@@ -467,6 +467,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const uiPublicDir = path.join(import.meta.dir, '../../ui/public');
     wsService.setPublicDir(uiPublicDir);
 
+    // 9c. Configure auth token if set
+    const authToken = jarvisConfig.auth?.token;
+    if (authToken) {
+      wsService.setAuthToken(authToken);
+      console.log('[Daemon] Auth token configured — dashboard routes require ?token= or cookie');
+    } else {
+      console.warn('[Daemon] No auth token configured — dashboard is open to anyone on the network');
+    }
+
     // 9b. Apply --no-local-tools flag if set
     if (config.noLocalTools) {
       const { setNoLocalTools } = await import('../actions/tools/builtin.ts');

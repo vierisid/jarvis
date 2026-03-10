@@ -78,6 +78,11 @@ function applyEnvOverrides(config: JarvisConfig): void {
   if (env.JARVIS_BRAIN_DOMAIN) {
     config.daemon.brain_domain = env.JARVIS_BRAIN_DOMAIN;
   }
+
+  if (env.JARVIS_AUTH_TOKEN) {
+    if (!config.auth) config.auth = {};
+    config.auth.token = env.JARVIS_AUTH_TOKEN;
+  }
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {

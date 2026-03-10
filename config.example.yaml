@@ -6,6 +6,12 @@ daemon:
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
 
+# Authentication — protects dashboard, API, and WebSocket.
+# If unset, the application is open (no auth).
+# Can also be set via JARVIS_AUTH_TOKEN env var.
+# auth:
+#   token: "your-secret-token-here"
+
 llm:
   # Primary provider to use
   primary: "anthropic"

@@ -119,6 +119,11 @@ export type GoalConfig = {
   calendar_ownership: boolean;
 };
 
+export type AuthConfig = {
+  /** Shared secret token. If unset, auth is disabled (open access). Env: JARVIS_AUTH_TOKEN */
+  token?: string;
+};
+
 export type JarvisConfig = {
   daemon: {
     port: number;
@@ -127,6 +132,7 @@ export type JarvisConfig = {
     /** External domain for the brain (used in sidecar JWT tokens). Env: JARVIS_BRAIN_DOMAIN */
     brain_domain?: string;
   };
+  auth?: AuthConfig;
   google?: GoogleConfig;
   channels?: ChannelConfig;
   stt?: STTConfig;

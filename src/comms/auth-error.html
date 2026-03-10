@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    Auth error page — if ?token= is inside the hash (e.g. /#/settings?token=xxx),
+    move it into the query string so the server can set the cookie via Set-Cookie + 302.
+  -->
+  <script>
+    (function () {
+      var h = location.hash;
+      var qi = h.indexOf('?');
+      if (qi !== -1) {
+        var hp = new URLSearchParams(h.slice(qi));
+        var t = hp.get('token');
+        if (t) {
+          hp.delete('token');
+          var cleanHash = h.slice(0, qi);
+          var remaining = hp.toString();
+          if (remaining) cleanHash += '?' + remaining;
+          location.replace(location.pathname + '?token=' + encodeURIComponent(t) + cleanHash);
+        }
+      }
+    })();
+  </script>
+  <title>Unauthorized</title>
+  <style>
+    body {
+      font-family: system-ui;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: #111;
+      color: #ccc;
+    }
+    .box { text-align: center }
+    h1 { font-size: 4rem; margin: 0; color: #666 }
+    p { margin-top: 1rem }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>401</h1>
+    <p>Access requires a valid token.</p>
+  </div>
+</body>
+</html>

@@ -23,6 +23,29 @@ export type WSClientHandler = {
 type RouteHandler = (req: Request) => Response | Promise<Response>;
 type MethodRoutes = { [method: string]: RouteHandler };
 
+/** 401 HTML page loaded from auth-error.html */
+const AUTH_ERROR_HTML = await Bun.file(path.join(import.meta.dir, 'auth-error.html')).text();
+
+/** Inline script injected into authed HTML pages — strips ?token= from the hash. */
+const TOKEN_STRIP_SCRIPT = `<script>(function(){var h=location.hash,i=h.indexOf('?');if(i===-1)return;var p=new URLSearchParams(h.slice(i));if(!p.has('token'))return;p.delete('token');var c=h.slice(0,i),r=p.toString();if(r)c+='?'+r;location.replace(location.pathname+location.search+c)})()</script>`;
+
+function getCookie(req: Request, name: string): string | null {
+  const cookies = req.headers.get('Cookie');
+  if (!cookies) return null;
+  const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+function isPublicRoute(pathname: string, method: string): boolean {
+  return (
+    pathname === '/health' ||
+    pathname === '/sidecar/connect' ||
+    pathname === '/api/sidecars/.well-known/jwks.json' ||
+    pathname.startsWith('/api/webhooks/') ||
+    method === 'OPTIONS'
+  );
+}
+
 export class WebSocketServer {
   private server: Server<any> | null = null;
   private clients: Set<ServerWebSocket<unknown>> = new Set();
@@ -33,9 +56,14 @@ export class WebSocketServer {
   private staticDir: string | null = null;
   private publicDir: string | null = null;
   private sidecarManager: SidecarManager | null = null;
+  private authToken: string | null = null;
 
   constructor(port: number = 3142) {
     this.port = port;
+  }
+
+  setAuthToken(token: string): void {
+    this.authToken = token;
   }
 
   setHandler(handler: WSClientHandler): void {
@@ -87,7 +115,7 @@ export class WebSocketServer {
         const url = new URL(req.url);
         const pathname = url.pathname;
 
-        // 0. Sidecar WebSocket upgrade
+        // 0. Sidecar WebSocket upgrade (has its own JWT auth)
         if (pathname === '/sidecar/connect' && self.sidecarManager) {
           const authHeader = req.headers.get('Authorization');
           const token = authHeader?.startsWith('Bearer ')
@@ -107,14 +135,44 @@ export class WebSocketServer {
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
 
-        // 1. WebSocket upgrade
+        // 1. Auth check (if configured)
+        if (self.authToken && !isPublicRoute(pathname, req.method)) {
+          const cookieToken = getCookie(req, 'token');
+          if (cookieToken !== self.authToken) {
+            // Check ?token= query param — set cookie via Set-Cookie and redirect
+            const queryToken = url.searchParams.get('token');
+            if (queryToken === self.authToken) {
+              const cleanParams = new URLSearchParams(url.searchParams);
+              cleanParams.delete('token');
+              const qs = cleanParams.toString();
+              const redirectTo = pathname + (qs ? '?' + qs : '');
+              return new Response(null, {
+                status: 302,
+                headers: {
+                  'Location': redirectTo || '/',
+                  'Set-Cookie': `token=${queryToken}; Path=/; SameSite=Lax`,
+                },
+              });
+            }
+            // No valid auth — API & WebSocket get JSON 401; browsers get the auth error page
+            if (pathname.startsWith('/api/') || pathname === '/ws') {
+              return Response.json({ error: 'Unauthorized' }, { status: 401 });
+            }
+            return new Response(AUTH_ERROR_HTML, {
+              status: 401,
+              headers: { 'Content-Type': 'text/html' },
+            });
+          }
+        }
+
+        // 2. WebSocket upgrade
         if (pathname === '/ws') {
           const success = server.upgrade(req, { data: {} });
           if (success) return undefined;
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
 
-        // 2. Health check
+        // 3. Health check (always public)
         if (pathname === '/health') {
           return Response.json({
             status: 'ok',
@@ -124,7 +182,7 @@ export class WebSocketServer {
           });
         }
 
-        // 3. API routes
+        // 4. API routes
         if (pathname.startsWith('/api/')) {
           // Handle CORS preflight
           if (req.method === 'OPTIONS') {
@@ -163,17 +221,21 @@ export class WebSocketServer {
           return Response.json({ error: 'Not found' }, { status: 404 });
         }
 
-        // 4a. Overlay widget (served from ui/ source, not dist/)
+        // 5a. Overlay widget (served from ui/ source, not dist/)
         if (pathname === '/overlay' && self.staticDir) {
           // overlay.html lives in the ui/ source directory (parent of dist/)
           const overlayPath = path.join(self.staticDir, '..', 'overlay.html');
           const overlayFile = Bun.file(overlayPath);
           if (await overlayFile.exists()) {
+            if (self.authToken) {
+              const html = await overlayFile.text();
+              return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
+            }
             return new Response(overlayFile, { headers: { 'Content-Type': 'text/html' } });
           }
         }
 
-        // 4. Static files (dashboard)
+        // 5b. Static files (dashboard)
         if (self.staticDir) {
           let filePath: string;
 
@@ -186,11 +248,15 @@ export class WebSocketServer {
 
           const file = Bun.file(filePath);
           if (await file.exists()) {
+            if (self.authToken && filePath.endsWith('.html')) {
+              const html = await file.text();
+              return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
+            }
             return new Response(file);
           }
         }
 
-        // 5. Public assets fallback (models, WASM, etc.)
+        // 6. Public assets fallback (models, WASM, etc.)
         if (self.publicDir) {
           const publicPath = path.join(self.publicDir, pathname);
           const publicFile = Bun.file(publicPath);
@@ -356,6 +422,24 @@ export class WebSocketServer {
   getClients(): Set<ServerWebSocket<unknown>> {
     return this.clients;
   }
+}
+
+/**
+ * Inject the token-stripping script into an HTML page (right after <head>).
+ */
+function injectTokenStrip(html: string): string {
+  const headIdx = html.indexOf('<head>');
+  if (headIdx !== -1) {
+    return html.slice(0, headIdx + 6) + TOKEN_STRIP_SCRIPT + html.slice(headIdx + 6);
+  }
+  const htmlIdx = html.indexOf('<html');
+  if (htmlIdx !== -1) {
+    const closeTag = html.indexOf('>', htmlIdx);
+    if (closeTag !== -1) {
+      return html.slice(0, closeTag + 1) + TOKEN_STRIP_SCRIPT + html.slice(closeTag + 1);
+    }
+  }
+  return TOKEN_STRIP_SCRIPT + html;
 }
 
 /**

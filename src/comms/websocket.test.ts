@@ -231,6 +231,138 @@ test('WebSocketServer - sendBinary reaches client', async () => {
   server.stop();
 });
 
+// --- Auth tests (use dedicated ports to avoid port reuse timing issues) ---
+
+test('WebSocketServer - auth token blocks unauthenticated requests', async () => {
+  const authServer = new WebSocketServer(3150);
+  authServer.setAuthToken('test-secret-123');
+  authServer.start();
+
+  try {
+    // Health is public — still accessible
+    const health = await fetch('http://localhost:3150/health');
+    expect(health.ok).toBe(true);
+
+    // API without cookie → 401 JSON
+    const api = await fetch('http://localhost:3150/api/health');
+    expect(api.status).toBe(401);
+    const body = await api.json() as any;
+    expect(body.error).toBe('Unauthorized');
+
+    // Dashboard without cookie → 401 HTML with hash-to-query bootstrap script
+    const dash = await fetch('http://localhost:3150/');
+    expect(dash.status).toBe(401);
+    const html = await dash.text();
+    expect(html).toContain("location.replace");
+    expect(html).toContain(".get('token')");
+
+    // Query param with valid token → 302 + Set-Cookie
+    const withToken = await fetch('http://localhost:3150/?token=test-secret-123', { redirect: 'manual' });
+    expect(withToken.status).toBe(302);
+    expect(withToken.headers.get('Set-Cookie')).toContain('token=test-secret-123');
+    expect(withToken.headers.get('Location')).toBe('/');
+
+    // Query param with wrong token → 401
+    const wrongToken = await fetch('http://localhost:3150/?token=wrong', { redirect: 'manual' });
+    expect(wrongToken.status).toBe(401);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - auth token allows requests with valid cookie', async () => {
+  const authServer = new WebSocketServer(3151);
+  authServer.setAuthToken('test-secret-123');
+  authServer.setApiRoutes({
+    '/api/health': {
+      GET: () => Response.json({ status: 'ok' }),
+    },
+  });
+  authServer.start();
+
+  try {
+    const res = await fetch('http://localhost:3151/api/health', {
+      headers: { Cookie: 'token=test-secret-123' },
+    });
+    expect(res.ok).toBe(true);
+    const data = await res.json() as any;
+    expect(data.status).toBe('ok');
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - auth token rejects wrong cookie', async () => {
+  const authServer = new WebSocketServer(3152);
+  authServer.setAuthToken('test-secret-123');
+  authServer.start();
+
+  try {
+    const res = await fetch('http://localhost:3152/api/health', {
+      headers: { Cookie: 'token=wrong-token' },
+    });
+    expect(res.status).toBe(401);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - public routes bypass auth', async () => {
+  const authServer = new WebSocketServer(3153);
+  authServer.setAuthToken('test-secret-123');
+  authServer.start();
+
+  try {
+    // /health is public
+    const health = await fetch('http://localhost:3153/health');
+    expect(health.ok).toBe(true);
+
+    // OPTIONS (CORS preflight) is public
+    const options = await fetch('http://localhost:3153/api/anything', { method: 'OPTIONS' });
+    expect(options.status).not.toBe(401);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - WebSocket blocked without auth cookie', async () => {
+  const authServer = new WebSocketServer(3154);
+  authServer.setAuthToken('test-secret-123');
+  authServer.start();
+
+  try {
+    // Regular HTTP fetch to /ws without cookie → 401 JSON
+    const res = await fetch('http://localhost:3154/ws');
+    expect(res.status).toBe(401);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - WebSocket allowed with auth cookie', async () => {
+  const authServer = new WebSocketServer(3155);
+  authServer.setAuthToken('test-secret-123');
+  authServer.start();
+
+  try {
+    const ws = new WebSocket('ws://localhost:3155/ws', {
+      headers: { Cookie: 'token=test-secret-123' },
+    } as any);
+
+    const connected = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+      setTimeout(() => resolve(false), 2000);
+    });
+
+    expect(connected).toBe(true);
+    ws.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    authServer.stop();
+  }
+});
+
 test('WebSocketServer - sendToClient unicasts JSON', async () => {
   let serverWsRef: any = null;
 

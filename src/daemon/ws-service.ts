@@ -117,6 +117,10 @@ export class WebSocketService implements Service {
     this.wsServer.setPublicDir(dir);
   }
 
+  setAuthToken(token: string): void {
+    this.wsServer.setAuthToken(token);
+  }
+
   async start(): Promise<void> {
     this._status = 'starting';
 
