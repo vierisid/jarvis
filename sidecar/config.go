@@ -25,7 +25,7 @@ func homeDir() string {
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
-			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness,
+			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser,
 		},
 		Terminal: TerminalConfig{
 			BlockedCommands: []string{},
