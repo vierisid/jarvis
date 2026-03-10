@@ -94,17 +94,18 @@ This ensures the token was signed by the real brain and hasn't been tampered wit
 
 ### Step 5: Sidecar Connects via WebSocket
 
-The sidecar opens a WebSocket connection to the `brain` URL from the JWT:
+The sidecar opens a WebSocket connection to the `brain` URL from the JWT, passing the token in the `Authorization` header:
 
 ```
-wss://shiny-panda.domain.com/sidecar/connect?token=<jwt>
+GET wss://shiny-panda.domain.com/sidecar/connect
+Authorization: Bearer <jwt>
 ```
 
 ### Step 6: Brain Validates Connection
 
 The brain:
 
-1. Extracts the JWT from the `token` query parameter
+1. Extracts the JWT from the `Authorization: Bearer` header
 2. Verifies the signature using its private key
 3. Checks that the `sid` corresponds to a registered (non-revoked) sidecar
 4. Accepts the WebSocket connection and associates it with the sidecar record

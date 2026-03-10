@@ -89,7 +89,10 @@ export class WebSocketServer {
 
         // 0. Sidecar WebSocket upgrade
         if (pathname === '/sidecar/connect' && self.sidecarManager) {
-          const token = url.searchParams.get('token');
+          const authHeader = req.headers.get('Authorization');
+          const token = authHeader?.startsWith('Bearer ')
+            ? authHeader.slice(7)
+            : null;
           if (!token) {
             return new Response('Missing token', { status: 401 });
           }

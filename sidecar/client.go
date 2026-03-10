@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
@@ -120,10 +121,13 @@ func (c *SidecarClient) runPreflight() {
 }
 
 func (c *SidecarClient) connectAndServe(ctx context.Context) error {
-	url := fmt.Sprintf("%s?token=%s", c.claims.Brain, c.config.Token)
 	log.Printf("[sidecar] Connecting to %s...", c.claims.Brain)
 
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	conn, _, err := websocket.Dial(ctx, c.claims.Brain, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + c.config.Token},
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
