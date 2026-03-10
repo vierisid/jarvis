@@ -11,6 +11,7 @@ import type {
 type OllamaMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  images?: string[];
 };
 
 type OllamaToolDef = {
@@ -235,10 +236,35 @@ export class OllamaProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): OllamaMessage[] {
-    return messages.map(m => ({
-      role: m.role as 'system' | 'user' | 'assistant',
-      content: m.content as string,
-    }));
+    return messages.map(m => {
+      if (typeof m.content === 'string') {
+        return {
+          role: m.role as 'system' | 'user' | 'assistant',
+          content: m.content,
+        };
+      }
+
+      // ContentBlock[] — extract text and images separately
+      let text = '';
+      const images: string[] = [];
+
+      for (const block of m.content) {
+        if (block.type === 'text') {
+          text += (text ? '\n' : '') + block.text;
+        } else if (block.type === 'image') {
+          images.push(block.source.data);
+        }
+      }
+
+      const msg: OllamaMessage = {
+        role: m.role as 'system' | 'user' | 'assistant',
+        content: text,
+      };
+      if (images.length > 0) {
+        msg.images = images;
+      }
+      return msg;
+    });
   }
 
   private convertTools(tools: LLMTool[]): OllamaToolDef[] {
