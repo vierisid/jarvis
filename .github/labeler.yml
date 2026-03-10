@@ -1,0 +1,29 @@
+feature:
+  - head-branch: ['^feat/', '^feature/']
+
+bug:
+  - head-branch: ['^fix/', '^bug/', '^hotfix/']
+
+infrastructure:
+  - head-branch: ['^infra/', '^ci/', '^devops/']
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'Dockerfile'
+          - 'docker-compose*.yml'
+
+sidecar:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sidecar/**'
+
+ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'ui/**'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '*.md'

@@ -1,0 +1,14 @@
+changelog:
+  categories:
+    - title: "🚀 Features"
+      labels: [feature]
+    - title: "🐛 Bug Fixes"
+      labels: [bug]
+    - title: "🏗️ Infrastructure"
+      labels: [infrastructure]
+    - title: "📖 Documentation"
+      labels: [documentation]
+    - title: "Other Changes"
+      labels: ["*"]
+  exclude:
+    labels: [skip-changelog]
