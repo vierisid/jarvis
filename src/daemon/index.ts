@@ -677,7 +677,51 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Wire sidecar awareness events to awareness service
         sidecarManager.onEvent((sidecarId, event) => {
           if (['screen_capture', 'context_changed', 'idle_detected'].includes(event.event_type)) {
-            svc.handleSidecarEvent(sidecarId, event);
+            svc.handleSidecarEvent(sidecarId, event).catch(err =>
+              console.error('[Daemon] Awareness sidecar event error:', err instanceof Error ? err.message : err)
+            );
+          }
+        });
+
+        // Wire sidecar disconnect → restart capture timer
+        sidecarManager.onDisconnect(() => {
+          svc.handleSidecarDisconnected();
+        });
+
+        // Wire sidecar RPC capture as fallback (for when sidecar is connected but not pushing events)
+        svc.setSidecarCapture(async () => {
+          // Find a connected sidecar with screenshot capability
+          const connected = sidecarManager.getConnectedSidecars();
+          const screenshotSidecar = connected.find(s =>
+            s.capabilities?.includes('screenshot') || s.capabilities?.includes('awareness')
+          );
+          if (!screenshotSidecar) return null;
+
+          try {
+            const result = await sidecarManager.dispatchRPC(screenshotSidecar.id, 'capture_screen', {}, {
+              initial: 10_000,
+              max: 15_000,
+            });
+            const data = result as Record<string, unknown>;
+            if (!data) return null;
+
+            // Image is returned via binary field (attached to result by rpc_result handler)
+            const binary = data._binary as { type: string; data: string; mime_type: string } | undefined;
+            if (!binary?.data || binary.type !== 'inline') return null;
+
+            const imageBuffer = Buffer.from(binary.data, 'base64');
+
+            // Get window title from a separate xdotool call or sidecar data
+            let windowTitle = '';
+            try {
+              const winResult = Bun.spawnSync(['xdotool', 'getactivewindow', 'getwindowname']);
+              if (winResult.exitCode === 0) windowTitle = winResult.stdout.toString().trim();
+            } catch { /* xdotool not available */ }
+
+            return imageBuffer.length > 0 ? { imageBuffer, windowTitle } : null;
+          } catch {
+            // Sidecar may not support capture_screen or may be busy — silent fail
+            return null;
           }
         });
 
@@ -859,9 +903,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.log('[Daemon] Sidecar routing enabled for run_command, read_file, write_file, list_directory');
     }
 
-    // 10h. Wire sidecar events into event pipeline
+    // 10h. Wire sidecar events into event pipeline (skip awareness events — already handled by awareness service)
+    const awarenessEventTypes = ['screen_capture', 'context_changed', 'idle_detected'];
     sidecarManager.onEvent((sidecarId, event) => {
-      const eventType = `sidecar_${event.type}`;
+      // Skip events already routed to awareness service to avoid double processing
+      if (awarenessService && awarenessEventTypes.includes(event.event_type)) return;
+
+      const eventType = `sidecar_${event.event_type}`;
       const eventData = {
         sidecar_id: sidecarId,
         ...(typeof event.payload === 'object' && event.payload !== null ? event.payload as Record<string, unknown> : { payload: event.payload }),

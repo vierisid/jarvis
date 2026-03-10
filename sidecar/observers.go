@@ -175,30 +175,7 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		},
 	}
 
-	// Use sendEvent for binary ref protocol (handled by the client)
-	// For now, send via the EventSender which goes through sendJSON.
-	// Attach binary inline or ref based on size.
-	const binaryRefThreshold = 256 * 1024
-	if len(imageData) >= binaryRefThreshold {
-		refId := padTo36(time.Now().Format("20060102-150405.000"))
-		event.Binary = &BinaryDataInline{
-			Type:     "ref",
-			MimeType: "image/png",
-			Data:     refId,
-		}
-		// Send JSON event first
-		if err := send(ctx, event); err != nil {
-			log.Printf("[screen] Failed to send event: %v", err)
-			return
-		}
-		// Binary frame is sent via the client's sendBinary — but we only have EventSender.
-		// For large frames, we need access to the client. Store the data in the event payload.
-		// TODO: For now, large screenshots fall back to inline base64 via event.
-		// The proper fix is to pass the SidecarClient into observers.
-		return
-	}
-
-	// Inline base64 for small images
+	// Always send inline base64 (ref protocol not yet implemented for observers)
 	event.Binary = &BinaryDataInline{
 		Type:     "inline",
 		MimeType: "image/png",
@@ -314,7 +291,7 @@ func (o *WindowObserver) poll(ctx context.Context, send EventSender) {
 	currentWindow := o.lastWindow
 	o.mu.Unlock()
 
-	if changed && (prevApp != "" || prevWindow != "") {
+	if changed {
 		log.Printf("[window] Context changed: %s → %s", prevApp, appName)
 		event := SidecarEvent{
 			Type:      "sidecar_event",

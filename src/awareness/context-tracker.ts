@@ -12,13 +12,13 @@ import { generateId } from '../vault/schema.ts';
 import { StruggleDetector } from './struggle-detector.ts';
 
 // Strong error indicators — always trigger (rare in normal output)
-const STRONG_ERROR_PATTERN = /\b(traceback|segfault|SIGSEGV|SIGABRT|panic|undefined is not|cannot read prop|stack overflow|out of memory)\b/i;
+const STRONG_ERROR_PATTERN = /\b(traceback|segfault|SIGSEGV|SIGABRT|panic|undefined is not|cannot read prop|stack overflow|out of memory|unhandled rejection|uncaught exception|TypeError:|ReferenceError:|SyntaxError:|RangeError:|ModuleNotFoundError|ImportError|FileNotFoundError|PermissionError|ConnectionRefusedError|ECONNREFUSED|ENOTFOUND|EPERM|Build failed|Compilation error|npm ERR!)\b/i;
 
 // Weaker indicators — only trigger when accompanied by stack trace context
 const WEAK_ERROR_PATTERN = /\b(error|exception|failed|fatal|crash|denied|refused|timeout|ENOENT|EACCES|ECONNREFUSED)\b/i;
 
-// Context that confirms a weak error is real (stack traces, error codes, etc.)
-const ERROR_CONFIRM_PATTERN = /(?:at .+:\d+|line \d+|\.ts:\d+|\.js:\d+|throw |exit code|status [45]\d{2}|Traceback|^\s+\^)/m;
+// Context that confirms a weak error is real (stack traces, error codes, build output, HTTP errors, etc.)
+const ERROR_CONFIRM_PATTERN = /(?:at .+:\d+|line \d+|\.ts:\d+|\.js:\d+|\.py:\d+|\.go:\d+|throw |exit code|status [45]\d{2}|Traceback|^\s+\^|command not found|No such file|permission denied|cannot find module|Module not found|Compilation failed|Build failed|ERR!|npm ERR|error\[\w+\]|✗|✘|FAIL|FAILED|returned non-zero|Process exited)/mi;
 
 // JARVIS own log lines — filter these out from error detection
 const JARVIS_LOG_PREFIX = /\[(CaptureEngine|ObserverManager|file-watcher|clipboard|processes|notifications|email|calendar|Daemon|ServiceRegistry|AgentService|WSService|OCREngine|Awareness|DesktopController|Executor|HealthMonitor|ChannelManager|TelegramAdapter|BackgroundAgent|WebSocketServer|EventReactor|Orchestrator|ChannelService|ObserverService)\]/;
@@ -40,6 +40,7 @@ export class ContextTracker {
   private lastActivityTimestamp: number = 0;
   private lastErrorText: string = '';
   private lastErrorTimestamp: number = 0;
+  private pendingWindowInfo: { appName: string; windowTitle: string } | null = null;
   private struggleDetector: StruggleDetector;
 
   constructor(config: AwarenessConfig) {
@@ -60,8 +61,14 @@ export class ContextTracker {
     const now = Date.now();
     const events: AwarenessEvent[] = [];
 
+    // Use pending window info from sidecar context_changed if no rawWindowTitle provided
+    const effectiveWindowTitle = rawWindowTitle || this.pendingWindowInfo?.windowTitle;
+    if (this.pendingWindowInfo && !rawWindowTitle) {
+      this.pendingWindowInfo = null; // consumed
+    }
+
     // Parse app name and details from window title or OCR
-    const { appName, windowTitle, url, filePath } = this.parseWindowInfo(ocrText, rawWindowTitle);
+    const { appName, windowTitle, url, filePath } = this.parseWindowInfo(ocrText, effectiveWindowTitle);
 
     // Detect context change
     const isAppChange = this.currentContext !== null &&
@@ -179,9 +186,9 @@ export class ContextTracker {
     const errorMatch = strongMatch ?? (weakMatch && ERROR_CONFIRM_PATTERN.test(filteredOcrText) ? weakMatch : null);
 
     if (errorMatch) {
-      // Cooldown: don't re-fire same error text within 2 minutes
+      // Cooldown: don't re-fire same error text within 30 seconds
       const sameError = errorMatch[0].toLowerCase() === this.lastErrorText.toLowerCase();
-      const cooldownExpired = (now - this.lastErrorTimestamp) > 120_000;
+      const cooldownExpired = (now - this.lastErrorTimestamp) > 30_000;
 
       if (!sameError || cooldownExpired) {
         const idx = filteredOcrText.indexOf(errorMatch[0]);
@@ -253,9 +260,11 @@ export class ContextTracker {
    * Called externally when the sidecar pushes a window change.
    */
   updateWindowInfo(appName: string, windowTitle: string): void {
-    // This will be picked up by the next processCapture call
-    // Store it so processCapture can use it when no rawWindowTitle is provided
-    if (!this.currentContext) return;
+    if (!this.currentContext) {
+      // No capture processed yet — store as pending info for the first processCapture call
+      this.pendingWindowInfo = { appName, windowTitle };
+      return;
+    }
     // Directly update current context's window info
     this.currentContext = {
       ...this.currentContext,

@@ -110,6 +110,7 @@ export class WebSocketServer {
 
     this.server = Bun.serve<{ sidecar_id?: string }>({
       port: this.port,
+      idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
       async fetch(req, server) {
         const url = new URL(req.url);

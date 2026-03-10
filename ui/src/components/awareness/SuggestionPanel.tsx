@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { useApiData, api } from "../../hooks/useApi";
 
 type SuggestionRow = {
@@ -13,6 +13,15 @@ type SuggestionRow = {
 
 export function SuggestionPanel() {
   const { data, loading, refetch } = useApiData<SuggestionRow[]>("/api/awareness/suggestions?limit=10", []);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll every 5 seconds for new suggestions
+  useEffect(() => {
+    intervalRef.current = setInterval(refetch, 5000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [refetch]);
 
   const dismiss = async (id: string) => {
     await api(`/api/awareness/suggestions/${id}/dismiss`, { method: "PATCH" });

@@ -50,6 +50,7 @@ export class SidecarManager implements Service {
   private sidecarConnections = new Map<string, SidecarConnection>();
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
+  private disconnectListeners = new Set<(sidecarId: string) => void>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -79,7 +80,12 @@ export class SidecarManager implements Service {
         if (payload.error) {
           this.rpcTracker.fail(payload.rpc_id, new Error(`${payload.error.code}: ${payload.error.message}`));
         } else {
-          this.rpcTracker.resolve(payload.rpc_id, payload.result);
+          // Attach binary data to result when present (e.g. capture_screen returns image in binary)
+          const result = payload.result as Record<string, unknown> | undefined;
+          if (event.binary && result && typeof result === 'object') {
+            (result as Record<string, unknown>)._binary = event.binary;
+          }
+          this.rpcTracker.resolve(payload.rpc_id, result);
         }
       });
 
@@ -90,7 +96,13 @@ export class SidecarManager implements Service {
         }
       });
 
-      this.scheduler.on('sidecar_event', async (sidecarId, event) => {
+      // Use wildcard handler for sidecar events: the scheduler dispatches by
+      // event_type (e.g. "screen_capture", "context_changed"), not the protocol
+      // category "sidecar_event", so a specific handler name would never match.
+      this.scheduler.on('*', async (sidecarId, event) => {
+        // Skip RPC events — they have dedicated handlers above
+        if (event.type === 'rpc_result' || event.type === 'rpc_progress') return;
+
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);
         }
@@ -465,6 +477,11 @@ export class SidecarManager implements Service {
     this.scheduler.removeSidecar(sidecarId);
     this.rpcTracker.failAll(sidecarId, 'disconnected');
     this.removeConnection(sidecarId);
+
+    // Notify disconnect listeners
+    for (const listener of this.disconnectListeners) {
+      try { listener(sidecarId); } catch { /* non-fatal */ }
+    }
   }
 
   // --------------- Protocol: RPC Dispatch ---------------
@@ -507,6 +524,11 @@ export class SidecarManager implements Service {
   /** Register a listener for sidecar events */
   onEvent(listener: (sidecarId: string, event: SidecarEvent) => void): void {
     this.eventListeners.add(listener);
+  }
+
+  /** Register a listener for sidecar disconnections */
+  onDisconnect(listener: (sidecarId: string) => void): void {
+    this.disconnectListeners.add(listener);
   }
 
   // --------------- Helpers ---------------

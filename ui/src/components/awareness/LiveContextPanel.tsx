@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { useApiData } from "../../hooks/useApi";
 
 type LiveContext = {
@@ -18,7 +18,16 @@ type AwarenessStatus = {
 };
 
 export function LiveContextPanel() {
-  const { data, loading } = useApiData<AwarenessStatus>("/api/awareness/status", []);
+  const { data, loading, refetch } = useApiData<AwarenessStatus>("/api/awareness/status", []);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll every 5 seconds for live context updates
+  useEffect(() => {
+    intervalRef.current = setInterval(refetch, 5000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [refetch]);
 
   if (loading || !data) {
     return (

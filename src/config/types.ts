@@ -200,8 +200,8 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     cloud_vision_enabled: true,
     cloud_vision_cooldown_ms: 30000,
     stuck_threshold_ms: 120000,
-    struggle_grace_ms: 120000,
-    struggle_cooldown_ms: 180000,
+    struggle_grace_ms: 45000,
+    struggle_cooldown_ms: 90000,
     suggestion_rate_limit_ms: 60000,
     overlay_autolaunch: true,
     retention: {

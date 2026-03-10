@@ -18,9 +18,21 @@ export type ScheduleDeps = {
   getUpcomingCommitments?: () => Array<{ what: string; when_due: number | null; priority: string }>;
 };
 
+// Per-type rate limits — errors fire fast, proactive suggestions less often
+const TYPE_RATE_LIMITS: Record<string, number> = {
+  error: 15_000,       // 15s — errors are urgent
+  struggle: 90_000,    // 90s — behavioral, stays true a while
+  stuck: 60_000,       // 60s — persistent state
+  automation: 120_000, // 2min — proactive, shouldn't nag
+  knowledge: 120_000,  // 2min
+  schedule: 300_000,   // 5min — calendar events don't change fast
+  break: 600_000,      // 10min — break reminders shouldn't nag
+  general: 60_000,     // 1min — cloud insight
+};
+
 export class SuggestionEngine {
-  private rateLimitMs: number;
-  private lastSuggestionAt = 0;
+  private defaultRateLimitMs: number;
+  private lastSuggestionByType = new Map<string, number>();
   private recentHashes: Set<string> = new Set();
   private hashQueue: string[] = [];
 
@@ -36,7 +48,7 @@ export class SuggestionEngine {
   private lastScheduleEventId = '';
 
   constructor(rateLimitMs: number = 60000, scheduleDeps?: ScheduleDeps) {
-    this.rateLimitMs = rateLimitMs;
+    this.defaultRateLimitMs = rateLimitMs;
     this.scheduleDeps = scheduleDeps ?? null;
   }
 
@@ -51,21 +63,34 @@ export class SuggestionEngine {
   ): Promise<Suggestion | null> {
     const now = Date.now();
 
-    // Rate limit
-    if (now - this.lastSuggestionAt < this.rateLimitMs) {
-      return null;
+    // Try each suggestion type in priority order
+    // Each candidate is checked against its own per-type rate limit
+    const candidates: (Suggestion | null)[] = [
+      this.checkError(context, events),
+      this.checkStruggle(context, events, cloudAnalysis),
+      this.checkStuck(context, events),
+      this.checkAutomation(context, events),
+      this.checkKnowledge(context, events),
+      null, // placeholder for async schedule
+      this.checkBreak(context),
+      this.checkCloudInsight(context, cloudAnalysis),
+    ];
+
+    // Async schedule check (only if nothing higher-priority passed)
+    if (candidates.every(c => c === null)) {
+      (candidates as (Suggestion | null)[])[5] = await this.checkSchedule(context);
     }
 
-    // Try each suggestion type in priority order
-    const suggestion =
-      this.checkError(context, events) ??
-      this.checkStruggle(context, events, cloudAnalysis) ??
-      this.checkStuck(context, events) ??
-      this.checkAutomation(context, events) ??
-      this.checkKnowledge(context, events) ??
-      (await this.checkSchedule(context)) ??
-      this.checkBreak(context) ??
-      this.checkCloudInsight(context, cloudAnalysis);
+    // Find the first non-null candidate that passes its per-type rate limit
+    let suggestion: Suggestion | null = null;
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const typeLimit = TYPE_RATE_LIMITS[candidate.type] ?? this.defaultRateLimitMs;
+      const lastFired = this.lastSuggestionByType.get(candidate.type) ?? 0;
+      if (now - lastFired < typeLimit) continue; // rate-limited for this type
+      suggestion = candidate;
+      break;
+    }
 
     if (!suggestion) return null;
 
@@ -75,7 +100,7 @@ export class SuggestionEngine {
 
     // Store and track
     this.addHash(hash);
-    this.lastSuggestionAt = now;
+    this.lastSuggestionByType.set(suggestion.type, now);
 
     // Persist to DB
     const row = createSuggestion({
@@ -396,7 +421,7 @@ export class SuggestionEngine {
 
       return {
         id: '',
-        type: 'general',
+        type: 'break',
         title: 'Time for a break?',
         body: `You've been working for over 90 minutes straight. A short break can boost focus and creativity.`,
         triggerCaptureId: context.captureId,
@@ -431,7 +456,9 @@ export class SuggestionEngine {
    * Simple hash for dedup.
    */
   private hashSuggestion(suggestion: Omit<Suggestion, 'id'>): string {
-    return `${suggestion.type}:${suggestion.title}`;
+    // Include body snippet in hash so different errors with same title aren't deduplicated
+    const bodySnippet = (suggestion.body || '').slice(0, 80);
+    return `${suggestion.type}:${suggestion.title}:${bodySnippet}`;
   }
 
   /**

@@ -44,7 +44,7 @@ type Snapshot = {
 
 const MAX_SNAPSHOTS = 30;          // ~3.5 min at 7s intervals
 const WINDOW_MS = 3.5 * 60 * 1000; // 3.5 minutes
-const MIN_SNAPSHOTS = 15;          // ~1.75 min of data before analysis
+const MIN_SNAPSHOTS = 8;           // ~56s of data before analysis
 
 const SIGNAL_WEIGHTS = {
   trialAndError: 0.30,
