@@ -31,3 +31,7 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 func handleFocusWindow(params map[string]any) (*RPCResult, error) {
 	return nil, fmt.Errorf("desktop tools are not supported on this platform")
 }
+
+func handleFindElement(params map[string]any) (*RPCResult, error) {
+	return nil, fmt.Errorf("desktop tools are not supported on this platform")
+}

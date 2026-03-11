@@ -601,7 +601,7 @@ export async function runDependencyCheck(config: any): Promise<void> {
       const ok = await buildFLAUIBridge();
       if (!ok) printWarn('FlaUI build incomplete. Build later on Windows: cd sidecar/flaui-bridge && dotnet publish -c Release -r win-x64 --self-contained');
     } else {
-      printInfo('Skip. JARVIS will use basic desktop tools instead. Build later if needed.');
+      printWarn('Skip. Windows desktop automation will not work without the FlaUI bridge.');
     }
   }
 

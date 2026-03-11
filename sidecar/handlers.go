@@ -46,9 +46,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, o
 		registry["press_keys"] = handlePressKeys
 		registry["launch_app"] = handleLaunchApp
 		registry["focus_window"] = handleFocusWindow
-		registry["flaui_inspect"] = handleFLAUIInspect
-		registry["flaui_find"] = handleFLAUIFind
-		registry["flaui_action"] = handleFLAUIAction
+		registry["find_element"] = handleFindElement
 	}
 	if caps[CapBrowser] {
 		launchChromeIfNeeded(cfg)

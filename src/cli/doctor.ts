@@ -168,7 +168,7 @@ export async function runDoctor(): Promise<void> {
       if (flaui && flaui.found) {
         results.push({ name: 'FlaUI Bridge', status: 'ok', message: flaui.path ?? 'Found' });
       } else if (flaui) {
-        results.push({ name: 'FlaUI Bridge', status: 'warn', message: 'Not found. Rich desktop automation unavailable. Basic tools still work.' });
+        results.push({ name: 'FlaUI Bridge', status: 'fail', message: 'Not found. Required for Windows desktop automation. Build with: cd sidecar/flaui-bridge && dotnet publish -c Release -r win-x64 --self-contained' });
       }
     } else {
       results.push({ name: 'FlaUI Bridge', status: 'skip', message: 'Windows-only (not needed on native Linux)' });

@@ -188,10 +188,11 @@ import gi, json, sys
 gi.require_version('Atspi', '2.0')
 from gi.repository import Atspi
 pid = int(sys.argv[1])
+max_depth = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 desktop = Atspi.get_desktop(0)
 elements = []
 def walk(node, depth=0):
-    if depth > 5 or len(elements) > 200:
+    if depth > max_depth or len(elements) > 200:
         return
     try:
         role = node.get_role_name() or ''
@@ -252,8 +253,13 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 		}
 	}
 
+	depth := 5
+	if v, ok := params["depth"].(float64); ok {
+		depth = int(v)
+	}
+
 	// Try AT-SPI2 via python3
-	tree, atSPIErr := tryATSPI(pid)
+	tree, atSPIErr := tryATSPI(pid, depth)
 	if atSPIErr == nil {
 		// Merge in window title and pid
 		tree["window_title"] = windowTitle
@@ -278,7 +284,7 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 }
 
 // tryATSPI runs the embedded Python3 AT-SPI2 script and parses its output.
-func tryATSPI(pid int) (map[string]any, error) {
+func tryATSPI(pid, depth int) (map[string]any, error) {
 	// Write script to a temp file to avoid shell escaping issues
 	tmpFile, err := os.CreateTemp("", "jarvis-atspi-*.py")
 	if err != nil {
@@ -295,7 +301,7 @@ func tryATSPI(pid int) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "python3", tmpFile.Name(), strconv.Itoa(pid))
+	cmd := exec.CommandContext(ctx, "python3", tmpFile.Name(), strconv.Itoa(pid), strconv.Itoa(depth))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("python3 AT-SPI2 script failed: %w", err)
@@ -331,6 +337,11 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	}
 	id := int(elemID)
 
+	action, _ := params["action"].(string)
+	if action == "" {
+		action = "click"
+	}
+
 	// Look up cached element for its bounding rect
 	elementCache.mu.Lock()
 	var rect map[string]any
@@ -342,19 +353,38 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	elementCache.mu.Unlock()
 
 	if rect == nil {
-		return nil, fmt.Errorf("element [%d] not found in cache — run get_window_tree first", id)
+		return nil, fmt.Errorf("element [%d] not found in cache — run desktop_snapshot first", id)
 	}
 
-	// Calculate center of element
 	x := toInt(rect["x"]) + toInt(rect["w"])/2
 	y := toInt(rect["y"]) + toInt(rect["h"])/2
 
-	if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
-		strconv.Itoa(x), strconv.Itoa(y), "click", "1"); err != nil {
-		return nil, fmt.Errorf("click_element failed: %w", err)
+	switch action {
+	case "click":
+		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
+			strconv.Itoa(x), strconv.Itoa(y), "click", "1"); err != nil {
+			return nil, fmt.Errorf("click failed: %w", err)
+		}
+	case "double_click":
+		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
+			strconv.Itoa(x), strconv.Itoa(y), "click", "--repeat", "2", "1"); err != nil {
+			return nil, fmt.Errorf("double_click failed: %w", err)
+		}
+	case "right_click":
+		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
+			strconv.Itoa(x), strconv.Itoa(y), "click", "3"); err != nil {
+			return nil, fmt.Errorf("right_click failed: %w", err)
+		}
+	case "focus":
+		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
+			strconv.Itoa(x), strconv.Itoa(y), "click", "1"); err != nil {
+			return nil, fmt.Errorf("focus failed: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("action '%s' is not supported on Linux (supported: click, double_click, right_click, focus)", action)
 	}
 
-	return &RPCResult{Result: map[string]any{"success": true, "x": x, "y": y}}, nil
+	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y}}, nil
 }
 
 // ── type_text ────────────────────────────────────────────────────────
@@ -485,6 +515,52 @@ func handleFocusWindow(params map[string]any) (*RPCResult, error) {
 	}
 
 	return &RPCResult{Result: map[string]any{"success": true, "pid": pid}}, nil
+}
+
+// ── find_element ─────────────────────────────────────────────────────
+
+func handleFindElement(params map[string]any) (*RPCResult, error) {
+	// Snapshot the tree to populate the cache, then filter in Go
+	_, err := handleGetWindowTree(params)
+	if err != nil {
+		return nil, fmt.Errorf("find_element failed: %w", err)
+	}
+
+	name, _ := params["name"].(string)
+	controlType, _ := params["control_type"].(string)
+	className, _ := params["class_name"].(string)
+	// automation_id is ignored on Linux (not an AT-SPI concept)
+
+	elementCache.mu.Lock()
+	defer elementCache.mu.Unlock()
+
+	var matches []map[string]any
+	for _, el := range elementCache.elements {
+		if name != "" {
+			elName, _ := el["name"].(string)
+			if elName != name {
+				continue
+			}
+		}
+		if controlType != "" {
+			elType, _ := el["control_type"].(string)
+			if elType != controlType {
+				continue
+			}
+		}
+		if className != "" {
+			elClass, _ := el["class_name"].(string)
+			if elClass != className {
+				continue
+			}
+		}
+		matches = append(matches, el)
+	}
+
+	return &RPCResult{Result: map[string]any{
+		"match_count": len(matches),
+		"elements":    matches,
+	}}, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -13,17 +13,6 @@ import (
 	"time"
 )
 
-// ── Element Cache ──────────────────────────────────────────────────────
-
-// elementCache stores the last tree snapshot so click_element / type_text
-// can reference elements by their [id] without re-walking the tree.
-var elementCache struct {
-	mu        sync.Mutex
-	elements  []map[string]any
-	pid       int
-	timestamp time.Time
-}
-
 // ── list_windows ──────────────────────────────────────────────────────
 
 func handleListWindows(params map[string]any) (*RPCResult, error) {
@@ -95,171 +84,52 @@ public class WinEnum {
 	return &RPCResult{Result: map[string]any{"windows": windows}}, nil
 }
 
-// ── get_window_tree (desktop_snapshot) ────────────────────────────────
+// ── get_window_tree (desktop_snapshot) — delegates to FlaUI bridge ──
 
 func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
-	pid := 0
-	if v, ok := params["pid"].(float64); ok {
-		pid = int(v)
+	bridgeParams := make(map[string]any)
+	if pid, ok := params["pid"].(float64); ok {
+		bridgeParams["pid"] = int(pid)
+	}
+	if depth, ok := params["depth"].(float64); ok {
+		bridgeParams["depth"] = int(depth)
 	}
 
-	// Build the PowerShell script for UIAutomation tree walk
-	pidFilter := ""
-	if pid > 0 {
-		pidFilter = fmt.Sprintf("$targetPid = %d", pid)
-	} else {
-		// Use foreground window's PID
-		pidFilter = `
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class FGW {
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    public static int GetPid() { var h = GetForegroundWindow(); uint p; GetWindowThreadProcessId(h, out p); return (int)p; }
-}
-'@
-$targetPid = [FGW]::GetPid()`
-	}
-
-	script := fmt.Sprintf(`
-%s
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-
-$auto = [System.Windows.Automation.AutomationElement]
-$root = $auto::RootElement
-$pidProp = [System.Windows.Automation.AutomationElement]::ProcessIdProperty
-$cond = New-Object System.Windows.Automation.PropertyCondition($pidProp, $targetPid)
-$win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-
-if ($win -eq $null) {
-    Write-Output '{"error":"Window not found for PID","pid":' + $targetPid + '}'
-    exit 0
-}
-
-$allCond = [System.Windows.Automation.Condition]::TrueCondition
-$elements = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $allCond)
-
-$result = @()
-$id = 0
-foreach ($el in $elements) {
-    try {
-        $name = $el.Current.Name
-        $ctrl = $el.Current.ControlType.ProgrammaticName
-        $autoId = $el.Current.AutomationId
-        $r = $el.Current.BoundingRectangle
-        $enabled = $el.Current.IsEnabled
-        $hasKb = $el.Current.IsKeyboardFocusable
-
-        # Skip invisible or unnamed elements (reduce noise)
-        if ($r.Width -le 0 -or $r.Height -le 0) { continue }
-
-        $d = @{
-            id = $id
-            name = if ($name) { $name } else { "" }
-            control_type = $ctrl -replace 'ControlType\.', ''
-            automation_id = if ($autoId) { $autoId } else { "" }
-            enabled = $enabled
-            focusable = $hasKb
-            rect = @{ x=[int]$r.X; y=[int]$r.Y; w=[int]$r.Width; h=[int]$r.Height }
-        }
-        $result += $d
-        $id++
-    } catch { continue }
-}
-
-$winName = $win.Current.Name
-$output = @{
-    window_title = $winName
-    pid = $targetPid
-    element_count = $result.Count
-    elements = $result
-}
-$output | ConvertTo-Json -Depth 4 -Compress
-`, pidFilter)
-
-	out, err := runPS(script, 15*time.Second)
+	result, err := bridge.call("inspect", bridgeParams)
 	if err != nil {
 		return nil, fmt.Errorf("get_window_tree failed: %w", err)
 	}
 
-	var tree map[string]any
-	if err := json.Unmarshal([]byte(out), &tree); err != nil {
-		return nil, fmt.Errorf("parse tree: %w (%s)", err, truncate(out, 200))
-	}
+	// Cache elements for click_element/type_text coordinate fallback
+	cacheElementsFromResult(result)
 
-	// Cache elements for click/type reference
-	if elems, ok := tree["elements"].([]any); ok {
-		elementCache.mu.Lock()
-		elementCache.elements = make([]map[string]any, 0, len(elems))
-		for _, e := range elems {
-			if m, ok := e.(map[string]any); ok {
-				elementCache.elements = append(elementCache.elements, m)
-			}
-		}
-		elementCache.pid = pid
-		elementCache.timestamp = time.Now()
-		elementCache.mu.Unlock()
-	}
-
-	return &RPCResult{Result: tree}, nil
+	return &RPCResult{Result: result}, nil
 }
 
-// ── click_element ────────────────────────────────────────────────────
+// ── click_element — delegates to FlaUI bridge for all actions ────────
 
 func handleClickElement(params map[string]any) (*RPCResult, error) {
 	elemID, ok := params["element_id"].(float64)
 	if !ok {
 		return nil, fmt.Errorf("missing required parameter: element_id")
 	}
-	id := int(elemID)
 
-	// Look up cached element for its bounding rect
-	elementCache.mu.Lock()
-	var rect map[string]any
-	if id >= 0 && id < len(elementCache.elements) {
-		if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
-			rect = r
-		}
-	}
-	elementCache.mu.Unlock()
-
-	if rect == nil {
-		return nil, fmt.Errorf("element [%d] not found in cache — run get_window_tree first", id)
+	action, _ := params["action"].(string)
+	if action == "" {
+		action = "click"
 	}
 
-	// Calculate center of element
-	x := toInt(rect["x"]) + toInt(rect["w"])/2
-	y := toInt(rect["y"]) + toInt(rect["h"])/2
+	bridgeParams := map[string]any{
+		"element_id": int(elemID),
+		"action":     action,
+	}
+	if value, ok := params["value"].(string); ok {
+		bridgeParams["value"] = value
+	}
 
-	script := fmt.Sprintf(`
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class Clicker {
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-    public static void Click(int x, int y) {
-        SetCursorPos(x, y);
-        System.Threading.Thread.Sleep(50);
-        mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); // LEFTDOWN
-        mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); // LEFTUP
-    }
-}
-'@
-[Clicker]::Click(%d, %d)
-Write-Output '{"success":true,"x":%d,"y":%d}'
-`, x, y, x, y)
-
-	out, err := runPS(script, 5*time.Second)
+	result, err := bridge.call("action", bridgeParams)
 	if err != nil {
-		return nil, fmt.Errorf("click_element failed: %w", err)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		return &RPCResult{Result: map[string]any{"success": true, "x": x, "y": y}}, nil
+		return nil, fmt.Errorf("click_element (action=%s) failed: %w", action, err)
 	}
 	return &RPCResult{Result: result}, nil
 }
@@ -272,17 +142,19 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("missing required parameter: text")
 	}
 
-	// If element_id is given, click it first
+	// If element_id is given, click it first to focus
 	if elemID, ok := params["element_id"].(float64); ok {
-		clickResult, err := handleClickElement(map[string]any{"element_id": elemID})
+		_, err := bridge.call("action", map[string]any{
+			"element_id": int(elemID),
+			"action":     "click",
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to click element before typing: %w", err)
 		}
-		_ = clickResult
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Escape text for PowerShell
+	// Use SendKeys for typing
 	escaped := strings.ReplaceAll(text, "'", "''")
 
 	script := fmt.Sprintf(`
@@ -311,7 +183,6 @@ func handlePressKeys(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("missing required parameter: keys")
 	}
 
-	// Convert "ctrl,s" → "^s", "alt,f4" → "%{F4}", etc.
 	sendKeysStr := convertToSendKeys(keys)
 
 	script := fmt.Sprintf(`
@@ -405,7 +276,57 @@ $ok = [Focuser]::Focus(%d)
 	return &RPCResult{Result: result}, nil
 }
 
+// ── find_element — delegates to FlaUI bridge ─────────────────────────
+
+func handleFindElement(params map[string]any) (*RPCResult, error) {
+	bridgeParams := make(map[string]any)
+	if pid, ok := params["pid"].(float64); ok {
+		bridgeParams["pid"] = int(pid)
+	}
+	for _, key := range []string{"automation_id", "name", "class_name", "control_type"} {
+		if v, ok := params[key].(string); ok && v != "" {
+			bridgeParams[key] = v
+		}
+	}
+
+	result, err := bridge.call("find", bridgeParams)
+	if err != nil {
+		return nil, fmt.Errorf("find_element failed: %w", err)
+	}
+	return &RPCResult{Result: result}, nil
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// cacheElementsFromResult extracts elements from a FlaUI inspect result
+// and stores them in the element cache for coordinate-based operations.
+func cacheElementsFromResult(result map[string]any) {
+	elems, ok := result["elements"].([]any)
+	if !ok {
+		return
+	}
+	elementCache.mu.Lock()
+	defer elementCache.mu.Unlock()
+	elementCache.elements = make([]map[string]any, 0, len(elems))
+	for _, e := range elems {
+		if m, ok := e.(map[string]any); ok {
+			elementCache.elements = append(elementCache.elements, m)
+		}
+	}
+	if pid, ok := result["pid"].(float64); ok {
+		elementCache.pid = int(pid)
+	}
+	elementCache.timestamp = time.Now()
+}
+
+// elementCache stores the last tree snapshot so type_text
+// can reference elements by their [id] without re-walking the tree.
+var elementCache struct {
+	mu        sync.Mutex
+	elements  []map[string]any
+	pid       int
+	timestamp time.Time
+}
 
 // runPS executes a PowerShell script with a timeout and returns stdout.
 func runPS(script string, timeout time.Duration) (string, error) {
@@ -448,7 +369,6 @@ func convertToSendKeys(keys string) string {
 		return modifiers
 	}
 
-	// Map special key names to SendKeys syntax
 	key := keyParts[0]
 	mapped := mapKey(key)
 
@@ -488,11 +408,9 @@ func mapKey(key string) string {
 	case "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
 		return "{" + strings.ToUpper(key) + "}"
 	default:
-		// For single characters, return as-is
 		if len(key) == 1 {
 			return key
 		}
-		// For unknown keys, wrap in braces
 		return "{" + strings.ToUpper(key) + "}"
 	}
 }

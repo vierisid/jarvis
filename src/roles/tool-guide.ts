@@ -129,18 +129,33 @@ export function buildToolGuide(hasSidecars: boolean): string {
   }
 
   // --- Desktop ---
-  lines.push('## Desktop Automation (Windows)');
+  lines.push('## Desktop Automation');
   lines.push('');
-  lines.push('Control Windows desktop applications via the desktop-bridge sidecar (FlaUI). Works like browser tools but for native Windows apps.');
+  lines.push('Control desktop applications on any platform (Windows, macOS, Linux). Works like browser tools but for native desktop apps. The same tools work on all platforms — the sidecar handles OS-specific details internally.');
   lines.push('');
-  lines.push('- `desktop_snapshot` — capture current window\'s UI elements');
-  lines.push('- `desktop_click` / `desktop_type` — interact by element [id]');
-  lines.push('- `desktop_open_app` — launch an application');
-  lines.push('- `desktop_switch_window` — switch to a window by title');
-  lines.push('- `desktop_list_windows` — list open windows');
-  lines.push('- `desktop_screenshot` — visual capture');
-  lines.push('- `desktop_scroll` — scroll within a window');
-  lines.push('- `desktop_hotkey` — send keyboard shortcuts');
+  lines.push('Workflow:');
+  lines.push('1. `desktop_list_windows` to see available windows with PIDs');
+  lines.push('2. `desktop_snapshot` to get the UI element tree with [id] numbers (like browser_snapshot)');
+  lines.push('3. `desktop_click` / `desktop_type` to interact using element [id]s');
+  lines.push('4. `desktop_snapshot` again to verify the result');
+  lines.push('');
+  lines.push('Tools:');
+  lines.push('- `desktop_list_windows` — list all visible windows (titles, PIDs, positions)');
+  lines.push('- `desktop_snapshot` — get the UI element tree of a window. Each element has an [id]. Optional `depth` param to control tree depth (default: 3).');
+  lines.push('- `desktop_click` — click or interact with an element by [id]. Optional `action` param: click (default), double_click, right_click, invoke, toggle, set_value, get_value, expand, collapse, focus. Optional `value` param for set_value.');
+  lines.push('- `desktop_type` — type text into the focused element. Optional `element_id` to click-focus first.');
+  lines.push('- `desktop_press_keys` — press key combos (e.g., "ctrl,s", "alt,f4", "enter")');
+  lines.push('- `desktop_find_element` — search for elements by property (name, control_type, class_name, automation_id) without scanning the full tree');
+  lines.push('- `desktop_launch_app` — launch an application by name or path');
+  lines.push('- `desktop_focus_window` — bring a window to the foreground by PID');
+  lines.push('- `desktop_screenshot` — visual capture of the desktop or a specific window');
+  lines.push('');
+  lines.push('Rules:');
+  lines.push('- Always `desktop_list_windows` first to get the PID, then `desktop_snapshot` with that PID.');
+  lines.push('- After clicking or typing, snapshot again to verify the updated state.');
+  lines.push('- Use `desktop_find_element` when you know the element name/type — faster than scanning the full tree.');
+  lines.push('- The `action` param on `desktop_click` supports richer interactions on Windows (invoke, toggle, set_value, expand, collapse). On macOS/Linux, only click, double_click, right_click, and focus are supported.');
+  lines.push('- `automation_id` in `desktop_find_element` is Windows-only; it is ignored on other platforms.');
   lines.push('');
 
   // --- Task Management ---

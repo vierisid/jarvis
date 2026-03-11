@@ -106,10 +106,16 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 		}
 	}
 
+	depth := 3
+	if v, ok := params["depth"].(float64); ok {
+		depth = int(v)
+	}
+
 	// Use JXA (JavaScript for Automation) to walk the accessibility tree
 	jsScript := fmt.Sprintf(`
 ObjC.import('stdlib')
 var se = Application('System Events')
+var maxDepth = %d
 var procs = se.processes.whose({unixId: %d})
 if (procs.length === 0) {
     JSON.stringify({error: 'Process not found', pid: %d})
@@ -117,7 +123,7 @@ if (procs.length === 0) {
 var proc = procs[0]
 var elements = []
 function walk(el, depth) {
-    if (depth > 3 || elements.length > 200) return
+    if (depth > maxDepth || elements.length > 200) return
     try {
         var role = el.role()
         var name = ''
@@ -146,7 +152,7 @@ for (var w = 0; w < wins.length; w++) { walk(wins[w], 0) }
 var winTitle = ''
 try { winTitle = proc.frontWindow ? proc.frontWindow.name() : (wins.length > 0 ? wins[0].name() : '') } catch(e) {}
 JSON.stringify({window_title: winTitle, pid: %d, element_count: elements.length, elements: elements})
-}`, pid, pid, pid)
+}`, depth, pid, pid, pid)
 
 	out, err := runOsascriptJS(jsScript, 20*time.Second)
 	if err != nil {
@@ -184,6 +190,11 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	}
 	id := int(elemID)
 
+	action, _ := params["action"].(string)
+	if action == "" {
+		action = "click"
+	}
+
 	// Look up cached element for its bounding rect
 	elementCache.mu.Lock()
 	var rect map[string]any
@@ -195,18 +206,34 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	elementCache.mu.Unlock()
 
 	if rect == nil {
-		return nil, fmt.Errorf("element [%d] not found in cache — run get_window_tree first", id)
+		return nil, fmt.Errorf("element [%d] not found in cache — run desktop_snapshot first", id)
 	}
 
-	// Calculate center of element
 	x := toInt(rect["x"]) + toInt(rect["w"])/2
 	y := toInt(rect["y"]) + toInt(rect["h"])/2
 
-	if err := clickAtCoords(x, y); err != nil {
-		return nil, fmt.Errorf("click_element failed: %w", err)
+	switch action {
+	case "click":
+		if err := clickAtCoords(x, y); err != nil {
+			return nil, fmt.Errorf("click_element failed: %w", err)
+		}
+	case "double_click":
+		if err := doubleClickAtCoords(x, y); err != nil {
+			return nil, fmt.Errorf("double_click failed: %w", err)
+		}
+	case "right_click":
+		if err := rightClickAtCoords(x, y); err != nil {
+			return nil, fmt.Errorf("right_click failed: %w", err)
+		}
+	case "focus":
+		if err := clickAtCoords(x, y); err != nil {
+			return nil, fmt.Errorf("focus failed: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("action '%s' is not supported on macOS (supported: click, double_click, right_click, focus)", action)
 	}
 
-	return &RPCResult{Result: map[string]any{"success": true, "x": x, "y": y}}, nil
+	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y}}, nil
 }
 
 // clickAtCoords performs a left-click at the given screen coordinates.
@@ -366,6 +393,99 @@ end tell`, pid)
 	success := err == nil
 
 	return &RPCResult{Result: map[string]any{"success": success, "pid": pid}}, nil
+}
+
+// doubleClickAtCoords performs a double-click at screen coordinates.
+func doubleClickAtCoords(x, y int) error {
+	if _, err := exec.LookPath("cliclick"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, "cliclick", fmt.Sprintf("dc:%d,%d", x, y)).Run()
+	}
+	pyScript := fmt.Sprintf(`
+from Quartz.CoreGraphics import *
+import time
+pt = CGPointMake(%d, %d)
+for _ in range(2):
+    ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, pt, kCGMouseButtonLeft)
+    CGEventSetIntegerValueField(ev, kCGMouseEventClickState, 2)
+    CGEventPost(kCGHIDEventTap, ev)
+    ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, pt, kCGMouseButtonLeft)
+    CGEventSetIntegerValueField(ev, kCGMouseEventClickState, 2)
+    CGEventPost(kCGHIDEventTap, ev)
+    time.sleep(0.05)
+`, x, y)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "python3", "-c", pyScript).Run()
+}
+
+// rightClickAtCoords performs a right-click at screen coordinates.
+func rightClickAtCoords(x, y int) error {
+	if _, err := exec.LookPath("cliclick"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, "cliclick", fmt.Sprintf("rc:%d,%d", x, y)).Run()
+	}
+	pyScript := fmt.Sprintf(`
+from Quartz.CoreGraphics import *
+import time
+pt = CGPointMake(%d, %d)
+ev = CGEventCreateMouseEvent(None, kCGEventRightMouseDown, pt, kCGMouseButtonRight)
+CGEventPost(kCGHIDEventTap, ev)
+time.sleep(0.05)
+ev = CGEventCreateMouseEvent(None, kCGEventRightMouseUp, pt, kCGMouseButtonRight)
+CGEventPost(kCGHIDEventTap, ev)
+`, x, y)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "python3", "-c", pyScript).Run()
+}
+
+// ── find_element ─────────────────────────────────────────────────────
+
+func handleFindElement(params map[string]any) (*RPCResult, error) {
+	// Snapshot the tree to populate the cache, then filter in Go
+	_, err := handleGetWindowTree(params)
+	if err != nil {
+		return nil, fmt.Errorf("find_element failed: %w", err)
+	}
+
+	name, _ := params["name"].(string)
+	controlType, _ := params["control_type"].(string)
+	className, _ := params["class_name"].(string)
+	// automation_id is ignored on macOS (not an accessibility concept)
+
+	elementCache.mu.Lock()
+	defer elementCache.mu.Unlock()
+
+	var matches []map[string]any
+	for _, el := range elementCache.elements {
+		if name != "" {
+			elName, _ := el["name"].(string)
+			if elName != name {
+				continue
+			}
+		}
+		if controlType != "" {
+			elType, _ := el["control_type"].(string)
+			if elType != controlType {
+				continue
+			}
+		}
+		if className != "" {
+			elClass, _ := el["class_name"].(string)
+			if elClass != className {
+				continue
+			}
+		}
+		matches = append(matches, el)
+	}
+
+	return &RPCResult{Result: map[string]any{
+		"match_count": len(matches),
+		"elements":    matches,
+	}}, nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
