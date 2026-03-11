@@ -374,7 +374,10 @@ export class WebSocketServer {
       }
     }
 
-    console.log(`[WebSocketServer] Broadcast to ${sent}/${this.clients.size} clients`);
+    // Only log errors or when no clients received the message
+    if (sent === 0 && this.clients.size > 0) {
+      console.warn(`[WebSocketServer] Broadcast failed: 0/${this.clients.size} clients received message`);
+    }
   }
 
   send(client: ServerWebSocket<unknown>, message: WSMessage): void {

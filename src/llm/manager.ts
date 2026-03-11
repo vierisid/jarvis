@@ -93,30 +93,55 @@ export class LLMManager {
   async *stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
     const providerNames = [this.primaryProvider, ...this.fallbackChain];
     const errors: Array<{ provider: string; error: string }> = [];
+    const MAX_RETRIES_PER_PROVIDER = 3;
+    const RETRY_BASE_MS = 5000;
 
     for (const providerName of providerNames) {
       const provider = this.providers.get(providerName);
       if (!provider) continue;
 
-      try {
-        let hasError = false;
-        for await (const event of provider.stream(messages, options)) {
-          if (event.type === 'error') {
-            hasError = true;
-            errors.push({ provider: providerName, error: event.error });
-            console.error(`Provider ${providerName} stream error:`, event.error);
-            break;
+      for (let attempt = 0; attempt <= MAX_RETRIES_PER_PROVIDER; attempt++) {
+        try {
+          let hasError = false;
+          let isRetryable = false;
+          for await (const event of provider.stream(messages, options)) {
+            if (event.type === 'error') {
+              hasError = true;
+              // Retry on transient errors (overloaded, rate limit, server errors)
+              isRetryable = /overloaded|rate.limit|529|5\d\d|timeout/i.test(event.error);
+              if (isRetryable && attempt < MAX_RETRIES_PER_PROVIDER) {
+                const delay = RETRY_BASE_MS * Math.pow(2, attempt);
+                console.log(`[LLMManager] ${providerName} stream error (${event.error}) — retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES_PER_PROVIDER})`);
+                await Bun.sleep(delay);
+              } else {
+                errors.push({ provider: providerName, error: event.error });
+                console.error(`Provider ${providerName} stream error:`, event.error);
+              }
+              break;
+            }
+            yield event;
           }
-          yield event;
-        }
 
-        if (!hasError) {
-          return; // Successful stream completion
+          if (!hasError) {
+            return; // Successful stream completion
+          }
+          if (isRetryable && attempt < MAX_RETRIES_PER_PROVIDER) {
+            continue; // Retry same provider
+          }
+          break; // Non-retryable error, try next provider
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const isRetryable = /overloaded|rate.limit|529|5\d\d|timeout|ECONNRESET/i.test(errorMsg);
+          if (isRetryable && attempt < MAX_RETRIES_PER_PROVIDER) {
+            const delay = RETRY_BASE_MS * Math.pow(2, attempt);
+            console.log(`[LLMManager] ${providerName} stream failed (${errorMsg}) — retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES_PER_PROVIDER})`);
+            await Bun.sleep(delay);
+            continue;
+          }
+          errors.push({ provider: providerName, error: errorMsg });
+          console.error(`Provider ${providerName} stream failed:`, errorMsg);
+          break; // Try next provider
         }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        errors.push({ provider: providerName, error: errorMsg });
-        console.error(`Provider ${providerName} stream failed:`, errorMsg);
       }
     }
 

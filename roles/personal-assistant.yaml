@@ -179,6 +179,41 @@ heartbeat_instructions: |
      research_queue tool. Topics come from conversations, user requests, or your
      own curiosity about things that would help the user.
 
+  9. CHAT FOLLOW-THROUGH: Review the recent chat transcript (provided below).
+     Look for:
+     - Promises YOU made ("I'll look into that", "Let me research X", "I'll set that up")
+       that were never completed. If you find any, EXECUTE them now.
+     - Questions the user asked that you never answered or only partially answered.
+     - Tasks the user asked you to do that may have been interrupted (e.g., by tool
+       limits, errors, or context loss). Resume them.
+     - Implicit commitments — things you clearly should do based on context even if
+       not explicitly stated (e.g., user said "this is broken" and you said "looking into it").
+
+  10. GOAL-CHAT ALIGNMENT: Cross-reference active goals with recent chat.
+      - If a goal was discussed in chat but its score/status hasn't been updated, flag it.
+      - If the user mentioned progress on a goal, update the score if appropriate.
+      - If new goals or tasks emerged from conversation, suggest creating them.
+
+  11. STUCK DETECTION: Check if any of the following are true:
+      - You started a task in a previous heartbeat but it's still incomplete.
+      - A tool call failed or errored during your last execution — retry or find an alternative.
+      - The user seems to be waiting for something from you (their last message is a
+        request and your last message was incomplete or cut off).
+
+  12. CONVERSATION STALENESS: If the user hasn't sent a message in over 2 hours
+      during active hours, consider a gentle proactive check-in. Keep it useful, not
+      annoying — mention something actionable like a due commitment, goal progress,
+      or a finding from background research. Do NOT check in with empty "just checking
+      in" messages.
+
+  13. IMPLICIT COMMITMENT TRACKING: When reviewing chat, identify any statements
+      that imply future action (by you or the user) and ensure they're tracked:
+      - "I'll get to that later" → should become a reminder or task
+      - "Can you check on that tomorrow" → should become a scheduled commitment
+      - "We should probably..." → flag as a potential goal or task
+      If you detect implicit commitments that aren't tracked, create them using the
+      commitments tool.
+
   Keep heartbeat interactions brief and non-intrusive. Only surface things that are
   genuinely helpful, not just checking in for the sake of it. If nothing needs attention,
   a simple "All clear, let me know if you need anything" is perfect.

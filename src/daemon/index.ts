@@ -895,9 +895,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     console.log(`[Daemon] Heartbeat interval: ${heartbeatConfig?.interval_minutes ?? 15} min, active hours: ${activeHours.start}:00-${activeHours.end}:00`);
 
+    const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minute timeout for heartbeat
     let heartbeatBusy = false;
     heartbeatTimer = setInterval(async () => {
-      if (heartbeatBusy) return;
+      if (heartbeatBusy) {
+        console.log('[Daemon] Skipping heartbeat — previous still running');
+        return;
+      }
       // Check if within active hours
       const currentHour = new Date().getHours();
       if (currentHour < activeHours.start || currentHour >= activeHours.end) {
@@ -906,6 +910,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
 
       heartbeatBusy = true;
+      console.log('[Daemon] Heartbeat starting...');
       try {
         // Check commitments and route critical/high ones to reactor
         const commitmentEvents = checkCommitments();
@@ -922,14 +927,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Flush coalesced events for heartbeat
         const coalescedSummary = coalescer.flush();
 
-        // Run heartbeat on BACKGROUND agent (separate browser, doesn't block chat)
-        const heartbeatResponse = await bgAgentService.handleHeartbeat(
+        // Run heartbeat on BACKGROUND agent with timeout to prevent stuck busy lock
+        const heartbeatPromise = bgAgentService.handleHeartbeat(
           coalescedSummary || undefined
         );
+        const timeoutPromise = new Promise<null>((resolve) =>
+          setTimeout(() => {
+            console.error('[Daemon] Heartbeat timed out after 5 minutes');
+            resolve(null);
+          }, HEARTBEAT_TIMEOUT_MS)
+        );
+
+        const heartbeatResponse = await Promise.race([heartbeatPromise, timeoutPromise]);
 
         if (heartbeatResponse) {
-          console.log('[Daemon] Heartbeat response:', heartbeatResponse.slice(0, 100));
+          console.log('[Daemon] Heartbeat response:', heartbeatResponse.slice(0, 200));
           wsService.broadcastHeartbeat(heartbeatResponse);
+        } else {
+          console.log('[Daemon] Heartbeat returned no response (busy or timed out)');
         }
       } catch (err) {
         console.error('[Daemon] Heartbeat error:', err);

@@ -56,7 +56,7 @@ export function MessageBubble({ message }: Props) {
               [heartbeat]
             </span>
           )}
-          {message.content}
+          <MarkdownContent content={message.content} />
         </div>
       </div>
     );
