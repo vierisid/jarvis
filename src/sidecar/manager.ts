@@ -50,7 +50,6 @@ export class SidecarManager implements Service {
   private sidecarConnections = new Map<string, SidecarConnection>();
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
-  private disconnectListeners = new Set<(sidecarId: string) => void>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -96,17 +95,16 @@ export class SidecarManager implements Service {
         }
       });
 
-      // Use wildcard handler for sidecar events: the scheduler dispatches by
-      // event_type (e.g. "screen_capture", "context_changed"), not the protocol
-      // category "sidecar_event", so a specific handler name would never match.
-      this.scheduler.on('*', async (sidecarId, event) => {
-        // Skip RPC events — they have dedicated handlers above
-        if (event.type === 'rpc_result' || event.type === 'rpc_progress') return;
-
+      // Register handlers for each sidecar observer event type
+      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change'];
+      const sidecarEventHandler = async (sidecarId: string, event: SidecarEvent) => {
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);
         }
-      });
+      };
+      for (const type of sidecarEventTypes) {
+        this.scheduler.on(type, sidecarEventHandler);
+      }
 
       this.rpcTracker.onDetachedComplete((rpcId, result, error) => {
         if (error) {
@@ -477,11 +475,6 @@ export class SidecarManager implements Service {
     this.scheduler.removeSidecar(sidecarId);
     this.rpcTracker.failAll(sidecarId, 'disconnected');
     this.removeConnection(sidecarId);
-
-    // Notify disconnect listeners
-    for (const listener of this.disconnectListeners) {
-      try { listener(sidecarId); } catch { /* non-fatal */ }
-    }
   }
 
   // --------------- Protocol: RPC Dispatch ---------------
@@ -524,11 +517,6 @@ export class SidecarManager implements Service {
   /** Register a listener for sidecar events */
   onEvent(listener: (sidecarId: string, event: SidecarEvent) => void): void {
     this.eventListeners.add(listener);
-  }
-
-  /** Register a listener for sidecar disconnections */
-  onDisconnect(listener: (sidecarId: string) => void): void {
-    this.disconnectListeners.add(listener);
   }
 
   // --------------- Helpers ---------------
