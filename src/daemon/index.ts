@@ -251,6 +251,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     initDatabase(config.dbPath);
     logWithTimestamp('Database initialized successfully');
 
+    // 2b. Load LLM settings from DB + encrypted keychain, merge into config
+    const { mergeLLMSettingsIntoConfig } = await import('./llm-settings.ts');
+    mergeLLMSettingsIntoConfig(jarvisConfig);
+    logWithTimestamp('LLM settings loaded from database');
+
     // 3. Create service registry
     registry = new ServiceRegistry();
 

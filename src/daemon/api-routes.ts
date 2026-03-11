@@ -542,6 +542,44 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // --- LLM Configuration (DB + encrypted keychain) ---
+    '/api/config/llm': {
+      GET: async () => {
+        const { getLLMSettings } = await import('./llm-settings.ts');
+        return json(getLLMSettings(ctx.config));
+      },
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as Record<string, unknown>;
+          const { saveLLMSettings, hotReloadLLMProviders } = await import('./llm-settings.ts');
+
+          saveLLMSettings(ctx.config, body as any);
+
+          // Hot-reload providers on the shared LLMManager
+          const llmManager = ctx.agentService.getLLMManager();
+          hotReloadLLMProviders(ctx.config, llmManager);
+
+          return json({ ok: true, message: 'LLM configuration saved and applied.' });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error(`Failed to save LLM config: ${msg}`);
+        }
+      },
+    },
+
+    '/api/config/llm/test': {
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as { provider: string; api_key?: string; model?: string; base_url?: string };
+          const { testLLMProvider } = await import('./llm-settings.ts');
+          const result = await testLLMProvider(body, ctx.config);
+          return json(result);
+        } catch (err) {
+          return error('Invalid request body');
+        }
+      },
+    },
+
     // --- Roles ---
     '/api/roles': {
       GET: () => {

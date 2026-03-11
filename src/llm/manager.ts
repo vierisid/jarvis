@@ -42,6 +42,32 @@ export class LLMManager {
     return this.providers.get(name);
   }
 
+  getPrimary(): string {
+    return this.primaryProvider;
+  }
+
+  getFallbackChain(): string[] {
+    return [...this.fallbackChain];
+  }
+
+  getProviderNames(): string[] {
+    return [...this.providers.keys()];
+  }
+
+  /**
+   * Atomically replace all providers. Safe for in-flight requests because
+   * JS is single-threaded and the map assignment is atomic.
+   */
+  replaceProviders(providers: LLMProvider[], primary: string, fallback: string[]): void {
+    const newMap = new Map<string, LLMProvider>();
+    for (const p of providers) {
+      newMap.set(p.name, p);
+    }
+    this.providers = newMap;
+    this.primaryProvider = newMap.has(primary) ? primary : (providers[0]?.name ?? '');
+    this.fallbackChain = fallback.filter(n => newMap.has(n));
+  }
+
   async chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse> {
     const providerNames = [this.primaryProvider, ...this.fallbackChain];
     const errors: Array<{ provider: string; error: string }> = [];

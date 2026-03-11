@@ -646,4 +646,13 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_name ON sidecars(name)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_token_id ON sidecars(token_id)`);
+
+  // Settings table: key-value store for dashboard-managed configuration
+  db.run(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
 }
