@@ -41,12 +41,29 @@ type RPCRequest struct {
 	Params map[string]any `json:"params"`
 }
 
-// BinaryDataInline holds inline binary data (e.g. screenshot).
-type BinaryDataInline struct {
-	Type     string `json:"type"`
-	MimeType string `json:"mime_type"`
-	Data     string `json:"data"`
+// BinaryData is the interface for binary attachment metadata in events.
+type BinaryData interface {
+	binaryMarker()
 }
+
+// BinaryDataInline holds inline base64 binary data (e.g. screenshot < 256KB).
+type BinaryDataInline struct {
+	Type     string `json:"type"`      // always "inline"
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`      // base64-encoded
+}
+
+func (BinaryDataInline) binaryMarker() {}
+
+// BinaryDataRef references binary data sent in a separate WebSocket binary frame.
+type BinaryDataRef struct {
+	Type     string `json:"type"`      // always "ref"
+	RefID    string `json:"ref_id"`
+	MimeType string `json:"mime_type"`
+	Size     int    `json:"size"`
+}
+
+func (BinaryDataRef) binaryMarker() {}
 
 // SidecarEvent is a message from sidecar to brain.
 type SidecarEvent struct {
@@ -55,7 +72,7 @@ type SidecarEvent struct {
 	Timestamp int64          `json:"timestamp"`
 	Payload   map[string]any `json:"payload"`
 	Priority  string         `json:"priority,omitempty"`
-	Binary    *BinaryDataInline `json:"binary,omitempty"`
+	Binary    BinaryData     `json:"binary,omitempty"`
 }
 
 // SidecarRegistration is sent on connect.
@@ -103,8 +120,8 @@ type BrowserConfig struct {
 
 // RPCResult is returned by handlers.
 type RPCResult struct {
-	Result any               `json:"result"`
-	Binary *BinaryDataInline `json:"binary,omitempty"`
+	Result any        `json:"result"`
+	Binary BinaryData `json:"binary,omitempty"`
 }
 
 // RPCHandler processes an RPC request.

@@ -260,7 +260,7 @@ func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
 
 	return &RPCResult{
 		Result: map[string]any{"captured": true},
-		Binary: &BinaryDataInline{
+		Binary: BinaryDataInline{
 			Type:     "inline",
 			MimeType: "image/png",
 			Data:     base64.StdEncoding.EncodeToString(data),

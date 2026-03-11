@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"nhooyr.io/websocket"
 )
 
@@ -146,8 +147,8 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	obsCtx, obsCancel := context.WithCancel(ctx)
 	defer obsCancel()
 
-	sendFn := func(ctx context.Context, event SidecarEvent) error {
-		return c.sendJSON(ctx, event)
+	sendFn := func(ctx context.Context, event SidecarEvent, binaryData []byte) error {
+		return c.sendEvent(ctx, event, binaryData)
 	}
 
 	c.mu.Lock()
@@ -276,20 +277,15 @@ func (c *SidecarClient) sendEvent(ctx context.Context, event SidecarEvent, binar
 	const binaryRefThreshold = 256 * 1024
 
 	if len(binaryData) > 0 && len(binaryData) >= binaryRefThreshold {
-		// Use binary ref protocol: send JSON with ref, then binary frame
-		refId := fmt.Sprintf("%s-%d", event.EventType, event.Timestamp)
-		// Pad/truncate to 36 bytes
-		if len(refId) > 36 {
-			refId = refId[:36]
-		}
-		for len(refId) < 36 {
-			refId += "0"
-		}
+		// Use binary ref protocol: send JSON with ref, then binary frame.
+		refId := generateRefID()
+		log.Printf("[sidecar] Sending %s via binary ref (%d bytes, ref=%s)", event.EventType, len(binaryData), refId)
 
-		event.Binary = &BinaryDataInline{
+		event.Binary = BinaryDataRef{
 			Type:     "ref",
+			RefID:    refId,
 			MimeType: "image/png",
-			Data:     refId, // repurpose Data field as ref_id for ref type
+			Size:     len(binaryData),
 		}
 
 		if err := c.sendJSON(ctx, event); err != nil {
@@ -300,7 +296,7 @@ func (c *SidecarClient) sendEvent(ctx context.Context, event SidecarEvent, binar
 
 	if len(binaryData) > 0 {
 		// Inline as base64
-		event.Binary = &BinaryDataInline{
+		event.Binary = BinaryDataInline{
 			Type:     "inline",
 			MimeType: "image/png",
 			Data:     base64Encode(binaryData),
@@ -312,4 +308,10 @@ func (c *SidecarClient) sendEvent(ctx context.Context, event SidecarEvent, binar
 
 func base64Encode(data []byte) string {
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+// generateRefID creates a UUID v4 string (hex + dashes, 36 chars)
+// that passes the TS validator's /^[0-9a-f-]{36}$/ check.
+func generateRefID() string {
+	return uuid.New().String()
 }
