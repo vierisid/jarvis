@@ -63,8 +63,11 @@ func checkBrowser(cfg *SidecarConfig) string {
 }
 
 func checkDesktop() string {
-	if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
-		return ""
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return "no display server (DISPLAY/WAYLAND_DISPLAY not set)"
 	}
-	return "no display server (DISPLAY/WAYLAND_DISPLAY not set)"
+	if _, err := exec.LookPath("xdotool"); err != nil {
+		return "xdotool not found (required for desktop automation)"
+	}
+	return ""
 }

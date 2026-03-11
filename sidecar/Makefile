@@ -45,6 +45,20 @@ dist: test vet
 			-o "dist/$${os}-$${arch}/$(BIN_NAME)$${ext}" . || exit 1; \
 	done
 
+# Build FlaUI bridge for Windows (requires dotnet SDK)
+flaui-bridge:
+	@if command -v dotnet >/dev/null 2>&1; then \
+		echo "Building FlaUI bridge..."; \
+		cd flaui-bridge && dotnet publish -c Release -r win-x64 \
+			--self-contained true \
+			-p:PublishSingleFile=true \
+			-p:IncludeNativeLibrariesForSelfExtract=true \
+			-o ../dist/windows-amd64/ 2>&1; \
+	else \
+		echo "SKIP: dotnet SDK not found — flaui-bridge will not be included in Windows build"; \
+		echo "      Install .NET SDK or build flaui-bridge separately on Windows"; \
+	fi
+
 # Copy binaries into npm platform packages and pack them
 npm-pack: dist
 	@# darwin-arm64
@@ -59,9 +73,13 @@ npm-pack: dist
 	@# linux-arm64
 	mkdir -p npm/linux-arm64/bin
 	cp dist/linux-arm64/$(BIN_NAME) npm/linux-arm64/bin/
-	@# win32-x64
+	@# win32-x64 (include flaui-bridge if available)
 	mkdir -p npm/win32-x64/bin
 	cp dist/windows-amd64/$(BIN_NAME).exe npm/win32-x64/bin/
+	@if [ -f dist/windows-amd64/flaui-bridge.exe ]; then \
+		cp dist/windows-amd64/flaui-bridge.exe npm/win32-x64/bin/; \
+		echo "Included flaui-bridge.exe in win32-x64 package"; \
+	fi
 	@# Pack all platform packages + main package
 	@for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64 npm/jarvis-sidecar; do \
 		echo "Packing $$dir..."; \

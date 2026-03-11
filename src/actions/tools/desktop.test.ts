@@ -2,8 +2,8 @@ import { test, expect, describe } from 'bun:test';
 import { DESKTOP_TOOLS } from './desktop.ts';
 
 describe('DESKTOP_TOOLS', () => {
-  test('contains 8 desktop tools', () => {
-    expect(DESKTOP_TOOLS).toHaveLength(8);
+  test('contains 11 desktop tools (8 basic + 3 FlaUI)', () => {
+    expect(DESKTOP_TOOLS).toHaveLength(11);
   });
 
   test('all have desktop category', () => {
@@ -23,6 +23,9 @@ describe('DESKTOP_TOOLS', () => {
       'desktop_screenshot',
       'desktop_snapshot',
       'desktop_type',
+      'flaui_action',
+      'flaui_find',
+      'flaui_inspect',
     ]);
   });
 

@@ -157,28 +157,25 @@ export async function runDoctor(): Promise<void> {
     results.push({ name: 'SQLite', status: 'fail', message: String(err) });
   }
 
-  // ── Check 9: Desktop Bridge (Windows/WSL only) ────────────────────
+  // ── Check 9: FlaUI Bridge (Windows/WSL only) ─────────────────────
 
-  const platform = process.platform;
   try {
     const procVersion = readFileSync('/proc/version', 'utf-8');
     const isWSL = procVersion.toLowerCase().includes('microsoft');
     if (isWSL) {
-      // Check for desktop-bridge.exe
-      const bridgePath = config?.desktop?.sidecar_path;
-      if (bridgePath && existsSync(bridgePath)) {
-        results.push({ name: 'Desktop Bridge', status: 'ok', message: bridgePath });
-      } else {
-        results.push({ name: 'Desktop Bridge', status: 'warn', message: 'Not configured. Desktop control will be limited.' });
+      const { checkFLAUIBridge } = await import('./deps.ts');
+      const flaui = checkFLAUIBridge();
+      if (flaui && flaui.found) {
+        results.push({ name: 'FlaUI Bridge', status: 'ok', message: flaui.path ?? 'Found' });
+      } else if (flaui) {
+        results.push({ name: 'FlaUI Bridge', status: 'warn', message: 'Not found. Rich desktop automation unavailable. Basic tools still work.' });
       }
     } else {
-      results.push({ name: 'Desktop Bridge', status: 'skip', message: 'Not needed on Linux' });
+      results.push({ name: 'FlaUI Bridge', status: 'skip', message: 'Windows-only (not needed on native Linux)' });
     }
   } catch {
-    if (platform === 'darwin') {
-      results.push({ name: 'Desktop Bridge', status: 'skip', message: 'Not available on macOS' });
-    } else {
-      results.push({ name: 'Desktop Bridge', status: 'skip', message: 'Not needed' });
+    if (process.platform === 'darwin') {
+      results.push({ name: 'FlaUI Bridge', status: 'skip', message: 'Windows-only (not needed on macOS)' });
     }
   }
 

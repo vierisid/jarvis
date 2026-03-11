@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -35,6 +37,51 @@ func platformCaptureScreen(outputPath string) error {
 
 func platformDefaultShell() string {
 	return "cmd.exe"
+}
+
+// launchChromeIfNeeded starts Chrome with remote debugging if not already running.
+func launchChromeIfNeeded(cfg *SidecarConfig) {
+	port := cfg.Browser.CDPPort
+	if port == 0 {
+		port = 9222
+	}
+
+	// Check if Chrome is already listening
+	url := fmt.Sprintf("http://localhost:%d/json/version", port)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+		return // Already running
+	}
+
+	// Try to launch Chrome with debugging port
+	chromePaths := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+	}
+
+	profileDir := cfg.Browser.ProfileDir
+	if profileDir == "" {
+		profileDir = fmt.Sprintf(`%%TEMP%%\jarvis-chrome-profile`)
+	}
+
+	for _, chromePath := range chromePaths {
+		cmd := exec.Command(chromePath,
+			fmt.Sprintf("--remote-debugging-port=%d", port),
+			fmt.Sprintf("--user-data-dir=%s", profileDir),
+			"--no-first-run",
+			"about:blank",
+		)
+		if err := cmd.Start(); err == nil {
+			log.Printf("[browser] Launched Chrome with CDP on port %d", port)
+			time.Sleep(2 * time.Second) // Give Chrome time to start
+			return
+		}
+	}
+
+	log.Printf("[browser] Could not launch Chrome — browser tools may not work")
 }
 
 func platformGetActiveWindow() (appName string, windowTitle string) {
