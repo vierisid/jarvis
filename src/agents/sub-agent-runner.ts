@@ -18,7 +18,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
 
-const MAX_TOOL_ITERATIONS = 15; // Lower than primary's 25 — sub-agents should be focused
+const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
 
 export type SubAgentResult = {

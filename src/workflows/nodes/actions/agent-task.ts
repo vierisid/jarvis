@@ -20,14 +20,14 @@ export const agentTaskAction: NodeDefinition = {
       label: 'Max Iterations',
       description: 'Maximum tool-loop iterations the sub-agent may run.',
       required: false,
-      default: 15,
+      default: 100,
     },
   },
   inputs: ['default'],
   outputs: ['default'],
   execute: async (input, config, ctx) => {
     const task = String(config.task ?? '');
-    const maxIterations = typeof config.max_iterations === 'number' ? config.max_iterations : 15;
+    const maxIterations = typeof config.max_iterations === 'number' ? config.max_iterations : 100;
 
     ctx.logger.info(`Dispatching agent task (max ${maxIterations} iterations): ${task.slice(0, 120)}`);
 
