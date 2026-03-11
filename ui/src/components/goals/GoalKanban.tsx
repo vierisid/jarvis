@@ -22,7 +22,7 @@ const columns: Column[] = [
   { id: "completed", label: "Done", filter: (g) => g.status === "completed" || g.status === "failed" || g.status === "killed", color: "var(--j-success)" },
 ];
 
-export function GoalKanban({ goals, onSelect }: Props) {
+export function GoalKanban({ goals, onSelect, onRefresh }: Props) {
   // Only show root goals and first-level children in kanban
   const rootGoals = goals.filter(g => !g.parent_id);
   const topGoals = goals.filter(g => !g.parent_id || rootGoals.some(r => r.id === g.parent_id));
@@ -85,7 +85,7 @@ export function GoalKanban({ goals, onSelect }: Props) {
               gap: "8px",
             }}>
               {colGoals.map((goal) => (
-                <GoalCard key={goal.id} goal={goal} onClick={onSelect} />
+                <GoalCard key={goal.id} goal={goal} onClick={onSelect} onDelete={() => onRefresh()} />
               ))}
               {colGoals.length === 0 && (
                 <div style={{

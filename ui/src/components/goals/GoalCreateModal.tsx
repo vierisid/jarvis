@@ -10,7 +10,7 @@ type Props = {
 type GoalProposal = {
   objective: { title: string; description: string; success_criteria: string; time_horizon: string };
   key_results: { title: string; description: string; success_criteria: string }[];
-  milestones: { title: string; description: string; kr_index: number }[];
+  milestones: { title: string; description: string; key_result_index: number }[];
   clarifying_questions: string[];
 };
 
@@ -203,7 +203,7 @@ export function GoalCreateModal({ onClose, onCreated }: Props) {
                   />
                   {/* Milestones under this KR */}
                   {proposal.milestones
-                    .filter(m => m.kr_index === i)
+                    .filter(m => m.key_result_index === i)
                     .map((m, j) => (
                       <ProposalCard
                         key={j}

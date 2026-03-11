@@ -1,8 +1,11 @@
+import { useState } from "react";
+import { api } from "../../hooks/useApi";
 import type { Goal } from "../../pages/GoalsPage";
 
 type Props = {
   goal: Goal;
   onClick: (goal: Goal) => void;
+  onDelete?: (goalId: string) => void;
 };
 
 const healthColors: Record<string, string> = {
@@ -27,26 +30,130 @@ function scoreColor(score: number): string {
   return "var(--j-text-muted)";
 }
 
-export function GoalCard({ goal, onClick }: Props) {
+export function GoalCard({ goal, onClick, onDelete }: Props) {
+  const [hovered, setHovered] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   const daysLeft = goal.deadline
     ? Math.ceil((goal.deadline - Date.now()) / 86400000)
     : null;
 
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(true);
+  };
+
+  const handleConfirmDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await api(`/api/goals/${goal.id}`, { method: "DELETE" });
+      onDelete?.(goal.id);
+    } catch { /* ignore */ }
+    setConfirmDelete(false);
+  };
+
+  const handleCancelDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(false);
+  };
+
   return (
     <div
       onClick={() => onClick(goal)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setConfirmDelete(false); }}
       style={{
         padding: "12px",
         background: "var(--j-surface)",
-        border: "1px solid var(--j-border)",
+        border: `1px solid ${hovered ? "var(--j-accent-dim)" : "var(--j-border)"}`,
         borderRadius: "8px",
         cursor: "pointer",
         transition: "border-color 0.15s",
         borderLeft: `3px solid ${healthColors[goal.health] ?? "var(--j-border)"}`,
+        position: "relative",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--j-accent-dim)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--j-border)"; e.currentTarget.style.borderLeftColor = healthColors[goal.health] ?? "var(--j-border)"; }}
     >
+      {/* Delete button (on hover) */}
+      {hovered && !confirmDelete && (
+        <button
+          onClick={handleDeleteClick}
+          title="Delete goal"
+          style={{
+            position: "absolute",
+            top: "6px",
+            right: "6px",
+            width: "22px",
+            height: "22px",
+            borderRadius: "4px",
+            border: "none",
+            background: "rgba(239, 68, 68, 0.15)",
+            color: "var(--j-error)",
+            fontSize: "12px",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+          }}
+        >
+          {"\u2715"}
+        </button>
+      )}
+
+      {/* Confirm delete overlay */}
+      {confirmDelete && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "var(--j-surface)",
+            borderRadius: "8px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "8px",
+            zIndex: 1,
+          }}
+        >
+          <span style={{ fontSize: "12px", color: "var(--j-error)", fontWeight: 500 }}>
+            Delete this goal?
+          </span>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              onClick={handleCancelDelete}
+              style={{
+                padding: "4px 12px",
+                borderRadius: "4px",
+                border: "1px solid var(--j-border)",
+                background: "transparent",
+                color: "var(--j-text-dim)",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmDelete}
+              style={{
+                padding: "4px 12px",
+                borderRadius: "4px",
+                border: "none",
+                background: "var(--j-error)",
+                color: "#fff",
+                fontSize: "11px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Title row */}
       <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
         <span style={{ fontSize: "12px", color: "var(--j-text-muted)" }}>

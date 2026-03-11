@@ -1810,6 +1810,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
+          const mode = body.mode as string | undefined;
+
+          // Natural language → OKR proposal (uses LLM)
+          if (mode === 'propose') {
+            const text = body.text as string;
+            if (!text?.trim()) return error('text is required for propose mode', 400);
+            const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
+            const llmManager = ctx.agentService.getLLMManager();
+            const builder = new NLGoalBuilder(llmManager);
+            const proposal = await builder.parseGoal(text.trim());
+            return json(proposal);
+          }
+
+          // Create goals from a confirmed proposal
+          if (mode === 'create_from_proposal') {
+            const proposal = body.proposal as any;
+            if (!proposal?.objective?.title) return error('proposal with objective required', 400);
+            const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
+            const llmManager = ctx.agentService.getLLMManager();
+            const builder = new NLGoalBuilder(llmManager);
+            const created = builder.createFromProposal(proposal, body.parent_id as string | undefined);
+            return json(created, 201);
+          }
+
+          // Quick create (direct)
           const title = body.title as string;
           const level = (body.level as string) ?? 'task';
           if (!title) return error('title is required', 400);

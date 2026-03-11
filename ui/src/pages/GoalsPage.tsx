@@ -76,8 +76,8 @@ export default function GoalsPage({ goalEvents }: Props) {
     fetchGoals();
     if (selectedGoal) {
       fetch(`/api/goals/${selectedGoal.id}`)
-        .then(r => r.json())
-        .then(g => setSelectedGoal(g))
+        .then(r => r.ok ? r.json() : null)
+        .then(g => { if (g) setSelectedGoal(g); else setSelectedGoal(null); })
         .catch(() => setSelectedGoal(null));
     }
   };

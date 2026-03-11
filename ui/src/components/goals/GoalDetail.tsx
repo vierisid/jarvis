@@ -56,6 +56,7 @@ export function GoalDetail({ goal, onClose, onUpdated }: Props) {
   const [children, setChildren] = useState<Goal[]>([]);
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setTitleValue(goal.title);
@@ -557,22 +558,54 @@ export function GoalDetail({ goal, onClose, onUpdated }: Props) {
 
         {/* Danger Zone */}
         <div style={{ marginTop: "8px", paddingTop: "12px", borderTop: "1px solid var(--j-border)" }}>
-          <button
-            onClick={handleDelete}
-            style={{
-              width: "100%",
-              padding: "8px",
-              borderRadius: "6px",
-              border: "1px solid var(--j-error)",
-              background: "rgba(239, 68, 68, 0.1)",
-              color: "var(--j-error)",
-              fontSize: "12px",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Delete Goal
-          </button>
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              style={{
+                width: "100%",
+                padding: "8px",
+                borderRadius: "6px",
+                border: "1px solid var(--j-error)",
+                background: "rgba(239, 68, 68, 0.1)",
+                color: "var(--j-error)",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Delete Goal
+            </button>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <span style={{ fontSize: "12px", color: "var(--j-error)", fontWeight: 500, textAlign: "center" }}>
+                Are you sure? This will also delete all child goals.
+              </span>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  style={{ ...btnSecondary, flex: 1 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  style={{
+                    flex: 1,
+                    padding: "6px 12px",
+                    borderRadius: "4px",
+                    border: "none",
+                    background: "var(--j-error)",
+                    color: "#fff",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Yes, Delete
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
