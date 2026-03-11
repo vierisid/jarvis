@@ -2,6 +2,7 @@ import React from "react";
 import type { ChatMessage } from "../../hooks/useWebSocket";
 import { ToolCallBadge } from "./ToolCallBadge";
 import { SubAgentTag } from "./SubAgentTag";
+import { MarkdownContent } from "./MarkdownContent";
 
 type Props = {
   message: ChatMessage;
@@ -106,12 +107,12 @@ export function MessageBubble({ message }: Props) {
             }`,
             fontSize: "14px",
             lineHeight: "1.6",
-            whiteSpace: "pre-wrap",
+            whiteSpace: isUser ? "pre-wrap" : undefined,
             wordBreak: "break-word",
             color: "var(--j-text)",
           }}
         >
-          {message.content}
+          {isUser ? message.content : <MarkdownContent content={message.content} />}
           {message.isStreaming && (
             <span
               style={{

@@ -63,6 +63,163 @@ body {
   color: white;
 }
 
+/* ── Markdown Content ────────────────────────────────────────── */
+
+.markdown-content {
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.markdown-content > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  color: var(--j-text);
+  font-weight: 600;
+  margin: 16px 0 8px;
+  line-height: 1.3;
+}
+
+.markdown-content h1 { font-size: 1.4em; border-bottom: 1px solid var(--j-border); padding-bottom: 4px; }
+.markdown-content h2 { font-size: 1.25em; }
+.markdown-content h3 { font-size: 1.1em; }
+.markdown-content h4 { font-size: 1em; color: var(--j-text-dim); }
+
+.markdown-content p {
+  margin: 6px 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.markdown-content li {
+  margin: 2px 0;
+}
+
+.markdown-content li > p {
+  margin: 2px 0;
+}
+
+.markdown-content li::marker {
+  color: var(--j-text-muted);
+}
+
+/* Task list checkboxes */
+.markdown-content li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -20px;
+}
+
+.markdown-content strong {
+  color: var(--j-text);
+  font-weight: 600;
+}
+
+.markdown-content em {
+  color: var(--j-text-dim);
+  font-style: italic;
+}
+
+.markdown-content del {
+  color: var(--j-text-muted);
+  text-decoration: line-through;
+}
+
+.markdown-content a:hover {
+  border-bottom-color: var(--j-accent) !important;
+}
+
+/* ── Highlight.js Theme (Cyberpunk Dark) ─────────────────── */
+
+.hljs {
+  color: var(--j-text);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-name {
+  color: #c792ea;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #c3e88d;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #546e7a;
+  font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-boolean {
+  color: #f78c6c;
+}
+
+.hljs-function,
+.hljs-title {
+  color: #82aaff;
+}
+
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #ffcb6b;
+}
+
+.hljs-variable,
+.hljs-params {
+  color: var(--j-text);
+}
+
+.hljs-regexp {
+  color: #89ddff;
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #f07178;
+}
+
+.hljs-meta {
+  color: #89ddff;
+}
+
+.hljs-addition {
+  color: #c3e88d;
+  background: rgba(195, 232, 141, 0.08);
+}
+
+.hljs-deletion {
+  color: #f07178;
+  background: rgba(240, 113, 120, 0.08);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
 /* Task card update pulse */
 @keyframes taskPulse {
   0% {
