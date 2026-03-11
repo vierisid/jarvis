@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -84,29 +83,30 @@ public class WinEnum {
 	return &RPCResult{Result: map[string]any{"windows": windows}}, nil
 }
 
-// ── get_window_tree (desktop_snapshot) — delegates to FlaUI bridge ──
+// ── get_window_tree (desktop_snapshot) — uses UIAutomation COM ───────
 
 func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
-	bridgeParams := make(map[string]any)
-	if pid, ok := params["pid"].(float64); ok {
-		bridgeParams["pid"] = int(pid)
+	pid := 0
+	if pidF, ok := params["pid"].(float64); ok {
+		pid = int(pidF)
 	}
-	if depth, ok := params["depth"].(float64); ok {
-		bridgeParams["depth"] = int(depth)
+	maxDepth := 3
+	if d, ok := params["depth"].(float64); ok {
+		maxDepth = int(d)
 	}
 
-	result, err := bridge.call("inspect", bridgeParams)
+	val, err := comThread.call(func(state *uiaState) (any, error) {
+		return uiaInspect(state, pid, maxDepth, false)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get_window_tree failed: %w", err)
 	}
 
-	// Cache elements for click_element/type_text coordinate fallback
-	cacheElementsFromResult(result)
-
+	result := val.(map[string]any)
 	return &RPCResult{Result: result}, nil
 }
 
-// ── click_element — delegates to FlaUI bridge for all actions ────────
+// ── click_element — uses UIAutomation COM for all actions ────────────
 
 func handleClickElement(params map[string]any) (*RPCResult, error) {
 	elemID, ok := params["element_id"].(float64)
@@ -119,18 +119,16 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 		action = "click"
 	}
 
-	bridgeParams := map[string]any{
-		"element_id": int(elemID),
-		"action":     action,
-	}
-	if value, ok := params["value"].(string); ok {
-		bridgeParams["value"] = value
-	}
+	value, _ := params["value"].(string)
 
-	result, err := bridge.call("action", bridgeParams)
+	val, err := comThread.call(func(state *uiaState) (any, error) {
+		return uiaPerformAction(state, int(elemID), action, value)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("click_element (action=%s) failed: %w", action, err)
 	}
+
+	result := val.(map[string]any)
 	return &RPCResult{Result: result}, nil
 }
 
@@ -144,9 +142,8 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 
 	// If element_id is given, click it first to focus
 	if elemID, ok := params["element_id"].(float64); ok {
-		_, err := bridge.call("action", map[string]any{
-			"element_id": int(elemID),
-			"action":     "click",
+		_, err := comThread.call(func(state *uiaState) (any, error) {
+			return uiaPerformAction(state, int(elemID), "click", "")
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to click element before typing: %w", err)
@@ -276,57 +273,31 @@ $ok = [Focuser]::Focus(%d)
 	return &RPCResult{Result: result}, nil
 }
 
-// ── find_element — delegates to FlaUI bridge ─────────────────────────
+// ── find_element — uses UIAutomation COM ─────────────────────────────
 
 func handleFindElement(params map[string]any) (*RPCResult, error) {
-	bridgeParams := make(map[string]any)
-	if pid, ok := params["pid"].(float64); ok {
-		bridgeParams["pid"] = int(pid)
-	}
-	for _, key := range []string{"automation_id", "name", "class_name", "control_type"} {
-		if v, ok := params[key].(string); ok && v != "" {
-			bridgeParams[key] = v
-		}
+	pid := 0
+	if pidF, ok := params["pid"].(float64); ok {
+		pid = int(pidF)
 	}
 
-	result, err := bridge.call("find", bridgeParams)
+	automationId, _ := params["automation_id"].(string)
+	name, _ := params["name"].(string)
+	className, _ := params["class_name"].(string)
+	controlType, _ := params["control_type"].(string)
+
+	val, err := comThread.call(func(state *uiaState) (any, error) {
+		return uiaFindElements(state, pid, automationId, name, className, controlType)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("find_element failed: %w", err)
 	}
+
+	result := val.(map[string]any)
 	return &RPCResult{Result: result}, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-// cacheElementsFromResult extracts elements from a FlaUI inspect result
-// and stores them in the element cache for coordinate-based operations.
-func cacheElementsFromResult(result map[string]any) {
-	elems, ok := result["elements"].([]any)
-	if !ok {
-		return
-	}
-	elementCache.mu.Lock()
-	defer elementCache.mu.Unlock()
-	elementCache.elements = make([]map[string]any, 0, len(elems))
-	for _, e := range elems {
-		if m, ok := e.(map[string]any); ok {
-			elementCache.elements = append(elementCache.elements, m)
-		}
-	}
-	if pid, ok := result["pid"].(float64); ok {
-		elementCache.pid = int(pid)
-	}
-	elementCache.timestamp = time.Now()
-}
-
-// elementCache stores the last tree snapshot so type_text
-// can reference elements by their [id] without re-walking the tree.
-var elementCache struct {
-	mu        sync.Mutex
-	elements  []map[string]any
-	pid       int
-	timestamp time.Time
-}
 
 // runPS executes a PowerShell script with a timeout and returns stdout.
 func runPS(script string, timeout time.Duration) (string, error) {

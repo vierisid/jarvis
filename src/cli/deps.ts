@@ -3,12 +3,11 @@
  *
  * Detects and offers to install system dependencies during onboard:
  * - Chromium/Chrome browser (all platforms)
- * - FlaUI bridge for rich desktop automation (WSL/Windows only)
  * - Linux X11 tools: xdotool, xprop, imagemagick (Linux/WSL)
  * - Google OAuth tokens (optional, all platforms)
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'bun';
@@ -73,71 +72,6 @@ export function checkBrowser(): DepStatus {
     message: 'Not found',
     installable: true,
   };
-}
-
-/**
- * Check if the FlaUI bridge is available (Windows/WSL only).
- * FlaUI enables rich desktop UI automation — inspecting element trees,
- * finding elements by property, invoking buttons, toggling checkboxes, etc.
- */
-export function checkFLAUIBridge(): DepStatus | null {
-  const platform = detectPlatform();
-  if (platform !== 'wsl') return null; // FlaUI is Windows-only
-
-  // Check common locations for flaui-bridge.exe on the Windows side
-  const searchPaths = getFLAUISearchPaths();
-
-  for (const p of searchPaths) {
-    if (existsSync(p)) {
-      return {
-        name: 'FlaUI Bridge',
-        found: true,
-        path: p,
-        message: `Found at ${p}`,
-        installable: false,
-      };
-    }
-  }
-
-  return {
-    name: 'FlaUI Bridge',
-    found: false,
-    message: 'Not found (rich desktop UI automation for Windows)',
-    installable: true,
-  };
-}
-
-/** Get paths where flaui-bridge.exe might live. */
-function getFLAUISearchPaths(): string[] {
-  const paths: string[] = [];
-
-  // Next to the Go sidecar binary in the npm package
-  try {
-    const PACKAGE_ROOT = join(import.meta.dir, '../..');
-    const win32Pkg = join(PACKAGE_ROOT, 'node_modules', '@jarvis', 'sidecar-win32-x64', 'bin');
-    paths.push(join(win32Pkg, 'flaui-bridge.exe'));
-  } catch { /* not installed via npm */ }
-
-  // Common manual locations via Windows user profile
-  try {
-    const result = spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%'], { stdout: 'pipe', stderr: 'pipe' });
-    const userProfile = result.stdout.toString().trim();
-    if (userProfile && !userProfile.includes('%')) {
-      const drive = userProfile.charAt(0).toLowerCase();
-      const rest = userProfile.slice(2).replace(/\\/g, '/');
-      const wslProfile = `/mnt/${drive}${rest}`;
-      paths.push(join(wslProfile, '.jarvis', 'sidecar', 'flaui-bridge.exe'));
-      paths.push(join(wslProfile, 'Desktop', 'flaui-bridge.exe'));
-    }
-  } catch { /* cmd.exe not available */ }
-
-  // Next to sidecar source build output
-  try {
-    const PACKAGE_ROOT = join(import.meta.dir, '../..');
-    paths.push(join(PACKAGE_ROOT, 'sidecar', 'dist', 'windows-amd64', 'flaui-bridge.exe'));
-  } catch {}
-
-  return paths;
 }
 
 /**
@@ -251,107 +185,6 @@ export async function installBrowser(): Promise<boolean> {
 
   printInfo('Install Chromium manually for your distribution.');
   return false;
-}
-
-/**
- * Build the FlaUI bridge from source (WSL only).
- * Requires .NET SDK on the Windows side (dotnet.exe accessible from WSL).
- */
-export async function buildFLAUIBridge(): Promise<boolean> {
-  // Check if dotnet.exe is available
-  const dotnetCheck = spawnSync(['dotnet.exe', '--version'], { stdout: 'pipe', stderr: 'pipe' });
-  if (dotnetCheck.exitCode !== 0) {
-    printErr('dotnet.exe not found. The .NET SDK must be installed on Windows.');
-    printInfo('Download from: https://dot.net/download');
-    printInfo('After installing, restart your terminal and run: jarvis onboard');
-    return false;
-  }
-
-  const dotnetVersion = dotnetCheck.stdout.toString().trim();
-  printInfo(`.NET SDK ${dotnetVersion} detected`);
-
-  // Check if FlaUI bridge source exists in the package
-  const PACKAGE_ROOT = join(import.meta.dir, '../..');
-  const bridgeDir = join(PACKAGE_ROOT, 'sidecar', 'flaui-bridge');
-
-  if (!existsSync(join(bridgeDir, 'FLAUIBridge.csproj'))) {
-    printErr('FlaUI bridge source not found in package.');
-    printInfo('Expected at: sidecar/flaui-bridge/FLAUIBridge.csproj');
-    return false;
-  }
-
-  // Determine output directory — next to the sidecar binary on Windows
-  let outputDir: string;
-  try {
-    const result = spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%'], { stdout: 'pipe' });
-    const userProfile = result.stdout.toString().trim();
-    if (userProfile && !userProfile.includes('%')) {
-      const drive = userProfile.charAt(0).toLowerCase();
-      const rest = userProfile.slice(2).replace(/\\/g, '/');
-      outputDir = `/mnt/${drive}${rest}/.jarvis/sidecar`;
-    } else {
-      outputDir = join(PACKAGE_ROOT, 'sidecar', 'dist', 'windows-amd64');
-    }
-  } catch {
-    outputDir = join(PACKAGE_ROOT, 'sidecar', 'dist', 'windows-amd64');
-  }
-
-  // Convert WSL paths to Windows format for dotnet.exe
-  const toWinPath = (p: string): string => {
-    if (p.startsWith('/mnt/')) {
-      const drive = p.charAt(5).toUpperCase();
-      return `${drive}:${p.slice(6).replace(/\//g, '\\')}`;
-    }
-    // For paths inside the WSL filesystem, use the \\wsl$ UNC path
-    return `\\\\wsl$\\${getWslDistro()}${p}`;
-  };
-
-  const winProject = toWinPath(bridgeDir);
-  const winOutput = toWinPath(outputDir);
-
-  console.log(c.dim(`  Building FlaUI bridge → ${winOutput}`));
-
-  const spin = startSpinner('Building FlaUI bridge (this may take a minute)...');
-
-  const buildResult = spawnSync([
-    'dotnet.exe', 'publish', winProject,
-    '-c', 'Release',
-    '-r', 'win-x64',
-    '--self-contained',
-    '/p:PublishSingleFile=true',
-    '/p:IncludeNativeLibrariesForSelfExtract=true',
-    '/p:PublishTrimmed=false',
-    '-o', winOutput,
-  ], {
-    stdout: 'pipe', stderr: 'pipe',
-  });
-
-  if (buildResult.exitCode !== 0) {
-    spin.stop();
-    printErr('FlaUI bridge build failed.');
-    const stderr = buildResult.stderr.toString().trim();
-    if (stderr) console.log(c.dim(`  ${stderr.split('\n')[0]}`));
-    printInfo('You can build it manually on Windows:');
-    printInfo('  cd sidecar\\flaui-bridge && dotnet publish -c Release -r win-x64 --self-contained');
-    return false;
-  }
-
-  spin.stop('FlaUI bridge built successfully!');
-  printInfo(`Output: ${winOutput}`);
-  return true;
-}
-
-/** Get the WSL distribution name for UNC paths. */
-function getWslDistro(): string {
-  try {
-    const result = spawnSync(['wslpath', '-m', '/'], { stdout: 'pipe', stderr: 'pipe' });
-    if (result.exitCode === 0) {
-      // wslpath -m / returns something like //wsl$/Ubuntu/
-      const m = result.stdout.toString().trim().match(/wsl\$\/([^/]+)/);
-      if (m && m[1]) return m[1];
-    }
-  } catch {}
-  return 'Ubuntu'; // Sensible default
 }
 
 /**
@@ -541,15 +374,10 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
  * Called as Step 3 of the onboard wizard.
  */
 export async function runDependencyCheck(config: any): Promise<void> {
-  const platform = detectPlatform();
-
   // Collect all dependency statuses
   const deps: DepStatus[] = [];
 
   deps.push(checkBrowser());
-
-  const flaui = checkFLAUIBridge();
-  if (flaui) deps.push(flaui);
 
   const linuxTools = checkLinuxTools();
   deps.push(...linuxTools);
@@ -559,7 +387,7 @@ export async function runDependencyCheck(config: any): Promise<void> {
   // Display status table
   console.log('');
   for (const dep of deps) {
-    const icon = dep.found ? c.green('✓') : c.red('✗');
+    const icon = dep.found ? c.green('\u2713') : c.red('\u2717');
     const name = dep.name.padEnd(26);
     const detail = dep.found
       ? c.dim(dep.path ?? dep.message)
@@ -589,19 +417,6 @@ export async function runDependencyCheck(config: any): Promise<void> {
       else printWarn('Browser install incomplete. Install manually later.');
     } else {
       printInfo('Skip. Install later: sudo apt install chromium-browser');
-    }
-  }
-
-  // Group: FlaUI bridge (Windows desktop automation)
-  const missingFlaUI = missing.find(d => d.name === 'FlaUI Bridge');
-  if (missingFlaUI) {
-    console.log(c.dim('  FlaUI enables JARVIS to inspect, click, and control Windows desktop apps.'));
-    const install = await askYesNo('Build FlaUI bridge? (Requires .NET SDK on Windows)', true);
-    if (install) {
-      const ok = await buildFLAUIBridge();
-      if (!ok) printWarn('FlaUI build incomplete. Build later on Windows: cd sidecar/flaui-bridge && dotnet publish -c Release -r win-x64 --self-contained');
-    } else {
-      printWarn('Skip. Windows desktop automation will not work without the FlaUI bridge.');
     }
   }
 

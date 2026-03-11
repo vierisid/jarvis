@@ -157,29 +157,7 @@ export async function runDoctor(): Promise<void> {
     results.push({ name: 'SQLite', status: 'fail', message: String(err) });
   }
 
-  // ── Check 9: FlaUI Bridge (Windows/WSL only) ─────────────────────
-
-  try {
-    const procVersion = readFileSync('/proc/version', 'utf-8');
-    const isWSL = procVersion.toLowerCase().includes('microsoft');
-    if (isWSL) {
-      const { checkFLAUIBridge } = await import('./deps.ts');
-      const flaui = checkFLAUIBridge();
-      if (flaui && flaui.found) {
-        results.push({ name: 'FlaUI Bridge', status: 'ok', message: flaui.path ?? 'Found' });
-      } else if (flaui) {
-        results.push({ name: 'FlaUI Bridge', status: 'fail', message: 'Not found. Required for Windows desktop automation. Build with: cd sidecar/flaui-bridge && dotnet publish -c Release -r win-x64 --self-contained' });
-      }
-    } else {
-      results.push({ name: 'FlaUI Bridge', status: 'skip', message: 'Windows-only (not needed on native Linux)' });
-    }
-  } catch {
-    if (process.platform === 'darwin') {
-      results.push({ name: 'FlaUI Bridge', status: 'skip', message: 'Windows-only (not needed on macOS)' });
-    }
-  }
-
-  // ── Check 10: TTS/STT Providers ───────────────────────────────────
+  // ── Check 9: TTS/STT Providers ────────────────────────────────────
 
   if (config?.tts?.enabled) {
     results.push({ name: 'TTS', status: 'ok', message: `${config.tts.provider ?? 'edge'} (${config.tts.voice ?? 'default'})` });

@@ -13,7 +13,7 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack flaui-bridge
+.PHONY: all build test vet clean dist npm-pack
 
 all: test build
 
@@ -33,8 +33,8 @@ clean:
 	rm -rf npm/darwin-arm64/bin npm/darwin-x64/bin npm/linux-x64/bin npm/linux-arm64/bin npm/win32-x64/bin
 	rm -f npm/jarvis-sidecar/*.tgz
 
-# Cross-compile all platforms into dist/ (includes FlaUI bridge for Windows)
-dist: test vet flaui-bridge
+# Cross-compile all platforms into dist/
+dist: test vet
 	@for platform in $(PLATFORMS); do \
 		os=$${platform%%/*}; \
 		arch=$${platform##*/}; \
@@ -44,19 +44,6 @@ dist: test vet flaui-bridge
 		GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" \
 			-o "dist/$${os}-$${arch}/$(BIN_NAME)$${ext}" . || exit 1; \
 	done
-
-# Build FlaUI bridge for Windows (required for desktop automation)
-flaui-bridge:
-	@command -v dotnet >/dev/null 2>&1 || \
-		{ echo "ERROR: dotnet SDK not found — required to build flaui-bridge.exe for Windows desktop automation"; \
-		  echo "       Install .NET SDK: https://dotnet.microsoft.com/download"; \
-		  exit 1; }
-	@echo "Building FlaUI bridge..."
-	cd flaui-bridge && dotnet publish -c Release -r win-x64 \
-		--self-contained true \
-		-p:PublishSingleFile=true \
-		-p:IncludeNativeLibrariesForSelfExtract=true \
-		-o ../dist/windows-amd64/
 
 # Copy binaries into npm platform packages and pack them
 npm-pack: dist
@@ -72,12 +59,9 @@ npm-pack: dist
 	@# linux-arm64
 	mkdir -p npm/linux-arm64/bin
 	cp dist/linux-arm64/$(BIN_NAME) npm/linux-arm64/bin/
-	@# win32-x64 (flaui-bridge.exe is required)
+	@# win32-x64
 	mkdir -p npm/win32-x64/bin
 	cp dist/windows-amd64/$(BIN_NAME).exe npm/win32-x64/bin/
-	@test -f dist/windows-amd64/flaui-bridge.exe || \
-		{ echo "ERROR: flaui-bridge.exe not found in dist/windows-amd64/ — run 'make flaui-bridge' first"; exit 1; }
-	cp dist/windows-amd64/flaui-bridge.exe npm/win32-x64/bin/
 	@# Pack all platform packages + main package
 	@for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64 npm/jarvis-sidecar; do \
 		echo "Packing $$dir..."; \
