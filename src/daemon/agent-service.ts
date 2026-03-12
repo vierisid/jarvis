@@ -16,6 +16,7 @@ import type { PersonalityModel } from '../personality/model.ts';
 import { LLMManager } from '../llm/manager.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
+import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
@@ -332,6 +333,17 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered OpenAI provider');
+    }
+
+    // Register Gemini
+    if (llm.gemini?.api_key) {
+      const provider = new GeminiProvider(
+        llm.gemini.api_key,
+        llm.gemini.model
+      );
+      this.llmManager.registerProvider(provider);
+      hasProvider = true;
+      console.log('[AgentService] Registered Gemini provider');
     }
 
     // Register Ollama (always available, no API key needed)

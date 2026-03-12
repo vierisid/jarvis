@@ -6,6 +6,7 @@ type LLMConfig = {
   fallback: string[];
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
+  gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
 };
 
@@ -13,21 +14,31 @@ type TestResult = { ok: boolean; model?: string; error?: string };
 
 const ANTHROPIC_MODELS = [
   "claude-opus-4-6",
+  "claude-sonnet-4-6",
   "claude-sonnet-4-5-20250929",
-  "claude-3-5-sonnet-20241022",
-  "claude-3-opus-20240229",
-  "claude-3-haiku-20240307",
+  "claude-haiku-4-5-20251001",
 ];
 
 const OPENAI_MODELS = [
-  "gpt-4o",
-  "gpt-4o-mini",
-  "gpt-4-turbo",
-  "gpt-4",
-  "gpt-3.5-turbo",
-  "o1",
-  "o1-mini",
-  "o3-mini",
+  "gpt-5.4",
+  "gpt-5.4-thinking",
+  "gpt-5.4-pro",
+  "gpt-5.3-instant",
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-5.1-codex",
+  "gpt-4.1",
+  "o3",
+  "o4-mini",
+];
+
+const GEMINI_MODELS = [
+  "gemini-3.1-pro-preview",
+  "gemini-3-deep-think",
+  "gemini-3-flash-preview",
+  "gemini-3-1-flash-lite-preview",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
 ];
 
 const OLLAMA_MODELS = [
@@ -42,7 +53,7 @@ const OLLAMA_MODELS = [
   "phi3",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "ollama"] as const;
+const PROVIDERS = ["anthropic", "openai", "gemini", "ollama"] as const;
 
 export function LLMPanel() {
   const { data: config, loading, refetch } = useApiData<LLMConfig>("/api/config/llm", []);
@@ -58,8 +69,13 @@ export function LLMPanel() {
 
   // OpenAI
   const [openaiKey, setOpenaiKey] = useState("");
-  const [openaiModel, setOpenaiModel] = useState("gpt-4o");
+  const [openaiModel, setOpenaiModel] = useState("gpt-5.4");
   const [openaiCustomModel, setOpenaiCustomModel] = useState("");
+
+  // Gemini
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiModel, setGeminiModel] = useState("gemini-3-flash-preview");
+  const [geminiCustomModel, setGeminiCustomModel] = useState("");
 
   // Ollama
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
@@ -98,6 +114,16 @@ export function LLMPanel() {
         setOpenaiCustomModel(m);
       }
     }
+    if (config.gemini) {
+      const m = config.gemini.model;
+      if (GEMINI_MODELS.includes(m)) {
+        setGeminiModel(m);
+        setGeminiCustomModel("");
+      } else {
+        setGeminiModel("custom");
+        setGeminiCustomModel(m);
+      }
+    }
     if (config.ollama) {
       setOllamaBaseUrl(config.ollama.base_url);
       const m = config.ollama.model;
@@ -129,6 +155,10 @@ export function LLMPanel() {
           model: resolveModel(openaiModel, openaiCustomModel),
           ...(openaiKey ? { api_key: openaiKey } : {}),
         },
+        gemini: {
+          model: resolveModel(geminiModel, geminiCustomModel),
+          ...(geminiKey ? { api_key: geminiKey } : {}),
+        },
         ollama: {
           base_url: ollamaBaseUrl,
           model: resolveModel(ollamaModel, ollamaCustomModel),
@@ -141,6 +171,7 @@ export function LLMPanel() {
       setMessage({ text: resp.message, type: "ok" });
       setAnthropicKey("");
       setOpenaiKey("");
+      setGeminiKey("");
       refetch();
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Save failed", type: "error" });
@@ -161,6 +192,9 @@ export function LLMPanel() {
       } else if (provider === "openai") {
         body.api_key = openaiKey || undefined;
         body.model = resolveModel(openaiModel, openaiCustomModel);
+      } else if (provider === "gemini") {
+        body.api_key = geminiKey || undefined;
+        body.model = resolveModel(geminiModel, geminiCustomModel);
       } else if (provider === "ollama") {
         body.base_url = ollamaBaseUrl;
         body.model = resolveModel(ollamaModel, ollamaCustomModel);
@@ -291,6 +325,24 @@ export function LLMPanel() {
           testing={testing === "openai"}
           testResult={testResult.openai}
           onTest={() => handleTest("openai")}
+        />
+
+        {/* Gemini */}
+        <ProviderSection
+          name="Gemini"
+          provider="gemini"
+          isPrimary={primary === "gemini"}
+          hasKey={config.gemini?.has_api_key ?? false}
+          apiKey={geminiKey}
+          onApiKeyChange={setGeminiKey}
+          model={geminiModel}
+          customModel={geminiCustomModel}
+          onModelChange={setGeminiModel}
+          onCustomModelChange={setGeminiCustomModel}
+          models={GEMINI_MODELS}
+          testing={testing === "gemini"}
+          testResult={testResult.gemini}
+          onTest={() => handleTest("gemini")}
         />
 
         {/* Ollama */}

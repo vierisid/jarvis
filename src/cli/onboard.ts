@@ -1,7 +1,7 @@
 /**
  * J.A.R.V.I.S. Interactive Onboard Wizard
  *
- * Full first-time setup: LLM provider, API keys, TTS, STT,
+ * Full first-time setup: user info, LLM provider, API keys, TTS, STT,
  * channels, personality, authority, autostart.
  * All steps are skippable except LLM configuration.
  */
@@ -43,20 +43,41 @@ export async function runOnboard(): Promise<void> {
     mkdirSync(JARVIS_DIR, { recursive: true });
   }
 
-  // ── Step 1: LLM Provider ──────────────────────────────────────────
+  // ── Step 1: About You ──────────────────────────────────────────────
 
-  printStep(1, TOTAL_STEPS, 'LLM Provider');
+  printStep(1, TOTAL_STEPS, 'About You');
+  console.log('  Let\'s get to know each other.\n');
+
+  const userName = await ask('What\'s your name?', config.user?.name || '');
+  config.user = { name: userName };
+
+  const assistantName = await ask(
+    'What would you like to call your assistant?',
+    config.personality.assistant_name ?? 'Jarvis',
+  );
+  config.personality.assistant_name = assistantName;
+
+  if (userName) {
+    printOk(`Nice to meet you, ${userName}! I'll be your ${assistantName}.`);
+  } else {
+    printOk(`I'll be your ${assistantName}.`);
+  }
+
+  // ── Step 2: LLM Provider ──────────────────────────────────────────
+
+  printStep(2, TOTAL_STEPS, 'LLM Provider');
   console.log('  JARVIS needs at least one AI model to function.\n');
 
   const provider = await askChoice('Choose your primary LLM provider:', [
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
-    { label: 'OpenAI (GPT-4)', value: 'openai' as const, description: 'Good alternative' },
+    { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
+    { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
   ], config.llm.primary as any);
 
   config.llm.primary = provider;
 
-  // Get API key for cloud providers
+  // Get API key and model for cloud providers
   if (provider === 'anthropic') {
     const existing = config.llm.anthropic?.api_key;
     if (existing && existing.startsWith('sk-')) {
@@ -75,7 +96,17 @@ export async function runOnboard(): Promise<void> {
       }
     }
 
-    const model = await ask('Claude model', config.llm.anthropic?.model ?? 'claude-sonnet-4-5-20250929');
+    const currentModel = config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
+    const anthropicModels = [
+      { label: 'Claude Opus 4.6', value: 'claude-opus-4-6', description: 'Most capable, latest' },
+      { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6', description: 'Best balance of speed & quality' },
+      { label: 'Claude Sonnet 4.5', value: 'claude-sonnet-4-5-20250929', description: 'Previous generation' },
+      { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001', description: 'Fastest, most affordable' },
+      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
+    ];
+    const isPreset = anthropicModels.some(m => m.value === currentModel);
+    const modelChoice = await askChoice('Choose a model:', anthropicModels, isPreset ? currentModel : 'custom');
+    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
     if (config.llm.anthropic) config.llm.anthropic.model = model;
 
   } else if (provider === 'openai') {
@@ -95,12 +126,73 @@ export async function runOnboard(): Promise<void> {
       }
     }
 
-    const model = await ask('OpenAI model', config.llm.openai?.model ?? 'gpt-4o');
+    const currentModel = config.llm.openai?.model ?? 'gpt-5.4';
+    const openaiModels = [
+      { label: 'GPT-5.4', value: 'gpt-5.4', description: 'Latest flagship' },
+      { label: 'GPT-5.4 Thinking', value: 'gpt-5.4-thinking', description: 'Flagship with reasoning' },
+      { label: 'GPT-5.4 Pro', value: 'gpt-5.4-pro', description: 'Highest capability' },
+      { label: 'GPT-5.3 Instant', value: 'gpt-5.3-instant', description: 'Fast flagship' },
+      { label: 'GPT-5 Mini', value: 'gpt-5-mini', description: 'Cost-efficient' },
+      { label: 'GPT-5 Nano', value: 'gpt-5-nano', description: 'Cheapest GPT-5' },
+      { label: 'GPT-5.1 Codex', value: 'gpt-5.1-codex', description: 'Code-focused' },
+      { label: 'GPT-4.1', value: 'gpt-4.1', description: 'Previous gen, still solid' },
+      { label: 'o3', value: 'o3', description: 'Reasoning model' },
+      { label: 'o4-mini', value: 'o4-mini', description: 'Fast reasoning' },
+      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
+    ];
+    const isPreset = openaiModels.some(m => m.value === currentModel);
+    const modelChoice = await askChoice('Choose a model:', openaiModels, isPreset ? currentModel : 'custom');
+    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
     if (config.llm.openai) config.llm.openai.model = model;
+
+  } else if (provider === 'gemini') {
+    const existing = config.llm.gemini?.api_key;
+    if (existing && existing.length > 5) {
+      const keep = await askYesNo(`API key found (${existing.slice(0, 10)}...). Keep it?`, true);
+      if (!keep) {
+        const key = await askSecret('Enter your Google AI API key');
+        if (key) config.llm.gemini = { ...config.llm.gemini, api_key: key };
+      }
+    } else {
+      const key = await askSecret('Enter your Google AI API key (from aistudio.google.com)');
+      if (key) {
+        config.llm.gemini = { ...config.llm.gemini, api_key: key };
+      } else {
+        printWarn('No API key set. JARVIS won\'t work without one.');
+      }
+    }
+
+    const currentModel = config.llm.gemini?.model ?? 'gemini-3-flash-preview';
+    const geminiModels = [
+      { label: 'Gemini 3.1 Pro', value: 'gemini-3.1-pro-preview', description: 'Most intelligent, complex reasoning' },
+      { label: 'Gemini 3 Deep Think', value: 'gemini-3-deep-think', description: 'Heavy science & research' },
+      { label: 'Gemini 3 Flash', value: 'gemini-3-flash-preview', description: 'Fast, pro-level intelligence' },
+      { label: 'Gemini 3.1 Flash-Lite', value: 'gemini-3-1-flash-lite-preview', description: 'Ultra-efficient, high-volume' },
+      { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro', description: 'Previous gen, still solid' },
+      { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash', description: 'Previous gen, fast' },
+      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
+    ];
+    const isPreset = geminiModels.some(m => m.value === currentModel);
+    const modelChoice = await askChoice('Choose a model:', geminiModels, isPreset ? currentModel : 'custom');
+    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
+    if (config.llm.gemini) config.llm.gemini.model = model;
 
   } else if (provider === 'ollama') {
     const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? 'http://localhost:11434');
-    const model = await ask('Ollama model', config.llm.ollama?.model ?? 'llama3');
+
+    const currentModel = config.llm.ollama?.model ?? 'llama3';
+    const ollamaModels = [
+      { label: 'Llama 3', value: 'llama3', description: 'General purpose' },
+      { label: 'Llama 3 70B', value: 'llama3:70b', description: 'Larger, more capable' },
+      { label: 'Mistral', value: 'mistral', description: 'Fast, good quality' },
+      { label: 'DeepSeek Coder', value: 'deepseek-coder', description: 'Code-focused' },
+      { label: 'CodeLlama', value: 'codellama', description: 'Code-focused' },
+      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
+    ];
+    const isPreset = ollamaModels.some(m => m.value === currentModel);
+    const modelChoice = await askChoice('Choose a model:', ollamaModels, isPreset ? currentModel : 'custom');
+    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
+
     config.llm.ollama = { base_url: url, model };
     printInfo('Make sure Ollama is running: ollama serve');
   }
@@ -110,13 +202,15 @@ export async function runOnboard(): Promise<void> {
   if (testConn) {
     const spin = startSpinner('Testing connection...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, OllamaProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
 
       if (provider === 'anthropic' && config.llm.anthropic?.api_key) {
         manager.registerProvider(new AnthropicProvider(config.llm.anthropic.api_key, config.llm.anthropic.model));
       } else if (provider === 'openai' && config.llm.openai?.api_key) {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
+      } else if (provider === 'gemini' && config.llm.gemini?.api_key) {
+        manager.registerProvider(new GeminiProvider(config.llm.gemini.api_key, config.llm.gemini.model));
       } else if (provider === 'ollama') {
         manager.registerProvider(new OllamaProvider(config.llm.ollama?.base_url, config.llm.ollama?.model));
       }
@@ -140,11 +234,11 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'ollama'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'gemini', 'ollama'].filter(p => p !== provider);
 
-  // ── Step 2: Fallback API Keys ─────────────────────────────────────
+  // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
-  printStep(2, TOTAL_STEPS, 'Fallback Providers');
+  printStep(3, TOTAL_STEPS, 'Fallback Providers');
   console.log('  Optional: configure backup LLM providers.\n');
 
   const setupFallbacks = await askYesNo('Configure fallback providers?', false);
@@ -152,10 +246,13 @@ export async function runOnboard(): Promise<void> {
     for (const fb of config.llm.fallback) {
       if (fb === 'anthropic' && (!config.llm.anthropic?.api_key || config.llm.anthropic.api_key === '')) {
         const key = await askSecret('Anthropic API key (for fallback)');
-        if (key) config.llm.anthropic = { ...config.llm.anthropic, api_key: key, model: config.llm.anthropic?.model ?? 'claude-sonnet-4-5-20250929' };
+        if (key) config.llm.anthropic = { ...config.llm.anthropic, api_key: key, model: config.llm.anthropic?.model ?? 'claude-sonnet-4-6' };
       } else if (fb === 'openai' && (!config.llm.openai?.api_key || config.llm.openai.api_key === '')) {
         const key = await askSecret('OpenAI API key (for fallback)');
-        if (key) config.llm.openai = { ...config.llm.openai, api_key: key, model: config.llm.openai?.model ?? 'gpt-4o' };
+        if (key) config.llm.openai = { ...config.llm.openai, api_key: key, model: config.llm.openai?.model ?? 'gpt-5.4' };
+      } else if (fb === 'gemini' && (!config.llm.gemini?.api_key || config.llm.gemini.api_key === '')) {
+        const key = await askSecret('Google AI API key (for fallback)');
+        if (key) config.llm.gemini = { ...config.llm.gemini, api_key: key, model: config.llm.gemini?.model ?? 'gemini-3-flash-preview' };
       } else if (fb === 'ollama') {
         const setupOllama = await askYesNo('Configure Ollama as fallback?', false);
         if (setupOllama) {
@@ -169,34 +266,118 @@ export async function runOnboard(): Promise<void> {
     printInfo('Skipped. You can add fallback providers later in config.');
   }
 
-  // ── Step 3: System Dependencies ─────────────────────────────────
+  // ── Step 4: System Dependencies ─────────────────────────────────
 
-  printStep(3, TOTAL_STEPS, 'System Dependencies');
+  printStep(4, TOTAL_STEPS, 'System Dependencies');
   console.log('  Checking for optional system tools JARVIS can use.\n');
 
   await runDependencyCheck(config);
 
-  // ── Step 4: TTS (Text-to-Speech) ─────────────────────────────────
+  // ── Step 5: TTS (Text-to-Speech) ─────────────────────────────────
 
-  printStep(4, TOTAL_STEPS, 'Voice Output (TTS)');
-  console.log('  JARVIS can speak responses aloud using Microsoft Edge TTS.\n');
+  printStep(5, TOTAL_STEPS, 'Voice Output (TTS)');
+  console.log('  JARVIS can speak responses aloud.\n');
 
   const enableTTS = await askYesNo('Enable text-to-speech?', false);
   config.tts = config.tts || { enabled: false };
   config.tts.enabled = enableTTS;
 
   if (enableTTS) {
-    config.tts.provider = 'edge';
-    const voice = await ask('TTS voice', config.tts.voice ?? 'en-US-GuyNeural');
-    config.tts.voice = voice;
-    printInfo('Popular voices: en-US-GuyNeural, en-US-AriaNeural, en-GB-RyanNeural');
+    const ttsProvider = await askChoice('TTS provider:', [
+      { label: 'Microsoft Edge TTS', value: 'edge' as const, description: 'Free, no API key needed' },
+      { label: 'ElevenLabs', value: 'elevenlabs' as const, description: 'Premium quality, API key required' },
+    ], config.tts.provider ?? 'edge');
+
+    config.tts.provider = ttsProvider;
+
+    if (ttsProvider === 'edge') {
+      const voice = await askChoice('Choose a voice:', [
+        { label: 'Aria (US Female)', value: 'en-US-AriaNeural' },
+        { label: 'Guy (US Male)', value: 'en-US-GuyNeural' },
+        { label: 'Sonia (UK Female)', value: 'en-GB-SoniaNeural' },
+        { label: 'Natasha (AU Female)', value: 'en-AU-NatashaNeural' },
+        { label: 'Jenny (US Female)', value: 'en-US-JennyNeural' },
+        { label: 'Davis (US Male)', value: 'en-US-DavisNeural' },
+      ], config.tts.voice ?? 'en-US-AriaNeural');
+      config.tts.voice = voice;
+    } else if (ttsProvider === 'elevenlabs') {
+      const existing = config.tts.elevenlabs?.api_key;
+      let apiKey: string;
+
+      if (existing) {
+        const keep = await askYesNo('ElevenLabs API key found. Keep it?', true);
+        apiKey = keep ? existing : await askSecret('ElevenLabs API key (from elevenlabs.io)');
+      } else {
+        apiKey = await askSecret('ElevenLabs API key (from elevenlabs.io)');
+      }
+
+      if (apiKey) {
+        config.tts.elevenlabs = {
+          ...config.tts.elevenlabs,
+          api_key: apiKey,
+        };
+
+        // Fetch available voices
+        const spin = startSpinner('Fetching available voices...');
+        try {
+          const { listElevenLabsVoices } = await import('../comms/voice.ts');
+          const voices = await Promise.race([
+            listElevenLabsVoices(apiKey),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Timed out')), 10_000),
+            ),
+          ]);
+
+          spin.stop(`Found ${voices.length} voices`);
+
+          if (voices.length > 0) {
+            const voiceOptions = voices.slice(0, 10).map(v => ({
+              label: `${v.name} (${v.category})`,
+              value: v.voice_id,
+            }));
+            voiceOptions.push({ label: 'Custom', value: 'custom' });
+
+            const currentVoiceId = config.tts.elevenlabs.voice_id;
+            const isPreset = voiceOptions.some(v => v.value === currentVoiceId);
+            const voiceChoice = await askChoice(
+              'Choose a voice:',
+              voiceOptions,
+              isPreset ? currentVoiceId : voiceOptions[0]!.value,
+            );
+
+            if (voiceChoice === 'custom') {
+              const customId = await ask('Enter voice ID', currentVoiceId ?? '');
+              config.tts.elevenlabs.voice_id = customId || undefined;
+            } else {
+              config.tts.elevenlabs.voice_id = voiceChoice;
+            }
+          }
+        } catch {
+          spin.stop();
+          printWarn('Could not fetch voices. Using default voice.');
+          const customId = await ask('Enter voice ID (optional)', config.tts.elevenlabs.voice_id ?? '');
+          if (customId) config.tts.elevenlabs.voice_id = customId;
+        }
+
+        // Model selection
+        const elModel = await askChoice('ElevenLabs model:', [
+          { label: 'Flash v2.5', value: 'eleven_flash_v2_5', description: 'Fast, low latency' },
+          { label: 'Multilingual v2', value: 'eleven_multilingual_v2', description: 'Higher quality' },
+        ], config.tts.elevenlabs.model ?? 'eleven_flash_v2_5');
+        config.tts.elevenlabs.model = elModel;
+      } else {
+        printWarn('No API key provided. Falling back to Edge TTS.');
+        config.tts.provider = 'edge';
+        config.tts.voice = 'en-US-AriaNeural';
+      }
+    }
   } else {
     printInfo('Skipped. Enable later in config.');
   }
 
-  // ── Step 5: STT (Speech-to-Text) ─────────────────────────────────
+  // ── Step 6: STT (Speech-to-Text) ─────────────────────────────────
 
-  printStep(5, TOTAL_STEPS, 'Voice Input (STT)');
+  printStep(6, TOTAL_STEPS, 'Voice Input (STT)');
   console.log('  For voice commands via the dashboard microphone button.\n');
 
   const setupSTT = await askYesNo('Configure speech-to-text?', false);
@@ -234,9 +415,9 @@ export async function runOnboard(): Promise<void> {
     printInfo('Skipped. Voice input will be disabled.');
   }
 
-  // ── Step 6: Channels ──────────────────────────────────────────────
+  // ── Step 7: Channels ──────────────────────────────────────────────
 
-  printStep(6, TOTAL_STEPS, 'Communication Channels');
+  printStep(7, TOTAL_STEPS, 'Communication Channels');
   console.log('  JARVIS can receive messages from Telegram and Discord.\n');
 
   const setupChannels = await askYesNo('Configure messaging channels?', false);
@@ -276,9 +457,9 @@ export async function runOnboard(): Promise<void> {
     printInfo('Skipped. Configure channels later for remote access.');
   }
 
-  // ── Step 7: Personality ───────────────────────────────────────────
+  // ── Step 8: Personality ───────────────────────────────────────────
 
-  printStep(7, TOTAL_STEPS, 'Personality');
+  printStep(8, TOTAL_STEPS, 'Personality');
   console.log('  Customize JARVIS\'s personality traits.\n');
 
   const customPersonality = await askYesNo('Customize personality traits?', false);
@@ -294,9 +475,9 @@ export async function runOnboard(): Promise<void> {
     printInfo(`Using defaults: ${config.personality.core_traits.join(', ')}`);
   }
 
-  // ── Step 8: Authority Level ───────────────────────────────────────
+  // ── Step 9: Authority Level ───────────────────────────────────────
 
-  printStep(8, TOTAL_STEPS, 'Authority & Safety');
+  printStep(9, TOTAL_STEPS, 'Authority & Safety');
   console.log('  Controls what JARVIS can do autonomously.\n');
   console.log(c.dim('  Level 1-3: Conservative (read-only, ask for everything)'));
   console.log(c.dim('  Level 4-6: Moderate (browse, read/write files, run safe commands)'));
@@ -319,19 +500,6 @@ export async function runOnboard(): Promise<void> {
     printInfo(`Using defaults: level ${config.authority.default_level}, governed: ${config.authority.governed_categories.join(', ')}`);
   }
 
-  // ── Step 9: Daemon Settings ───────────────────────────────────────
-
-  printStep(9, TOTAL_STEPS, 'Daemon Settings');
-
-  const customDaemon = await askYesNo('Customize daemon settings?', false);
-  if (customDaemon) {
-    const portStr = await ask('Dashboard port', String(config.daemon.port));
-    const port = parseInt(portStr, 10);
-    if (port > 0 && port < 65536) config.daemon.port = port;
-  } else {
-    printInfo(`Using defaults: port ${config.daemon.port}, data at ${JARVIS_DIR}`);
-  }
-
   // ── Step 10: Autostart ────────────────────────────────────────────
 
   printStep(10, TOTAL_STEPS, 'Autostart');
@@ -350,15 +518,31 @@ export async function runOnboard(): Promise<void> {
     }
   }
 
+  // ── Port (quick inline question) ──────────────────────────────────
+
+  console.log('');
+  const changePort = await askYesNo(`Dashboard will run on port ${config.daemon.port}. Change it?`, false);
+  if (changePort) {
+    const portStr = await ask('Dashboard port', String(config.daemon.port));
+    const port = parseInt(portStr, 10);
+    if (port > 0 && port < 65536) config.daemon.port = port;
+  }
+
   // ── Save ──────────────────────────────────────────────────────────
 
   console.log('\n' + c.bold('─'.repeat(50)));
   console.log(c.bold('\nConfiguration Summary:\n'));
 
+  const ttsLabel = !config.tts?.enabled ? 'disabled'
+    : config.tts.provider === 'elevenlabs' ? 'ElevenLabs'
+    : `${config.tts.voice} (Edge)`;
+
   const summaryItems: [string, string][] = [
+    ['User', config.user?.name || c.dim('not set')],
+    ['Assistant', config.personality.assistant_name ?? 'Jarvis'],
     ['LLM Provider', `${config.llm.primary} (${config.llm[config.llm.primary as keyof typeof config.llm] ? 'configured' : 'not set'})`],
     ['Fallback', config.llm.fallback.join(' -> ')],
-    ['TTS', config.tts?.enabled ? `${config.tts.voice}` : 'disabled'],
+    ['TTS', ttsLabel],
     ['STT', config.stt?.provider ?? 'not configured'],
     ['Telegram', config.channels?.telegram?.enabled ? 'enabled' : 'disabled'],
     ['Discord', config.channels?.discord?.enabled ? 'enabled' : 'disabled'],

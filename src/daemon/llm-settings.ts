@@ -10,6 +10,7 @@ import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain
 import type { JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
+import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -17,12 +18,14 @@ import type { LLMManager } from '../llm/manager.ts';
 // Keychain key names
 const KEY_ANTHROPIC = 'llm.anthropic.api_key';
 const KEY_OPENAI = 'llm.openai.api_key';
+const KEY_GEMINI = 'llm.gemini.api_key';
 
 // DB setting keys
 const SETTING_PRIMARY = 'llm.primary';
 const SETTING_FALLBACK = 'llm.fallback';
 const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
+const SETTING_GEMINI_MODEL = 'llm.gemini.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
 const SETTING_OLLAMA_BASE_URL = 'llm.ollama.base_url';
 
@@ -31,6 +34,7 @@ export type LLMSettingsResponse = {
   fallback: string[];
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
+  gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
 };
 
@@ -43,19 +47,22 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const fallbackRaw = getSetting(SETTING_FALLBACK);
   const fallback = fallbackRaw ? JSON.parse(fallbackRaw) : config.llm.fallback;
 
-  const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-5-20250929';
-  const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-4o';
+  const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
+  const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
+  const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
   const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? 'http://localhost:11434';
 
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
+  const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
 
   return {
     primary,
     fallback,
     anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey },
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
+    gemini: { model: geminiModel, has_api_key: hasGeminiKey },
     ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
   };
 }
@@ -70,6 +77,7 @@ export function saveLLMSettings(
     fallback?: string[];
     anthropic?: { api_key?: string; model?: string };
     openai?: { api_key?: string; model?: string };
+    gemini?: { api_key?: string; model?: string };
     ollama?: { base_url?: string; model?: string };
   },
 ): void {
@@ -113,6 +121,21 @@ export function saveLLMSettings(
     };
   }
 
+  // Gemini
+  if (body.gemini) {
+    if (body.gemini.model) {
+      setSetting(SETTING_GEMINI_MODEL, body.gemini.model);
+    }
+    if (body.gemini.api_key) {
+      setSecret(KEY_GEMINI, body.gemini.api_key);
+    }
+    config.llm.gemini = {
+      ...config.llm.gemini,
+      model: body.gemini.model ?? config.llm.gemini?.model,
+      api_key: body.gemini.api_key ?? getGeminiApiKey(config) ?? '',
+    };
+  }
+
   // Ollama
   if (body.ollama) {
     if (body.ollama.model) {
@@ -141,6 +164,13 @@ function getAnthropicApiKey(config: JarvisConfig): string | null {
  */
 function getOpenAIApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_OPENAI) ?? config.llm.openai?.api_key ?? null;
+}
+
+/**
+ * Resolve the Gemini API key: keychain > config.yaml > env var.
+ */
+function getGeminiApiKey(config: JarvisConfig): string | null {
+  return getSecret(KEY_GEMINI) ?? config.llm.gemini?.api_key ?? null;
 }
 
 /**
@@ -181,6 +211,19 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     };
   }
 
+  // Gemini
+  const dbGeminiModel = getSetting(SETTING_GEMINI_MODEL);
+  const keychainGeminiKey = getSecret(KEY_GEMINI);
+  if (dbGeminiModel || keychainGeminiKey) {
+    config.llm.gemini = {
+      ...config.llm.gemini,
+      api_key: (!process.env.JARVIS_GEMINI_KEY && keychainGeminiKey)
+        ? keychainGeminiKey
+        : (config.llm.gemini?.api_key ?? ''),
+      model: dbGeminiModel ?? config.llm.gemini?.model,
+    };
+  }
+
   // Ollama
   const dbOllamaModel = getSetting(SETTING_OLLAMA_MODEL);
   const dbOllamaUrl = getSetting(SETTING_OLLAMA_BASE_URL);
@@ -210,6 +253,10 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
   if (llm.openai?.api_key) {
     providers.push(new OpenAIProvider(llm.openai.api_key, llm.openai.model));
     console.log('[LLM] Hot-reloaded OpenAI provider');
+  }
+  if (llm.gemini?.api_key) {
+    providers.push(new GeminiProvider(llm.gemini.api_key, llm.gemini.model));
+    console.log('[LLM] Hot-reloaded Gemini provider');
   }
   if (llm.ollama) {
     providers.push(new OllamaProvider(llm.ollama.base_url, llm.ollama.model));
@@ -245,6 +292,10 @@ export async function testLLMProvider(
       const key = opts.api_key || getSecret(KEY_OPENAI) || config.llm.openai?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new OpenAIProvider(key, opts.model ?? config.llm.openai?.model);
+    } else if (opts.provider === 'gemini') {
+      const key = opts.api_key || config.llm.gemini?.api_key;
+      if (!key) return { ok: false, error: 'API key required' };
+      instance = new GeminiProvider(key, opts.model ?? config.llm.gemini?.model);
     } else if (opts.provider === 'ollama') {
       instance = new OllamaProvider(
         opts.base_url ?? config.llm.ollama?.base_url,

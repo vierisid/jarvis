@@ -11,7 +11,6 @@ set -euo pipefail
 #   2. Installs Bun if not already installed
 #   3. Clones the repo & installs dependencies
 #   4. Links the `jarvis` command globally
-#   5. Runs the interactive setup wizard
 #
 # ─────────────────────────────────────────────────────────────────────
 
@@ -164,7 +163,7 @@ main() {
 
   # ── Step 1: Check / Install Bun ──────────────────────────────────
 
-  echo -e "${CYAN}[1/4]${RESET} ${BOLD}Checking Bun runtime...${RESET}"
+  echo -e "${CYAN}[1/3]${RESET} ${BOLD}Checking Bun runtime...${RESET}"
 
   if command -v bun &> /dev/null; then
     BUN_VERSION=$(bun --version)
@@ -200,7 +199,7 @@ main() {
 
   # ── Step 2: Clone / Update repo ─────────────────────────────────
 
-  echo -e "${CYAN}[2/4]${RESET} ${BOLD}Downloading J.A.R.V.I.S...${RESET}"
+  echo -e "${CYAN}[2/3]${RESET} ${BOLD}Downloading J.A.R.V.I.S...${RESET}"
 
   if ! command -v git &> /dev/null; then
     info "git not found. Installing..."
@@ -241,7 +240,7 @@ main() {
 
   # ── Step 3: Install dependencies & link ─────────────────────────
 
-  echo -e "${CYAN}[3/4]${RESET} ${BOLD}Installing dependencies...${RESET}"
+  echo -e "${CYAN}[3/3]${RESET} ${BOLD}Installing dependencies...${RESET}"
 
   cd "$INSTALL_DIR" || {
     err "Failed to enter install directory: $INSTALL_DIR"
@@ -281,15 +280,15 @@ main() {
     -d "{\"os\":\"$OS\",\"bun_version\":\"$BUN_VER\"}" \
     --connect-timeout 2 --max-time 3 &>/dev/null &
 
-  # ── Step 4: Run Onboard Wizard ─────────────────────────────────
+  # ── Done ─────────────────────────────────────────────────────────
 
-  echo -e "${CYAN}[4/4]${RESET} ${BOLD}Running setup wizard...${RESET}"
   echo ""
-
-  ensure_bun_path
-  # Redirect stdin from /dev/tty so the interactive wizard works
-  # even when install.sh is piped (curl | bash)
-  jarvis onboard < /dev/tty
+  echo -e "${GREEN}${BOLD}✓ J.A.R.V.I.S. installed successfully!${RESET}"
+  echo ""
+  echo -e "  Run the setup wizard to configure your assistant:"
+  echo -e "    ${CYAN}jarvis onboard${RESET}"
+  echo ""
+  echo -e "  ${DIM}Or start directly with: jarvis start${RESET}"
 }
 
 main "$@"

@@ -106,8 +106,9 @@ describe('Default Config', () => {
   });
 
   test('has correct LLM defaults', () => {
-    expect(DEFAULT_CONFIG.llm.anthropic?.model).toBe('claude-sonnet-4-5-20250929');
-    expect(DEFAULT_CONFIG.llm.openai?.model).toBe('gpt-4o');
+    expect(DEFAULT_CONFIG.llm.anthropic?.model).toBe('claude-sonnet-4-6');
+    expect(DEFAULT_CONFIG.llm.openai?.model).toBe('gpt-5.4');
+    expect(DEFAULT_CONFIG.llm.gemini?.model).toBe('gemini-3-flash-preview');
     expect(DEFAULT_CONFIG.llm.ollama?.model).toBe('llama3');
     expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('http://localhost:11434');
   });

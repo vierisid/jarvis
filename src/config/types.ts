@@ -124,7 +124,12 @@ export type AuthConfig = {
   token?: string;
 };
 
+export type UserConfig = {
+  name?: string;
+};
+
 export type JarvisConfig = {
+  user?: UserConfig;
   daemon: {
     port: number;
     data_dir: string;
@@ -144,10 +149,12 @@ export type JarvisConfig = {
     fallback: string[];
     anthropic?: { api_key: string; model?: string };
     openai?: { api_key: string; model?: string };
+    gemini?: { api_key: string; model?: string };
     ollama?: { base_url?: string; model?: string };
   };
   personality: {
     core_traits: string[];
+    assistant_name?: string;
   };
   workflows?: WorkflowConfig;
   goals?: GoalConfig;
@@ -157,6 +164,9 @@ export type JarvisConfig = {
 };
 
 export const DEFAULT_CONFIG: JarvisConfig = {
+  user: {
+    name: '',
+  },
   daemon: {
     port: 3142,
     data_dir: '~/.jarvis',
@@ -205,11 +215,15 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     fallback: ['openai', 'ollama'],
     anthropic: {
       api_key: '',
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
     },
     openai: {
       api_key: '',
-      model: 'gpt-4o',
+      model: 'gpt-5.4',
+    },
+    gemini: {
+      api_key: '',
+      model: 'gemini-3-flash-preview',
     },
     ollama: {
       base_url: 'http://localhost:11434',
@@ -224,6 +238,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       'respectful',
       'adaptive',
     ],
+    assistant_name: 'Jarvis',
   },
   authority: {
     default_level: 3,
