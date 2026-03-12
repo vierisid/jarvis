@@ -20,8 +20,25 @@ all: test build
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_NAME) .
 
-test:
+# Cross-compile tester binaries for all platforms and run unit tests.
+test: vet
+	@echo "=== Unit tests ==="
 	go test -v ./...
+	@echo ""
+	@echo "=== Building tester binaries ==="
+	@mkdir -p tester/bin
+	@for platform in $(PLATFORMS); do \
+		os=$${platform%%/*}; \
+		arch=$${platform##*/}; \
+		ext=""; \
+		[ "$$os" = "windows" ] && ext=".exe"; \
+		echo "  tester/$${os}_$${arch}$${ext}"; \
+		GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" \
+			-o "tester/bin/tester_$${os}_$${arch}$${ext}" ./tester/ || exit 1; \
+	done
+	@echo ""
+	@echo "Tester binaries ready in tester/bin/"
+	@ls -lh tester/bin/tester_*
 
 vet:
 	go vet ./...
@@ -29,6 +46,7 @@ vet:
 clean:
 	rm -f $(BIN_NAME) $(BIN_NAME).exe
 	rm -rf dist
+	rm -f tester/bin/tester_*
 	rm -f npm/*/*.tgz
 	rm -rf npm/darwin-arm64/bin npm/darwin-x64/bin npm/linux-x64/bin npm/linux-arm64/bin npm/win32-x64/bin
 	rm -f npm/jarvis-sidecar/*.tgz

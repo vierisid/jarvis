@@ -76,7 +76,6 @@ type uiaRes struct {
 // uiaState holds COM objects that live on the COM thread.
 type uiaState struct {
 	automation *ole.IDispatch // IUIAutomation
-	rawWalker  *ole.IDispatch // IUIAutomationTreeWalker (raw view)
 	cache      *uiaElementCache
 }
 
@@ -115,33 +114,32 @@ func (t *uiaComThread) run(ready chan<- error) {
 		ready <- fmt.Errorf("create IUIAutomation: %w", err)
 		return
 	}
-	automation := unknown.MustQueryInterface(IID_IUIAutomation)
-
-	// Get RawViewWalker (vtable offset 14 from IUIAutomation)
-	rawWalker, err := uiaGetRawViewWalker(automation)
-	if err != nil {
-		automation.Release()
-		ready <- fmt.Errorf("get RawViewWalker: %w", err)
-		return
-	}
+	automation := (*ole.IDispatch)(unsafe.Pointer(unknown))
 
 	state := &uiaState{
 		automation: automation,
-		rawWalker:  rawWalker,
 		cache:      newUIAElementCache(),
 	}
 
 	ready <- nil
 
-	// Process requests forever
+	// Process requests forever (with panic recovery to avoid crashing the sidecar)
 	for req := range t.reqCh {
-		val, err := req.fn(state)
+		val, err := func() (v any, e error) {
+			defer func() {
+				if r := recover(); r != nil {
+					v = nil
+					e = fmt.Errorf("COM thread panic: %v", r)
+					log.Printf("[uia] Recovered from panic: %v", r)
+				}
+			}()
+			return req.fn(state)
+		}()
 		req.result <- uiaRes{val, err}
 	}
 
 	// Cleanup (only reached if channel is closed)
 	state.cache.clear()
-	rawWalker.Release()
 	automation.Release()
 }
 
@@ -158,27 +156,19 @@ func (t *uiaComThread) call(fn func(*uiaState) (any, error)) (any, error) {
 
 // ── IUIAutomation vtable helpers ─────────────────────────────────────
 
-// IUIAutomation vtable offsets (from IUnknown base of 3 methods):
-//  3: CompareElements
-//  4: CompareRuntimeIds
-//  5: GetRootElement
-//  6: ElementFromHandle
-//  7: ElementFromPoint
-//  8: GetFocusedElement
-//  9: CreateTreeWalker
-// 10: get_ControlViewWalker
-// 11: get_ContentViewWalker
-// 12: get_RawViewWalker
-// 13: CreateCacheRequest
-// 14: CreateTrueCondition
-// 15: CreateFalseCondition
-// 16: CreatePropertyCondition
-// ...
-// 21: CreateAndCondition
-
-// Note: The exact offsets depend on the IUIAutomation interface definition.
-// IUIAutomation inherits from IUnknown (3 methods).
-// The offsets below are 0-indexed from the start of IUIAutomation-specific methods.
+// IUIAutomation vtable layout (inherits IUnknown):
+//  [0]  QueryInterface    [1]  AddRef             [2]  Release
+//  [3]  CompareElements   [4]  CompareRuntimeIds  [5]  GetRootElement
+//  [6]  ElementFromHandle [7]  ElementFromPoint   [8]  GetFocusedElement
+//  [9]  GetRootElementBuildCache   [10] ElementFromHandleBuildCache
+//  [11] ElementFromPointBuildCache [12] GetFocusedElementBuildCache
+//  [13] CreateTreeWalker  [14] get_ControlViewWalker
+//  [15] get_ContentViewWalker     [16] get_RawViewWalker
+//  [17] get_RawViewCondition      [18] get_ControlViewCondition
+//  [19] get_ContentViewCondition
+//  [20] CreateCacheRequest        [21] CreateTrueCondition
+//  [22] CreateFalseCondition      [23] CreatePropertyCondition
+//  [24] CreatePropertyConditionEx [25] CreateAndCondition
 
 func vtblOffset(iface *ole.IDispatch, idx int) uintptr {
 	// IDispatch vtable: [QueryInterface, AddRef, Release, GetTypeInfoCount, GetTypeInfo, GetIDsOfNames, Invoke]
@@ -202,25 +192,11 @@ func uiaGetRootElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
 	return elem, nil
 }
 
-func uiaGetRawViewWalker(automation *ole.IDispatch) (*ole.IDispatch, error) {
-	var walker *ole.IDispatch
-	// IUIAutomation::get_RawViewWalker = IUnknown(3) + offset 9 = vtable[12]
-	hr, _, _ := syscall.SyscallN(
-		vtblOffset(automation, 12),
-		uintptr(unsafe.Pointer(automation)),
-		uintptr(unsafe.Pointer(&walker)),
-	)
-	if hr != 0 {
-		return nil, fmt.Errorf("get_RawViewWalker failed: HRESULT 0x%x", hr)
-	}
-	return walker, nil
-}
-
 func uiaCreateTrueCondition(automation *ole.IDispatch) (*ole.IDispatch, error) {
 	var cond *ole.IDispatch
-	// IUIAutomation::CreateTrueCondition = IUnknown(3) + offset 11 = vtable[14]
+	// IUIAutomation::CreateTrueCondition = vtable[21]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(automation, 14),
+		vtblOffset(automation, 21),
 		uintptr(unsafe.Pointer(automation)),
 		uintptr(unsafe.Pointer(&cond)),
 	)
@@ -242,13 +218,13 @@ func uiaCreatePropertyCondition(automation *ole.IDispatch, propertyId int, value
 	}
 
 	var cond *ole.IDispatch
-	// IUIAutomation::CreatePropertyCondition = IUnknown(3) + offset 13 = vtable[16]
+	// IUIAutomation::CreatePropertyCondition = vtable[23]
+	// VARIANT (16 bytes) is passed by reference on x64 per Windows calling convention.
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(automation, 16),
+		vtblOffset(automation, 23),
 		uintptr(unsafe.Pointer(automation)),
 		uintptr(propertyId),
 		uintptr(unsafe.Pointer(&v)),
-		uintptr(0), // padding for VARIANT (16 bytes on 64-bit)
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
@@ -259,9 +235,9 @@ func uiaCreatePropertyCondition(automation *ole.IDispatch, propertyId int, value
 
 func uiaCreateAndCondition(automation *ole.IDispatch, cond1, cond2 *ole.IDispatch) (*ole.IDispatch, error) {
 	var cond *ole.IDispatch
-	// IUIAutomation::CreateAndCondition = IUnknown(3) + offset 18 = vtable[21]
+	// IUIAutomation::CreateAndCondition = vtable[25]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(automation, 21),
+		vtblOffset(automation, 25),
 		uintptr(unsafe.Pointer(automation)),
 		uintptr(unsafe.Pointer(cond1)),
 		uintptr(unsafe.Pointer(cond2)),
@@ -274,15 +250,29 @@ func uiaCreateAndCondition(automation *ole.IDispatch, cond1, cond2 *ole.IDispatc
 }
 
 // ── IUIAutomationElement helpers ─────────────────────────────────────
+//
+// IUIAutomationElement vtable layout (inherits IUnknown):
+//  [0]  QueryInterface         [1]  AddRef                 [2]  Release
+//  [3]  SetFocus               [4]  GetRuntimeId           [5]  FindFirst
+//  [6]  FindAll                [7]  FindFirstBuildCache    [8]  FindAllBuildCache
+//  [9]  BuildUpdatedCache      [10] GetCurrentPropertyValue
+//  [11] GetCurrentPropertyValueEx  [12] GetCachedPropertyValue
+//  [13] GetCachedPropertyValueEx   [14] GetCurrentPatternAs
+//  [15] GetCachedPatternAs     [16] GetCurrentPattern      [17] GetCachedPattern
+//  [18] GetCachedParent        [19] GetCachedChildren
+//  [20] get_CurrentProcessId   [21] get_CurrentControlType
+//  [22] get_CurrentLocalizedControlType  [23] get_CurrentName
+//  ... (more Current* properties) ...
+//  [43] get_CurrentBoundingRectangle
 
 func uiaElementGetPropertyStr(elem *ole.IDispatch, propertyId int) string {
 	var v ole.VARIANT
 	ole.VariantInit(&v)
 	defer ole.VariantClear(&v)
 
-	// IUIAutomationElement::GetCurrentPropertyValue = IUnknown(3) + offset 20 = vtable[23]
+	// IUIAutomationElement::GetCurrentPropertyValue = IUnknown(3) + offset 7 = vtable[10]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 23),
+		vtblOffset(elem, 10),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(propertyId),
 		uintptr(unsafe.Pointer(&v)),
@@ -301,8 +291,9 @@ func uiaElementGetPropertyInt(elem *ole.IDispatch, propertyId int) int {
 	ole.VariantInit(&v)
 	defer ole.VariantClear(&v)
 
+	// IUIAutomationElement::GetCurrentPropertyValue = vtable[10]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 23),
+		vtblOffset(elem, 10),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(propertyId),
 		uintptr(unsafe.Pointer(&v)),
@@ -321,8 +312,9 @@ func uiaElementGetPropertyBool(elem *ole.IDispatch, propertyId int) bool {
 	ole.VariantInit(&v)
 	defer ole.VariantClear(&v)
 
+	// IUIAutomationElement::GetCurrentPropertyValue = vtable[10]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 23),
+		vtblOffset(elem, 10),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(propertyId),
 		uintptr(unsafe.Pointer(&v)),
@@ -356,9 +348,9 @@ func uiaElementGetBoundingRect(elem *ole.IDispatch) (x, y, w, h int) {
 }
 
 func uiaElementSetFocus(elem *ole.IDispatch) error {
-	// IUIAutomationElement::SetFocus = IUnknown(3) + offset 22 = vtable[25]
+	// IUIAutomationElement::SetFocus = IUnknown(3) + offset 0 = vtable[3]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 25),
+		vtblOffset(elem, 3),
 		uintptr(unsafe.Pointer(elem)),
 	)
 	if hr != 0 {
@@ -370,9 +362,9 @@ func uiaElementSetFocus(elem *ole.IDispatch) error {
 // IUIAutomationElement::FindFirst
 func uiaElementFindFirst(elem *ole.IDispatch, scope int, condition *ole.IDispatch) (*ole.IDispatch, error) {
 	var found *ole.IDispatch
-	// IUIAutomationElement::FindFirst = IUnknown(3) + offset 1 = vtable[4]
+	// IUIAutomationElement::FindFirst = IUnknown(3) + offset 2 = vtable[5]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 4),
+		vtblOffset(elem, 5),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(scope),
 		uintptr(unsafe.Pointer(condition)),
@@ -387,9 +379,9 @@ func uiaElementFindFirst(elem *ole.IDispatch, scope int, condition *ole.IDispatc
 // IUIAutomationElement::FindAll
 func uiaElementFindAll(elem *ole.IDispatch, scope int, condition *ole.IDispatch) (*ole.IDispatch, error) {
 	var arr *ole.IDispatch
-	// IUIAutomationElement::FindAll = IUnknown(3) + offset 2 = vtable[5]
+	// IUIAutomationElement::FindAll = IUnknown(3) + offset 3 = vtable[6]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 5),
+		vtblOffset(elem, 6),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(scope),
 		uintptr(unsafe.Pointer(condition)),
@@ -404,9 +396,9 @@ func uiaElementFindAll(elem *ole.IDispatch, scope int, condition *ole.IDispatch)
 // IUIAutomationElement::GetCurrentPattern
 func uiaElementGetPattern(elem *ole.IDispatch, patternId int) (*ole.IDispatch, error) {
 	var pattern *ole.IDispatch
-	// IUIAutomationElement::GetCurrentPattern = IUnknown(3) + offset 18 = vtable[21]
+	// IUIAutomationElement::GetCurrentPattern = IUnknown(3) + offset 13 = vtable[16]
 	hr, _, _ := syscall.SyscallN(
-		vtblOffset(elem, 21),
+		vtblOffset(elem, 16),
 		uintptr(unsafe.Pointer(elem)),
 		uintptr(patternId),
 		uintptr(unsafe.Pointer(&pattern)),
@@ -415,38 +407,6 @@ func uiaElementGetPattern(elem *ole.IDispatch, patternId int) (*ole.IDispatch, e
 		return nil, fmt.Errorf("GetCurrentPattern(%d) failed: HRESULT 0x%x", patternId, hr)
 	}
 	return pattern, nil
-}
-
-// ── IUIAutomationTreeWalker helpers ──────────────────────────────────
-
-func uiaWalkerGetFirstChild(walker, elem *ole.IDispatch) *ole.IDispatch {
-	var child *ole.IDispatch
-	// IUIAutomationTreeWalker::GetFirstChildElement = IUnknown(3) + offset 1 = vtable[4]
-	hr, _, _ := syscall.SyscallN(
-		vtblOffset(walker, 4),
-		uintptr(unsafe.Pointer(walker)),
-		uintptr(unsafe.Pointer(elem)),
-		uintptr(unsafe.Pointer(&child)),
-	)
-	if hr != 0 {
-		return nil
-	}
-	return child
-}
-
-func uiaWalkerGetNextSibling(walker, elem *ole.IDispatch) *ole.IDispatch {
-	var sibling *ole.IDispatch
-	// IUIAutomationTreeWalker::GetNextSiblingElement = IUnknown(3) + offset 3 = vtable[6]
-	hr, _, _ := syscall.SyscallN(
-		vtblOffset(walker, 6),
-		uintptr(unsafe.Pointer(walker)),
-		uintptr(unsafe.Pointer(elem)),
-		uintptr(unsafe.Pointer(&sibling)),
-	)
-	if hr != 0 {
-		return nil
-	}
-	return sibling
 }
 
 // ── IUIAutomationElementArray helpers ────────────────────────────────
@@ -596,14 +556,31 @@ func resolvePid(pid int) (int, error) {
 	return int(fgPid), nil
 }
 
-// walkTree recursively walks the UIAutomation tree using RawViewWalker.
+// walkTree recursively walks the UIAutomation tree using FindAll(TreeScope_Children).
 func walkTree(state *uiaState, parent *ole.IDispatch, depth, maxDepth int, includeInvisible bool, results *[]map[string]any) {
 	if depth > maxDepth {
 		return
 	}
 
-	child := uiaWalkerGetFirstChild(state.rawWalker, parent)
-	for child != nil {
+	trueCond, err := uiaCreateTrueCondition(state.automation)
+	if err != nil {
+		return
+	}
+	defer trueCond.Release()
+
+	arr, err := uiaElementFindAll(parent, TreeScope_Children, trueCond)
+	if err != nil || arr == nil {
+		return
+	}
+	defer arr.Release()
+
+	count := uiaArrayLength(arr)
+	for i := 0; i < count; i++ {
+		child := uiaArrayGetElement(arr, i)
+		if child == nil {
+			continue
+		}
+
 		x, y, w, h := uiaElementGetBoundingRect(child)
 		visible := w > 0 && h > 0
 		_ = x
@@ -617,12 +594,9 @@ func walkTree(state *uiaState, parent *ole.IDispatch, depth, maxDepth int, inclu
 
 		walkTree(state, child, depth+1, maxDepth, includeInvisible, results)
 
-		next := uiaWalkerGetNextSibling(state.rawWalker, child)
 		if !visible && !includeInvisible {
-			// Element wasn't cached, release it
 			child.Release()
 		}
-		child = next
 	}
 }
 

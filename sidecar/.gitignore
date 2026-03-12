@@ -11,3 +11,6 @@ npm/linux-x64/bin/
 npm/linux-arm64/bin/
 npm/win32-x64/bin/
 *.tgz
+
+# Tester binaries (built by make test)
+tester/bin/tester_*
