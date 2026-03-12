@@ -29,7 +29,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your des
 ### npm (recommended)
 
 ```bash
-bun add -g @usejarvis/brain
+npm install -g @usejarvis/brain
 jarvis onboard
 ```
 
@@ -48,6 +48,7 @@ The install script sets up Bun, clones the repo, and links the `jarvis` CLI. The
 git clone https://github.com/vierisid/jarvis.git ~/.jarvis/daemon
 cd ~/.jarvis/daemon
 bun install
+bun run build:ui
 jarvis onboard
 ```
 
@@ -56,6 +57,7 @@ jarvis onboard
 ```bash
 jarvis start            # Start in foreground
 jarvis start -d         # Start as background daemon
+jarvis start --port 3142 # Start on a specific port
 jarvis stop             # Stop the daemon
 jarvis status           # Check if running
 jarvis doctor           # Verify environment & connectivity
@@ -85,7 +87,7 @@ npm install -g @usejarvis/sidecar
 
 1. Open the JARVIS dashboard at `http://localhost:3142`
 2. Go to **Settings** → **Sidecar**
-3. Enter a name for this machine (e.g. "work-laptop") and click **Enroll**
+3. Enter a friendly name for this machine (e.g. "work laptop") and click **Enroll**
 4. Click **Copy** to copy the token command
 
 ### 3. Run the sidecar
@@ -93,7 +95,7 @@ npm install -g @usejarvis/sidecar
 Paste and run the copied command on the machine where you installed the sidecar:
 
 ```bash
-jarvis-sidecar --token <your-jwt-token>
+jarvis-sidecar --token <your-token>
 ```
 
 The sidecar saves the token locally, so on subsequent runs you just need:
@@ -242,6 +244,7 @@ bun run db:init         # Initialize or reset the database
 | 20 | Self-Improvement — Autonomous prompt evolution |
 | 21 | Multi-Modal — DALL-E 3, full video/image processing |
 | 22 | Swarm Intelligence — Multi-device coordination |
+| — | Windows and macOS sidecar installers |
 
 See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 
@@ -261,7 +264,7 @@ See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 ## Requirements
 
 - **Bun** >= 1.0
-- **OS**: macOS, Linux, or Windows (WSL2)
+- **OS**: Windows, macOS, or Linux
 - **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
 - Google OAuth credentials (optional — Calendar and Gmail integration)
 - Telegram bot token (optional — notification channel)
