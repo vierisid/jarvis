@@ -141,7 +141,7 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('');
   lines.push('Tools:');
   lines.push('- `desktop_list_windows` — list all visible windows (titles, PIDs, positions)');
-  lines.push('- `desktop_snapshot` — get the UI element tree of a window. Each element has an [id]. Optional `depth` param to control tree depth (default: 3).');
+  lines.push('- `desktop_snapshot` — get the UI element tree of a window. Each element has an [id]. Optional `depth` param to control tree depth (default: 8).');
   lines.push('- `desktop_click` — click or interact with an element by [id]. Optional `action` param: click (default), double_click, right_click, invoke, toggle, set_value, get_value, expand, collapse, focus. Optional `value` param for set_value.');
   lines.push('- `desktop_type` — type text into the focused element. Optional `element_id` to click-focus first.');
   lines.push('- `desktop_press_keys` — press key combos (e.g., "ctrl,s", "alt,f4", "enter")');

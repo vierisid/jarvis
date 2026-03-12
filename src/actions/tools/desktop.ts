@@ -61,7 +61,7 @@ export const desktopSnapshotTool: ToolDefinition = {
     },
     depth: {
       type: 'number',
-      description: 'Max tree depth to walk (default: 3). Increase for deeply nested UIs.',
+      description: 'Max tree depth to walk (default: 8). Decrease for faster but shallower snapshots.',
       required: false,
     },
   },

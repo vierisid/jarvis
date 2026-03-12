@@ -90,7 +90,7 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 	if pidF, ok := params["pid"].(float64); ok {
 		pid = int(pidF)
 	}
-	maxDepth := 3
+	maxDepth := 8
 	if d, ok := params["depth"].(float64); ok {
 		maxDepth = int(d)
 	}

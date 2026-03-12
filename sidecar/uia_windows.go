@@ -557,16 +557,11 @@ func resolvePid(pid int) (int, error) {
 }
 
 // walkTree recursively walks the UIAutomation tree using FindAll(TreeScope_Children).
-func walkTree(state *uiaState, parent *ole.IDispatch, depth, maxDepth int, includeInvisible bool, results *[]map[string]any) {
+// trueCond is a pre-created TrueCondition to avoid repeated COM allocations.
+func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, depth, maxDepth int, includeInvisible bool, results *[]map[string]any) {
 	if depth > maxDepth {
 		return
 	}
-
-	trueCond, err := uiaCreateTrueCondition(state.automation)
-	if err != nil {
-		return
-	}
-	defer trueCond.Release()
 
 	arr, err := uiaElementFindAll(parent, TreeScope_Children, trueCond)
 	if err != nil || arr == nil {
@@ -592,7 +587,7 @@ func walkTree(state *uiaState, parent *ole.IDispatch, depth, maxDepth int, inclu
 			*results = append(*results, info)
 		}
 
-		walkTree(state, child, depth+1, maxDepth, includeInvisible, results)
+		walkTree(state, trueCond, child, depth+1, maxDepth, includeInvisible, results)
 
 		if !visible && !includeInvisible {
 			child.Release()
@@ -615,28 +610,14 @@ func uiaInspect(state *uiaState, pid, maxDepth int, includeInvisible bool) (map[
 
 	state.cache.clear()
 
-	var elements []map[string]any
-	walkTree(state, window, 0, maxDepth, includeInvisible, &elements)
-
-	// Fallback: if walker found nothing, try FindAll with Descendants
-	if len(elements) == 0 {
-		trueCond, err := uiaCreateTrueCondition(state.automation)
-		if err == nil {
-			defer trueCond.Release()
-			arr, err := uiaElementFindAll(window, TreeScope_Descendants, trueCond)
-			if err == nil && arr != nil {
-				defer arr.Release()
-				length := uiaArrayLength(arr)
-				for i := 0; i < length; i++ {
-					elem := uiaArrayGetElement(arr, i)
-					if elem != nil {
-						id := state.cache.add(elem)
-						elements = append(elements, buildElementInfo(elem, id, 0))
-					}
-				}
-			}
-		}
+	trueCond, err := uiaCreateTrueCondition(state.automation)
+	if err != nil {
+		return nil, fmt.Errorf("CreateTrueCondition: %w", err)
 	}
+	defer trueCond.Release()
+
+	var elements []map[string]any
+	walkTree(state, trueCond, window, 0, maxDepth, includeInvisible, &elements)
 
 	windowTitle := uiaElementGetPropertyStr(window, UIA_NamePropertyId)
 
