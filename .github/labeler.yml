@@ -22,6 +22,14 @@ ui:
       - any-glob-to-any-file:
           - 'ui/**'
 
+packaging:
+  - head-branch: ['^packaging/', '^npm/', '^release/']
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sidecar/npm/**'
+          - 'package.json'
+          - 'install.sh'
+
 documentation:
   - changed-files:
       - any-glob-to-any-file:

@@ -1,5 +1,5 @@
 {
-  "name": "@jarvis/sidecar-darwin-x64",
+  "name": "@usejarvis/sidecar-darwin-x64",
   "version": "0.1.0",
   "description": "Jarvis sidecar binary for macOS x64",
   "os": ["darwin"],

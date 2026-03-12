@@ -1,5 +1,5 @@
 {
-  "name": "@jarvis/sidecar-linux-x64",
+  "name": "@usejarvis/sidecar-linux-x64",
   "version": "0.1.0",
   "description": "Jarvis sidecar binary for Linux x64",
   "os": ["linux"],

@@ -5,11 +5,11 @@ const path = require("path");
 const os = require("os");
 
 const PLATFORMS = {
-  "darwin-arm64": "@jarvis/sidecar-darwin-arm64",
-  "darwin-x64": "@jarvis/sidecar-darwin-x64",
-  "linux-x64": "@jarvis/sidecar-linux-x64",
-  "linux-arm64": "@jarvis/sidecar-linux-arm64",
-  "win32-x64": "@jarvis/sidecar-win32-x64",
+  "darwin-arm64": "@usejarvis/sidecar-darwin-arm64",
+  "darwin-x64": "@usejarvis/sidecar-darwin-x64",
+  "linux-x64": "@usejarvis/sidecar-linux-x64",
+  "linux-arm64": "@usejarvis/sidecar-linux-arm64",
+  "win32-x64": "@usejarvis/sidecar-win32-x64",
 };
 
 const key = `${os.platform()}-${os.arch()}`;
@@ -27,7 +27,7 @@ try {
   binPath = path.join(pkgDir, "bin", `jarvis-sidecar${ext}`);
 } catch {
   console.error(
-    `Platform package ${pkg} is not installed. Try reinstalling @jarvis/sidecar.`
+    `Platform package ${pkg} is not installed. Try reinstalling @usejarvis/sidecar.`
   );
   process.exit(1);
 }

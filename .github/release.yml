@@ -6,6 +6,8 @@ changelog:
       labels: [bug]
     - title: "🏗️ Infrastructure"
       labels: [infrastructure]
+    - title: "📦 Packaging"
+      labels: [packaging]
     - title: "📖 Documentation"
       labels: [documentation]
     - title: "Other Changes"

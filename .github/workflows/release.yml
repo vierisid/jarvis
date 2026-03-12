@@ -30,7 +30,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -62,11 +62,12 @@ jobs:
             npm_pkg: win32-x64
             ext: .exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sidecar/go.sum
 
       - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: sidecar
@@ -78,7 +79,7 @@ jobs:
           go build -ldflags "-s -w" -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
@@ -88,14 +89,14 @@ jobs:
     needs: build-sidecar
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Download all sidecar binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -127,7 +128,7 @@ jobs:
 
           # Update optionalDependencies versions
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            sed -i "s|\"@jarvis/sidecar-${platform}\": \".*\"|\"@jarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
+            sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
           done
 
       - name: Setup npm auth
@@ -140,7 +141,7 @@ jobs:
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            echo "Publishing @jarvis/sidecar-${platform}... ${FLAGS}"
+            echo "Publishing @usejarvis/sidecar-${platform}... ${FLAGS}"
             cd "sidecar/npm/${platform}"
             npm publish --access public $FLAGS
             cd "$GITHUB_WORKSPACE"
@@ -155,12 +156,12 @@ jobs:
           cd sidecar/npm/jarvis-sidecar
           npm publish --access public $FLAGS
 
-  # ─── Publish main daemon to npm ────────────────────────────────
-  publish-daemon:
+  # ─── Publish main brain package to npm ─────────────────────────
+  publish-brain:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -193,12 +194,12 @@ jobs:
     needs: build-sidecar
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download all sidecar binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
