@@ -2,7 +2,10 @@
  * Tests for Observer Layer
  */
 
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   ObserverManager,
   FileWatcher,
@@ -14,10 +17,19 @@ import {
   type ObserverEvent,
 } from './index';
 
+// Use an isolated temp dir instead of /tmp to avoid slow recursive watches on CI
+let testDir: string;
+beforeAll(() => {
+  testDir = mkdtempSync(join(tmpdir(), 'jarvis-test-'));
+});
+afterAll(() => {
+  try { rmSync(testDir, { recursive: true }); } catch {}
+});
+
 describe('ObserverManager', () => {
   test('registers observers', () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
 
     manager.register(watcher);
 
@@ -26,7 +38,7 @@ describe('ObserverManager', () => {
 
   test('propagates event handler to observers', () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
 
     manager.register(watcher);
 
@@ -41,7 +53,7 @@ describe('ObserverManager', () => {
 
   test('starts and stops all observers', async () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
     const clipboard = new ClipboardMonitor(5000);
 
     manager.register(watcher);
@@ -62,7 +74,7 @@ describe('ObserverManager', () => {
 
   test('starts and stops individual observers', async () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
 
     manager.register(watcher);
 
@@ -76,7 +88,7 @@ describe('ObserverManager', () => {
 
 describe('FileWatcher', () => {
   test('starts and stops', async () => {
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
 
     expect(watcher.isRunning()).toBe(false);
 
@@ -88,7 +100,7 @@ describe('FileWatcher', () => {
   });
 
   test('prevents double start', async () => {
-    const watcher = new FileWatcher(['/tmp']);
+    const watcher = new FileWatcher([testDir]);
 
     await watcher.start();
     await watcher.start(); // Should not throw
