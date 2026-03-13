@@ -249,7 +249,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: v${{ steps.version.outputs.VERSION }}
+          name: Jarvis v${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
           append_body: true
           body_path: release/INSTALL.md
