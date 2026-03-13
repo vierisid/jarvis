@@ -15,7 +15,8 @@ export type ActionCategory =
  * - 1-2: Read only (read_data)
  * - 3-4: Read + write + send messages (write_data, send_message)
  * - 5-6: + execute commands, control apps (execute_command, access_browser, control_app)
- * - 7-8: + spawn agents, send email, install software (spawn_agent, send_email, install_software)
+ * - 1+: spawn agents (spawn_agent) — always allowed
+ * - 7-8: + send email, install software (send_email, install_software)
  * - 9-10: Full access including payments and settings (make_payment, modify_settings, delete_data, terminate_agent)
  */
 export const AUTHORITY_REQUIREMENTS: Record<ActionCategory, number> = {
@@ -32,7 +33,7 @@ export const AUTHORITY_REQUIREMENTS: Record<ActionCategory, number> = {
   'control_app': 5,
 
   // Level 7-8: + spawn agents, send email, install software
-  'spawn_agent': 7,
+  'spawn_agent': 1,
   'send_email': 7,
   'install_software': 7,
 
