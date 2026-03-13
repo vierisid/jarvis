@@ -842,6 +842,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             });
             goalToolRegistry.register(manageGoalsTool);
             console.log('[Daemon] manage_goals tool registered for chat agent');
+
+            // Wire DailyRhythm + chat delivery into GoalService for proactive reminders
+            goalRhythm.setEventCallback((event) => wsService.broadcastGoalEvent(event));
+            goalSvc.setRhythm(goalRhythm);
+            goalSvc.setChatCallback((text) => wsService.broadcastHeartbeat(text));
           }
         } catch (err) {
           console.error('[Daemon] Failed to register manage_goals tool:', err instanceof Error ? err.message : err);

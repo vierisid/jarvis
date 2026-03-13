@@ -10,6 +10,7 @@ import type { Service, ServiceStatus } from '../daemon/services.ts';
 import type { GoalEvent } from './events.ts';
 import type { GoalConfig } from '../config/types.ts';
 import type { Goal, GoalLevel, GoalStatus, GoalHealth } from './types.ts';
+import type { DailyRhythm } from './rhythm.ts';
 import * as vault from '../vault/goals.ts';
 
 export class GoalService implements Service {
@@ -17,6 +18,8 @@ export class GoalService implements Service {
   private _status: ServiceStatus = 'stopped';
   private config: GoalConfig;
   private eventCallback: ((event: GoalEvent) => void) | null = null;
+  private chatCallback: ((text: string) => void) | null = null;
+  private rhythm: DailyRhythm | null = null;
 
   // Timers
   private rhythmTimer: Timer | null = null;        // daily rhythm check (60s)
@@ -32,6 +35,20 @@ export class GoalService implements Service {
    */
   setEventCallback(cb: (event: GoalEvent) => void): void {
     this.eventCallback = cb;
+  }
+
+  /**
+   * Set callback for sending proactive messages to the user's chat.
+   */
+  setChatCallback(cb: (text: string) => void): void {
+    this.chatCallback = cb;
+  }
+
+  /**
+   * Set the DailyRhythm instance for morning/evening planning.
+   */
+  setRhythm(rhythm: DailyRhythm): void {
+    this.rhythm = rhythm;
   }
 
   private emit(event: GoalEvent): void {
@@ -191,8 +208,7 @@ export class GoalService implements Service {
 
   /**
    * Check if we're in a morning or evening window and trigger check-ins.
-   * This is a lightweight timer check — the actual NL-driven rhythm
-   * is in src/goals/rhythm.ts (Phase 4).
+   * Calls DailyRhythm to generate the plan/review and sends the message to chat.
    */
   private async checkDailyRhythm(): Promise<void> {
     const now = new Date();
@@ -205,9 +221,32 @@ export class GoalService implements Service {
     if (hour >= morningWindow.start && hour < morningWindow.end) {
       const existing = vault.getTodayCheckIn('morning_plan');
       if (!existing) {
-        // Morning plan needed — Phase 4 (rhythm.ts) will handle the LLM-driven planning
-        // For now, just log that it's time
-        console.log('[GoalService] Morning plan window — check-in needed');
+        console.log('[GoalService] Morning plan window — running morning plan');
+        if (this.rhythm) {
+          try {
+            const result = await this.rhythm.runMorningPlan();
+            if (this.chatCallback) {
+              const parts: string[] = [];
+              parts.push(`**Morning Plan**\n`);
+              parts.push(result.message);
+              if (result.warnings.length > 0) {
+                parts.push(`\n\n**Warnings:**`);
+                for (const w of result.warnings) parts.push(`- ${w}`);
+              }
+              if (result.focusAreas.length > 0) {
+                parts.push(`\n\n**Focus Areas:**`);
+                for (const f of result.focusAreas) parts.push(`- ${f}`);
+              }
+              if (result.dailyActions.length > 0) {
+                parts.push(`\n\n**Today's Actions:**`);
+                for (const a of result.dailyActions) parts.push(`- ${a}`);
+              }
+              this.chatCallback(parts.join('\n'));
+            }
+          } catch (err) {
+            console.error('[GoalService] Morning plan failed:', err);
+          }
+        }
       }
     }
 
@@ -215,7 +254,27 @@ export class GoalService implements Service {
     if (hour >= eveningWindow.start && hour < eveningWindow.end) {
       const existing = vault.getTodayCheckIn('evening_review');
       if (!existing) {
-        console.log('[GoalService] Evening review window — check-in needed');
+        console.log('[GoalService] Evening review window — running evening review');
+        if (this.rhythm) {
+          try {
+            const result = await this.rhythm.runEveningReview();
+            if (this.chatCallback) {
+              const parts: string[] = [];
+              parts.push(`**Evening Review**\n`);
+              parts.push(result.message);
+              parts.push(`\n\n${result.assessment}`);
+              if (result.scoreUpdates.length > 0) {
+                parts.push(`\n\n**Score Updates:**`);
+                for (const u of result.scoreUpdates) {
+                  parts.push(`- ${u.reason} (${u.newScore.toFixed(1)})`);
+                }
+              }
+              this.chatCallback(parts.join('\n'));
+            }
+          } catch (err) {
+            console.error('[GoalService] Evening review failed:', err);
+          }
+        }
       }
     }
   }
