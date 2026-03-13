@@ -3,10 +3,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
+import { DocumentCard } from "./DocumentCard";
 
 type Props = {
   content: string;
 };
+
+const DOC_MARKER_RE = /<!-- jarvis:document id="([^"]+)" title="([^"]+)" format="([^"]+)" size="([^"]+)" -->/g;
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -238,15 +241,56 @@ const components: Components = {
 };
 
 export function MarkdownContent({ content }: Props) {
-  return (
-    <div className="markdown-content">
+  // Split content around document markers and render DocumentCards inline
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const re = new RegExp(DOC_MARKER_RE.source, 'g');
+
+  while ((match = re.exec(content)) !== null) {
+    // Text before the marker
+    if (match.index > lastIndex) {
+      const text = content.slice(lastIndex, match.index).trim();
+      if (text) {
+        parts.push(
+          <ReactMarkdown
+            key={`md-${lastIndex}`}
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={components}
+          >
+            {text}
+          </ReactMarkdown>
+        );
+      }
+    }
+    // The document card
+    parts.push(
+      <DocumentCard
+        key={`doc-${match[1]}`}
+        id={match[1]!}
+        title={match[2]!}
+        format={match[3]!}
+        size={match[4]!}
+      />
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining text after last marker (or all text if no markers)
+  const remaining = content.slice(lastIndex).trim();
+  if (remaining) {
+    parts.push(
       <ReactMarkdown
+        key={`md-${lastIndex}`}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={components}
       >
-        {content}
+        {remaining}
       </ReactMarkdown>
-    </div>
-  );
+    );
+  }
+
+  return <div className="markdown-content">{parts}</div>;
 }

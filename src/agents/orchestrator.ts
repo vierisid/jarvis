@@ -251,6 +251,14 @@ export class AgentOrchestrator {
           });
           const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
           console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
+
+          // Capture document markers so they appear in the final response
+          if (typeof result === 'string') {
+            const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
+            if (docMarker) {
+              finalText += '\n' + docMarker[0] + '\n';
+            }
+          }
         }
 
         // Continue loop to re-call LLM with tool results
@@ -400,6 +408,14 @@ export class AgentOrchestrator {
         });
         const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
         console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
+
+        // Inject document markers into the stream so the UI can render download cards
+        if (typeof result === 'string') {
+          const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
+          if (docMarker) {
+            yield { type: 'text' as const, text: '\n' + docMarker[0] + '\n' };
+          }
+        }
       }
 
       // Continue loop — will stream next LLM response

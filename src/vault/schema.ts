@@ -655,4 +655,20 @@ function createTables(db: Database): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  // Documents table: vault-stored documents created by JARVIS
+  db.run(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      format TEXT NOT NULL DEFAULT 'markdown'
+        CHECK(format IN ('markdown', 'plain', 'html', 'json', 'csv', 'code')),
+      tags TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_documents_format ON documents(format)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at)`);
 }

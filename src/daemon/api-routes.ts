@@ -2020,6 +2020,77 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // --- Documents ---
+    '/api/documents': {
+      GET: (req: Request) => {
+        try {
+          const { findDocuments } = require('../vault/documents.ts');
+          const url = new URL(req.url);
+          const format = url.searchParams.get('format') || undefined;
+          const tag = url.searchParams.get('tag') || undefined;
+          const search = url.searchParams.get('search') || undefined;
+          const query = (format || tag || search) ? { format, tag, search } : undefined;
+          return json(findDocuments(query));
+        } catch (err) { return error(`${err}`); }
+      },
+    },
+
+    '/api/documents/:id': {
+      GET: (req: Request) => {
+        try {
+          const { getDocument } = require('../vault/documents.ts');
+          const url = new URL(req.url);
+          const parts = url.pathname.split('/');
+          const id = parts[parts.length - 1]!;
+          const doc = getDocument(id);
+          if (!doc) return error('Document not found', 404);
+          return json(doc);
+        } catch (err) { return error(`${err}`); }
+      },
+      DELETE: (req: Request) => {
+        try {
+          const { deleteDocument } = require('../vault/documents.ts');
+          const url = new URL(req.url);
+          const parts = url.pathname.split('/');
+          const id = parts[parts.length - 1]!;
+          const deleted = deleteDocument(id);
+          if (!deleted) return error('Document not found', 404);
+          return json({ ok: true });
+        } catch (err) { return error(`${err}`); }
+      },
+    },
+
+    '/api/documents/:id/download': {
+      GET: (req: Request) => {
+        try {
+          const { getDocument } = require('../vault/documents.ts');
+          const url = new URL(req.url);
+          const parts = url.pathname.split('/');
+          const id = parts[parts.length - 2]!;
+          const doc = getDocument(id);
+          if (!doc) return error('Document not found', 404);
+
+          const ext: Record<string, string> = {
+            markdown: '.md', plain: '.txt', html: '.html',
+            json: '.json', csv: '.csv', code: '.txt',
+          };
+          const mime: Record<string, string> = {
+            markdown: 'text/markdown', plain: 'text/plain', html: 'text/html',
+            json: 'application/json', csv: 'text/csv', code: 'text/plain',
+          };
+
+          const filename = doc.title.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_') + (ext[doc.format] || '.txt');
+
+          return new Response(doc.body, {
+            headers: {
+              'Content-Type': mime[doc.format] || 'text/plain',
+              'Content-Disposition': `attachment; filename="${filename}"`,
+            },
+          });
+        } catch (err) { return error(`${err}`); }
+      },
+    },
+
     // --- Sidecars ---
     '/api/sidecars': {
       GET: () => {
