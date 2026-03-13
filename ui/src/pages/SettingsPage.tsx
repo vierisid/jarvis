@@ -1,4 +1,5 @@
 import React from "react";
+import type { SettingsSection } from "../App";
 import { PersonalityPanel } from "../components/settings/PersonalityPanel";
 import { LLMPanel } from "../components/settings/LLMPanel";
 import { HeartbeatPanel } from "../components/settings/HeartbeatPanel";
@@ -7,39 +8,49 @@ import { IntegrationsPanel } from "../components/settings/IntegrationsPanel";
 import { ChannelsPanel } from "../components/settings/ChannelsPanel";
 import { SidecarPanel } from "../components/settings/SidecarPanel";
 
-export default function SettingsPage() {
+const SECTION_META: Record<SettingsSection, { title: string; subtitle: string }> = {
+  general: { title: "General", subtitle: "Personality, role, and heartbeat configuration" },
+  llm: { title: "LLM Configuration", subtitle: "Manage AI providers, models, and API keys" },
+  channels: { title: "Communication Channels", subtitle: "Telegram, Discord, voice transcription, and text-to-speech" },
+  integrations: { title: "Integrations", subtitle: "Third-party service connections" },
+  sidecar: { title: "Sidecar", subtitle: "Remote machine control via Go sidecar agents" },
+};
+
+export default function SettingsPage({ section }: { section: SettingsSection }) {
+  const meta = SECTION_META[section];
+
   return (
-    <div style={{ padding: "24px", overflow: "auto", height: "100%" }}>
-      <div style={{ marginBottom: "24px" }}>
-        <h1
-          style={{
-            fontSize: "20px",
-            fontWeight: 600,
-            color: "var(--j-text)",
-            margin: 0,
-          }}
-        >
-          Settings
+    <div style={{ padding: "32px 40px", overflow: "auto", height: "100%" }}>
+      <div style={{ maxWidth: "800px" }}>
+        <h1 style={{
+          fontSize: "18px",
+          fontWeight: 600,
+          color: "var(--j-text)",
+          margin: 0,
+        }}>
+          {meta.title}
         </h1>
-        <div style={{ fontSize: "13px", color: "var(--j-text-muted)", marginTop: "4px" }}>
-          System configuration and personality
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: "20px" }}>
-        {/* Left column */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
-          <PersonalityPanel />
-          <RolePanel />
+        <div style={{
+          fontSize: "13px",
+          color: "var(--j-text-muted)",
+          marginTop: "4px",
+          marginBottom: "28px",
+        }}>
+          {meta.subtitle}
         </div>
 
-        {/* Right column */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
-          <LLMPanel />
-          <HeartbeatPanel />
-          <IntegrationsPanel />
-          <ChannelsPanel />
-          <SidecarPanel />
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          {section === "general" && (
+            <>
+              <PersonalityPanel />
+              <RolePanel />
+              <HeartbeatPanel />
+            </>
+          )}
+          {section === "llm" && <LLMPanel />}
+          {section === "channels" && <ChannelsPanel />}
+          {section === "integrations" && <IntegrationsPanel />}
+          {section === "sidecar" && <SidecarPanel />}
         </div>
       </div>
     </div>

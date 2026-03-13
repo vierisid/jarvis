@@ -20,12 +20,28 @@ const GoalsPage = React.lazy(() => import("./pages/GoalsPage"));
 
 type Route = "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "workflows" | "goals" | "settings";
 
+export type SettingsSection = "general" | "llm" | "channels" | "integrations" | "sidecar";
+
+const SETTINGS_SECTIONS: SettingsSection[] = ["general", "llm", "channels", "integrations", "sidecar"];
+
 function getRoute(): Route {
   const hash = window.location.hash.replace("#/", "");
-  if (["chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals", "settings"].includes(hash)) {
+  if (hash.startsWith("settings")) return "settings";
+  if (["chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals"].includes(hash)) {
     return hash as Route;
   }
   return "chat";
+}
+
+function getSettingsSection(): SettingsSection {
+  const hash = window.location.hash.replace("#/", "");
+  if (hash.startsWith("settings/")) {
+    const section = hash.replace("settings/", "");
+    if (SETTINGS_SECTIONS.includes(section as SettingsSection)) {
+      return section as SettingsSection;
+    }
+  }
+  return "general";
 }
 
 function PageFallback() {
@@ -45,6 +61,7 @@ function PageFallback() {
 
 export function App() {
   const [route, setRoute] = useState<Route>(getRoute);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(getSettingsSection);
   const ws = useWebSocket();
   const voice = useVoice({ wsRef: ws.wsRef });
 
@@ -58,7 +75,10 @@ export function App() {
   }, [voice.handleTTSBinary, voice.handleTTSStart, voice.handleTTSEnd]);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(getRoute());
+    const onHashChange = () => {
+      setRoute(getRoute());
+      setSettingsSection(getSettingsSection());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -126,7 +146,12 @@ export function App() {
           <NavItem icon={"\u26A1"} label="Workflows" route="workflows" active={route} onClick={navigate} />
           <NavItem icon={"\u25B2"} label="Goals" route="goals" active={route} onClick={navigate} />
           <NavItem icon={"\u2666"} label="Authority" route="authority" active={route} onClick={navigate} />
-          <NavItem icon={"\u2699"} label="Settings" route="settings" active={route} onClick={navigate} />
+
+          {/* Settings with collapsible sub-items */}
+          <SettingsNavGroup
+            isActive={route === "settings"}
+            activeSection={settingsSection}
+          />
         </div>
 
         {/* Status */}
@@ -148,7 +173,7 @@ export function App() {
           {route === "workflows" && <WorkflowsPage workflowEvents={ws.workflowEvents} sendMessage={ws.sendMessage} />}
           {route === "goals" && <GoalsPage goalEvents={ws.goalEvents} />}
           {route === "authority" && <AuthorityPage />}
-          {route === "settings" && <SettingsPage />}
+          {route === "settings" && <SettingsPage section={settingsSection} />}
         </React.Suspense>
       </main>
     </div>
@@ -199,6 +224,115 @@ function NavItem({ icon, label, route, active, onClick }: {
       <span style={{ fontSize: "14px", width: "20px", textAlign: "center" }}>{icon}</span>
       {label}
     </button>
+  );
+}
+
+const SETTINGS_NAV: { section: SettingsSection; label: string }[] = [
+  { section: "general", label: "General" },
+  { section: "llm", label: "LLM" },
+  { section: "channels", label: "Channels" },
+  { section: "integrations", label: "Integrations" },
+  { section: "sidecar", label: "Sidecar" },
+];
+
+function SettingsNavGroup({ isActive, activeSection }: {
+  isActive: boolean;
+  activeSection: SettingsSection;
+}) {
+  return (
+    <div>
+      {/* Settings parent button */}
+      <button
+        onClick={() => {
+          if (!isActive) {
+            window.location.hash = "#/settings/general";
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          padding: "8px 12px",
+          borderRadius: "6px",
+          border: "none",
+          background: isActive ? "rgba(0, 212, 255, 0.1)" : "transparent",
+          color: isActive ? "var(--j-accent)" : "var(--j-text-dim)",
+          cursor: "pointer",
+          fontSize: "13px",
+          fontWeight: isActive ? 600 : 400,
+          textAlign: "left",
+          width: "100%",
+          transition: "all 0.15s ease",
+          borderLeft: isActive ? "2px solid var(--j-accent)" : "2px solid transparent",
+        }}
+        onMouseEnter={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.background = "var(--j-surface-hover)";
+            e.currentTarget.style.color = "var(--j-text)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--j-text-dim)";
+          }
+        }}
+      >
+        <span style={{ fontSize: "14px", width: "20px", textAlign: "center" }}>{"\u2699"}</span>
+        <span style={{ flex: 1 }}>Settings</span>
+        <span style={{
+          fontSize: "10px",
+          color: "var(--j-text-muted)",
+          transition: "transform 0.2s",
+          transform: isActive ? "rotate(90deg)" : "rotate(0deg)",
+        }}>{"\u25B6"}</span>
+      </button>
+
+      {/* Sub-items — only visible when settings is active */}
+      {isActive && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1px", marginTop: "2px" }}>
+          {SETTINGS_NAV.map(({ section, label }) => {
+            const isSectionActive = activeSection === section;
+            return (
+              <button
+                key={section}
+                onClick={() => { window.location.hash = `#/settings/${section}`; }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "6px 12px 6px 42px",
+                  borderRadius: "4px",
+                  border: "none",
+                  background: isSectionActive ? "rgba(0, 212, 255, 0.08)" : "transparent",
+                  color: isSectionActive ? "var(--j-accent)" : "var(--j-text-muted)",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  fontWeight: isSectionActive ? 600 : 400,
+                  textAlign: "left",
+                  width: "100%",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSectionActive) {
+                    e.currentTarget.style.background = "var(--j-surface-hover)";
+                    e.currentTarget.style.color = "var(--j-text)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSectionActive) {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "var(--j-text-muted)";
+                  }
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
