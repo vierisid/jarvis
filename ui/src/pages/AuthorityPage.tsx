@@ -410,6 +410,8 @@ function ConfigTab() {
   const [config, setConfig] = useState<AuthorityConfig | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddOverride, setShowAddOverride] = useState(false);
+  const [showAddRule, setShowAddRule] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -482,19 +484,79 @@ function ConfigTab() {
     updateConfig({ overrides: updated });
   };
 
+  const addOverride = (override: AuthorityConfig["overrides"][0]) => {
+    if (!config) return;
+    updateConfig({ overrides: [...config.overrides, override] });
+    setShowAddOverride(false);
+  };
+
+  const removeContextRule = (id: string) => {
+    if (!config) return;
+    updateConfig({ context_rules: config.context_rules.filter(r => r.id !== id) });
+  };
+
+  const addContextRule = (rule: AuthorityConfig["context_rules"][0]) => {
+    if (!config) return;
+    updateConfig({ context_rules: [...config.context_rules, rule] });
+    setShowAddRule(false);
+  };
+
   if (loading || !config) return <div style={{ color: "var(--j-text-muted)" }}>Loading...</div>;
 
   const allCategories = [
-    "read_data", "write_data", "execute_command", "access_browser",
-    "manage_files", "control_app", "send_email", "send_message",
-    "make_payment", "manage_schedule", "access_api", "spawn_agent",
-    "system_config",
+    "read_data", "write_data", "delete_data", "execute_command", "access_browser",
+    "control_app", "send_email", "send_message",
+    "make_payment", "spawn_agent", "terminate_agent",
+    "install_software", "modify_settings",
   ];
+
+  const levelLabels: Record<number, string> = {
+    1: "Read-only", 2: "Suggest", 3: "Conservative", 4: "Moderate",
+    5: "Capable", 6: "Autonomous", 7: "Trusted", 8: "High trust",
+    9: "Near-full", 10: "Full autonomy",
+  };
 
   return (
     <div style={{ display: "flex", gap: "24px" }}>
-      {/* Left: Governed Categories + Overrides */}
+      {/* Left: Authority Level + Governed Categories + Overrides */}
       <div style={{ flex: 1 }}>
+        {/* Authority Level Slider */}
+        <h3 style={sectionHeading}>Default Authority Level</h3>
+        <div style={{
+          padding: "16px",
+          background: "var(--j-surface)",
+          border: "1px solid var(--j-border)",
+          borderRadius: "8px",
+          marginBottom: "20px",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+            <span style={{ fontSize: "13px", color: "var(--j-text)" }}>
+              Level {config.default_level} — {levelLabels[config.default_level] ?? "Custom"}
+            </span>
+            <span style={{
+              fontSize: "20px",
+              fontWeight: 700,
+              color: config.default_level <= 3 ? "var(--j-success)" :
+                     config.default_level <= 6 ? "#ffc107" :
+                     config.default_level <= 8 ? "#ff9800" : "#f44336",
+            }}>
+              {config.default_level}/10
+            </span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            value={config.default_level}
+            onChange={(e) => updateConfig({ default_level: Number(e.target.value) })}
+            style={{ width: "100%", accentColor: "var(--j-accent)", cursor: "pointer" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+            <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>1 — Read-only</span>
+            <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>10 — Full autonomy</span>
+          </div>
+        </div>
+
         {/* Learning Suggestions */}
         {suggestions.length > 0 && (
           <div style={{ marginBottom: "20px" }}>
@@ -558,8 +620,14 @@ function ConfigTab() {
         </div>
 
         {/* Overrides */}
-        <h3 style={sectionHeading}>Permission Overrides</h3>
-        {config.overrides.length === 0 ? (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+          <h3 style={{ ...sectionHeading, margin: 0 }}>Permission Overrides</h3>
+          <button onClick={() => setShowAddOverride(!showAddOverride)} style={{ ...actionBtnStyle, background: "rgba(0, 212, 255, 0.1)", color: "var(--j-accent)" }}>
+            {showAddOverride ? "Cancel" : "+ Add"}
+          </button>
+        </div>
+        {showAddOverride && <AddOverrideForm categories={allCategories} onAdd={addOverride} />}
+        {config.overrides.length === 0 && !showAddOverride ? (
           <div style={emptyStyle}>No overrides configured</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -588,10 +656,16 @@ function ConfigTab() {
         )}
       </div>
 
-      {/* Right: Context Rules + Settings */}
+      {/* Right: Context Rules + Learning Settings */}
       <div style={{ flex: 1 }}>
-        <h3 style={sectionHeading}>Context Rules</h3>
-        {config.context_rules.length === 0 ? (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+          <h3 style={{ ...sectionHeading, margin: 0 }}>Context Rules</h3>
+          <button onClick={() => setShowAddRule(!showAddRule)} style={{ ...actionBtnStyle, background: "rgba(0, 212, 255, 0.1)", color: "var(--j-accent)" }}>
+            {showAddRule ? "Cancel" : "+ Add"}
+          </button>
+        </div>
+        {showAddRule && <AddContextRuleForm categories={allCategories} onAdd={addContextRule} />}
+        {config.context_rules.length === 0 && !showAddRule ? (
           <div style={emptyStyle}>No context rules configured</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -601,40 +675,238 @@ function ConfigTab() {
                 background: "var(--j-surface)",
                 border: "1px solid var(--j-border)",
                 borderRadius: "6px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
               }}>
-                <div style={{ fontSize: "13px", color: "var(--j-text)" }}>{rule.description}</div>
-                <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
-                  {rule.action} &middot; {rule.condition} &middot; effect: {rule.effect}
+                <div>
+                  <div style={{ fontSize: "13px", color: "var(--j-text)" }}>{rule.description}</div>
+                  <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
+                    {rule.action} &middot; {rule.condition} &middot; effect: {rule.effect}
+                  </div>
                 </div>
+                <button onClick={() => removeContextRule(rule.id)} style={{ ...linkBtnStyle, color: "#f44336", flexShrink: 0 }}>
+                  Remove
+                </button>
               </div>
             ))}
           </div>
         )}
 
-        <h3 style={{ ...sectionHeading, marginTop: "24px" }}>Settings</h3>
+        {/* Learning Settings */}
+        <h3 style={{ ...sectionHeading, marginTop: "24px" }}>Learning</h3>
         <div style={{
           padding: "14px 16px",
           background: "var(--j-surface)",
           border: "1px solid var(--j-border)",
           borderRadius: "8px",
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-            <span style={{ fontSize: "13px", color: "var(--j-text)" }}>Default Authority Level</span>
-            <span style={{ fontSize: "13px", color: "var(--j-accent)", fontWeight: 600 }}>{config.default_level}/10</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+            <div>
+              <div style={{ fontSize: "13px", color: "var(--j-text)" }}>Auto-approve learning</div>
+              <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
+                Suggest auto-approve rules after repeated approvals
+              </div>
+            </div>
+            <button
+              onClick={() => updateConfig({ learning: { ...config.learning, enabled: !config.learning.enabled } })}
+              style={{
+                width: "40px",
+                height: "22px",
+                borderRadius: "11px",
+                border: "none",
+                background: config.learning.enabled ? "var(--j-accent)" : "var(--j-border)",
+                cursor: "pointer",
+                position: "relative",
+                transition: "background 0.2s",
+              }}
+            >
+              <div style={{
+                width: "16px",
+                height: "16px",
+                borderRadius: "50%",
+                background: "#fff",
+                position: "absolute",
+                top: "3px",
+                left: config.learning.enabled ? "21px" : "3px",
+                transition: "left 0.2s",
+              }} />
+            </button>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-            <span style={{ fontSize: "13px", color: "var(--j-text)" }}>Learning</span>
-            <span style={{ fontSize: "13px", color: config.learning.enabled ? "var(--j-success)" : "var(--j-text-muted)" }}>
-              {config.learning.enabled ? `Enabled (threshold: ${config.learning.suggest_threshold})` : "Disabled"}
-            </span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "13px", color: "var(--j-text)" }}>Governed Actions</span>
-            <span style={{ fontSize: "13px", color: "var(--j-text-dim)" }}>
-              {config.governed_categories.length} categories
-            </span>
-          </div>
+          {config.learning.enabled && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "13px", color: "var(--j-text)" }}>Suggestion threshold</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  onClick={() => {
+                    const v = Math.max(1, config.learning.suggest_threshold - 1);
+                    updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
+                  }}
+                  style={{ ...stepBtnStyle }}
+                >-</button>
+                <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-accent)", minWidth: "20px", textAlign: "center" }}>
+                  {config.learning.suggest_threshold}
+                </span>
+                <button
+                  onClick={() => {
+                    const v = Math.min(50, config.learning.suggest_threshold + 1);
+                    updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
+                  }}
+                  style={{ ...stepBtnStyle }}
+                >+</button>
+                <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>approvals</span>
+              </div>
+            </div>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Add Override Form ---
+
+function AddOverrideForm({ categories, onAdd }: { categories: string[]; onAdd: (o: AuthorityConfig["overrides"][0]) => void }) {
+  const [action, setAction] = useState(categories[0] ?? "read_data");
+  const [roleId, setRoleId] = useState("");
+  const [effect, setEffect] = useState<"deny" | "allow" | "allow_approval">("deny");
+
+  return (
+    <div style={{
+      padding: "14px 16px",
+      background: "var(--j-surface)",
+      border: "1px solid rgba(0, 212, 255, 0.3)",
+      borderRadius: "8px",
+      marginBottom: "12px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
+    }}>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Action</label>
+        <select value={action} onChange={e => setAction(e.target.value)} style={selectStyle}>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Role</label>
+        <input
+          value={roleId}
+          onChange={e => setRoleId(e.target.value)}
+          placeholder="Leave empty for global"
+          style={inputStyle}
+        />
+      </div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Effect</label>
+        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} style={selectStyle}>
+          <option value="deny">Deny</option>
+          <option value="allow">Always allow</option>
+          <option value="allow_approval">Allow with approval</option>
+        </select>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={() => onAdd({
+            action,
+            role_id: roleId || undefined,
+            allowed: effect !== "deny",
+            requires_approval: effect === "allow_approval" ? true : undefined,
+          })}
+          style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}
+        >
+          Add Override
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- Add Context Rule Form ---
+
+function AddContextRuleForm({ categories, onAdd }: { categories: string[]; onAdd: (r: AuthorityConfig["context_rules"][0]) => void }) {
+  const [action, setAction] = useState(categories[0] ?? "read_data");
+  const [condition, setCondition] = useState<"always" | "time_range" | "tool_name">("always");
+  const [effect, setEffect] = useState<"deny" | "allow" | "require_approval">("deny");
+  const [description, setDescription] = useState("");
+  const [startTime, setStartTime] = useState("22:00");
+  const [endTime, setEndTime] = useState("06:00");
+  const [toolName, setToolName] = useState("");
+
+  const buildParams = (): Record<string, unknown> => {
+    if (condition === "time_range") return { start: startTime, end: endTime };
+    if (condition === "tool_name") return { name: toolName };
+    return {};
+  };
+
+  return (
+    <div style={{
+      padding: "14px 16px",
+      background: "var(--j-surface)",
+      border: "1px solid rgba(0, 212, 255, 0.3)",
+      borderRadius: "8px",
+      marginBottom: "12px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
+    }}>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Action</label>
+        <select value={action} onChange={e => setAction(e.target.value)} style={selectStyle}>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Condition</label>
+        <select value={condition} onChange={e => setCondition(e.target.value as typeof condition)} style={selectStyle}>
+          <option value="always">Always</option>
+          <option value="time_range">Time range</option>
+          <option value="tool_name">Specific tool</option>
+        </select>
+      </div>
+      {condition === "time_range" && (
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <label style={formLabelStyle}>Time</label>
+          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} style={{ ...inputStyle, width: "120px" }} />
+          <span style={{ fontSize: "12px", color: "var(--j-text-muted)" }}>to</span>
+          <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} style={{ ...inputStyle, width: "120px" }} />
+        </div>
+      )}
+      {condition === "tool_name" && (
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <label style={formLabelStyle}>Tool</label>
+          <input value={toolName} onChange={e => setToolName(e.target.value)} placeholder="e.g. run_command" style={inputStyle} />
+        </div>
+      )}
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Effect</label>
+        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} style={selectStyle}>
+          <option value="deny">Deny</option>
+          <option value="allow">Allow</option>
+          <option value="require_approval">Require approval</option>
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <label style={formLabelStyle}>Description</label>
+        <input value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. Block payments at night" style={inputStyle} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={() => {
+            if (!description.trim()) return;
+            onAdd({
+              id: `rule_${Date.now()}`,
+              action,
+              condition,
+              params: buildParams(),
+              effect,
+              description: description.trim(),
+            });
+          }}
+          style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}
+        >
+          Add Rule
+        </button>
       </div>
     </div>
   );
@@ -813,4 +1085,45 @@ const sectionHeading: React.CSSProperties = {
   fontWeight: 600,
   color: "var(--j-text)",
   margin: "0 0 10px 0",
+};
+
+const selectStyle: React.CSSProperties = {
+  flex: 1,
+  padding: "6px 10px",
+  borderRadius: "4px",
+  border: "1px solid var(--j-border)",
+  background: "var(--j-bg)",
+  color: "var(--j-text)",
+  fontSize: "12px",
+};
+
+const inputStyle: React.CSSProperties = {
+  flex: 1,
+  padding: "6px 10px",
+  borderRadius: "4px",
+  border: "1px solid var(--j-border)",
+  background: "var(--j-bg)",
+  color: "var(--j-text)",
+  fontSize: "12px",
+};
+
+const formLabelStyle: React.CSSProperties = {
+  fontSize: "12px",
+  color: "var(--j-text-muted)",
+  minWidth: "70px",
+};
+
+const stepBtnStyle: React.CSSProperties = {
+  width: "24px",
+  height: "24px",
+  borderRadius: "4px",
+  border: "1px solid var(--j-border)",
+  background: "var(--j-bg)",
+  color: "var(--j-text)",
+  fontSize: "14px",
+  fontWeight: 600,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
 };

@@ -558,6 +558,8 @@ export class AgentService implements Service, IAgentService {
           this.role.authority_level,
           this.role.id
         );
+        const configLevel = this.authorityEngine.getConfig().default_level;
+        context.effectiveAuthorityLevel = Math.max(this.role.authority_level, configLevel);
       } catch (err) {
         console.error('[AgentService] Error building authority rules:', err);
       }

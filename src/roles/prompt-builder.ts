@@ -13,6 +13,7 @@ export type PromptContext = {
   authorityRules?: string;
   activeGoals?: string;
   hasSidecars?: boolean;
+  effectiveAuthorityLevel?: number;
 };
 
 /**
@@ -106,7 +107,8 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
 
   // Authority Level
   sections.push('# Authority Level');
-  sections.push(`Your authority level is ${role.authority_level}/10.`);
+  const displayLevel = context?.effectiveAuthorityLevel ?? role.authority_level;
+  sections.push(`Your authority level is ${displayLevel}/10.`);
   sections.push('This determines which actions you can perform autonomously.');
   sections.push('');
 

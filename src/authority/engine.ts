@@ -142,12 +142,15 @@ export class AuthorityEngine {
     }
 
     // 4. Numeric level check
+    // Use the higher of the agent's role level and the config's default_level,
+    // so the dashboard authority slider acts as the effective authority floor.
+    const effectiveLevel = Math.max(agentAuthorityLevel, this.config.default_level);
     const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
-    if (agentAuthorityLevel < requiredLevel) {
+    if (effectiveLevel < requiredLevel) {
       return {
         allowed: false,
         requiresApproval: false,
-        reason: `Authority level ${agentAuthorityLevel} is below required ${requiredLevel} for ${actionCategory}`,
+        reason: `Authority level ${effectiveLevel} is below required ${requiredLevel} for ${actionCategory}`,
         actionCategory,
       };
     }
@@ -166,7 +169,7 @@ export class AuthorityEngine {
     return {
       allowed: true,
       requiresApproval: false,
-      reason: `Authority level ${agentAuthorityLevel} meets requirement ${requiredLevel}`,
+      reason: `Authority level ${effectiveLevel} meets requirement ${requiredLevel}`,
       actionCategory,
     };
   }
@@ -175,9 +178,10 @@ export class AuthorityEngine {
    * Generate human-readable authority rules for the system prompt.
    */
   describeRulesForAgent(authorityLevel: number, roleId: string): string {
+    const effectiveLevel = Math.max(authorityLevel, this.config.default_level);
     const lines: string[] = [];
 
-    lines.push(`Your authority level: ${authorityLevel}/10`);
+    lines.push(`Your authority level: ${effectiveLevel}/10`);
     lines.push('');
 
     // Governed categories
