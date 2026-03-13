@@ -1,20 +1,56 @@
+<div align="center">
+
 # JARVIS
 
 **Just A Rather Very Intelligent System**
 
-> An always-on autonomous AI daemon with desktop awareness, multi-agent hierarchy, visual workflows, and goal pursuit.
+[![CI](https://github.com/vierisid/jarvis/actions/workflows/test.yml/badge.svg)](https://github.com/vierisid/jarvis/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@usejarvis/brain)](https://www.npmjs.com/package/@usejarvis/brain)
+[![License](https://img.shields.io/badge/license-RSALv2-blue)](LICENSE)
+[![Runtime](https://img.shields.io/badge/runtime-Bun-%23f9f1e1)](https://bun.sh)
+[![Discord](https://img.shields.io/discord/nE3hcaFYZP?logo=discord&label=Discord)](https://discord.gg/nE3hcaFYZP)
+[![Website](https://img.shields.io/badge/website-usejarvis.dev-black)](https://usejarvis.dev)
 
-JARVIS is not a chatbot with tools. It is a persistent daemon that sees your desktop, thinks about what you're doing, and acts — within the authority limits you define.
+*An always-on autonomous AI daemon with desktop awareness, multi-agent hierarchy, visual workflows, and goal pursuit.*
+
+JARVIS is not a chatbot with tools. It is a persistent daemon that sees your screen, understands what you're doing, and acts — within the authority limits you define. Run it on a server for 24/7 availability, then connect sidecars on your laptop, desktop, or any other machine to give it eyes and hands everywhere.
+
+</div>
+
+<!-- TODO: add dashboard screenshot or demo GIF here -->
 
 ---
 
-## What Makes JARVIS Different
+## Table of Contents
+
+- [🔍 What Makes JARVIS Different](#-what-makes-jarvis-different)
+- [⚡ Quick Start](#-quick-start)
+- [💡 Use Cases](#-use-cases)
+- [📋 Requirements](#-requirements)
+- [📦 Installation](#-installation)
+- [🚀 Usage](#-usage)
+- [🖥️ Sidecar Setup](#️-sidecar-setup)
+- [🧠 Core Capabilities](#-core-capabilities)
+- [🎛️ Dashboard](#️-dashboard)
+- [⚙️ Configuration](#️-configuration)
+- [🏗️ Architecture](#️-architecture)
+- [🛠️ Development](#️-development)
+- [🗺️ Roadmap](#️-roadmap)
+- [📖 Documentation](#-documentation)
+- [💬 Community](#-community)
+- [🔒 Security](#-security)
+- [📄 License](#-license)
+
+---
+
+## 🔍 What Makes JARVIS Different
 
 | Feature | Typical AI Assistant | JARVIS |
 |---|---|---|
-| Always-on | No — request/response only | Yes — persistent daemon |
-| Desktop awareness | No | Yes — screen capture every 5-10s |
-| Native app control | No | Yes — Go sidecar with Win32/X11 automation |
+| Always-on | No — request/response only | Yes — persistent daemon, runs 24/7 on a server or locally |
+| Reach across machines | No — single machine only | Yes — one daemon, unlimited sidecars on any machine |
+| Desktop awareness | No | Yes — screen capture every 5-10s via sidecar |
+| Native app control | No | Yes — Go sidecar with Win32/X11/macOS automation |
 | Multi-agent delegation | No | Yes — 9 specialist roles |
 | Visual workflow builder | No | Yes — 50+ nodes, n8n-style |
 | Voice with wake word | No | Yes — streaming TTS + openwakeword |
@@ -24,7 +60,47 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your des
 
 ---
 
-## Install
+## ⚡ Quick Start
+
+```bash
+npm install -g @usejarvis/brain   # Install the daemon
+jarvis onboard                    # Interactive setup wizard
+jarvis start -d                   # Start as background daemon
+```
+
+Open `http://localhost:3142` — your dashboard is ready.
+
+---
+
+## 💡 Use Cases
+
+**Research while you work** — Ask JARVIS to deep-dive a topic. It runs browser searches, reads pages, and compiles a summary in the background while you focus on other things.
+
+**Automate across machines** — Run the daemon on your home server. Connect sidecars on your work laptop and your desktop. JARVIS can move files between them, run scripts on your server, and open apps on your laptop — all from one conversation.
+
+**Inbox triage** — Set up a workflow that monitors your Gmail, categorizes incoming messages, drafts replies for your review, and schedules follow-ups on your calendar.
+
+**Desktop co-pilot** — JARVIS watches your screen via the sidecar. If it sees you struggling with an error message or a complex form, it proactively offers help or fills in fields for you.
+
+**Goal accountability** — Define OKRs in the Goals dashboard. JARVIS plans your day each morning, checks in during the evening, and escalates if you're falling behind — like a personal drill sergeant.
+
+**Multi-step workflows** — Build visual automations with 50+ node types: "when a file appears in this folder, OCR it, extract key data, update the spreadsheet, and notify me on Telegram."
+
+---
+
+## 📋 Requirements
+
+- **Bun** >= 1.0 (installed automatically if missing)
+- **OS**: Windows, macOS, or Linux
+- **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
+- Google OAuth credentials (optional — Calendar and Gmail integration)
+- Telegram bot token (optional — notification channel)
+- Discord bot token (optional — notification channel)
+- ElevenLabs API key (optional — premium TTS)
+
+---
+
+## 📦 Installation
 
 ### npm (recommended)
 
@@ -52,7 +128,9 @@ bun run build:ui
 jarvis onboard
 ```
 
-### Run
+---
+
+## 🚀 Usage
 
 ```bash
 jarvis start            # Start in foreground
@@ -69,9 +147,11 @@ The dashboard is available at `http://localhost:3142` once the daemon is running
 
 ---
 
-## Sidecar Setup
+## 🖥️ Sidecar Setup
 
-The sidecar is a lightweight agent that runs on your desktop machine and gives JARVIS access to desktop automation, browser control, terminal, filesystem, screenshots, and more.
+The sidecar is what gives JARVIS physical reach beyond the machine it runs on. It is a lightweight agent that you install on any machine — your laptop, a dev server, a home PC — and it connects back to the central daemon over an authenticated WebSocket. Each sidecar gives JARVIS access to that machine's desktop, browser, terminal, filesystem, clipboard, and screenshots.
+
+This means you can run the daemon on an always-on server and still interact with your desktop machines as if JARVIS were running locally. Enroll as many sidecars as you want.
 
 ### 1. Install the sidecar
 
@@ -108,7 +188,7 @@ Once connected, the sidecar appears as online in the Settings page where you can
 
 ---
 
-## Core Capabilities
+## 🧠 Core Capabilities
 
 **Conversations** — Multi-provider LLM routing (Anthropic Claude, OpenAI GPT, Google Gemini, Ollama). Streaming responses, personality engine, vault-injected memory context on every message.
 
@@ -134,7 +214,7 @@ Once connected, the sidecar appears as online in the Settings page where you can
 
 ---
 
-## Dashboard (13 Pages)
+## 🎛️ Dashboard
 
 Built with React 19 and Tailwind CSS 4. Served by the daemon at `http://localhost:3142`.
 
@@ -156,7 +236,7 @@ Built with React 19 and Tailwind CSS 4. Served by the daemon at `http://localhos
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 JARVIS stores its configuration at `~/.jarvis/config.yaml`. Run `jarvis onboard` for interactive setup — it walks through LLM provider, voice, channels, personality, and authority settings.
 
@@ -187,7 +267,47 @@ See [config.example.yaml](config.example.yaml) for the full reference including 
 
 ---
 
-## Development
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     JARVIS Daemon                           │
+│                  (server or local machine)                  │
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐  │
+│  │ LLM      │  │ Vault    │  │ Agent     │  │ Workflow   │  │
+│  │ Router   │  │ Memory   │  │ Manager   │  │ Engine     │  │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐  │
+│  │ Tool     │  │ Authority│  │ Goal      │  │ Awareness  │  │
+│  │ Executor │  │ Engine   │  │ Tracker   │  │ Pipeline   │  │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────┘  │
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ Bun.serve() — HTTP + WebSocket + Dashboard (React)   │   │
+│  └──────────────────────────────────────────────────────┘   │
+└──────────────┬──────────────────────┬───────────────────────┘
+               │ JWT-auth WebSocket   │
+       ┌───────┴───────┐      ┌──────┴────────┐
+       │  Sidecar #1   │      │  Sidecar #2   │      ...
+       │  (laptop)     │      │  (dev server) │
+       │               │      │               │
+       │  desktop      │      │  terminal     │
+       │  browser      │      │  filesystem   │
+       │  terminal     │      │  screenshots  │
+       │  clipboard    │      │               │
+       └───────────────┘      └───────────────┘
+```
+
+The **daemon** is the brain — it holds the LLM connections, memory vault, agent hierarchy, and all decision-making. It can run on a home server, a VPS, or your local machine.
+
+**Sidecars** are the hands. Each sidecar is a lightweight Go binary that connects to the daemon and exposes its host machine's capabilities. The daemon can orchestrate actions across all connected sidecars simultaneously. Sidecars authenticate via JWT and communicate over a binary WebSocket protocol.
+
+This separation means JARVIS stays reachable 24/7 on a server while still being able to see your screen, type in your apps, and manage files on any machine where a sidecar is running.
+
+---
+
+## 🛠️ Development
 
 ```bash
 bun test                # Run all tests (379 tests across 22 files)
@@ -209,48 +329,28 @@ bun run db:init         # Initialize or reset the database
 
 ---
 
-## Development Status
+## 🗺️ Roadmap
 
-### Completed Milestones
-
-| # | Milestone | Summary |
-|---|---|---|
-| 1 | LLM Conversations | Multi-provider streaming, personality engine |
-| 2 | Tool Execution Loop | 14+ builtin tools, 200-iteration agent loop |
-| 3 | Memory Retrieval | Vault knowledge graph injected per message |
-| 4 | Browser Control | Chromium auto-launch, CDP, 7 browser tools |
-| 5 | Proactive Agent | CommitmentExecutor, Gmail/Calendar observers, research queue |
-| 6 | Dashboard UI | 13-page React 19 dashboard, Google integrations |
-| 7 | Multi-Agent Hierarchy | `delegate_task`, AgentTaskManager, 9 specialist roles |
-| 8 | Communication Channels | Telegram, Discord, pluggable STT, voice transcription |
-| 9 | Native App Control | Go sidecar, platform-specific automation, 7 desktop tools |
-| 10 | Voice Interface | Edge TTS / ElevenLabs, binary WS, wake word, streaming playback |
-| 11 | Authority & Autonomy | Runtime enforcement, soft-gate approvals, audit trail, emergency controls |
-| 12 | Distribution & Onboarding | `jarvis` CLI, install.sh, npm package, interactive wizard |
-| 13 | Continuous Awareness | Desktop capture, OCR+Vision, proactive suggestions, overlay widget |
-| 14 | Workflow Automation | Visual builder, 50+ nodes, NL creation, self-healing execution |
-| 15 | Plugin Ecosystem | TypeScript SDK, tiered permissions, official plugin registry |
-| 16 | Autonomous Goal Pursuit | OKR hierarchy, 0.0-1.0 scoring, daily rhythm, accountability |
+16 milestones completed — LLM conversations, tool execution, memory vault, browser control, proactive agent, dashboard UI, multi-agent hierarchy, communication channels, native app control, voice interface, authority & autonomy, distribution & onboarding, continuous awareness, workflow automation, plugin ecosystem, and autonomous goal pursuit.
 
 **379 tests passing across 22 test files. ~65,000 lines of TypeScript + Go.**
 
 ### Upcoming
 
-| # | Milestone |
+| Milestone | Description |
 |---|---|
-| 17 | Smart Home — Home Assistant integration |
-| 18 | Financial Intelligence — Plaid, portfolio tracking |
-| 19 | Mobile Companion — React Native dashboard |
-| 20 | Self-Improvement — Autonomous prompt evolution |
-| 21 | Multi-Modal — DALL-E 3, full video/image processing |
-| 22 | Swarm Intelligence — Multi-device coordination |
-| — | Windows and macOS sidecar installers |
+| Smart Home | Home Assistant integration |
+| Financial Intelligence | Plaid, portfolio tracking |
+| Mobile Companion | React Native dashboard |
+| Self-Improvement | Autonomous prompt evolution |
+| Multi-Modal | DALL-E 3, full video/image processing |
+| Swarm Intelligence | Multi-device coordination |
 
 See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 
 ---
 
-## Documentation
+## 📖 Documentation
 
 - [VISION.md](VISION.md) — Full roadmap and milestone specifications
 - [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) — LLM provider configuration
@@ -261,18 +361,22 @@ See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 
 ---
 
-## Requirements
+## 💬 Community
 
-- **Bun** >= 1.0
-- **OS**: Windows, macOS, or Linux
-- **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
-- Google OAuth credentials (optional — Calendar and Gmail integration)
-- Telegram bot token (optional — notification channel)
-- Discord bot token (optional — notification channel)
-- ElevenLabs API key (optional — premium TTS)
+- [Discord](https://discord.gg/nE3hcaFYZP) — Chat with other users, ask questions, share workflows
+- [Website](https://usejarvis.dev) — Project homepage and documentation
+- [GitHub Issues](https://github.com/vierisid/jarvis/issues) — Bug reports and feature requests
 
 ---
 
-## License
+## 🔒 Security
+
+JARVIS includes a built-in authority engine that gates every action at runtime. All tool executions are logged in an audit trail, and sensitive operations require explicit approval via the dashboard, Telegram, or Discord. Emergency pause and kill controls are always available.
+
+If you discover a security vulnerability, please report it privately by emailing the maintainer rather than opening a public issue.
+
+---
+
+## 📄 License
 
 [Jarvis Source Available License 2.0](LICENSE) (based on RSALv2)
