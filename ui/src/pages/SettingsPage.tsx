@@ -21,7 +21,7 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
 
   return (
     <div style={{ padding: "32px 40px", overflow: "auto", height: "100%" }}>
-      <div style={{ maxWidth: "800px" }}>
+      <div style={{ maxWidth: "800px", margin: "0 auto" }}>
         <h1 style={{
           fontSize: "18px",
           fontWeight: 600,
