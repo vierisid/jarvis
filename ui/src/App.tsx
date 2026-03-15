@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useVoice } from "./hooks/useVoice";
+import "./styles/sidebar.css";
 
 import ChatPage from "./pages/ChatPage";
 
@@ -60,6 +61,44 @@ function PageFallback() {
   );
 }
 
+/* ================================================================
+   NAV ITEMS CONFIG — icon, label, route, grouped
+   ================================================================ */
+type NavEntry = { icon: string; label: string; route: Route };
+
+const NAV_CORE: NavEntry[] = [
+  { icon: "\u25C7", label: "Dashboard",  route: "dashboard" },
+  { icon: "\u25CE", label: "Chat",       route: "chat" },
+  { icon: "\u25C6", label: "Goals",      route: "goals" },
+  { icon: "\u2B21", label: "Workflows",  route: "workflows" },
+];
+
+const NAV_INTEL: NavEntry[] = [
+  { icon: "\u25B3", label: "Agents",     route: "office" },
+  { icon: "\u2726", label: "Tasks",      route: "tasks" },
+  { icon: "\u25A3", label: "Authority",  route: "authority" },
+  { icon: "\u25C8", label: "Memory",     route: "memory" },
+];
+
+const NAV_MORE: NavEntry[] = [
+  { icon: "\u25B6", label: "Pipeline",   route: "pipeline" },
+  { icon: "\u25A1", label: "Calendar",   route: "calendar" },
+  { icon: "\u25CB", label: "Knowledge",  route: "knowledge" },
+  { icon: "\u25A3", label: "Command",    route: "command" },
+  { icon: "\u25CE", label: "Awareness",  route: "awareness" },
+];
+
+const SETTINGS_NAV: { section: SettingsSection; label: string }[] = [
+  { section: "general", label: "General" },
+  { section: "llm", label: "LLM" },
+  { section: "channels", label: "Channels" },
+  { section: "integrations", label: "Integrations" },
+  { section: "sidecar", label: "Sidecar" },
+];
+
+/* ================================================================
+   APP
+   ================================================================ */
 export function App() {
   const [route, setRoute] = useState<Route>(getRoute);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(getSettingsSection);
@@ -97,68 +136,101 @@ export function App() {
   };
 
   return (
-    <div style={{ display: "flex", height: "100vh", width: "100vw" }}>
-      {/* Sidebar */}
-      <nav style={{
-        width: "240px",
-        minWidth: "240px",
-        background: "var(--j-surface)",
-        borderRight: "1px solid var(--j-border)",
-        display: "flex",
-        flexDirection: "column",
-        padding: "0",
-      }}>
-        {/* Logo */}
-        <div style={{
-          padding: "24px 16px 20px",
-          borderBottom: "1px solid var(--j-border)",
-        }}>
-          <div style={{
-            fontSize: "18px",
-            fontWeight: 700,
-            color: "var(--j-accent)",
-            letterSpacing: "3px",
-            textAlign: "center",
-            textShadow: "0 0 20px rgba(0, 212, 255, 0.5), 0 0 40px rgba(0, 212, 255, 0.2)",
-          }}>
-            J.A.R.V.I.S.
-          </div>
-          <div style={{
-            fontSize: "10px",
-            color: "var(--j-text-muted)",
-            textAlign: "center",
-            marginTop: "4px",
-            letterSpacing: "1.5px",
-          }}>
-            INTELLIGENT SYSTEM
-          </div>
-        </div>
+    <div style={{ display: "flex", height: "100vh", width: "100vw", background: "#07070A" }}>
+      {/* Sidebar — The Spine */}
+      <nav className="sidebar" role="navigation" aria-label="Primary navigation">
 
-        {/* Nav Links */}
-        <div style={{ flex: 1, minHeight: 0, padding: "12px 8px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
-          <NavItem icon={"\u25C7"} label="Dashboard" route="dashboard" active={route} onClick={navigate} />
-          <NavItem icon={"\u25C8"} label="Chat" route="chat" active={route} onClick={navigate} />
-          <NavItem icon={"\u2726"} label="Tasks" route="tasks" active={route} onClick={navigate} />
-          <NavItem icon={"\u25B6"} label="Pipeline" route="pipeline" active={route} onClick={navigate} />
-          <NavItem icon={"\u25C6"} label="Memory" route="memory" active={route} onClick={navigate} />
-          <NavItem icon={"\u25A1"} label="Calendar" route="calendar" active={route} onClick={navigate} />
-          <NavItem icon={"\u25CB"} label="Office" route="office" active={route} onClick={navigate} />
-          <NavItem icon={"\u25C7"} label="Knowledge" route="knowledge" active={route} onClick={navigate} />
-          <NavItem icon={"\u25A3"} label="Command Center" route="command" active={route} onClick={navigate} />
-          <NavItem icon={"\u25CE"} label="Awareness" route="awareness" active={route} onClick={navigate} />
-          <NavItem icon={"\u26A1"} label="Workflows" route="workflows" active={route} onClick={navigate} />
-          <NavItem icon={"\u25B2"} label="Goals" route="goals" active={route} onClick={navigate} />
-          <NavItem icon={"\u2666"} label="Authority" route="authority" active={route} onClick={navigate} />
-
-          {/* Settings with collapsible sub-items */}
-          <SettingsNavGroup
-            isActive={route === "settings"}
-            activeSection={settingsSection}
+        {/* Logo orb */}
+        <div className="sidebar-logo-row">
+          <div
+            className="sidebar-logo"
+            title="JARVIS v0.2 Alpha"
+            role="img"
+            aria-label="JARVIS logo"
+            onClick={() => navigate("dashboard")}
           />
+          <span className="sidebar-logo-text">J.A.R.V.I.S.</span>
+        </div>
+        <div className="sidebar-logo-gap" />
+
+        {/* Navigation */}
+        <div className="sidebar-nav">
+          {/* CORE group */}
+          {NAV_CORE.map((item) => (
+            <SidebarNavItem
+              key={item.route}
+              icon={item.icon}
+              label={item.label}
+              active={route === item.route}
+              onClick={() => navigate(item.route)}
+            />
+          ))}
+
+          <div className="sidebar-group-divider" aria-hidden="true" />
+
+          {/* INTEL group */}
+          {NAV_INTEL.map((item) => (
+            <SidebarNavItem
+              key={item.route}
+              icon={item.icon}
+              label={item.label}
+              active={route === item.route}
+              onClick={() => navigate(item.route)}
+            />
+          ))}
+
+          <div className="sidebar-group-divider" aria-hidden="true" />
+
+          {/* MORE group */}
+          {NAV_MORE.map((item) => (
+            <SidebarNavItem
+              key={item.route}
+              icon={item.icon}
+              label={item.label}
+              active={route === item.route}
+              onClick={() => navigate(item.route)}
+            />
+          ))}
+
+          <div className="sidebar-group-divider" aria-hidden="true" />
+
+          {/* Settings */}
+          <SidebarNavItem
+            icon={"\u2699"}
+            label="Settings"
+            active={route === "settings"}
+            onClick={() => {
+              if (route !== "settings") {
+                window.location.hash = "#/settings/general";
+              }
+            }}
+          />
+
+          {/* Settings sub-items — only visible when expanded + settings active */}
+          <div className={`sidebar-settings-sub ${route === "settings" ? "open" : ""}`}>
+            {SETTINGS_NAV.map(({ section, label }) => (
+              <button
+                key={section}
+                className={`sidebar-sub-item ${settingsSection === section ? "active" : ""}`}
+                onClick={() => { window.location.hash = `#/settings/${section}`; }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Status */}
-        <AwarenessStatusBar isConnected={ws.isConnected} />
+        {/* Health dot */}
+        <div className="sidebar-health-row">
+          <div
+            className={`sidebar-health ${ws.isConnected ? "connected" : "disconnected"}`}
+            title={ws.isConnected ? "System online" : "Disconnected"}
+            aria-label={`System health: ${ws.isConnected ? "online" : "disconnected"}`}
+          />
+          <span className="sidebar-health-label">
+            {ws.isConnected ? "Online" : "Disconnected"}
+          </span>
+        </div>
       </nav>
 
       {/* Main Content */}
@@ -184,219 +256,27 @@ export function App() {
   );
 }
 
-function NavItem({ icon, label, route, active, onClick }: {
+/* ================================================================
+   SIDEBAR NAV ITEM
+   ================================================================ */
+function SidebarNavItem({ icon, label, active, onClick }: {
   icon: string;
   label: string;
-  route: Route;
-  active: Route;
-  onClick: (r: Route) => void;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const isActive = route === active;
   return (
     <button
-      onClick={() => onClick(route)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        padding: "8px 12px",
-        borderRadius: "6px",
-        border: "none",
-        background: isActive ? "rgba(0, 212, 255, 0.1)" : "transparent",
-        color: isActive ? "var(--j-accent)" : "var(--j-text-dim)",
-        cursor: "pointer",
-        fontSize: "13px",
-        fontWeight: isActive ? 600 : 400,
-        textAlign: "left",
-        width: "100%",
-        transition: "all 0.15s ease",
-        borderLeft: isActive ? "2px solid var(--j-accent)" : "2px solid transparent",
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive) {
-          e.currentTarget.style.background = "var(--j-surface-hover)";
-          e.currentTarget.style.color = "var(--j-text)";
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive) {
-          e.currentTarget.style.background = "transparent";
-          e.currentTarget.style.color = "var(--j-text-dim)";
-        }
-      }}
+      className={`sidebar-nav-item ${active ? "active" : ""}`}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      tabIndex={0}
     >
-      <span style={{ fontSize: "14px", width: "20px", textAlign: "center" }}>{icon}</span>
-      {label}
+      <span className="nav-icon" aria-hidden="true">{icon}</span>
+      <span className="nav-label">{label}</span>
+      <div className="nav-active-dot" aria-hidden="true" />
     </button>
-  );
-}
-
-const SETTINGS_NAV: { section: SettingsSection; label: string }[] = [
-  { section: "general", label: "General" },
-  { section: "llm", label: "LLM" },
-  { section: "channels", label: "Channels" },
-  { section: "integrations", label: "Integrations" },
-  { section: "sidecar", label: "Sidecar" },
-];
-
-function SettingsNavGroup({ isActive, activeSection }: {
-  isActive: boolean;
-  activeSection: SettingsSection;
-}) {
-  return (
-    <div>
-      {/* Settings parent button */}
-      <button
-        onClick={() => {
-          if (!isActive) {
-            window.location.hash = "#/settings/general";
-          }
-        }}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          padding: "8px 12px",
-          borderRadius: "6px",
-          border: "none",
-          background: isActive ? "rgba(0, 212, 255, 0.1)" : "transparent",
-          color: isActive ? "var(--j-accent)" : "var(--j-text-dim)",
-          cursor: "pointer",
-          fontSize: "13px",
-          fontWeight: isActive ? 600 : 400,
-          textAlign: "left",
-          width: "100%",
-          transition: "all 0.15s ease",
-          borderLeft: isActive ? "2px solid var(--j-accent)" : "2px solid transparent",
-        }}
-        onMouseEnter={(e) => {
-          if (!isActive) {
-            e.currentTarget.style.background = "var(--j-surface-hover)";
-            e.currentTarget.style.color = "var(--j-text)";
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!isActive) {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--j-text-dim)";
-          }
-        }}
-      >
-        <span style={{ fontSize: "14px", width: "20px", textAlign: "center" }}>{"\u2699"}</span>
-        <span style={{ flex: 1 }}>Settings</span>
-        <span style={{
-          fontSize: "10px",
-          color: "var(--j-text-muted)",
-          transition: "transform 0.2s",
-          transform: isActive ? "rotate(90deg)" : "rotate(0deg)",
-        }}>{"\u25B6"}</span>
-      </button>
-
-      {/* Sub-items — only visible when settings is active */}
-      {isActive && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1px", marginTop: "2px" }}>
-          {SETTINGS_NAV.map(({ section, label }) => {
-            const isSectionActive = activeSection === section;
-            return (
-              <button
-                key={section}
-                onClick={() => { window.location.hash = `#/settings/${section}`; }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  padding: "6px 12px 6px 42px",
-                  borderRadius: "4px",
-                  border: "none",
-                  background: isSectionActive ? "rgba(0, 212, 255, 0.08)" : "transparent",
-                  color: isSectionActive ? "var(--j-accent)" : "var(--j-text-muted)",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  fontWeight: isSectionActive ? 600 : 400,
-                  textAlign: "left",
-                  width: "100%",
-                  transition: "all 0.15s ease",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSectionActive) {
-                    e.currentTarget.style.background = "var(--j-surface-hover)";
-                    e.currentTarget.style.color = "var(--j-text)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSectionActive) {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = "var(--j-text-muted)";
-                  }
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AwarenessStatusBar({ isConnected }: { isConnected: boolean }) {
-  const [status, setStatus] = useState<{ running: boolean; appName?: string; captureCount?: number } | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    const poll = async () => {
-      try {
-        const resp = await fetch("/api/awareness/status");
-        if (resp.ok && mounted) {
-          const data = await resp.json();
-          setStatus({
-            running: data.running,
-            appName: data.liveContext?.currentApp,
-            captureCount: data.liveContext?.captureCount,
-          });
-        }
-      } catch { /* ignore */ }
-    };
-    poll();
-    const interval = setInterval(poll, 10000);
-    return () => { mounted = false; clearInterval(interval); };
-  }, []);
-
-  const dotColor = !isConnected
-    ? "var(--j-text-muted)"
-    : status?.running
-    ? "var(--j-success)"
-    : "var(--j-warning, #f59e0b)";
-
-  const label = !isConnected
-    ? "Disconnected"
-    : status?.running
-    ? status.appName
-      ? `Watching: ${status.appName}`
-      : "Awareness Active"
-    : "System Online";
-
-  return (
-    <div style={{
-      padding: "12px 16px",
-      borderTop: "1px solid var(--j-border)",
-      fontSize: "11px",
-      color: "var(--j-text-muted)",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        <span style={{
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          background: dotColor,
-          display: "inline-block",
-          boxShadow: status?.running ? `0 0 6px ${dotColor}` : "none",
-        }} />
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {label}
-        </span>
-      </div>
-    </div>
   );
 }

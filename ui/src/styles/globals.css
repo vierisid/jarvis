@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --j-bg: #0a0e17;
-  --j-surface: #111827;
-  --j-surface-hover: #1a2234;
-  --j-border: #1e293b;
-  --j-border-bright: #334155;
-  --j-accent: #00d4ff;
-  --j-accent-dim: #0891b2;
-  --j-accent2: #7c3aed;
-  --j-success: #10b981;
-  --j-warning: #f59e0b;
-  --j-error: #ef4444;
-  --j-text: #e2e8f0;
-  --j-text-dim: #94a3b8;
-  --j-text-muted: #64748b;
-  --j-glow: 0 0 20px rgba(0, 212, 255, 0.15);
-  --j-glow-strong: 0 0 30px rgba(0, 212, 255, 0.3);
+  --j-bg: #07070A;
+  --j-surface: #0C0C12;
+  --j-surface-hover: #1A1A22;
+  --j-border: rgba(255,255,255,0.04);
+  --j-border-bright: rgba(255,255,255,0.07);
+  --j-accent: #8B5CF6;
+  --j-accent-dim: #6D28D9;
+  --j-accent2: #A78BFA;
+  --j-success: #34D399;
+  --j-warning: #FBBF24;
+  --j-error: #FB7185;
+  --j-text: rgba(255,255,255,0.88);
+  --j-text-dim: rgba(255,255,255,0.48);
+  --j-text-muted: rgba(255,255,255,0.25);
+  --j-glow: 0 0 20px rgba(139,92,246,0.15);
+  --j-glow-strong: 0 0 30px rgba(139,92,246,0.3);
 }
 
 * {
@@ -59,7 +59,7 @@ body {
 
 /* Selection */
 ::selection {
-  background: rgba(0, 212, 255, 0.3);
+  background: rgba(139,92,246,0.3);
   color: white;
 }
 

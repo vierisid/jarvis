@@ -1,0 +1,375 @@
+/* ================================================================
+   SIDEBAR — The Spine
+   52px collapsed (icon-only), expands to 200px on hover
+   ================================================================ */
+
+.sidebar {
+  width: 52px;
+  min-width: 52px;
+  background: var(--j-surface, #0C0C12);
+  border-right: 1px solid rgba(255,255,255,0.04);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 0 16px;
+  z-index: 10;
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 280ms cubic-bezier(0.4,0,0.2,1),
+              min-width 280ms cubic-bezier(0.4,0,0.2,1);
+}
+
+.sidebar:hover {
+  width: 200px;
+  min-width: 200px;
+}
+
+/* Vertical energy spine — 1px, very faint violet line */
+.sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 26px;
+  width: 1px;
+  background: rgba(139,92,246,0.03);
+  pointer-events: none;
+  z-index: 0;
+  transition: left 280ms cubic-bezier(0.4,0,0.2,1);
+}
+
+.sidebar:hover::before {
+  left: 26px; /* stays in same position relative to icons */
+}
+
+/* ================================================================
+   LOGO ORB — 12px violet orb with breath animation
+   ================================================================ */
+.sidebar-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 33%, #C4B5FD 0%, #8B5CF6 45%, #6D28D9 100%);
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  z-index: 1;
+  animation: sb-coreBreath 5s ease-in-out infinite, sb-orbGlow 5s ease-in-out infinite;
+}
+
+.sidebar-logo-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: #8B5CF6;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 200ms 0ms, width 280ms cubic-bezier(0.4,0,0.2,1);
+  margin-left: 0;
+}
+
+.sidebar:hover .sidebar-logo-text {
+  opacity: 1;
+  width: auto;
+  margin-left: 12px;
+  transition: opacity 200ms 100ms, width 280ms cubic-bezier(0.4,0,0.2,1);
+}
+
+.sidebar-logo-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
+.sidebar-logo-gap { height: 20px; flex-shrink: 0; }
+
+/* ================================================================
+   NAV CONTAINER
+   ================================================================ */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.sidebar-nav::-webkit-scrollbar { display: none; }
+
+/* ================================================================
+   GROUP DIVIDER
+   ================================================================ */
+.sidebar-group-divider {
+  width: 28px;
+  height: 1px;
+  background: rgba(255,255,255,0.04);
+  margin: 6px auto;
+  flex-shrink: 0;
+  transition: width 280ms cubic-bezier(0.4,0,0.2,1);
+}
+
+.sidebar:hover .sidebar-group-divider {
+  width: calc(100% - 24px);
+}
+
+/* ================================================================
+   NAV ITEM
+   ================================================================ */
+.sidebar-nav-item {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: all 200ms cubic-bezier(0.4,0,0.2,1);
+  border-radius: 8px;
+  margin: 1px 6px;
+  z-index: 1;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.sidebar:hover .sidebar-nav-item {
+  width: calc(100% - 12px);
+  justify-content: flex-start;
+  padding: 0 12px;
+}
+
+.sidebar-nav-item:hover {
+  background: rgba(139,92,246,0.04);
+}
+
+.sidebar-nav-item:hover .nav-icon {
+  opacity: 0.50;
+}
+
+/* Active item concentrates the spine energy */
+.sidebar-nav-item.active {
+  box-shadow: 0 0 20px rgba(139,92,246,0.08);
+}
+
+.sidebar-nav-item.active:hover {
+  background: rgba(139,92,246,0.06);
+}
+
+/* ================================================================
+   NAV ICON
+   ================================================================ */
+.nav-icon {
+  font-size: 14px;
+  opacity: 0.20;
+  transition: opacity 150ms;
+  color: rgba(255,255,255,0.88);
+  font-style: normal;
+  line-height: 1;
+  user-select: none;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.sidebar-nav-item.active .nav-icon {
+  opacity: 1;
+}
+
+/* ================================================================
+   NAV LABEL — hidden when collapsed, shown on hover
+   ================================================================ */
+.nav-label {
+  font-size: 12px;
+  color: rgba(255,255,255,0.48);
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+  width: 0;
+  transition: opacity 150ms 0ms, width 280ms cubic-bezier(0.4,0,0.2,1), margin 280ms;
+  margin-left: 0;
+}
+
+.sidebar:hover .nav-label {
+  opacity: 1;
+  width: auto;
+  margin-left: 10px;
+  transition: opacity 150ms 120ms, width 280ms cubic-bezier(0.4,0,0.2,1), margin 280ms;
+}
+
+.sidebar-nav-item.active .nav-label {
+  color: rgba(255,255,255,0.88);
+  font-weight: 500;
+}
+
+.sidebar-nav-item:hover .nav-label {
+  color: rgba(255,255,255,0.70);
+}
+
+/* ================================================================
+   ACTIVE DOT — 4px violet dot below icon (collapsed) / beside (expanded)
+   ================================================================ */
+.nav-active-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #8B5CF6;
+  opacity: 0;
+  transition: opacity 150ms;
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.sidebar-nav-item.active .nav-active-dot {
+  opacity: 1;
+  animation: sb-breathe 3s ease-in-out infinite;
+}
+
+.sidebar:hover .nav-active-dot {
+  bottom: auto;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* ================================================================
+   SETTINGS SUB-ITEMS
+   ================================================================ */
+.sidebar-settings-sub {
+  display: none;
+  flex-direction: column;
+  width: 100%;
+  gap: 0;
+}
+
+.sidebar:hover .sidebar-settings-sub.open {
+  display: flex;
+}
+
+.sidebar-sub-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 12px);
+  margin: 0 6px;
+  padding: 6px 12px 6px 38px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  white-space: nowrap;
+  transition: all 150ms;
+}
+
+.sidebar-sub-item:hover {
+  background: rgba(139,92,246,0.04);
+  color: rgba(255,255,255,0.60);
+}
+
+.sidebar-sub-item.active {
+  color: #A78BFA;
+  font-weight: 500;
+}
+
+/* ================================================================
+   HEALTH DOT — bottom of sidebar
+   ================================================================ */
+.sidebar-health {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
+  margin-bottom: 4px;
+  cursor: default;
+  flex-shrink: 0;
+  transition: background 300ms;
+}
+
+.sidebar-health.connected {
+  background: #34D399;
+  animation: sb-statusPulse 2.5s ease-out infinite;
+}
+
+.sidebar-health.disconnected {
+  background: rgba(255,255,255,0.25);
+  animation: none;
+}
+
+.sidebar-health-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 20px;
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-health-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.25);
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+  width: 0;
+  margin-left: 0;
+  transition: opacity 150ms 0ms, width 280ms, margin 280ms;
+}
+
+.sidebar:hover .sidebar-health-label {
+  opacity: 1;
+  width: auto;
+  margin-left: 10px;
+  transition: opacity 150ms 120ms, width 280ms, margin 280ms;
+}
+
+/* ================================================================
+   KEYFRAMES
+   ================================================================ */
+@keyframes sb-coreBreath {
+  0%, 100% { transform: scale(1);    opacity: 0.70; }
+  50%       { transform: scale(1.12); opacity: 1; }
+}
+
+@keyframes sb-orbGlow {
+  0%, 100% {
+    box-shadow:
+      0 0 8px rgba(139,92,246,0.50),
+      0 0 20px rgba(139,92,246,0.15);
+  }
+  50% {
+    box-shadow:
+      0 0 14px rgba(139,92,246,0.80),
+      0 0 36px rgba(139,92,246,0.25);
+  }
+}
+
+@keyframes sb-breathe {
+  0%, 100% { opacity: 0.28; }
+  50%       { opacity: 1; }
+}
+
+@keyframes sb-statusPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(52,211,153,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0   rgba(52,211,153,0); }
+}
