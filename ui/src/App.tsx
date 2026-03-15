@@ -17,8 +17,9 @@ const SettingsPage = React.lazy(() => import("./pages/SettingsPage"));
 const AwarenessPage = React.lazy(() => import("./pages/AwarenessPage"));
 const WorkflowsPage = React.lazy(() => import("./pages/WorkflowsPage"));
 const GoalsPage = React.lazy(() => import("./pages/GoalsPage"));
+const DashboardPage = React.lazy(() => import("./pages/DashboardPage"));
 
-type Route = "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "workflows" | "goals" | "settings";
+type Route = "dashboard" | "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "workflows" | "goals" | "settings";
 
 export type SettingsSection = "general" | "llm" | "channels" | "integrations" | "sidecar";
 
@@ -27,10 +28,10 @@ const SETTINGS_SECTIONS: SettingsSection[] = ["general", "llm", "channels", "int
 function getRoute(): Route {
   const hash = window.location.hash.replace("#/", "");
   if (hash.startsWith("settings")) return "settings";
-  if (["chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals"].includes(hash)) {
+  if (["dashboard", "chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals"].includes(hash)) {
     return hash as Route;
   }
-  return "chat";
+  return "dashboard";
 }
 
 function getSettingsSection(): SettingsSection {
@@ -87,7 +88,7 @@ export function App() {
   // Set default hash if none
   useEffect(() => {
     if (!window.location.hash) {
-      window.location.hash = "#/chat";
+      window.location.hash = "#/dashboard";
     }
   }, []);
 
@@ -135,6 +136,7 @@ export function App() {
 
         {/* Nav Links */}
         <div style={{ flex: 1, minHeight: 0, padding: "12px 8px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
+          <NavItem icon={"\u25C7"} label="Dashboard" route="dashboard" active={route} onClick={navigate} />
           <NavItem icon={"\u25C8"} label="Chat" route="chat" active={route} onClick={navigate} />
           <NavItem icon={"\u2726"} label="Tasks" route="tasks" active={route} onClick={navigate} />
           <NavItem icon={"\u25B6"} label="Pipeline" route="pipeline" active={route} onClick={navigate} />
@@ -162,6 +164,7 @@ export function App() {
       {/* Main Content */}
       <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <React.Suspense fallback={<PageFallback />}>
+          {route === "dashboard" && <DashboardPage messages={ws.messages} isConnected={ws.isConnected} voice={voice} agentActivity={ws.agentActivity} goalEvents={ws.goalEvents} workflowEvents={ws.workflowEvents} />}
           {route === "chat" && <ChatPage messages={ws.messages} isConnected={ws.isConnected} sendMessage={ws.sendMessage} voice={voice} />}
           {route === "tasks" && <TasksPage taskEvents={ws.taskEvents} />}
           {route === "pipeline" && <PipelinePage contentEvents={ws.contentEvents} sendMessage={ws.sendMessage} />}

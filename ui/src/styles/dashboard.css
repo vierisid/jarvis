@@ -1,0 +1,990 @@
+/* ================================================================
+   DASHBOARD — Design Vision CSS
+   All tokens scoped under .dashboard to avoid conflicts with globals.css
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   CUSTOM PROPERTIES (scoped to .dashboard root)
+   ---------------------------------------------------------------- */
+.dashboard {
+  --void:           #07070A;
+  --surface-1:      #0C0C12;
+  --surface-2:      #131319;
+  --surface-3:      #1A1A22;
+  --surface-4:      #22222E;
+
+  --border-1:       rgba(255,255,255,0.04);
+  --border-2:       rgba(255,255,255,0.07);
+  --border-3:       rgba(255,255,255,0.12);
+
+  --text-1:         rgba(255,255,255,0.88);
+  --text-2:         rgba(255,255,255,0.48);
+  --text-3:         rgba(255,255,255,0.25);
+
+  --violet:         #8B5CF6;
+  --violet-bright:  #A78BFA;
+  --violet-glow:    rgba(139,92,246,0.20);
+  --violet-aura:    rgba(139,92,246,0.06);
+
+  --emerald:        #34D399;
+  --emerald-glow:   rgba(52,211,153,0.15);
+
+  --blue:           #60A5FA;
+  --blue-glow:      rgba(96,165,250,0.12);
+
+  --cyan:           #22D3EE;
+  --rose:           #FB7185;
+  --amber:          #FBBF24;
+
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--void);
+  color: var(--text-1);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ================================================================
+   KEYFRAMES
+   ================================================================ */
+
+@keyframes db-auroraShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes db-drift {
+  0%, 100% { transform: translate(0, 0); }
+  25%       { transform: translate(3px, -5px); }
+  50%       { transform: translate(-3px, 3px); }
+  75%       { transform: translate(2px, 4px); }
+}
+
+@keyframes db-streamDown {
+  0%   { transform: translateY(-20px); opacity: 0; }
+  10%  { opacity: 0.18; }
+  90%  { opacity: 0.18; }
+  100% { transform: translateY(120vh); opacity: 0; }
+}
+
+@keyframes db-flowPulse {
+  0%   { stroke-dashoffset: 16; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes db-materialize {
+  0%   { opacity: 0; transform: translateY(16px) scale(0.98); filter: blur(4px); }
+  100% { opacity: 1; transform: translateY(0)    scale(1);    filter: blur(0); }
+}
+
+@keyframes db-coreBreath {
+  0%, 100% { transform: scale(1);    opacity: 0.50; }
+  50%       { transform: scale(1.12); opacity: 0.85; }
+}
+
+@keyframes db-ringExpand {
+  0%, 100% { transform: translate(-50%,-50%) scale(0.8);  opacity: 0.6; }
+  50%       { transform: translate(-50%,-50%) scale(1.1);  opacity: 0.2; }
+}
+
+@keyframes db-orbGlow {
+  0%, 100% {
+    box-shadow:
+      0 0 10px rgba(139,92,246,0.50),
+      0 0 24px rgba(139,92,246,0.20),
+      0 0 50px rgba(139,92,246,0.06);
+  }
+  50% {
+    box-shadow:
+      0 0 18px rgba(139,92,246,0.80),
+      0 0 44px rgba(139,92,246,0.35),
+      0 0 80px rgba(139,92,246,0.12);
+  }
+}
+
+@keyframes db-orbit {
+  from { transform: rotate(0deg)   translateX(var(--r)) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(var(--r)) rotate(-360deg); }
+}
+
+@keyframes db-rotateSlow {
+  from { transform: translate(-50%,-50%) rotate(0deg); }
+  to   { transform: translate(-50%,-50%) rotate(-360deg); }
+}
+
+@keyframes db-drawLine {
+  from { stroke-dashoffset: 200; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes db-barReveal {
+  from { width: 0; }
+  to   { width: var(--bar-w); }
+}
+
+@keyframes db-statusPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(52,211,153,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0   rgba(52,211,153,0); }
+}
+
+@keyframes db-breathe {
+  0%, 100% { opacity: 0.28; }
+  50%       { opacity: 1; }
+}
+
+@keyframes db-scanDot {
+  0%   { left: -24px; opacity: 0; }
+  8%   { opacity: 1; }
+  92%  { opacity: 1; }
+  100% { left: 100%;  opacity: 0; }
+}
+
+@keyframes db-waveform {
+  0%, 100% { height: var(--wave-min); }
+  50%       { height: var(--wave-max); }
+}
+
+/* ================================================================
+   ATMOSPHERE — Three-layer living background
+   ================================================================ */
+.db-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Layer 1: Aurora gradients */
+.db-aurora-layer {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 30% 15%, rgba(139,92,246,0.035) 0%, transparent 55%),
+    radial-gradient(ellipse at 68% 58%, rgba(96,165,250,0.028)  0%, transparent 45%),
+    radial-gradient(ellipse at 42% 82%, rgba(52,211,153,0.022)  0%, transparent 50%);
+  background-size: 200% 200%;
+  animation: db-auroraShift 30s ease-in-out infinite;
+}
+
+/* Layer 2: Constellation */
+.db-constellation-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.db-const-node {
+  position: absolute;
+  border-radius: 50%;
+}
+
+.db-const-node.db-drift {
+  animation: db-drift var(--dur) ease-in-out infinite;
+  animation-delay: var(--delay);
+}
+
+.db-const-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Layer 3: Data streams */
+.db-stream-channel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.db-stream-particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  left: 0;
+  animation: db-streamDown var(--dur) ease-in-out infinite;
+  animation-delay: var(--delay);
+}
+
+/* ================================================================
+   DASHBOARD SCROLL CONTAINER
+   ================================================================ */
+.db-scroll {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-4) transparent;
+}
+
+.db-scroll::-webkit-scrollbar { width: 4px; }
+.db-scroll::-webkit-scrollbar-track { background: transparent; }
+.db-scroll::-webkit-scrollbar-thumb { background: var(--surface-4); border-radius: 2px; }
+
+.db-inner {
+  padding: 24px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ================================================================
+   HERO ROW — Left metrics | Core | Right metrics
+   ================================================================ */
+.db-hero-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.db-metrics-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 200px;
+  min-width: 200px;
+}
+
+/* Metric cards */
+.db-metric-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  padding: 16px 18px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: default;
+  transition: transform 250ms cubic-bezier(0.4,0,0.2,1),
+              border-color 250ms,
+              box-shadow 250ms;
+  animation: db-materialize 500ms cubic-bezier(0.16,1,0.3,1) both;
+  animation-delay: var(--card-delay, 0ms);
+  position: relative;
+  overflow: hidden;
+}
+
+.db-metric-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-2);
+  box-shadow: 0 8px 32px rgba(139,92,246,0.06), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.db-metric-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--text-3);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.db-metric-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.92);
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.db-sparkline {
+  width: 100%;
+  height: 32px;
+  display: block;
+}
+
+.db-sparkline path.db-line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: db-drawLine 1s cubic-bezier(0.16,1,0.3,1) both;
+  animation-delay: var(--line-delay, 0ms);
+}
+
+.db-sparkline path.db-fill {
+  stroke: none;
+  opacity: 0;
+  transition: opacity 400ms;
+}
+
+.db-metric-card:hover .db-sparkline path.db-fill {
+  opacity: 1;
+}
+
+.db-metric-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.db-metric-trend {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.db-trend-up   { color: var(--emerald); }
+.db-trend-flat { color: var(--text-3); }
+
+.db-metric-fresh {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ================================================================
+   PULSE CORE — JARVIS's Heart
+   ================================================================ */
+.db-core-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.db-core-container {
+  width: 180px;
+  height: 180px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-core-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+}
+
+.db-core-ring-1 {
+  width: 60px;
+  height: 60px;
+  border: 1px solid rgba(139,92,246,0.18);
+  animation: db-ringExpand 5s ease-in-out infinite;
+}
+
+.db-core-ring-2 {
+  width: 110px;
+  height: 110px;
+  border: 1px solid rgba(139,92,246,0.08);
+  animation: db-ringExpand 5s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
+
+.db-core-ring-3 {
+  width: 170px;
+  height: 170px;
+  border: 1px dashed rgba(139,92,246,0.04);
+  animation: db-rotateSlow 120s linear infinite;
+}
+
+.db-core-orb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #C4B5FD 0%, #8B5CF6 40%, #6D28D9 100%);
+  position: relative;
+  z-index: 2;
+  animation: db-coreBreath 5s ease-in-out infinite, db-orbGlow 5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.db-orbital-wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+
+.db-orbital-dot {
+  position: absolute;
+  border-radius: 50%;
+  transform-origin: center;
+  animation: db-orbit var(--speed) linear infinite;
+}
+
+.db-orbital-dot::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  width: var(--sz);
+  height: var(--sz);
+  background: var(--col);
+  top: calc(-1 * var(--sz) / 2);
+  left: calc(-1 * var(--sz) / 2);
+}
+
+.db-core-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.25em;
+  color: rgba(255,255,255,0.15);
+  text-transform: uppercase;
+}
+
+/* ================================================================
+   PANEL SHARED
+   ================================================================ */
+.db-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.db-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.db-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+
+.db-badge-violet {
+  background: var(--violet-aura);
+  color: var(--violet-bright);
+  border: 1px solid rgba(139,92,246,0.12);
+}
+
+.db-badge-neutral {
+  background: rgba(255,255,255,0.03);
+  color: var(--text-2);
+  border: 1px solid var(--border-1);
+}
+
+.db-panel-link {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color 150ms;
+  background: none;
+  border: none;
+  font-family: inherit;
+}
+
+.db-panel-link:hover { color: var(--text-1); }
+
+/* ================================================================
+   AGENT FLEET
+   ================================================================ */
+.db-fleet-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  padding: 20px 24px;
+  animation: db-materialize 500ms cubic-bezier(0.16,1,0.3,1) 160ms both;
+}
+
+.db-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.db-agent-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 150ms cubic-bezier(0.4,0,0.2,1);
+  position: relative;
+  overflow: hidden;
+}
+
+.db-agent-card:hover {
+  background: var(--surface-3);
+  border-color: var(--border-2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+.db-agent-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.db-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.db-s-running { background: var(--emerald); animation: db-statusPulse 2s ease-out infinite; }
+.db-s-error   { background: var(--rose); animation: db-breathe 2s ease-in-out infinite; }
+.db-s-idle    { background: var(--text-3); }
+
+.db-agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  flex: 1;
+}
+
+.db-agent-role {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-radius: 4px;
+  padding: 2px 7px;
+}
+
+.db-agent-task {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+
+.db-agent-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.db-agent-flow-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.db-agent-flow-slab {
+  position: absolute;
+  top: 0;
+  width: 24px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--violet), transparent);
+  animation: db-scanDot 3.5s ease-in-out infinite;
+  animation-delay: var(--slab-delay, 0s);
+}
+
+/* ================================================================
+   VOICE SESSION CARD
+   ================================================================ */
+.db-voice-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: db-materialize 500ms cubic-bezier(0.16,1,0.3,1) 240ms both;
+}
+
+.db-voice-aurora {
+  height: 2px;
+  background: linear-gradient(90deg, var(--violet), var(--blue), var(--cyan), var(--emerald));
+  opacity: 0.20;
+  background-size: 200% 100%;
+  animation: db-auroraShift 8s ease-in-out infinite;
+}
+
+.db-voice-inner {
+  padding: 24px;
+  display: flex;
+  gap: 24px;
+}
+
+.db-voice-left  {
+  flex: 0 0 60%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.db-voice-right {
+  flex: 0 0 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.db-voice-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.db-voice-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.db-voice-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--emerald);
+}
+
+/* Waveform — 38 bars */
+.db-waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2.5px;
+  height: 48px;
+}
+
+.db-wave-bar {
+  width: 3px;
+  border-radius: 1.5px;
+  animation: db-waveform var(--dur) ease-in-out infinite;
+  animation-delay: var(--delay);
+  flex-shrink: 0;
+}
+
+.db-voice-speaking {
+  font-size: 11px;
+  color: var(--text-2);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+.db-voice-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.db-voice-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-2);
+  background: var(--surface-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-2);
+  transition: all 150ms;
+  font-family: inherit;
+}
+
+.db-voice-btn:hover {
+  border-color: var(--violet);
+  color: var(--violet-bright);
+  background: var(--violet-aura);
+}
+
+.db-voice-btn-end {
+  background: rgba(251,113,133,0.06);
+  border-color: rgba(251,113,133,0.15);
+  color: var(--rose);
+}
+
+.db-voice-btn-end:hover {
+  background: rgba(251,113,133,0.12);
+}
+
+.db-transcript-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.db-transcript-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.db-transcript-ts {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-3);
+  min-width: 32px;
+  padding-top: 1px;
+  flex-shrink: 0;
+}
+
+.db-transcript-text {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.db-transcript-jarvis {
+  background: var(--violet-aura);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-1);
+}
+
+/* ================================================================
+   MEMORY VAULT + NEURAL TOPOLOGY — two-col
+   ================================================================ */
+.db-two-col {
+  display: grid;
+  grid-template-columns: 55% 1fr;
+  gap: 16px;
+}
+
+.db-sub-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  padding: 20px 24px;
+  animation: db-materialize 500ms cubic-bezier(0.16,1,0.3,1) both;
+}
+
+.db-memory-panel { animation-delay: 320ms; }
+.db-neural-panel { animation-delay: 360ms; }
+
+/* Memory Vault constellation viz */
+.db-vault-viz {
+  position: relative;
+  height: 200px;
+  margin: 12px 0;
+  overflow: hidden;
+}
+
+.db-vault-viz svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.db-entity-dot {
+  position: absolute;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.3s, opacity 0.3s;
+}
+
+.db-entity-dot:hover { transform: scale(1.8); }
+
+.db-entity-dot.db-drift {
+  animation: db-drift var(--dur) ease-in-out infinite;
+  animation-delay: var(--delay);
+}
+
+.db-entity-label {
+  position: absolute;
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-3);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.db-recent-memories {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.db-mem-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin: -4px -6px;
+  transition: background 150ms;
+}
+
+.db-mem-item:hover {
+  background: var(--surface-2);
+}
+
+.db-mem-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.db-mem-text {
+  font-size: 11px;
+  color: var(--text-2);
+  flex: 1;
+}
+
+.db-mem-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* Neural Topology */
+.db-neural-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-neural-pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--violet);
+  animation: db-breathe 3s ease-in-out infinite;
+}
+
+.db-neural-svg-wrap {
+  margin: 12px 0;
+}
+
+.db-neural-pathway-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: rgba(139,92,246,0.50);
+  margin-top: 8px;
+}
+
+.db-node-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+}
+
+/* ================================================================
+   GOALS
+   ================================================================ */
+.db-goals-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  padding: 20px 24px;
+  animation: db-materialize 500ms cubic-bezier(0.16,1,0.3,1) 400ms both;
+}
+
+.db-goals-grid {
+  display: flex;
+  gap: 20px;
+  margin-top: 14px;
+}
+
+.db-goal-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 8px;
+  margin: -10px -10px;
+  transition: background 150ms;
+}
+
+.db-goal-item:hover {
+  background: var(--surface-2);
+}
+
+.db-goal-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.db-goal-track {
+  height: 5px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.db-goal-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--violet);
+  width: 0;
+  animation: db-barReveal 900ms cubic-bezier(0.16,1,0.3,1) forwards;
+  animation-delay: var(--delay, 0ms);
+}
+
+.db-goal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-goal-pct {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.db-priority {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.db-p1 { background: rgba(251,113,133,0.10); color: var(--rose); }
+.db-p2 { background: rgba(251,191,36,0.08);  color: var(--amber); }
+.db-p3 { background: var(--surface-3);       color: var(--text-3); }
+
+/* ================================================================
+   NEURAL SVG internal classes (defined here because they're used
+   inside inline SVG with <style> tags in the mockup)
+   ================================================================ */
+.db-path-idle {
+  stroke: rgba(255,255,255,0.04);
+  stroke-width: 1;
+  fill: none;
+}
+
+.db-path-active {
+  stroke: rgba(139,92,246,0.45);
+  stroke-width: 1.2;
+  fill: none;
+  stroke-dasharray: 8 4;
+  animation: db-flowPulse var(--fp) linear infinite;
+}
+
+/* Constellation SVG classes */
+.db-cl-idle {
+  stroke: rgba(139,92,246,0.05);
+  stroke-width: 0.5;
+  fill: none;
+}
+
+.db-cl-flow {
+  stroke: rgba(139,92,246,0.05);
+  stroke-width: 0.5;
+  fill: none;
+  stroke-dasharray: 16;
+  animation: db-flowPulse var(--fp) linear infinite;
+}
