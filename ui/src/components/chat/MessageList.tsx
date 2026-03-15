@@ -6,43 +6,41 @@ type Props = {
   messages: ChatMessage[];
 };
 
+function formatTimeDivider(timestamp: string): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  if (isToday) return `Today  ${time}`;
+  if (isYesterday) return `Yesterday  ${time}`;
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })}  ${time}`;
+}
+
+function shouldShowTimeDivider(current: ChatMessage, previous: ChatMessage | undefined): boolean {
+  if (!previous) return true;
+  const gap = new Date(current.timestamp).getTime() - new Date(previous.timestamp).getTime();
+  return gap > 10 * 60 * 1000; // 10 minutes
+}
+
 export function MessageList({ messages }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   if (messages.length === 0) {
     return (
-      <div
-        ref={containerRef}
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "16px",
-          color: "var(--j-text-muted)",
-          padding: "40px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "48px",
-            opacity: 0.3,
-            color: "var(--j-accent)",
-          }}
-        >
-          &#9670;
-        </div>
-        <div style={{ fontSize: "16px", color: "var(--j-text-dim)" }}>
-          Ready to assist
-        </div>
-        <div style={{ fontSize: "13px", maxWidth: "400px", textAlign: "center", lineHeight: "1.6" }}>
+      <div className="chat-empty">
+        <div className="chat-empty-orb" />
+        <div className="chat-empty-title">Ready to assist</div>
+        <div className="chat-empty-sub">
           Type a message below to start a conversation with JARVIS.
         </div>
       </div>
@@ -50,21 +48,20 @@ export function MessageList({ messages }: Props) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        flex: 1,
-        overflow: "auto",
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-        padding: "16px 0",
-      }}
-    >
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
-      <div ref={bottomRef} />
+    <div ref={containerRef} className="chat-messages-scroll">
+      <div className="chat-messages-center">
+        {messages.map((msg, i) => (
+          <React.Fragment key={msg.id}>
+            {shouldShowTimeDivider(msg, messages[i - 1]) && (
+              <div className="chat-time-divider">
+                <span className="chat-time-label">{formatTimeDivider(msg.timestamp)}</span>
+              </div>
+            )}
+            <MessageBubble message={msg} />
+          </React.Fragment>
+        ))}
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }

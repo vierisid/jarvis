@@ -3,6 +3,7 @@ import type { ChatMessage } from "../hooks/useWebSocket";
 import type { UseVoiceReturn } from "../hooks/useVoice";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatInput } from "../components/chat/ChatInput";
+import "../styles/chat.css";
 
 type ChatPageProps = {
   messages: ChatMessage[];
@@ -23,54 +24,52 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
     : null;
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        position: "relative",
-      }}
-    >
+    <div className="chat-page">
+      {/* Atmosphere — Three-layer living background */}
+      <div className="chat-atmos">
+        {/* Layer 1: Aurora gradients */}
+        <div className="chat-atmos-aurora" />
+
+        {/* Layer 2: Constellation dots + SVG connectors */}
+        <div className="chat-atmos-constellation">
+          <div className="chat-const-node drift" style={{ width: 3, height: 3, background: "rgba(139,92,246,0.15)", top: "12%", left: "18%", "--dur": "12s", "--delay": "0s" } as React.CSSProperties} />
+          <div className="chat-const-node drift" style={{ width: 2, height: 2, background: "rgba(96,165,250,0.12)", top: "28%", left: "72%", "--dur": "15s", "--delay": "2s" } as React.CSSProperties} />
+          <div className="chat-const-node drift" style={{ width: 2, height: 2, background: "rgba(52,211,153,0.10)", top: "65%", left: "35%", "--dur": "18s", "--delay": "4s" } as React.CSSProperties} />
+          <div className="chat-const-node drift" style={{ width: 3, height: 3, background: "rgba(139,92,246,0.12)", top: "80%", left: "82%", "--dur": "14s", "--delay": "1s" } as React.CSSProperties} />
+          <div className="chat-const-node" style={{ width: 2, height: 2, background: "rgba(96,165,250,0.08)", top: "45%", left: "55%" }} />
+
+          <svg className="chat-const-svg">
+            <line x1="18%" y1="12%" x2="72%" y2="28%" stroke="rgba(139,92,246,0.03)" strokeWidth="1" strokeDasharray="4 8" style={{ animation: "chat-flowPulse 4s linear infinite" }} />
+            <line x1="35%" y1="65%" x2="82%" y2="80%" stroke="rgba(52,211,153,0.02)" strokeWidth="1" strokeDasharray="4 8" style={{ animation: "chat-flowPulse 5s linear infinite" }} />
+          </svg>
+        </div>
+
+        {/* Layer 3: Data stream particles */}
+        <div className="chat-stream-channel" style={{ left: "22%" }}>
+          <div className="chat-stream-particle" style={{ background: "rgba(139,92,246,0.18)", "--dur": "8s", "--delay": "0s" } as React.CSSProperties} />
+          <div className="chat-stream-particle" style={{ background: "rgba(139,92,246,0.12)", "--dur": "12s", "--delay": "3s" } as React.CSSProperties} />
+        </div>
+        <div className="chat-stream-channel" style={{ left: "68%" }}>
+          <div className="chat-stream-particle" style={{ background: "rgba(96,165,250,0.14)", "--dur": "10s", "--delay": "1s" } as React.CSSProperties} />
+          <div className="chat-stream-particle" style={{ background: "rgba(52,211,153,0.10)", "--dur": "14s", "--delay": "5s" } as React.CSSProperties} />
+        </div>
+        <div className="chat-stream-channel" style={{ left: "45%" }}>
+          <div className="chat-stream-particle" style={{ background: "rgba(139,92,246,0.10)", "--dur": "11s", "--delay": "2s" } as React.CSSProperties} />
+        </div>
+      </div>
+
       {/* Connection status bar */}
       {!isConnected && (
-        <div
-          style={{
-            padding: "6px 16px",
-            background: "rgba(239, 68, 68, 0.15)",
-            borderBottom: "1px solid rgba(239, 68, 68, 0.3)",
-            color: "var(--j-error)",
-            fontSize: "12px",
-            textAlign: "center",
-          }}
-        >
+        <div className="chat-status-bar chat-status-disconnected">
+          <span className="chat-status-dot chat-status-dot-recording" />
           Disconnected from JARVIS. Reconnecting...
         </div>
       )}
 
       {/* Voice status bar */}
       {voiceStatus && (
-        <div
-          style={{
-            padding: "6px 16px",
-            background: "rgba(0, 212, 255, 0.1)",
-            borderBottom: "1px solid rgba(0, 212, 255, 0.2)",
-            color: "var(--j-accent)",
-            fontSize: "12px",
-            textAlign: "center",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-          }}
-        >
-          <span style={{
-            width: "6px",
-            height: "6px",
-            borderRadius: "50%",
-            background: voice?.voiceState === "recording" ? "var(--j-error)" : "var(--j-accent)",
-            display: "inline-block",
-            animation: voice?.voiceState === "recording" ? "micPulse 1s ease infinite" : "none",
-          }} />
+        <div className="chat-status-bar chat-status-voice">
+          <span className={`chat-status-dot ${voice?.voiceState === "recording" ? "chat-status-dot-recording" : "chat-status-dot-voice"}`} />
           {voiceStatus}
         </div>
       )}
@@ -92,19 +91,6 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
           cancelTTS: voice.cancelTTS,
         } : undefined}
       />
-
-      {/* Animations */}
-      <style>{`
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-        @keyframes micPulse {
-          0% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.15); opacity: 0.7; }
-          100% { transform: scale(1); opacity: 1; }
-        }
-      `}</style>
     </div>
   );
 }

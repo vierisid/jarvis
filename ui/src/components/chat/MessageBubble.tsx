@@ -8,154 +8,98 @@ type Props = {
   message: ChatMessage;
 };
 
+function getSystemType(message: ChatMessage): "heartbeat" | "error" | "workflow" | "default" {
+  if (message.source === "error" || message.priority === "urgent") return "error";
+  if (message.source === "heartbeat") return "heartbeat";
+  if (message.source === "workflow") return "workflow";
+  return "default";
+}
+
+function getSystemIcon(type: string): string {
+  switch (type) {
+    case "heartbeat": return "\u2661"; // heart
+    case "error": return "\u26A0";     // warning
+    case "workflow": return "\u25B6";   // play
+    default: return "\u25C7";           // diamond
+  }
+}
+
+function getSystemLabel(type: string, message: ChatMessage): string {
+  switch (type) {
+    case "heartbeat": return "Heartbeat";
+    case "error": return "Error";
+    case "workflow": return "Workflow";
+    default: return message.source || "System";
+  }
+}
+
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const timestamp = new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-  // System messages (heartbeat, proactive, errors)
+  // System messages — notification cards
   if (isSystem) {
-    const isError = message.source === "error";
-    const isHeartbeat = message.source === "heartbeat";
-    const isUrgent = message.priority === "urgent";
+    const type = getSystemType(message);
 
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          padding: "4px 20px",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: "600px",
-            padding: "8px 14px",
-            borderRadius: "6px",
-            background: isError
-              ? "rgba(239, 68, 68, 0.1)"
-              : isUrgent
-                ? "rgba(239, 68, 68, 0.1)"
-                : "rgba(0, 212, 255, 0.05)",
-            border: `1px solid ${
-              isError
-                ? "rgba(239, 68, 68, 0.3)"
-                : isUrgent
-                  ? "rgba(239, 68, 68, 0.3)"
-                  : "var(--j-border)"
-            }`,
-            fontSize: "12px",
-            color: isError
-              ? "var(--j-error)"
-              : isUrgent
-                ? "var(--j-error)"
-                : "var(--j-text-dim)",
-          }}
-        >
-          {isHeartbeat && (
-            <span style={{ color: "var(--j-accent-dim)", marginRight: "6px" }}>
-              [heartbeat]
-            </span>
-          )}
-          <MarkdownContent content={message.content} />
+      <div className="chat-msg chat-msg-system">
+        <div className="chat-system-card">
+          <div className={`chat-system-icon chat-system-icon-${type}`}>
+            {getSystemIcon(type)}
+          </div>
+          <div className="chat-system-body">
+            <div className={`chat-system-label chat-system-label-${type}`}>
+              {getSystemLabel(type, message)}
+            </div>
+            <div className={`chat-system-text ${type === "error" ? "chat-system-text-error" : ""}`}>
+              <MarkdownContent content={message.content} />
+            </div>
+            <div className="chat-system-ts">{timestamp}</div>
+          </div>
         </div>
       </div>
     );
   }
 
+  // User / JARVIS messages
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: isUser ? "flex-end" : "flex-start",
-        padding: "4px 20px",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "75%",
-          display: "flex",
-          flexDirection: "column",
-          gap: "6px",
-        }}
-      >
-        {/* Sub-agent tags */}
-        {message.subAgentEvents && message.subAgentEvents.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "4px",
-              paddingBottom: "2px",
-            }}
-          >
-            {message.subAgentEvents.map((evt, i) => (
-              <SubAgentTag key={i} event={evt} />
-            ))}
-          </div>
-        )}
-
-        {/* Main bubble */}
-        <div
-          style={{
-            padding: "10px 14px",
-            borderRadius: isUser ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-            background: isUser
-              ? "rgba(0, 212, 255, 0.15)"
-              : "var(--j-surface)",
-            border: `1px solid ${
-              isUser ? "rgba(0, 212, 255, 0.3)" : "var(--j-border)"
-            }`,
-            fontSize: "14px",
-            lineHeight: "1.6",
-            whiteSpace: isUser ? "pre-wrap" : undefined,
-            wordBreak: "break-word",
-            color: "var(--j-text)",
-          }}
-        >
-          {isUser ? message.content : <MarkdownContent content={message.content} />}
-          {message.isStreaming && (
-            <span
-              style={{
-                display: "inline-block",
-                width: "6px",
-                height: "14px",
-                background: "var(--j-accent)",
-                marginLeft: "2px",
-                animation: "blink 1s step-end infinite",
-                verticalAlign: "text-bottom",
-              }}
-            />
-          )}
+    <div className={`chat-msg ${isUser ? "chat-msg-user" : "chat-msg-jarvis"}`}>
+      {/* JARVIS sender row */}
+      {!isUser && (
+        <div className="chat-sender">
+          <div className="chat-sender-orb" />
+          <span className="chat-sender-name">JARVIS</span>
+          <span className="chat-sender-ts">{timestamp}</span>
         </div>
+      )}
 
-        {/* Tool calls */}
-        {message.toolCalls && message.toolCalls.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "4px",
-              paddingTop: "2px",
-            }}
-          >
-            {message.toolCalls.map((tc, i) => (
-              <ToolCallBadge key={i} toolCall={tc} />
-            ))}
-          </div>
-        )}
-
-        {/* Timestamp */}
-        <div
-          style={{
-            fontSize: "10px",
-            color: "var(--j-text-muted)",
-            textAlign: isUser ? "right" : "left",
-            paddingTop: "1px",
-          }}
-        >
-          {new Date(message.timestamp).toLocaleTimeString()}
+      {/* Sub-agent tags */}
+      {message.subAgentEvents && message.subAgentEvents.length > 0 && (
+        <div className="chat-sa-row">
+          {message.subAgentEvents.map((evt, i) => (
+            <SubAgentTag key={i} event={evt} />
+          ))}
         </div>
+      )}
+
+      {/* Bubble */}
+      <div className={`chat-bubble ${isUser ? "chat-bubble-user" : "chat-bubble-jarvis"}`}>
+        {isUser ? message.content : <MarkdownContent content={message.content} />}
+        {message.isStreaming && <span className="chat-cursor" />}
       </div>
+
+      {/* Tool calls */}
+      {message.toolCalls && message.toolCalls.length > 0 && (
+        <div className="chat-tools-row">
+          {message.toolCalls.map((tc, i) => (
+            <ToolCallBadge key={i} toolCall={tc} />
+          ))}
+        </div>
+      )}
+
+      {/* Timestamp for user messages */}
+      {isUser && <div className="chat-ts chat-ts-right">{timestamp}</div>}
     </div>
   );
 }

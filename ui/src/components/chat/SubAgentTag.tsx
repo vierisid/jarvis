@@ -5,14 +5,23 @@ type Props = {
   event: SubAgentEvent;
 };
 
-export function SubAgentTag({ event }: Props) {
-  const color =
-    event.type === "done"
-      ? "var(--j-success)"
-      : event.type === "tool_call"
-        ? "var(--j-warning)"
-        : "var(--j-accent2)";
+function getClassName(type: string): string {
+  switch (type) {
+    case "done": return "chat-sa chat-sa-done";
+    case "tool_call": return "chat-sa chat-sa-tool";
+    default: return "chat-sa chat-sa-active";
+  }
+}
 
+function getIcon(type: string): string {
+  switch (type) {
+    case "done": return "\u2713";     // checkmark
+    case "tool_call": return "\u2699"; // gear
+    default: return "\u25C6";          // diamond
+  }
+}
+
+export function SubAgentTag({ event }: Props) {
   const label =
     event.type === "done"
       ? `${event.agentName} completed`
@@ -21,21 +30,8 @@ export function SubAgentTag({ event }: Props) {
         : event.agentName;
 
   return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "4px",
-        padding: "2px 8px",
-        borderRadius: "4px",
-        background: `${color}15`,
-        border: `1px solid ${color}40`,
-        color,
-        fontSize: "11px",
-        fontWeight: 500,
-      }}
-    >
-      <span style={{ fontSize: "10px" }}>&#9670;</span>
+    <span className={getClassName(event.type)}>
+      <span style={{ fontSize: "9px" }}>{getIcon(event.type)}</span>
       {label}
     </span>
   );

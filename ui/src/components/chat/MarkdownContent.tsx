@@ -28,17 +28,18 @@ function CopyButton({ text }: { text: string }) {
         position: "absolute",
         top: "8px",
         right: "8px",
-        padding: "2px 8px",
-        fontSize: "11px",
-        background: copied ? "rgba(16, 185, 129, 0.2)" : "rgba(255,255,255,0.08)",
-        border: `1px solid ${copied ? "rgba(16, 185, 129, 0.4)" : "rgba(255,255,255,0.12)"}`,
+        padding: "3px 8px",
+        fontSize: "10px",
+        fontFamily: "'JetBrains Mono', monospace",
+        background: copied ? "rgba(52, 211, 153, 0.15)" : "rgba(255,255,255,0.06)",
+        border: `1px solid ${copied ? "rgba(52, 211, 153, 0.3)" : "rgba(255,255,255,0.08)"}`,
         borderRadius: "4px",
         color: copied ? "var(--j-success)" : "var(--j-text-dim)",
         cursor: "pointer",
-        transition: "all 0.15s ease",
+        transition: "all 150ms",
       }}
     >
-      {copied ? "Copied!" : "Copy"}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
@@ -59,9 +60,9 @@ const components: Components = {
                 top: "8px",
                 left: "12px",
                 fontSize: "10px",
+                fontFamily: "'JetBrains Mono', monospace",
                 color: "var(--j-text-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.5px",
+                letterSpacing: "0.04em",
               }}
             >
               {match[1]}
@@ -72,11 +73,11 @@ const components: Components = {
             style={{
               background: "rgba(0, 0, 0, 0.35)",
               border: "1px solid var(--j-border)",
-              borderRadius: "6px",
-              padding: match ? "28px 12px 12px" : "12px",
+              borderRadius: "12px",
+              padding: match ? "28px 14px 14px" : "14px",
               overflowX: "auto",
-              fontSize: "13px",
-              lineHeight: "1.5",
+              fontSize: "12px",
+              lineHeight: "1.65",
             }}
           >
             <code className={className} {...props}>
@@ -87,17 +88,17 @@ const components: Components = {
       );
     }
 
-    // Inline code
+    // Inline code — violet styling (CSS overrides in chat.css handle .chat-page context)
     return (
       <code
         style={{
-          background: "rgba(0, 212, 255, 0.1)",
-          border: "1px solid rgba(0, 212, 255, 0.2)",
-          borderRadius: "3px",
-          padding: "1px 5px",
-          fontSize: "0.9em",
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-          color: "var(--j-accent)",
+          background: "rgba(139, 92, 246, 0.08)",
+          border: "1px solid rgba(139, 92, 246, 0.10)",
+          borderRadius: "5px",
+          padding: "2px 7px",
+          fontSize: "0.85em",
+          fontFamily: "'JetBrains Mono', monospace",
+          color: "var(--j-accent2)",
         }}
         {...props}
       >
@@ -113,10 +114,10 @@ const components: Components = {
         target="_blank"
         rel="noopener noreferrer"
         style={{
-          color: "var(--j-accent)",
+          color: "var(--j-accent2)",
           textDecoration: "none",
-          borderBottom: "1px solid rgba(0, 212, 255, 0.3)",
-          transition: "border-color 0.15s ease",
+          borderBottom: "1px solid rgba(139,92,246,0.3)",
+          transition: "border-color 150ms",
         }}
         {...props}
       >
@@ -127,12 +128,15 @@ const components: Components = {
 
   table({ children, ...props }) {
     return (
-      <div style={{ overflowX: "auto", margin: "8px 0" }}>
+      <div style={{ overflowX: "auto", margin: "12px 0" }}>
         <table
           style={{
             borderCollapse: "collapse",
             width: "100%",
-            fontSize: "13px",
+            fontSize: "12px",
+            border: "1px solid var(--j-border)",
+            borderRadius: "8px",
+            overflow: "hidden",
           }}
           {...props}
         >
@@ -146,14 +150,15 @@ const components: Components = {
     return (
       <th
         style={{
-          background: "rgba(0, 212, 255, 0.08)",
-          border: "1px solid var(--j-border)",
-          padding: "6px 10px",
+          background: "rgba(139, 92, 246, 0.04)",
+          borderBottom: "1px solid var(--j-border-bright)",
+          padding: "8px 12px",
           textAlign: "left",
-          fontSize: "12px",
+          fontSize: "10px",
           fontWeight: 600,
-          color: "var(--j-accent)",
-          whiteSpace: "nowrap",
+          color: "var(--j-text-dim)",
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
         }}
         {...props}
       >
@@ -166,8 +171,9 @@ const components: Components = {
     return (
       <td
         style={{
-          border: "1px solid var(--j-border)",
-          padding: "5px 10px",
+          borderBottom: "1px solid var(--j-border)",
+          padding: "7px 12px",
+          color: "var(--j-text-dim)",
         }}
         {...props}
       >
@@ -180,11 +186,14 @@ const components: Components = {
     return (
       <blockquote
         style={{
-          borderLeft: "3px solid var(--j-accent-dim)",
-          margin: "8px 0",
-          padding: "4px 12px",
+          borderLeft: "2px solid var(--j-accent)",
+          margin: "12px 0",
+          padding: "10px 16px",
           color: "var(--j-text-dim)",
-          background: "rgba(0, 212, 255, 0.03)",
+          background: "rgba(139, 92, 246, 0.06)",
+          borderRadius: "0 10px 10px 0",
+          fontSize: "13px",
+          lineHeight: "1.65",
         }}
         {...props}
       >
@@ -200,7 +209,7 @@ const components: Components = {
         alt={alt}
         style={{
           maxWidth: "100%",
-          borderRadius: "6px",
+          borderRadius: "8px",
           border: "1px solid var(--j-border)",
           margin: "4px 0",
         }}
@@ -241,14 +250,12 @@ const components: Components = {
 };
 
 export function MarkdownContent({ content }: Props) {
-  // Split content around document markers and render DocumentCards inline
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   const re = new RegExp(DOC_MARKER_RE.source, 'g');
 
   while ((match = re.exec(content)) !== null) {
-    // Text before the marker
     if (match.index > lastIndex) {
       const text = content.slice(lastIndex, match.index).trim();
       if (text) {
@@ -264,7 +271,6 @@ export function MarkdownContent({ content }: Props) {
         );
       }
     }
-    // The document card
     parts.push(
       <DocumentCard
         key={`doc-${match[1]}`}
@@ -277,7 +283,6 @@ export function MarkdownContent({ content }: Props) {
     lastIndex = match.index + match[0].length;
   }
 
-  // Remaining text after last marker (or all text if no markers)
   const remaining = content.slice(lastIndex).trim();
   if (remaining) {
     parts.push(
