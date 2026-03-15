@@ -266,3 +266,53 @@ jobs:
           echo "Would have created release v${{ steps.version.outputs.VERSION }}"
           echo "Assets that would be attached:"
           ls -lh release/
+
+  # ─── Notify Discord about the new release ──────────────────────
+  discord-notify:
+    needs: github-release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release notes
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_JSON=$(gh api repos/${{ github.repository }}/releases/tags/${RELEASE_TAG})
+          BODY=$(echo "$RELEASE_JSON" | jq -r '.body')
+          HTML_URL=$(echo "$RELEASE_JSON" | jq -r '.html_url')
+          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+
+          # Extract "What's Changed" section (everything between "## What's Changed" and the next "## " heading or end)
+          WHATS_CHANGED=$(echo "$BODY" | sed -n '/^## What'\''s Changed/,/^## /{ /^## What'\''s Changed/p; /^## [^W]/!{ /^## What'\''s Changed/!p; }; }')
+
+          # Store in files to avoid delimiter issues
+          echo "$WHATS_CHANGED" > /tmp/whats_changed.txt
+          echo "$HTML_URL" > /tmp/html_url.txt
+          echo "$TAG" > /tmp/tag.txt
+
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          TAG=$(cat /tmp/tag.txt)
+          HTML_URL=$(cat /tmp/html_url.txt)
+          WHATS_CHANGED=$(cat /tmp/whats_changed.txt)
+
+          # Build the Discord message
+          MESSAGE="@everyone
+
+          **Jarvis ${TAG} has been released!** 🎉
+
+          ${WHATS_CHANGED}
+
+          🔗 **Full release:** ${HTML_URL}"
+
+          # Post to Discord via webhook
+          # Trim leading whitespace from heredoc indentation
+          MESSAGE=$(echo "$MESSAGE" | sed 's/^          //')
+
+          jq -n --arg content "$MESSAGE" '{"content": $content}' | \
+            curl -sf -X POST "$DISCORD_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d @-

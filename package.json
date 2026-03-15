@@ -14,7 +14,7 @@
     "type": "git",
     "url": "git+https://github.com/vierisid/jarvis.git"
   },
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": ["jarvis", "ai", "daemon", "assistant", "cli"],
   "files": [
     "bin/",
