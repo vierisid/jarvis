@@ -1,50 +1,37 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../hooks/useApi";
-import { AgentDesk } from "../components/office/AgentDesk";
-import { AgentActivityFeed } from "../components/office/AgentActivityFeed";
-import type { DeskAgent, LiveAgentInfo } from "../components/office/AgentDesk";
-import type { ActivityEvent } from "../components/office/AgentActivityFeed";
 import type { AgentActivityEvent } from "../hooks/useWebSocket";
+import CommandCenterView from "../components/office/CommandCenterView";
+import OrbitalView from "../components/office/OrbitalView";
+import type { AgentWithLive, LiveAgentInfo } from "../components/office/CommandCenterView";
+import "../styles/agents.css";
 
-/* ---- Static roster arranged into rows (back → front) ---- */
-
-const BACK_ROW: DeskAgent[] = [
-  { roleId: "system-administrator", name: "Sys Admin", emoji: "\uD83D\uDDA5\uFE0F", items: ["coffee"] },
-  { roleId: "project-coordinator", name: "Coordinator", emoji: "\uD83D\uDCCB", items: ["plant"] },
-  { roleId: "hr-specialist", name: "HR", emoji: "\uD83D\uDC65", items: ["plant"] },
-  { roleId: "financial-analyst", name: "Finance", emoji: "\uD83D\uDCB0" },
-];
-
-const MIDDLE_ROW: DeskAgent[] = [
-  { roleId: "data-analyst", name: "Data Analyst", emoji: "\uD83D\uDCCA" },
-  { roleId: "content-writer", name: "Writer", emoji: "\u270D\uFE0F", items: ["plant", "coffee"] },
-  { roleId: "marketing-strategist", name: "Marketing", emoji: "\uD83D\uDCE2", items: ["coffee"] },
-  { roleId: "legal-advisor", name: "Legal", emoji: "\u2696\uFE0F" },
-];
-
-const FRONT_ROW: DeskAgent[] = [
-  { roleId: "research-analyst", name: "Researcher", emoji: "\uD83D\uDD0D", items: ["plant"] },
-  { roleId: "software-engineer", name: "Engineer", emoji: "\uD83D\uDCBB", items: ["coffee"] },
-  { roleId: "personal-assistant", name: "PA", emoji: "\uD83E\uDD16", alwaysActive: true, items: ["coffee"] },
-  { roleId: "customer-support", name: "Support", emoji: "\uD83C\uDFA7", items: ["coffee"] },
-];
-
-const ALL_AGENTS = [...BACK_ROW, ...MIDDLE_ROW, ...FRONT_ROW];
-
-/* ---- Stars for window ---- */
-const STARS = [
-  { x: 18, y: 18, s: 2 }, { x: 55, y: 32, s: 1.5 }, { x: 95, y: 15, s: 1 },
-  { x: 140, y: 42, s: 2 }, { x: 195, y: 22, s: 1.5 }, { x: 42, y: 65, s: 1 },
-  { x: 125, y: 55, s: 1.5 }, { x: 175, y: 72, s: 1 }, { x: 245, y: 30, s: 2 },
-  { x: 78, y: 80, s: 1 }, { x: 220, y: 60, s: 1.5 }, { x: 160, y: 15, s: 1 },
+/* ── Static agent roster ── */
+const AGENT_ROSTER = [
+  { roleId: "personal-assistant",   name: "Personal Assistant",   emoji: "\u{1F916}",               authority: 5, tools: 14, avatarBg: "ag-avatar-violet", isPrimary: true },
+  { roleId: "software-engineer",    name: "Software Engineer",    emoji: "\u{1F468}\u200D\u{1F4BB}", authority: 4, tools: 8,  avatarBg: "ag-avatar-blue" },
+  { roleId: "research-analyst",     name: "Research Analyst",     emoji: "\u{1F52C}",                authority: 3, tools: 6,  avatarBg: "ag-avatar-emerald" },
+  { roleId: "content-writer",       name: "Content Writer",       emoji: "\u270D\uFE0F",             authority: 3, tools: 5,  avatarBg: "ag-avatar-violet" },
+  { roleId: "data-analyst",         name: "Data Analyst",         emoji: "\u{1F4CA}",                authority: 3, tools: 7,  avatarBg: "ag-avatar-cyan" },
+  { roleId: "system-administrator", name: "System Administrator", emoji: "\u{1F5A5}\uFE0F",          authority: 4, tools: 10, avatarBg: "ag-avatar-amber" },
+  { roleId: "legal-advisor",        name: "Legal Advisor",        emoji: "\u2696\uFE0F",             authority: 3, tools: 4,  avatarBg: "ag-avatar-rose" },
+  { roleId: "financial-analyst",    name: "Financial Analyst",    emoji: "\u{1F4B0}",                authority: 3, tools: 5,  avatarBg: "ag-avatar-emerald" },
+  { roleId: "hr-specialist",        name: "HR Specialist",        emoji: "\u{1F465}",                authority: 2, tools: 4,  avatarBg: "ag-avatar-blue" },
+  { roleId: "project-coordinator",  name: "Project Coordinator",  emoji: "\u{1F4CB}",                authority: 3, tools: 6,  avatarBg: "ag-avatar-amber" },
+  { roleId: "marketing-strategist", name: "Marketing Strategist", emoji: "\u{1F4E3}",                authority: 3, tools: 5,  avatarBg: "ag-avatar-rose" },
+  { roleId: "customer-support",     name: "Customer Support",     emoji: "\u{1F3A7}",                authority: 2, tools: 4,  avatarBg: "ag-avatar-cyan" },
 ];
 
 type Props = {
   agentActivity: AgentActivityEvent[];
 };
 
+type TabId = "command" | "orbital";
+
 export default function OfficePage({ agentActivity }: Props) {
   const [liveAgents, setLiveAgents] = useState<LiveAgentInfo[]>([]);
+  const [activeTab, setActiveTab] = useState<TabId>("command");
+  const [search, setSearch] = useState("");
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -71,413 +58,128 @@ export default function OfficePage({ agentActivity }: Props) {
     );
   }
 
-  const activeCount = ALL_AGENTS.filter(
-    (a) => a.alwaysActive || getLive(a.roleId)?.status === "active"
-  ).length;
+  // Build combined agent list
+  const allAgents: AgentWithLive[] = AGENT_ROSTER.map((r) => ({
+    ...r,
+    live: getLive(r.roleId),
+  }));
 
-  const feedEvents: ActivityEvent[] = agentActivity
-    .filter((e) => e.eventType === "tool_call" || e.eventType === "done")
-    .map((e) => ({
-      id: e.id,
-      agentName: e.agentName,
-      text:
-        e.eventType === "done"
-          ? "completed task"
-          : `used tool: ${(e.data as any)?.name ?? "unknown"}`,
-      timestamp: e.timestamp,
-    }))
-    .slice(0, 10);
+  // Apply search filter
+  const filteredAgents = search.trim()
+    ? allAgents.filter((a) =>
+        a.name.toLowerCase().includes(search.toLowerCase())
+      )
+    : allAgents;
+
+  // Stats
+  const activeCount = allAgents.filter(
+    (a) => a.isPrimary || a.live?.status === "active"
+  ).length;
+  const totalCount = AGENT_ROSTER.length;
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        position: "relative",
-        overflow: "hidden",
-        background: "#100d14",
-      }}
-    >
-      {/* ===== Room background ===== */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "linear-gradient(180deg, #1a1520 0%, #16121e 35%, #110e16 100%)",
-        }}
-      >
-        {/* Window */}
-        <div
-          style={{
-            position: "absolute",
-            top: "28px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "280px",
-            height: "110px",
-            borderRadius: "3px",
-            border: "3px solid #2a2535",
-            overflow: "hidden",
-            background:
-              "linear-gradient(180deg, #0a1628 0%, #142040 50%, #1a2848 100%)",
-            boxShadow:
-              "inset 0 0 30px rgba(20,40,80,0.3), 0 0 40px rgba(20,40,80,0.1)",
-          }}
-        >
-          {/* Moon */}
-          <div
-            style={{
-              position: "absolute",
-              top: "14px",
-              right: "28px",
-              width: "22px",
-              height: "22px",
-              borderRadius: "50%",
-              background:
-                "radial-gradient(circle at 40% 40%, #f5eedd, #d4c8a8)",
-              boxShadow:
-                "0 0 15px rgba(245,238,221,0.25), 0 0 40px rgba(245,238,221,0.08)",
-            }}
-          />
-          {/* Stars */}
-          {STARS.map((star, i) => (
-            <div
-              key={i}
-              style={{
-                position: "absolute",
-                left: star.x,
-                top: star.y,
-                width: star.s,
-                height: star.s,
-                borderRadius: "50%",
-                background: "rgba(255,255,255,0.6)",
-                animation: `twinkle ${2.5 + i * 0.3}s ease-in-out ${i * 0.2}s infinite`,
-              }}
-            />
-          ))}
-          {/* Window divider (cross pane) */}
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: "50%",
-              width: "2px",
-              height: "100%",
-              background: "#2a2535",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: 0,
-              width: "100%",
-              height: "2px",
-              background: "#2a2535",
-            }}
-          />
-          {/* Sill */}
-          <div
-            style={{
-              position: "absolute",
-              bottom: 0,
-              width: "100%",
-              height: "6px",
-              background: "#2a2535",
-            }}
+    <div className="ag-page">
+      {/* ── Header ── */}
+      <header className="ag-header">
+        <span className="ag-header-title">Agents</span>
+        <span className="ag-header-count">{totalCount} agents</span>
+        <div className="ag-header-spacer" />
+        <div className="ag-header-search-wrap">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <circle cx="6" cy="6" r="4.5" stroke="rgba(255,255,255,0.3)" strokeWidth="1.2" />
+            <path d="M9.5 9.5L12 12" stroke="rgba(255,255,255,0.3)" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          <input
+            className="ag-header-search"
+            type="text"
+            placeholder="Search agents…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <button className="ag-spawn-btn">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          Spawn Agent
+        </button>
+      </header>
 
-        {/* Clock on wall */}
-        <div
-          style={{
-            position: "absolute",
-            top: "36px",
-            right: "12%",
-            width: "28px",
-            height: "28px",
-            borderRadius: "50%",
-            border: "2px solid #2a2535",
-            background: "#1a1824",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              width: "1px",
-              height: "8px",
-              background: "rgba(255,255,255,0.3)",
-              transformOrigin: "bottom center",
-              transform: "rotate(30deg)",
-              position: "absolute",
-              bottom: "50%",
-            }}
-          />
-          <div
-            style={{
-              width: "1px",
-              height: "6px",
-              background: "rgba(0,200,240,0.4)",
-              transformOrigin: "bottom center",
-              animation: "clock-hand 60s linear infinite",
-              position: "absolute",
-              bottom: "50%",
-            }}
-          />
-          <div
-            style={{
-              width: "3px",
-              height: "3px",
-              borderRadius: "50%",
-              background: "rgba(255,255,255,0.2)",
-            }}
-          />
+      {/* ── Stats Bar ── */}
+      <div className="ag-stats-bar">
+        <div className="ag-stat-card">
+          <div className="ag-stat-label">Active Agents</div>
+          <div className="ag-stat-value cyan">
+            {activeCount}{" "}
+            <span style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-3)" }}>
+              of {totalCount}
+            </span>
+          </div>
+          <div className="ag-stat-sub">
+            <span className="up">+{activeCount}</span> active now
+          </div>
         </div>
+        <div className="ag-stat-card">
+          <div className="ag-stat-label">Tasks Completed (24h)</div>
+          <div className="ag-stat-value emerald">
+            {agentActivity.filter((e) => e.eventType === "done").length}
+          </div>
+          <div className="ag-stat-sub">based on session activity</div>
+        </div>
+        <div className="ag-stat-card">
+          <div className="ag-stat-label">Avg Response Time</div>
+          <div className="ag-stat-value violet">—</div>
+          <div className="ag-stat-sub">median across all agents</div>
+        </div>
+        <div className="ag-stat-card">
+          <div className="ag-stat-label">Delegation Depth</div>
+          <div className="ag-stat-value amber">{activeCount > 1 ? 2 : 1}</div>
+          <div className="ag-stat-sub">active agent hierarchy</div>
+        </div>
+      </div>
 
-        {/* Wall shelf decoration (left) */}
-        <div
-          style={{
-            position: "absolute",
-            top: "48px",
-            left: "10%",
-            width: "60px",
-            height: "3px",
-            background: "#2a2232",
-            borderRadius: "1px",
-          }}
+      {/* ── Tab Bar ── */}
+      <div className="ag-tab-bar">
+        <button
+          className={`ag-tab-btn${activeTab === "command" ? " active" : ""}`}
+          onClick={() => setActiveTab("command")}
+        >
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <rect x="1" y="1" width="4.5" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="7.5" y="1" width="4.5" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="1" y="7.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+          Command Center
+          <span className="ag-tab-badge">{totalCount}</span>
+        </button>
+        <button
+          className={`ag-tab-btn${activeTab === "orbital" ? " active" : ""}`}
+          onClick={() => setActiveTab("orbital")}
+        >
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" strokeWidth="1.3" />
+            <circle cx="6.5" cy="6.5" r="2.5" stroke="currentColor" strokeWidth="1.3" />
+            <circle cx="6.5" cy="6.5" r="1" fill="currentColor" />
+          </svg>
+          Orbital View
+          <span className="ag-tab-badge">{activeCount} active</span>
+        </button>
+      </div>
+
+      {/* ── Tab Views ── */}
+      {activeTab === "command" && (
+        <CommandCenterView
+          agents={filteredAgents}
+          agentActivity={agentActivity}
         />
-        {/* Small book on shelf */}
-        <div
-          style={{
-            position: "absolute",
-            top: "38px",
-            left: "calc(10% + 8px)",
-            width: "8px",
-            height: "10px",
-            background: "#4a3048",
-            borderRadius: "1px",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            top: "36px",
-            left: "calc(10% + 18px)",
-            width: "6px",
-            height: "12px",
-            background: "#2e4a50",
-            borderRadius: "1px",
-          }}
-        />
-      </div>
-
-      {/* ===== Floor ===== */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: "58%",
-          background:
-            "linear-gradient(180deg, #16121e 0%, #14101c 50%, #12101a 100%)",
-          borderTop: "1px solid rgba(255,255,255,0.02)",
-        }}
-      >
-        {/* Perspective floor lines */}
-        {[0.12, 0.32, 0.58].map((y, i) => (
-          <div
-            key={i}
-            style={{
-              position: "absolute",
-              top: `${y * 100}%`,
-              left: "8%",
-              right: "8%",
-              height: "1px",
-              background: `rgba(255,255,255,${0.018 - i * 0.004})`,
-            }}
-          />
-        ))}
-      </div>
-
-      {/* ===== Desk area ===== */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          paddingBottom: "16px",
-          gap: "2px",
-        }}
-      >
-        {/* Back row */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: "16px",
-            opacity: 0.65,
-            marginBottom: "0px",
-          }}
-        >
-          {BACK_ROW.map((agent) => (
-            <AgentDesk
-              key={agent.roleId}
-              agent={agent}
-              live={getLive(agent.roleId)}
-              scale={0.68}
-            />
-          ))}
-        </div>
-
-        {/* Middle row */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: "28px",
-            opacity: 0.82,
-            marginBottom: "0px",
-          }}
-        >
-          {MIDDLE_ROW.map((agent) => (
-            <AgentDesk
-              key={agent.roleId}
-              agent={agent}
-              live={getLive(agent.roleId)}
-              scale={0.82}
-            />
-          ))}
-        </div>
-
-        {/* Front row */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: "40px",
-          }}
-        >
-          {FRONT_ROW.map((agent) => (
-            <AgentDesk
-              key={agent.roleId}
-              agent={agent}
-              live={getLive(agent.roleId)}
-              scale={1}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* ===== Ambient warm glow ===== */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(ellipse at 50% 35%, rgba(245,180,80,0.025) 0%, transparent 55%)",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* Vignette */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.35) 100%)",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* ===== Header overlay ===== */}
-      <div
-        style={{
-          position: "absolute",
-          top: "14px",
-          left: "20px",
-          zIndex: 10,
-        }}
-      >
-        <h1
-          style={{
-            margin: 0,
-            fontSize: "15px",
-            fontWeight: 600,
-            color: "rgba(255,255,255,0.65)",
-            textShadow: "0 1px 4px rgba(0,0,0,0.5)",
-            letterSpacing: "0.5px",
-          }}
-        >
-          The Office
-        </h1>
-        <p
-          style={{
-            margin: "2px 0 0",
-            fontSize: "10px",
-            color: "rgba(255,255,255,0.3)",
-          }}
-        >
-          {activeCount} active {"\u00B7"} {ALL_AGENTS.length - activeCount}{" "}
-          available
-        </p>
-      </div>
-
-      {/* ===== Activity feed overlay ===== */}
-      {feedEvents.length > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: "14px",
-            right: "14px",
-            width: "260px",
-            zIndex: 10,
-            opacity: 0.85,
-          }}
-        >
-          <AgentActivityFeed events={feedEvents} />
-        </div>
       )}
-
-      {/* ===== Keyframe animations ===== */}
-      <style>{`
-        @keyframes agent-bob {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-2px); }
-        }
-        @keyframes cursor-blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-        @keyframes pulse-dot {
-          0%, 100% { opacity: 0.4; }
-          50% { opacity: 1; }
-        }
-        @keyframes code-line {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; width: 70%; }
-        }
-        @keyframes steam {
-          0% { opacity: 0.25; transform: translateY(0) scaleX(1); }
-          50% { opacity: 0.1; transform: translateY(-4px) scaleX(1.3); }
-          100% { opacity: 0; transform: translateY(-8px) scaleX(0.8); }
-        }
-        @keyframes twinkle {
-          0%, 100% { opacity: 0.2; }
-          50% { opacity: 0.9; }
-        }
-        @keyframes clock-hand {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
+      {activeTab === "orbital" && (
+        <OrbitalView
+          agents={filteredAgents}
+          agentActivity={agentActivity}
+        />
+      )}
     </div>
   );
 }
