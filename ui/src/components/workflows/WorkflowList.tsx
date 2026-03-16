@@ -16,41 +16,117 @@ type Workflow = {
   created_at: number;
 };
 
+type WorkflowDefinition = {
+  nodes: Array<{
+    id: string;
+    type: string;
+    label: string;
+    position: { x: number; y: number };
+    config: Record<string, unknown>;
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    label?: string;
+  }>;
+  settings: Record<string, unknown>;
+};
+
+type PreviewNode = { label: string; bg: string };
+
+// ── Color mapping for node type prefixes ──
+function nodeColor(type: string): string {
+  if (type.startsWith("trigger.")) return "var(--blue-dim)";
+  if (type.startsWith("action.")) return "var(--amber-dim)";
+  if (type.startsWith("logic."))  return "var(--emerald-dim)";
+  if (type.startsWith("transform.")) return "var(--violet-dim)";
+  if (type.startsWith("error."))  return "var(--rose-dim)";
+  return "var(--surface-4)";
+}
+
+// ── Build linear preview chain from definition ──
+function getPreviewChain(def: WorkflowDefinition): PreviewNode[] {
+  const { nodes, edges } = def;
+  if (nodes.length === 0) return [];
+
+  const outgoing = new Map<string, string[]>();
+  for (const e of edges) {
+    outgoing.set(e.source, [...(outgoing.get(e.source) || []), e.target]);
+  }
+
+  const hasIncoming = new Set(edges.map(e => e.target));
+  let root = nodes.find(n => !hasIncoming.has(n.id)) ?? nodes[0];
+
+  const chain: PreviewNode[] = [];
+  const visited = new Set<string>();
+  let current: typeof nodes[0] | undefined = root;
+
+  while (current && chain.length < 5 && !visited.has(current.id)) {
+    visited.add(current.id);
+    chain.push({ label: current.label, bg: nodeColor(current.type) });
+    const targets = outgoing.get(current.id);
+    current = targets?.[0] ? nodes.find(n => n.id === targets[0]) : undefined;
+  }
+
+  return chain;
+}
+
+// ── Truncate long labels ──
+function shortLabel(label: string, max = 14): string {
+  return label.length > max ? label.slice(0, max - 1) + "." : label;
+}
+
 export default function WorkflowList({
   workflows,
   loading,
   onSelect,
   onRefetch,
+  onCreate,
   workflowEvents,
+  definitionMap,
 }: {
   workflows: Workflow[];
   loading: boolean;
   onSelect: (id: string) => void;
   onRefetch: () => void;
+  onCreate: () => void;
   workflowEvents: WorkflowEvent[];
+  definitionMap: Map<string, WorkflowDefinition>;
 }) {
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center", color: "var(--j-text-dim)" }}>
-        Loading workflows...
+      <div className="wf-loading">
+        <div className="wf-loading-orb" />
+        <span className="wf-loading-text">Loading workflows...</span>
       </div>
     );
   }
 
   if (workflows.length === 0) {
     return (
-      <div style={{
-        padding: "60px 40px", textAlign: "center", color: "var(--j-text-dim)",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: "12px",
-      }}>
-        <div style={{ fontSize: "32px" }}>&#9889;</div>
-        <div style={{ fontSize: "14px" }}>No workflows yet</div>
-        <div style={{ fontSize: "12px" }}>Create your first automation to get started</div>
+      <div className="wf-empty">
+        <div className="wf-empty-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <path d="M4 14h6l3-8 6 16 3-8h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.5"/>
+          </svg>
+        </div>
+        <h2 className="wf-empty-title">No workflows yet</h2>
+        <p className="wf-empty-desc">Create your first automation to get started.</p>
+        <button className="wf-empty-cta" onClick={onCreate}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <line x1="7" y1="1" x2="7" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            <line x1="1" y1="7" x2="13" y2="7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+          New Workflow
+        </button>
       </div>
     );
   }
 
-  const handleToggle = async (id: string, enabled: boolean) => {
+  const handleToggle = async (e: React.MouseEvent, id: string, enabled: boolean) => {
+    e.stopPropagation();
     try {
       await api(`/api/workflows/${id}`, {
         method: "PATCH",
@@ -62,7 +138,8 @@ export default function WorkflowList({
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
     if (!confirm("Delete this workflow?")) return;
     try {
       await api(`/api/workflows/${id}`, { method: "DELETE" });
@@ -72,7 +149,8 @@ export default function WorkflowList({
     }
   };
 
-  const handleRun = async (id: string) => {
+  const handleRun = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
     try {
       await api(`/api/workflows/${id}/execute`, { method: "POST", body: "{}" });
     } catch (err) {
@@ -81,83 +159,119 @@ export default function WorkflowList({
   };
 
   return (
-    <div style={{ padding: "16px 24px", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "12px", overflowY: "auto", height: "100%" }}>
-      {workflows.map((wf) => {
-        const recentEvents = workflowEvents.filter(e => e.workflowId === wf.id).slice(-3);
-        const lastEvent = recentEvents[recentEvents.length - 1];
-        const isRunning = lastEvent?.type === "execution_started";
+    <div className="wf-grid-area">
+      <div className="wf-grid">
+        {workflows.map((wf) => {
+          const recentEvents = workflowEvents.filter(ev => ev.workflowId === wf.id).slice(-3);
+          const lastEvent = recentEvents[recentEvents.length - 1];
+          const isRunning = lastEvent?.type === "execution_started";
+          const def = definitionMap.get(wf.id);
+          const chain = def ? getPreviewChain(def) : [];
+          const totalNodes = def?.nodes.length ?? 0;
+          const statusClass = isRunning ? "running" : wf.enabled ? "active" : "disabled";
+          const statusLabel = isRunning ? "Running" : wf.enabled ? "Active" : "Paused";
 
-        return (
-          <div
-            key={wf.id}
-            style={{
-              background: "var(--j-surface)",
-              border: "1px solid var(--j-border)",
-              borderRadius: "8px",
-              padding: "16px",
-              cursor: "pointer",
-              transition: "border-color 0.15s",
-            }}
-            onClick={() => onSelect(wf.id)}
-            onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--j-accent)"}
-            onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--j-border)"}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-text)" }}>
-                {wf.name}
+          return (
+            <div key={wf.id} className="wf-card" onClick={() => onSelect(wf.id)}>
+              {/* Top: icon + info + status */}
+              <div className="wf-card-top">
+                <div
+                  className="wf-card-icon"
+                  style={{
+                    background: wf.enabled
+                      ? "var(--blue-dim)"
+                      : "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M3 8h3l2-4 4 8 2-4h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" opacity="0.7"/>
+                  </svg>
+                </div>
+                <div className="wf-card-info">
+                  <div className="wf-card-name">{wf.name}</div>
+                  {wf.description && (
+                    <div className="wf-card-desc">{wf.description}</div>
+                  )}
+                </div>
+                <div className={`wf-card-status ${statusClass}`}>
+                  <span className="wf-status-dot" />
+                  {statusLabel}
+                </div>
               </div>
-              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                {isRunning && (
-                  <span style={{
-                    width: "8px", height: "8px", borderRadius: "50%",
-                    background: "var(--j-accent)", display: "inline-block",
-                    animation: "pulse 1.5s infinite",
-                  }} />
+
+              {/* Mini flow preview */}
+              {chain.length > 0 && (
+                <div className="wf-card-preview">
+                  {chain.map((node, i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && <span className="wf-preview-arrow">&rarr;</span>}
+                      <div className="wf-preview-node" style={{ background: node.bg }}>
+                        {shortLabel(node.label)}
+                      </div>
+                    </React.Fragment>
+                  ))}
+                  {totalNodes > chain.length && (
+                    <span className="wf-preview-more">+{totalNodes - chain.length}</span>
+                  )}
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="wf-card-footer">
+                {wf.tags.length > 0 && (
+                  <div className="wf-card-tags">
+                    {wf.tags.slice(0, 3).map(tag => (
+                      <span key={tag} className="wf-card-tag">{tag}</span>
+                    ))}
+                  </div>
                 )}
-                <span style={{
-                  padding: "2px 8px", borderRadius: "10px", fontSize: "10px", fontWeight: 600,
-                  background: wf.enabled ? "rgba(16, 185, 129, 0.15)" : "rgba(107, 114, 128, 0.15)",
-                  color: wf.enabled ? "var(--j-success)" : "var(--j-text-muted)",
-                }}>
-                  {wf.enabled ? "Active" : "Disabled"}
-                </span>
+                <div className="wf-card-meta">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M5 1v4l2.5 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                  </svg>
+                  v{wf.current_version} · {wf.execution_count.toLocaleString()} runs
+                </div>
+                <div className="wf-card-footer-spacer" />
+                <button
+                  className="wf-card-action run"
+                  title="Run now"
+                  onClick={(e) => handleRun(e, wf.id)}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M2 1l7 4-7 4V1z" fill="currentColor"/>
+                  </svg>
+                </button>
+                <button
+                  className="wf-card-action"
+                  title={wf.enabled ? "Pause" : "Enable"}
+                  onClick={(e) => handleToggle(e, wf.id, wf.enabled)}
+                >
+                  {wf.enabled ? (
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <rect x="1.5" y="1" width="2.5" height="8" rx="0.5" fill="currentColor"/>
+                      <rect x="6" y="1" width="2.5" height="8" rx="0.5" fill="currentColor"/>
+                    </svg>
+                  ) : (
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M2 1l7 4-7 4V1z" fill="currentColor"/>
+                    </svg>
+                  )}
+                </button>
+                <button
+                  className="wf-card-action danger"
+                  title="Delete"
+                  onClick={(e) => handleDelete(e, wf.id)}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    <line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </svg>
+                </button>
               </div>
             </div>
-
-            {wf.description && (
-              <div style={{ fontSize: "12px", color: "var(--j-text-dim)", marginBottom: "8px", lineHeight: "1.4" }}>
-                {wf.description}
-              </div>
-            )}
-
-            {wf.tags.length > 0 && (
-              <div style={{ display: "flex", gap: "4px", marginBottom: "8px", flexWrap: "wrap" }}>
-                {wf.tags.map(tag => (
-                  <span key={tag} style={{
-                    padding: "1px 6px", borderRadius: "4px", fontSize: "10px",
-                    background: "rgba(0, 212, 255, 0.1)", color: "var(--j-accent)",
-                  }}>{tag}</span>
-                ))}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", color: "var(--j-text-muted)" }}>
-              <span>v{wf.current_version} | {wf.execution_count} runs</span>
-              <div style={{ display: "flex", gap: "6px" }} onClick={e => e.stopPropagation()}>
-                <button onClick={() => handleRun(wf.id)} style={{ background: "none", border: "none", color: "var(--j-accent)", cursor: "pointer", fontSize: "11px" }} title="Run">
-                  &#9654;
-                </button>
-                <button onClick={() => handleToggle(wf.id, wf.enabled)} style={{ background: "none", border: "none", color: "var(--j-text-dim)", cursor: "pointer", fontSize: "11px" }} title="Toggle">
-                  {wf.enabled ? "Pause" : "Enable"}
-                </button>
-                <button onClick={() => handleDelete(wf.id)} style={{ background: "none", border: "none", color: "var(--j-error, #ef4444)", cursor: "pointer", fontSize: "11px" }} title="Delete">
-                  &#10005;
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

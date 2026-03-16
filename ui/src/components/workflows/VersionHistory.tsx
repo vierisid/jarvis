@@ -21,15 +21,11 @@ export default function VersionHistory({ workflowId }: { workflowId: string }) {
   const [diffPair, setDiffPair] = useState<[number, number] | null>(null);
 
   if (loading) {
-    return <div style={{ padding: "16px", color: "var(--j-text-dim)", fontSize: "12px" }}>Loading versions...</div>;
+    return <div className="wf-panel-placeholder">Loading versions...</div>;
   }
 
   if (!versions || versions.length === 0) {
-    return (
-      <div style={{ padding: "24px", textAlign: "center", color: "var(--j-text-dim)", fontSize: "12px" }}>
-        No versions yet.
-      </div>
-    );
+    return <div className="wf-panel-placeholder">No versions yet.</div>;
   }
 
   const diffResult = diffPair ? computeDiff(
@@ -38,62 +34,41 @@ export default function VersionHistory({ workflowId }: { workflowId: string }) {
   ) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px", padding: "12px" }}>
-      <div style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "0 4px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div style={{ fontSize: "11px", color: "var(--text-3)", padding: "0 4px" }}>
         {versions.length} version{versions.length !== 1 ? "s" : ""}
       </div>
 
       {versions.map((v, i) => {
         const prev = versions[i + 1];
         return (
-          <div key={v.id} style={{
-            background: "var(--j-bg)",
-            border: "1px solid var(--j-border)",
-            borderRadius: "6px",
-            padding: "10px 12px",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={v.id} className="wf-version-card">
+            <div className="wf-version-header">
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{
-                  fontSize: "12px", fontWeight: 600, color: "var(--j-text)",
-                  background: i === 0 ? "rgba(0, 212, 255, 0.1)" : "transparent",
-                  padding: i === 0 ? "1px 6px" : "0",
-                  borderRadius: "4px",
-                }}>
+                <span className={`wf-version-badge${i === 0 ? " latest" : ""}`}>
                   v{v.version}
-                  {i === 0 && <span style={{ fontSize: "10px", color: "var(--j-accent)", marginLeft: "4px" }}>latest</span>}
+                  {i === 0 && <span className="wf-version-latest-label">latest</span>}
                 </span>
               </div>
-              <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>
+              <span className="wf-version-date">
                 {new Date(v.created_at).toLocaleString()}
               </span>
             </div>
 
             {v.changelog && (
-              <div style={{ fontSize: "11px", color: "var(--j-text-dim)", marginTop: "4px" }}>
-                {v.changelog}
-              </div>
+              <div className="wf-version-changelog">{v.changelog}</div>
             )}
 
-            <div style={{ fontSize: "10px", color: "var(--j-text-muted)", marginTop: "4px" }}>
+            <div className="wf-version-stats">
               {v.definition.nodes.length} nodes, {v.definition.edges.length} edges
             </div>
 
             {prev && (
               <button
+                className="wf-version-diff-btn"
                 onClick={() => setDiffPair(diffPair?.[0] === prev.version ? null : [prev.version, v.version])}
-                style={{
-                  marginTop: "6px",
-                  background: "none",
-                  border: "1px solid var(--j-border)",
-                  borderRadius: "4px",
-                  padding: "2px 8px",
-                  fontSize: "10px",
-                  color: "var(--j-accent)",
-                  cursor: "pointer",
-                }}
               >
-                {diffPair?.[0] === prev.version ? "Hide diff" : `Diff v${prev.version} → v${v.version}`}
+                {diffPair?.[0] === prev.version ? "Hide diff" : `Diff v${prev.version} \u2192 v${v.version}`}
               </button>
             )}
 
@@ -125,43 +100,40 @@ function computeDiff(v1?: WorkflowVersion, v2?: WorkflowVersion): DiffInfo | nul
   const edgeIds1 = new Set(d1.edges.map(e => e.id));
   const edgeIds2 = new Set(d2.edges.map(e => e.id));
 
-  const nodesAdded = d2.nodes.filter(n => !nodeIds1.has(n.id)).map(n => n.label);
-  const nodesRemoved = d1.nodes.filter(n => !nodeIds2.has(n.id)).map(n => n.label);
-  const nodesModified = d2.nodes.filter(n => {
-    if (!nodeIds1.has(n.id)) return false;
-    const old = d1.nodes.find(o => o.id === n.id);
-    return old && (old.type !== n.type || old.label !== n.label);
-  }).map(n => n.label);
-
   return {
-    nodesAdded,
-    nodesRemoved,
-    nodesModified,
+    nodesAdded: d2.nodes.filter(n => !nodeIds1.has(n.id)).map(n => n.label),
+    nodesRemoved: d1.nodes.filter(n => !nodeIds2.has(n.id)).map(n => n.label),
+    nodesModified: d2.nodes.filter(n => {
+      if (!nodeIds1.has(n.id)) return false;
+      const old = d1.nodes.find(o => o.id === n.id);
+      return old && (old.type !== n.type || old.label !== n.label);
+    }).map(n => n.label),
     edgesAdded: d2.edges.filter(e => !edgeIds1.has(e.id)).length,
     edgesRemoved: d1.edges.filter(e => !edgeIds2.has(e.id)).length,
   };
 }
 
 function DiffView({ diff }: { diff: DiffInfo }) {
-  const hasChanges = diff.nodesAdded.length || diff.nodesRemoved.length || diff.nodesModified.length || diff.edgesAdded || diff.edgesRemoved;
+  const hasChanges = diff.nodesAdded.length || diff.nodesRemoved.length ||
+    diff.nodesModified.length || diff.edgesAdded || diff.edgesRemoved;
 
   if (!hasChanges) {
-    return <div style={{ fontSize: "10px", color: "var(--j-text-muted)", marginTop: "6px" }}>No differences</div>;
+    return <div style={{ fontSize: "10px", color: "var(--text-3)", marginTop: "6px" }}>No differences</div>;
   }
 
   return (
     <div style={{ marginTop: "6px", fontSize: "10px", display: "flex", flexDirection: "column", gap: "2px" }}>
       {diff.nodesAdded.map(n => (
-        <div key={`+${n}`} style={{ color: "var(--j-success)" }}>+ {n}</div>
+        <div key={`+${n}`} style={{ color: "var(--emerald)" }}>+ {n}</div>
       ))}
       {diff.nodesRemoved.map(n => (
-        <div key={`-${n}`} style={{ color: "var(--j-error, #ef4444)" }}>- {n}</div>
+        <div key={`-${n}`} style={{ color: "var(--rose)" }}>- {n}</div>
       ))}
       {diff.nodesModified.map(n => (
-        <div key={`~${n}`} style={{ color: "var(--j-warning, #f59e0b)" }}>~ {n}</div>
+        <div key={`~${n}`} style={{ color: "var(--amber)" }}>~ {n}</div>
       ))}
-      {diff.edgesAdded > 0 && <div style={{ color: "var(--j-success)" }}>+ {diff.edgesAdded} edge(s)</div>}
-      {diff.edgesRemoved > 0 && <div style={{ color: "var(--j-error, #ef4444)" }}>- {diff.edgesRemoved} edge(s)</div>}
+      {diff.edgesAdded > 0 && <div style={{ color: "var(--emerald)" }}>+ {diff.edgesAdded} edge(s)</div>}
+      {diff.edgesRemoved > 0 && <div style={{ color: "var(--rose)" }}>- {diff.edgesRemoved} edge(s)</div>}
     </div>
   );
 }

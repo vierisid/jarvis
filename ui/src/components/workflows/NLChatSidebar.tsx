@@ -60,55 +60,25 @@ export default function NLChatSidebar({
   };
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      height: "100%",
-    }}>
-      {/* Header */}
-      <div style={{
-        padding: "10px 12px",
-        borderBottom: "1px solid var(--j-border)",
-        fontSize: "12px",
-        fontWeight: 600,
-        color: "var(--j-text)",
-      }}>
-        AI Assistant
-      </div>
+    <div className="wf-chat">
+      <div className="wf-chat-header">AI Assistant</div>
 
-      {/* Messages */}
-      <div ref={listRef} style={{
-        flex: 1,
-        overflowY: "auto",
-        padding: "8px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-      }}>
+      <div ref={listRef} className="wf-chat-messages">
         {messages.length === 0 && (
-          <div style={{ padding: "16px", textAlign: "center", color: "var(--j-text-muted)", fontSize: "11px" }}>
-            Describe what you want to build or modify. For example:
+          <div className="wf-chat-empty">
+            Describe what you want to build or modify.
             <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
               {[
-                "\"Add a step that sends an email when done\"",
-                "\"Connect the HTTP node to the filter\"",
-                "\"Add error handling for the API call\"",
+                "Add a step that sends an email when done",
+                "Connect the HTTP node to the filter",
+                "Add error handling for the API call",
               ].map(hint => (
                 <button
                   key={hint}
-                  onClick={() => { setInput(hint.replace(/"/g, "")); }}
-                  style={{
-                    background: "var(--j-bg)",
-                    border: "1px solid var(--j-border)",
-                    borderRadius: "4px",
-                    padding: "4px 8px",
-                    fontSize: "10px",
-                    color: "var(--j-text-dim)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
+                  className="wf-chat-hint-btn"
+                  onClick={() => setInput(hint)}
                 >
-                  {hint}
+                  "{hint}"
                 </button>
               ))}
             </div>
@@ -116,77 +86,29 @@ export default function NLChatSidebar({
         )}
 
         {messages.map((msg, i) => (
-          <div key={i} style={{
-            alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
-            maxWidth: "85%",
-            padding: "6px 10px",
-            borderRadius: "8px",
-            fontSize: "11px",
-            lineHeight: "1.4",
-            background: msg.role === "user"
-              ? "rgba(0, 212, 255, 0.15)"
-              : "var(--j-bg)",
-            color: msg.role === "user"
-              ? "var(--j-accent)"
-              : "var(--j-text)",
-            border: `1px solid ${msg.role === "user" ? "rgba(0, 212, 255, 0.2)" : "var(--j-border)"}`,
-          }}>
+          <div key={i} className={`wf-chat-msg ${msg.role}`}>
             {msg.content}
           </div>
         ))}
 
         {loading && (
-          <div style={{
-            alignSelf: "flex-start",
-            padding: "6px 10px",
-            borderRadius: "8px",
-            fontSize: "11px",
-            background: "var(--j-bg)",
-            color: "var(--j-text-muted)",
-            border: "1px solid var(--j-border)",
-          }}>
-            Thinking...
-          </div>
+          <div className="wf-chat-msg thinking">Thinking...</div>
         )}
       </div>
 
-      {/* Input */}
-      <div style={{
-        padding: "8px",
-        borderTop: "1px solid var(--j-border)",
-        display: "flex",
-        gap: "6px",
-      }}>
+      <div className="wf-chat-input-area">
         <input
           type="text"
+          className="wf-chat-input"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") sendMessage(); }}
           placeholder="Describe a change..."
-          style={{
-            flex: 1,
-            padding: "6px 10px",
-            borderRadius: "6px",
-            border: "1px solid var(--j-border)",
-            background: "var(--j-bg)",
-            color: "var(--j-text)",
-            fontSize: "11px",
-            outline: "none",
-          }}
         />
         <button
+          className="wf-chat-send"
           onClick={sendMessage}
           disabled={loading || !input.trim()}
-          style={{
-            padding: "6px 12px",
-            borderRadius: "6px",
-            border: "none",
-            background: "var(--j-accent)",
-            color: "#fff",
-            fontSize: "11px",
-            cursor: loading ? "not-allowed" : "pointer",
-            opacity: loading || !input.trim() ? 0.5 : 1,
-          }}
         >
           Send
         </button>

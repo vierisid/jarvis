@@ -124,7 +124,7 @@ export default function WorkflowCanvas({
       target: e.target,
       sourceHandle: e.sourceHandle,
       label: e.label,
-      style: { stroke: "var(--j-text-muted)" },
+      style: { stroke: "rgba(255,255,255,0.15)", strokeWidth: 1.5 },
       animated: false,
     }));
 
@@ -132,17 +132,15 @@ export default function WorkflowCanvas({
     setEdges(flowEdges);
   }, [latestVersion, catalogMap]);
 
-  // Connect edges
   const onConnect = useCallback((connection: Connection) => {
     setEdges(eds => addEdge({
       ...connection,
       id: `e-${Date.now()}`,
-      style: { stroke: "var(--j-text-muted)" },
+      style: { stroke: "rgba(255,255,255,0.15)", strokeWidth: 1.5 },
     }, eds));
     scheduleSave();
   }, []);
 
-  // Node selection
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     setSelectedNodeId(node.id);
   }, []);
@@ -151,7 +149,6 @@ export default function WorkflowCanvas({
     setSelectedNodeId(null);
   }, []);
 
-  // Drop handler for adding nodes from palette
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
@@ -190,7 +187,6 @@ export default function WorkflowCanvas({
     scheduleSave();
   }, [catalogMap]);
 
-  // Save workflow (debounced)
   const scheduleSave = useCallback(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {
@@ -225,7 +221,6 @@ export default function WorkflowCanvas({
     }, 2000);
   }, [nodes, edges, workflowId, latestVersion]);
 
-  // Update node config
   const handleConfigUpdate = useCallback((nodeId: string, config: Record<string, unknown>) => {
     setNodes(nds => nds.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, config } } : n
@@ -241,7 +236,6 @@ export default function WorkflowCanvas({
       if (evt.type === "step_started" && evt.nodeId) runningNodes.add(evt.nodeId);
       if ((evt.type === "step_completed" || evt.type === "step_failed") && evt.nodeId) runningNodes.delete(evt.nodeId);
     }
-
     setEdges(eds => eds.map(e => ({
       ...e,
       animated: runningNodes.has(e.source),
@@ -249,45 +243,23 @@ export default function WorkflowCanvas({
   }, [workflowEvents, workflowId]);
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
-
-  const toggleBtnStyle: React.CSSProperties = {
-    background: "var(--j-surface)",
-    border: "1px solid var(--j-border)",
-    color: "var(--j-text-dim)",
-    cursor: "pointer",
-    fontSize: "12px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: "4px",
-    width: "28px",
-    height: "28px",
-    flexShrink: 0,
-  };
+  const tabLabels = { properties: "Config", executions: "Runs", versions: "Versions", chat: "AI" } as const;
 
   return (
-    <div style={{ display: "flex", height: "100%", background: "var(--j-bg)" }}>
-      {/* Left: Node Palette (collapsible) */}
+    <div className="wf-canvas-layout">
+      {/* Left: Node Palette */}
       {showPalette ? (
         <NodePalette catalog={nodeCatalog ?? []} onCollapse={() => setShowPalette(false)} />
       ) : (
-        <div style={{
-          width: "32px", minWidth: "32px",
-          borderRight: "1px solid var(--j-border)",
-          background: "var(--j-surface)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          paddingTop: "8px",
-        }}>
-          <button onClick={() => setShowPalette(true)} style={toggleBtnStyle} title="Show node palette">
-            {"\u25B6"}
+        <div className="wf-palette-collapsed">
+          <button className="wf-palette-expand" onClick={() => setShowPalette(true)} title="Show node palette">
+            &#9654;
           </button>
         </div>
       )}
 
       {/* Center: Canvas */}
-      <div ref={reactFlowWrapper} style={{ flex: 1, position: "relative" }}>
+      <div ref={reactFlowWrapper} className="wf-canvas-center">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -301,65 +273,40 @@ export default function WorkflowCanvas({
           nodeTypes={nodeTypes}
           fitView
           proOptions={{ hideAttribution: true }}
-          style={{ background: "var(--j-bg)" }}
+          style={{ background: "var(--surface-1)" }}
         >
-          <Controls style={{ background: "var(--j-surface)", borderColor: "var(--j-border)" }} />
+          <Controls />
           <MiniMap
-            style={{ background: "var(--j-surface)" }}
-            nodeColor="#00d4ff"
+            nodeColor="rgba(139,92,246,0.6)"
             maskColor="rgba(0,0,0,0.5)"
           />
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--j-border)" />
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="rgba(255,255,255,0.04)" />
         </ReactFlow>
       </div>
 
-      {/* Right: Tabbed Panel (collapsible) */}
+      {/* Right: Tabbed Panel */}
       {showPanel ? (
-        <div style={{
-          width: "300px", minWidth: "300px",
-          borderLeft: "1px solid var(--j-border)",
-          background: "var(--j-surface)",
-          display: "flex",
-          flexDirection: "column",
-        }}>
-          {/* Tabs + collapse button */}
-          <div style={{
-            display: "flex",
-            borderBottom: "1px solid var(--j-border)",
-            flexShrink: 0,
-            alignItems: "center",
-          }}>
+        <div className="wf-right-panel">
+          <div className="wf-panel-tabs">
             {(["properties", "executions", "versions", "chat"] as const).map(tab => (
               <button
                 key={tab}
+                className={`wf-panel-tab${rightTab === tab ? " active" : ""}`}
                 onClick={() => setRightTab(tab)}
-                style={{
-                  flex: 1,
-                  padding: "8px 4px",
-                  background: "none",
-                  border: "none",
-                  borderBottom: rightTab === tab ? "2px solid var(--j-accent)" : "2px solid transparent",
-                  color: rightTab === tab ? "var(--j-accent)" : "var(--j-text-dim)",
-                  fontSize: "10px",
-                  fontWeight: rightTab === tab ? 600 : 400,
-                  cursor: "pointer",
-                  textTransform: "capitalize",
-                }}
               >
-                {tab === "chat" ? "AI" : tab === "properties" ? "Config" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {tabLabels[tab]}
               </button>
             ))}
             <button
+              className="wf-panel-collapse"
               onClick={() => setShowPanel(false)}
-              style={{ ...toggleBtnStyle, margin: "4px", width: "22px", height: "22px", fontSize: "10px" }}
               title="Collapse panel"
             >
-              {"\u25B6"}
+              &#9654;
             </button>
           </div>
 
-          {/* Tab content */}
-          <div style={{ flex: 1, overflowY: "auto" }}>
+          <div className="wf-panel-body">
             {rightTab === "properties" && (
               selectedNode ? (
                 <NodeProperties
@@ -367,7 +314,7 @@ export default function WorkflowCanvas({
                   onConfigUpdate={(config) => handleConfigUpdate(selectedNode.id, config)}
                 />
               ) : (
-                <div style={{ padding: "20px", color: "var(--j-text-dim)", fontSize: "12px", textAlign: "center" }}>
+                <div className="wf-panel-placeholder">
                   Select a node to configure it, or drag one from the palette.
                 </div>
               )
@@ -384,17 +331,9 @@ export default function WorkflowCanvas({
           </div>
         </div>
       ) : (
-        <div style={{
-          width: "32px", minWidth: "32px",
-          borderLeft: "1px solid var(--j-border)",
-          background: "var(--j-surface)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          paddingTop: "8px",
-        }}>
-          <button onClick={() => setShowPanel(true)} style={toggleBtnStyle} title="Show panel">
-            {"\u25C0"}
+        <div className="wf-panel-collapsed">
+          <button className="wf-palette-expand" onClick={() => setShowPanel(true)} title="Show panel">
+            &#9664;
           </button>
         </div>
       )}

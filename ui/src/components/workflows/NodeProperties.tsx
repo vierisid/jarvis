@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import type { Node } from "@xyflow/react";
 
 type ConfigField = {
-  type: string; // string | number | boolean | select | code | template | json
+  type: string;
   label: string;
   required?: boolean;
   default?: unknown;
@@ -43,57 +43,44 @@ export default function NodeProperties({
   };
 
   return (
-    <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+    <>
       {/* Node header */}
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <span style={{
-          width: "28px",
-          height: "28px",
-          borderRadius: "6px",
-          background: data.color,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "14px",
-        }}>
+      <div className="wf-panel-node-header">
+        <div className="wf-panel-node-icon" style={{ background: data.color }}>
           {data.icon}
-        </span>
+        </div>
         <div>
-          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--j-text)" }}>
-            {data.label}
-          </div>
-          <div style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>
-            {data.nodeType}
-          </div>
+          <div className="wf-panel-node-name">{data.label}</div>
+          <div className="wf-panel-node-type">{data.nodeType}</div>
         </div>
       </div>
 
-      <div style={{ height: "1px", background: "var(--j-border)" }} />
+      <div className="wf-panel-divider" />
 
       {/* Config fields */}
-      {fields.length === 0 ? (
-        <div style={{ fontSize: "12px", color: "var(--j-text-dim)", textAlign: "center", padding: "12px 0" }}>
-          No configuration needed
-        </div>
-      ) : (
-        fields.map(([key, field]) => (
-          <FieldEditor
-            key={`${node.id}-${key}`}
-            fieldKey={key}
-            field={field}
-            value={config[key]}
-            onChange={(val) => updateField(key, val)}
-          />
-        ))
-      )}
+      <div className="wf-panel-section">
+        <div className="wf-panel-section-label">Configuration</div>
+
+        {fields.length === 0 ? (
+          <div className="wf-panel-placeholder" style={{ padding: "12px 0" }}>
+            No configuration needed
+          </div>
+        ) : (
+          fields.map(([key, field]) => (
+            <FieldEditor
+              key={`${node.id}-${key}`}
+              fieldKey={key}
+              field={field}
+              value={config[key]}
+              onChange={(val) => updateField(key, val)}
+            />
+          ))
+        )}
+      </div>
 
       {/* Node ID */}
-      <div style={{ marginTop: "auto", paddingTop: "12px", borderTop: "1px solid var(--j-border)" }}>
-        <div style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>
-          ID: {node.id}
-        </div>
-      </div>
-    </div>
+      <div className="wf-panel-node-id">Node ID: {node.id}</div>
+    </>
   );
 }
 
@@ -109,18 +96,6 @@ function FieldEditor({
   onChange: (val: unknown) => void;
 }) {
   const label = field.label || fieldKey;
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "6px 10px",
-    borderRadius: "6px",
-    border: "1px solid var(--j-border)",
-    background: "var(--j-bg)",
-    color: "var(--j-text)",
-    fontSize: "12px",
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "inherit",
-  };
 
   const renderInput = () => {
     switch (field.type) {
@@ -131,9 +106,9 @@ function FieldEditor({
               type="checkbox"
               checked={!!value}
               onChange={e => onChange(e.target.checked)}
-              style={{ accentColor: "var(--j-accent)" }}
+              style={{ accentColor: "var(--violet)" }}
             />
-            <span style={{ fontSize: "12px", color: "var(--j-text)" }}>{label}</span>
+            <span style={{ fontSize: "12px", color: "var(--text-1)" }}>{label}</span>
           </label>
         );
 
@@ -141,24 +116,24 @@ function FieldEditor({
         return (
           <input
             type="number"
+            className="wf-panel-input"
             value={value != null ? String(value) : ""}
             onChange={e => onChange(e.target.value ? Number(e.target.value) : undefined)}
             placeholder={field.placeholder ?? String(field.default ?? "")}
-            style={inputStyle}
           />
         );
 
       case "select":
         return (
           <select
+            className="wf-panel-input"
             value={String(value ?? field.default ?? "")}
             onChange={e => onChange(e.target.value)}
-            style={inputStyle}
           >
-            <option value="">— Select —</option>
+            <option value="">-- Select --</option>
             {(field.options ?? []).map(opt => {
-              const val = typeof opt === 'string' ? opt : opt.value;
-              const lbl = typeof opt === 'string' ? opt : opt.label;
+              const val = typeof opt === "string" ? opt : opt.value;
+              const lbl = typeof opt === "string" ? opt : opt.label;
               return <option key={val} value={val}>{lbl}</option>;
             })}
           </select>
@@ -168,74 +143,54 @@ function FieldEditor({
       case "template":
         return (
           <textarea
+            className="wf-panel-input mono"
             value={String(value ?? "")}
             onChange={e => onChange(e.target.value)}
             placeholder={field.placeholder ?? ""}
             rows={4}
-            style={{
-              ...inputStyle,
-              fontFamily: "monospace",
-              fontSize: "11px",
-              resize: "vertical",
-              minHeight: "60px",
-            }}
+            style={{ resize: "vertical", minHeight: "60px" }}
           />
         );
 
       case "json":
         return (
           <textarea
+            className="wf-panel-input mono"
             value={typeof value === "string" ? value : JSON.stringify(value ?? "", null, 2)}
             onChange={e => {
-              try {
-                onChange(JSON.parse(e.target.value));
-              } catch {
-                onChange(e.target.value);
-              }
+              try { onChange(JSON.parse(e.target.value)); }
+              catch { onChange(e.target.value); }
             }}
             placeholder="{}"
             rows={4}
-            style={{
-              ...inputStyle,
-              fontFamily: "monospace",
-              fontSize: "11px",
-              resize: "vertical",
-              minHeight: "60px",
-            }}
+            style={{ resize: "vertical", minHeight: "60px" }}
           />
         );
 
-      default: // string
+      default:
         return (
           <input
             type="text"
+            className="wf-panel-input"
             value={String(value ?? "")}
             onChange={e => onChange(e.target.value)}
             placeholder={field.placeholder ?? String(field.default ?? "")}
-            style={inputStyle}
           />
         );
     }
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+    <div className="wf-panel-field">
       {field.type !== "boolean" && (
-        <label style={{
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--j-text-dim)",
-          display: "flex",
-          alignItems: "center",
-          gap: "4px",
-        }}>
+        <label>
           {label}
-          {field.required && <span style={{ color: "var(--j-error, #ef4444)" }}>*</span>}
+          {field.required && <span style={{ color: "var(--rose)", marginLeft: "3px" }}>*</span>}
         </label>
       )}
       {renderInput()}
       {field.description && (
-        <div style={{ fontSize: "10px", color: "var(--j-text-muted)", lineHeight: "1.3" }}>
+        <div style={{ fontSize: "10px", color: "var(--text-3)", lineHeight: "1.3" }}>
           {field.description}
         </div>
       )}

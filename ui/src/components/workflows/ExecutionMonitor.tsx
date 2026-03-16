@@ -25,14 +25,14 @@ type StepResult = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  running: "var(--j-accent)",
-  completed: "var(--j-success)",
-  failed: "var(--j-error, #ef4444)",
-  cancelled: "var(--j-warning, #f59e0b)",
-  paused: "var(--j-text-muted)",
-  pending: "var(--j-text-dim)",
-  skipped: "var(--j-text-dim)",
-  waiting: "var(--j-accent)",
+  running: "var(--violet)",
+  completed: "var(--emerald)",
+  failed: "var(--rose)",
+  cancelled: "var(--amber)",
+  paused: "var(--text-3)",
+  pending: "var(--text-3)",
+  skipped: "var(--text-3)",
+  waiting: "var(--blue)",
 };
 
 export default function ExecutionMonitor({
@@ -47,19 +47,19 @@ export default function ExecutionMonitor({
   );
 
   if (loading) {
-    return <div style={{ padding: "16px", color: "var(--j-text-dim)", fontSize: "12px" }}>Loading executions...</div>;
+    return <div className="wf-panel-placeholder">Loading executions...</div>;
   }
 
   if (!executions || executions.length === 0) {
     return (
-      <div style={{ padding: "24px", textAlign: "center", color: "var(--j-text-dim)", fontSize: "12px" }}>
+      <div className="wf-panel-placeholder">
         No executions yet. Run the workflow to see results.
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px", padding: "12px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
       {executions.slice(0, 20).map(exec => (
         <ExecutionCard key={exec.id} execution={exec} workflowEvents={workflowEvents} />
       ))}
@@ -79,75 +79,45 @@ function ExecutionCard({
     expanded ? `/api/workflows/executions/${exec.id}` : null
   );
 
-  const liveEvents = workflowEvents.filter(e => e.executionId === exec.id);
-  const color = STATUS_COLORS[exec.status] ?? "var(--j-text-dim)";
+  const color = STATUS_COLORS[exec.status] ?? "var(--text-3)";
   const duration = exec.completed_at
     ? `${((exec.completed_at - exec.started_at) / 1000).toFixed(1)}s`
-    : exec.status === "running" ? "running..." : "—";
+    : exec.status === "running" ? "running..." : "--";
 
   return (
-    <div style={{
-      background: "var(--j-bg)",
-      border: "1px solid var(--j-border)",
-      borderRadius: "6px",
-      overflow: "hidden",
-    }}>
-      <div
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 12px",
-          cursor: "pointer",
-          fontSize: "12px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{
-            width: "8px", height: "8px", borderRadius: "50%",
-            background: color,
-            boxShadow: exec.status === "running" ? `0 0 6px ${color}` : "none",
-            animation: exec.status === "running" ? "pulse 1.5s infinite" : undefined,
-          }} />
-          <span style={{ color: "var(--j-text)", fontWeight: 500 }}>
-            v{exec.version}
-          </span>
-          <span style={{ color: "var(--j-text-muted)", fontSize: "11px" }}>
-            {exec.trigger_type}
-          </span>
+    <div className="wf-exec-card">
+      <div className="wf-exec-header" onClick={() => setExpanded(!expanded)}>
+        <div className="wf-exec-header-left">
+          <span
+            className={`wf-exec-status-dot${exec.status === "running" ? " running" : ""}`}
+            style={{
+              background: color,
+              boxShadow: exec.status === "running" ? `0 0 6px ${color}` : "none",
+            }}
+          />
+          <span className="wf-exec-version">v{exec.version}</span>
+          <span className="wf-exec-trigger">{exec.trigger_type}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ color: "var(--j-text-muted)", fontSize: "11px" }}>{duration}</span>
-          <span style={{ color: "var(--j-text-dim)", fontSize: "10px" }}>{expanded ? "\u25BC" : "\u25B6"}</span>
+        <div className="wf-exec-header-right">
+          <span className="wf-exec-duration">{duration}</span>
+          <span className="wf-exec-expand-icon">{expanded ? "\u25BC" : "\u25B6"}</span>
         </div>
       </div>
 
       {expanded && steps?.steps && (
-        <div style={{ borderTop: "1px solid var(--j-border)", padding: "8px 12px" }}>
+        <div className="wf-exec-steps">
           {steps.steps.map(step => {
-            const stepColor = STATUS_COLORS[step.status] ?? "var(--j-text-dim)";
+            const stepColor = STATUS_COLORS[step.status] ?? "var(--text-3)";
             return (
-              <div key={step.id} style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "4px 0",
-                fontSize: "11px",
-              }}>
-                <span style={{
-                  width: "6px", height: "6px", borderRadius: "50%",
-                  background: stepColor, flexShrink: 0,
-                }} />
-                <span style={{ color: "var(--j-text)", flex: 1 }}>{step.node_id}</span>
-                <span style={{ color: "var(--j-text-muted)" }}>{step.node_type}</span>
+              <div key={step.id} className="wf-exec-step">
+                <span className="wf-exec-step-dot" style={{ background: stepColor }} />
+                <span className="wf-exec-step-name">{step.node_id}</span>
+                <span className="wf-exec-step-type">{step.node_type}</span>
                 {step.retry_count > 0 && (
-                  <span style={{ color: "var(--j-warning, #f59e0b)", fontSize: "10px" }}>
-                    {step.retry_count}x retry
-                  </span>
+                  <span className="wf-exec-step-retry">{step.retry_count}x retry</span>
                 )}
                 {step.error_message && (
-                  <span style={{ color: "var(--j-error, #ef4444)", fontSize: "10px", maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={step.error_message}>
+                  <span className="wf-exec-step-error" title={step.error_message}>
                     {step.error_message}
                   </span>
                 )}
@@ -158,15 +128,7 @@ function ExecutionCard({
       )}
 
       {exec.error_message && (
-        <div style={{
-          borderTop: "1px solid var(--j-border)",
-          padding: "6px 12px",
-          fontSize: "11px",
-          color: "var(--j-error, #ef4444)",
-          background: "rgba(239, 68, 68, 0.05)",
-        }}>
-          {exec.error_message}
-        </div>
+        <div className="wf-exec-error-banner">{exec.error_message}</div>
       )}
     </div>
   );

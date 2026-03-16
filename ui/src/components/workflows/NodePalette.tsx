@@ -54,140 +54,54 @@ export default function NodePalette({ catalog, onCollapse }: { catalog: NodeCata
   };
 
   return (
-    <div style={{
-      width: "220px",
-      minWidth: "220px",
-      borderRight: "1px solid var(--j-border)",
-      background: "var(--j-surface)",
-      display: "flex",
-      flexDirection: "column",
-      overflowY: "auto",
-    }}>
-      {/* Header + Search */}
-      <div style={{ padding: "8px 8px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--j-text-dim)", textTransform: "uppercase", letterSpacing: "0.5px", paddingLeft: "4px" }}>Nodes</span>
+    <div className="wf-palette">
+      <div className="wf-palette-header">
+        <span className="wf-palette-label">Nodes</span>
         {onCollapse && (
-          <button
-            onClick={onCollapse}
-            style={{
-              background: "none",
-              border: "1px solid var(--j-border)",
-              color: "var(--j-text-dim)",
-              cursor: "pointer",
-              fontSize: "10px",
-              width: "22px",
-              height: "22px",
-              borderRadius: "4px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            title="Collapse palette"
-          >{"\u25C0"}</button>
+          <button className="wf-palette-collapse" onClick={onCollapse} title="Collapse palette">
+            &#9664;
+          </button>
         )}
       </div>
-      <div style={{ padding: "8px 12px 8px" }}>
-        <input
-          type="text"
-          placeholder="Search nodes..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{
-            width: "100%",
-            padding: "6px 10px",
-            borderRadius: "6px",
-            border: "1px solid var(--j-border)",
-            background: "var(--j-bg)",
-            color: "var(--j-text)",
-            fontSize: "12px",
-            outline: "none",
-            boxSizing: "border-box",
-          }}
-        />
-      </div>
 
-      {/* Categories */}
-      <div style={{ flex: 1, padding: "0 8px 12px", overflowY: "auto" }}>
+      <input
+        type="text"
+        className="wf-palette-search"
+        placeholder="Search nodes..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+
+      <div className="wf-palette-scroll">
         {Array.from(grouped.entries()).map(([cat, items]) => (
-          <div key={cat} style={{ marginBottom: "8px" }}>
-            <button
+          <div key={cat}>
+            <div
+              className="wf-palette-category"
               onClick={() => toggleCategory(cat)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                width: "100%",
-                padding: "6px 8px",
-                background: "none",
-                border: "none",
-                color: "var(--j-text-dim)",
-                fontSize: "11px",
-                fontWeight: 600,
-                cursor: "pointer",
-                textTransform: "uppercase",
-                letterSpacing: "0.5px",
-              }}
             >
               <span>{CATEGORY_LABELS[cat] ?? cat}</span>
-              <span style={{ fontSize: "10px" }}>{collapsed.has(cat) ? "\u25B6" : "\u25BC"}</span>
-            </button>
+              <span style={{ fontSize: "8px" }}>{collapsed.has(cat) ? "\u25B6" : "\u25BC"}</span>
+            </div>
 
-            {!collapsed.has(cat) && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                {items.map(node => (
-                  <div
-                    key={node.type}
-                    draggable
-                    onDragStart={e => onDragStart(e, node.type)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "6px 8px",
-                      borderRadius: "6px",
-                      cursor: "grab",
-                      fontSize: "12px",
-                      color: "var(--j-text)",
-                      transition: "background 0.1s",
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = "var(--j-surface-hover, rgba(255,255,255,0.05))"}
-                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                    title={node.description}
-                  >
-                    <span style={{
-                      width: "24px",
-                      height: "24px",
-                      borderRadius: "4px",
-                      background: node.color,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "12px",
-                      flexShrink: 0,
-                    }}>
-                      {node.icon}
-                    </span>
-                    <span style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}>
-                      {node.label}
-                    </span>
-                  </div>
-                ))}
+            {!collapsed.has(cat) && items.map(node => (
+              <div
+                key={node.type}
+                className="wf-palette-node"
+                draggable
+                onDragStart={e => onDragStart(e, node.type)}
+                title={node.description}
+              >
+                <div className="wf-palette-node-icon" style={{ background: node.color }}>
+                  {node.icon}
+                </div>
+                <div className="wf-palette-node-name">{node.label}</div>
               </div>
-            )}
+            ))}
           </div>
         ))}
 
         {grouped.size === 0 && (
-          <div style={{
-            padding: "20px",
-            textAlign: "center",
-            color: "var(--j-text-muted)",
-            fontSize: "12px",
-          }}>
+          <div className="wf-palette-empty">
             {search ? "No nodes match" : "Loading nodes..."}
           </div>
         )}
