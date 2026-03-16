@@ -19,45 +19,54 @@ type ProgressEntry = {
   created_at: number;
 };
 
-const healthColors: Record<string, string> = {
-  on_track: "var(--j-success)",
-  at_risk: "var(--j-warning)",
-  behind: "#f97316",
-  critical: "var(--j-error)",
+// ----------------------------------------------------------------
+// Static lookup maps
+// ----------------------------------------------------------------
+
+const LEVEL_BADGE_COLORS: Record<string, { bg: string; color: string; border: string }> = {
+  objective:    { bg: "var(--violet-aura)",           color: "var(--violet-bright)", border: "rgba(139,92,246,0.20)" },
+  key_result:   { bg: "rgba(96,165,250,0.06)",         color: "var(--blue)",          border: "rgba(96,165,250,0.20)" },
+  milestone:    { bg: "rgba(52,211,153,0.06)",         color: "var(--emerald)",       border: "rgba(52,211,153,0.20)" },
+  task:         { bg: "rgba(251,191,36,0.06)",         color: "var(--amber)",         border: "rgba(251,191,36,0.20)" },
+  daily_action: { bg: "rgba(34,211,238,0.06)",         color: "var(--cyan)",          border: "rgba(34,211,238,0.20)" },
+};
+
+const LEVEL_DOT_COLORS: Record<string, string> = {
+  objective:    "var(--violet)",
+  key_result:   "var(--blue)",
+  milestone:    "var(--emerald)",
+  task:         "var(--amber)",
+  daily_action: "var(--cyan)",
+};
+
+const HEALTH_DOT_COLORS: Record<string, string> = {
+  on_track: "var(--emerald)",
+  at_risk:  "var(--amber)",
+  behind:   "var(--orange)",
+  critical: "var(--rose)",
 };
 
 const statusOptions = ["draft", "active", "paused", "completed", "failed", "killed"];
 const healthOptions = ["on_track", "at_risk", "behind", "critical"];
-const levelIcons: Record<string, string> = {
-  objective: "\u25C6",
-  key_result: "\u25B8",
-  milestone: "\u25A0",
-  task: "\u25CB",
-  daily_action: "\u2022",
-};
 
-function scoreColor(score: number): string {
-  if (score >= 0.7) return "var(--j-success)";
-  if (score >= 0.4) return "var(--j-warning)";
-  if (score > 0) return "#f97316";
-  return "var(--j-text-muted)";
-}
+const CIRC = 2 * Math.PI * 26; // circumference for r=26
 
 export function GoalDetail({ goal, onClose, onUpdated }: Props) {
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleValue, setTitleValue] = useState(goal.title);
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [descValue, setDescValue] = useState(goal.description);
+  const [editingTitle, setEditingTitle]       = useState(false);
+  const [titleValue, setTitleValue]           = useState(goal.title);
+  const [editingDesc, setEditingDesc]         = useState(false);
+  const [descValue, setDescValue]             = useState(goal.description);
   const [editingCriteria, setEditingCriteria] = useState(false);
-  const [criteriaValue, setCriteriaValue] = useState(goal.success_criteria);
-  const [scoreValue, setScoreValue] = useState(goal.score);
-  const [scoreReason, setScoreReason] = useState("");
-  const [showScoreInput, setShowScoreInput] = useState(false);
-  const [children, setChildren] = useState<Goal[]>([]);
-  const [progress, setProgress] = useState<ProgressEntry[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [criteriaValue, setCriteriaValue]     = useState(goal.success_criteria);
+  const [scoreValue, setScoreValue]           = useState(goal.score);
+  const [scoreReason, setScoreReason]         = useState("");
+  const [showScoreInput, setShowScoreInput]   = useState(false);
+  const [children, setChildren]               = useState<Goal[]>([]);
+  const [progress, setProgress]               = useState<ProgressEntry[]>([]);
+  const [saving, setSaving]                   = useState(false);
+  const [confirmDelete, setConfirmDelete]     = useState(false);
 
+  // Reset local state when a different goal is selected
   useEffect(() => {
     setTitleValue(goal.title);
     setDescValue(goal.description);
@@ -67,8 +76,10 @@ export function GoalDetail({ goal, onClose, onUpdated }: Props) {
     setEditingDesc(false);
     setEditingCriteria(false);
     setShowScoreInput(false);
+    setConfirmDelete(false);
   }, [goal.id]);
 
+  // Fetch children and progress history
   useEffect(() => {
     fetch(`/api/goals/${goal.id}/children`)
       .then(r => r.json())
@@ -79,6 +90,10 @@ export function GoalDetail({ goal, onClose, onUpdated }: Props) {
       .then(setProgress)
       .catch(() => setProgress([]));
   }, [goal.id]);
+
+  // ----------------------------------------------------------------
+  // API helpers
+  // ----------------------------------------------------------------
 
   const saveField = async (field: string, value: unknown) => {
     setSaving(true);
@@ -161,524 +176,423 @@ export function GoalDetail({ goal, onClose, onUpdated }: Props) {
     } catch { /* ignore */ }
   };
 
+  // ----------------------------------------------------------------
+  // Computed values
+  // ----------------------------------------------------------------
+
   const daysLeft = goal.deadline
     ? Math.ceil((goal.deadline - Date.now()) / 86400000)
     : null;
 
+  const levelBadge = LEVEL_BADGE_COLORS[goal.level] ?? LEVEL_BADGE_COLORS.task;
+  const levelLabel = goal.level.replace(/_/g, " ").toUpperCase();
+
+  const scoreOffset = CIRC * (1 - goal.score);
+  const scorePercent = Math.round(goal.score * 100);
+
+  // ----------------------------------------------------------------
+  // Render
+  // ----------------------------------------------------------------
+
   return (
-    <div style={{
-      width: "380px",
-      minWidth: "380px",
-      borderLeft: "1px solid var(--j-border)",
-      display: "flex",
-      flexDirection: "column",
-      height: "100%",
-      overflow: "hidden",
-      background: "var(--j-bg)",
-    }}>
-      {/* Header */}
-      <div style={{
-        padding: "16px 20px",
-        borderBottom: "1px solid var(--j-border)",
-        flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{ fontSize: "14px", color: "var(--j-text-muted)" }}>
-              {levelIcons[goal.level] ?? ""}
-            </span>
-            <span style={{
-              fontSize: "11px",
-              textTransform: "capitalize",
-              color: "var(--j-text-dim)",
-              fontWeight: 600,
-            }}>
-              {goal.level.replace("_", " ")}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--j-text-muted)",
-              fontSize: "18px",
-              cursor: "pointer",
-              padding: "4px",
-            }}
+    <div className="goals-detail">
+      <div className="goals-detail-scroll">
+
+        {/* Top bar: level badge + close */}
+        <div className="goals-detail-top">
+          <div
+            className="goals-detail-level-badge"
+            style={levelBadge ? { background: levelBadge.bg, color: levelBadge.color, borderColor: levelBadge.border } : undefined}
           >
-            {"\u2715"}
+            {levelLabel}
+          </div>
+          <button className="goals-detail-close" onClick={onClose} aria-label="Close detail panel">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
           </button>
         </div>
 
-        {/* Title */}
+        {/* Title — editable */}
         {editingTitle ? (
           <input
+            className="goals-edit-input"
             value={titleValue}
-            onChange={(e) => setTitleValue(e.target.value)}
+            onChange={e => setTitleValue(e.target.value)}
             onBlur={handleTitleSave}
-            onKeyDown={(e) => e.key === "Enter" && handleTitleSave()}
+            onKeyDown={e => e.key === "Enter" && handleTitleSave()}
             autoFocus
-            style={{
-              fontSize: "16px",
-              fontWeight: 600,
-              color: "var(--j-text)",
-              background: "transparent",
-              border: "none",
-              borderBottom: "2px solid var(--j-accent)",
-              outline: "none",
-              width: "100%",
-              padding: "0 0 4px 0",
-              fontFamily: "inherit",
-            }}
+            aria-label="Edit goal title"
           />
         ) : (
-          <h2
+          <div
+            className="goals-detail-title"
             onClick={() => setEditingTitle(true)}
-            style={{
-              fontSize: "16px",
-              fontWeight: 600,
-              color: "var(--j-text)",
-              margin: 0,
-              cursor: "text",
-            }}
+            title="Click to edit title"
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === "Enter" && setEditingTitle(true)}
           >
             {goal.title}
-          </h2>
+          </div>
         )}
 
-        {/* Meta badges */}
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", flexWrap: "wrap" }}>
-          <span style={{
-            fontSize: "10px",
-            fontWeight: 600,
-            padding: "2px 6px",
-            borderRadius: "4px",
-            background: `${healthColors[goal.health] ?? "var(--j-border)"}20`,
-            color: healthColors[goal.health] ?? "var(--j-text-muted)",
-            textTransform: "uppercase",
-          }}>
-            {goal.health.replace("_", " ")}
-          </span>
-          <span style={{
-            fontSize: "10px",
-            fontWeight: 600,
-            padding: "2px 6px",
-            borderRadius: "4px",
-            background: "rgba(0, 212, 255, 0.1)",
-            color: "var(--j-accent)",
-            textTransform: "uppercase",
-          }}>
-            {goal.status}
-          </span>
-          {goal.escalation_stage !== "none" && (
-            <span style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              padding: "2px 6px",
-              borderRadius: "4px",
-              background: "rgba(239, 68, 68, 0.15)",
-              color: "var(--j-error)",
-              textTransform: "uppercase",
-            }}>
-              {goal.escalation_stage.replace("_", " ")}
-            </span>
-          )}
+        {/* Meta row: health, status, deadline, escalation, saving */}
+        <div className="goals-meta-row">
+          <div className={`goals-meta-badge health-${goal.health}`}>
+            <div
+              className="goals-meta-dot"
+              style={{ background: HEALTH_DOT_COLORS[goal.health] ?? "var(--text-3)" }}
+            />
+            {goal.health.replace(/_/g, " ").toUpperCase()}
+          </div>
+
+          <div className={`goals-meta-badge status-${goal.status}`}>
+            {goal.status.toUpperCase()}
+          </div>
+
           {daysLeft !== null && (
-            <span style={{
-              fontSize: "10px",
-              color: daysLeft < 0 ? "var(--j-error)" : daysLeft < 7 ? "var(--j-warning)" : "var(--j-text-muted)",
-            }}>
-              {daysLeft < 0 ? `${Math.abs(daysLeft)}d overdue` : `${daysLeft}d left`}
-            </span>
-          )}
-          {saving && <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>Saving...</span>}
-        </div>
-      </div>
-
-      {/* Scrollable content */}
-      <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-        {/* Score */}
-        <Section title="Score">
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <div style={{
-              flex: 1,
-              height: "8px",
-              background: "var(--j-border)",
-              borderRadius: "4px",
-              overflow: "hidden",
-            }}>
-              <div style={{
-                width: `${goal.score * 100}%`,
-                height: "100%",
-                background: scoreColor(goal.score),
-                borderRadius: "4px",
-                transition: "width 0.3s",
-              }} />
-            </div>
-            <span
-              onClick={() => setShowScoreInput(true)}
-              style={{
-                fontSize: "16px",
-                fontWeight: 700,
-                color: scoreColor(goal.score),
-                cursor: "pointer",
-                minWidth: "40px",
-                textAlign: "right",
-              }}
+            <div
+              className={`goals-meta-badge ${
+                daysLeft < 0 ? "deadline-overdue" : daysLeft < 7 ? "deadline-warning" : "deadline"
+              }`}
             >
-              {goal.score.toFixed(2)}
-            </span>
-          </div>
-          {goal.score_reason && (
-            <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "4px" }}>
-              {goal.score_reason}
+              <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true">
+                <circle cx="4.5" cy="4.5" r="3.5" stroke="currentColor" strokeWidth="1"/>
+                <line x1="4.5" y1="2.5" x2="4.5" y2="4.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+                <line x1="4.5" y1="4.5" x2="6" y2="5.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+              </svg>
+              {daysLeft < 0 ? `${Math.abs(daysLeft)}d overdue` : `${daysLeft}d left`}
             </div>
           )}
-          {showScoreInput && (
-            <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={scoreValue}
-                  onChange={(e) => setScoreValue(parseFloat(e.target.value))}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: "12px", color: "var(--j-text)", fontWeight: 600, minWidth: "32px" }}>
-                  {scoreValue.toFixed(2)}
-                </span>
-              </div>
-              <input
-                type="text"
-                placeholder="Reason for score change..."
-                value={scoreReason}
-                onChange={(e) => setScoreReason(e.target.value)}
-                style={inputStyle}
-              />
-              <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
-                <button onClick={() => setShowScoreInput(false)} style={btnSecondary}>Cancel</button>
-                <button onClick={handleScoreSave} style={btnPrimary}>Update Score</button>
-              </div>
-            </div>
-          )}
-        </Section>
 
-        {/* Status & Health */}
-        <Section title="Status & Health">
-          <div style={{ display: "flex", gap: "8px" }}>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Status</label>
-              <select
-                value={goal.status}
-                onChange={(e) => handleStatusChange(e.target.value)}
-                style={inputStyle}
-              >
-                {statusOptions.map(s => (
-                  <option key={s} value={s}>{s.replace("_", " ")}</option>
-                ))}
-              </select>
+          {goal.escalation_stage !== "none" && (
+            <div className="goals-meta-badge escalation">
+              {goal.escalation_stage.replace(/_/g, " ").toUpperCase()}
             </div>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Health</label>
-              <select
-                value={goal.health}
-                onChange={(e) => handleHealthChange(e.target.value)}
-                style={inputStyle}
-              >
-                {healthOptions.map(h => (
-                  <option key={h} value={h}>{h.replace("_", " ")}</option>
-                ))}
-              </select>
-            </div>
+          )}
+
+          {saving && <span className="goals-saving-text">Saving...</span>}
+        </div>
+
+        {/* Score section */}
+        <div className="goals-score-section">
+          <div className="goals-score-ring-wrap">
+            <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+              <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(139,92,246,0.12)" strokeWidth="4"/>
+              <circle
+                cx="32" cy="32" r="26" fill="none" stroke="var(--violet)" strokeWidth="4"
+                strokeDasharray={`${CIRC} ${CIRC}`}
+                strokeDashoffset={scoreOffset}
+                strokeLinecap="round"
+              />
+            </svg>
+            <div className="goals-score-center">{goal.score.toFixed(2)}</div>
           </div>
-        </Section>
+
+          <div className="goals-score-info">
+            <div className="goals-score-label">OVERALL SCORE</div>
+            <div
+              className="goals-score-value"
+              onClick={() => setShowScoreInput(v => !v)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => e.key === "Enter" && setShowScoreInput(v => !v)}
+              title="Click to update score"
+              aria-label={`Score ${scorePercent}%. Click to update.`}
+            >
+              {scorePercent}%
+            </div>
+            {goal.score_reason && (
+              <div className="goals-score-reason">{goal.score_reason}</div>
+            )}
+
+            {/* Inline score editor */}
+            {showScoreInput && (
+              <div className="goals-score-input-section">
+                <div className="goals-score-slider-row">
+                  <input
+                    type="range"
+                    className="goals-score-slider"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={scoreValue}
+                    onChange={e => setScoreValue(parseFloat(e.target.value))}
+                    aria-label="Score slider"
+                  />
+                  <span className="goals-score-slider-val">{scoreValue.toFixed(2)}</span>
+                </div>
+                <input
+                  type="text"
+                  className="goals-score-reason-input"
+                  placeholder="Reason for score change..."
+                  value={scoreReason}
+                  onChange={e => setScoreReason(e.target.value)}
+                  aria-label="Score change reason"
+                />
+                <div className="goals-score-btn-row">
+                  <button
+                    className="goals-btn-secondary"
+                    onClick={() => setShowScoreInput(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="goals-btn-primary"
+                    onClick={handleScoreSave}
+                  >
+                    Update Score
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Description */}
-        <Section title="Description">
+        <div className="goals-detail-section">
+          <div className="goals-detail-section-label">DESCRIPTION</div>
           {editingDesc ? (
             <textarea
+              className="goals-edit-textarea"
               value={descValue}
-              onChange={(e) => setDescValue(e.target.value)}
+              onChange={e => setDescValue(e.target.value)}
               onBlur={handleDescSave}
               rows={4}
               autoFocus
-              style={{ ...inputStyle, resize: "vertical" }}
+              aria-label="Edit description"
             />
           ) : (
             <div
+              className={`goals-detail-text${!goal.description ? " empty" : ""}`}
               onClick={() => setEditingDesc(true)}
-              style={{
-                fontSize: "12px",
-                color: goal.description ? "var(--j-text-dim)" : "var(--j-text-muted)",
-                cursor: "text",
-                minHeight: "32px",
-                whiteSpace: "pre-wrap",
-                fontStyle: goal.description ? "normal" : "italic",
-              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => e.key === "Enter" && setEditingDesc(true)}
+              title="Click to edit description"
             >
               {goal.description || "Click to add description"}
             </div>
           )}
-        </Section>
+        </div>
 
         {/* Success Criteria */}
-        <Section title="Success Criteria">
+        <div className="goals-detail-section">
+          <div className="goals-detail-section-label">SUCCESS CRITERIA</div>
           {editingCriteria ? (
             <textarea
+              className="goals-edit-textarea"
               value={criteriaValue}
-              onChange={(e) => setCriteriaValue(e.target.value)}
+              onChange={e => setCriteriaValue(e.target.value)}
               onBlur={handleCriteriaSave}
               rows={3}
               autoFocus
-              style={{ ...inputStyle, resize: "vertical" }}
+              aria-label="Edit success criteria"
             />
           ) : (
             <div
+              className={`goals-detail-text${!goal.success_criteria ? " empty" : ""}`}
               onClick={() => setEditingCriteria(true)}
-              style={{
-                fontSize: "12px",
-                color: goal.success_criteria ? "var(--j-text-dim)" : "var(--j-text-muted)",
-                cursor: "text",
-                minHeight: "24px",
-                whiteSpace: "pre-wrap",
-                fontStyle: goal.success_criteria ? "normal" : "italic",
-              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => e.key === "Enter" && setEditingCriteria(true)}
+              title="Click to edit success criteria"
             >
               {goal.success_criteria || "Click to add success criteria"}
             </div>
           )}
-        </Section>
+        </div>
 
-        {/* Details */}
-        <Section title="Details">
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px" }}>
-            <DetailRow label="Time Horizon" value={goal.time_horizon.replace("_", " ")} />
-            <DetailRow label="Deadline" value={goal.deadline ? new Date(goal.deadline).toLocaleDateString() : "None"} />
-            <DetailRow label="Started" value={goal.started_at ? new Date(goal.started_at).toLocaleDateString() : "Not started"} />
-            <DetailRow label="Est. Hours" value={goal.estimated_hours?.toString() ?? "—"} />
-            <DetailRow label="Actual Hours" value={goal.actual_hours.toFixed(1)} />
-            <DetailRow label="Authority Level" value={goal.authority_level.toString()} />
-            {goal.tags.length > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
-                <span style={{ color: "var(--j-text-muted)", minWidth: "90px" }}>Tags</span>
-                {goal.tags.map(t => (
-                  <span key={t} style={{
-                    fontSize: "10px",
-                    padding: "1px 6px",
-                    borderRadius: "3px",
-                    background: "var(--j-surface)",
-                    border: "1px solid var(--j-border)",
-                    color: "var(--j-text-dim)",
-                  }}>{t}</span>
+        {/* Status & Health */}
+        <div className="goals-detail-section">
+          <div className="goals-detail-section-label">STATUS &amp; HEALTH</div>
+          <div className="goals-select-row">
+            <div className="goals-select-group">
+              <label className="goals-select-label" htmlFor={`status-${goal.id}`}>STATUS</label>
+              <select
+                id={`status-${goal.id}`}
+                className="goals-select"
+                value={goal.status}
+                onChange={e => handleStatusChange(e.target.value)}
+              >
+                {statusOptions.map(s => (
+                  <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
                 ))}
-              </div>
-            )}
+              </select>
+            </div>
+            <div className="goals-select-group">
+              <label className="goals-select-label" htmlFor={`health-${goal.id}`}>HEALTH</label>
+              <select
+                id={`health-${goal.id}`}
+                className="goals-select"
+                value={goal.health}
+                onChange={e => handleHealthChange(e.target.value)}
+              >
+                {healthOptions.map(h => (
+                  <option key={h} value={h}>{h.replace(/_/g, " ")}</option>
+                ))}
+              </select>
+            </div>
           </div>
-        </Section>
+        </div>
 
         {/* Children */}
         {children.length > 0 && (
-          <Section title={`Children (${children.length})`}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <div className="goals-detail-section">
+            <div className="goals-detail-section-label">CHILDREN ({children.length})</div>
+            <div className="goals-children-list">
               {children.map(child => (
-                <div key={child.id} style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "6px 8px",
-                  borderRadius: "4px",
-                  background: "var(--j-surface)",
-                  border: "1px solid var(--j-border)",
-                  fontSize: "12px",
-                }}>
-                  <span style={{ color: "var(--j-text-muted)", fontSize: "10px" }}>
-                    {levelIcons[child.level] ?? ""}
-                  </span>
-                  <span style={{
-                    flex: 1,
-                    color: "var(--j-text)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}>
-                    {child.title}
-                  </span>
-                  <span style={{
-                    fontSize: "11px",
-                    fontWeight: 600,
-                    color: scoreColor(child.score),
-                  }}>
-                    {child.score.toFixed(1)}
-                  </span>
-                  <span style={{
-                    width: "6px",
-                    height: "6px",
-                    borderRadius: "50%",
-                    background: healthColors[child.health] ?? "var(--j-border)",
-                  }} />
+                <div key={child.id} className="goals-child-card">
+                  <div
+                    className="goals-child-dot"
+                    style={{ background: LEVEL_DOT_COLORS[child.level] ?? "var(--text-3)" }}
+                  />
+                  <div className="goals-child-name">{child.title}</div>
+                  <div className="goals-child-score">{child.score.toFixed(2)}</div>
+                  <div
+                    className="goals-child-health"
+                    style={{ background: HEALTH_DOT_COLORS[child.health] ?? "var(--text-3)" }}
+                  />
                 </div>
               ))}
             </div>
-          </Section>
+          </div>
         )}
 
-        {/* Progress History */}
+        {/* Score History */}
         {progress.length > 0 && (
-          <Section title="Progress History">
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              {progress.map(entry => (
-                <div key={entry.id} style={{
-                  padding: "6px 8px",
-                  borderRadius: "4px",
-                  background: "var(--j-surface)",
-                  border: "1px solid var(--j-border)",
-                  fontSize: "11px",
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
-                    <span style={{ color: "var(--j-text-dim)", fontWeight: 500 }}>
-                      {entry.score_before.toFixed(2)} → {entry.score_after.toFixed(2)}
-                    </span>
-                    <span style={{ color: "var(--j-text-muted)", fontSize: "10px" }}>
-                      {new Date(entry.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {entry.note && (
-                    <div style={{ color: "var(--j-text-muted)", fontSize: "10px" }}>
-                      {entry.note}
+          <div className="goals-detail-section">
+            <div className="goals-detail-section-label">SCORE HISTORY</div>
+            <div className="goals-progress-list">
+              {progress.map(entry => {
+                const delta = entry.score_after - entry.score_before;
+                const isBaseline = entry.type === "baseline" || (delta === 0 && entry.note === "");
+                const deltaStr = isBaseline
+                  ? "baseline"
+                  : (delta >= 0 ? "+" : "") + delta.toFixed(2);
+                const dateStr = new Date(entry.created_at).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                });
+                return (
+                  <div key={entry.id} className="goals-progress-entry">
+                    <div className={`goals-progress-dot${isBaseline ? " baseline" : ""}`} />
+                    <div className={`goals-progress-change${isBaseline ? " baseline" : ""}`}>
+                      {deltaStr}
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="goals-progress-desc">
+                      {isBaseline
+                        ? (entry.note || "Goal created, initial score set")
+                        : `${entry.score_before.toFixed(2)} → ${entry.score_after.toFixed(2)}${entry.note ? ` — ${entry.note}` : ""}`
+                      }
+                    </div>
+                    <div className="goals-progress-date">{dateStr}</div>
+                  </div>
+                );
+              })}
             </div>
-          </Section>
+          </div>
         )}
 
-        {/* Danger Zone */}
-        <div style={{ marginTop: "8px", paddingTop: "12px", borderTop: "1px solid var(--j-border)" }}>
+        {/* Details grid */}
+        <div className="goals-detail-section">
+          <div className="goals-detail-section-label">DETAILS</div>
+          <div className="goals-details-grid">
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">TIME HORIZON</div>
+              <div className="goals-detail-item-val">{goal.time_horizon.replace(/_/g, " ")}</div>
+            </div>
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">DEADLINE</div>
+              <div className="goals-detail-item-val">
+                {goal.deadline ? new Date(goal.deadline).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "None"}
+              </div>
+            </div>
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">EST. HOURS</div>
+              <div className="goals-detail-item-val">
+                {goal.estimated_hours != null ? `${goal.estimated_hours} hrs` : "—"}
+              </div>
+            </div>
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">ACTUAL HOURS</div>
+              <div className="goals-detail-item-val accent">{goal.actual_hours.toFixed(1)} hrs</div>
+            </div>
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">TAGS</div>
+              {goal.tags.length > 0 ? (
+                <div className="goals-tags-list">
+                  {goal.tags.map(t => (
+                    <span key={t} className="goals-tag-pill">{t}</span>
+                  ))}
+                </div>
+              ) : (
+                <div className="goals-detail-item-val muted">None</div>
+              )}
+            </div>
+            <div className="goals-detail-item">
+              <div className="goals-detail-item-label">ESCALATION</div>
+              <div className={`goals-detail-item-val${goal.escalation_stage === "none" ? "" : " muted"}`}
+                style={goal.escalation_stage !== "none" ? { color: "var(--rose)" } : undefined}>
+                {goal.escalation_stage === "none" ? "None" : goal.escalation_stage.replace(/_/g, " ")}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Parent link */}
+        {goal.parent_id && (
+          <div className="goals-parent-link">
+            <span className="goals-parent-arrow">↑</span>
+            <span>Parent goal</span>
+          </div>
+        )}
+
+        {/* Danger zone */}
+        <div className="goals-danger-zone">
+          <div className="goals-danger-label">DANGER ZONE</div>
           {!confirmDelete ? (
             <button
+              className="goals-delete-btn"
               onClick={() => setConfirmDelete(true)}
-              style={{
-                width: "100%",
-                padding: "8px",
-                borderRadius: "6px",
-                border: "1px solid var(--j-error)",
-                background: "rgba(239, 68, 68, 0.1)",
-                color: "var(--j-error)",
-                fontSize: "12px",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
+              aria-label="Delete this goal"
             >
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+                <rect x="1" y="3" width="9" height="7" rx="1" stroke="currentColor" strokeWidth="1.2"/>
+                <line x1="4" y1="5" x2="4" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="7" y1="5" x2="7" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="0.5" y1="3" x2="10.5" y2="3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="3.5" y1="1" x2="7.5" y2="1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
               Delete Goal
             </button>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <span style={{ fontSize: "12px", color: "var(--j-error)", fontWeight: 500, textAlign: "center" }}>
+            <>
+              <div className="goals-delete-confirm-text">
                 Are you sure? This will also delete all child goals.
-              </span>
-              <div style={{ display: "flex", gap: "8px" }}>
+              </div>
+              <div className="goals-delete-confirm-row">
                 <button
+                  className="goals-btn-secondary"
                   onClick={() => setConfirmDelete(false)}
-                  style={{ ...btnSecondary, flex: 1 }}
                 >
                   Cancel
                 </button>
                 <button
+                  className="goals-btn-danger"
                   onClick={handleDelete}
-                  style={{
-                    flex: 1,
-                    padding: "6px 12px",
-                    borderRadius: "4px",
-                    border: "none",
-                    background: "var(--j-error)",
-                    color: "#fff",
-                    fontSize: "11px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
+                  aria-label="Confirm goal deletion"
                 >
                   Yes, Delete
                 </button>
               </div>
-            </div>
+            </>
           )}
         </div>
+
       </div>
     </div>
   );
 }
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <h4 style={{
-        fontSize: "11px",
-        fontWeight: 600,
-        color: "var(--j-text-muted)",
-        textTransform: "uppercase",
-        letterSpacing: "0.5px",
-        margin: "0 0 6px 0",
-      }}>
-        {title}
-      </h4>
-      {children}
-    </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between" }}>
-      <span style={{ color: "var(--j-text-muted)" }}>{label}</span>
-      <span style={{ color: "var(--j-text)", fontWeight: 500 }}>{value}</span>
-    </div>
-  );
-}
-
-const labelStyle: React.CSSProperties = {
-  fontSize: "10px",
-  fontWeight: 600,
-  color: "var(--j-text-muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.5px",
-  display: "block",
-  marginBottom: "4px",
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "6px 8px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
-  borderRadius: "4px",
-  color: "var(--j-text)",
-  fontSize: "12px",
-  outline: "none",
-  fontFamily: "inherit",
-  width: "100%",
-  boxSizing: "border-box",
-};
-
-const btnPrimary: React.CSSProperties = {
-  padding: "4px 12px",
-  borderRadius: "4px",
-  border: "none",
-  background: "var(--j-accent)",
-  color: "#000",
-  fontSize: "11px",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const btnSecondary: React.CSSProperties = {
-  padding: "4px 12px",
-  borderRadius: "4px",
-  border: "1px solid var(--j-border)",
-  background: "transparent",
-  color: "var(--j-text-dim)",
-  fontSize: "11px",
-  cursor: "pointer",
-};

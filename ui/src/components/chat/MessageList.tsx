@@ -6,7 +6,7 @@ type Props = {
   messages: ChatMessage[];
 };
 
-function formatTimeDivider(timestamp: string): string {
+function formatTimeDivider(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
@@ -23,7 +23,7 @@ function formatTimeDivider(timestamp: string): string {
 
 function shouldShowTimeDivider(current: ChatMessage, previous: ChatMessage | undefined): boolean {
   if (!previous) return true;
-  const gap = new Date(current.timestamp).getTime() - new Date(previous.timestamp).getTime();
+  const gap = current.timestamp - previous.timestamp;
   return gap > 10 * 60 * 1000; // 10 minutes
 }
 
