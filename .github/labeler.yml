@@ -30,6 +30,15 @@ packaging:
           - 'package.json'
           - 'install.sh'
 
+security:
+  - head-branch: ['^security/', '^sec/']
+
+performance:
+  - head-branch: ['^perf/', '^performance/']
+
+refactoring:
+  - head-branch: ['^refactor/', '^refactoring/']
+
 documentation:
   - changed-files:
       - any-glob-to-any-file:

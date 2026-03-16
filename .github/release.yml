@@ -8,6 +8,12 @@ changelog:
       labels: [infrastructure]
     - title: "📦 Packaging"
       labels: [packaging]
+    - title: "⚡ Performance"
+      labels: [performance]
+    - title: "♻️ Refactoring"
+      labels: [refactoring]
+    - title: "🔒 Security"
+      labels: [security]
     - title: "📖 Documentation"
       labels: [documentation]
     - title: "Other Changes"
