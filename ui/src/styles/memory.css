@@ -1,0 +1,250 @@
+/* ═══════════════════════════════════════════════════════════════
+   MEMORY PAGE — Nexus + Explorer (Combined)
+   Prefix: mem-
+   ═══════════════════════════════════════════════════════════════ */
+
+.mem-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.mem-atmosphere {
+  position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 500px 500px at 35% 45%, rgba(139,92,246,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 300px 300px at 80% 20%, rgba(34,211,238,0.04) 0%, transparent 60%);
+}
+
+/* ── Header ── */
+.mem-header {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px 28px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.mem-header-title { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+.mem-header-count { font-size: 11px; color: rgba(255,255,255,0.30); background: #12121C; padding: 2px 8px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; }
+.mem-header-spacer { flex: 1; }
+
+/* View toggle */
+.mem-view-toggle { display: flex; gap: 2px; background: #12121C; border-radius: 8px; padding: 2px; }
+.mem-view-toggle button {
+  background: none; border: none; color: rgba(255,255,255,0.30);
+  font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 6px;
+  cursor: pointer; display: flex; align-items: center; gap: 5px; font-family: inherit;
+  transition: color 0.15s, background 0.15s;
+}
+.mem-view-toggle button:hover { color: rgba(255,255,255,0.55); }
+.mem-view-toggle button.active { background: #1A1A28; color: rgba(255,255,255,0.92); }
+
+/* Search */
+.mem-search-wrap { position: relative; }
+.mem-search-wrap svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); opacity: 0.3; pointer-events: none; }
+.mem-search-input {
+  background: #12121C; border: 1px solid rgba(255,255,255,0.04); border-radius: 8px;
+  padding: 7px 12px 7px 32px; font-size: 12px; color: rgba(255,255,255,0.92);
+  width: 220px; outline: none; font-family: inherit;
+}
+.mem-search-input:focus { border-color: rgba(139,92,246,0.3); box-shadow: 0 0 0 4px rgba(139,92,246,0.04); }
+.mem-search-input::placeholder { color: rgba(255,255,255,0.25); }
+
+/* ═══ CONSTELLATION VIEW ═══ */
+.mem-constellation-layout { position: relative; z-index: 1; flex: 1; display: flex; overflow: hidden; }
+
+/* Filter bar inside constellation */
+.mem-cf-bar { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.mem-cf-pill {
+  font-size: 9px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.04); background: transparent; color: rgba(255,255,255,0.30);
+  cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 4px;
+  transition: all 0.15s;
+}
+.mem-cf-pill:hover { border-color: rgba(255,255,255,0.08); }
+.mem-cf-pill.active { background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.3); color: #A78BFA; }
+.mem-cf-pill .cp-dot { width: 4px; height: 4px; border-radius: 50%; }
+
+/* Star field */
+.mem-star-field { flex: 1; position: relative; overflow: hidden; }
+.mem-dot-grid {
+  position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(circle 1px, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Constellation left panel */
+.mem-constellation { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Entity stars */
+.mem-star {
+  position: absolute; border-radius: 50%; cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16,1,0.3,1);
+  animation: mem-starIn 0.5s cubic-bezier(0.175,0.885,0.32,1.275) backwards;
+}
+.mem-star:hover { transform: scale(1.6); z-index: 5; }
+.mem-star.selected { z-index: 5; }
+@keyframes mem-starIn { from { opacity: 0; transform: scale(0.3); } }
+
+.mem-star .star-label {
+  position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+  font-size: 8px; font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.30);
+  white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s;
+}
+.mem-star:hover .star-label, .mem-star.selected .star-label { opacity: 1; }
+
+/* Connection SVG */
+.mem-conn-svg { position: absolute; inset: 0; pointer-events: none; }
+.mem-conn-svg line {
+  stroke: rgba(255,255,255,0.06); stroke-width: 1;
+  stroke-dasharray: 4,4; animation: mem-connFlow 3s linear infinite;
+}
+.mem-conn-svg line.highlight { stroke: rgba(139,92,246,0.2); stroke-width: 1.5; stroke-dasharray: none; }
+@keyframes mem-connFlow { 0% { stroke-dashoffset: 16; } 100% { stroke-dashoffset: 0; } }
+
+/* Legend */
+.mem-legend {
+  position: absolute; bottom: 12px; left: 12px; display: flex; gap: 12px;
+  background: rgba(12,12,18,0.8); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; backdrop-filter: blur(8px); padding: 6px 12px; z-index: 10;
+}
+.mem-legend-item { display: flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.30); }
+.mem-legend-item .ldot { width: 5px; height: 5px; border-radius: 50%; }
+
+/* ── Detail panel (right) ── */
+.mem-detail-panel {
+  width: 360px; flex-shrink: 0; background: #0D0D14;
+  border-left: 1px solid rgba(255,255,255,0.04);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: mem-panelSlide 0.3s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes mem-panelSlide { from { transform: translateX(20px); opacity: 0; } }
+
+.mem-d-tabs { display: flex; gap: 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.mem-d-tab {
+  flex: 1; padding: 10px; border: none; background: none;
+  font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.30);
+  cursor: pointer; font-family: inherit; border-bottom: 2px solid transparent; text-align: center;
+  transition: color 0.15s;
+}
+.mem-d-tab:hover { color: rgba(255,255,255,0.55); }
+.mem-d-tab.active { color: #A78BFA; border-bottom-color: #8B5CF6; }
+
+.mem-d-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.mem-d-content::-webkit-scrollbar { width: 3px; }
+.mem-d-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+/* Entity header */
+.mem-d-entity-header { margin-bottom: 16px; }
+.mem-d-entity-name { font-size: 18px; font-weight: 700; margin-top: 8px; margin-bottom: 4px; }
+.mem-d-entity-meta { font-size: 10px; color: rgba(255,255,255,0.30); font-family: 'JetBrains Mono', monospace; }
+
+/* Sections */
+.mem-d-section { margin-bottom: 16px; }
+.mem-d-section-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.30); margin-bottom: 8px; }
+
+/* Facts */
+.mem-d-fact { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 11px; }
+.mem-d-fact:last-child { border-bottom: none; }
+.mem-d-fact .df-pred { color: rgba(255,255,255,0.30); min-width: 80px; font-size: 10px; flex-shrink: 0; }
+.mem-d-fact .df-obj { color: rgba(255,255,255,0.92); flex: 1; }
+.mem-d-fact .df-conf { font-size: 9px; color: rgba(255,255,255,0.30); font-family: 'JetBrains Mono', monospace; flex-shrink: 0; }
+
+/* Relationships */
+.mem-d-rel {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: #12121C; border-radius: 8px; margin-bottom: 4px;
+  cursor: pointer; border: 1px solid transparent; transition: border-color 0.15s;
+}
+.mem-d-rel:hover { border-color: rgba(255,255,255,0.08); }
+.mem-d-rel .dr-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.mem-d-rel .dr-type { font-size: 9px; color: rgba(255,255,255,0.30); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.mem-d-rel .dr-name { font-size: 11px; font-weight: 500; flex: 1; }
+
+/* Conversations */
+.mem-d-conv { padding: 10px 12px; background: #12121C; border-radius: 8px; margin-bottom: 6px; }
+.mem-d-conv .dc-channel { font-size: 10px; font-weight: 600; color: #A78BFA; }
+.mem-d-conv .dc-preview { font-size: 11px; color: rgba(255,255,255,0.55); margin-top: 4px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mem-d-conv .dc-meta { font-size: 9px; color: rgba(255,255,255,0.30); font-family: 'JetBrains Mono', monospace; margin-top: 4px; }
+
+/* No selection state */
+.mem-no-selection { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 12px; }
+.mem-no-selection-orb {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px dashed rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center;
+  animation: mem-breathe 4s ease-in-out infinite;
+}
+@keyframes mem-breathe { 0%,100% { opacity: 0.3; } 50% { opacity: 0.5; } }
+.mem-no-selection p { font-size: 12px; color: rgba(255,255,255,0.30); }
+
+/* Type badge */
+.mem-type-badge { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 4px; }
+
+/* ═══ EXPLORER VIEW ═══ */
+.mem-explorer-layout { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Type tabs */
+.mem-type-tabs { display: flex; align-items: center; gap: 4px; padding: 10px 28px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.mem-ttab {
+  padding: 5px 14px; border-radius: 20px; border: 1px solid transparent;
+  font-size: 11px; font-weight: 600; cursor: pointer; background: none; color: rgba(255,255,255,0.30);
+  font-family: inherit; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
+}
+.mem-ttab:hover { color: rgba(255,255,255,0.55); background: #12121C; }
+.mem-ttab.active { background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.2); color: #A78BFA; }
+.mem-ttab .tdot { width: 5px; height: 5px; border-radius: 50%; }
+.mem-ttab .tcount { font-family: 'JetBrains Mono', monospace; font-size: 9px; opacity: 0.6; }
+.mem-tabs-spacer { flex: 1; }
+
+/* Grid */
+.mem-grid-area { flex: 1; overflow-y: auto; padding: 20px 28px; }
+.mem-grid-area::-webkit-scrollbar { width: 3px; }
+.mem-grid-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+.mem-entity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+
+/* Entity card */
+.mem-entity-card {
+  background: #0D0D14; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px;
+  overflow: hidden; cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16,1,0.3,1);
+  animation: mem-cardIn 0.4s cubic-bezier(0.16,1,0.3,1) backwards;
+}
+.mem-entity-card:hover { border-color: rgba(139,92,246,0.2); transform: translateY(-2px); box-shadow: 0 8px 28px rgba(0,0,0,0.3), 0 0 18px rgba(139,92,246,0.06); }
+@keyframes mem-cardIn { from { opacity: 0; transform: translateY(10px) scale(0.97); filter: blur(4px); } }
+
+.mem-ec-accent { height: 2px; }
+.mem-ec-body { padding: 16px; }
+.mem-ec-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.mem-ec-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+.mem-ec-info { flex: 1; min-width: 0; }
+.mem-ec-name { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.mem-ec-source { font-size: 9px; color: rgba(255,255,255,0.30); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+
+/* Fact preview */
+.mem-ec-facts { margin-bottom: 12px; }
+.mem-ec-fact { display: flex; gap: 6px; font-size: 10px; padding: 3px 0; }
+.mem-ec-fact .f-pred { color: rgba(255,255,255,0.30); min-width: 70px; }
+.mem-ec-fact .f-obj { color: rgba(255,255,255,0.55); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Card footer */
+.mem-ec-footer { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.04); }
+.mem-ef-chip { font-size: 9px; color: rgba(255,255,255,0.30); font-family: 'JetBrains Mono', monospace; }
+.mem-ef-time { margin-left: auto; font-size: 9px; color: rgba(255,255,255,0.30); font-family: 'JetBrains Mono', monospace; }
+
+/* Stats ribbon */
+.mem-stats-ribbon { position: relative; z-index: 1; display: flex; gap: 1px; background: rgba(255,255,255,0.04); border-top: 1px solid rgba(255,255,255,0.04); }
+.mem-v-stat { flex: 1; background: #0D0D14; padding: 12px 18px; }
+.mem-vs-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.30); margin-bottom: 3px; }
+.mem-vs-value { font-size: 16px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+/* ── Loading / Empty ── */
+.mem-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 16px; }
+.mem-loading-orb {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #C4B5FD 0%, #8B5CF6 50%, #6D28D9 100%);
+  box-shadow: 0 0 20px rgba(139,92,246,0.4); animation: mem-loadBreath 2s ease-in-out infinite;
+}
+@keyframes mem-loadBreath { 0%,100% { transform: scale(1); opacity: 0.8; } 50% { transform: scale(1.15); opacity: 1; } }
+.mem-loading-text { font-size: 12px; color: rgba(255,255,255,0.30); }
+.mem-empty { text-align: center; padding: 48px 20px; color: rgba(255,255,255,0.30); font-size: 12px; }
