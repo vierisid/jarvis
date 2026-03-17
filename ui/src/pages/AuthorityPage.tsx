@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import "../styles/authority.css";
 
 const API = `http://${window.location.hostname}:3142`;
 
@@ -71,15 +72,91 @@ type Suggestion = {
 
 type Tab = "approvals" | "audit" | "config";
 
+const LEVEL_LABELS: Record<number, string> = {
+  1: "Read-only", 2: "Suggest", 3: "Conservative", 4: "Moderate",
+  5: "Capable", 6: "Autonomous", 7: "Trusted", 8: "High trust",
+  9: "Near-full", 10: "Full autonomy",
+};
+
+const ALL_CATEGORIES = [
+  "read_data", "write_data", "delete_data", "execute_command", "access_browser",
+  "control_app", "send_email", "send_message",
+  "make_payment", "spawn_agent", "terminate_agent",
+  "install_software", "modify_settings",
+];
+
+function getLevelColor(level: number): string {
+  if (level <= 3) return "#34D399";
+  if (level <= 6) return "#FBBF24";
+  if (level <= 8) return "#FF9800";
+  return "#FB7185";
+}
+
+// Arc gauge: total arc length ~251 for this path
+function getArcOffset(level: number): number {
+  const totalArc = 251;
+  return totalArc - (totalArc * (level / 10));
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+         d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function timeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function tryFormatJSON(str: string): string {
+  try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
+}
+
+// ── Main Component ──
+
 export default function AuthorityPage() {
   const [tab, setTab] = useState<Tab>("approvals");
-  const [emergencyState, setEmergencyState] = useState<string>("normal");
+  const [emergencyState, setEmergencyState] = useState("normal");
+  const [pending, setPending] = useState<ApprovalRequest[]>([]);
+  const [auditStats, setAuditStats] = useState<AuditStats | null>(null);
 
+  // Fetch emergency state on mount
   useEffect(() => {
     fetch(`${API}/api/authority/status`).then(r => r.json()).then(data => {
       if (data.emergency_state) setEmergencyState(data.emergency_state);
     }).catch(() => {});
   }, []);
+
+  // Fetch pending count for gauge panel
+  const refreshPending = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/authority/approvals?status=pending`);
+      setPending(await res.json());
+    } catch {}
+  }, []);
+
+  const refreshStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/authority/audit/stats`);
+      setAuditStats(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { refreshPending(); refreshStats(); }, [refreshPending, refreshStats]);
+  useEffect(() => {
+    const timer = setInterval(() => { refreshPending(); refreshStats(); }, 5000);
+    return () => clearInterval(timer);
+  }, [refreshPending, refreshStats]);
 
   const handleEmergency = async (action: string) => {
     try {
@@ -91,70 +168,133 @@ export default function AuthorityPage() {
     }
   };
 
+  // Read config for gauge
+  const [config, setConfig] = useState<AuthorityConfig | null>(null);
+  useEffect(() => {
+    fetch(`${API}/api/authority/config`).then(r => r.json()).then(setConfig).catch(() => {});
+  }, []);
+
+  const level = config?.default_level ?? 3;
+  const levelColor = getLevelColor(level);
+
   return (
-    <div style={{ padding: "24px", overflow: "auto", height: "100%" }}>
+    <div className="au-page">
+      <div className="au-atmosphere" />
+
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
-        <div>
-          <h1 style={{ fontSize: "20px", fontWeight: 600, color: "var(--j-text)", margin: 0 }}>
-            Authority & Autonomy
-          </h1>
-          <div style={{ fontSize: "13px", color: "var(--j-text-muted)", marginTop: "4px" }}>
-            Approval queue, audit trail, and authority configuration
+      <div className="au-header">
+        <span className="au-header-title">Authority & Autonomy</span>
+        <span className="au-header-spacer" />
+        <span className={`au-em-badge ${emergencyState}`}>{emergencyState}</span>
+        {emergencyState === "normal" && (
+          <>
+            <button className="au-em-btn pause" onClick={() => handleEmergency("pause")}>Pause</button>
+            <button className="au-em-btn kill" onClick={() => handleEmergency("kill")}>Kill</button>
+          </>
+        )}
+        {emergencyState === "paused" && (
+          <>
+            <button className="au-em-btn resume" onClick={() => handleEmergency("resume")}>Resume</button>
+            <button className="au-em-btn kill" onClick={() => handleEmergency("kill")}>Kill</button>
+          </>
+        )}
+        {emergencyState === "killed" && (
+          <button className="au-em-btn reset" onClick={() => handleEmergency("reset")}>Reset</button>
+        )}
+      </div>
+
+      {/* Split layout */}
+      <div className="au-main-layout">
+
+        {/* Left: Gauge panel */}
+        <div className="au-gauge-panel">
+          {/* Arc gauge */}
+          <div className="au-arc-container">
+            <svg viewBox="0 0 200 120" style={{ width: 200, height: 120 }}>
+              <path d="M 20 110 A 80 80 0 0 1 180 110" className="au-arc-bg" />
+              <path
+                d="M 20 110 A 80 80 0 0 1 180 110"
+                className="au-arc-fill"
+                style={{
+                  stroke: levelColor,
+                  strokeDasharray: 251,
+                  strokeDashoffset: getArcOffset(level),
+                  filter: `drop-shadow(0 0 6px ${levelColor})`,
+                }}
+              />
+            </svg>
+            <div className="au-gauge-value">
+              <div className="au-gauge-number" style={{ color: levelColor }}>{level}</div>
+              <div className="au-gauge-sublabel">{LEVEL_LABELS[level] ?? "Custom"}</div>
+            </div>
+          </div>
+          <div className="au-level-range">
+            <span>1</span>
+            <span>5</span>
+            <span>10</span>
+          </div>
+
+          {/* Stats */}
+          <div className="au-gauge-stats">
+            <div className="au-g-stat">
+              <div className="au-g-dot" style={{ background: "#FBBF24", boxShadow: "0 0 6px rgba(251,191,36,0.4)" }} />
+              <div className="au-g-info">
+                <div className="au-g-label">Pending</div>
+                <div className="au-g-val" style={{ color: "#FBBF24" }}>{pending.length}</div>
+              </div>
+            </div>
+            <div className="au-g-stat">
+              <div className="au-g-dot" style={{ background: "#34D399" }} />
+              <div className="au-g-info">
+                <div className="au-g-label">Approved Today</div>
+                <div className="au-g-val" style={{ color: "#34D399" }}>{auditStats?.allowed ?? 0}</div>
+              </div>
+            </div>
+            <div className="au-g-stat">
+              <div className="au-g-dot" style={{ background: "#FB7185" }} />
+              <div className="au-g-info">
+                <div className="au-g-label">Denied Today</div>
+                <div className="au-g-val" style={{ color: "#FB7185" }}>{auditStats?.denied ?? 0}</div>
+              </div>
+            </div>
+            <div className="au-g-stat">
+              <div className="au-g-dot" style={{ background: "#8B5CF6" }} />
+              <div className="au-g-info">
+                <div className="au-g-label">Total Audit</div>
+                <div className="au-g-val" style={{ color: "#A78BFA" }}>{auditStats?.total ?? 0}</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Emergency Controls */}
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <span style={{
-            fontSize: "12px",
-            padding: "4px 10px",
-            borderRadius: "4px",
-            background: emergencyState === "normal" ? "rgba(0, 200, 83, 0.15)" :
-                        emergencyState === "paused" ? "rgba(255, 193, 7, 0.15)" : "rgba(244, 67, 54, 0.15)",
-            color: emergencyState === "normal" ? "var(--j-success)" :
-                   emergencyState === "paused" ? "#ffc107" : "#f44336",
-            fontWeight: 600,
-          }}>
-            {emergencyState.toUpperCase()}
-          </span>
+        {/* Right: Content panel */}
+        <div className="au-content-panel">
+          <div className="au-tabs">
+            <button className={`au-tab-btn${tab === "approvals" ? " active" : ""}`} onClick={() => setTab("approvals")}>
+              Approvals <span className="au-tab-count" style={{ color: "#FBBF24" }}>{pending.length}</span>
+            </button>
+            <button className={`au-tab-btn${tab === "audit" ? " active" : ""}`} onClick={() => setTab("audit")}>
+              Audit Trail
+            </button>
+            <button className={`au-tab-btn${tab === "config" ? " active" : ""}`} onClick={() => setTab("config")}>
+              Rules & Config
+            </button>
+          </div>
 
-          {emergencyState === "normal" && (
-            <>
-              <EmergencyButton label="Pause" color="#ffc107" onClick={() => handleEmergency("pause")} />
-              <EmergencyButton label="Kill" color="#f44336" onClick={() => handleEmergency("kill")} />
-            </>
-          )}
-          {emergencyState === "paused" && (
-            <>
-              <EmergencyButton label="Resume" color="#00c853" onClick={() => handleEmergency("resume")} />
-              <EmergencyButton label="Kill" color="#f44336" onClick={() => handleEmergency("kill")} />
-            </>
-          )}
-          {emergencyState === "killed" && (
-            <EmergencyButton label="Reset" color="#00c853" onClick={() => handleEmergency("reset")} />
-          )}
+          {tab === "approvals" && <ApprovalQueue onRefresh={refreshPending} />}
+          {tab === "audit" && <AuditTrailTab />}
+          {tab === "config" && <ConfigTab onConfigChange={() => {
+            fetch(`${API}/api/authority/config`).then(r => r.json()).then(setConfig).catch(() => {});
+          }} />}
         </div>
       </div>
-
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: "0", borderBottom: "1px solid var(--j-border)", marginBottom: "20px" }}>
-        <TabButton label="Approval Queue" active={tab === "approvals"} onClick={() => setTab("approvals")} />
-        <TabButton label="Audit Trail" active={tab === "audit"} onClick={() => setTab("audit")} />
-        <TabButton label="Rules & Config" active={tab === "config"} onClick={() => setTab("config")} />
-      </div>
-
-      {/* Tab Content */}
-      {tab === "approvals" && <ApprovalQueue />}
-      {tab === "audit" && <AuditTrailTab />}
-      {tab === "config" && <ConfigTab />}
     </div>
   );
 }
 
-// --- Approval Queue ---
+// ── Approval Queue Tab ──
 
-function ApprovalQueue() {
+function ApprovalQueue({ onRefresh }: { onRefresh: () => void }) {
   const [pending, setPending] = useState<ApprovalRequest[]>([]);
   const [history, setHistory] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -167,15 +307,11 @@ function ApprovalQueue() {
       ]);
       setPending(await pRes.json());
       setHistory(await hRes.json());
-    } catch (err) {
-      console.error("Failed to load approvals:", err);
-    }
+    } catch (err) { console.error("Failed to load approvals:", err); }
     setLoading(false);
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
-
-  // Auto-refresh every 5s
   useEffect(() => {
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
@@ -185,228 +321,137 @@ function ApprovalQueue() {
     try {
       await fetch(`${API}/api/authority/approvals/${id}/${action}`, { method: "POST" });
       await refresh();
-    } catch (err) {
-      console.error(`Failed to ${action}:`, err);
-    }
+      onRefresh();
+    } catch (err) { console.error(`Failed to ${action}:`, err); }
   };
 
-  if (loading) return <div style={{ color: "var(--j-text-muted)" }}>Loading...</div>;
+  if (loading) return <div className="au-loading">Loading...</div>;
+
+  const historyFiltered = history.filter(h => h.status !== "pending");
 
   return (
-    <div>
-      {/* Pending Approvals */}
-      <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-text)", margin: "0 0 12px 0" }}>
-        Pending ({pending.length})
-      </h3>
+    <div className="au-tab-content">
       {pending.length === 0 ? (
-        <div style={emptyStyle}>No pending approval requests</div>
+        <div className="au-empty">No pending approval requests</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "24px" }}>
-          {pending.map(req => (
-            <ApprovalCard key={req.id} request={req} onApprove={() => handleAction(req.id, "approve")} onDeny={() => handleAction(req.id, "deny")} />
-          ))}
-        </div>
+        pending.map((req, i) => (
+          <ApprovalCard
+            key={req.id}
+            request={req}
+            index={i}
+            onApprove={() => handleAction(req.id, "approve")}
+            onDeny={() => handleAction(req.id, "deny")}
+          />
+        ))
       )}
 
-      {/* History */}
-      <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-text)", margin: "24px 0 12px 0" }}>
-        Recent History
-      </h3>
-      {history.filter(h => h.status !== "pending").length === 0 ? (
-        <div style={emptyStyle}>No history yet</div>
-      ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Time</th>
-              <th style={thStyle}>Agent</th>
-              <th style={thStyle}>Tool</th>
-              <th style={thStyle}>Category</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Decided By</th>
-            </tr>
-          </thead>
-          <tbody>
-            {history.filter(h => h.status !== "pending").map(req => (
-              <tr key={req.id}>
-                <td style={tdStyle}>{formatTime(req.created_at)}</td>
-                <td style={tdStyle}>{req.agent_name}</td>
-                <td style={tdStyle}><code>{req.tool_name}</code></td>
-                <td style={tdStyle}>{req.action_category}</td>
-                <td style={tdStyle}>
-                  <StatusBadge status={req.status} />
-                </td>
-                <td style={tdStyle}>{req.decided_by ?? "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {historyFiltered.length > 0 && (
+        <>
+          <div className="au-config-label" style={{ marginTop: 24 }}>Recent History</div>
+          {historyFiltered.map((req, i) => (
+            <div key={req.id} className="au-audit-entry" style={{ animationDelay: `${i * 0.03}s` }}>
+              <div className={`au-ae-dot ${req.status === "approved" || req.status === "executed" ? "allowed" : req.status === "denied" ? "denied" : "approval_required"}`} />
+              <div className="au-ae-body">
+                <div className="au-ae-tool">{req.tool_name}</div>
+                <div className="au-ae-detail">{req.agent_name} · {req.action_category} · {req.status}{req.decided_by ? ` by ${req.decided_by}` : ""}</div>
+              </div>
+              <div className="au-ae-time">{formatTime(req.created_at)}</div>
+            </div>
+          ))}
+        </>
       )}
     </div>
   );
 }
 
-function ApprovalCard({ request, onApprove, onDeny }: { request: ApprovalRequest; onApprove: () => void; onDeny: () => void }) {
+function ApprovalCard({ request, index, onApprove, onDeny }: {
+  request: ApprovalRequest; index: number; onApprove: () => void; onDeny: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const shortId = request.id.slice(0, 8);
 
   return (
-    <div style={{
-      background: "var(--j-surface)",
-      border: `1px solid ${request.urgency === "urgent" ? "rgba(255, 193, 7, 0.4)" : "var(--j-border)"}`,
-      borderRadius: "8px",
-      padding: "14px 16px",
-    }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <code style={{ fontSize: "13px", color: "var(--j-accent)" }}>{request.tool_name}</code>
-            <span style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "2px 6px", background: "var(--j-surface-hover)", borderRadius: "3px" }}>
-              {request.action_category}
-            </span>
-            {request.urgency === "urgent" && (
-              <span style={{ fontSize: "10px", color: "#ffc107", fontWeight: 700 }}>URGENT</span>
-            )}
-          </div>
-          <div style={{ fontSize: "12px", color: "var(--j-text-dim)", marginTop: "4px" }}>
-            {request.agent_name} &middot; {formatTime(request.created_at)} &middot; <span style={{ fontFamily: "monospace", fontSize: "11px" }}>{shortId}</span>
-          </div>
-          {request.reason && (
-            <div style={{ fontSize: "12px", color: "var(--j-text-muted)", marginTop: "4px" }}>
-              {request.reason}
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <button onClick={() => setExpanded(!expanded)} style={linkBtnStyle}>
-            {expanded ? "Hide" : "Details"}
-          </button>
-          <button onClick={onDeny} style={{ ...actionBtnStyle, background: "rgba(244, 67, 54, 0.15)", color: "#f44336" }}>
-            Deny
-          </button>
-          <button onClick={onApprove} style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}>
-            Approve
-          </button>
-        </div>
+    <div className="au-af-card" style={{ animationDelay: `${index * 0.05}s` }}>
+      <div className={`au-af-indicator ${request.urgency === "urgent" ? "urgent" : "pending"}`} />
+      <div className="au-af-body">
+        <div className="au-af-tool">{request.tool_name}</div>
+        <div className="au-af-detail">{request.reason || request.action_category}</div>
+        <div className="au-af-meta">{request.agent_name} · {timeAgo(request.created_at)} · {request.action_category}</div>
+        <button className="au-af-toggle" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+        {expanded && <pre className="au-af-pre">{tryFormatJSON(request.tool_arguments)}</pre>}
       </div>
-
-      {expanded && (
-        <pre style={{
-          marginTop: "10px",
-          padding: "10px",
-          background: "var(--j-bg)",
-          borderRadius: "4px",
-          fontSize: "11px",
-          color: "var(--j-text-dim)",
-          overflow: "auto",
-          maxHeight: "200px",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-        }}>
-          {tryFormatJSON(request.tool_arguments)}
-        </pre>
-      )}
+      <div className="au-af-actions">
+        <button className="au-af-btn approve" title="Approve" onClick={onApprove}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20,6 9,17 4,12" /></svg>
+        </button>
+        <button className="au-af-btn deny" title="Deny" onClick={onDeny}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+        </button>
+      </div>
     </div>
   );
 }
 
-// --- Audit Trail ---
+// ── Audit Trail Tab ──
 
 function AuditTrailTab() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
-  const [stats, setStats] = useState<AuditStats | null>(null);
-  const [filter, setFilter] = useState<string>("all");
+  const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const filterParam = filter !== "all" ? `&decision=${filter}` : "";
-      const [eRes, sRes] = await Promise.all([
-        fetch(`${API}/api/authority/audit?limit=100${filterParam}`),
-        fetch(`${API}/api/authority/audit/stats`),
-      ]);
-      setEntries(await eRes.json());
-      setStats(await sRes.json());
-    } catch (err) {
-      console.error("Failed to load audit:", err);
-    }
+      const res = await fetch(`${API}/api/authority/audit?limit=100${filterParam}`);
+      setEntries(await res.json());
+    } catch (err) { console.error("Failed to load audit:", err); }
     setLoading(false);
   }, [filter]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  if (loading) return <div style={{ color: "var(--j-text-muted)" }}>Loading...</div>;
+  if (loading) return <div className="au-loading">Loading...</div>;
 
   return (
-    <div>
-      {/* Stats cards */}
-      {stats && (
-        <div style={{ display: "flex", gap: "12px", marginBottom: "20px" }}>
-          <StatCard label="Total" value={stats.total} color="var(--j-text)" />
-          <StatCard label="Allowed" value={stats.allowed} color="var(--j-success)" />
-          <StatCard label="Denied" value={stats.denied} color="#f44336" />
-          <StatCard label="Approval Required" value={stats.approvalRequired} color="#ffc107" />
-        </div>
-      )}
-
-      {/* Filter */}
-      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
-        <span style={{ fontSize: "12px", color: "var(--j-text-muted)" }}>Filter:</span>
+    <div className="au-tab-content">
+      <div className="au-filter-row">
+        <span className="au-filter-label">Filter:</span>
         {["all", "allowed", "denied", "approval_required"].map(f => (
           <button
             key={f}
+            className={`au-filter-pill${filter === f ? " active" : ""}`}
             onClick={() => setFilter(f)}
-            style={{
-              ...chipStyle,
-              background: filter === f ? "rgba(0, 212, 255, 0.15)" : "transparent",
-              color: filter === f ? "var(--j-accent)" : "var(--j-text-dim)",
-              borderColor: filter === f ? "var(--j-accent)" : "var(--j-border)",
-            }}
           >
             {f === "all" ? "All" : f.replace("_", " ")}
           </button>
         ))}
       </div>
 
-      {/* Table */}
       {entries.length === 0 ? (
-        <div style={emptyStyle}>No audit entries yet</div>
+        <div className="au-empty">No audit entries</div>
       ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Time</th>
-              <th style={thStyle}>Agent</th>
-              <th style={thStyle}>Tool</th>
-              <th style={thStyle}>Category</th>
-              <th style={thStyle}>Decision</th>
-              <th style={thStyle}>Executed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map(entry => (
-              <tr key={entry.id}>
-                <td style={tdStyle}>{formatTime(entry.created_at)}</td>
-                <td style={tdStyle}>{entry.agent_name}</td>
-                <td style={tdStyle}><code>{entry.tool_name}</code></td>
-                <td style={tdStyle}>{entry.action_category}</td>
-                <td style={tdStyle}>
-                  <StatusBadge status={entry.authority_decision} />
-                </td>
-                <td style={tdStyle}>{entry.executed ? "Yes" : "No"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        entries.map((entry, i) => (
+          <div key={entry.id} className="au-audit-entry" style={{ animationDelay: `${i * 0.02}s` }}>
+            <div className={`au-ae-dot ${entry.authority_decision}`} />
+            <div className="au-ae-body">
+              <div className="au-ae-tool">{entry.tool_name}</div>
+              <div className="au-ae-detail">
+                {entry.agent_name} · {entry.action_category} · {entry.authority_decision.replace("_", " ")}
+                {entry.executed ? " · executed" : ""}
+              </div>
+            </div>
+            <div className="au-ae-time">{formatTime(entry.created_at)}</div>
+          </div>
+        ))
       )}
     </div>
   );
 }
 
-// --- Config Tab ---
+// ── Config Tab ──
 
-function ConfigTab() {
+function ConfigTab({ onConfigChange }: { onConfigChange: () => void }) {
   const [config, setConfig] = useState<AuthorityConfig | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -421,9 +466,7 @@ function ConfigTab() {
       ]);
       setConfig(await cRes.json());
       setSuggestions(await sRes.json());
-    } catch (err) {
-      console.error("Failed to load config:", err);
-    }
+    } catch (err) { console.error("Failed to load config:", err); }
     setLoading(false);
   }, []);
 
@@ -437,324 +480,200 @@ function ConfigTab() {
         body: JSON.stringify(updates),
       });
       await refresh();
-    } catch (err) {
-      console.error("Failed to update config:", err);
-    }
+      onConfigChange();
+    } catch (err) { console.error("Failed to update config:", err); }
   };
 
   const handleAcceptSuggestion = async (s: Suggestion) => {
     try {
       await fetch(`${API}/api/authority/learning/accept`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: s.actionCategory, tool_name: s.toolName }),
       });
       await refresh();
-    } catch (err) {
-      console.error("Failed to accept suggestion:", err);
-    }
+    } catch {}
   };
 
   const handleDismissSuggestion = async (s: Suggestion) => {
     try {
       await fetch(`${API}/api/authority/learning/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: s.actionCategory, tool_name: s.toolName }),
       });
       await refresh();
-    } catch (err) {
-      console.error("Failed to dismiss suggestion:", err);
-    }
+    } catch {}
   };
 
-  const toggleGoverned = (category: string) => {
-    if (!config) return;
-    const current = config.governed_categories;
-    const updated = current.includes(category)
-      ? current.filter(c => c !== category)
-      : [...current, category];
-    updateConfig({ governed_categories: updated });
-  };
+  if (loading || !config) return <div className="au-loading">Loading...</div>;
 
-  const removeOverride = (index: number) => {
-    if (!config) return;
-    const updated = [...config.overrides];
-    updated.splice(index, 1);
-    updateConfig({ overrides: updated });
-  };
-
-  const addOverride = (override: AuthorityConfig["overrides"][0]) => {
-    if (!config) return;
-    updateConfig({ overrides: [...config.overrides, override] });
-    setShowAddOverride(false);
-  };
-
-  const removeContextRule = (id: string) => {
-    if (!config) return;
-    updateConfig({ context_rules: config.context_rules.filter(r => r.id !== id) });
-  };
-
-  const addContextRule = (rule: AuthorityConfig["context_rules"][0]) => {
-    if (!config) return;
-    updateConfig({ context_rules: [...config.context_rules, rule] });
-    setShowAddRule(false);
-  };
-
-  if (loading || !config) return <div style={{ color: "var(--j-text-muted)" }}>Loading...</div>;
-
-  const allCategories = [
-    "read_data", "write_data", "delete_data", "execute_command", "access_browser",
-    "control_app", "send_email", "send_message",
-    "make_payment", "spawn_agent", "terminate_agent",
-    "install_software", "modify_settings",
-  ];
-
-  const levelLabels: Record<number, string> = {
-    1: "Read-only", 2: "Suggest", 3: "Conservative", 4: "Moderate",
-    5: "Capable", 6: "Autonomous", 7: "Trusted", 8: "High trust",
-    9: "Near-full", 10: "Full autonomy",
-  };
+  const level = config.default_level;
+  const levelColor = getLevelColor(level);
 
   return (
-    <div style={{ display: "flex", gap: "24px" }}>
-      {/* Left: Authority Level + Governed Categories + Overrides */}
-      <div style={{ flex: 1 }}>
-        {/* Authority Level Slider */}
-        <h3 style={sectionHeading}>Default Authority Level</h3>
-        <div style={{
-          padding: "16px",
-          background: "var(--j-surface)",
-          border: "1px solid var(--j-border)",
-          borderRadius: "8px",
-          marginBottom: "20px",
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-            <span style={{ fontSize: "13px", color: "var(--j-text)" }}>
-              Level {config.default_level} — {levelLabels[config.default_level] ?? "Custom"}
-            </span>
-            <span style={{
-              fontSize: "20px",
-              fontWeight: 700,
-              color: config.default_level <= 3 ? "var(--j-success)" :
-                     config.default_level <= 6 ? "#ffc107" :
-                     config.default_level <= 8 ? "#ff9800" : "#f44336",
-            }}>
-              {config.default_level}/10
-            </span>
-          </div>
-          <input
-            type="range"
-            min={1}
-            max={10}
-            value={config.default_level}
-            onChange={(e) => updateConfig({ default_level: Number(e.target.value) })}
-            style={{ width: "100%", accentColor: "var(--j-accent)", cursor: "pointer" }}
-          />
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
-            <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>1 — Read-only</span>
-            <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>10 — Full autonomy</span>
-          </div>
-        </div>
-
-        {/* Learning Suggestions */}
-        {suggestions.length > 0 && (
-          <div style={{ marginBottom: "20px" }}>
-            <h3 style={sectionHeading}>Auto-Approve Suggestions</h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {suggestions.map((s, i) => (
-                <div key={i} style={{
-                  background: "rgba(0, 212, 255, 0.05)",
-                  border: "1px solid rgba(0, 212, 255, 0.2)",
-                  borderRadius: "6px",
-                  padding: "12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}>
-                  <div>
-                    <div style={{ fontSize: "13px", color: "var(--j-text)" }}>
-                      <code>{s.actionCategory}</code> via <code>{s.toolName || "any tool"}</code>
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
-                      Approved {s.consecutiveApprovals} times in a row
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <button onClick={() => handleDismissSuggestion(s)} style={{ ...actionBtnStyle, background: "transparent", color: "var(--j-text-dim)" }}>
-                      Dismiss
-                    </button>
-                    <button onClick={() => handleAcceptSuggestion(s)} style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}>
-                      Accept
-                    </button>
-                  </div>
-                </div>
-              ))}
+    <div className="au-tab-content">
+      {/* Authority Level */}
+      <div className="au-config-section">
+        <div className="au-config-label">Authority Level</div>
+        <div className="au-cfg-card">
+          <div className="au-level-row">
+            <span className="au-lr-num" style={{ color: levelColor }}>{level}</span>
+            <div>
+              <div className="au-lr-name">{LEVEL_LABELS[level] ?? "Custom"}</div>
+              <div className="au-lr-desc">
+                {level <= 3 ? "Low autonomy, most actions require approval" :
+                 level <= 6 ? "Moderate autonomy with oversight" :
+                 level <= 8 ? "High trust, minimal approval needed" :
+                 "Full autonomy, no restrictions"}
+              </div>
             </div>
           </div>
-        )}
-
-        {/* Governed Categories */}
-        <h3 style={sectionHeading}>Governed Categories</h3>
-        <div style={{ fontSize: "12px", color: "var(--j-text-muted)", marginBottom: "10px" }}>
-          Actions requiring user approval before execution
+          <input
+            type="range" min={1} max={10} value={level}
+            className="au-level-slider"
+            style={{ "--thumb-color": levelColor } as React.CSSProperties}
+            onChange={(e) => updateConfig({ default_level: Number(e.target.value) })}
+          />
+          <div className="au-slider-range"><span>1 — Read-only</span><span>10 — Full autonomy</span></div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "20px" }}>
-          {allCategories.map(cat => {
-            const isGoverned = config.governed_categories.includes(cat);
-            return (
-              <button
-                key={cat}
-                onClick={() => toggleGoverned(cat)}
-                style={{
-                  ...chipStyle,
-                  background: isGoverned ? "rgba(255, 193, 7, 0.15)" : "transparent",
-                  color: isGoverned ? "#ffc107" : "var(--j-text-dim)",
-                  borderColor: isGoverned ? "rgba(255, 193, 7, 0.4)" : "var(--j-border)",
-                }}
-              >
-                {cat}
-              </button>
-            );
-          })}
-        </div>
+      </div>
 
-        {/* Overrides */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-          <h3 style={{ ...sectionHeading, margin: 0 }}>Permission Overrides</h3>
-          <button onClick={() => setShowAddOverride(!showAddOverride)} style={{ ...actionBtnStyle, background: "rgba(0, 212, 255, 0.1)", color: "var(--j-accent)" }}>
+      {/* Learning Suggestions */}
+      {suggestions.length > 0 && (
+        <div className="au-config-section">
+          <div className="au-config-label">Auto-Approve Suggestions</div>
+          {suggestions.map((s, i) => (
+            <div key={i} className="au-suggestion">
+              <div>
+                <div className="au-sg-tool">{s.actionCategory} via {s.toolName || "any tool"}</div>
+                <div className="au-sg-count">Approved {s.consecutiveApprovals} times in a row</div>
+              </div>
+              <div className="au-sg-actions">
+                <button className="au-sg-btn dismiss" onClick={() => handleDismissSuggestion(s)}>Dismiss</button>
+                <button className="au-sg-btn accept" onClick={() => handleAcceptSuggestion(s)}>Accept</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Governed Categories */}
+      <div className="au-config-section">
+        <div className="au-config-label">Governed Categories</div>
+        <div className="au-cat-chips">
+          {ALL_CATEGORIES.map(cat => (
+            <button
+              key={cat}
+              className={`au-cat-chip${config.governed_categories.includes(cat) ? " governed" : ""}`}
+              onClick={() => {
+                const current = config.governed_categories;
+                const updated = current.includes(cat) ? current.filter(c => c !== cat) : [...current, cat];
+                updateConfig({ governed_categories: updated });
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Overrides */}
+      <div className="au-config-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div className="au-config-label" style={{ margin: 0 }}>Permission Overrides</div>
+          <button className="au-add-btn" onClick={() => setShowAddOverride(!showAddOverride)}>
             {showAddOverride ? "Cancel" : "+ Add"}
           </button>
         </div>
-        {showAddOverride && <AddOverrideForm categories={allCategories} onAdd={addOverride} />}
+        {showAddOverride && (
+          <AddOverrideForm onAdd={(o) => {
+            updateConfig({ overrides: [...config.overrides, o] });
+            setShowAddOverride(false);
+          }} />
+        )}
         {config.overrides.length === 0 && !showAddOverride ? (
-          <div style={emptyStyle}>No overrides configured</div>
+          <div className="au-empty" style={{ padding: 16 }}>No overrides configured</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            {config.overrides.map((o, i) => (
-              <div key={i} style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "8px 12px",
-                background: "var(--j-surface)",
-                border: "1px solid var(--j-border)",
-                borderRadius: "6px",
-              }}>
-                <div>
-                  <code style={{ fontSize: "12px" }}>{o.action}</code>
-                  <span style={{ fontSize: "11px", color: "var(--j-text-muted)", marginLeft: "8px" }}>
-                    {o.role_id ? `[${o.role_id}]` : "[global]"} &mdash; {o.allowed ? (o.requires_approval ? "allowed w/ approval" : "always allowed") : "denied"}
-                  </span>
-                </div>
-                <button onClick={() => removeOverride(i)} style={{ ...linkBtnStyle, color: "#f44336" }}>
-                  Remove
-                </button>
+          config.overrides.map((o, i) => (
+            <div key={i} className="au-rule-entry">
+              <div>
+                <span className="au-re-code">{o.action}</span>
+                <span className="au-re-detail">
+                  {o.role_id ? `[${o.role_id}]` : "[global]"} — {o.allowed ? (o.requires_approval ? "allowed w/ approval" : "always allowed") : "denied"}
+                </span>
               </div>
-            ))}
-          </div>
+              <button className="au-re-remove" onClick={() => {
+                const updated = [...config.overrides];
+                updated.splice(i, 1);
+                updateConfig({ overrides: updated });
+              }}>Remove</button>
+            </div>
+          ))
         )}
       </div>
 
-      {/* Right: Context Rules + Learning Settings */}
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-          <h3 style={{ ...sectionHeading, margin: 0 }}>Context Rules</h3>
-          <button onClick={() => setShowAddRule(!showAddRule)} style={{ ...actionBtnStyle, background: "rgba(0, 212, 255, 0.1)", color: "var(--j-accent)" }}>
+      {/* Context Rules */}
+      <div className="au-config-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div className="au-config-label" style={{ margin: 0 }}>Context Rules</div>
+          <button className="au-add-btn" onClick={() => setShowAddRule(!showAddRule)}>
             {showAddRule ? "Cancel" : "+ Add"}
           </button>
         </div>
-        {showAddRule && <AddContextRuleForm categories={allCategories} onAdd={addContextRule} />}
-        {config.context_rules.length === 0 && !showAddRule ? (
-          <div style={emptyStyle}>No context rules configured</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            {config.context_rules.map(rule => (
-              <div key={rule.id} style={{
-                padding: "10px 12px",
-                background: "var(--j-surface)",
-                border: "1px solid var(--j-border)",
-                borderRadius: "6px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-              }}>
-                <div>
-                  <div style={{ fontSize: "13px", color: "var(--j-text)" }}>{rule.description}</div>
-                  <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
-                    {rule.action} &middot; {rule.condition} &middot; effect: {rule.effect}
-                  </div>
-                </div>
-                <button onClick={() => removeContextRule(rule.id)} style={{ ...linkBtnStyle, color: "#f44336", flexShrink: 0 }}>
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
+        {showAddRule && (
+          <AddContextRuleForm onAdd={(r) => {
+            updateConfig({ context_rules: [...config.context_rules, r] });
+            setShowAddRule(false);
+          }} />
         )}
-
-        {/* Learning Settings */}
-        <h3 style={{ ...sectionHeading, marginTop: "24px" }}>Learning</h3>
-        <div style={{
-          padding: "14px 16px",
-          background: "var(--j-surface)",
-          border: "1px solid var(--j-border)",
-          borderRadius: "8px",
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-            <div>
-              <div style={{ fontSize: "13px", color: "var(--j-text)" }}>Auto-approve learning</div>
-              <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>
-                Suggest auto-approve rules after repeated approvals
+        {config.context_rules.length === 0 && !showAddRule ? (
+          <div className="au-empty" style={{ padding: 16 }}>No context rules configured</div>
+        ) : (
+          config.context_rules.map(rule => (
+            <div key={rule.id} className="au-rule-entry">
+              <div>
+                <span className="au-re-code">{rule.description}</span>
+                <span className="au-re-detail"> {rule.action} · {rule.condition} · {rule.effect}</span>
               </div>
+              <button className="au-re-remove" onClick={() => {
+                updateConfig({ context_rules: config.context_rules.filter(r => r.id !== rule.id) });
+              }}>Remove</button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Learning */}
+      <div className="au-config-section">
+        <div className="au-config-label">Learning</div>
+        <div className="au-cfg-card">
+          <div className="au-toggle-row" style={{ marginBottom: config.learning.enabled ? 14 : 0 }}>
+            <div>
+              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.92)" }}>Auto-approve learning</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.30)", marginTop: 2 }}>Suggest rules after repeated approvals</div>
             </div>
             <button
+              className={`au-toggle-sw ${config.learning.enabled ? "on" : "off"}`}
               onClick={() => updateConfig({ learning: { ...config.learning, enabled: !config.learning.enabled } })}
-              style={{
-                width: "40px",
-                height: "22px",
-                borderRadius: "11px",
-                border: "none",
-                background: config.learning.enabled ? "var(--j-accent)" : "var(--j-border)",
-                cursor: "pointer",
-                position: "relative",
-                transition: "background 0.2s",
-              }}
             >
-              <div style={{
-                width: "16px",
-                height: "16px",
-                borderRadius: "50%",
-                background: "#fff",
-                position: "absolute",
-                top: "3px",
-                left: config.learning.enabled ? "21px" : "3px",
-                transition: "left 0.2s",
-              }} />
+              <div className="au-toggle-knob" />
             </button>
           </div>
           {config.learning.enabled && (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "13px", color: "var(--j-text)" }}>Suggestion threshold</span>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <button
-                  onClick={() => {
-                    const v = Math.max(1, config.learning.suggest_threshold - 1);
-                    updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
-                  }}
-                  style={{ ...stepBtnStyle }}
-                >-</button>
-                <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-accent)", minWidth: "20px", textAlign: "center" }}>
+            <div className="au-toggle-row">
+              <span style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>Suggestion threshold</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                <button className="au-step-btn" onClick={() => {
+                  const v = Math.max(1, config.learning.suggest_threshold - 1);
+                  updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
+                }}>-</button>
+                <span style={{ fontSize: 16, fontWeight: 700, color: "#A78BFA", fontFamily: "'JetBrains Mono', monospace", minWidth: 20, textAlign: "center" as const }}>
                   {config.learning.suggest_threshold}
                 </span>
-                <button
-                  onClick={() => {
-                    const v = Math.min(50, config.learning.suggest_threshold + 1);
-                    updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
-                  }}
-                  style={{ ...stepBtnStyle }}
-                >+</button>
-                <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>approvals</span>
+                <button className="au-step-btn" onClick={() => {
+                  const v = Math.min(50, config.learning.suggest_threshold + 1);
+                  updateConfig({ learning: { ...config.learning, suggest_threshold: v } });
+                }}>+</button>
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.30)" }}>approvals</span>
               </div>
             </div>
           )}
@@ -764,68 +683,46 @@ function ConfigTab() {
   );
 }
 
-// --- Add Override Form ---
+// ── Add Override Form ──
 
-function AddOverrideForm({ categories, onAdd }: { categories: string[]; onAdd: (o: AuthorityConfig["overrides"][0]) => void }) {
-  const [action, setAction] = useState(categories[0] ?? "read_data");
+function AddOverrideForm({ onAdd }: { onAdd: (o: AuthorityConfig["overrides"][0]) => void }) {
+  const [action, setAction] = useState(ALL_CATEGORIES[0]!);
   const [roleId, setRoleId] = useState("");
   const [effect, setEffect] = useState<"deny" | "allow" | "allow_approval">("deny");
 
   return (
-    <div style={{
-      padding: "14px 16px",
-      background: "var(--j-surface)",
-      border: "1px solid rgba(0, 212, 255, 0.3)",
-      borderRadius: "8px",
-      marginBottom: "12px",
-      display: "flex",
-      flexDirection: "column",
-      gap: "10px",
-    }}>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Action</label>
-        <select value={action} onChange={e => setAction(e.target.value)} style={selectStyle}>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+    <div className="au-inline-form">
+      <div className="au-form-row">
+        <label className="au-form-label">Action</label>
+        <select value={action} onChange={e => setAction(e.target.value)} className="au-form-select">
+          {ALL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Role</label>
-        <input
-          value={roleId}
-          onChange={e => setRoleId(e.target.value)}
-          placeholder="Leave empty for global"
-          style={inputStyle}
-        />
+      <div className="au-form-row">
+        <label className="au-form-label">Role</label>
+        <input value={roleId} onChange={e => setRoleId(e.target.value)} placeholder="Leave empty for global" className="au-form-input" />
       </div>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Effect</label>
-        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} style={selectStyle}>
+      <div className="au-form-row">
+        <label className="au-form-label">Effect</label>
+        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} className="au-form-select">
           <option value="deny">Deny</option>
           <option value="allow">Always allow</option>
           <option value="allow_approval">Allow with approval</option>
         </select>
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          onClick={() => onAdd({
-            action,
-            role_id: roleId || undefined,
-            allowed: effect !== "deny",
-            requires_approval: effect === "allow_approval" ? true : undefined,
-          })}
-          style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}
-        >
-          Add Override
-        </button>
-      </div>
+      <button className="au-form-submit" onClick={() => onAdd({
+        action, role_id: roleId || undefined,
+        allowed: effect !== "deny",
+        requires_approval: effect === "allow_approval" ? true : undefined,
+      })}>Add Override</button>
     </div>
   );
 }
 
-// --- Add Context Rule Form ---
+// ── Add Context Rule Form ──
 
-function AddContextRuleForm({ categories, onAdd }: { categories: string[]; onAdd: (r: AuthorityConfig["context_rules"][0]) => void }) {
-  const [action, setAction] = useState(categories[0] ?? "read_data");
+function AddContextRuleForm({ onAdd }: { onAdd: (r: AuthorityConfig["context_rules"][0]) => void }) {
+  const [action, setAction] = useState(ALL_CATEGORIES[0]!);
   const [condition, setCondition] = useState<"always" | "time_range" | "tool_name">("always");
   const [effect, setEffect] = useState<"deny" | "allow" | "require_approval">("deny");
   const [description, setDescription] = useState("");
@@ -840,290 +737,51 @@ function AddContextRuleForm({ categories, onAdd }: { categories: string[]; onAdd
   };
 
   return (
-    <div style={{
-      padding: "14px 16px",
-      background: "var(--j-surface)",
-      border: "1px solid rgba(0, 212, 255, 0.3)",
-      borderRadius: "8px",
-      marginBottom: "12px",
-      display: "flex",
-      flexDirection: "column",
-      gap: "10px",
-    }}>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Action</label>
-        <select value={action} onChange={e => setAction(e.target.value)} style={selectStyle}>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+    <div className="au-inline-form">
+      <div className="au-form-row">
+        <label className="au-form-label">Action</label>
+        <select value={action} onChange={e => setAction(e.target.value)} className="au-form-select">
+          {ALL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Condition</label>
-        <select value={condition} onChange={e => setCondition(e.target.value as typeof condition)} style={selectStyle}>
+      <div className="au-form-row">
+        <label className="au-form-label">Condition</label>
+        <select value={condition} onChange={e => setCondition(e.target.value as typeof condition)} className="au-form-select">
           <option value="always">Always</option>
           <option value="time_range">Time range</option>
           <option value="tool_name">Specific tool</option>
         </select>
       </div>
       {condition === "time_range" && (
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <label style={formLabelStyle}>Time</label>
-          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} style={{ ...inputStyle, width: "120px" }} />
-          <span style={{ fontSize: "12px", color: "var(--j-text-muted)" }}>to</span>
-          <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} style={{ ...inputStyle, width: "120px" }} />
+        <div className="au-form-row">
+          <label className="au-form-label">Time</label>
+          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="au-form-input" style={{ maxWidth: 120 }} />
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.30)" }}>to</span>
+          <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="au-form-input" style={{ maxWidth: 120 }} />
         </div>
       )}
       {condition === "tool_name" && (
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <label style={formLabelStyle}>Tool</label>
-          <input value={toolName} onChange={e => setToolName(e.target.value)} placeholder="e.g. run_command" style={inputStyle} />
+        <div className="au-form-row">
+          <label className="au-form-label">Tool</label>
+          <input value={toolName} onChange={e => setToolName(e.target.value)} placeholder="e.g. run_command" className="au-form-input" />
         </div>
       )}
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Effect</label>
-        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} style={selectStyle}>
+      <div className="au-form-row">
+        <label className="au-form-label">Effect</label>
+        <select value={effect} onChange={e => setEffect(e.target.value as typeof effect)} className="au-form-select">
           <option value="deny">Deny</option>
           <option value="allow">Allow</option>
           <option value="require_approval">Require approval</option>
         </select>
       </div>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <label style={formLabelStyle}>Description</label>
-        <input value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. Block payments at night" style={inputStyle} />
+      <div className="au-form-row">
+        <label className="au-form-label">Description</label>
+        <input value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. Block payments at night" className="au-form-input" />
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          onClick={() => {
-            if (!description.trim()) return;
-            onAdd({
-              id: `rule_${Date.now()}`,
-              action,
-              condition,
-              params: buildParams(),
-              effect,
-              description: description.trim(),
-            });
-          }}
-          style={{ ...actionBtnStyle, background: "rgba(0, 200, 83, 0.15)", color: "#00c853" }}
-        >
-          Add Rule
-        </button>
-      </div>
+      <button className="au-form-submit" onClick={() => {
+        if (!description.trim()) return;
+        onAdd({ id: `rule_${Date.now()}`, action, condition, params: buildParams(), effect, description: description.trim() });
+      }}>Add Rule</button>
     </div>
   );
 }
-
-// --- Shared Components ---
-
-function EmergencyButton({ label, color, onClick }: { label: string; color: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "6px 14px",
-        borderRadius: "4px",
-        border: `1px solid ${color}`,
-        background: "transparent",
-        color,
-        fontSize: "12px",
-        fontWeight: 600,
-        cursor: "pointer",
-        transition: "all 0.15s ease",
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = `${color}20`; }}
-      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "10px 18px",
-        border: "none",
-        borderBottom: active ? "2px solid var(--j-accent)" : "2px solid transparent",
-        background: "transparent",
-        color: active ? "var(--j-accent)" : "var(--j-text-dim)",
-        fontSize: "13px",
-        fontWeight: active ? 600 : 400,
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, { bg: string; fg: string }> = {
-    allowed: { bg: "rgba(0, 200, 83, 0.15)", fg: "#00c853" },
-    approved: { bg: "rgba(0, 200, 83, 0.15)", fg: "#00c853" },
-    executed: { bg: "rgba(0, 212, 255, 0.15)", fg: "var(--j-accent)" },
-    denied: { bg: "rgba(244, 67, 54, 0.15)", fg: "#f44336" },
-    expired: { bg: "rgba(158, 158, 158, 0.15)", fg: "#9e9e9e" },
-    approval_required: { bg: "rgba(255, 193, 7, 0.15)", fg: "#ffc107" },
-    pending: { bg: "rgba(255, 193, 7, 0.15)", fg: "#ffc107" },
-  };
-  const c = colors[status] ?? { bg: "var(--j-surface-hover)", fg: "var(--j-text-dim)" };
-  return (
-    <span style={{
-      fontSize: "11px",
-      padding: "2px 8px",
-      borderRadius: "3px",
-      background: c.bg,
-      color: c.fg,
-      fontWeight: 600,
-    }}>
-      {status.replace("_", " ")}
-    </span>
-  );
-}
-
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div style={{
-      flex: 1,
-      padding: "14px 16px",
-      background: "var(--j-surface)",
-      border: "1px solid var(--j-border)",
-      borderRadius: "8px",
-      textAlign: "center",
-    }}>
-      <div style={{ fontSize: "24px", fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: "11px", color: "var(--j-text-muted)", marginTop: "2px" }}>{label}</div>
-    </div>
-  );
-}
-
-// --- Helpers ---
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function tryFormatJSON(str: string): string {
-  try {
-    return JSON.stringify(JSON.parse(str), null, 2);
-  } catch {
-    return str;
-  }
-}
-
-// --- Styles ---
-
-const tableStyle: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: "12px",
-};
-
-const thStyle: React.CSSProperties = {
-  textAlign: "left",
-  padding: "8px 10px",
-  borderBottom: "1px solid var(--j-border)",
-  color: "var(--j-text-muted)",
-  fontWeight: 500,
-  fontSize: "11px",
-  textTransform: "uppercase",
-  letterSpacing: "0.5px",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "8px 10px",
-  borderBottom: "1px solid var(--j-border)",
-  color: "var(--j-text-dim)",
-};
-
-const emptyStyle: React.CSSProperties = {
-  padding: "24px",
-  textAlign: "center",
-  color: "var(--j-text-muted)",
-  fontSize: "13px",
-  background: "var(--j-surface)",
-  borderRadius: "8px",
-  border: "1px solid var(--j-border)",
-};
-
-const actionBtnStyle: React.CSSProperties = {
-  padding: "6px 14px",
-  borderRadius: "4px",
-  border: "none",
-  fontSize: "12px",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const linkBtnStyle: React.CSSProperties = {
-  padding: "4px 8px",
-  border: "none",
-  background: "transparent",
-  color: "var(--j-accent)",
-  fontSize: "12px",
-  cursor: "pointer",
-};
-
-const chipStyle: React.CSSProperties = {
-  padding: "4px 10px",
-  borderRadius: "4px",
-  border: "1px solid var(--j-border)",
-  background: "transparent",
-  fontSize: "12px",
-  cursor: "pointer",
-};
-
-const sectionHeading: React.CSSProperties = {
-  fontSize: "14px",
-  fontWeight: 600,
-  color: "var(--j-text)",
-  margin: "0 0 10px 0",
-};
-
-const selectStyle: React.CSSProperties = {
-  flex: 1,
-  padding: "6px 10px",
-  borderRadius: "4px",
-  border: "1px solid var(--j-border)",
-  background: "var(--j-bg)",
-  color: "var(--j-text)",
-  fontSize: "12px",
-};
-
-const inputStyle: React.CSSProperties = {
-  flex: 1,
-  padding: "6px 10px",
-  borderRadius: "4px",
-  border: "1px solid var(--j-border)",
-  background: "var(--j-bg)",
-  color: "var(--j-text)",
-  fontSize: "12px",
-};
-
-const formLabelStyle: React.CSSProperties = {
-  fontSize: "12px",
-  color: "var(--j-text-muted)",
-  minWidth: "70px",
-};
-
-const stepBtnStyle: React.CSSProperties = {
-  width: "24px",
-  height: "24px",
-  borderRadius: "4px",
-  border: "1px solid var(--j-border)",
-  background: "var(--j-bg)",
-  color: "var(--j-text)",
-  fontSize: "14px",
-  fontWeight: 600,
-  cursor: "pointer",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
