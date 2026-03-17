@@ -25,6 +25,7 @@ export type UseVoiceReturn = {
   handleTTSBinary: (data: ArrayBuffer) => void;
   handleTTSStart: (requestId: string) => void;
   handleTTSEnd: () => void;
+  handleError: (message?: string) => void;
 };
 
 export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): UseVoiceReturn {
@@ -33,8 +34,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
   const [ttsAudioPlaying, setTtsAudioPlaying] = useState(false);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingContextRef = useRef<AudioContext | null>(null);
+  const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const recordingProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const recordingMuteRef = useRef<GainNode | null>(null);
+  const pcmChunksRef = useRef<Float32Array[]>([]);
+  const sampleRateRef = useRef(16000);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,6 +70,47 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       audioContextRef.current.resume().catch(() => {});
     }
     return audioContextRef.current;
+  }, []);
+
+  const encodeWav = useCallback((chunks: Float32Array[], sampleRate: number): ArrayBuffer => {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const pcm = new Int16Array(totalLength);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.length; i++) {
+        const sample = Math.max(-1, Math.min(1, chunk[i]));
+        pcm[offset++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      }
+    }
+
+    const buffer = new ArrayBuffer(44 + pcm.length * 2);
+    const view = new DataView(buffer);
+    const writeString = (position: number, value: string) => {
+      for (let i = 0; i < value.length; i++) {
+        view.setUint8(position + i, value.charCodeAt(i));
+      }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + pcm.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, pcm.length * 2, true);
+
+    for (let i = 0; i < pcm.length; i++) {
+      view.setInt16(44 + i * 2, pcm[i], true);
+    }
+
+    return buffer;
   }, []);
 
   // --- Check mic availability on mount ---
@@ -242,6 +288,17 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     setTtsAudioPlaying(false);
   }, []);
 
+  const handleError = useCallback(() => {
+    ttsQueueRef.current = [];
+    ttsPlayingRef.current = false;
+    ttsRequestIdRef.current = null;
+    audioContextRef.current?.close();
+    audioContextRef.current = null;
+    setTtsAudioPlaying(false);
+    setVoiceState("error");
+    setTimeout(() => setVoiceState("idle"), 3000);
+  }, []);
+
   // Safety timeout: processing → idle if TTS never arrives
   useEffect(() => {
     if (voiceState === "processing") {
@@ -272,9 +329,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const sendAudioToServer = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pcmChunksRef.current.length === 0) return;
 
-    const blob = new Blob(audioChunksRef.current, { type: "audio/webm;codecs=opus" });
     const requestId = crypto.randomUUID();
+    const wavBuffer = encodeWav(pcmChunksRef.current, sampleRateRef.current);
 
     // Signal start
     ws.send(JSON.stringify({
@@ -283,28 +341,29 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       timestamp: Date.now(),
     }));
 
-    // Send binary audio
-    blob.arrayBuffer().then(buffer => {
-      ws.send(buffer);
-      // Signal end
-      ws.send(JSON.stringify({
-        type: "voice_end",
-        payload: { requestId },
-        timestamp: Date.now(),
-      }));
-    });
+    ws.send(wavBuffer);
+    ws.send(JSON.stringify({
+      type: "voice_end",
+      payload: { requestId },
+      timestamp: Date.now(),
+    }));
 
-    audioChunksRef.current = [];
+    pcmChunksRef.current = [];
     setVoiceState("processing");
-  }, [wsRef]);
+  }, [encodeWav, wsRef]);
 
   // --- Stop recording ---
   const stopRecordingInternal = useCallback(() => {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
+    recordingProcessorRef.current?.disconnect();
+    recordingProcessorRef.current = null;
+    recordingSourceRef.current?.disconnect();
+    recordingSourceRef.current = null;
+    recordingMuteRef.current?.disconnect();
+    recordingMuteRef.current = null;
+    recordingContextRef.current?.close().catch(() => {});
+    recordingContextRef.current = null;
     // Disconnect and close silence detection audio graph
     silenceSourceRef.current?.disconnect();
     silenceSourceRef.current = null;
@@ -319,7 +378,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
-  }, []);
+    sendAudioToServer();
+  }, [sendAudioToServer]);
 
   // --- Start recording ---
   // autoStop: true = silence detection enabled (wake word mode), false = PTT (user controls stop)
@@ -332,7 +392,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
         audio: { echoCancellation: true, noiseSuppression: true },
       });
       streamRef.current = stream;
-      audioChunksRef.current = [];
+      pcmChunksRef.current = [];
 
       // Silence detection with speech gate: only start silence countdown
       // AFTER the user has spoken at least once (prevents premature stop)
@@ -373,23 +433,25 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
         }, 100);
       }
 
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      const recordingContext = new AudioContext({ sampleRate: 16000 });
+      recordingContextRef.current = recordingContext;
+      sampleRateRef.current = recordingContext.sampleRate;
+      const recordingSource = recordingContext.createMediaStreamSource(stream);
+      recordingSourceRef.current = recordingSource;
+      const processor = recordingContext.createScriptProcessor(4096, 1, 1);
+      recordingProcessorRef.current = processor;
+      const mute = recordingContext.createGain();
+      mute.gain.value = 0;
+      recordingMuteRef.current = mute;
+
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        pcmChunksRef.current.push(new Float32Array(input));
       };
-      recorder.onstop = () => {
-        if (silenceCheckRef.current) {
-          clearInterval(silenceCheckRef.current);
-          silenceCheckRef.current = null;
-        }
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = null;
-        }
-        sendAudioToServer();
-      };
-      recorder.start(250); // 250ms chunks
-      mediaRecorderRef.current = recorder;
+
+      recordingSource.connect(processor);
+      processor.connect(mute);
+      mute.connect(recordingContext.destination);
       setVoiceState("recording");
     } catch (err) {
       console.error("[Voice] Mic access error:", err);
@@ -425,6 +487,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       silenceSourceRef.current?.disconnect();
       silenceCtxRef.current?.close().catch(() => {});
       audioContextRef.current?.close();
+      recordingProcessorRef.current?.disconnect();
+      recordingSourceRef.current?.disconnect();
+      recordingMuteRef.current?.disconnect();
+      recordingContextRef.current?.close().catch(() => {});
       if (wakeEngineRef.current) {
         wakeEngineRef.current.stop().catch(() => {});
         wakeEngineRef.current = null;
@@ -443,5 +509,6 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     handleTTSBinary,
     handleTTSStart,
     handleTTSEnd,
+    handleError,
   };
 }

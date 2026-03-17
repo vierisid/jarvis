@@ -705,9 +705,10 @@ export class WebSocketService implements Service {
       }, ws);
     } catch (err) {
       console.error('[WSService] STT error:', err);
+      const message = err instanceof Error ? err.message : 'Voice transcription failed';
       this.wsServer.sendToClient(ws, {
         type: 'error',
-        payload: { message: 'Voice transcription failed' },
+        payload: { message },
         timestamp: Date.now(),
       });
     }

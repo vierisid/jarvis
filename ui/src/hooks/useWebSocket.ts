@@ -86,6 +86,7 @@ export type VoiceCallbacks = {
   onTTSBinary: (data: ArrayBuffer) => void;
   onTTSStart: (requestId: string) => void;
   onTTSEnd: () => void;
+  onError: (message?: string) => void;
 };
 
 export type WorkflowEvent = {
@@ -369,6 +370,7 @@ export function useWebSocket() {
         }
       }
     } else if (msg.type === "error") {
+      voiceCallbacksRef.current?.onError(msg.payload?.message);
       setMessages((prev) => [
         ...prev,
         {

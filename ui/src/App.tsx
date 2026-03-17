@@ -71,8 +71,9 @@ export function App() {
       onTTSBinary: voice.handleTTSBinary,
       onTTSStart: voice.handleTTSStart,
       onTTSEnd: voice.handleTTSEnd,
+      onError: voice.handleError,
     };
-  }, [voice.handleTTSBinary, voice.handleTTSStart, voice.handleTTSEnd]);
+  }, [voice.handleTTSBinary, voice.handleTTSStart, voice.handleTTSEnd, voice.handleError]);
 
   useEffect(() => {
     const onHashChange = () => {
