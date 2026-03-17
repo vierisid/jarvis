@@ -297,29 +297,29 @@ See [config.example.yaml](config.example.yaml) for the full reference including 
 │                     JARVIS Daemon                           │
 │                  (server or local machine)                  │
 │                                                             │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ LLM      │  │ Vault    │  │ Agent     │  │ Workflow   │  │
-│  │ Router   │  │ Memory   │  │ Manager   │  │ Engine     │  │
-│  └──────────┘  └──────────┘  └───────────┘  └───────────┘  │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ Tool     │  │ Authority│  │ Goal      │  │ Awareness  │  │
-│  │ Executor │  │ Engine   │  │ Tracker   │  │ Pipeline   │  │
-│  └──────────┘  └──────────┘  └───────────┘  └───────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐   │
+│  │ LLM      │  │ Vault    │  │ Agent     │  │ Workflow  │   │
+│  │ Router   │  │ Memory   │  │ Manager   │  │ Engine    │   │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐   │ 
+│  │ Tool     │  │ Authority│  │ Goal      │  │ Awareness │   │
+│  │ Executor │  │ Engine   │  │ Tracker   │  │ Pipeline  │   │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────┘   │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ Bun.serve() — HTTP + WebSocket + Dashboard (React)   │   │
 │  └──────────────────────────────────────────────────────┘   │
 └──────────────┬──────────────────────┬───────────────────────┘
                │ JWT-auth WebSocket   │
-       ┌───────┴───────┐      ┌──────┴────────┐
-       │  Sidecar #1   │      │  Sidecar #2   │      ...
-       │  (laptop)     │      │  (dev server) │
-       │               │      │               │
-       │  desktop      │      │  terminal     │
-       │  browser      │      │  filesystem   │
-       │  terminal     │      │  screenshots  │
-       │  clipboard    │      │               │
-       └───────────────┘      └───────────────┘
+       ┌───────┴───────┐       ┌──────┴────────┐
+       │  Sidecar #1   │       │  Sidecar #2   │      ...
+       │  (laptop)     │       │  (dev server) │
+       │               │       │               │
+       │  desktop      │       │  terminal     │
+       │  browser      │       │  filesystem   │
+       │  terminal     │       │  screenshots  │
+       │  clipboard    │       │               │
+       └───────────────┘       └───────────────┘
 ```
 
 The **daemon** is the brain — it holds the LLM connections, memory vault, agent hierarchy, and all decision-making. It can run on a home server, a VPS, or your local machine.
