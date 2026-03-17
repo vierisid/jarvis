@@ -25,6 +25,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
 
 - [🔍 What Makes JARVIS Different](#-what-makes-jarvis-different)
 - [⚡ Quick Start](#-quick-start)
+- [☁️ Managed Hosting](#️-managed-hosting)
 - [💡 Use Cases](#-use-cases)
 - [📋 Requirements](#-requirements)
 - [📦 Installation](#-installation)
@@ -69,6 +70,18 @@ jarvis start -d                   # Start as background daemon
 ```
 
 Open `http://localhost:3142` — your dashboard is ready.
+
+---
+
+## ☁️ Managed Hosting
+
+Don't want to deal with servers, DNS, or TLS certificates? We've partnered with **[opencove.host](https://opencove.host)** — a managed hosting platform built specifically for JARVIS.
+
+- **No self-hosting hassle** — no server to provision, no dependencies to install
+- **Dedicated domain included** — no need to buy a domain or configure DNS and TLS
+- **Up and running in under 5 minutes** — spin up your JARVIS instance and start using it immediately
+
+Visit [opencove.host](https://opencove.host) to get started.
 
 ---
 
