@@ -5,7 +5,7 @@
 **Just A Rather Very Intelligent System**
 
 [![CI](https://github.com/vierisid/jarvis/actions/workflows/test.yml/badge.svg)](https://github.com/vierisid/jarvis/actions/workflows/test.yml)
-[![npm](https://img.shields.io/npm/v/@usejarvis/brain)](https://www.npmjs.com/package/@usejarvis/brain)
+[![bun](https://img.shields.io/npm/v/@usejarvis/brain?label=bun&logo=bun&color=%23f9f1e1)](https://bun.sh/packages/@usejarvis/brain)
 [![License](https://img.shields.io/badge/license-RSALv2-blue)](LICENSE)
 [![Runtime](https://img.shields.io/badge/runtime-Bun-%23f9f1e1)](https://bun.sh)
 [![Discord](https://img.shields.io/discord/nE3hcaFYZP?logo=discord&label=Discord)](https://discord.gg/nE3hcaFYZP)
@@ -64,7 +64,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
 ## ⚡ Quick Start
 
 ```bash
-npm install -g @usejarvis/brain   # Install the daemon
+bun install -g @usejarvis/brain   # Install the daemon
 jarvis onboard                    # Interactive setup wizard
 jarvis start -d                   # Start as background daemon
 ```
@@ -115,10 +115,10 @@ Visit [opencove.host](https://opencove.host) to get started.
 
 ## 📦 Installation
 
-### npm (recommended)
+### bun (recommended)
 
 ```bash
-npm install -g @usejarvis/brain
+bun install -g @usejarvis/brain
 jarvis onboard
 ```
 
@@ -168,10 +168,10 @@ This means you can run the daemon on an always-on server and still interact with
 
 ### 1. Install the sidecar
 
-**Via npm:**
+**Via bun:**
 
 ```bash
-npm install -g @usejarvis/sidecar
+bun install -g @usejarvis/sidecar
 ```
 
 **Or download the binary** from [GitHub Releases](https://github.com/vierisid/jarvis/releases) for your platform (macOS, Linux, Windows).
@@ -338,7 +338,7 @@ bun run db:init         # Initialize or reset the database
 - **LLM**: Anthropic Claude, OpenAI GPT, Google Gemini, Ollama
 - **Desktop sidecar**: Go (JWT auth, WebSocket RPC, platform-specific automation)
 - **Voice**: openwakeword (ONNX), Edge TTS / ElevenLabs
-- **Package**: [`@usejarvis/brain`](https://www.npmjs.com/package/@usejarvis/brain) on npm
+- **Package**: `@usejarvis/brain` (published to npm registry, installable via bun)
 
 ---
 
