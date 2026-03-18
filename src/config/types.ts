@@ -27,7 +27,7 @@ export type STTConfig = {
   provider: 'openai' | 'groq' | 'local';
   openai?: { api_key: string; model?: string };
   groq?: { api_key: string; model?: string };
-  local?: { endpoint: string; model?: string };
+  local?: { endpoint: string; model?: string; server_type?: 'whisper_cpp' | 'openai_compatible' };
 };
 
 export type TTSConfig = {

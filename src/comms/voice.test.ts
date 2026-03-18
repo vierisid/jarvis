@@ -1,4 +1,4 @@
-import { test, expect, describe, mock, afterEach, beforeEach } from 'bun:test';
+import { test, expect, describe, mock, afterEach } from 'bun:test';
 import {
   createSTTProvider,
   createTTSProvider,
@@ -10,7 +10,7 @@ import {
 } from './voice.ts';
 import type { STTConfig, TTSConfig } from '../config/types.ts';
 
-/** Build a minimal valid WAV buffer so LocalWhisperSTT.isWav() returns true */
+/** Build a minimal valid WAV buffer */
 function makeWavBuffer(pcmBytes = 100): Buffer {
   const dataSize = pcmBytes;
   const buf = Buffer.alloc(44 + dataSize);
@@ -71,6 +71,15 @@ describe('createSTTProvider factory', () => {
     const config: STTConfig = {
       provider: 'local',
       local: { endpoint: 'http://my-server:9000' },
+    };
+    const provider = createSTTProvider(config);
+    expect(provider).toBeInstanceOf(LocalWhisperSTT);
+  });
+
+  test('passes server_type through to LocalWhisperSTT', () => {
+    const config: STTConfig = {
+      provider: 'local',
+      local: { endpoint: 'http://my-server:9000', server_type: 'openai_compatible' },
     };
     const provider = createSTTProvider(config);
     expect(provider).toBeInstanceOf(LocalWhisperSTT);
@@ -172,7 +181,7 @@ describe('splitIntoSentences', () => {
 });
 
 // ---------------------------------------------------------------------------
-// LocalWhisperSTT – transcribe() integration tests
+// LocalWhisperSTT – transcribe() tests
 // ---------------------------------------------------------------------------
 
 describe('LocalWhisperSTT.transcribe', () => {
@@ -182,71 +191,126 @@ describe('LocalWhisperSTT.transcribe', () => {
     globalThis.fetch = originalFetch;
   });
 
-  // -- WAV detection & skipping transcode ----------------------------------
+  // -- Server type defaults ------------------------------------------------
 
-  test('skips transcoding when audio has RIFF/WAVE header', async () => {
+  test('defaults to whisper_cpp server type', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8189');
     const wav = makeWavBuffer();
 
-    globalThis.fetch = mock(async () =>
-      new Response(JSON.stringify({ text: 'hello' }), {
-        headers: { 'content-type': 'application/json' },
-      })
-    ) as any;
-
-    const result = await stt.transcribe(wav);
-    expect(result).toBe('hello');
-  });
-
-  // -- Candidate URL generation -------------------------------------------
-
-  test('tries /inference first for bare-host endpoint', async () => {
-    const stt = new LocalWhisperSTT('http://localhost:8189');
-    const wav = makeWavBuffer();
-    const calledUrls: string[] = [];
-
-    globalThis.fetch = mock(async (url: string) => {
-      calledUrls.push(url);
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      const body = init.body as FormData;
+      expect(body.has('response_format')).toBe(true);
+      expect(body.has('model')).toBe(false);
       return new Response(JSON.stringify({ text: 'ok' }), {
         headers: { 'content-type': 'application/json' },
       });
     }) as any;
 
     await stt.transcribe(wav);
-    expect(calledUrls[0]).toBe('http://localhost:8189/inference');
   });
 
-  test('uses single URL when endpoint already has explicit path', async () => {
+  // -- whisper_cpp mode ----------------------------------------------------
+
+  test('whisper_cpp: appends /inference to bare-host endpoint', async () => {
+    const stt = new LocalWhisperSTT('http://localhost:8189');
+    const wav = makeWavBuffer();
+    let calledUrl = '';
+
+    globalThis.fetch = mock(async (url: string) => {
+      calledUrl = url;
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(wav);
+    expect(calledUrl).toBe('http://localhost:8189/inference');
+  });
+
+  test('whisper_cpp: uses endpoint as-is when it has explicit path', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8189/inference');
     const wav = makeWavBuffer();
-    const calledUrls: string[] = [];
+    let calledUrl = '';
 
     globalThis.fetch = mock(async (url: string) => {
-      calledUrls.push(url);
+      calledUrl = url;
       return new Response(JSON.stringify({ text: 'ok' }), {
         headers: { 'content-type': 'application/json' },
       });
     }) as any;
 
     await stt.transcribe(wav);
-    // Should only call the explicit URL, not append /inference again
-    expect(calledUrls.every(u => u === 'http://localhost:8189/inference')).toBe(true);
+    expect(calledUrl).toBe('http://localhost:8189/inference');
   });
 
-  test('strips trailing slashes from endpoint', async () => {
+  test('whisper_cpp: strips trailing slashes from endpoint', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8189///');
     const wav = makeWavBuffer();
-    const calledUrls: string[] = [];
+    let calledUrl = '';
 
     globalThis.fetch = mock(async (url: string) => {
-      calledUrls.push(url);
+      calledUrl = url;
       return new Response(JSON.stringify({ text: 'ok' }), {
         headers: { 'content-type': 'application/json' },
       });
     }) as any;
 
     await stt.transcribe(wav);
-    expect(calledUrls[0]).toBe('http://localhost:8189/inference');
+    expect(calledUrl).toBe('http://localhost:8189/inference');
+  });
+
+  test('whisper_cpp: sends response_format and temperature fields', async () => {
+    const stt = new LocalWhisperSTT('http://localhost:8189/inference', undefined, 'whisper_cpp');
+    const wav = makeWavBuffer();
+
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      const body = init.body as FormData;
+      expect(body.has('response_format')).toBe(true);
+      expect(body.get('response_format')).toBe('json');
+      expect(body.has('temperature')).toBe(true);
+      expect(body.has('model')).toBe(false);
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(wav);
+  });
+
+  // -- openai_compatible mode ----------------------------------------------
+
+  test('openai_compatible: uses endpoint verbatim', async () => {
+    const stt = new LocalWhisperSTT('http://localhost:8080/v1/audio/transcriptions', undefined, 'openai_compatible');
+    const wav = makeWavBuffer();
+    let calledUrl = '';
+
+    globalThis.fetch = mock(async (url: string) => {
+      calledUrl = url;
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(wav);
+    expect(calledUrl).toBe('http://localhost:8080/v1/audio/transcriptions');
+  });
+
+  test('openai_compatible: sends model and language fields', async () => {
+    const stt = new LocalWhisperSTT('http://localhost:8080/v1/audio/transcriptions', 'whisper-1', 'openai_compatible');
+    const wav = makeWavBuffer();
+
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      const body = init.body as FormData;
+      expect(body.has('model')).toBe(true);
+      expect(body.get('model')).toBe('whisper-1');
+      expect(body.has('language')).toBe(true);
+      expect(body.has('response_format')).toBe(false);
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(wav);
   });
 
   // -- Response shape parsing ---------------------------------------------
@@ -316,60 +380,9 @@ describe('LocalWhisperSTT.transcribe', () => {
     expect(await stt.transcribe(wav)).toBe('hello');
   });
 
-  // -- Fallback & retry logic ---------------------------------------------
+  // -- Error handling -----------------------------------------------------
 
-  test('falls back to bare endpoint when /inference returns error', async () => {
-    const stt = new LocalWhisperSTT('http://localhost:8189');
-    const wav = makeWavBuffer();
-    const calledUrls: string[] = [];
-
-    globalThis.fetch = mock(async (url: string) => {
-      calledUrls.push(url);
-      if (url.includes('/inference')) {
-        return new Response('not found', { status: 404 });
-      }
-      return new Response(JSON.stringify({ text: 'fallback worked' }), {
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as any;
-
-    const result = await stt.transcribe(wav);
-    expect(result).toBe('fallback worked');
-    expect(calledUrls.some(u => u === 'http://localhost:8189')).toBe(true);
-  });
-
-  test('tries whisper.cpp form before openai-compatible form', async () => {
-    const stt = new LocalWhisperSTT('http://localhost:8189/inference');
-    const wav = makeWavBuffer();
-    let callIndex = 0;
-    const formLabels: string[] = [];
-
-    globalThis.fetch = mock(async (_url: string, init: any) => {
-      callIndex++;
-      const body = init.body as FormData;
-      // whisper.cpp form has response_format; openai-compatible has model
-      if (body.has('response_format')) {
-        formLabels.push('whisper.cpp');
-      } else if (body.has('model')) {
-        formLabels.push('openai-compatible');
-      }
-      // Only succeed on second call
-      if (callIndex === 1) {
-        return new Response('bad', { status: 400 });
-      }
-      return new Response(JSON.stringify({ text: 'ok' }), {
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as any;
-
-    await stt.transcribe(wav);
-    expect(formLabels[0]).toBe('whisper.cpp');
-    expect(formLabels[1]).toBe('openai-compatible');
-  });
-
-  // -- Error aggregation --------------------------------------------------
-
-  test('throws aggregated error when all attempts fail', async () => {
+  test('throws on HTTP error with status and body', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8189');
     const wav = makeWavBuffer();
 
@@ -379,14 +392,32 @@ describe('LocalWhisperSTT.transcribe', () => {
 
     try {
       await stt.transcribe(wav);
-      expect(true).toBe(false); // should not reach
+      expect(true).toBe(false);
     } catch (err: any) {
-      expect(err.message).toContain('Local Whisper STT failed');
+      expect(err.message).toContain('Local Whisper STT error');
       expect(err.message).toContain('500');
     }
   });
 
-  test('includes network errors in aggregated error message', async () => {
+  test('throws on empty transcription', async () => {
+    const stt = new LocalWhisperSTT('http://localhost:8189/inference');
+    const wav = makeWavBuffer();
+
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ text: '' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    ) as any;
+
+    try {
+      await stt.transcribe(wav);
+      expect(true).toBe(false);
+    } catch (err: any) {
+      expect(err.message).toContain('empty transcription');
+    }
+  });
+
+  test('propagates network errors', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8189/inference');
     const wav = makeWavBuffer();
 
@@ -398,52 +429,7 @@ describe('LocalWhisperSTT.transcribe', () => {
       await stt.transcribe(wav);
       expect(true).toBe(false);
     } catch (err: any) {
-      expect(err.message).toContain('Local Whisper STT failed');
-      expect(err.message).toContain('Connection refused');
-    }
-  });
-
-  test('treats empty transcription as failure and continues trying', async () => {
-    const stt = new LocalWhisperSTT('http://localhost:8189/inference');
-    const wav = makeWavBuffer();
-    let callCount = 0;
-
-    globalThis.fetch = mock(async () => {
-      callCount++;
-      // First two calls return empty, last one returns real text
-      if (callCount <= 1) {
-        return new Response(JSON.stringify({ text: '' }), {
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({ text: 'finally got it' }), {
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as any;
-
-    const result = await stt.transcribe(wav);
-    expect(result).toBe('finally got it');
-    expect(callCount).toBeGreaterThan(1);
-  });
-
-  // -- Non-WAV audio (ffmpeg path) ----------------------------------------
-
-  test('attempts ffmpeg transcode for non-WAV audio and includes error on failure', async () => {
-    const stt = new LocalWhisperSTT('http://localhost:8189/inference');
-    const nonWav = Buffer.from('not a wav file at all');
-
-    // fetch always fails too, so we get the aggregated error
-    globalThis.fetch = mock(async () =>
-      new Response('error', { status: 500 })
-    ) as any;
-
-    try {
-      await stt.transcribe(nonWav);
-      expect(true).toBe(false);
-    } catch (err: any) {
-      expect(err.message).toContain('Local Whisper STT failed');
-      // Should still have tried the openai-compatible form even without WAV
-      expect(err.message).toContain('openai-compatible');
+      expect(err.message).toBe('Connection refused');
     }
   });
 });

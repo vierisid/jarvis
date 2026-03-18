@@ -36,8 +36,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const recordingProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const recordingMuteRef = useRef<GainNode | null>(null);
+  const recordingWorkletRef = useRef<AudioWorkletNode | null>(null);
   const pcmChunksRef = useRef<Float32Array[]>([]);
   const sampleRateRef = useRef(16000);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -356,12 +355,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const stopRecordingInternal = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
-    recordingProcessorRef.current?.disconnect();
-    recordingProcessorRef.current = null;
+    recordingWorkletRef.current?.disconnect();
+    recordingWorkletRef.current = null;
     recordingSourceRef.current?.disconnect();
     recordingSourceRef.current = null;
-    recordingMuteRef.current?.disconnect();
-    recordingMuteRef.current = null;
     recordingContextRef.current?.close().catch(() => {});
     recordingContextRef.current = null;
     // Disconnect and close silence detection audio graph
@@ -436,22 +433,18 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       const recordingContext = new AudioContext({ sampleRate: 16000 });
       recordingContextRef.current = recordingContext;
       sampleRateRef.current = recordingContext.sampleRate;
+
+      await recordingContext.audioWorklet.addModule('/audio/pcm-capture-processor.js');
       const recordingSource = recordingContext.createMediaStreamSource(stream);
       recordingSourceRef.current = recordingSource;
-      const processor = recordingContext.createScriptProcessor(4096, 1, 1);
-      recordingProcessorRef.current = processor;
-      const mute = recordingContext.createGain();
-      mute.gain.value = 0;
-      recordingMuteRef.current = mute;
+      const workletNode = new AudioWorkletNode(recordingContext, 'pcm-capture-processor');
+      recordingWorkletRef.current = workletNode;
 
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0);
-        pcmChunksRef.current.push(new Float32Array(input));
+      workletNode.port.onmessage = (event) => {
+        pcmChunksRef.current.push(new Float32Array(event.data));
       };
 
-      recordingSource.connect(processor);
-      processor.connect(mute);
-      mute.connect(recordingContext.destination);
+      recordingSource.connect(workletNode);
       setVoiceState("recording");
     } catch (err) {
       console.error("[Voice] Mic access error:", err);
@@ -487,9 +480,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       silenceSourceRef.current?.disconnect();
       silenceCtxRef.current?.close().catch(() => {});
       audioContextRef.current?.close();
-      recordingProcessorRef.current?.disconnect();
+      recordingWorkletRef.current?.disconnect();
       recordingSourceRef.current?.disconnect();
-      recordingMuteRef.current?.disconnect();
       recordingContextRef.current?.close().catch(() => {});
       if (wakeEngineRef.current) {
         wakeEngineRef.current.stop().catch(() => {});

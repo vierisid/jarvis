@@ -1,8 +1,5 @@
 import type { STTConfig, TTSConfig } from '../config/types.ts';
 import { Communicate } from 'edge-tts-universal';
-import { unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -82,29 +79,47 @@ export class GroqWhisperSTT implements STTProvider {
 }
 
 /**
- * Local Whisper STT — connects to a whisper.cpp HTTP server or compatible endpoint.
+ * Local Whisper STT — connects to a whisper.cpp HTTP server or OpenAI-compatible endpoint.
  */
+export type LocalWhisperServerType = 'whisper_cpp' | 'openai_compatible';
+
 export class LocalWhisperSTT implements STTProvider {
   private endpoint: string;
   private model: string;
+  private serverType: LocalWhisperServerType;
 
-  constructor(endpoint: string = 'http://localhost:8080', model?: string) {
+  constructor(
+    endpoint: string = 'http://localhost:8080',
+    model?: string,
+    serverType: LocalWhisperServerType = 'whisper_cpp',
+  ) {
     this.endpoint = endpoint;
     this.model = model ?? 'base';
+    this.serverType = serverType;
   }
 
-  private isWav(audio: Buffer): boolean {
-    return audio.length >= 12 &&
-      audio.subarray(0, 4).toString('ascii') === 'RIFF' &&
-      audio.subarray(8, 12).toString('ascii') === 'WAVE';
-  }
-
-  private buildCandidateUrls(): string[] {
+  private resolveUrl(): string {
     const normalized = this.endpoint.replace(/\/+$/, '');
-    const looksLikeExplicitPath = /\/(inference|asr|transcribe|audio\/transcriptions)$/.test(normalized);
-    return looksLikeExplicitPath
-      ? [normalized]
-      : [`${normalized}/inference`, normalized];
+    if (this.serverType === 'whisper_cpp') {
+      const hasPath = /\/(inference|asr|transcribe)$/.test(normalized);
+      return hasPath ? normalized : `${normalized}/inference`;
+    }
+    return normalized;
+  }
+
+  private buildForm(audio: Buffer): FormData {
+    const formData = new FormData();
+    if (this.serverType === 'whisper_cpp') {
+      formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+      formData.append('response_format', 'json');
+      formData.append('temperature', '0.0');
+      formData.append('temperature_inc', '0.2');
+    } else {
+      formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+      formData.append('model', this.model);
+      formData.append('language', 'en');
+    }
+    return formData;
   }
 
   private async parseResponse(response: Response): Promise<string> {
@@ -118,108 +133,28 @@ export class LocalWhisperSTT implements STTProvider {
         ''
       ).trim();
     }
-
     return (await response.text()).trim();
   }
 
-  private async transcodeToWav(audio: Buffer): Promise<Buffer> {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const inputPath = join(tmpdir(), `jarvis-voice-${id}.webm`);
-    const outputPath = join(tmpdir(), `jarvis-voice-${id}.wav`);
+  async transcribe(audio: Buffer): Promise<string> {
+    const url = this.resolveUrl();
+    const formData = this.buildForm(audio);
 
-    await Bun.write(inputPath, audio);
-
-    const proc = Bun.spawn([
-      'ffmpeg',
-      '-y',
-      '-i', inputPath,
-      '-ar', '16000',
-      '-ac', '1',
-      '-c:a', 'pcm_s16le',
-      outputPath,
-    ], {
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
     });
 
-    const exitCode = await proc.exited;
-    const stderr = await new Response(proc.stderr).text();
-
-    try { await unlink(inputPath); } catch {}
-
-    if (exitCode !== 0) {
-      throw new Error(`ffmpeg conversion failed (${exitCode}): ${stderr.trim()}`);
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Local Whisper STT error (${response.status}): ${err}`);
     }
 
-    const wav = Buffer.from(await Bun.file(outputPath).arrayBuffer());
-    try { await unlink(outputPath); } catch {}
-    return wav;
-  }
-
-  private buildOpenAICompatibleForm(audio: Buffer): FormData {
-    const audioBlob = new Blob([new Uint8Array(audio)], { type: 'audio/webm' });
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'audio.webm');
-    formData.append('model', this.model);
-    formData.append('language', 'en');
-    return formData;
-  }
-
-  private buildWhisperCppForm(audio: Buffer): FormData {
-    const audioBlob = new Blob([new Uint8Array(audio)], { type: 'audio/wav' });
-    const whisperCppForm = new FormData();
-    whisperCppForm.append('file', audioBlob, 'audio.wav');
-    whisperCppForm.append('response_format', 'json');
-    whisperCppForm.append('temperature', '0.0');
-    whisperCppForm.append('temperature_inc', '0.2');
-    return whisperCppForm;
-  }
-
-  async transcribe(audio: Buffer): Promise<string> {
-    const errors: string[] = [];
-    let whisperCppAudio: Buffer | null = null;
-
-    if (this.isWav(audio)) {
-      whisperCppAudio = audio;
-    } else {
-      try {
-        whisperCppAudio = await this.transcodeToWav(audio);
-      } catch (err) {
-        errors.push(`ffmpeg conversion -> ${err instanceof Error ? err.message : String(err)}`);
-      }
+    const transcript = await this.parseResponse(response);
+    if (!transcript) {
+      throw new Error('Local Whisper STT returned empty transcription');
     }
-
-    for (const url of this.buildCandidateUrls()) {
-      const requestBodies: Array<{ label: string; formData: FormData }> = [];
-      if (whisperCppAudio) {
-        requestBodies.push({ label: 'whisper.cpp', formData: this.buildWhisperCppForm(whisperCppAudio) });
-      }
-      requestBodies.push({ label: 'openai-compatible', formData: this.buildOpenAICompatibleForm(audio) });
-
-      for (const { label: requestLabel, formData } of requestBodies) {
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (!response.ok) {
-            const err = await response.text();
-            errors.push(`${url} (${requestLabel}) -> ${response.status}: ${err}`);
-            continue;
-          }
-
-          const transcript = await this.parseResponse(response);
-          if (transcript) return transcript;
-
-          errors.push(`${url} (${requestLabel}) -> empty transcription response`);
-        } catch (err) {
-          errors.push(`${url} (${requestLabel}) -> ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-
-    throw new Error(`Local Whisper STT failed. Tried: ${errors.join(' | ')}`);
+    return transcript;
   }
 }
 
@@ -236,7 +171,7 @@ export function createSTTProvider(config: STTConfig): STTProvider | null {
       if (!config.groq?.api_key) return null;
       return new GroqWhisperSTT(config.groq.api_key, config.groq.model);
     case 'local':
-      return new LocalWhisperSTT(config.local?.endpoint, config.local?.model);
+      return new LocalWhisperSTT(config.local?.endpoint, config.local?.model, config.local?.server_type);
     default:
       return null;
   }

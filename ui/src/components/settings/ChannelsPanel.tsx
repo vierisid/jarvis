@@ -16,6 +16,7 @@ type STTConfigData = {
   has_openai_key: boolean;
   has_groq_key: boolean;
   local_endpoint: string | null;
+  local_server_type: string;
 };
 
 type TTSConfigData = {
@@ -60,6 +61,7 @@ export function ChannelsPanel() {
   const [sttProvider, setSttProvider] = useState("openai");
   const [sttKey, setSttKey] = useState("");
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
+  const [sttServerType, setSttServerType] = useState("whisper_cpp");
 
   // TTS form
   const [ttsEnabled, setTtsEnabled] = useState(false);
@@ -96,6 +98,7 @@ export function ChannelsPanel() {
     if (sttCfg) {
       setSttProvider(sttCfg.provider);
       if (sttCfg.local_endpoint) setSttEndpoint(sttCfg.local_endpoint);
+      if (sttCfg.local_server_type) setSttServerType(sttCfg.local_server_type);
     }
   }, [sttCfg]);
 
@@ -171,7 +174,7 @@ export function ChannelsPanel() {
       } else if (sttProvider === "groq" && sttKey) {
         body.groq = { api_key: sttKey };
       } else if (sttProvider === "local") {
-        body.local = { endpoint: sttEndpoint };
+        body.local = { endpoint: sttEndpoint, server_type: sttServerType };
       }
 
       await api("/api/config/stt", {
@@ -368,13 +371,26 @@ export function ChannelsPanel() {
         )}
 
         {sttProvider === "local" && (
-          <input
-            style={inputStyle}
-            type="text"
-            placeholder="Whisper endpoint (e.g., http://localhost:8080)"
-            value={sttEndpoint}
-            onChange={e => setSttEndpoint(e.target.value)}
-          />
+          <>
+            <input
+              style={inputStyle}
+              type="text"
+              placeholder="Whisper endpoint (e.g., http://localhost:8080)"
+              value={sttEndpoint}
+              onChange={e => setSttEndpoint(e.target.value)}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Server Type</span>
+              <select
+                style={inputStyle}
+                value={sttServerType}
+                onChange={e => setSttServerType(e.target.value)}
+              >
+                <option value="whisper_cpp">whisper.cpp</option>
+                <option value="openai_compatible">OpenAI-compatible</option>
+              </select>
+            </div>
+          </>
         )}
 
         <button style={{ ...primaryBtnStyle, marginTop: "8px" }} onClick={saveSTT}>
