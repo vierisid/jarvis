@@ -79,7 +79,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
 
     for (const chunk of chunks) {
       for (let i = 0; i < chunk.length; i++) {
-        const sample = Math.max(-1, Math.min(1, chunk[i]));
+        const sample = Math.max(-1, Math.min(1, chunk[i]!));
         pcm[offset++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
       }
     }
@@ -107,7 +107,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     view.setUint32(40, pcm.length * 2, true);
 
     for (let i = 0; i < pcm.length; i++) {
-      view.setInt16(44 + i * 2, pcm[i], true);
+      view.setInt16(44 + i * 2, pcm[i]!, true);
     }
 
     return buffer;
