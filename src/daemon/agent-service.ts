@@ -18,6 +18,7 @@ import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
+import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -348,6 +349,17 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered Gemini provider');
+    }
+
+    // Register OpenRouter
+    if (llm.openrouter?.api_key) {
+      const provider = new OpenRouterProvider(
+        llm.openrouter.api_key,
+        llm.openrouter.model
+      );
+      this.llmManager.registerProvider(provider);
+      hasProvider = true;
+      console.log('[AgentService] Registered OpenRouter provider');
     }
 
     // Register Ollama (always available, no API key needed)

@@ -151,6 +151,7 @@ export type JarvisConfig = {
     openai?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
     ollama?: { base_url?: string; model?: string };
+    openrouter?: { api_key: string; model?: string };
   };
   personality: {
     core_traits: string[];
@@ -228,6 +229,10 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     ollama: {
       base_url: 'http://localhost:11434',
       model: 'llama3',
+    },
+    openrouter: {
+      api_key: '',
+      model: 'anthropic/claude-sonnet-4',
     },
   },
   personality: {

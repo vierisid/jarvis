@@ -2,6 +2,7 @@ import { test, expect, describe } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
 import { OllamaProvider } from './ollama.ts';
+import { OpenRouterProvider } from './openrouter.ts';
 import { LLMManager } from './manager.ts';
 import { guardImageSize, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
@@ -20,6 +21,11 @@ describe('LLM Provider Types', () => {
   test('OllamaProvider can be instantiated', () => {
     const provider = new OllamaProvider('http://localhost:11434', 'llama3');
     expect(provider.name).toBe('ollama');
+  });
+
+  test('OpenRouterProvider can be instantiated', () => {
+    const provider = new OpenRouterProvider('test-key', 'anthropic/claude-sonnet-4');
+    expect(provider.name).toBe('openrouter');
   });
 });
 
@@ -119,6 +125,11 @@ describe('Provider URLs', () => {
     expect(provider.apiUrl).toBe('https://api.openai.com/v1/chat/completions');
   });
 
+  test('OpenRouterProvider uses correct API URL', () => {
+    const provider = new OpenRouterProvider('test-key') as any;
+    expect(provider.apiUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
+  });
+
   test('OllamaProvider uses correct base URL', () => {
     const provider = new OllamaProvider() as any;
     expect(provider.baseUrl).toBe('http://localhost:11434');
@@ -146,14 +157,21 @@ describe('Default Models', () => {
     expect(provider.defaultModel).toBe('llama3');
   });
 
+  test('OpenRouterProvider has correct default model', () => {
+    const provider = new OpenRouterProvider('test-key') as any;
+    expect(provider.defaultModel).toBe('anthropic/claude-sonnet-4');
+  });
+
   test('can override default models', () => {
     const anthropic = new AnthropicProvider('key', 'custom-model') as any;
     const openai = new OpenAIProvider('key', 'custom-model') as any;
     const ollama = new OllamaProvider('http://localhost:11434', 'custom-model') as any;
+    const openrouter = new OpenRouterProvider('key', 'custom-model') as any;
 
     expect(anthropic.defaultModel).toBe('custom-model');
     expect(openai.defaultModel).toBe('custom-model');
     expect(ollama.defaultModel).toBe('custom-model');
+    expect(openrouter.defaultModel).toBe('custom-model');
   });
 });
 

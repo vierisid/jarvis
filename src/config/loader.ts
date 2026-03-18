@@ -75,6 +75,11 @@ function applyEnvOverrides(config: JarvisConfig): void {
     config.llm.ollama.base_url = env.JARVIS_OLLAMA_URL;
   }
 
+  if (env.JARVIS_OPENROUTER_KEY) {
+    if (!config.llm.openrouter) config.llm.openrouter = { api_key: '', model: 'anthropic/claude-sonnet-4' };
+    config.llm.openrouter.api_key = env.JARVIS_OPENROUTER_KEY;
+  }
+
   if (env.JARVIS_BRAIN_DOMAIN) {
     config.daemon.brain_domain = env.JARVIS_BRAIN_DOMAIN;
   }

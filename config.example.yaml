@@ -31,6 +31,11 @@ llm:
     api_key: "sk-..."
     model: "gpt-4o"
 
+  # OpenRouter (access hundreds of models via single API key)
+  # openrouter:
+  #   api_key: "sk-or-..."
+  #   model: "anthropic/claude-sonnet-4"
+
   # Ollama (local models) configuration
   ollama:
     base_url: "http://localhost:11434"

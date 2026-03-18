@@ -12,6 +12,7 @@ import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
+import { OpenRouterProvider } from '../llm/openrouter.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
 
@@ -19,6 +20,7 @@ import type { LLMManager } from '../llm/manager.ts';
 const KEY_ANTHROPIC = 'llm.anthropic.api_key';
 const KEY_OPENAI = 'llm.openai.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
+const KEY_OPENROUTER = 'llm.openrouter.api_key';
 
 // DB setting keys
 const SETTING_PRIMARY = 'llm.primary';
@@ -28,6 +30,7 @@ const SETTING_OPENAI_MODEL = 'llm.openai.model';
 const SETTING_GEMINI_MODEL = 'llm.gemini.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
 const SETTING_OLLAMA_BASE_URL = 'llm.ollama.base_url';
+const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
 
 export type LLMSettingsResponse = {
   primary: string;
@@ -36,6 +39,7 @@ export type LLMSettingsResponse = {
   openai: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
+  openrouter: { model: string; has_api_key: boolean } | null;
 };
 
 /**
@@ -53,9 +57,12 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
   const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? 'http://localhost:11434';
 
+  const openrouterModel = getSetting(SETTING_OPENROUTER_MODEL) ?? config.llm.openrouter?.model ?? 'anthropic/claude-sonnet-4';
+
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
+  const hasOpenrouterKey = hasSecret(KEY_OPENROUTER) || !!config.llm.openrouter?.api_key;
 
   return {
     primary,
@@ -64,6 +71,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
     ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
+    openrouter: { model: openrouterModel, has_api_key: hasOpenrouterKey },
   };
 }
 
@@ -79,6 +87,7 @@ export function saveLLMSettings(
     openai?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
     ollama?: { base_url?: string; model?: string };
+    openrouter?: { api_key?: string; model?: string };
   },
 ): void {
   // Save non-secret settings to DB
@@ -150,6 +159,21 @@ export function saveLLMSettings(
       base_url: body.ollama.base_url ?? config.llm.ollama?.base_url,
     };
   }
+
+  // OpenRouter
+  if (body.openrouter) {
+    if (body.openrouter.model) {
+      setSetting(SETTING_OPENROUTER_MODEL, body.openrouter.model);
+    }
+    if (body.openrouter.api_key) {
+      setSecret(KEY_OPENROUTER, body.openrouter.api_key);
+    }
+    config.llm.openrouter = {
+      ...config.llm.openrouter,
+      model: body.openrouter.model ?? config.llm.openrouter?.model,
+      api_key: body.openrouter.api_key ?? getOpenRouterApiKey(config) ?? '',
+    };
+  }
 }
 
 /**
@@ -171,6 +195,13 @@ function getOpenAIApiKey(config: JarvisConfig): string | null {
  */
 function getGeminiApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_GEMINI) ?? config.llm.gemini?.api_key ?? null;
+}
+
+/**
+ * Resolve the OpenRouter API key: keychain > config.yaml > env var.
+ */
+function getOpenRouterApiKey(config: JarvisConfig): string | null {
+  return getSecret(KEY_OPENROUTER) ?? config.llm.openrouter?.api_key ?? null;
 }
 
 /**
@@ -236,6 +267,19 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
         : (config.llm.ollama?.base_url ?? 'http://localhost:11434'),
     };
   }
+
+  // OpenRouter
+  const dbOpenrouterModel = getSetting(SETTING_OPENROUTER_MODEL);
+  const keychainOpenrouterKey = getSecret(KEY_OPENROUTER);
+  if (dbOpenrouterModel || keychainOpenrouterKey) {
+    config.llm.openrouter = {
+      ...config.llm.openrouter,
+      api_key: (!process.env.JARVIS_OPENROUTER_KEY && keychainOpenrouterKey)
+        ? keychainOpenrouterKey
+        : (config.llm.openrouter?.api_key ?? ''),
+      model: dbOpenrouterModel ?? config.llm.openrouter?.model,
+    };
+  }
 }
 
 /**
@@ -257,6 +301,10 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
   if (llm.gemini?.api_key) {
     providers.push(new GeminiProvider(llm.gemini.api_key, llm.gemini.model));
     console.log('[LLM] Hot-reloaded Gemini provider');
+  }
+  if (llm.openrouter?.api_key) {
+    providers.push(new OpenRouterProvider(llm.openrouter.api_key, llm.openrouter.model));
+    console.log('[LLM] Hot-reloaded OpenRouter provider');
   }
   if (llm.ollama) {
     providers.push(new OllamaProvider(llm.ollama.base_url, llm.ollama.model));
@@ -296,6 +344,10 @@ export async function testLLMProvider(
       const key = opts.api_key || config.llm.gemini?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new GeminiProvider(key, opts.model ?? config.llm.gemini?.model);
+    } else if (opts.provider === 'openrouter') {
+      const key = opts.api_key || getSecret(KEY_OPENROUTER) || config.llm.openrouter?.api_key;
+      if (!key) return { ok: false, error: 'API key required' };
+      instance = new OpenRouterProvider(key, opts.model ?? config.llm.openrouter?.model);
     } else if (opts.provider === 'ollama') {
       instance = new OllamaProvider(
         opts.base_url ?? config.llm.ollama?.base_url,
