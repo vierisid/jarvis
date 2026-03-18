@@ -312,7 +312,7 @@ jobs:
           # Trim leading whitespace from heredoc indentation
           MESSAGE=$(echo "$MESSAGE" | sed 's/^          //')
 
-          jq -n --arg content "$MESSAGE" '{"content": $content}' | \
+          jq -n --arg content "$MESSAGE" '{"content": $content, "flags": 4}' | \
             curl -sf -X POST "$DISCORD_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
               -d @-
