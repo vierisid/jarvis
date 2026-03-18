@@ -20,7 +20,7 @@ import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { checkCommitments, classifyEvent } from "./event-classifier.ts";
-import { createApiRoutes } from "./api-routes.ts";
+import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
@@ -470,6 +470,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       goalService: undefined,
       sidecarManager,
     };
+    setCorsOrigin(jarvisConfig.daemon.port);
     const apiRoutes = createApiRoutes(apiContext);
     wsService.setApiRoutes(apiRoutes);
 

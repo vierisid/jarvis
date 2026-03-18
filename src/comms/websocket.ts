@@ -1,6 +1,13 @@
 import type { Server, ServerWebSocket } from 'bun';
+import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import type { SidecarManager } from '../sidecar/manager.ts';
+
+/** Constant-time string comparison to prevent timing attacks */
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 export type WSMessage = {
   type: 'chat' | 'command' | 'status' | 'stream' | 'error' | 'notification'
@@ -57,9 +64,11 @@ export class WebSocketServer {
   private publicDir: string | null = null;
   private sidecarManager: SidecarManager | null = null;
   private authToken: string | null = null;
+  private corsOrigin: string | null = null;
 
   constructor(port: number = 3142) {
     this.port = port;
+    this.corsOrigin = `http://localhost:${port}`;
   }
 
   setAuthToken(token: string): void {
@@ -139,10 +148,10 @@ export class WebSocketServer {
         // 1. Auth check (if configured)
         if (self.authToken && !isPublicRoute(pathname, req.method)) {
           const cookieToken = getCookie(req, 'token');
-          if (cookieToken !== self.authToken) {
+          if (!cookieToken || !safeCompare(cookieToken, self.authToken)) {
             // Check ?token= query param — set cookie via Set-Cookie and redirect
             const queryToken = url.searchParams.get('token');
-            if (queryToken === self.authToken) {
+            if (queryToken && safeCompare(queryToken, self.authToken)) {
               const cleanParams = new URLSearchParams(url.searchParams);
               cleanParams.delete('token');
               const qs = cleanParams.toString();
@@ -151,7 +160,7 @@ export class WebSocketServer {
                 status: 302,
                 headers: {
                   'Location': redirectTo || '/',
-                  'Set-Cookie': `token=${queryToken}; Path=/; SameSite=Lax`,
+                  'Set-Cookie': `token=${queryToken}; Path=/; SameSite=Lax; HttpOnly`,
                 },
               });
             }
@@ -187,10 +196,11 @@ export class WebSocketServer {
         if (pathname.startsWith('/api/')) {
           // Handle CORS preflight
           if (req.method === 'OPTIONS') {
+            const allowedOrigin = self.corsOrigin || `http://localhost:${self.port}`;
             return new Response(null, {
               status: 204,
               headers: {
-                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Origin': allowedOrigin,
                 'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
               },
@@ -243,8 +253,13 @@ export class WebSocketServer {
           if (pathname === '/' || pathname === '/index.html') {
             filePath = path.join(self.staticDir, 'index.html');
           } else {
-            // Serve JS/CSS/assets
-            filePath = path.join(self.staticDir, pathname);
+            // Serve JS/CSS/assets — resolve and validate within staticDir
+            filePath = path.resolve(self.staticDir, '.' + pathname);
+          }
+
+          // Prevent path traversal outside staticDir
+          if (!filePath.startsWith(path.resolve(self.staticDir) + path.sep) && filePath !== path.resolve(self.staticDir, 'index.html')) {
+            return new Response('Forbidden', { status: 403 });
           }
 
           const file = Bun.file(filePath);
@@ -259,7 +274,11 @@ export class WebSocketServer {
 
         // 6. Public assets fallback (models, WASM, etc.)
         if (self.publicDir) {
-          const publicPath = path.join(self.publicDir, pathname);
+          const publicPath = path.resolve(self.publicDir, '.' + pathname);
+          // Prevent path traversal outside publicDir
+          if (!publicPath.startsWith(path.resolve(self.publicDir) + path.sep)) {
+            return new Response('Forbidden', { status: 403 });
+          }
           const publicFile = Bun.file(publicPath);
           if (await publicFile.exists()) {
             return new Response(publicFile);

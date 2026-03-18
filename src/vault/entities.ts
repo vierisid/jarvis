@@ -1,5 +1,10 @@
 import { getDb, generateId } from './schema.ts';
 
+/** Escape SQL LIKE wildcard characters in user input */
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
 export type EntityType = 'person' | 'project' | 'tool' | 'place' | 'concept' | 'event';
 
 export type Entity = {
@@ -106,8 +111,8 @@ export function findEntities(query: {
   }
 
   if (query.nameContains) {
-    conditions.push('name LIKE ?');
-    params.push(`%${query.nameContains}%`);
+    conditions.push("name LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(query.nameContains)}%`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -174,7 +179,7 @@ export function deleteEntity(id: string): boolean {
  */
 export function searchEntitiesByName(query: string): Entity[] {
   const db = getDb();
-  const stmt = db.prepare('SELECT * FROM entities WHERE name LIKE ? ORDER BY name');
-  const rows = stmt.all(`%${query}%`) as EntityRow[];
+  const stmt = db.prepare("SELECT * FROM entities WHERE name LIKE ? ESCAPE '\\' ORDER BY name");
+  const rows = stmt.all(`%${escapeLike(query)}%`) as EntityRow[];
   return rows.map(parseEntity);
 }

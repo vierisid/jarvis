@@ -32,13 +32,55 @@ import {
   createContent, getContent, findContent, updateContent, deleteContent,
   advanceStage, regressStage,
   addStageNote, getStageNotes,
-  addAttachment, getAttachments, deleteAttachment,
+  addAttachment, getAttachment, getAttachments, deleteAttachment,
   CONTENT_STAGES, CONTENT_TYPES,
 } from '../vault/content-pipeline.ts';
 
 import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+
+// --- Security helpers ---
+
+/** HTML-escape to prevent XSS in inline HTML responses */
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** Sanitize a single path segment — strip directory separators and dot-dot sequences */
+function sanitizePathSegment(segment: string): string {
+  return path.basename(segment.replace(/\.\./g, ''));
+}
+
+/** Validate that a resolved path is within the expected base directory */
+function isWithinBase(resolvedPath: string, baseDir: string): boolean {
+  const normalizedBase = path.resolve(baseDir) + path.sep;
+  const normalizedPath = path.resolve(resolvedPath);
+  return normalizedPath.startsWith(normalizedBase) || normalizedPath === path.resolve(baseDir);
+}
+
+/** Escape SQL LIKE wildcard characters in user input */
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
+/** Sanitize a filename for Content-Disposition headers */
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_\- .]/g, '');
+}
+
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50 MB
+
+const BLOCKED_MIME_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'application/javascript',
+  'text/javascript',
+  'image/svg+xml',
+  'application/x-httpd-php',
+  'application/x-sh',
+  'application/x-csh',
+]);
 
 import type { WebSocketService } from './ws-service.ts';
 import type { ChannelService } from './channel-service.ts';
@@ -75,12 +117,21 @@ export type ApiContext = {
   sidecarManager?: import('../sidecar/manager.ts').SidecarManager;
 };
 
-// CORS headers for dashboard
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
+// CORS headers — scoped to the dashboard origin, not wildcard
+let CORS: Record<string, string> = {
+  'Access-Control-Allow-Origin': 'http://localhost:3142',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+
+/** Call once during init to set the correct CORS origin from config */
+export function setCorsOrigin(port: number, host = 'localhost') {
+  CORS = {
+    'Access-Control-Allow-Origin': `http://${host}:${port}`,
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: CORS });
@@ -184,15 +235,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           for (const e of nameMatches) entityIds.add(e.id);
 
           // 2. Search facts by predicate or object
+          const safeQ = escapeLike(q);
           const factRows = db.prepare(
-            'SELECT DISTINCT subject_id FROM facts WHERE predicate LIKE ? OR object LIKE ? LIMIT 200'
-          ).all(`%${q}%`, `%${q}%`) as { subject_id: string }[];
+            "SELECT DISTINCT subject_id FROM facts WHERE predicate LIKE ? ESCAPE '\\' OR object LIKE ? ESCAPE '\\' LIMIT 200"
+          ).all(`%${safeQ}%`, `%${safeQ}%`) as { subject_id: string }[];
           for (const r of factRows) entityIds.add(r.subject_id);
 
           // 3. Search relationships by type
           const relRows = db.prepare(
-            'SELECT from_id, to_id FROM relationships WHERE type LIKE ? LIMIT 200'
-          ).all(`%${q}%`) as { from_id: string; to_id: string }[];
+            "SELECT from_id, to_id FROM relationships WHERE type LIKE ? ESCAPE '\\' LIMIT 200"
+          ).all(`%${safeQ}%`) as { from_id: string; to_id: string }[];
           for (const r of relRows) {
             entityIds.add(r.from_id);
             entityIds.add(r.to_id);
@@ -732,22 +784,44 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const file = formData.get('file') as File | null;
           if (!file) return error('Missing "file" in form data');
 
-          const label = (formData.get('label') as string) || null;
-
-          // Save file to ~/.jarvis/content/<id>/
-          const contentDir = path.join(os.homedir(), '.jarvis', 'content', contentId);
-          if (!existsSync(contentDir)) {
-            mkdirSync(contentDir, { recursive: true });
+          // Enforce upload size limit
+          if (file.size > MAX_UPLOAD_SIZE) {
+            return error(`File too large. Maximum size is ${MAX_UPLOAD_SIZE / 1024 / 1024}MB`, 413);
           }
 
-          const diskPath = path.join(contentDir, file.name);
+          // Block dangerous MIME types
+          const mimeType = file.type || 'application/octet-stream';
+          if (BLOCKED_MIME_TYPES.has(mimeType)) {
+            return error(`File type "${mimeType}" is not allowed`, 415);
+          }
+
+          const label = (formData.get('label') as string) || null;
+
+          // Sanitize filename to prevent path traversal
+          const safeName = path.basename(file.name);
+          if (!safeName || safeName === '.' || safeName === '..') {
+            return error('Invalid filename', 400);
+          }
+
+          // Save file to ~/.jarvis/content/<id>/
+          const baseDir = path.join(os.homedir(), '.jarvis', 'content', contentId);
+          if (!existsSync(baseDir)) {
+            mkdirSync(baseDir, { recursive: true });
+          }
+
+          const diskPath = path.resolve(baseDir, safeName);
+          // Verify resolved path stays within the content directory
+          if (!isWithinBase(diskPath, baseDir)) {
+            return error('Invalid filename', 400);
+          }
+
           await Bun.write(diskPath, file);
 
           const attachment = addAttachment(
             contentId,
-            file.name,
+            safeName,
             diskPath,
-            file.type || 'application/octet-stream',
+            mimeType,
             file.size,
             label ?? undefined,
           );
@@ -762,6 +836,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/content/:id/attachments/:aid': {
       DELETE: (req: Request & { params: { id: string; aid: string } }) => {
+        // Verify attachment belongs to this content item before deleting
+        const attachment = getAttachment(req.params.aid);
+        if (!attachment || attachment.content_id !== req.params.id) {
+          return error('Attachment not found', 404);
+        }
         const deleted = deleteAttachment(req.params.aid);
         if (!deleted) return error('Attachment not found', 404);
         const item = getContent(req.params.id);
@@ -771,14 +850,33 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     '/api/content/files/:contentId/:filename': {
-      GET: (req: Request & { params: { contentId: string; filename: string } }) => {
-        const filePath = path.join(
-          os.homedir(), '.jarvis', 'content',
-          req.params.contentId, req.params.filename
-        );
+      GET: async (req: Request & { params: { contentId: string; filename: string } }) => {
+        // Sanitize path segments to prevent traversal
+        const safeContentId = sanitizePathSegment(req.params.contentId);
+        const safeFilename = sanitizePathSegment(req.params.filename);
+        if (!safeContentId || !safeFilename) {
+          return error('Invalid path', 400);
+        }
+
+        const baseDir = path.join(os.homedir(), '.jarvis', 'content');
+        const filePath = path.resolve(baseDir, safeContentId, safeFilename);
+
+        // Verify resolved path stays within the content directory
+        if (!isWithinBase(filePath, baseDir)) {
+          return error('Invalid path', 400);
+        }
+
         const file = Bun.file(filePath);
+        if (!await file.exists()) {
+          return error('File not found', 404);
+        }
+
         return new Response(file, {
-          headers: { ...CORS },
+          headers: {
+            ...CORS,
+            'Content-Disposition': 'attachment',
+            'X-Content-Type-Options': 'nosniff',
+          },
         });
       },
     },
@@ -792,7 +890,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
         if (authError) {
           return new Response(
-            `<html><body><h1>Authorization Denied</h1><p>${authError}</p><p>You can close this tab.</p></body></html>`,
+            `<html><body><h1>Authorization Denied</h1><p>${escapeHtml(authError)}</p><p>You can close this tab.</p></body></html>`,
             { headers: { ...CORS, 'Content-Type': 'text/html' } }
           );
         }
@@ -818,7 +916,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               <h1>JARVIS Google Authorization Complete!</h1>
               <p>Tokens saved. This window will close automatically.</p>
               <script>
-                if (window.opener) { window.opener.postMessage('google-auth-complete', '*'); }
+                if (window.opener) { window.opener.postMessage('google-auth-complete', window.location.origin); }
                 setTimeout(function() { window.close(); }, 2000);
               </script>
             </body></html>`,
@@ -827,7 +925,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           return new Response(
-            `<html><body><h1>Token Exchange Failed</h1><pre>${msg}</pre></body></html>`,
+            `<html><body><h1>Token Exchange Failed</h1><pre>${escapeHtml(msg)}</pre></body></html>`,
             { headers: { ...CORS, 'Content-Type': 'text/html' }, status: 500 }
           );
         }
@@ -1367,6 +1465,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request & { params: { id: string } }) => {
         const capture = getCapture(req.params.id);
         if (!capture || !capture.image_path) return error('Image not found', 404);
+        // Validate path stays within the expected captures/data directory
+        const jarvisDir = path.join(os.homedir(), '.jarvis');
+        if (!isWithinBase(capture.image_path, jarvisDir)) {
+          return error('Image not found', 404);
+        }
         try {
           const imageData = readFileSync(capture.image_path);
           return new Response(imageData, {
@@ -1382,8 +1485,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request & { params: { id: string } }) => {
         const capture = getCapture(req.params.id);
         if (!capture) return error('Capture not found', 404);
+        const jarvisDir = path.join(os.homedir(), '.jarvis');
         // Prefer thumbnail, fall back to full image
-        if (capture.thumbnail_path) {
+        if (capture.thumbnail_path && isWithinBase(capture.thumbnail_path, jarvisDir)) {
           try {
             const thumbData = readFileSync(capture.thumbnail_path);
             return new Response(thumbData, {
@@ -1391,7 +1495,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             });
           } catch { /* thumbnail file missing, fall through */ }
         }
-        if (capture.image_path) {
+        if (capture.image_path && isWithinBase(capture.image_path, jarvisDir)) {
           try {
             const imageData = readFileSync(capture.image_path);
             return new Response(imageData, {
@@ -1692,7 +1796,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return new Response(yaml, {
             headers: {
               'Content-Type': 'text/yaml',
-              'Content-Disposition': `attachment; filename="${wf.name}.yaml"`,
+              'Content-Disposition': `attachment; filename="${sanitizeFilename(wf.name)}.yaml"`,
               ...CORS,
             },
           });
@@ -2075,8 +2179,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             markdown: '.md', plain: '.txt', html: '.html',
             json: '.json', csv: '.csv', code: '.txt',
           };
+          // Serve all formats as safe MIME types to prevent XSS via inline rendering
           const mime: Record<string, string> = {
-            markdown: 'text/markdown', plain: 'text/plain', html: 'text/html',
+            markdown: 'text/markdown', plain: 'text/plain', html: 'text/plain',
             json: 'application/json', csv: 'text/csv', code: 'text/plain',
           };
 
@@ -2086,6 +2191,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             headers: {
               'Content-Type': mime[doc.format] || 'text/plain',
               'Content-Disposition': `attachment; filename="${filename}"`,
+              'X-Content-Type-Options': 'nosniff',
             },
           });
         } catch (err) { return error(`${err}`); }

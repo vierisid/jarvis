@@ -1,5 +1,10 @@
 import { getDb, generateId } from './schema.ts';
 
+/** Escape SQL LIKE wildcard characters in user input */
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
 export const CONTENT_STAGES = [
   'idea', 'research', 'outline', 'draft', 'assets', 'review', 'scheduled', 'published',
 ] as const;
@@ -126,8 +131,8 @@ export function findContent(query: {
     params.push(query.content_type);
   }
   if (query.tag) {
-    conditions.push("tags LIKE ?");
-    params.push(`%"${query.tag}"%`);
+    conditions.push("tags LIKE ? ESCAPE '\\'");
+    params.push(`%"${escapeLike(query.tag)}"%`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -244,6 +249,11 @@ export function addAttachment(
   ).run(id, contentId, filename, diskPath, mimeType, sizeBytes, label ?? null, now);
 
   return { id, content_id: contentId, filename, disk_path: diskPath, mime_type: mimeType, size_bytes: sizeBytes, label: label ?? null, created_at: now };
+}
+
+export function getAttachment(id: string): ContentAttachment | null {
+  const db = getDb();
+  return (db.prepare('SELECT * FROM content_attachments WHERE id = ?').get(id) as ContentAttachment) ?? null;
 }
 
 export function getAttachments(contentId: string): ContentAttachment[] {

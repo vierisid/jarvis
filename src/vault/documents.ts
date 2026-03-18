@@ -7,6 +7,11 @@
 
 import { getDb, generateId } from './schema.ts';
 
+/** Escape SQL LIKE wildcard characters in user input */
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
 export type DocumentFormat = 'markdown' | 'plain' | 'html' | 'json' | 'csv' | 'code';
 
 export type Document = {
@@ -78,12 +83,12 @@ export function findDocuments(query?: {
     params.push(query.format);
   }
   if (query?.tag) {
-    conditions.push('tags LIKE ?');
-    params.push(`%"${query.tag}"%`);
+    conditions.push("tags LIKE ? ESCAPE '\\'");
+    params.push(`%"${escapeLike(query.tag)}"%`);
   }
   if (query?.search) {
-    conditions.push('(title LIKE ? OR body LIKE ?)');
-    params.push(`%${query.search}%`, `%${query.search}%`);
+    conditions.push("(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')");
+    params.push(`%${escapeLike(query.search)}%`, `%${escapeLike(query.search)}%`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
