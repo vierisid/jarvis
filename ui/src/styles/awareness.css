@@ -1,0 +1,92 @@
+/* ═══════════════════════════════════════════════════════════════
+   AWARENESS PAGE — Awareness Hub
+   Prefix: aw-
+   ═══════════════════════════════════════════════════════════════ */
+
+.aw-page { height: 100%; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+
+.aw-atmosphere {
+  position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background: radial-gradient(ellipse 500px 300px at 50% 0%, rgba(34,211,238,0.05) 0%, transparent 70%),
+              radial-gradient(ellipse 400px 300px at 80% 70%, rgba(139,92,246,0.03) 0%, transparent 70%);
+}
+
+/* ── Header ── */
+.aw-header {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px 28px; border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.aw-header-title { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+.aw-header-spacer { flex: 1; }
+
+.aw-status-pill {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 4px 12px; border-radius: 20px; display: flex; align-items: center; gap: 5px;
+}
+.aw-status-pill.active { background: rgba(52,211,153,0.12); color: #34D399; }
+.aw-status-pill.inactive { background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.30); }
+.aw-status-dot { width: 6px; height: 6px; border-radius: 50%; }
+.aw-status-dot.active { background: #34D399; box-shadow: 0 0 6px rgba(52,211,153,0.4); }
+.aw-status-dot.inactive { background: rgba(255,255,255,0.30); }
+
+.aw-toggle-btn {
+  padding: 5px 14px; border-radius: 8px; border: 1px solid;
+  font-size: 10px; font-weight: 600; cursor: pointer; font-family: inherit; background: transparent;
+  transition: background 0.15s;
+}
+.aw-toggle-btn.disable { border-color: rgba(251,113,133,0.3); color: #FB7185; }
+.aw-toggle-btn.disable:hover { background: rgba(251,113,133,0.08); }
+.aw-toggle-btn.enable { border-color: rgba(52,211,153,0.3); color: #34D399; }
+.aw-toggle-btn.enable:hover { background: rgba(52,211,153,0.08); }
+
+/* ── Stats ribbon ── */
+.aw-stats-ribbon {
+  position: relative; z-index: 1;
+  display: flex; gap: 1px; padding: 0 28px; background: rgba(255,255,255,0.04);
+}
+.aw-stat { flex: 1; background: #0D0D14; padding: 14px 18px; }
+.aw-stat-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.30); margin-bottom: 4px; }
+.aw-stat-value { font-size: 20px; font-weight: 700; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.03em; }
+.aw-stat-value.app-name { font-size: 14px; letter-spacing: 0; }
+.aw-stat-sub { font-size: 9px; color: rgba(255,255,255,0.30); margin-top: 2px; }
+
+/* ── Tabs ── */
+.aw-tabs {
+  position: relative; z-index: 1;
+  display: flex; gap: 0; padding: 0 28px; border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.aw-tab-btn {
+  padding: 12px 18px; border: none; background: none;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  color: rgba(255,255,255,0.30); border-bottom: 2px solid transparent;
+  font-family: inherit; transition: color 0.15s, border-color 0.15s;
+}
+.aw-tab-btn:hover { color: rgba(255,255,255,0.55); }
+.aw-tab-btn.active { color: #A78BFA; border-bottom-color: #8B5CF6; }
+
+/* ── Tab content ── */
+.aw-tab-content {
+  position: relative; z-index: 1;
+  flex: 1; overflow-y: auto; padding: 20px 28px;
+}
+.aw-tab-content::-webkit-scrollbar { width: 3px; }
+.aw-tab-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+/* ── Live tab: two-column split ── */
+.aw-live-split { display: flex; gap: 16px; }
+.aw-live-split > div { flex: 1; }
+
+/* ── Loading ── */
+.aw-loading {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex: 1; gap: 16px;
+}
+.aw-loading-orb {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #A5F3FC 0%, #22D3EE 50%, #0891B2 100%);
+  box-shadow: 0 0 20px rgba(34,211,238,0.4);
+  animation: aw-loadBreath 2s ease-in-out infinite;
+}
+@keyframes aw-loadBreath { 0%,100% { transform: scale(1); opacity: 0.8; } 50% { transform: scale(1.15); opacity: 1; } }
+.aw-loading-text { font-size: 12px; color: rgba(255,255,255,0.30); }

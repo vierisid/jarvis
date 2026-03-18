@@ -1,77 +1,134 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { api, useApiData } from "../hooks/useApi";
 import { LiveContextPanel } from "../components/awareness/LiveContextPanel";
 import { SuggestionPanel } from "../components/awareness/SuggestionPanel";
 import { ActivityTimeline } from "../components/awareness/ActivityTimeline";
 import { DailyReportPanel } from "../components/awareness/DailyReportPanel";
 import { TrendsPanel } from "../components/awareness/TrendsPanel";
+import "../styles/awareness.css";
 
 type Tab = "live" | "timeline" | "reports" | "trends";
 
+type AwarenessStatus = {
+  status: string;
+  enabled: boolean;
+  liveContext: {
+    currentApp: string | null;
+    currentWindow: string | null;
+    currentSession: { id: string; topic: string | null; durationMs: number } | null;
+    recentApps: string[];
+    capturesLastHour: number;
+    suggestionsToday: number;
+    isRunning: boolean;
+  };
+};
+
 export default function AwarenessPage() {
   const [tab, setTab] = useState<Tab>("live");
+  const [enabled, setEnabled] = useState(true);
+
+  // Fetch awareness status for stats ribbon + toggle state
+  const { data: status, refetch: refetchStatus } = useApiData<AwarenessStatus>(
+    "/api/awareness/status", []
+  );
+
+  // Poll status every 5s
+  useEffect(() => {
+    const timer = setInterval(refetchStatus, 5000);
+    return () => clearInterval(timer);
+  }, [refetchStatus]);
+
+  // Sync enabled state from API
+  useEffect(() => {
+    if (status) setEnabled(status.enabled);
+  }, [status]);
+
+  const handleToggle = useCallback(async () => {
+    try {
+      const res = await api<{ ok: boolean; enabled: boolean }>("/api/awareness/toggle", {
+        method: "POST",
+        body: JSON.stringify({ enabled: !enabled }),
+      });
+      setEnabled(res.enabled);
+      refetchStatus();
+    } catch (err) {
+      console.error("Failed to toggle awareness:", err);
+    }
+  }, [enabled, refetchStatus]);
+
+  const liveCtx = status?.liveContext;
+  const isActive = status?.enabled && liveCtx?.isRunning;
+  const currentApp = liveCtx?.currentApp || "—";
+  const currentWindow = liveCtx?.currentWindow || "";
+  const sessionTopic = liveCtx?.currentSession?.topic || null;
+  const sessionMinutes = liveCtx?.currentSession ? Math.floor(liveCtx.currentSession.durationMs / 60000) : 0;
+  const capturesHr = liveCtx?.capturesLastHour ?? 0;
+  const suggestionsDay = liveCtx?.suggestionsToday ?? 0;
 
   return (
-    <div style={{ padding: "24px", overflow: "auto", height: "100%" }}>
-      <div style={{ marginBottom: "24px" }}>
-        <h1 style={{ fontSize: "20px", fontWeight: 600, color: "var(--j-text)", margin: 0 }}>
-          Awareness
-        </h1>
-        <div style={{ fontSize: "13px", color: "var(--j-text-muted)", marginTop: "4px" }}>
-          Screen context, activity tracking, and proactive suggestions
+    <div className="aw-page">
+      <div className="aw-atmosphere" />
+
+      {/* Header */}
+      <div className="aw-header">
+        <span className="aw-header-title">Awareness</span>
+        <span className={`aw-status-pill ${isActive ? "active" : "inactive"}`}>
+          <span className={`aw-status-dot ${isActive ? "active" : "inactive"}`} />
+          {isActive ? "Active" : enabled ? "Starting" : "Disabled"}
+        </span>
+        <div className="aw-header-spacer" />
+        <button
+          className={`aw-toggle-btn ${enabled ? "disable" : "enable"}`}
+          onClick={handleToggle}
+        >
+          {enabled ? "Disable" : "Enable"}
+        </button>
+      </div>
+
+      {/* Stats ribbon */}
+      <div className="aw-stats-ribbon">
+        <div className="aw-stat">
+          <div className="aw-stat-label">Current App</div>
+          <div className="aw-stat-value app-name" style={{ color: "#22D3EE" }}>{currentApp}</div>
+          {currentWindow && <div className="aw-stat-sub">{currentWindow.length > 40 ? currentWindow.slice(0, 38) + ".." : currentWindow}</div>}
+        </div>
+        <div className="aw-stat">
+          <div className="aw-stat-label">Captures / Hour</div>
+          <div className="aw-stat-value" style={{ color: "#A78BFA" }}>{capturesHr}</div>
+        </div>
+        <div className="aw-stat">
+          <div className="aw-stat-label">Suggestions Today</div>
+          <div className="aw-stat-value" style={{ color: "#FBBF24" }}>{suggestionsDay}</div>
+        </div>
+        <div className="aw-stat">
+          <div className="aw-stat-label">Session</div>
+          <div className="aw-stat-value" style={{ color: "#22D3EE", fontSize: sessionTopic ? 14 : 20 }}>
+            {sessionTopic || (sessionMinutes > 0 ? `${sessionMinutes}m` : "—")}
+          </div>
+          {sessionTopic && sessionMinutes > 0 && <div className="aw-stat-sub">{sessionMinutes}m active</div>}
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
-        <TabBtn label="Live" tab="live" active={tab} onClick={setTab} />
-        <TabBtn label="Timeline" tab="timeline" active={tab} onClick={setTab} />
-        <TabBtn label="Reports" tab="reports" active={tab} onClick={setTab} />
-        <TabBtn label="Trends" tab="trends" active={tab} onClick={setTab} />
+      {/* Tabs */}
+      <div className="aw-tabs">
+        <button className={`aw-tab-btn${tab === "live" ? " active" : ""}`} onClick={() => setTab("live")}>Live</button>
+        <button className={`aw-tab-btn${tab === "timeline" ? " active" : ""}`} onClick={() => setTab("timeline")}>Timeline</button>
+        <button className={`aw-tab-btn${tab === "reports" ? " active" : ""}`} onClick={() => setTab("reports")}>Reports</button>
+        <button className={`aw-tab-btn${tab === "trends" ? " active" : ""}`} onClick={() => setTab("trends")}>Trends</button>
       </div>
 
       {/* Tab content */}
-      {tab === "live" && (
-        <div style={{ display: "flex", gap: "20px" }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
-            <LiveContextPanel />
+      <div className="aw-tab-content">
+        {tab === "live" && (
+          <div className="aw-live-split">
+            <div><LiveContextPanel /></div>
+            <div><SuggestionPanel /></div>
           </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
-            <SuggestionPanel />
-          </div>
-        </div>
-      )}
-
-      {tab === "timeline" && <ActivityTimeline />}
-
-      {tab === "reports" && <DailyReportPanel />}
-
-      {tab === "trends" && <TrendsPanel />}
+        )}
+        {tab === "timeline" && <ActivityTimeline />}
+        {tab === "reports" && <DailyReportPanel />}
+        {tab === "trends" && <TrendsPanel />}
+      </div>
     </div>
-  );
-}
-
-function TabBtn({ label, tab, active, onClick }: {
-  label: string;
-  tab: Tab;
-  active: Tab;
-  onClick: (t: Tab) => void;
-}) {
-  const isActive = tab === active;
-  return (
-    <button
-      onClick={() => onClick(tab)}
-      style={{
-        padding: "8px 16px",
-        borderRadius: "6px",
-        border: "1px solid " + (isActive ? "var(--j-accent)" : "var(--j-border)"),
-        background: isActive ? "rgba(0, 212, 255, 0.1)" : "transparent",
-        color: isActive ? "var(--j-accent)" : "var(--j-text-dim)",
-        fontSize: "13px",
-        fontWeight: isActive ? 600 : 400,
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
   );
 }
