@@ -114,6 +114,48 @@ describe('Default Config', () => {
   });
 });
 
+describe('Config Parse Errors', () => {
+  afterEach(async () => {
+    if (existsSync(TEST_CONFIG_PATH)) {
+      await unlink(TEST_CONFIG_PATH);
+    }
+  });
+
+  test('throws on malformed YAML when file exists', async () => {
+    const badYaml = `
+daemon:
+  port: 3142
+    bad_indent: true
+  this is: not: valid
+`;
+    await Bun.write(TEST_CONFIG_PATH, badYaml);
+
+    expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow();
+  });
+
+  test('uses defaults when file does not exist (no throw)', async () => {
+    const config = await loadConfig('/tmp/jarvis-definitely-not-here.yaml');
+    expect(config.daemon.port).toBe(DEFAULT_CONFIG.daemon.port);
+    expect(config.daemon.data_dir).not.toContain('~');
+    expect(config.daemon.db_path).not.toContain('~');
+  });
+
+  test('expands tildes in parsed config', async () => {
+    const yamlWithTilde = `
+daemon:
+  data_dir: "~/.jarvis"
+  db_path: "~/.jarvis/jarvis.db"
+`;
+    await Bun.write(TEST_CONFIG_PATH, yamlWithTilde);
+
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.daemon.data_dir).not.toContain('~');
+    expect(config.daemon.db_path).not.toContain('~');
+    expect(config.daemon.data_dir).toMatch(/^\//);
+    expect(config.daemon.db_path).toMatch(/^\//);
+  });
+});
+
 describe('Path Expansion', () => {
   test('expands tilde in paths', async () => {
     const config = await loadConfig();

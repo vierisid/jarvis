@@ -218,7 +218,15 @@ Just A Rather Very Intelligent System
  */
 export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<void> {
   // Load config from YAML (with defaults)
-  const jarvisConfig = await loadConfig();
+  let jarvisConfig;
+  try {
+    jarvisConfig = await loadConfig();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`\n[Daemon] Failed to parse config file: ${message}`);
+    console.error('[Daemon] Fix the YAML syntax in ~/.jarvis/config.yaml or delete it to use defaults.\n');
+    process.exit(1);
+  }
 
   // Determine data directory: CLI args > config file > default
   const dataDir = userConfig?.dataDir ?? jarvisConfig.daemon.data_dir ?? DEFAULT_DATA_DIR;

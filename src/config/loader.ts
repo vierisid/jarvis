@@ -88,37 +88,33 @@ function applyEnvOverrides(config: JarvisConfig): void {
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   const path = configPath || expandTilde('~/.jarvis/config.yaml');
 
-  try {
-    const file = Bun.file(path);
-    const exists = await file.exists();
+  const file = Bun.file(path);
+  const exists = await file.exists();
 
-    if (!exists) {
-      console.warn(`Config file not found at ${path}, using defaults`);
-      const config = structuredClone(DEFAULT_CONFIG);
-      config.daemon.data_dir = expandTilde(config.daemon.data_dir);
-      config.daemon.db_path = expandTilde(config.daemon.db_path);
-      applyEnvOverrides(config);
-      return config;
-    }
-
-    const text = await file.text();
-    const parsed = YAML.parse(text);
-
-    // Deep merge with defaults to ensure all required fields exist
-    const config = deepMerge(DEFAULT_CONFIG, parsed) as JarvisConfig;
-
-    // Expand tilde in paths
+  if (!exists) {
+    console.warn(`Config file not found at ${path}, using defaults`);
+    const config = structuredClone(DEFAULT_CONFIG);
     config.daemon.data_dir = expandTilde(config.daemon.data_dir);
     config.daemon.db_path = expandTilde(config.daemon.db_path);
-
-    // Apply environment variable overrides
     applyEnvOverrides(config);
-
     return config;
-  } catch (err) {
-    console.error(`Failed to load config from ${path}:`, err);
-    return DEFAULT_CONFIG;
   }
+
+  // File exists — parse errors should be fatal
+  const text = await file.text();
+  const parsed = YAML.parse(text);  // throws YAMLParseError on bad syntax
+
+  // Deep merge with defaults to ensure all required fields exist
+  const config = deepMerge(DEFAULT_CONFIG, parsed) as JarvisConfig;
+
+  // Expand tilde in paths
+  config.daemon.data_dir = expandTilde(config.daemon.data_dir);
+  config.daemon.db_path = expandTilde(config.daemon.db_path);
+
+  // Apply environment variable overrides
+  applyEnvOverrides(config);
+
+  return config;
 }
 
 export async function saveConfig(
