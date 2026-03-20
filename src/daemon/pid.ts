@@ -1,38 +1,147 @@
 /**
- * PID File Manager for J.A.R.V.I.S. Daemon
+ * Process Lock Manager for J.A.R.V.I.S. Daemon
  *
- * Manages the daemon PID file at ~/.jarvis/jarvis.pid
- * for start/stop/status lifecycle commands.
+ * Uses flock()-based advisory locks to prevent duplicate daemon instances.
+ * Unlike PID-based checks, flock locks are automatically released by the OS
+ * when the process dies (even on SIGKILL, OOM, or crash), making this
+ * container-safe and race-free.
  */
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import {
+  constants,
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  writeSync,
+  ftruncateSync,
+} from 'node:fs';
+import { dlopen, FFIType } from 'bun:ffi';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const LOG_DIR = join(JARVIS_DIR, 'logs');
-const PID_PATH = join(JARVIS_DIR, 'jarvis.pid');
+const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
 const LOG_PATH = join(LOG_DIR, 'jarvis.log');
 
+// ── flock() via Bun FFI ──────────────────────────────────────────────
+
+const libc = dlopen('libc.so.6', {
+  flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+});
+
+const LOCK_EX = 2;  // Exclusive lock
+const LOCK_NB = 4;  // Non-blocking
+const LOCK_UN = 8;  // Unlock
+
+// ── Lock state ───────────────────────────────────────────────────────
+
+// The open FD that holds the flock — kept alive for the process lifetime.
+// When the process exits (normally, SIGKILL, OOM, crash), the OS closes it
+// and the advisory lock is automatically released.
+let lockFd: number | null = null;
+
+// ── Public API ───────────────────────────────────────────────────────
+
 /**
- * Write the current daemon PID to the PID file.
+ * Acquire an exclusive lock on the lock file and write the PID.
+ * Returns true if the lock was acquired, false if another instance holds it.
  */
-export function writePid(pid: number): void {
+export function acquireLock(pid: number): boolean {
   try {
-    mkdirSync(JARVIS_DIR, { recursive: true }); // idempotent, no race
-    writeFileSync(PID_PATH, String(pid), 'utf-8');
+    mkdirSync(JARVIS_DIR, { recursive: true });
+
+    // Open (or create) the lock file — don't truncate before locking
+    const fd = openSync(LOCK_PATH, constants.O_WRONLY | constants.O_CREAT, 0o644);
+
+    // Try non-blocking exclusive lock
+    const result = libc.symbols.flock(fd, LOCK_EX | LOCK_NB);
+    if (result !== 0) {
+      closeSync(fd);
+      return false;
+    }
+
+    // Lock acquired — truncate and write PID for display purposes
+    ftruncateSync(fd, 0);
+    writeSync(fd, String(pid));
+
+    // Keep the FD open — closing it would release the lock
+    lockFd = fd;
+    return true;
   } catch (err) {
-    console.error(`[PID] Failed to write PID file: ${err}`);
+    console.error(`[PID] Failed to acquire lock: ${err}`);
+    return false;
   }
 }
 
 /**
- * Read the PID from the PID file. Returns null if no PID file exists.
+ * Check if the daemon lock is currently held.
+ * Returns the PID if locked (daemon running), null otherwise.
+ */
+export function isLocked(): number | null {
+  if (!existsSync(LOCK_PATH)) return null;
+
+  let fd: number;
+  try {
+    fd = openSync(LOCK_PATH, constants.O_RDONLY);
+  } catch {
+    return null;
+  }
+
+  try {
+    // Try non-blocking exclusive lock to probe
+    const result = libc.symbols.flock(fd, LOCK_EX | LOCK_NB);
+    if (result === 0) {
+      // Lock acquired — no daemon running. Release immediately.
+      libc.symbols.flock(fd, LOCK_UN);
+      closeSync(fd);
+      return null;
+    }
+    // Lock held by another process — daemon is running
+    closeSync(fd);
+    const pid = readPid();
+
+    // Container safety: if PID is 1 and we're inside a container,
+    // the lock file is stale from a previous container lifecycle
+    if (pid === 1 && isInsideContainer()) {
+      releaseLock();
+      return null;
+    }
+
+    return pid;
+  } catch {
+    try { closeSync(fd); } catch { /* already closed */ }
+    return null;
+  }
+}
+
+/**
+ * Release the lock (close the FD) and remove the lock file.
+ */
+export function releaseLock(): void {
+  if (lockFd !== null) {
+    try {
+      closeSync(lockFd);
+    } catch {
+      // Already closed
+    }
+    lockFd = null;
+  }
+  try {
+    if (existsSync(LOCK_PATH)) unlinkSync(LOCK_PATH);
+  } catch { /* ignore */ }
+}
+
+/**
+ * Read the PID from the lock file. Returns null if no file or invalid content.
  */
 export function readPid(): number | null {
-  if (!existsSync(PID_PATH)) return null;
+  if (!existsSync(LOCK_PATH)) return null;
   try {
-    const content = readFileSync(PID_PATH, 'utf-8').trim();
+    const content = readFileSync(LOCK_PATH, 'utf-8').trim();
     const pid = parseInt(content, 10);
     if (isNaN(pid) || pid <= 0) return null;
     return pid;
@@ -42,51 +151,17 @@ export function readPid(): number | null {
 }
 
 /**
- * Clear (delete) the PID file.
- */
-export function clearPid(): void {
-  try {
-    if (existsSync(PID_PATH)) {
-      unlinkSync(PID_PATH);
-    }
-  } catch (err) {
-    // Log but don't crash — file may already be gone or permissions issue
-    console.warn(`[PID] Could not remove PID file: ${err}`);
-  }
-}
-
-/**
- * Check if a daemon process is currently running.
- * Returns the PID if running, null otherwise.
- * Also cleans up stale PID files.
- */
-export function isRunning(): number | null {
-  const pid = readPid();
-  if (pid === null) return null;
-
-  try {
-    // signal 0 doesn't kill the process — just checks if it exists
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    // Process doesn't exist — stale PID file
-    clearPid();
-    return null;
-  }
-}
-
-/**
- * Get the PID file path (for display purposes).
+ * Get the lock file path (for display purposes).
  */
 export function getPidPath(): string {
-  return PID_PATH;
+  return LOCK_PATH;
 }
 
 /**
  * Get the log file path. Creates the log directory if needed.
  */
 export function getLogPath(): string {
-  mkdirSync(LOG_DIR, { recursive: true }); // idempotent
+  mkdirSync(LOG_DIR, { recursive: true });
   return LOG_PATH;
 }
 
@@ -95,4 +170,15 @@ export function getLogPath(): string {
  */
 export function getLogDir(): string {
   return LOG_DIR;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function isInsideContainer(): boolean {
+  if (existsSync('/.dockerenv')) return true;
+  try {
+    return readFileSync('/proc/1/cgroup', 'utf-8').includes('docker');
+  } catch {
+    return false;
+  }
 }

@@ -15,7 +15,7 @@
 import { join } from 'node:path';
 import { readFileSync, existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { writePid, clearPid, isRunning, getLogPath } from '../src/daemon/pid.ts';
+import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
@@ -85,20 +85,16 @@ async function cmdStart(args: string[]): Promise<void> {
     }
   }
 
-  // Check if already running
-  const existingPid = isRunning();
-  if (existingPid) {
-    console.log(c.yellow(`JARVIS is already running (PID ${existingPid})`));
-    console.log(c.dim(`  Stop it first with: jarvis stop`));
-    process.exit(1);
-  }
-
   if (!detach) {
-    // Run in foreground — just import and call startDaemon
-    writePid(process.pid);
-    process.on('exit', () => clearPid());
-    process.on('SIGINT', () => { clearPid(); process.exit(0); });
-    process.on('SIGTERM', () => { clearPid(); process.exit(0); });
+    // Run in foreground — acquire lock atomically (checks + locks in one step)
+    if (!acquireLock(process.pid)) {
+      console.log(c.yellow('JARVIS is already running'));
+      console.log(c.dim('  Stop it first with: jarvis stop'));
+      process.exit(1);
+    }
+    process.on('exit', () => releaseLock());
+    process.on('SIGINT', () => { releaseLock(); process.exit(0); });
+    process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, ...(port ? {} : {}) });
@@ -107,6 +103,14 @@ async function cmdStart(args: string[]): Promise<void> {
       openDashboard(port ?? 3142);
     }
   } else {
+    // Check if already running before spawning detached child
+    const existingPid = isLocked();
+    if (existingPid) {
+      console.log(c.yellow(`JARVIS is already running (PID ${existingPid})`));
+      console.log(c.dim('  Stop it first with: jarvis stop'));
+      process.exit(1);
+    }
+
     // Run in background — spawn a detached child process with log file
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));
 
@@ -124,11 +128,11 @@ async function cmdStart(args: string[]): Promise<void> {
     });
     child.unref();
 
-    // Poll for the daemon to write its PID (up to 10s)
+    // Poll for the daemon to acquire its lock (up to 10s)
     let runningPid: number | null = null;
     for (let i = 0; i < 20; i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      runningPid = isRunning();
+      runningPid = isLocked();
       if (runningPid) break;
     }
 
@@ -150,7 +154,7 @@ async function cmdStart(args: string[]): Promise<void> {
 }
 
 async function cmdStop(): Promise<void> {
-  const pid = isRunning();
+  const pid = isLocked();
   if (!pid) {
     console.log(c.yellow('JARVIS is not running.'));
     return;
@@ -172,16 +176,16 @@ async function cmdStop(): Promise<void> {
       try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
     }
 
-    clearPid();
+    releaseLock();
     console.log(c.green('✓ JARVIS daemon stopped.'));
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
-    clearPid();
+    releaseLock();
   }
 }
 
 function cmdStatus(): void {
-  const pid = isRunning();
+  const pid = isLocked();
   if (pid) {
     console.log(`${c.green('●')} JARVIS is ${c.green('running')} (PID ${pid})`);
 
@@ -216,7 +220,7 @@ async function cmdDoctor(): Promise<void> {
 }
 
 async function cmdRestart(args: string[]): Promise<void> {
-  const pid = isRunning();
+  const pid = isLocked();
   if (pid) {
     await cmdStop();
   }
@@ -270,17 +274,17 @@ async function cmdUpdate(): Promise<void> {
   console.log(`  Current version: ${c.bold(currentVersion)}`);
 
   // Check if daemon is running (we'll restart it after update)
-  const wasRunning = isRunning();
+  const wasRunning = isLocked();
 
   // Stop daemon if running
   if (wasRunning) {
     console.log(c.dim('  Stopping daemon before update...'));
     try {
       process.kill(wasRunning, 'SIGTERM');
-      clearPid();
+      releaseLock();
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch {
-      clearPid();
+      releaseLock();
     }
   }
 
