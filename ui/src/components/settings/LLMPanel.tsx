@@ -8,6 +8,7 @@ type LLMConfig = {
   openai: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
+  openrouter: { model: string; has_api_key: boolean } | null;
 };
 
 type TestResult = { ok: boolean; model?: string; error?: string };
@@ -53,7 +54,28 @@ const OLLAMA_MODELS = [
   "phi3",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "gemini", "ollama"] as const;
+const OPENROUTER_MODELS = [
+  "anthropic/claude-sonnet-4",
+  "anthropic/claude-opus-4",
+  "anthropic/claude-haiku-4",
+  "openai/gpt-5.4",
+  "openai/o3",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+  "deepseek/deepseek-r1",
+  "meta-llama/llama-4-maverick",
+  "mistralai/mistral-large",
+];
+
+const PROVIDERS = ["anthropic", "openai", "gemini", "ollama", "openrouter"] as const;
+
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  ollama: "Ollama",
+  openrouter: "OpenRouter",
+};
 
 export function LLMPanel() {
   const { data: config, loading, refetch } = useApiData<LLMConfig>("/api/config/llm", []);
@@ -81,6 +103,11 @@ export function LLMPanel() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [ollamaCustomModel, setOllamaCustomModel] = useState("");
+
+  // OpenRouter
+  const [openrouterKey, setOpenrouterKey] = useState("");
+  const [openrouterModel, setOpenrouterModel] = useState("anthropic/claude-sonnet-4");
+  const [openrouterCustomModel, setOpenrouterCustomModel] = useState("");
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -135,6 +162,16 @@ export function LLMPanel() {
         setOllamaCustomModel(m);
       }
     }
+    if (config.openrouter) {
+      const m = config.openrouter.model;
+      if (OPENROUTER_MODELS.includes(m)) {
+        setOpenrouterModel(m);
+        setOpenrouterCustomModel("");
+      } else {
+        setOpenrouterModel("custom");
+        setOpenrouterCustomModel(m);
+      }
+    }
   }, [config]);
 
   const resolveModel = (selected: string, custom: string) =>
@@ -163,6 +200,10 @@ export function LLMPanel() {
           base_url: ollamaBaseUrl,
           model: resolveModel(ollamaModel, ollamaCustomModel),
         },
+        openrouter: {
+          model: resolveModel(openrouterModel, openrouterCustomModel),
+          ...(openrouterKey ? { api_key: openrouterKey } : {}),
+        },
       };
       const resp = await api<{ ok: boolean; message: string }>("/api/config/llm", {
         method: "POST",
@@ -172,6 +213,7 @@ export function LLMPanel() {
       setAnthropicKey("");
       setOpenaiKey("");
       setGeminiKey("");
+      setOpenrouterKey("");
       refetch();
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Save failed", type: "error" });
@@ -198,6 +240,9 @@ export function LLMPanel() {
       } else if (provider === "ollama") {
         body.base_url = ollamaBaseUrl;
         body.model = resolveModel(ollamaModel, ollamaCustomModel);
+      } else if (provider === "openrouter") {
+        body.api_key = openrouterKey || undefined;
+        body.model = resolveModel(openrouterModel, openrouterCustomModel);
       }
       const result = await api<TestResult>("/api/config/llm/test", {
         method: "POST",
@@ -256,7 +301,7 @@ export function LLMPanel() {
         <select value={primary} onChange={(e) => setPrimary(e.target.value)} style={selectStyle}>
           {PROVIDERS.map((p) => (
             <option key={p} value={p}>
-              {p.charAt(0).toUpperCase() + p.slice(1)}
+              {PROVIDER_LABELS[p] ?? p}
             </option>
           ))}
         </select>
@@ -284,7 +329,7 @@ export function LLMPanel() {
                 onChange={() => toggleFallback(p)}
                 style={{ accentColor: "var(--j-accent)" }}
               />
-              {p.charAt(0).toUpperCase() + p.slice(1)}
+              {PROVIDER_LABELS[p] ?? p}
             </label>
           ))}
         </div>
@@ -343,6 +388,24 @@ export function LLMPanel() {
           testing={testing === "gemini"}
           testResult={testResult.gemini}
           onTest={() => handleTest("gemini")}
+        />
+
+        {/* OpenRouter */}
+        <ProviderSection
+          name="OpenRouter"
+          provider="openrouter"
+          isPrimary={primary === "openrouter"}
+          hasKey={config.openrouter?.has_api_key ?? false}
+          apiKey={openrouterKey}
+          onApiKeyChange={setOpenrouterKey}
+          model={openrouterModel}
+          customModel={openrouterCustomModel}
+          onModelChange={setOpenrouterModel}
+          onCustomModelChange={setOpenrouterCustomModel}
+          models={OPENROUTER_MODELS}
+          testing={testing === "openrouter"}
+          testResult={testResult.openrouter}
+          onTest={() => handleTest("openrouter")}
         />
 
         {/* Ollama */}
