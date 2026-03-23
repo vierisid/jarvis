@@ -72,6 +72,7 @@ export async function runOnboard(): Promise<void> {
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
     { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
     { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
+    { label: 'OpenRouter', value: 'openrouter' as const, description: 'Access hundreds of models via single API key' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
   ], config.llm.primary as any);
 
@@ -177,6 +178,42 @@ export async function runOnboard(): Promise<void> {
     const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
     if (config.llm.gemini) config.llm.gemini.model = model;
 
+  } else if (provider === 'openrouter') {
+    const existing = config.llm.openrouter?.api_key;
+    if (existing && existing.startsWith('sk-or-')) {
+      const keep = await askYesNo(`API key found (${existing.slice(0, 12)}...). Keep it?`, true);
+      if (!keep) {
+        const key = await askSecret('Enter your OpenRouter API key');
+        if (key) config.llm.openrouter = { ...config.llm.openrouter, api_key: key };
+      }
+    } else {
+      const key = await askSecret('Enter your OpenRouter API key (from openrouter.ai/keys)');
+      if (key) {
+        config.llm.openrouter = { ...config.llm.openrouter, api_key: key };
+      } else {
+        printWarn('No API key set. JARVIS won\'t work without one.');
+      }
+    }
+
+    const currentModel = config.llm.openrouter?.model ?? 'anthropic/claude-sonnet-4';
+    const openrouterModels = [
+      { label: 'Claude Sonnet 4', value: 'anthropic/claude-sonnet-4', description: 'Anthropic, great balance' },
+      { label: 'Claude Opus 4', value: 'anthropic/claude-opus-4', description: 'Anthropic, most capable' },
+      { label: 'Claude Haiku 4', value: 'anthropic/claude-haiku-4', description: 'Anthropic, fast & cheap' },
+      { label: 'GPT-5.4', value: 'openai/gpt-5.4', description: 'OpenAI flagship' },
+      { label: 'o3', value: 'openai/o3', description: 'OpenAI reasoning' },
+      { label: 'Gemini 2.5 Pro', value: 'google/gemini-2.5-pro', description: 'Google, best quality' },
+      { label: 'Gemini 2.5 Flash', value: 'google/gemini-2.5-flash', description: 'Google, fast' },
+      { label: 'DeepSeek R1', value: 'deepseek/deepseek-r1', description: 'DeepSeek reasoning' },
+      { label: 'Llama 4 Maverick', value: 'meta-llama/llama-4-maverick', description: 'Meta, open-weight' },
+      { label: 'Mistral Large', value: 'mistralai/mistral-large', description: 'Mistral, strong all-round' },
+      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
+    ];
+    const isPreset = openrouterModels.some(m => m.value === currentModel);
+    const modelChoice = await askChoice('Choose a model:', openrouterModels, isPreset ? currentModel : 'custom');
+    const model = modelChoice === 'custom' ? await ask('Enter model name (provider/model format)', currentModel) : modelChoice;
+    if (config.llm.openrouter) config.llm.openrouter.model = model;
+
   } else if (provider === 'ollama') {
     const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? 'http://localhost:11434');
 
@@ -202,7 +239,7 @@ export async function runOnboard(): Promise<void> {
   if (testConn) {
     const spin = startSpinner('Testing connection...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
 
       if (provider === 'anthropic' && config.llm.anthropic?.api_key) {
@@ -211,6 +248,8 @@ export async function runOnboard(): Promise<void> {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
       } else if (provider === 'gemini' && config.llm.gemini?.api_key) {
         manager.registerProvider(new GeminiProvider(config.llm.gemini.api_key, config.llm.gemini.model));
+      } else if (provider === 'openrouter' && config.llm.openrouter?.api_key) {
+        manager.registerProvider(new OpenRouterProvider(config.llm.openrouter.api_key, config.llm.openrouter.model));
       } else if (provider === 'ollama') {
         manager.registerProvider(new OllamaProvider(config.llm.ollama?.base_url, config.llm.ollama?.model));
       }
@@ -234,7 +273,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'gemini', 'ollama'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'gemini', 'openrouter', 'ollama'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
@@ -253,6 +292,9 @@ export async function runOnboard(): Promise<void> {
       } else if (fb === 'gemini' && (!config.llm.gemini?.api_key || config.llm.gemini.api_key === '')) {
         const key = await askSecret('Google AI API key (for fallback)');
         if (key) config.llm.gemini = { ...config.llm.gemini, api_key: key, model: config.llm.gemini?.model ?? 'gemini-3-flash-preview' };
+      } else if (fb === 'openrouter' && (!config.llm.openrouter?.api_key || config.llm.openrouter.api_key === '')) {
+        const key = await askSecret('OpenRouter API key (for fallback)');
+        if (key) config.llm.openrouter = { ...config.llm.openrouter, api_key: key, model: config.llm.openrouter?.model ?? 'anthropic/claude-sonnet-4' };
       } else if (fb === 'ollama') {
         const setupOllama = await askYesNo('Configure Ollama as fallback?', false);
         if (setupOllama) {
