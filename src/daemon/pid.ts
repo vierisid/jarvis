@@ -20,17 +20,24 @@ import {
   writeSync,
   ftruncateSync,
 } from 'node:fs';
-import { dlopen, FFIType } from 'bun:ffi';
+import { cc } from 'bun:ffi';
+import flockSource from './flock.c' with { type: 'file' };
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const LOG_DIR = join(JARVIS_DIR, 'logs');
 const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
 const LOG_PATH = join(LOG_DIR, 'jarvis.log');
 
-// ── flock() via Bun FFI ──────────────────────────────────────────────
+// ── flock() via Bun cc() ────────────────────────────────────────────
+// Compiled at startup by Bun's embedded TinyCC. Resolves libc via
+// system headers — works on Linux, macOS, and any POSIX platform
+// without hardcoding a shared library path.
 
-const libc = dlopen('libc.so.6', {
-  flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+const { symbols: flock } = cc({
+  source: flockSource,
+  symbols: {
+    do_flock: { args: ['i32', 'i32'], returns: 'i32' },
+  },
 });
 
 const LOCK_EX = 2;  // Exclusive lock
@@ -58,7 +65,7 @@ export function acquireLock(pid: number): boolean {
     const fd = openSync(LOCK_PATH, constants.O_WRONLY | constants.O_CREAT, 0o644);
 
     // Try non-blocking exclusive lock
-    const result = libc.symbols.flock(fd, LOCK_EX | LOCK_NB);
+    const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result !== 0) {
       closeSync(fd);
       return false;
@@ -93,10 +100,10 @@ export function isLocked(): number | null {
 
   try {
     // Try non-blocking exclusive lock to probe
-    const result = libc.symbols.flock(fd, LOCK_EX | LOCK_NB);
+    const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result === 0) {
       // Lock acquired — no daemon running. Release immediately.
-      libc.symbols.flock(fd, LOCK_UN);
+      flock.do_flock(fd, LOCK_UN);
       closeSync(fd);
       return null;
     }
