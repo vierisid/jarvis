@@ -1,0 +1,66 @@
+# Version control
+.git
+.github
+.githooks
+.gitignore
+
+# IDE / editor
+.claude
+.vscode
+.idea
+*.swp
+*.swo
+
+# Dependencies (reinstalled in Docker)
+node_modules
+
+# Sidecar (Go binary, not included in Docker image)
+sidecar/
+
+# Documentation (not needed at runtime)
+docs/
+VISION.md
+QUICKSTART.md
+SECURITY_AUDIT_DOCUMENTS.md
+CLAUDE.md
+CHANGELOG.md
+LICENSE
+
+# Build artifacts
+*.tgz
+coverage/
+*.lcov
+out/
+
+# UI build output (rebuilt in Docker)
+ui/dist/
+
+# ONNX/WASM assets (copied from node_modules in Docker)
+ui/public/openwakeword/
+ui/public/ort/
+
+# Env files (secrets — pass via env vars or volume mount)
+.env
+.env.*
+.secrets.*
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+
+# Large training data (tesseract.js manages its own)
+eng.traineddata
+
+# Misc
+todos/
+examples/
+*.heapsnapshot
+*.log
+trace.json*
+.DS_Store
+.npmignore
+install.sh
+config.example.yaml

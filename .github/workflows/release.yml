@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   GO_VERSION: "1.23"
@@ -266,6 +267,89 @@ jobs:
           echo "Would have created release v${{ steps.version.outputs.VERSION }}"
           echo "Assets that would be attached:"
           ls -lh release/
+
+  # ─── Build and push Docker images ──────────────────────────────
+  publish-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          if echo "$VERSION" | grep -q '-'; then
+            echo "IS_PRERELEASE=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.IS_PRERELEASE == 'false' }}
+          labels: |
+            org.opencontainers.image.title=Jarvis
+            org.opencontainers.image.description=J.A.R.V.I.S. — Always-on autonomous AI daemon
+            org.opencontainers.image.vendor=vierisid
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
+
+      - name: Build and push Docker image
+        if: env.DRY_RUN != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Docker image (dry run)
+        if: env.DRY_RUN == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == 'true'
+        run: |
+          echo "::notice::DRY RUN — Docker image built but not pushed"
+          echo "Tags that would have been pushed:"
+          echo "${{ steps.meta.outputs.tags }}"
 
   # ─── Notify Discord about the new release ──────────────────────
   discord-notify:

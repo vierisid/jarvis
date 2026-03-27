@@ -32,6 +32,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
   - [📋 Requirements](#-requirements)
   - [📦 Installation](#-installation)
     - [bun (recommended)](#bun-recommended)
+    - [Docker](#docker)
     - [One-liner](#one-liner)
     - [Manual](#manual)
   - [🚀 Usage](#-usage)
@@ -131,6 +132,20 @@ Visit [opencove.host](https://opencove.host) to get started.
 bun install -g @usejarvis/brain
 jarvis onboard
 ```
+
+### Docker
+
+Run JARVIS on any OS with a single command — no Bun or dependencies required. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows, macOS, Linux) if you don't have Docker yet.
+
+```bash
+docker run -d --name jarvis \
+  -p 3142:3142 \
+  -v jarvis-data:/data \
+  -e JARVIS_API_KEY=sk-ant-your-key \
+  ghcr.io/vierisid/jarvis:latest
+```
+
+The image is available on [GHCR](https://ghcr.io/vierisid/jarvis). Configuration can be provided via environment variables or by mounting a `config.yaml` into the `/data` volume.
 
 ### One-liner
 

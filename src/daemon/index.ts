@@ -80,7 +80,7 @@ function parseArgs(): Partial<DaemonConfig> {
         config.healthCheckInterval = parseInt(args[++i]!, 10);
         break;
       case '--no-local-tools':
-        (config as any).noLocalTools = true;
+        config.noLocalTools = true;
         break;
       case '--help':
       case '-h':
@@ -241,6 +241,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     dataDir,
     dbPath,
     healthCheckInterval: userConfig?.healthCheckInterval ?? 30000,
+    noLocalTools: userConfig?.noLocalTools ?? false,
   };
 
   // If dbPath is relative, make it absolute within dataDir
@@ -291,7 +292,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 5. Create real services
     const agentService = new AgentService(jarvisConfig);
     agentService.setResearchQueue(researchQueue);
-    const observerService = new ObserverService(reactor, coalescer, googleAuth ?? undefined);
+    const observerService = config.noLocalTools
+      ? null
+      : new ObserverService(reactor, coalescer, googleAuth ?? undefined);
     const wsService = new WebSocketService(config.port, agentService);
 
     // 5b. Create channel service for external comms (Telegram, Discord)
@@ -323,7 +326,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 7. Register services in startup order
     //    Agent first (needs DB), Observers second, Channels third, Sidecar, WebSocket last (needs Agent)
     registry.register(agentService);
-    registry.register(observerService);
+    if (observerService) registry.register(observerService);
     registry.register(channelService);
     registry.register(sidecarManager);
     registry.register(wsService);
@@ -530,7 +533,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     commitmentExecutor = executor;
 
     // 10e. Create and start Awareness Service (M13)
-    if (jarvisConfig.awareness?.enabled !== false) {
+    //       Skipped when --no-local-tools is set (headless / Docker)
+    if (jarvisConfig.awareness?.enabled !== false && !config.noLocalTools) {
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
         const svc = new AwarenessService(
