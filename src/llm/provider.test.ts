@@ -265,3 +265,81 @@ describe('Vision Support', () => {
     });
   });
 });
+
+describe('Tool Call Conversion', () => {
+  const toolUseConversation: LLMMessage[] = [
+    { role: 'system', content: 'You are helpful' },
+    { role: 'user', content: 'What time is it?' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        { id: 'call_1', name: 'get_time', arguments: { timezone: 'UTC' } },
+      ],
+    },
+    {
+      role: 'tool',
+      content: '2026-03-30T12:00:00Z',
+      tool_call_id: 'call_1',
+    },
+  ];
+
+  test('OpenAIProvider preserves tool_calls on assistant messages', () => {
+    const provider = new OpenAIProvider('test-key') as any;
+    const converted = provider.convertMessages(toolUseConversation);
+
+    const assistant = converted[2];
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.tool_calls).toBeDefined();
+    expect(assistant.tool_calls).toHaveLength(1);
+    expect(assistant.tool_calls[0].id).toBe('call_1');
+    expect(assistant.tool_calls[0].type).toBe('function');
+    expect(assistant.tool_calls[0].function.name).toBe('get_time');
+    expect(assistant.tool_calls[0].function.arguments).toBe('{"timezone":"UTC"}');
+  });
+
+  test('OpenAIProvider preserves tool_call_id on tool messages', () => {
+    const provider = new OpenAIProvider('test-key') as any;
+    const converted = provider.convertMessages(toolUseConversation);
+
+    const tool = converted[3];
+    expect(tool.role).toBe('tool');
+    expect(tool.tool_call_id).toBe('call_1');
+    expect(tool.content).toBe('2026-03-30T12:00:00Z');
+  });
+
+  test('GroqProvider preserves tool_calls on assistant messages', () => {
+    const provider = new GroqProvider('test-key') as any;
+    const converted = provider.convertMessages(toolUseConversation);
+
+    const assistant = converted[2];
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.tool_calls).toBeDefined();
+    expect(assistant.tool_calls).toHaveLength(1);
+    expect(assistant.tool_calls[0].id).toBe('call_1');
+    expect(assistant.tool_calls[0].type).toBe('function');
+    expect(assistant.tool_calls[0].function.name).toBe('get_time');
+    expect(assistant.tool_calls[0].function.arguments).toBe('{"timezone":"UTC"}');
+  });
+
+  test('GroqProvider preserves tool_call_id on tool messages', () => {
+    const provider = new GroqProvider('test-key') as any;
+    const converted = provider.convertMessages(toolUseConversation);
+
+    const tool = converted[3];
+    expect(tool.role).toBe('tool');
+    expect(tool.tool_call_id).toBe('call_1');
+    expect(tool.content).toBe('2026-03-30T12:00:00Z');
+  });
+
+  test('Messages without tool_calls omit the field', () => {
+    const provider = new OpenAIProvider('test-key') as any;
+    const converted = provider.convertMessages([
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there' },
+    ]);
+    expect(converted[0].tool_calls).toBeUndefined();
+    expect(converted[1].tool_calls).toBeUndefined();
+    expect(converted[0].tool_call_id).toBeUndefined();
+  });
+});

@@ -9,8 +9,10 @@ import type {
 } from './provider.ts';
 
 type OpenAIMessage = {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  tool_calls?: OpenAIToolCall[];
+  tool_call_id?: string;
 };
 
 type OpenAIToolDef = {
@@ -284,10 +286,26 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
-    return messages.map(m => ({
-      role: m.role as 'system' | 'user' | 'assistant',
-      content: m.content as string,
-    }));
+    return messages.map(m => {
+      const text = typeof m.content === 'string'
+        ? m.content
+        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      const msg: OpenAIMessage = {
+        role: m.role as 'system' | 'user' | 'assistant' | 'tool',
+        content: text,
+      };
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        msg.tool_calls = m.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        }));
+      }
+      if (m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+      }
+      return msg;
+    });
   }
 
   private convertTools(tools: LLMTool[]): OpenAIToolDef[] {
