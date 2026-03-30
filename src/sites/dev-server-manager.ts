@@ -53,7 +53,7 @@ export class DevServerManager {
       throw new Error(`Max concurrent servers reached (${this.maxConcurrent}). Stop another project first.`);
     }
 
-    const port = this.allocatePort();
+    const port = await this.allocatePort();
 
     const proc = Bun.spawn(['make', 'dev'], {
       cwd: projectPath,
@@ -62,6 +62,8 @@ export class DevServerManager {
       env: {
         ...process.env,
         PORT: String(port),
+        // Enforce loopback bind — prevent dev servers from listening on 0.0.0.0
+        HOST: '127.0.0.1',
       },
     });
 
@@ -182,14 +184,29 @@ export class DevServerManager {
 
   // ── Port Management ──
 
-  private allocatePort(): number {
+  private async allocatePort(): Promise<number> {
     for (let port = this.portStart; port <= this.portEnd; port++) {
       if (!this.allocatedPorts.has(port)) {
-        this.allocatedPorts.add(port);
-        return port;
+        // Verify the port is actually free on the system
+        const available = await this.isPortAvailable(port);
+        if (available) {
+          this.allocatedPorts.add(port);
+          return port;
+        }
       }
     }
     throw new Error(`No available ports in range ${this.portStart}-${this.portEnd}`);
+  }
+
+  /** Probe whether a port is free by attempting a TCP connect */
+  private isPortAvailable(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const { createServer } = require('node:net');
+      const server = createServer();
+      server.once('error', () => resolve(false));
+      server.once('listening', () => { server.close(() => resolve(true)); });
+      server.listen(port, '127.0.0.1');
+    });
   }
 
   private releasePort(port: number): void {
@@ -240,16 +257,27 @@ export class DevServerManager {
       const file = Bun.file(this.pidFilePath);
       if (!await file.exists()) return;
 
+      const { readFileSync, unlinkSync } = await import('node:fs');
+
       const pids = JSON.parse(await file.text()) as Record<string, { pid: number; port: number }>;
       for (const [id, { pid }] of Object.entries(pids)) {
         try {
-          process.kill(pid, 'SIGTERM');
-          console.log(`[SiteBuilder] Killed orphaned process ${pid} for project "${id}"`);
-        } catch { /* process already gone */ }
+          // Verify PID belongs to a Jarvis-spawned process before killing
+          const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+          const isMakeDev = cmdline.includes('make') && cmdline.includes('dev');
+          const isBunHot = cmdline.includes('bun') && cmdline.includes('--hot');
+          const isVite = cmdline.includes('vite');
+          const isNext = cmdline.includes('next');
+          if (isMakeDev || isBunHot || isVite || isNext) {
+            process.kill(pid, 'SIGTERM');
+            console.log(`[SiteBuilder] Killed orphaned process ${pid} for project "${id}"`);
+          } else {
+            console.log(`[SiteBuilder] Skipped PID ${pid} — not a recognized dev server process`);
+          }
+        } catch { /* process already gone or /proc not available */ }
       }
 
       // Clean up the PID file
-      const { unlinkSync } = await import('node:fs');
       try { unlinkSync(this.pidFilePath); } catch { /* ignore */ }
     } catch { /* no PID file or parse error */ }
   }

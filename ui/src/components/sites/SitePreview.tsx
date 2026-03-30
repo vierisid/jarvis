@@ -48,6 +48,16 @@ export function SitePreview({ project }: Props) {
     ? `http://localhost:${project.devPort}/`
     : `/api/sites/${project.id}/proxy/`;
 
+  // Proxy path is same-origin with the dashboard — omit allow-same-origin
+  // so iframe JS cannot access Jarvis API/cookies/storage.
+  // Direct localhost path is already cross-origin (different port) so
+  // allow-same-origin is safe and required for the dev server to function.
+  // Omit allow-popups on both paths to block window.open() / target="_blank".
+  const isProxyPath = !project.devPort;
+  const sandboxValue = isProxyPath
+    ? "allow-scripts allow-forms"
+    : "allow-scripts allow-forms allow-same-origin";
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }}>
       {/* Reload button */}
@@ -69,6 +79,7 @@ export function SitePreview({ project }: Props) {
       <iframe
         key={iframeKey}
         src={previewUrl}
+        sandbox={sandboxValue}
         style={{
           width: "100%",
           height: "calc(100% - 28px)",

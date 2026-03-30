@@ -9,6 +9,27 @@ import type { ToolDefinition } from '../actions/tools/registry.ts';
 import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
 
+/** Block patterns for long-running dev servers that conflict with the managed server */
+const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|npm\s+run\s+dev|yarn\s+dev)\b/i;
+
+/** Env keys that must never leak to subprocesses */
+const SECRET_ENV_PATTERNS = [
+  /api[_-]?key/i, /secret/i, /token/i, /password/i, /credential/i,
+  /^JARVIS_API_KEY$/, /^JARVIS_AUTH_TOKEN$/, /^JARVIS_OPENAI_KEY$/,
+  /^JARVIS_OPENROUTER_KEY$/, /^ANTHROPIC_API_KEY$/, /^OPENAI_API_KEY$/,
+];
+
+/** Build a sanitized env with secrets stripped */
+function sanitizedEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (SECRET_ENV_PATTERNS.some(p => p.test(key))) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 export function createSiteBuilderTools(
   projectManager: ProjectManager,
   gitManager: GitManager,
@@ -94,10 +115,10 @@ export function createSiteBuilderTools(
         const projectPath = projectManager.getProjectPath(params.project_id as string);
         if (!projectPath) return 'Error: Project not found';
 
-        // Block commands that would start long-running servers
         const cmd = (params.command as string).trim();
-        const blockedPatterns = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|npm\s+run\s+dev|yarn\s+dev)\b/i;
-        if (blockedPatterns.test(cmd)) {
+
+        // Block commands that start long-running dev servers (conflicts with managed server)
+        if (BLOCKED_SERVER_PATTERNS.test(cmd)) {
           return 'Error: Do not start dev servers with site_run_command. The dev server is managed automatically — use the Start button in the Sites page or POST /api/sites/projects/:id/start instead.';
         }
 
@@ -106,7 +127,7 @@ export function createSiteBuilderTools(
             cwd: projectPath,
             stdout: 'pipe',
             stderr: 'pipe',
-            env: process.env,
+            env: sanitizedEnv(),
           });
 
           // 30-second timeout to prevent hanging

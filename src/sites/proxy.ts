@@ -50,7 +50,12 @@ export class SiteProxy {
       const headers = new Headers(req.headers);
       headers.delete('host');
       headers.set('host', `127.0.0.1:${port}`);
-      headers.set('x-forwarded-for', '127.0.0.1');
+
+      // Forward real client IP instead of hardcoded loopback
+      const clientIp = req.headers.get('x-forwarded-for')
+        || req.headers.get('x-real-ip')
+        || '127.0.0.1';
+      headers.set('x-forwarded-for', clientIp);
       headers.set('x-forwarded-proto', 'http');
 
       const proxyReq: RequestInit = {
@@ -69,7 +74,14 @@ export class SiteProxy {
       if (resp.status >= 300 && resp.status < 400) {
         const location = resp.headers.get('location');
         if (location) {
-          const rewritten = location.startsWith('/') ? proxyBase + location : location;
+          let rewritten: string;
+          if (location.startsWith('/')) {
+            rewritten = proxyBase + location;
+          } else {
+            // Rewrite full-URL redirects pointing to the dev server
+            const fullUrlMatch = location.match(/^https?:\/\/127\.0\.0\.1:\d+(\/.*)?$/);
+            rewritten = fullUrlMatch ? proxyBase + (fullUrlMatch[1] || '/') : location;
+          }
           return new Response(null, {
             status: resp.status,
             headers: { 'Location': rewritten },
@@ -79,13 +91,16 @@ export class SiteProxy {
 
       const contentType = resp.headers.get('content-type') ?? '';
       const respHeaders = new Headers(resp.headers);
-      respHeaders.delete('transfer-encoding');
 
       // For HTML responses, rewrite absolute paths to go through proxy
       if (contentType.includes('text/html')) {
+        // Strip transfer-encoding since we're re-encoding the body
+        respHeaders.delete('transfer-encoding');
         let html = await resp.text();
         html = this.rewriteHtml(html, proxyBase);
         respHeaders.set('content-length', String(new TextEncoder().encode(html).length));
+        // CSP: defense-in-depth restricting where scripts can come from
+        respHeaders.set('content-security-policy', "frame-ancestors 'self'");
         return new Response(html, {
           status: resp.status,
           statusText: resp.statusText,
@@ -94,7 +109,10 @@ export class SiteProxy {
       }
 
       // For JS module responses, rewrite bare absolute imports
-      if (contentType.includes('javascript') || contentType.includes('application/json')) {
+      // Skip JSON — the regex rewriter corrupts JSON strings
+      if (contentType.includes('javascript') && !contentType.includes('application/json')) {
+        // Strip transfer-encoding since we're re-encoding the body
+        respHeaders.delete('transfer-encoding');
         let body = await resp.text();
         body = this.rewriteJs(body, proxyBase);
         respHeaders.set('content-length', String(new TextEncoder().encode(body).length));
@@ -105,14 +123,20 @@ export class SiteProxy {
         });
       }
 
+      // For non-rewritten responses, preserve transfer-encoding
       return new Response(resp.body, {
         status: resp.status,
         statusText: resp.statusText,
         headers: respHeaders,
       });
     } catch (err) {
+      // Sanitize error messages — strip internal ports and paths
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const safeMsg = rawMsg
+        .replace(/127\.0\.0\.1:\d+/g, '<dev-server>')
+        .replace(/\/home\/[^\s"']*/g, '<path>');
       return new Response(JSON.stringify({
-        error: `Proxy error: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Proxy error: ${safeMsg}`,
       }), {
         status: 502,
         headers: { 'Content-Type': 'application/json' },
@@ -134,19 +158,37 @@ export class SiteProxy {
 
   /**
    * Rewrite HTML: change src="/..." and href="/..." to go through the proxy.
+   * Handles quoted attributes, <base>, srcset, and CSS url()
    */
   private rewriteHtml(html: string, proxyBase: string): string {
-    // Rewrite src="/ and href="/ attributes
+    // Remove <base> tags that would redirect asset resolution away from proxy
+    html = html.replace(/<base\s[^>]*>/gi, '');
+
+    // Rewrite src="/ href="/ action="/ (double and single quoted)
     html = html.replace(/(src|href|action)=(["'])\//g, `$1=$2${proxyBase}/`);
-    // Rewrite import("/...") and from "/..."
+
+    // Rewrite srcset="/..." values
+    html = html.replace(/srcset=(["'])([^"']*)\1/gi, (match, quote, value) => {
+      const rewritten = (value as string).replace(
+        /(^|,\s*)\//g,
+        `$1${proxyBase}/`
+      );
+      return `srcset=${quote}${rewritten}${quote}`;
+    });
+
+    // Rewrite inline CSS url(/) references
+    html = html.replace(/url\(\s*(["']?)\//g, `url($1${proxyBase}/`);
+
+    // Rewrite JS import/from patterns
     html = html.replace(/from\s+(["'])\//g, `from $1${proxyBase}/`);
     html = html.replace(/import\s*\(\s*(["'])\//g, `import($1${proxyBase}/`);
+
     return html;
   }
 
   /**
    * Rewrite JS: change bare absolute imports (from "/...", import("/..."))
-   * to go through the proxy.
+   * to go through the proxy. Also handles new URL() and CSS url() in JS
    */
   private rewriteJs(js: string, proxyBase: string): string {
     // from "/node_modules/..." → from "/api/sites/:id/proxy/node_modules/..."
@@ -155,6 +197,8 @@ export class SiteProxy {
     js = js.replace(/import\s*\(\s*(["'])\//g, `import($1${proxyBase}/`);
     // new URL("/...", import.meta.url)
     js = js.replace(/new\s+URL\s*\(\s*(["'])\//g, `new URL($1${proxyBase}/`);
+    // CSS url() in JS template literals or strings
+    js = js.replace(/url\(\s*(["']?)\//g, `url($1${proxyBase}/`);
     return js;
   }
 }
