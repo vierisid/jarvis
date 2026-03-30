@@ -24,6 +24,8 @@ export type ToolDefinition = {
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
+  /** Default working directory for tools like run_command. Set by site builder context. */
+  defaultCwd: string | null = null;
 
   register(tool: ToolDefinition): void {
     if (this.tools.has(tool.name)) {

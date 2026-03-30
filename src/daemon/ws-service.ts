@@ -13,6 +13,7 @@ import type { ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
+import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
@@ -579,6 +580,13 @@ ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
       const conversation = getOrCreateConversation(channel);
       addMessage(conversation.id, { role: 'user', content: text });
 
+      // Set default cwd for general tools (run_command, read_file, etc.)
+      // so they operate in the project directory during site builder conversations
+      if (projectId && this.siteBuilderService) {
+        const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
+        setDefaultCwd(projectPath);
+      }
+
       const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext);
 
       // Set up streaming TTS: speak sentences as they arrive
@@ -677,6 +685,9 @@ ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
           this.activeTaskId = null;
         }
       }
+
+      // Clear site builder default cwd now that the turn is done
+      setDefaultCwd(null);
 
       // Fire-and-forget: run post-processing (extraction, personality)
       onComplete(fullText).catch((err) =>

@@ -7,6 +7,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
@@ -22,9 +23,9 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 // Shared browser controller (lazy-connected on first browser tool use)
 export const browser = new BrowserController();
 
-import { isNoLocalTools, LOCAL_DISABLED_MSG } from './local-tools-guard.ts';
+import { isNoLocalTools, LOCAL_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
 // Re-export for convenience
-export { setNoLocalTools, isNoLocalTools } from './local-tools-guard.ts';
+export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
 
 /**
@@ -96,7 +97,8 @@ export const runCommandTool: ToolDefinition = {
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
     const command = params.command as string;
-    const cwd = (params.cwd as string) || undefined;
+    const explicitCwd = params.cwd as string | undefined;
+    const cwd = explicitCwd || getDefaultCwd() || homedir();
     const timeout = (params.timeout as number) || undefined;
 
     const result = await terminal.execute(command, { cwd, timeout });
@@ -139,7 +141,9 @@ export const readFileTool: ToolDefinition = {
 
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
-    const filePath = resolve(params.path as string);
+    const rawPath = params.path as string;
+    const baseCwd = getDefaultCwd() || homedir();
+    const filePath = resolve(baseCwd, rawPath);
 
     if (!existsSync(filePath)) {
       return `Error: File not found: ${filePath}`;
@@ -189,7 +193,9 @@ export const writeFileTool: ToolDefinition = {
 
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
-    const filePath = resolve(params.path as string);
+    const rawPath = params.path as string;
+    const baseCwd = getDefaultCwd() || homedir();
+    const filePath = resolve(baseCwd, rawPath);
     const content = params.content as string;
 
     writeFileSync(filePath, content, 'utf-8');
@@ -221,7 +227,9 @@ export const listDirectoryTool: ToolDefinition = {
 
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
-    const dirPath = resolve(params.path as string);
+    const rawPath = params.path as string;
+    const baseCwd = getDefaultCwd() || homedir();
+    const dirPath = resolve(baseCwd, rawPath);
 
     if (!existsSync(dirPath)) {
       return `Error: Directory not found: ${dirPath}`;
