@@ -530,6 +530,7 @@ export class WebSocketService implements Service {
     // Build site builder system prompt context (injected into system prompt, not user message)
     let siteContext: string | undefined;
     if (projectId && this.siteBuilderService) {
+      // Project-scoped chat (from the Site Builder page)
       const project = await this.siteBuilderService.getProjectWithStatus(projectId);
       if (project) {
         let fileTreeText = '';
@@ -544,6 +545,7 @@ You are working on project "${project.name}" (${project.framework}).
 - Path: ${project.path}
 - Branch: ${project.gitBranch ?? 'main'}
 - Dev server: ${project.status}
+${project.githubUrl ? `- GitHub: ${project.githubUrl}` : ''}
 ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
 
 ## Rules
@@ -553,6 +555,25 @@ ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
 - Changes are auto-committed after this conversation turn completes.
 - For the "bun-react" framework: the server uses Bun.serve() with HTML imports (import from "./index.html"). Run with "bun --hot index.ts", NOT vite or webpack.`;
       }
+    } else if (this.siteBuilderService) {
+      // General chat (main dashboard) — give the LLM awareness of site builder projects
+      try {
+        const projects = await this.siteBuilderService.listProjectsWithStatus();
+        if (projects.length > 0) {
+          const projectList = projects.map(p =>
+            `  - "${p.name}" (id: ${p.id}, framework: ${p.framework}, branch: ${p.gitBranch ?? 'main'}${p.githubUrl ? `, github: ${p.githubUrl}` : ''})`
+          ).join('\n');
+
+          siteContext = `# Site Builder
+
+You have access to the Site Builder feature with ${projects.length} project(s):
+${projectList}
+
+You can work on any of these projects using site builder tools (site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push) by passing the project's id as project_id.
+When the user asks you to build, edit, or work on a website/app, use these tools to make changes directly in the project files.
+If the user wants to create a new project, tell them to use the Site Builder page (Sites tab in the sidebar) to create one first.`;
+        }
+      } catch { /* ignore — site builder may not be fully started */ }
     }
 
     // Auto-create a task for non-trivial messages
