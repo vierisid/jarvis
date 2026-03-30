@@ -71,10 +71,10 @@ export async function runOnboard(): Promise<void> {
   const provider = await askChoice('Choose your primary LLM provider:', [
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
     { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
-    { label: 'Groq', value: 'groq' as const, description: 'Fast, OpenAI-compatible API' },
     { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
-    { label: 'OpenRouter', value: 'openrouter' as const, description: 'Access hundreds of models via single API key' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
+    { label: 'OpenRouter', value: 'openrouter' as const, description: 'Access hundreds of models via single API key' },
+    { label: 'Groq', value: 'groq' as const, description: 'Fast, OpenAI-compatible API' },
   ], config.llm.primary as any);
 
   config.llm.primary = provider;
@@ -306,7 +306,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'groq', 'gemini', 'openrouter', 'ollama'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
