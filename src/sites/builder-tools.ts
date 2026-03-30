@@ -8,6 +8,7 @@
 import type { ToolDefinition } from '../actions/tools/registry.ts';
 import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
+import type { GitHubManager } from './github-manager.ts';
 
 /** Block patterns for long-running dev servers that conflict with the managed server */
 const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|npm\s+run\s+dev|yarn\s+dev)\b/i;
@@ -33,6 +34,7 @@ function sanitizedEnv(): Record<string, string> {
 export function createSiteBuilderTools(
   projectManager: ProjectManager,
   gitManager: GitManager,
+  githubManager?: GitHubManager,
 ): ToolDefinition[] {
   return [
     {
@@ -180,5 +182,34 @@ export function createSiteBuilderTools(
         }
       },
     },
+    ...(githubManager ? [{
+      name: 'site_github_push',
+      description: 'Push the current site builder project to GitHub. The project must already be connected to a GitHub repository (via the Git panel). Commits all pending changes before pushing.',
+      category: 'site-builder',
+      parameters: {
+        project_id: { type: 'string', description: 'The project ID', required: true },
+        commit_message: { type: 'string', description: 'Optional commit message for any uncommitted changes. If omitted, uncommitted changes are not committed before pushing.', required: false },
+      },
+      execute: async (params) => {
+        const projectPath = projectManager.getProjectPath(params.project_id as string);
+        if (!projectPath) return 'Error: Project not found';
+
+        try {
+          // Optionally commit pending changes first
+          if (params.commit_message) {
+            const commit = await gitManager.autoCommit(projectPath, params.commit_message as string);
+            if (commit) {
+              // continue to push
+            }
+          }
+
+          const result = await githubManager.push(projectPath);
+          if (!result.success) return `Error: ${result.error}`;
+          return 'Pushed to GitHub successfully';
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    } as ToolDefinition] : []),
   ];
 }

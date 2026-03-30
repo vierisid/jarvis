@@ -11,10 +11,11 @@ type Props = {
   onOpenProject: (project: Project) => void;
   onNewProject: () => void;
   onStopServer: () => void;
+  onGitHubChange: () => void;
 };
 
 export function SiteTopBar({
-  openTabs, activeProjectId, projects, onSelectTab, onCloseTab, onOpenProject, onNewProject, onStopServer,
+  openTabs, activeProjectId, projects, onSelectTab, onCloseTab, onOpenProject, onNewProject, onStopServer, onGitHubChange,
 }: Props) {
   const activeProject = openTabs.find((p) => p.id === activeProjectId);
   const [showProjectList, setShowProjectList] = React.useState(false);
@@ -96,6 +97,17 @@ export function SiteTopBar({
                 {activeProject.gitDirty && <span style={{ color: "var(--j-warning)", fontSize: "10px" }}>*</span>}
               </button>
             )}
+            {activeProject.githubUrl && (
+              <a
+                href={activeProject.githubUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={ghIndicatorStyle}
+                title={`View on GitHub: ${activeProject.githubUrl.replace("https://github.com/", "")}`}
+              >
+                GH
+              </a>
+            )}
             {activeProject.status === "running" && (
               <button onClick={onStopServer} style={stopBtnStyle} title="Stop dev server">
                 Stop
@@ -110,8 +122,14 @@ export function SiteTopBar({
       </div>
 
       {/* Git panel dropdown */}
-      {showGitPanel && activeProjectId && (
-        <SiteGitPanel projectId={activeProjectId} onClose={() => setShowGitPanel(false)} />
+      {showGitPanel && activeProjectId && activeProject && (
+        <SiteGitPanel
+          projectId={activeProjectId}
+          projectName={activeProject.name}
+          githubUrl={activeProject.githubUrl}
+          onClose={() => setShowGitPanel(false)}
+          onGitHubChange={onGitHubChange}
+        />
       )}
     </div>
   );
@@ -203,6 +221,18 @@ const gitBtnStyle: React.CSSProperties = {
   border: "1px solid var(--j-border)",
   borderRadius: "4px",
   color: "var(--j-text-dim)",
+  cursor: "pointer",
+};
+
+const ghIndicatorStyle: React.CSSProperties = {
+  padding: "2px 6px",
+  fontSize: "10px",
+  fontWeight: 700,
+  background: "rgba(0,212,255,0.1)",
+  border: "1px solid rgba(0,212,255,0.3)",
+  borderRadius: "4px",
+  color: "var(--j-accent)",
+  textDecoration: "none",
   cursor: "pointer",
 };
 

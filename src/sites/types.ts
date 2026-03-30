@@ -16,6 +16,7 @@ export type Project = {
   gitDirty: boolean;
   createdAt: number;
   lastOpenedAt: number;
+  githubUrl: string | null; // e.g., "https://github.com/owner/repo"
 };
 
 export type ProjectMeta = {
@@ -23,6 +24,12 @@ export type ProjectMeta = {
   framework: string;
   createdAt: number;
   lastOpenedAt: number;
+  github?: {
+    owner: string;
+    repo: string;
+    remoteUrl: string;
+    lastPushedAt: number | null;
+  };
 };
 
 export type ProjectTemplate = {
@@ -54,6 +61,22 @@ export type GitCommit = {
 export type GitBranch = {
   name: string;
   current: boolean;
+};
+
+export type GitRemoteStatus = {
+  hasRemote: boolean;
+  remoteUrl: string | null;
+  owner: string | null;
+  repo: string | null;
+  ahead: number;
+  behind: number;
+  lastPushedAt: number | null;
+};
+
+export type GitHubRepoOptions = {
+  name: string;
+  description?: string;
+  private: boolean;
 };
 
 export type SiteBuilderConfig = {

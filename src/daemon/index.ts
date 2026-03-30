@@ -748,7 +748,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
         // Register builder tools into the agent's tool registry
         const { createSiteBuilderTools } = await import('../sites/builder-tools.ts');
-        const builderTools = createSiteBuilderTools(siteBuilderService.projectManager, siteBuilderService.gitManager);
+        const builderTools = createSiteBuilderTools(siteBuilderService.projectManager, siteBuilderService.gitManager, siteBuilderService.githubManager);
         const toolReg = orchestrator.getToolRegistry();
         if (toolReg) {
           for (const tool of builderTools) toolReg.register(tool);

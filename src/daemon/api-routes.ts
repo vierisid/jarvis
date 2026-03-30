@@ -2548,6 +2548,173 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // --- Site Builder: GitHub Integration ---
+    '/api/sites/github/token': {
+      GET: async () => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const gh = ctx.siteBuilderService.githubManager;
+        if (!gh.hasToken()) return json({ hasToken: false, username: null });
+        const { valid, username } = await gh.validateToken();
+        return json({ hasToken: valid, username });
+      },
+      POST: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        try {
+          const body = await req.json() as { token: string };
+          if (!body.token) return error('token is required');
+          const gh = ctx.siteBuilderService.githubManager;
+          gh.setToken(body.token);
+          const { valid, username, scopes } = await gh.validateToken();
+          if (!valid) {
+            gh.deleteToken();
+            return error('Invalid token — could not authenticate with GitHub', 401);
+          }
+          return json({ ok: true, username, scopes });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+      DELETE: () => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        ctx.siteBuilderService.githubManager.deleteToken();
+        return json({ ok: true });
+      },
+    },
+
+    '/api/sites/github/repos': {
+      GET: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        try {
+          const page = parseInt(getSearchParams(req).get('page') ?? '1', 10);
+          const repos = await ctx.siteBuilderService.githubManager.listUserRepos(page);
+          return json(repos);
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    '/api/sites/projects/:id/github/repo': {
+      POST: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const id = new URL(req.url).pathname.split('/')[4]!;
+        const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
+        if (!projectPath) return error('Project not found', 404);
+        try {
+          const body = await req.json() as {
+            name?: string; description?: string; private?: boolean;
+            existingRepo?: string; // "owner/repo" format
+          };
+          const gh = ctx.siteBuilderService.githubManager;
+          let owner: string, repo: string, cloneUrl: string, htmlUrl: string;
+
+          if (body.existingRepo) {
+            // Connect to existing repo
+            const [o, r] = body.existingRepo.split('/');
+            if (!o || !r) return error('existingRepo must be in "owner/repo" format');
+            const info = await gh.getRepo(o, r);
+            owner = info.owner; repo = info.repo; cloneUrl = info.cloneUrl; htmlUrl = info.htmlUrl;
+          } else {
+            // Create new repo
+            if (!body.name) return error('name is required (or provide existingRepo)');
+            const info = await gh.createRepo({
+              name: body.name,
+              description: body.description,
+              private: body.private ?? true,
+            });
+            owner = info.owner; repo = info.repo; cloneUrl = info.cloneUrl; htmlUrl = info.htmlUrl;
+          }
+
+          // Add/update remote origin
+          await gh.addRemote(projectPath, cloneUrl);
+
+          // Persist GitHub metadata
+          await ctx.siteBuilderService.projectManager.updateGitHubMeta(id, {
+            owner, repo, remoteUrl: cloneUrl, lastPushedAt: null,
+          });
+
+          const project = await ctx.siteBuilderService.getProjectWithStatus(id);
+          return json(project, 201);
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+      DELETE: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const id = new URL(req.url).pathname.split('/')[4]!;
+        const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
+        if (!projectPath) return error('Project not found', 404);
+        try {
+          await ctx.siteBuilderService.githubManager.removeRemote(projectPath);
+          await ctx.siteBuilderService.projectManager.updateGitHubMeta(id, null);
+          return json({ ok: true });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    '/api/sites/projects/:id/github/push': {
+      POST: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const id = new URL(req.url).pathname.split('/')[4]!;
+        const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
+        if (!projectPath) return error('Project not found', 404);
+        try {
+          const body = await req.json().catch(() => ({})) as { force?: boolean };
+          const result = await ctx.siteBuilderService.githubManager.push(projectPath, undefined, body.force);
+          if (!result.success) return error(result.error ?? 'Push failed');
+
+          // Update lastPushedAt
+          const project = await ctx.siteBuilderService.projectManager.getProject(id);
+          if (project?.githubUrl) {
+            const meta = require('node:fs').readFileSync(
+              require('node:path').join(projectPath, '.jarvis-project.json'), 'utf-8'
+            );
+            const parsed = JSON.parse(meta);
+            if (parsed.github) {
+              parsed.github.lastPushedAt = Date.now();
+              await Bun.write(require('node:path').join(projectPath, '.jarvis-project.json'), JSON.stringify(parsed, null, 2));
+            }
+          }
+
+          return json({ ok: true });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    '/api/sites/projects/:id/github/pull': {
+      POST: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const id = new URL(req.url).pathname.split('/')[4]!;
+        const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
+        if (!projectPath) return error('Project not found', 404);
+        try {
+          const result = await ctx.siteBuilderService.githubManager.pull(projectPath);
+          return json(result);
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    '/api/sites/projects/:id/github/status': {
+      GET: async (req: Request) => {
+        if (!ctx.siteBuilderService) return error('Site builder not available', 503);
+        const id = new URL(req.url).pathname.split('/')[4]!;
+        const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
+        if (!projectPath) return error('Project not found', 404);
+        try {
+          const status = await ctx.siteBuilderService.githubManager.getRemoteStatus(projectPath);
+          return json(status);
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
     // --- CORS preflight ---
     '/api/*': {
       OPTIONS: () => new Response(null, { status: 204, headers: CORS }),

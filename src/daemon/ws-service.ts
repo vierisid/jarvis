@@ -547,7 +547,7 @@ You are working on project "${project.name}" (${project.framework}).
 ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
 
 ## Rules
-- Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit tools with project_id="${projectId}".
+- Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push tools with project_id="${projectId}".
 - Do NOT use regular read_file, write_file, or run_command — always use the site_* variants.
 - Do NOT start dev servers via site_run_command. The dev server is managed by the dashboard (make dev runs automatically).
 - Changes are auto-committed after this conversation turn completes.

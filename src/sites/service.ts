@@ -11,6 +11,7 @@ import { ProjectManager } from './project-manager.ts';
 import { GitManager } from './git-manager.ts';
 import { DevServerManager } from './dev-server-manager.ts';
 import { SiteProxy } from './proxy.ts';
+import { GitHubManager } from './github-manager.ts';
 
 export class SiteBuilderService implements Service {
   name = 'site-builder';
@@ -18,11 +19,13 @@ export class SiteBuilderService implements Service {
 
   readonly projectManager: ProjectManager;
   readonly gitManager: GitManager;
+  readonly githubManager: GitHubManager;
   readonly devServerManager: DevServerManager;
   readonly proxy: SiteProxy;
 
   constructor(private config: SiteBuilderConfig) {
     this.gitManager = new GitManager();
+    this.githubManager = new GitHubManager();
     this.devServerManager = new DevServerManager(config);
     this.projectManager = new ProjectManager(config, this.gitManager);
     this.proxy = new SiteProxy(this.devServerManager);

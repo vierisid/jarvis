@@ -17,6 +17,7 @@ export type Project = {
   gitDirty: boolean;
   createdAt: number;
   lastOpenedAt: number;
+  githubUrl: string | null;
 };
 
 export type FileEntry = {
@@ -149,6 +150,16 @@ export default function SitesPage({ sendMessage, isConnected, messages }: Props)
             await api(`/api/sites/projects/${activeProjectId}/stop`, { method: "POST" });
             setOpenTabs((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, status: "stopped" as const, devPort: null } : p)));
           }
+        }}
+        onGitHubChange={async () => {
+          // Refresh the active project to pick up githubUrl changes
+          if (activeProjectId) {
+            try {
+              const updated = await api<Project>(`/api/sites/projects/${activeProjectId}`);
+              setOpenTabs((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, ...updated } : p)));
+            } catch { /* ignore */ }
+          }
+          refetchProjects();
         }}
       />
 

@@ -72,6 +72,7 @@ export class ProjectManager {
         gitDirty,
         createdAt: meta?.createdAt ?? statSync(projectPath).birthtimeMs,
         lastOpenedAt: meta?.lastOpenedAt ?? Date.now(),
+        githubUrl: meta?.github ? `https://github.com/${meta.github.owner}/${meta.github.repo}` : null,
       });
     }
 
@@ -106,6 +107,7 @@ export class ProjectManager {
       gitDirty,
       createdAt: meta?.createdAt ?? statSync(projectPath).birthtimeMs,
       lastOpenedAt: meta?.lastOpenedAt ?? Date.now(),
+      githubUrl: meta?.github ? `https://github.com/${meta.github.owner}/${meta.github.repo}` : null,
     };
   }
 
@@ -188,6 +190,7 @@ export class ProjectManager {
       gitDirty: false,
       createdAt: meta.createdAt,
       lastOpenedAt: meta.lastOpenedAt,
+      githubUrl: null,
     };
   }
 
@@ -267,6 +270,29 @@ export class ProjectManager {
       lastOpenedAt: Date.now(),
     };
     meta.lastOpenedAt = Date.now();
+    await Bun.write(join(projectPath, META_FILE), JSON.stringify(meta, null, 2));
+  }
+
+  /**
+   * Update the GitHub metadata for a project (or clear it with null).
+   */
+  async updateGitHubMeta(projectId: string, github: ProjectMeta['github'] | null): Promise<void> {
+    const projectPath = this.resolveProjectPath(projectId);
+    if (!projectPath) throw new Error(`Project "${projectId}" not found`);
+
+    const meta = this.readMeta(projectPath) ?? {
+      name: projectId,
+      framework: 'custom',
+      createdAt: Date.now(),
+      lastOpenedAt: Date.now(),
+    };
+
+    if (github) {
+      meta.github = github;
+    } else {
+      delete meta.github;
+    }
+
     await Bun.write(join(projectPath, META_FILE), JSON.stringify(meta, null, 2));
   }
 
