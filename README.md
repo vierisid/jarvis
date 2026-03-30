@@ -147,6 +147,8 @@ docker run -d --name jarvis \
 
 The image is available on [GHCR](https://ghcr.io/vierisid/jarvis). Configuration can be provided via environment variables or by mounting a `config.yaml` into the `/data` volume.
 
+> **Note:** Docker runs in an isolated container, so the daemon inside it cannot access your host desktop, browser, or clipboard directly. You must still install the [sidecar](#️-sidecar-setup) on each machine where you want JARVIS to have desktop awareness and automation capabilities.
+
 ### One-liner
 
 ```bash
