@@ -53,6 +53,8 @@ ${c.bold('Start options:')}
   --port <N>        Override daemon port (default: 3142)
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
+  --data-dir <path> Override data directory (default: ~/.jarvis)
+  --no-local-tools  Disable local tool execution (Docker/headless mode)
 
 ${c.bold('Logs options:')}
   -f, --follow      Follow log output (like tail -f)
@@ -73,6 +75,7 @@ ${c.bold('Examples:')}
 async function cmdStart(args: string[]): Promise<void> {
   const detach = args.includes('--detach') || args.includes('-d');
   const noOpen = args.includes('--no-open');
+  const noLocalTools = args.includes('--no-local-tools');
 
   // Parse --port
   let port: number | undefined;
@@ -83,6 +86,13 @@ async function cmdStart(args: string[]): Promise<void> {
       console.error(c.red('Error: --port requires a number between 1 and 65535'));
       process.exit(1);
     }
+  }
+
+  // Parse --data-dir
+  let dataDir: string | undefined;
+  const dataDirIdx = args.indexOf('--data-dir');
+  if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
+    dataDir = args[dataDirIdx + 1]!;
   }
 
   if (!detach) {
@@ -97,7 +107,7 @@ async function cmdStart(args: string[]): Promise<void> {
     process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
-    await startDaemon({ port, ...(port ? {} : {}) });
+    await startDaemon({ port, dataDir, noLocalTools });
 
     if (!noOpen) {
       openDashboard(port ?? 3142);
