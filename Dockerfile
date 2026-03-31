@@ -54,7 +54,7 @@ FROM oven/bun:1-slim AS production
 # ca-certificates: HTTPS calls to LLM APIs
 # git: required by the Site Builder for project version control
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates git && \
+    apt-get install -y --no-install-recommends ca-certificates git make procps && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
