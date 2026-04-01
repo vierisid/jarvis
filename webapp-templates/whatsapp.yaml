@@ -1,6 +1,15 @@
 app_name: WhatsApp
 domains:
   - web.whatsapp.com
+keywords:
+  - send a message to
+  - send message to
+  - text message
+  - check my messages
+  - check messages
+  - read my messages
+  - unread messages
+  - whatsapp message
 description: WhatsApp Web messaging — send/read messages, search contacts, send media
 version: 3
 instructions: |

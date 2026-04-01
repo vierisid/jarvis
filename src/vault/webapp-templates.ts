@@ -11,6 +11,7 @@ export type WebappTemplate = {
   id: string;
   app_name: string;
   domains: string[];
+  keywords: string[];
   description: string;
   instructions: string;
   version: number;
@@ -23,6 +24,7 @@ type WebappRow = {
   id: string;
   app_name: string;
   domains: string;
+  keywords: string;
   description: string;
   instructions: string;
   version: number;
@@ -35,6 +37,7 @@ function rowToTemplate(row: WebappRow): WebappTemplate {
   return {
     ...row,
     domains: JSON.parse(row.domains),
+    keywords: JSON.parse(row.keywords),
     enabled: row.enabled === 1,
   };
 }
@@ -45,6 +48,7 @@ function rowToTemplate(row: WebappRow): WebappTemplate {
 export function upsertWebappTemplate(template: {
   app_name: string;
   domains: string[];
+  keywords?: string[];
   description: string;
   instructions: string;
   version?: number;
@@ -61,10 +65,11 @@ export function upsertWebappTemplate(template: {
   if (existing) {
     db.prepare(`
       UPDATE webapp_templates
-      SET domains = ?, description = ?, instructions = ?, version = ?, enabled = ?, updated_at = ?
+      SET domains = ?, keywords = ?, description = ?, instructions = ?, version = ?, enabled = ?, updated_at = ?
       WHERE id = ?
     `).run(
       JSON.stringify(template.domains),
+      JSON.stringify(template.keywords ?? []),
       template.description,
       template.instructions,
       template.version ?? existing.version + 1,
@@ -77,12 +82,13 @@ export function upsertWebappTemplate(template: {
 
   const id = generateId();
   db.prepare(`
-    INSERT INTO webapp_templates (id, app_name, domains, description, instructions, version, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO webapp_templates (id, app_name, domains, keywords, description, instructions, version, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     template.app_name,
     JSON.stringify(template.domains),
+    JSON.stringify(template.keywords ?? []),
     template.description,
     template.instructions,
     template.version ?? 1,
@@ -157,7 +163,7 @@ export function listWebappTemplates(enabledOnly = true): WebappTemplate[] {
 
 /**
  * Match webapp templates against a user message.
- * Checks for app name mentions and URL patterns.
+ * Checks for app name mentions, URL patterns, and keyword triggers.
  * Returns all matching templates (usually 0-1).
  */
 export function matchWebappTemplates(message: string): WebappTemplate[] {
@@ -182,8 +188,20 @@ export function matchWebappTemplates(message: string): WebappTemplate[] {
 
     // Check if any domain appears in message
     const domains: string[] = JSON.parse(row.domains);
+    let domainMatch = false;
     for (const domain of domains) {
       if (msgLower.includes(domain)) {
+        matched.push(rowToTemplate(row));
+        domainMatch = true;
+        break;
+      }
+    }
+    if (domainMatch) continue;
+
+    // Check if any keyword triggers match
+    const keywords: string[] = JSON.parse(row.keywords);
+    for (const keyword of keywords) {
+      if (msgLower.includes(keyword.toLowerCase())) {
         matched.push(rowToTemplate(row));
         break;
       }

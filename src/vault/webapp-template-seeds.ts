@@ -18,6 +18,7 @@ import { upsertWebappTemplate } from './webapp-templates.ts';
 export type TemplateSeed = {
   app_name: string;
   domains: string[];
+  keywords?: string[];
   description: string;
   instructions: string;
   version?: number;
@@ -52,6 +53,7 @@ function loadTemplatesFromDir(dir: string): Map<string, TemplateSeed> {
       const seed: TemplateSeed = {
         app_name: parsed.app_name as string,
         domains: parsed.domains as string[],
+        keywords: (parsed.keywords as string[]) || [],
         description: (parsed.description as string) || '',
         instructions: (parsed.instructions as string).trim(),
         version: parsed.version as number | undefined,

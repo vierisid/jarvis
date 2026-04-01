@@ -678,6 +678,7 @@ function createTables(db: Database): void {
       id TEXT PRIMARY KEY,
       app_name TEXT NOT NULL UNIQUE,
       domains TEXT NOT NULL,
+      keywords TEXT NOT NULL DEFAULT '[]',
       description TEXT NOT NULL DEFAULT '',
       instructions TEXT NOT NULL,
       version INTEGER NOT NULL DEFAULT 1,

@@ -441,8 +441,18 @@ function formatSnapshot(snap: PageSnapshot): string {
   lines.push('');
 
   if (snap.elements.length > 0) {
-    // Prioritize: inputs/textboxes/buttons first, then cap repeated roles
-    // This prevents chat lists (gridcell x70) from crowding out input elements
+    // Prioritize: inputs/textboxes/buttons first, then cap repeated roles.
+    // Elements with UNIQUE aria-labels are always shown (they're distinct actions).
+    // Elements that share an aria-label (e.g. 50 star toggles) are capped.
+    // This prevents repetitive lists from hiding important action buttons like Send.
+
+    // Pre-count aria-label frequency to identify repeated vs unique labels
+    const labelFreq = new Map<string, number>();
+    for (const el of snap.elements) {
+      const label = el.attrs['aria-label'];
+      if (label) labelFreq.set(label, (labelFreq.get(label) || 0) + 1);
+    }
+
     const roleCounts = new Map<string, number>();
     const shown: typeof snap.elements = [];
     const deferred: typeof snap.elements = [];
@@ -454,7 +464,9 @@ function formatSnapshot(snap: PageSnapshot): string {
       const isHighValue = el.tag === 'input' || el.tag === 'textarea' || el.tag === 'select'
         || el.tag === 'button'
         || el.attrs.contenteditable === 'true' || el.attrs.role === 'textbox';
-      if (isHighValue) {
+      // Elements with a unique aria-label are distinct actions (e.g. Send, Attach, Delete)
+      const hasUniqueLabel = el.attrs['aria-label'] && (labelFreq.get(el.attrs['aria-label']) || 0) === 1;
+      if (isHighValue || hasUniqueLabel) {
         shown.push(el);
       } else if (count < MAX_SAME_ROLE) {
         shown.push(el);
@@ -473,14 +485,13 @@ function formatSnapshot(snap: PageSnapshot): string {
     // Sort by original ID order so positions make sense
     shown.sort((a, b) => a.id - b.id);
 
-    // Highlight key inputs/textboxes at the top so the LLM finds them immediately
-    // Highlight key interactive elements at the top
+    // Highlight key interactive elements at the top so the LLM finds them immediately
     const keyInputs = shown.filter(el =>
       el.tag === 'input' || el.tag === 'textarea' || el.tag === 'select'
       || el.attrs.contenteditable === 'true' || el.attrs.role === 'textbox'
     );
     const keyButtons = shown.filter(el =>
-      el.tag === 'button' && el.attrs['aria-label']
+      (el.tag === 'button' || el.attrs.role === 'button') && el.attrs['aria-label']
     );
     if (keyInputs.length > 0 || keyButtons.length > 0) {
       lines.push('--- Key Elements ---');
