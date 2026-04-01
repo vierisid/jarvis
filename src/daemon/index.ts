@@ -260,6 +260,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     initDatabase(config.dbPath);
     logWithTimestamp('Database initialized successfully');
 
+    // 2a. Seed webapp templates (upserts, safe to run every startup)
+    const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
+    seedWebappTemplates();
+
     // 2b. Load LLM settings from DB + encrypted keychain, merge into config
     const { mergeLLMSettingsIntoConfig } = await import('./llm-settings.ts');
     mergeLLMSettingsIntoConfig(jarvisConfig);

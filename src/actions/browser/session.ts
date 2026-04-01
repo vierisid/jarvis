@@ -360,6 +360,41 @@ export class BrowserController {
   }
 
   /**
+   * Upload a file to a <input type="file"> element on the page.
+   * Uses CDP DOM.setFileInputFiles to bypass the native file picker.
+   * If no selector is provided, finds the first visible file input.
+   */
+  async uploadFile(filePath: string, selector?: string): Promise<string> {
+    await this.ensureConnected();
+
+    // Resolve the file input element
+    const query = selector || 'input[type="file"]';
+    const doc = await this.cdp.send('DOM.getDocument');
+    const node = await this.cdp.send('DOM.querySelector', {
+      nodeId: doc.root.nodeId,
+      selector: query,
+    });
+
+    if (!node.nodeId) {
+      return `Error: No file input found matching "${query}". Click the upload/attach button first to trigger the file input.`;
+    }
+
+    // Set the file on the input element via CDP
+    try {
+      await this.cdp.send('DOM.setFileInputFiles', {
+        files: [filePath],
+        nodeId: node.nodeId,
+      });
+    } catch (err) {
+      return `Error setting file: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    await Bun.sleep(1000); // Wait for the app to process the file
+
+    return `Uploaded file "${filePath}" to file input`;
+  }
+
+  /**
    * Take a screenshot and save to a file.
    */
   async screenshot(filePath: string = '/tmp/jarvis-screenshot.png'): Promise<string> {
