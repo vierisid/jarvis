@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
 import { GroqProvider } from './groq.ts';
@@ -320,6 +320,7 @@ describe('Tool Call Conversion', () => {
     expect(assistant.tool_calls[0].type).toBe('function');
     expect(assistant.tool_calls[0].function.name).toBe('get_time');
     expect(assistant.tool_calls[0].function.arguments).toBe('{"timezone":"UTC"}');
+    expect(assistant.content).toBeNull();
   });
 
   test('GroqProvider preserves tool_call_id on tool messages', () => {
@@ -341,5 +342,107 @@ describe('Tool Call Conversion', () => {
     expect(converted[0].tool_calls).toBeUndefined();
     expect(converted[1].tool_calls).toBeUndefined();
     expect(converted[0].tool_call_id).toBeUndefined();
+  });
+});
+
+describe('Groq request shaping', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      return new Response(JSON.stringify({
+        id: 'cmpl_test',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: 'llama-test',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        },
+      }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-test-body': typeof init?.body === 'string' ? init.body : '',
+        },
+      });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('GroqProvider uses Groq-compatible tool fields', async () => {
+    const provider = new GroqProvider('test-key') as any;
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'You are helpful.' },
+      { role: 'user', content: 'Use the weather tool.' },
+    ];
+
+    await provider.chat(messages, {
+      max_tokens: 321,
+      tools: [
+        {
+          name: 'weather_lookup',
+          description: 'Look up weather',
+          parameters: {
+            type: 'object',
+            properties: {
+              city: { type: 'string' },
+            },
+            required: ['city'],
+          },
+        },
+      ],
+    });
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof mock>;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+
+    expect(body.max_completion_tokens).toBe(321);
+    expect(body.max_tokens).toBeUndefined();
+    expect(body.tool_choice).toBe('auto');
+    expect(body.parallel_tool_calls).toBe(true);
+    expect(body.tools).toHaveLength(1);
+  });
+
+  test('GroqProvider trims oversized history but keeps system and latest turn', async () => {
+    const provider = new GroqProvider('test-key') as any;
+    const long = 'x'.repeat(12_000);
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: long },
+      { role: 'assistant', content: long },
+      { role: 'user', content: 'latest question' },
+    ];
+
+    await provider.chat(messages, {
+      tools: [
+        {
+          name: 'delegate_task',
+          description: 'Delegate focused work',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      ],
+    });
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof mock>;
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+
+    expect(body.messages[0].role).toBe('system');
+    expect(body.messages.at(-1).content).toBe('latest question');
+    expect(body.messages.length).toBeLessThan(messages.length);
   });
 });

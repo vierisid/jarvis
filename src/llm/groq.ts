@@ -10,7 +10,7 @@ import type {
 
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | null;
   tool_calls?: GroqToolCall[];
   tool_call_id?: string;
 };
@@ -83,6 +83,8 @@ export class GroqProvider implements LLMProvider {
   private apiKey: string;
   private defaultModel: string;
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
+  private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
+  private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
 
   constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
     this.apiKey = apiKey;
@@ -90,17 +92,7 @@ export class GroqProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
-    const body: Record<string, unknown> = {
-      model,
-      messages: this.convertMessages(messages),
-    };
-
-    if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
-    }
+    const body = this.buildRequestBody(messages, options, false);
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -121,19 +113,8 @@ export class GroqProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
-
-    const body: Record<string, unknown> = {
-      model,
-      messages: this.convertMessages(messages),
-      stream: true,
-    };
-
-    if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
-    }
+    const body = this.buildRequestBody(messages, options, true);
+    const responseModel = typeof body.model === 'string' ? body.model : this.defaultModel;
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -159,7 +140,7 @@ export class GroqProvider implements LLMProvider {
     const toolCalls: LLMToolCall[] = [];
     const toolCallBuilders: Map<number, { id: string; name: string; arguments: string }> = new Map();
     let finishReason: string | null = null;
-    let responseModel = model;
+    let streamedModel = responseModel;
 
     try {
       const reader = response.body.getReader();
@@ -184,7 +165,7 @@ export class GroqProvider implements LLMProvider {
             const chunk = JSON.parse(data) as GroqStreamChunk;
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];
-              responseModel = chunk.model;
+              streamedModel = chunk.model;
 
               if (choice!.delta.content) {
                 accumulatedText += choice!.delta.content;
@@ -246,7 +227,7 @@ export class GroqProvider implements LLMProvider {
           content: accumulatedText,
           tool_calls: toolCalls,
           usage: { input_tokens: 0, output_tokens: 0 },
-          model: responseModel,
+          model: streamedModel,
           finish_reason: mappedFinishReason,
         },
       };
@@ -279,14 +260,34 @@ export class GroqProvider implements LLMProvider {
     }
   }
 
+  private buildRequestBody(messages: LLMMessage[], options: LLMOptions, stream: boolean): Record<string, unknown> {
+    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const body: Record<string, unknown> = {
+      model,
+      messages: this.convertMessages(this.compactMessages(messages, tools)),
+    };
+
+    if (stream) body.stream = true;
+    if (temperature !== undefined) body.temperature = temperature;
+    if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
+    if (tools && tools.length > 0) {
+      body.tools = this.convertTools(tools);
+      body.tool_choice = 'auto';
+      body.parallel_tool_calls = true;
+    }
+
+    return body;
+  }
+
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
     return messages.map(m => {
       const text = typeof m.content === 'string'
         ? m.content
         : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      const hasToolCalls = !!(m.tool_calls && m.tool_calls.length > 0);
       const msg: GroqMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: text,
+        content: hasToolCalls && text.trim().length === 0 ? null : text,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({
@@ -300,6 +301,48 @@ export class GroqProvider implements LLMProvider {
       }
       return msg;
     });
+  }
+
+  private compactMessages(messages: LLMMessage[], tools?: LLMTool[]): LLMMessage[] {
+    if (messages.length <= 2) return messages;
+
+    const toolOverhead = tools && tools.length > 0
+      ? Math.min(
+        GroqProvider.SAFE_TOOL_OVERHEAD_CHARS,
+        JSON.stringify(this.convertTools(tools)).length,
+      )
+      : 0;
+    const budget = Math.max(8_000, GroqProvider.SAFE_PROMPT_CHAR_BUDGET - toolOverhead);
+    const systemMessage = messages[0]?.role === 'system' ? messages[0] : null;
+    const compacted: LLMMessage[] = [];
+    let used = systemMessage ? this.measureMessage(systemMessage) : 0;
+
+    if (systemMessage) compacted.push(systemMessage);
+
+    const startIndex = systemMessage ? 1 : 0;
+    const keptTail: LLMMessage[] = [];
+
+    for (let i = messages.length - 1; i >= startIndex; i--) {
+      const current = messages[i]!;
+      const size = this.measureMessage(current);
+      if (keptTail.length > 0 && used + size > budget) {
+        break;
+      }
+      keptTail.push(current);
+      used += size;
+    }
+
+    keptTail.reverse();
+    compacted.push(...keptTail);
+    return compacted;
+  }
+
+  private measureMessage(message: LLMMessage): number {
+    const content = typeof message.content === 'string'
+      ? message.content
+      : message.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+    const toolCallsSize = message.tool_calls ? JSON.stringify(message.tool_calls).length : 0;
+    return content.length + toolCallsSize + 128;
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {
