@@ -15,11 +15,9 @@ import {
 } from './helpers.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadConfig, saveConfig } from '../config/loader.ts';
-import { installAutostart, startAutostartService, getAutostartName, isAutostartSupported } from './autostart.ts';
+import { installAutostart, getAutostartName } from './autostart.ts';
 import { runDependencyCheck } from './deps.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
-import { saveUserProfile } from '../vault/user-profile.ts';
-import { USER_PROFILE_QUESTIONS, normalizeUserProfileAnswers } from '../user/profile.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
@@ -588,7 +586,7 @@ export async function runOnboard(): Promise<void> {
   printStep(10, TOTAL_STEPS, 'Keepalive');
   const platform = detectPlatform();
   let enableKeepalive = false;
-  const keepaliveSupported = isAutostartSupported();
+  const keepaliveSupported = process.platform === 'linux' || process.platform === 'darwin';
 
   if (!keepaliveSupported) {
     if (platform === 'wsl') {
@@ -617,31 +615,7 @@ export async function runOnboard(): Promise<void> {
     '  what you care about, and how you like to work.\n');
 
   let userProfileAnswers: Record<string, string> | null = null;
-  const runProfileWizard = await askYesNo('Answer user profile questions now?', false);
-  if (runProfileWizard) {
-    const rawAnswers: Record<string, string> = {};
-
-    for (const question of USER_PROFILE_QUESTIONS) {
-      console.log('');
-      console.log(c.bold(`  ${question.step_title} · ${question.label}`));
-      console.log(c.dim(`  ${question.description}`));
-
-      const defaultAnswer =
-        question.id === 'preferred_name'
-          ? (config.user?.name || '')
-          : '';
-
-      const answer = await ask(question.prompt, defaultAnswer);
-      if (answer.trim()) {
-        rawAnswers[question.id] = answer.trim();
-      }
-    }
-
-    userProfileAnswers = normalizeUserProfileAnswers(rawAnswers) as Record<string, string>;
-    printOk(`Captured ${Object.keys(userProfileAnswers).length} profile answer(s).`);
-  } else {
-    printInfo('Skipped. You can complete the same wizard later in Settings > Profile.');
-  }
+  printInfo('Skipped. You can complete your profile later in Settings > Profile.');
 
   // ── Port (quick inline question) ──────────────────────────────────
 
@@ -690,11 +664,6 @@ export async function runOnboard(): Promise<void> {
     if (userProfileAnswers && Object.keys(userProfileAnswers).length > 0) {
       try {
         initDatabase(resolveOnboardDbPath(config));
-        saveUserProfile(userProfileAnswers);
-        printOk('User profile saved to the vault.');
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        printWarn(`Config was saved, but user profile could not be stored: ${msg}`);
       } finally {
         closeDb();
       }
@@ -703,10 +672,7 @@ export async function runOnboard(): Promise<void> {
     if (enableKeepalive) {
       const installed = await installAutostart();
       if (installed) {
-        const started = await startAutostartService();
-        if (started && (process.platform === 'linux' || process.platform === 'darwin')) {
-          printInfo('You can restart the 24/7 service later from Settings > General.');
-        }
+        printInfo('Keepalive installation complete. You can control restart behavior from Settings > General.');
       }
     }
   } else {
