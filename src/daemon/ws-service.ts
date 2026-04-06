@@ -42,6 +42,7 @@ export class WebSocketService implements Service {
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
+  private welcomeUserName: string | null = null;
 
   constructor(port: number, agentService: AgentService) {
     this.port = port;
@@ -91,6 +92,11 @@ export class WebSocketService implements Service {
     console.log('[WSService] TTS provider set');
   }
 
+  setWelcomeUserName(name?: string): void {
+    const trimmed = (name ?? '').trim();
+    this.welcomeUserName = trimmed.length > 0 ? trimmed : null;
+  }
+
   /**
    * Set the STT provider for voice input transcription.
    */
@@ -138,8 +144,11 @@ export class WebSocketService implements Service {
       this.wsServer.setHandler({
         onMessage: (msg, ws) => this.routeMessage(msg, ws),
         onBinaryMessage: (data, ws) => this.handleVoiceAudio(data, ws),
-        onConnect: (_ws) => {
+        onConnect: (ws) => {
           console.log('[WSService] Client connected');
+          this.greetClientOnConnect(ws).catch((err) => {
+            console.error('[WSService] Client greeting failed:', err);
+          });
         },
         onDisconnect: (ws) => {
           // Clean up any pending voice session for this client
@@ -167,6 +176,43 @@ export class WebSocketService implements Service {
 
   status(): ServiceStatus {
     return this._status;
+  }
+
+  private async greetClientOnConnect(ws: ServerWebSocket<unknown>): Promise<void> {
+    const name = this.welcomeUserName ?? 'there';
+    const greeting = `Hi ${name}, how can I help you today?`;
+
+    this.wsServer.sendToClient(ws, {
+      type: 'notification',
+      payload: {
+        source: 'assistant_message',
+        text: greeting,
+      },
+      timestamp: Date.now(),
+    });
+
+    if (!this.ttsProvider) return;
+
+    const requestId = `welcome-${Date.now()}`;
+    this.wsServer.sendToClient(ws, {
+      type: 'tts_start',
+      payload: { requestId },
+      id: requestId,
+      timestamp: Date.now(),
+    });
+
+    try {
+      for await (const chunk of this.ttsProvider.synthesizeStream(greeting)) {
+        this.wsServer.sendBinary(ws, chunk);
+      }
+    } finally {
+      this.wsServer.sendToClient(ws, {
+        type: 'tts_end',
+        payload: { requestId },
+        id: requestId,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   /**

@@ -296,6 +296,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ? null
       : new ObserverService(reactor, coalescer, googleAuth ?? undefined);
     const wsService = new WebSocketService(config.port, agentService);
+    wsService.setWelcomeUserName(jarvisConfig.user?.name);
 
     // 5b. Create channel service for external comms (Telegram, Discord)
     const channelService = new ChannelService(jarvisConfig, agentService);

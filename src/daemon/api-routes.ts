@@ -146,6 +146,12 @@ function getSearchParams(req: Request): URLSearchParams {
   return new URL(req.url).searchParams;
 }
 
+async function syncActiveRoleAuthorityLevel(ctx: ApiContext, authorityLevel: number): Promise<void> {
+  const primary = ctx.agentService.getOrchestrator().getPrimary();
+  if (!primary?.agent?.role) return;
+  primary.agent.role.authority_level = authorityLevel;
+}
+
 /**
  * Create all API route handlers.
  */
@@ -1363,6 +1369,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             learning: currentConfig.learning,
           };
           await saveConfig(freshConfig);
+
+          if (body.default_level !== undefined) {
+            await syncActiveRoleAuthorityLevel(ctx, currentConfig.default_level);
+          }
 
           return json({ ok: true, config: currentConfig });
         } catch (err) {
