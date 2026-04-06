@@ -11,11 +11,10 @@ type Props = {
   onOpenProject: (project: Project) => void;
   onNewProject: () => void;
   onStopServer: () => void;
-  onGitHubChange: () => void;
 };
 
 export function SiteTopBar({
-  openTabs, activeProjectId, projects, onSelectTab, onCloseTab, onOpenProject, onNewProject, onStopServer, onGitHubChange,
+  openTabs, activeProjectId, projects, onSelectTab, onCloseTab, onOpenProject, onNewProject, onStopServer,
 }: Props) {
   const activeProject = openTabs.find((p) => p.id === activeProjectId);
   const [showProjectList, setShowProjectList] = React.useState(false);
@@ -97,17 +96,6 @@ export function SiteTopBar({
                 {activeProject.gitDirty && <span style={{ color: "var(--j-warning)", fontSize: "10px" }}>*</span>}
               </button>
             )}
-            {activeProject.githubUrl && (
-              <a
-                href={activeProject.githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={ghIndicatorStyle}
-                title={`View on GitHub: ${activeProject.githubUrl.replace("https://github.com/", "")}`}
-              >
-                GH
-              </a>
-            )}
             {activeProject.status === "running" && (
               <button onClick={onStopServer} style={stopBtnStyle} title="Stop dev server">
                 Stop
@@ -122,14 +110,8 @@ export function SiteTopBar({
       </div>
 
       {/* Git panel dropdown */}
-      {showGitPanel && activeProjectId && activeProject && (
-        <SiteGitPanel
-          projectId={activeProjectId}
-          projectName={activeProject.name}
-          githubUrl={activeProject.githubUrl}
-          onClose={() => setShowGitPanel(false)}
-          onGitHubChange={onGitHubChange}
-        />
+      {showGitPanel && activeProjectId && (
+        <SiteGitPanel projectId={activeProjectId} onClose={() => setShowGitPanel(false)} />
       )}
     </div>
   );

@@ -1,27 +1,13 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../hooks/useApi";
 import type { GitBranch, GitCommit } from "../../pages/SitesPage";
-import { SiteGitHubModal } from "./SiteGitHubModal";
-
-type GitRemoteStatus = {
-  hasRemote: boolean;
-  remoteUrl: string | null;
-  owner: string | null;
-  repo: string | null;
-  ahead: number;
-  behind: number;
-  lastPushedAt: number | null;
-};
 
 type Props = {
   projectId: string;
-  projectName: string;
-  githubUrl: string | null;
   onClose: () => void;
-  onGitHubChange: () => void;
 };
 
-export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGitHubChange }: Props) {
+export function SiteGitPanel({ projectId, onClose }: Props) {
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,12 +16,6 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
   const [mergeBranch, setMergeBranch] = useState<string | null>(null);
   const [mergeStrategy, setMergeStrategy] = useState<"merge" | "rebase">("merge");
   const [actionMessage, setActionMessage] = useState<{ text: string; type: "ok" | "error" } | null>(null);
-
-  // GitHub state
-  const [showGitHubModal, setShowGitHubModal] = useState(false);
-  const [remoteStatus, setRemoteStatus] = useState<GitRemoteStatus | null>(null);
-  const [pushing, setPushing] = useState(false);
-  const [pulling, setPulling] = useState(false);
 
   const currentBranch = branches.find((b) => b.current)?.name ?? "main";
 
@@ -99,67 +79,6 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
       refresh();
     } catch (err) {
       setActionMessage({ text: err instanceof Error ? err.message : "Merge failed", type: "error" });
-    }
-  };
-
-  // Fetch remote status when panel opens and project has GitHub
-  useEffect(() => {
-    if (!githubUrl) return;
-    (async () => {
-      try {
-        const status = await api<GitRemoteStatus>(`/api/sites/projects/${projectId}/github/status`);
-        setRemoteStatus(status);
-      } catch { /* ignore */ }
-    })();
-  }, [projectId, githubUrl]);
-
-  const handlePush = async () => {
-    setPushing(true);
-    setActionMessage(null);
-    try {
-      await api(`/api/sites/projects/${projectId}/github/push`, { method: "POST" });
-      setActionMessage({ text: "Pushed to GitHub", type: "ok" });
-      // Refresh status
-      const status = await api<GitRemoteStatus>(`/api/sites/projects/${projectId}/github/status`);
-      setRemoteStatus(status);
-    } catch (err) {
-      setActionMessage({ text: err instanceof Error ? err.message : "Push failed", type: "error" });
-    }
-    setPushing(false);
-  };
-
-  const handlePull = async () => {
-    setPulling(true);
-    setActionMessage(null);
-    try {
-      const result = await api<{ success: boolean; conflicts?: string[]; error?: string }>(
-        `/api/sites/projects/${projectId}/github/pull`, { method: "POST" }
-      );
-      if (result.success) {
-        setActionMessage({ text: "Pulled from GitHub", type: "ok" });
-      } else if (result.conflicts?.length) {
-        setActionMessage({ text: `Conflicts: ${result.conflicts.join(", ")}`, type: "error" });
-      } else {
-        setActionMessage({ text: result.error ?? "Pull failed", type: "error" });
-      }
-      refresh();
-      const status = await api<GitRemoteStatus>(`/api/sites/projects/${projectId}/github/status`);
-      setRemoteStatus(status);
-    } catch (err) {
-      setActionMessage({ text: err instanceof Error ? err.message : "Pull failed", type: "error" });
-    }
-    setPulling(false);
-  };
-
-  const handleDisconnect = async () => {
-    if (!confirm("Disconnect this project from GitHub? (The remote repo will not be deleted.)")) return;
-    try {
-      await api(`/api/sites/projects/${projectId}/github/repo`, { method: "DELETE" });
-      setRemoteStatus(null);
-      setActionMessage({ text: "Disconnected from GitHub", type: "ok" });
-      onGitHubChange();
-    } catch (err) {
-      setActionMessage({ text: err instanceof Error ? err.message : "Disconnect failed", type: "error" });
     }
   };
 
@@ -273,61 +192,6 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
           )}
         </div>
       </div>
-
-      {/* GitHub section */}
-      <div style={{ ...sectionStyle, borderTop: "1px solid var(--j-border)" }}>
-        <span style={sectionLabelStyle}>GitHub</span>
-        {githubUrl ? (
-          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: "6px" }}>
-            <a href={githubUrl} target="_blank" rel="noopener noreferrer" style={ghLinkStyle}>
-              {githubUrl.replace("https://github.com/", "")}
-            </a>
-            {remoteStatus && (
-              <div style={{ display: "flex", gap: "8px", fontSize: "11px" }}>
-                {remoteStatus.ahead > 0 && (
-                  <span style={{ color: "var(--j-accent)" }}>{remoteStatus.ahead} ahead</span>
-                )}
-                {remoteStatus.behind > 0 && (
-                  <span style={{ color: "var(--j-warning)" }}>{remoteStatus.behind} behind</span>
-                )}
-                {remoteStatus.ahead === 0 && remoteStatus.behind === 0 && (
-                  <span style={{ color: "var(--j-text-muted)" }}>Up to date</span>
-                )}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: "4px", marginTop: 2 }}>
-              <button onClick={handlePush} disabled={pushing} style={smallBtnStyle}>
-                {pushing ? "Pushing..." : "Push"}
-              </button>
-              <button onClick={handlePull} disabled={pulling} style={smallBtnStyle}>
-                {pulling ? "Pulling..." : "Pull"}
-              </button>
-              <button onClick={handleDisconnect} style={{ ...smallBtnStyle, color: "var(--j-text-muted)", borderColor: "var(--j-border)", marginLeft: "auto" }}>
-                Disconnect
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ marginTop: 6 }}>
-            <button onClick={() => setShowGitHubModal(true)} style={smallBtnStyle}>
-              Push to GitHub
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* GitHub modal */}
-      {showGitHubModal && (
-        <SiteGitHubModal
-          projectId={projectId}
-          projectName={projectName}
-          onClose={() => setShowGitHubModal(false)}
-          onConnected={() => {
-            setShowGitHubModal(false);
-            onGitHubChange();
-          }}
-        />
-      )}
     </div>
   );
 }

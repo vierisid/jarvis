@@ -154,6 +154,21 @@ export class SiteProxy {
     return `ws://127.0.0.1:${port}${subPath}`;
   }
 
+  private getProjectIdFromCookie(req: Request): string | null {
+    const cookie = req.headers.get('cookie');
+    if (!cookie) return null;
+
+    const match = cookie.match(/(?:^|;\s*)__proj=([^;]+)/);
+    if (!match) return null;
+
+    try {
+      const value = decodeURIComponent(match[1]!);
+      return value || null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Rewriting ──
 
   /**
@@ -200,5 +215,26 @@ export class SiteProxy {
     // CSS url() in JS template literals or strings
     js = js.replace(/url\(\s*(["']?)\//g, `url($1${proxyBase}/`);
     return js;
+  }
+
+  getWebSocketTargetFromCookie(req: Request, subPath: string): string | null {
+    const projectId = this.getProjectIdFromCookie(req);
+    if (!projectId) return null;
+    return this.getWebSocketTarget(projectId, subPath);
+  }
+
+  async proxyCatchAll(req: Request, subPath: string): Promise<Response | null> {
+    const projectId = this.getProjectIdFromCookie(req);
+    if (!projectId) return null;
+
+    const port = this.devServerManager.getPort(projectId);
+    if (port === null) {
+      return new Response(JSON.stringify({ error: `Dev server for "${projectId}" is not running` }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return this.proxyHttp(req, projectId, subPath);
   }
 }
