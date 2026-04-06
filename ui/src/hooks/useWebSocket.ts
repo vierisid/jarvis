@@ -408,7 +408,7 @@ export function useWebSocket() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, options?: { projectId?: string }) => {
+    (text: string, options?: { projectId?: string; fastMode?: boolean }) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       const id = crypto.randomUUID();
@@ -431,6 +431,7 @@ export function useWebSocket() {
         payload: {
           text,
           ...(options?.projectId ? { projectId: options.projectId } : {}),
+          ...(options?.fastMode ? { fast_mode: true } : {}),
         },
         id,
         timestamp: Date.now(),

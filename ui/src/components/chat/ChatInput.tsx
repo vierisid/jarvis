@@ -14,10 +14,11 @@ type VoiceProps = {
 type Props = {
   onSend: (text: string) => void;
   disabled?: boolean;
+  fastMode?: boolean;
   voice?: VoiceProps;
 };
 
-export function ChatInput({ onSend, disabled, voice }: Props) {
+export function ChatInput({ onSend, disabled, fastMode, voice }: Props) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -96,7 +97,7 @@ export function ChatInput({ onSend, disabled, voice }: Props) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
-          placeholder="Type a message..."
+          placeholder={fastMode ? "Fast chat mode: direct answer, no tools..." : "Type a message..."}
           disabled={disabled}
           rows={1}
         />
@@ -124,7 +125,7 @@ export function ChatInput({ onSend, disabled, voice }: Props) {
         </button>
       </div>
       <div className="chat-hints">
-        Enter to send &middot; Shift+Enter for new line
+        {fastMode ? "Fast Chat on" : "Agent mode on"} &middot; Enter to send &middot; Shift+Enter for new line
       </div>
     </div>
   );
