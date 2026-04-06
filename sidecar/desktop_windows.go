@@ -210,15 +210,57 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	args, _ := params["args"].(string)
 
 	escaped := strings.ReplaceAll(executable, "'", "''")
-	argsClause := ""
-	if args != "" {
-		argsClause = fmt.Sprintf("-ArgumentList '%s'", strings.ReplaceAll(args, "'", "''"))
-	}
+	escapedArgs := strings.ReplaceAll(args, "'", "''")
 
+	// Resolve common app aliases/URIs first, then fall back to shell launch for bare names.
 	script := fmt.Sprintf(`
-$p = Start-Process -FilePath '%s' %s -PassThru
+$exe = '%s'
+$argLine = '%s'
+
+$p = $null
+$errors = New-Object System.Collections.Generic.List[string]
+
+function Try-Launch([string]$filePath, [string]$argumentLine) {
+	if ([string]::IsNullOrWhiteSpace($argumentLine)) {
+		return Start-Process -FilePath $filePath -PassThru -ErrorAction Stop
+	}
+	return Start-Process -FilePath $filePath -ArgumentList $argumentLine -PassThru -ErrorAction Stop
+}
+
+try {
+	$p = Try-Launch $exe $argLine
+} catch {
+	$errors.Add($_.Exception.Message)
+}
+
+$normalized = [System.IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()
+
+if (-not $p -and $normalized -eq 'spotify') {
+	try {
+		$p = Try-Launch 'spotify:' $argLine
+	} catch {
+		$errors.Add($_.Exception.Message)
+	}
+}
+
+if (-not $p -and $exe -match '^[a-zA-Z0-9._-]+$') {
+	try {
+		$cmdArgs = '/c start "" ' + $exe
+		if (-not [string]::IsNullOrWhiteSpace($argLine)) {
+			$cmdArgs += ' ' + $argLine
+		}
+		$p = Start-Process -FilePath 'cmd.exe' -ArgumentList $cmdArgs -PassThru -ErrorAction Stop
+	} catch {
+		$errors.Add($_.Exception.Message)
+	}
+}
+
+if (-not $p) {
+	throw ('Unable to launch app "' + $exe + '". Attempts: ' + ($errors -join ' | '))
+}
+
 @{ success=$true; pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
-`, escaped, argsClause)
+`, escaped, escapedArgs)
 
 	out, err := runPS(script, 10*time.Second)
 	if err != nil {

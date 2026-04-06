@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -64,7 +66,7 @@ func launchChromeIfNeeded(cfg *SidecarConfig) {
 
 	profileDir := cfg.Browser.ProfileDir
 	if profileDir == "" {
-		profileDir = fmt.Sprintf(`%%TEMP%%\jarvis-chrome-profile`)
+		profileDir = filepath.Join(os.TempDir(), "jarvis-chrome-profile")
 	}
 
 	for _, chromePath := range chromePaths {
@@ -72,6 +74,9 @@ func launchChromeIfNeeded(cfg *SidecarConfig) {
 			fmt.Sprintf("--remote-debugging-port=%d", port),
 			fmt.Sprintf("--user-data-dir=%s", profileDir),
 			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-sync",
+			"--disable-features=ChromeWhatsNewUI",
 			"about:blank",
 		)
 		if err := cmd.Start(); err == nil {

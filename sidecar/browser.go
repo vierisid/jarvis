@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,34 +58,44 @@ func getCDP(cfg *SidecarConfig) (*cdpClient, error) {
 }
 
 func newCDPClient(port int) (*cdpClient, error) {
-	// Get the first page's WebSocket URL from Chrome's /json endpoint
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("http://localhost:%d/json", port)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	resp, err := http.DefaultClient.Do(req)
+	targets, err := fetchCDPTargets(ctx, port)
 	if err != nil {
 		return nil, fmt.Errorf("Chrome not running on port %d — launch Chrome with --remote-debugging-port=%d: %w", port, port, err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var targets []struct {
-		WebSocketDebuggerUrl string `json:"webSocketDebuggerUrl"`
-		Type                 string `json:"type"`
-	}
-	if err := json.Unmarshal(body, &targets); err != nil {
-		return nil, fmt.Errorf("parse CDP targets: %w", err)
 	}
 
 	wsURL := ""
 	for _, t := range targets {
-		if t.Type == "page" && t.WebSocketDebuggerUrl != "" {
-			wsURL = t.WebSocketDebuggerUrl
-			break
+		if t.Type != "page" || t.WebSocketDebuggerUrl == "" {
+			continue
+		}
+		u := strings.ToLower(t.URL)
+		// Skip non-user pages that frequently break automation attachment.
+		if strings.HasPrefix(u, "chrome://") || strings.HasPrefix(u, "devtools://") || strings.HasPrefix(u, "chrome-extension://") {
+			continue
+		}
+		wsURL = t.WebSocketDebuggerUrl
+		break
+	}
+
+	if wsURL == "" {
+		for _, t := range targets {
+			if t.Type == "page" && t.WebSocketDebuggerUrl != "" {
+				wsURL = t.WebSocketDebuggerUrl
+				break
+			}
 		}
 	}
+
+	if wsURL == "" {
+		newTargetURL, targetErr := createCDPTarget(ctx, port, "about:blank")
+		if targetErr == nil {
+			wsURL = newTargetURL
+		}
+	}
+
 	if wsURL == "" {
 		return nil, fmt.Errorf("no CDP page target found on port %d", port)
 	}
@@ -104,6 +116,49 @@ func newCDPClient(port int) (*cdpClient, error) {
 	go c.readLoop()
 
 	return c, nil
+}
+
+type cdpTarget struct {
+	WebSocketDebuggerUrl string `json:"webSocketDebuggerUrl"`
+	Type                 string `json:"type"`
+	URL                  string `json:"url"`
+}
+
+func fetchCDPTargets(ctx context.Context, port int) ([]cdpTarget, error) {
+	url := fmt.Sprintf("http://localhost:%d/json", port)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var targets []cdpTarget
+	if err := json.Unmarshal(body, &targets); err != nil {
+		return nil, fmt.Errorf("parse CDP targets: %w", err)
+	}
+	return targets, nil
+}
+
+func createCDPTarget(ctx context.Context, port int, pageURL string) (string, error) {
+	createURL := fmt.Sprintf("http://localhost:%d/json/new?%s", port, url.QueryEscape(pageURL))
+	req, _ := http.NewRequestWithContext(ctx, "GET", createURL, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var target cdpTarget
+	if err := json.Unmarshal(body, &target); err != nil {
+		return "", fmt.Errorf("parse created CDP target: %w", err)
+	}
+	if target.WebSocketDebuggerUrl == "" {
+		return "", fmt.Errorf("created CDP target missing websocket URL")
+	}
+	return target.WebSocketDebuggerUrl, nil
 }
 
 func (c *cdpClient) readLoop() {
