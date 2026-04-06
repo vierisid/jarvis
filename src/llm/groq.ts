@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -90,16 +91,23 @@ export class GroqProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    
+    // Compact history for Groq's context limits
+    const budget = calculateHistoryBudget(8192);
+    const compactedMessages = compactHistory(messages, budget);
+    
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
     };
 
     if (temperature !== undefined) body.temperature = temperature;
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';        // Enable tool calling
+      body.parallel_tool_calls = true;                 // Allow concurrent tool execution
     }
 
     const response = await fetch(this.apiUrl, {
@@ -121,11 +129,15 @@ export class GroqProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+
+    // Compact history for Groq's context limits
+    const budget = calculateHistoryBudget(8192);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
       stream: true,
     };
 
@@ -133,6 +145,8 @@ export class GroqProvider implements LLMProvider {
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';        // Enable tool calling
+      body.parallel_tool_calls = true;                 // Allow concurrent tool execution
     }
 
     const response = await fetch(this.apiUrl, {
@@ -286,7 +300,8 @@ export class GroqProvider implements LLMProvider {
         : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
       const msg: GroqMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: text,
+        // When assistant made tool calls, content must be null (Groq spec)
+        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({
