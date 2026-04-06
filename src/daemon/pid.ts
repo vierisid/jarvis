@@ -23,7 +23,7 @@ import {
 import { cc } from 'bun:ffi';
 import flockSource from './flock.c' with { type: 'file' };
 
-const JARVIS_DIR = join(homedir(), '.jarvis');
+const JARVIS_DIR = join(process.env.JARVIS_HOME || homedir(), '.jarvis');
 const LOG_DIR = join(JARVIS_DIR, 'logs');
 const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
 const LOG_PATH = join(LOG_DIR, 'jarvis.log');

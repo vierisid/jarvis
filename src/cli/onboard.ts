@@ -6,7 +6,7 @@
  * All steps are skippable except LLM configuration.
  */
 
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, mkdirSync } from 'node:fs';
 import {
@@ -15,12 +15,15 @@ import {
 } from './helpers.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadConfig, saveConfig } from '../config/loader.ts';
-import { installAutostart, getAutostartName } from './autostart.ts';
+import { installAutostart, startAutostartService, getAutostartName, isAutostartSupported } from './autostart.ts';
 import { runDependencyCheck } from './deps.ts';
+import { initDatabase, closeDb } from '../vault/schema.ts';
+import { saveUserProfile } from '../vault/user-profile.ts';
+import { USER_PROFILE_QUESTIONS, normalizeUserProfileAnswers } from '../user/profile.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
-const TOTAL_STEPS = 10;
+const TOTAL_STEPS = 11;
 
 export async function runOnboard(): Promise<void> {
   printBanner();
@@ -71,6 +74,7 @@ export async function runOnboard(): Promise<void> {
   const provider = await askChoice('Choose your primary LLM provider:', [
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
     { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
+    { label: 'Groq', value: 'groq' as const, description: 'Fast, OpenAI-compatible API' },
     { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
     { label: 'OpenRouter', value: 'openrouter' as const, description: 'Access hundreds of models via single API key' },
@@ -246,7 +250,7 @@ export async function runOnboard(): Promise<void> {
     if (config.llm.openrouter) config.llm.openrouter.model = model;
 
   } else if (provider === 'ollama') {
-    const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? 'http://localhost:11434');
+    const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? 'http://ollama:11434');
 
     const currentModel = config.llm.ollama?.model ?? 'llama3';
     const ollamaModels = [
@@ -306,6 +310,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
+
   config.llm.fallback = ['anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
@@ -580,20 +585,62 @@ export async function runOnboard(): Promise<void> {
 
   // ── Step 10: Autostart ────────────────────────────────────────────
 
-  printStep(10, TOTAL_STEPS, 'Autostart');
+  printStep(10, TOTAL_STEPS, 'Keepalive');
   const platform = detectPlatform();
+  let enableKeepalive = false;
+  const keepaliveSupported = isAutostartSupported();
 
-  if (platform === 'wsl') {
-    printInfo('WSL detected. Autostart is not supported in WSL.');
+  if (!keepaliveSupported) {
+    if (platform === 'wsl') {
+      printInfo('WSL2 detected, but the user systemd service manager is not available in this session.');
+      printInfo('Enable systemd in WSL, then rerun onboard to use 24/7 keepalive mode.');
+    } else {
+      printInfo('Keepalive mode is not supported in this environment.');
+    }
     printInfo('Start JARVIS manually with: jarvis start');
   } else {
-    console.log(`  Autostart mechanism: ${c.bold(getAutostartName())}\n`);
-    const setupAutostart = await askYesNo('Start JARVIS automatically on login?', false);
-    if (setupAutostart) {
-      await installAutostart();
+    if (process.platform === 'linux' || process.platform === 'darwin') {
+      const platformHint = platform === 'wsl' ? ' on WSL2' : '';
+      console.log(`  Keepalive mode uses ${c.bold(getAutostartName())}${platformHint} to keep JARVIS running`);
+      console.log('  after you close the terminal, with automatic restart if the service exits.\n');
+      enableKeepalive = await askYesNo('Activate JARVIS keepalive mode?', false);
     } else {
-      printInfo('Skipped. Start manually with: jarvis start');
+      console.log(`  Autostart mechanism: ${c.bold(getAutostartName())}\n`);
+      enableKeepalive = await askYesNo('Start JARVIS automatically?', false);
     }
+  }
+
+  // ── Step 11: Know Your User ───────────────────────────────────────
+
+  printStep(11, TOTAL_STEPS, 'Know Your User');
+  console.log('  Optional: answer a richer profile wizard so JARVIS starts with context about who you are,\n' +
+    '  what you care about, and how you like to work.\n');
+
+  let userProfileAnswers: Record<string, string> | null = null;
+  const runProfileWizard = await askYesNo('Answer user profile questions now?', false);
+  if (runProfileWizard) {
+    const rawAnswers: Record<string, string> = {};
+
+    for (const question of USER_PROFILE_QUESTIONS) {
+      console.log('');
+      console.log(c.bold(`  ${question.step_title} · ${question.label}`));
+      console.log(c.dim(`  ${question.description}`));
+
+      const defaultAnswer =
+        question.id === 'preferred_name'
+          ? (config.user?.name || '')
+          : '';
+
+      const answer = await ask(question.prompt, defaultAnswer);
+      if (answer.trim()) {
+        rawAnswers[question.id] = answer.trim();
+      }
+    }
+
+    userProfileAnswers = normalizeUserProfileAnswers(rawAnswers) as Record<string, string>;
+    printOk(`Captured ${Object.keys(userProfileAnswers).length} profile answer(s).`);
+  } else {
+    printInfo('Skipped. You can complete the same wizard later in Settings > Profile.');
   }
 
   // ── Port (quick inline question) ──────────────────────────────────
@@ -625,6 +672,7 @@ export async function runOnboard(): Promise<void> {
     ['Telegram', config.channels?.telegram?.enabled ? 'enabled' : 'disabled'],
     ['Discord', config.channels?.discord?.enabled ? 'enabled' : 'disabled'],
     ['Authority', `level ${config.authority.default_level}`],
+    ['Keepalive', enableKeepalive ? 'enabled' : 'disabled'],
     ['Port', String(config.daemon.port)],
   ];
 
@@ -638,13 +686,41 @@ export async function runOnboard(): Promise<void> {
   if (doSave) {
     await saveConfig(config);
     printOk(`Config saved to ${CONFIG_PATH}`);
+
+    if (userProfileAnswers && Object.keys(userProfileAnswers).length > 0) {
+      try {
+        initDatabase(resolveOnboardDbPath(config));
+        saveUserProfile(userProfileAnswers);
+        printOk('User profile saved to the vault.');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        printWarn(`Config was saved, but user profile could not be stored: ${msg}`);
+      } finally {
+        closeDb();
+      }
+    }
+
+    if (enableKeepalive) {
+      const installed = await installAutostart();
+      if (installed) {
+        const started = await startAutostartService();
+        if (started && (process.platform === 'linux' || process.platform === 'darwin')) {
+          printInfo('You can restart the 24/7 service later from Settings > General.');
+        }
+      }
+    }
   } else {
     printWarn('Configuration not saved.');
   }
 
   // Offer to start daemon
   console.log('');
-  const startNow = await askYesNo('Start JARVIS now?', true);
+  const keepaliveActive = doSave && enableKeepalive;
+  const defaultStartNow = keepaliveActive ? false : true;
+  const startNowPrompt = keepaliveActive
+    ? 'Start another foreground JARVIS process now?'
+    : 'Start JARVIS now?';
+  const startNow = await askYesNo(startNowPrompt, defaultStartNow);
   if (startNow) {
     console.log(c.cyan('\nStarting J.A.R.V.I.S. daemon...\n'));
     closeRL();
@@ -652,7 +728,27 @@ export async function runOnboard(): Promise<void> {
     const { startDaemon } = await import('../daemon/index.ts');
     await startDaemon();
   } else {
-    console.log(c.dim('\nStart later with: jarvis start\n'));
+    if (keepaliveActive) {
+      console.log(c.dim('\nJARVIS keepalive mode is managing the daemon.\n'));
+      if (process.platform === 'linux' || process.platform === 'darwin') {
+        console.log(c.dim('Restart it later from Settings > General.\n'));
+      }
+    } else {
+      console.log(c.dim('\nStart later with: jarvis start\n'));
+    }
     closeRL();
   }
+}
+
+function expandHome(filepath: string): string {
+  if (filepath.startsWith('~/')) {
+    return join(homedir(), filepath.slice(2));
+  }
+  return filepath;
+}
+
+function resolveOnboardDbPath(config: JarvisConfig): string {
+  const dataDir = expandHome(config.daemon.data_dir);
+  const dbPath = expandHome(config.daemon.db_path);
+  return isAbsolute(dbPath) ? dbPath : join(dataDir, dbPath);
 }
