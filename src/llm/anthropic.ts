@@ -53,7 +53,7 @@ type AnthropicStreamEvent =
   | { type: 'message_stop' }
   | { type: 'error'; error: { type: string; message: string } };
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000; // 5s, 10s, 20s
 
 export class AnthropicProvider implements LLMProvider {
