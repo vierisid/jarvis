@@ -93,7 +93,7 @@ export class LLMManager {
   async *stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
     const providerNames = [this.primaryProvider, ...this.fallbackChain];
     const errors: Array<{ provider: string; error: string }> = [];
-    const MAX_RETRIES_PER_PROVIDER = 3;
+    const MAX_RETRIES_PER_PROVIDER = 0;
     const RETRY_BASE_MS = 5000;
 
     for (const providerName of providerNames) {

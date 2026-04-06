@@ -50,7 +50,7 @@ type GeminiStreamChunk = {
   };
 };
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000;
 
 export class GeminiProvider implements LLMProvider {
