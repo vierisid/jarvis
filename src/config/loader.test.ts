@@ -3,7 +3,7 @@ import { loadConfig, saveConfig } from './loader.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 const TEST_CONFIG_PATH = '/tmp/jarvis-test-config.yaml';
 
@@ -80,8 +80,8 @@ describe('Default Config', () => {
   test('has all required fields', () => {
     expect(DEFAULT_CONFIG.daemon).toBeDefined();
     expect(DEFAULT_CONFIG.daemon.port).toBe(3142);
-    expect(DEFAULT_CONFIG.daemon.data_dir).toBe('~/.jarvis');
-    expect(DEFAULT_CONFIG.daemon.db_path).toBe('~/.jarvis/jarvis.db');
+    expect(DEFAULT_CONFIG.daemon.data_dir).toBe('D:/jarvis');
+    expect(DEFAULT_CONFIG.daemon.db_path).toBe('D:/jarvis/jarvis.db');
 
     expect(DEFAULT_CONFIG.llm).toBeDefined();
     expect(DEFAULT_CONFIG.llm.primary).toBe('anthropic');
@@ -110,7 +110,7 @@ describe('Default Config', () => {
     expect(DEFAULT_CONFIG.llm.openai?.model).toBe('gpt-5.4');
     expect(DEFAULT_CONFIG.llm.gemini?.model).toBe('gemini-3-flash-preview');
     expect(DEFAULT_CONFIG.llm.ollama?.model).toBe('llama3');
-    expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('http://localhost:11434');
+    expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('http://ollama:11434');
   });
 });
 
@@ -151,8 +151,8 @@ daemon:
     const config = await loadConfig(TEST_CONFIG_PATH);
     expect(config.daemon.data_dir).not.toContain('~');
     expect(config.daemon.db_path).not.toContain('~');
-    expect(config.daemon.data_dir).toMatch(/^\//);
-    expect(config.daemon.db_path).toMatch(/^\//);
+    expect(isAbsolute(config.daemon.data_dir)).toBe(true);
+    expect(isAbsolute(config.daemon.db_path)).toBe(true);
   });
 });
 
