@@ -41,6 +41,7 @@ export type LLMOptions = {
   max_tokens?: number;
   tools?: LLMTool[];
   stream?: boolean;
+  tool_choice?: 'auto' | 'none' | 'required';  // 'auto' enables tool calling when available
 };
 
 export interface LLMProvider {

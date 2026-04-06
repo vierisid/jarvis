@@ -374,7 +374,7 @@ describe('Groq request shaping', () => {
           'x-test-body': typeof init?.body === 'string' ? init.body : '',
         },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -405,7 +405,7 @@ describe('Groq request shaping', () => {
       ],
     });
 
-    const fetchMock = globalThis.fetch as ReturnType<typeof mock>;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
@@ -437,7 +437,7 @@ describe('Groq request shaping', () => {
       ],
     });
 
-    const fetchMock = globalThis.fetch as ReturnType<typeof mock>;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
 

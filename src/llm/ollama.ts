@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OllamaMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -81,11 +82,15 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, tools } = options;
+    const { model = this.defaultModel, temperature, tools, tool_choice } = options;
+    
+    // Compact history for Ollama's context limits
+    const budget = calculateHistoryBudget(32000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
       stream: false,
     };
 
@@ -115,11 +120,15 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, tools } = options;
+    const { model = this.defaultModel, temperature, tools, tool_choice } = options;
+    
+    // Compact history for Ollama's context limits
+    const budget = calculateHistoryBudget(32000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
       stream: true,
     };
 
