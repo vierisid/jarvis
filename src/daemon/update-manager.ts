@@ -241,20 +241,27 @@ export async function startUpdateJob(): Promise<{ ok: boolean; message: string }
       const isDocker = existsSync('/.dockerenv');
       const dockerArg = isDocker ? '--in-docker' : '';
       const allArgs = [targetVersionArg, dockerArg].filter(Boolean).join(' ');
-      const command = isWindows()
-        ? ['powershell.exe', '-NoProfile', '-Command', `Start-Sleep -Seconds 1; bun run src/cli/update.ts ${allArgs}`]
-        : ['bash', '-lc', `sleep 1; bun run src/cli/update.ts ${allArgs}`];
-
-      const child = spawn(
-        command[0],
-        command.slice(1),
-        {
-          cwd: PACKAGE_ROOT,
-          detached: true,
-          stdio: ['ignore', logFd, logFd],
-          env: { ...process.env },
-        },
-      );
+      const child = isWindows()
+        ? spawn(
+          'powershell.exe',
+          ['-NoProfile', '-Command', `Start-Sleep -Seconds 1; bun run src/cli/update.ts ${allArgs}`],
+          {
+            cwd: PACKAGE_ROOT,
+            detached: true,
+            stdio: ['ignore', logFd, logFd],
+            env: { ...process.env },
+          },
+        )
+        : spawn(
+          'bash',
+          ['-lc', `sleep 1; bun run src/cli/update.ts ${allArgs}`],
+          {
+            cwd: PACKAGE_ROOT,
+            detached: true,
+            stdio: ['ignore', logFd, logFd],
+            env: { ...process.env },
+          },
+        );
       child.unref();
     } finally {
       closeSync(logFd);

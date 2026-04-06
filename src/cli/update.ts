@@ -89,8 +89,9 @@ function ensureUpstreamIsFastForwardable(): void {
   }
 
   const divergence = divergenceResult.stdout.toString().trim().split('\t').map((value) => Number.parseInt(value, 10));
-  const [behind, ahead] = divergence;
-  if (Number.isNaN(behind) || Number.isNaN(ahead)) {
+  const behind = divergence[0];
+  const ahead = divergence[1];
+  if (behind === undefined || ahead === undefined || Number.isNaN(behind) || Number.isNaN(ahead)) {
     throw new Error('Unexpected git divergence data before update.');
   }
 
