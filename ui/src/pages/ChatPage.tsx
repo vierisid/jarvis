@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import type { ChatMessage } from "../hooks/useWebSocket";
+import type { ChatMessage, ChatSendOptions } from "../hooks/useWebSocket";
 import type { UseVoiceReturn, VoiceState } from "../hooks/useVoice";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatInput } from "../components/chat/ChatInput";
@@ -8,11 +8,27 @@ import "../styles/chat.css";
 type ChatPageProps = {
   messages: ChatMessage[];
   isConnected: boolean;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, options?: ChatSendOptions) => void;
   voice?: UseVoiceReturn;
 };
 
 export default function ChatPage({ messages, isConnected, sendMessage, voice }: ChatPageProps) {
+  const [fastMode, setFastMode] = React.useState<boolean>(() => {
+    try {
+      return localStorage.getItem("jarvis.fastChatMode") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis.fastChatMode", String(fastMode));
+    } catch {
+      // ignore storage write failures
+    }
+  }, [fastMode]);
+
   const voiceStatus = voice
     ? voice.voiceState === "speaking" || voice.ttsAudioPlaying
       ? "JARVIS is speaking..."
@@ -107,9 +123,26 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
       {/* Messages */}
       <MessageList messages={messages} />
 
+      <button
+        className={`chat-fast-toggle ${fastMode ? "chat-fast-toggle-active" : ""}`}
+        type="button"
+        role="switch"
+        aria-checked={fastMode}
+        onClick={() => setFastMode((v) => !v)}
+        title={`Fast Chat ${fastMode ? "on" : "off"}`}
+      >
+        <span className="chat-fast-toggle-labels">
+          <span className="chat-fast-toggle-title">FAST CHAT</span>
+          <span className="chat-fast-toggle-state">{fastMode ? "No tools" : "Off"}</span>
+        </span>
+        <span className="chat-fast-toggle-switch" aria-hidden="true">
+          <span className="chat-fast-toggle-thumb" />
+        </span>
+      </button>
+
       {/* Input */}
       <ChatInput
-        onSend={sendMessage}
+        onSend={(text) => sendMessage(text, { fastMode })}
         disabled={!isConnected}
         voice={voice ? {
           voiceState: voice.voiceState,

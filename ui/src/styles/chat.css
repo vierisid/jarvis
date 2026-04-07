@@ -202,6 +202,93 @@
   animation: chat-breathe 2s ease-in-out infinite;
 }
 
+.chat-fast-toggle {
+  position: absolute;
+  right: 20px;
+  bottom: 124px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(139, 92, 246, 0.24);
+  background: rgba(10, 12, 18, 0.76);
+  color: var(--text-1);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.chat-fast-toggle-labels {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.chat-fast-toggle-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.chat-fast-toggle-state {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.chat-fast-toggle-switch {
+  width: 46px;
+  height: 26px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.chat-fast-toggle-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  transform: translateX(0);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.chat-fast-toggle-active {
+  border-color: rgba(52, 211, 153, 0.45);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.24) inset;
+}
+
+.chat-fast-toggle-active .chat-fast-toggle-switch {
+  background: rgba(16, 185, 129, 0.26);
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
+.chat-fast-toggle-active .chat-fast-toggle-thumb {
+  transform: translateX(20px);
+  background: #34d399;
+}
+
+@media (max-width: 820px) {
+  .chat-fast-toggle {
+    right: 12px;
+    bottom: 118px;
+    padding: 8px 10px;
+  }
+
+  .chat-fast-toggle-title {
+    font-size: 11px;
+  }
+
+  .chat-fast-toggle-state {
+    font-size: 11px;
+  }
+}
+
 /* ================================================================
    MESSAGES SCROLL AREA
    ================================================================ */
