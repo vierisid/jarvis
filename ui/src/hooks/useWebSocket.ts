@@ -361,7 +361,14 @@ export function useWebSocket() {
       const siteEvent = msg.payload as SiteEvent;
       setSiteEvents((prev) => [...prev.slice(-100), siteEvent]);
     } else if (msg.type === "notification") {
-      const payload = msg.payload as { source?: string; action?: string; task?: TaskEvent["task"]; item?: ContentEvent["item"]; event?: any };
+      const payload = msg.payload as {
+        source?: string;
+        action?: string;
+        task?: TaskEvent["task"];
+        item?: ContentEvent["item"];
+        event?: any;
+        text?: string;
+      };
       if (payload.source === "task_update" && payload.task && payload.action) {
         const event: TaskEvent = {
           action: payload.action as TaskEvent["action"],
@@ -384,6 +391,16 @@ export function useWebSocket() {
           // so no need to duplicate here — just log for debugging
           console.log("[WS] Awareness suggestion:", awarenessEvent.data.title);
         }
+      } else if (payload.source === "assistant_message" && payload.text) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: msg.id ?? crypto.randomUUID(),
+            role: "assistant",
+            content: String(payload.text),
+            timestamp: msg.timestamp,
+          },
+        ]);
       }
     } else if (msg.type === "error") {
       voiceCallbacksRef.current?.onError(msg.payload?.message);

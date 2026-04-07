@@ -28,6 +28,12 @@ import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCo
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { getRecentObservations } from '../vault/observations.ts';
 import { getPersonality } from '../personality/model.ts';
+import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import {
+  USER_PROFILE_QUESTIONS,
+  countAnsweredUserProfileQuestions,
+  hasUserProfile,
+} from '../user/profile.ts';
 import {
   createContent, getContent, findContent, updateContent, deleteContent,
   advanceStage, regressStage,
@@ -572,6 +578,43 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // --- Personality ---
     '/api/personality': {
       GET: () => json(getPersonality()),
+    },
+
+    // --- User Profile Wizard ---
+    '/api/user-profile': {
+      GET: () => {
+        const profile = getUserProfile();
+        return json({
+          questions: USER_PROFILE_QUESTIONS,
+          profile,
+          answered_count: countAnsweredUserProfileQuestions(profile),
+          total_questions: USER_PROFILE_QUESTIONS.length,
+          has_profile: hasUserProfile(profile),
+        });
+      },
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as { answers?: Record<string, unknown> };
+          const profile = saveUserProfile(body.answers ?? {});
+          return json({
+            ok: true,
+            profile,
+            answered_count: countAnsweredUserProfileQuestions(profile),
+            total_questions: USER_PROFILE_QUESTIONS.length,
+            message: 'User profile saved.',
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error(`Failed to save user profile: ${msg}`);
+        }
+      },
+    },
+
+    '/api/user-profile/clear': {
+      POST: () => {
+        clearUserProfile();
+        return json({ ok: true, message: 'User profile cleared.' });
+      },
     },
 
     // --- Config (sanitized — no API keys) ---

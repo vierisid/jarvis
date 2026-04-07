@@ -10,6 +10,7 @@ import { getDb } from './schema.ts';
 import { searchEntitiesByName, type Entity } from './entities.ts';
 import { findFacts, type Fact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
+import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 
 // Common stopwords to filter from search queries
 const STOPWORDS = new Set([
@@ -59,9 +60,35 @@ export function extractSearchTerms(message: string): string[] {
  */
 export function retrieveForMessage(message: string): EntityProfile[] {
   const terms = extractSearchTerms(message);
-  if (terms.length === 0) return [];
-
   const entityMap = new Map<string, Entity>();
+
+  if (looksLikeSelfQuery(message)) {
+    try {
+      const db = getDb();
+      const row = db.prepare(
+        'SELECT * FROM entities WHERE source = ? ORDER BY updated_at DESC LIMIT 1'
+      ).get(USER_PROFILE_VAULT_SOURCE) as {
+        id: string;
+        type: Entity['type'];
+        name: string;
+        properties: string | null;
+        created_at: number;
+        updated_at: number;
+        source: string | null;
+      } | null;
+
+      if (row) {
+        entityMap.set(row.id, {
+          ...row,
+          properties: row.properties ? JSON.parse(row.properties) : null,
+        });
+      }
+    } catch {
+      // DB not available — skip self-profile bootstrap
+    }
+  }
+
+  if (terms.length === 0 && entityMap.size === 0) return [];
 
   // 1. Search entity names
   for (const term of terms) {
@@ -119,6 +146,10 @@ export function retrieveForMessage(message: string): EntityProfile[] {
   }
 
   return profiles;
+}
+
+function looksLikeSelfQuery(message: string): boolean {
+  return /\b(i|me|my|mine|myself)\b/i.test(message);
 }
 
 /**

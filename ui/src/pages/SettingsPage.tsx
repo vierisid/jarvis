@@ -7,9 +7,11 @@ import { RolePanel } from "../components/settings/RolePanel";
 import { IntegrationsPanel } from "../components/settings/IntegrationsPanel";
 import { ChannelsPanel } from "../components/settings/ChannelsPanel";
 import { SidecarPanel } from "../components/settings/SidecarPanel";
+import { UserProfilePanel } from "../components/settings/UserProfilePanel";
 
 const SECTION_META: Record<SettingsSection, { title: string; subtitle: string }> = {
   general: { title: "General", subtitle: "Personality, role, and heartbeat configuration" },
+  profile: { title: "Know Your User", subtitle: "Capture durable user context so JARVIS starts with the right background" },
   llm: { title: "LLM Configuration", subtitle: "Manage AI providers, models, and API keys" },
   channels: { title: "Communication Channels", subtitle: "Telegram, Discord, voice transcription, and text-to-speech" },
   integrations: { title: "Integrations", subtitle: "Third-party service connections" },
@@ -47,6 +49,7 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
               <HeartbeatPanel />
             </>
           )}
+          {section === "profile" && <UserProfilePanel />}
           {section === "llm" && <LLMPanel />}
           {section === "channels" && <ChannelsPanel />}
           {section === "integrations" && <IntegrationsPanel />}

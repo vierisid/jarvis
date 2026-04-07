@@ -3,6 +3,7 @@ import { initDatabase } from './schema.ts';
 import { createEntity } from './entities.ts';
 import { createFact } from './facts.ts';
 import { createRelationship } from './relationships.ts';
+import { saveUserProfile } from './user-profile.ts';
 import {
   extractSearchTerms,
   retrieveForMessage,
@@ -85,6 +86,18 @@ test('retrieveForMessage returns empty for irrelevant query', () => {
   createEntity('person', 'John');
   const profiles = retrieveForMessage('the is a');
   expect(profiles.length).toBe(0);
+});
+
+test('retrieveForMessage includes current user profile for self queries', () => {
+  saveUserProfile({
+    preferred_name: 'Alex',
+    interests: 'AI, cars',
+  });
+
+  const profiles = retrieveForMessage('What do you know about me?');
+  expect(profiles.length).toBeGreaterThanOrEqual(1);
+  expect(profiles[0]!.entity.name).toBe('Alex');
+  expect(profiles[0]!.facts.some((fact) => fact.predicate === 'interests' && fact.object === 'AI, cars')).toBe(true);
 });
 
 // --- formatKnowledgeContext ---

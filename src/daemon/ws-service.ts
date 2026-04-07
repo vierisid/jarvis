@@ -20,6 +20,7 @@ import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } fr
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -230,6 +231,19 @@ export class WebSocketService implements Service {
         action,
         task,
       },
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  private broadcastAssistantMessage(text: string, requestId?: string): void {
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'assistant_message',
+        text,
+      },
+      id: requestId,
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
@@ -599,6 +613,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     // Persist user message
     try {
       const conversation = getOrCreateConversation(channel);
+      recordUserProfileTurn(text);
       addMessage(conversation.id, { role: 'user', content: text });
 
       // Set default cwd for general tools (run_command, read_file, etc.)
@@ -693,6 +708,12 @@ If the user wants to create a new project, tell them to use the Site Builder pag
 
       // Persist assistant response
       addMessage(conversation.id, { role: 'assistant', content: fullText });
+
+      const followupPrompt = maybeCreateUserProfileFollowupPrompt();
+      if (followupPrompt) {
+        this.broadcastAssistantMessage(followupPrompt);
+        addMessage(conversation.id, { role: 'assistant', content: followupPrompt });
+      }
 
       // Mark task as completed
       if (taskCommitment) {
