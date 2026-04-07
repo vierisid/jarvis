@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect } from "react";
 import type { ChatMessage } from "../hooks/useWebSocket";
-import type { UseVoiceReturn } from "../hooks/useVoice";
+import type { UseVoiceReturn, VoiceState } from "../hooks/useVoice";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatInput } from "../components/chat/ChatInput";
 import "../styles/chat.css";
@@ -22,6 +22,36 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
           ? "Listening..."
           : null
     : null;
+
+  const isLikelyQuestion = (text: string) => {
+    const normalized = text.trim();
+    if (!normalized) return false;
+    if (/[?]["')\]]*$/.test(normalized)) return true;
+    return /\b(can|could|would|will|should|do|does|did|are|is|want|need|which|what|when|where|why|how)\b/i.test(normalized) && /\b(you|your)\b/i.test(normalized);
+  };
+
+  const prevVoiceStateRef = React.useRef<VoiceState>("idle");
+  const lastAutoFollowupRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!voice) return;
+    const prev = prevVoiceStateRef.current;
+    if (prev === "speaking" && voice.voiceState === "idle") {
+      const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+      if (lastAssistant && isLikelyQuestion(lastAssistant.content) && lastAutoFollowupRef.current !== lastAssistant.id) {
+        lastAutoFollowupRef.current = lastAssistant.id;
+        // Retry in short bursts because browser mic/wake recognizer handoff can race right after TTS ends.
+        const retryDelays = [120, 420, 920];
+        retryDelays.forEach((delay) => {
+          window.setTimeout(() => {
+            if (!voice.ttsAudioPlaying && voice.voiceState === "idle") {
+              voice.startRecording();
+            }
+          }, delay);
+        });
+      }
+    }
+    prevVoiceStateRef.current = voice.voiceState;
+  }, [voice, messages]);
 
   return (
     <div className="chat-page">

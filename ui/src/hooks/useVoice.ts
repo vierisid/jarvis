@@ -49,6 +49,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const ttsQueueRef = useRef<ArrayBuffer[]>([]);
   const ttsPlayingRef = useRef(false);
   const ttsRequestIdRef = useRef<string | null>(null);
+  const ttsInterruptedRef = useRef(false);
   const voiceStateRef = useRef<VoiceState>("idle");
   const wakeEngineRef = useRef<any>(null);
   const wakeWordEnabledRef = useRef(wakeWordEnabled);
@@ -244,6 +245,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   }, [getAudioContext]);
 
   const handleTTSBinary = useCallback((data: ArrayBuffer) => {
+    if (ttsInterruptedRef.current) {
+      return;
+    }
     ttsQueueRef.current.push(data);
     if (!ttsPlayingRef.current) {
       playNextTTSChunk();
@@ -252,6 +256,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
 
   const handleTTSStart = useCallback((requestId: string) => {
     console.log("[Voice] TTS start:", requestId);
+    ttsInterruptedRef.current = false;
     // Stop any lingering playback from a previous TTS session
     if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
       audioContextRef.current?.close();
@@ -268,6 +273,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
 
   const handleTTSEnd = useCallback(() => {
     ttsRequestIdRef.current = null;
+    ttsInterruptedRef.current = false;
     // If nothing is playing and queue is empty, transition now
     if (!ttsPlayingRef.current && ttsQueueRef.current.length === 0) {
       setVoiceState("idle");
@@ -277,6 +283,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   }, []);
 
   const cancelTTS = useCallback(() => {
+    ttsInterruptedRef.current = true;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
