@@ -143,7 +143,7 @@ export class ProcessMonitor implements Observer {
         return this.parsePS(output);
       } else if (platform === 'win32') {
         // Use PowerShell for Windows
-        const result = await Bun.$`powershell.exe Get-Process | Select-Object Id,Name,CPU,WorkingSet | ConvertTo-Csv -NoTypeInformation`.quiet();
+        const result = await Bun.$`powershell.exe -Command "Get-Process | Select-Object Id,Name,CPU,WorkingSet | ConvertTo-Csv -NoTypeInformation"`.quiet();
         const output = result.stdout.toString();
 
         return this.parseWindowsPS(output);
