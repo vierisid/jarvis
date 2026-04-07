@@ -151,8 +151,8 @@ daemon:
     const config = await loadConfig(TEST_CONFIG_PATH);
     expect(config.daemon.data_dir).not.toContain('~');
     expect(config.daemon.db_path).not.toContain('~');
-    expect(config.daemon.data_dir).toMatch(/^\//);
-    expect(config.daemon.db_path).toMatch(/^\//);
+    expect(config.daemon.data_dir).toMatch(/^(\/|[a-zA-Z]:\\\\)/);
+    expect(config.daemon.db_path).toMatch(/^(\/|[a-zA-Z]:\\\\)/);
   });
 });
 
