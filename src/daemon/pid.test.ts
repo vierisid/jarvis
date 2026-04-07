@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import {
   acquireLock,
@@ -15,8 +15,8 @@ import {
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
 const PID_MODULE = join(import.meta.dir, 'pid.ts');
-const READY_SIGNAL = '/tmp/jarvis-test-lock-ready';
-const HOLDER_SCRIPT = '/tmp/jarvis-test-lock-holder.ts';
+const READY_SIGNAL = join(tmpdir(), 'jarvis-test-lock-ready');
+const HOLDER_SCRIPT = join(tmpdir(), 'jarvis-test-lock-holder.ts');
 
 function cleanup(): void {
   releaseLock();
@@ -32,10 +32,10 @@ async function spawnLockHolder(): Promise<{ proc: ReturnType<typeof Bun.spawn>; 
   try { unlinkSync(READY_SIGNAL); } catch {}
 
   writeFileSync(HOLDER_SCRIPT, `
-import { acquireLock } from '${PID_MODULE}';
+import { acquireLock } from ${JSON.stringify(PID_MODULE)};
 import { writeFileSync } from 'node:fs';
 const ok = acquireLock(process.pid);
-writeFileSync('${READY_SIGNAL}', ok ? String(process.pid) : 'FAIL');
+writeFileSync(${JSON.stringify(READY_SIGNAL)}, ok ? String(process.pid) : 'FAIL');
 await Bun.sleep(60000);
 `);
 

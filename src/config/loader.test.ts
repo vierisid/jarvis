@@ -3,7 +3,7 @@ import { loadConfig, saveConfig } from './loader.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 
 const TEST_CONFIG_PATH = '/tmp/jarvis-test-config.yaml';
 
@@ -151,8 +151,8 @@ daemon:
     const config = await loadConfig(TEST_CONFIG_PATH);
     expect(config.daemon.data_dir).not.toContain('~');
     expect(config.daemon.db_path).not.toContain('~');
-    expect(config.daemon.data_dir).toMatch(/^(\/|[a-zA-Z]:\\\\)/);
-    expect(config.daemon.db_path).toMatch(/^(\/|[a-zA-Z]:\\\\)/);
+    expect(isAbsolute(config.daemon.data_dir)).toBe(true);
+    expect(isAbsolute(config.daemon.db_path)).toBe(true);
   });
 });
 

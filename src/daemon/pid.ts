@@ -64,6 +64,8 @@ let lockFd: number | null = null;
  * Returns true if the lock was acquired, false if another instance holds it.
  */
 export function acquireLock(pid: number): boolean {
+  if (lockFd !== null) return false;
+
   try {
     mkdirSync(JARVIS_DIR, { recursive: true });
 
