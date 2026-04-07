@@ -10,6 +10,7 @@ export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
   private primaryProvider = '';
   private fallbackChain: string[] = [];
+  private static readonly MAX_RETRIES_PER_PROVIDER = 3;
 
   constructor() {}
 
@@ -76,12 +77,14 @@ export class LLMManager {
       const provider = this.providers.get(providerName);
       if (!provider) continue;
 
-      try {
-        return await provider.chat(messages, options);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        errors.push({ provider: providerName, error: errorMsg });
-        console.error(`Provider ${providerName} failed:`, errorMsg);
+      for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+        try {
+          return await provider.chat(messages, options);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          errors.push({ provider: `${providerName} (attempt ${attempt})`, error: errorMsg });
+          console.error(`Provider ${providerName} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, errorMsg);
+        }
       }
     }
 
@@ -98,25 +101,27 @@ export class LLMManager {
       const provider = this.providers.get(providerName);
       if (!provider) continue;
 
-      try {
-        let hasError = false;
-        for await (const event of provider.stream(messages, options)) {
-          if (event.type === 'error') {
-            hasError = true;
-            errors.push({ provider: providerName, error: event.error });
-            console.error(`Provider ${providerName} stream error:`, event.error);
-            break;
+      for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+        try {
+          let hasError = false;
+          for await (const event of provider.stream(messages, options)) {
+            if (event.type === 'error') {
+              hasError = true;
+              errors.push({ provider: `${providerName} (attempt ${attempt})`, error: event.error });
+              console.error(`Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, event.error);
+              break;
+            }
+            yield event;
           }
-          yield event;
-        }
 
-        if (!hasError) {
-          return; // Successful stream completion
+          if (!hasError) {
+            return; // Successful stream completion
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          errors.push({ provider: `${providerName} (attempt ${attempt})`, error: errorMsg });
+          console.error(`Provider ${providerName} stream failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, errorMsg);
         }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        errors.push({ provider: providerName, error: errorMsg });
-        console.error(`Provider ${providerName} stream failed:`, errorMsg);
       }
     }
 
