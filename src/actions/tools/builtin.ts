@@ -14,7 +14,8 @@ import { TerminalExecutor } from '../terminal/executor.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
-import { routeToSidecar } from './sidecar-route.ts';
+import type { BinaryDataInline } from '../../sidecar/protocol.ts';
+import { routeToSidecar, routeToSidecarRaw } from './sidecar-route.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 
@@ -465,6 +466,42 @@ function formatSnapshot(snap: PageSnapshot): string {
   return lines.join('\n');
 }
 
+function toPageSnapshot(raw: unknown): PageSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const source = data.snapshot && typeof data.snapshot === 'object'
+    ? data.snapshot as Record<string, unknown>
+    : data;
+
+  const title = typeof source.title === 'string' ? source.title : '';
+  const url = typeof source.url === 'string' ? source.url : '';
+  const text = typeof source.text === 'string' ? source.text : '';
+  const rawElements = Array.isArray(source.elements) ? source.elements : [];
+  const elements = rawElements.flatMap((element): PageSnapshot['elements'] => {
+    if (!element || typeof element !== 'object') return [];
+    const el = element as Record<string, unknown>;
+    const id = typeof el.id === 'number' ? el.id : Number(el.id);
+    if (!Number.isFinite(id)) return [];
+
+    const attrs: Record<string, string> = {};
+    for (const key of ['type', 'href', 'name', 'role', 'placeholder', 'aria-label', 'title', 'id']) {
+      if (typeof el[key] === 'string' && el[key]) {
+        attrs[key] = el[key] as string;
+      }
+    }
+
+    return [{
+      id,
+      tag: typeof el.tag === 'string' ? el.tag : 'unknown',
+      text: typeof el.text === 'string' ? el.text : '',
+      attrs,
+    }];
+  });
+
+  if (!url && !text && elements.length === 0) return null;
+  return { title, url, text, elements };
+}
+
 // --- Browser Tool Implementations ---
 
 export const browserNavigateTool: ToolDefinition = {
@@ -486,7 +523,10 @@ export const browserNavigateTool: ToolDefinition = {
   execute: async (params) => {
     const target = params.target as string | undefined;
     if (target) {
-      return routeToSidecar(target, 'browser_navigate', { url: params.url }, 'browser');
+      const remote = await routeToSidecarRaw(target, 'browser_navigate', { url: params.url }, 'browser');
+      if (typeof remote === 'string') return remote;
+      const snap = toPageSnapshot(remote);
+      return snap ? formatSnapshot(snap) : JSON.stringify(remote, null, 2);
     }
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
@@ -512,7 +552,10 @@ export const browserSnapshotTool: ToolDefinition = {
   execute: async (params) => {
     const target = params.target as string | undefined;
     if (target) {
-      return routeToSidecar(target, 'browser_snapshot', {}, 'browser');
+      const remote = await routeToSidecarRaw(target, 'browser_snapshot', {}, 'browser');
+      if (typeof remote === 'string') return remote;
+      const snap = toPageSnapshot(remote);
+      return snap ? formatSnapshot(snap) : JSON.stringify(remote, null, 2);
     }
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
@@ -616,7 +659,18 @@ export const browserScreenshotTool: ToolDefinition = {
   execute: async (params) => {
     const target = params.target as string | undefined;
     if (target) {
-      return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
+      const remote = await routeToSidecarRaw(target, 'browser_screenshot', {}, 'browser');
+      if (typeof remote === 'string') return remote;
+      const binary = (remote as { _binary?: BinaryDataInline })._binary;
+      if (binary?.type === 'inline' && binary.mime_type && binary.data) {
+        return {
+          content: [
+            { type: 'text' as const, text: 'Browser screenshot captured.' },
+            { type: 'image' as const, source: { type: 'base64' as const, media_type: binary.mime_type, data: binary.data } },
+          ],
+        } satisfies ToolResult;
+      }
+      return JSON.stringify(remote, null, 2);
     }
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {

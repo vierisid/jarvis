@@ -7,11 +7,10 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | null;
   tool_calls?: GroqToolCall[];
   tool_call_id?: string;
 };
@@ -84,6 +83,8 @@ export class GroqProvider implements LLMProvider {
   private apiKey: string;
   private defaultModel: string;
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
+  private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
+  private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
 
   constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
     this.apiKey = apiKey;
@@ -91,24 +92,7 @@ export class GroqProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
-    
-    // Compact history for Groq's context limits
-    const budget = calculateHistoryBudget(8192);
-    const compactedMessages = compactHistory(messages, budget);
-    
-    const body: Record<string, unknown> = {
-      model,
-      messages: this.convertMessages(compactedMessages),
-    };
-
-    if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
-      body.tool_choice = tool_choice || 'auto';        // Enable tool calling
-      body.parallel_tool_calls = true;                 // Allow concurrent tool execution
-    }
+    const body = this.buildRequestBody(messages, options, false);
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -129,25 +113,8 @@ export class GroqProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
-
-    // Compact history for Groq's context limits
-    const budget = calculateHistoryBudget(8192);
-    const compactedMessages = compactHistory(messages, budget);
-
-    const body: Record<string, unknown> = {
-      model,
-      messages: this.convertMessages(compactedMessages),
-      stream: true,
-    };
-
-    if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
-      body.tool_choice = tool_choice || 'auto';        // Enable tool calling
-      body.parallel_tool_calls = true;                 // Allow concurrent tool execution
-    }
+    const body = this.buildRequestBody(messages, options, true);
+    const responseModel = typeof body.model === 'string' ? body.model : this.defaultModel;
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -173,7 +140,7 @@ export class GroqProvider implements LLMProvider {
     const toolCalls: LLMToolCall[] = [];
     const toolCallBuilders: Map<number, { id: string; name: string; arguments: string }> = new Map();
     let finishReason: string | null = null;
-    let responseModel = model;
+    let streamedModel = responseModel;
 
     try {
       const reader = response.body.getReader();
@@ -198,7 +165,7 @@ export class GroqProvider implements LLMProvider {
             const chunk = JSON.parse(data) as GroqStreamChunk;
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];
-              responseModel = chunk.model;
+              streamedModel = chunk.model;
 
               if (choice!.delta.content) {
                 accumulatedText += choice!.delta.content;
@@ -260,7 +227,7 @@ export class GroqProvider implements LLMProvider {
           content: accumulatedText,
           tool_calls: toolCalls,
           usage: { input_tokens: 0, output_tokens: 0 },
-          model: responseModel,
+          model: streamedModel,
           finish_reason: mappedFinishReason,
         },
       };
@@ -293,15 +260,34 @@ export class GroqProvider implements LLMProvider {
     }
   }
 
+  private buildRequestBody(messages: LLMMessage[], options: LLMOptions, stream: boolean): Record<string, unknown> {
+    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const body: Record<string, unknown> = {
+      model,
+      messages: this.convertMessages(this.compactMessages(messages, tools)),
+    };
+
+    if (stream) body.stream = true;
+    if (temperature !== undefined) body.temperature = temperature;
+    if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
+    if (tools && tools.length > 0) {
+      body.tools = this.convertTools(tools);
+      body.tool_choice = 'auto';
+      body.parallel_tool_calls = true;
+    }
+
+    return body;
+  }
+
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
     return messages.map(m => {
       const text = typeof m.content === 'string'
         ? m.content
         : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      const hasToolCalls = !!(m.tool_calls && m.tool_calls.length > 0);
       const msg: GroqMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        // When assistant made tool calls, content must be null (Groq spec)
-        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,
+        content: hasToolCalls && text.trim().length === 0 ? null : text,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({
@@ -315,6 +301,81 @@ export class GroqProvider implements LLMProvider {
       }
       return msg;
     });
+  }
+
+  private compactMessages(messages: LLMMessage[], tools?: LLMTool[]): LLMMessage[] {
+    if (messages.length <= 2) return messages;
+
+    const toolOverhead = tools && tools.length > 0
+      ? Math.min(
+        GroqProvider.SAFE_TOOL_OVERHEAD_CHARS,
+        JSON.stringify(this.convertTools(tools)).length,
+      )
+      : 0;
+    const budget = Math.max(8_000, GroqProvider.SAFE_PROMPT_CHAR_BUDGET - toolOverhead);
+    const systemMessage = messages[0]?.role === 'system' ? messages[0] : null;
+    const compacted: LLMMessage[] = [];
+    let used = systemMessage ? this.measureMessage(systemMessage) : 0;
+
+    if (systemMessage) compacted.push(systemMessage);
+
+    const startIndex = systemMessage ? 1 : 0;
+    const chunks = this.chunkMessages(messages.slice(startIndex));
+    const keptChunks: LLMMessage[][] = [];
+
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const chunk = chunks[i]!;
+      const size = this.measureChunk(chunk);
+      if (keptChunks.length > 0 && used + size > budget) {
+        break;
+      }
+      keptChunks.push(chunk);
+      used += size;
+    }
+
+    keptChunks.reverse();
+    for (const chunk of keptChunks) {
+      compacted.push(...chunk);
+    }
+    return compacted;
+  }
+
+  private chunkMessages(messages: LLMMessage[]): LLMMessage[][] {
+    const chunks: LLMMessage[][] = [];
+
+    for (let i = 0; i < messages.length; i += 1) {
+      const current = messages[i]!;
+
+      if (current.role === 'assistant' && current.tool_calls && current.tool_calls.length > 0) {
+        const chunk: LLMMessage[] = [current];
+        i += 1;
+
+        while (i < messages.length && messages[i]!.role === 'tool') {
+          chunk.push(messages[i]!);
+          i += 1;
+        }
+
+        i -= 1;
+        chunks.push(chunk);
+        continue;
+      }
+
+      chunks.push([current]);
+    }
+
+    return chunks;
+  }
+
+  private measureMessage(message: LLMMessage): number {
+    const content = typeof message.content === 'string'
+      ? message.content
+      : message.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+    const toolCallsSize = message.tool_calls ? JSON.stringify(message.tool_calls).length : 0;
+    return content.length + toolCallsSize + 128;
+  }
+
+  private measureChunk(messages: LLMMessage[]): number {
+    return messages.reduce((total, message) => total + this.measureMessage(message), 0);
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {

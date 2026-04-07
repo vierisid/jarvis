@@ -64,6 +64,8 @@ export class DevServerManager {
         PORT: String(port),
         // Enforce loopback bind — prevent dev servers from listening on 0.0.0.0
         HOST: '127.0.0.1',
+        // Dev servers (Vite, Next.js) fail or behave unexpectedly under NODE_ENV=production
+        NODE_ENV: 'development',
       },
     });
 

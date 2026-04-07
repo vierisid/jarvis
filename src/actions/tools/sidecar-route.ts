@@ -14,7 +14,7 @@ let sidecarManager: SidecarManager | null = null;
 /**
  * Inject the sidecar manager at startup. Called once from the daemon.
  */
-export function setSidecarManagerRef(manager: SidecarManager): void {
+export function setSidecarManagerRef(manager: SidecarManager | null): void {
   sidecarManager = manager;
 }
 
@@ -44,6 +44,24 @@ function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarInfo | n
   return byContains ?? null;
 }
 
+function resolveSidecar(target: string): { sidecar: SidecarInfo | null; error?: string } {
+  if (!sidecarManager) {
+    return { sidecar: null, error: 'Error: Sidecar system not initialized.' };
+  }
+
+  const sidecars = sidecarManager.listSidecars();
+  const sidecar = findSidecar(target, sidecars);
+  if (!sidecar) {
+    const available = sidecars.map((s) => s.name).join(', ') || 'none';
+    return {
+      sidecar: null,
+      error: `Error: No sidecar found matching "${target}". Available: ${available}`,
+    };
+  }
+
+  return { sidecar };
+}
+
 /**
  * Route an RPC call to a sidecar. Returns the result string, or an error message.
  *
@@ -52,22 +70,15 @@ function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarInfo | n
  * @param params - RPC parameters
  * @param requiredCapability - The sidecar must advertise this capability
  */
-export async function routeToSidecar(
+export async function routeToSidecarRaw(
   target: string,
   method: string,
   params: Record<string, unknown>,
   requiredCapability: SidecarCapability,
-): Promise<string> {
-  if (!sidecarManager) {
-    return 'Error: Sidecar system not initialized.';
-  }
-
-  const sidecars = sidecarManager.listSidecars();
-  const sidecar = findSidecar(target, sidecars);
-
+): Promise<unknown> {
+  const { sidecar, error } = resolveSidecar(target);
   if (!sidecar) {
-    const available = sidecars.map((s) => s.name).join(', ') || 'none';
-    return `Error: No sidecar found matching "${target}". Available: ${available}`;
+    return error ?? `Error: No sidecar found matching "${target}".`;
   }
 
   if (!sidecar.connected) {
@@ -85,13 +96,11 @@ export async function routeToSidecar(
   }
 
   try {
-    const result = await sidecarManager.dispatchRPC(sidecar.id, method, params);
-
-    if (result === 'detached') {
-      return `Task dispatched to "${sidecar.name}" and running in the background.`;
+    const manager = sidecarManager;
+    if (!manager) {
+      return 'Error: Sidecar system not initialized.';
     }
-
-    return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    return await manager.dispatchRPC(sidecar.id, method, params);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
 
@@ -102,4 +111,20 @@ export async function routeToSidecar(
 
     return `Error [${sidecar.name}]: ${msg}`;
   }
+}
+
+export async function routeToSidecar(
+  target: string,
+  method: string,
+  params: Record<string, unknown>,
+  requiredCapability: SidecarCapability,
+): Promise<string> {
+  const { sidecar } = resolveSidecar(target);
+  const result = await routeToSidecarRaw(target, method, params, requiredCapability);
+
+  if (result === 'detached') {
+    return `Task dispatched to "${sidecar?.name ?? target}" and running in the background.`;
+  }
+
+  return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
 }

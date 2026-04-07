@@ -350,6 +350,24 @@ export class WebSocketServer {
           }
         }
 
+        // 7. Site builder catch-all — proxy unmatched paths to the active
+        //    dev server using the __proj cookie set by the explicit proxy route.
+        //    This handles absolute paths (/src/main.tsx, /node_modules/...) that
+        //    frameworks emit and that don't match any JARVIS route.
+        if (self.siteProxy) {
+          // WebSocket upgrade (e.g. Vite HMR)
+          if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+            const targetUrl = self.siteProxy.getWebSocketTargetFromCookie(req, pathname);
+            if (targetUrl) {
+              const success = server.upgrade(req, { data: { proxy_target: targetUrl } });
+              if (success) return undefined;
+            }
+          }
+          // HTTP
+          const proxyResp = await self.siteProxy.proxyCatchAll(req, pathname + url.search);
+          if (proxyResp) return proxyResp;
+        }
+
         return new Response('Not Found', { status: 404 });
       },
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -243,6 +244,9 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 		if !ok {
 			return nil, fmt.Errorf("missing required parameter: element_id")
 		}
+		if elemID < 1 || math.Trunc(elemID) != elemID {
+			return nil, fmt.Errorf("invalid element_id: must be a positive integer")
+		}
 
 		cdp, err := getCDP(cfg)
 		if err != nil {
@@ -258,7 +262,7 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
     el.click();
     return JSON.stringify({success: true, tag: el.tagName, id: %d});
 })()
-`, int(elemID), int(elemID), int(elemID))
+`, int(elemID)-1, int(elemID), int(elemID))
 
 		result, err := cdp.send("Runtime.evaluate", map[string]any{
 			"expression":    script,
@@ -278,7 +282,14 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		if text == "" {
 			return nil, fmt.Errorf("missing required parameter: text")
 		}
-		elemID, hasElem := params["element_id"].(float64)
+		rawElemID, elementIDProvided := params["element_id"]
+		elemID, hasElem := rawElemID.(float64)
+		if elementIDProvided && !hasElem {
+			return nil, fmt.Errorf("invalid element_id: must be a positive integer")
+		}
+		if hasElem && (elemID < 1 || math.Trunc(elemID) != elemID) {
+			return nil, fmt.Errorf("invalid element_id: must be a positive integer")
+		}
 		submit, _ := params["submit"].(bool)
 
 		cdp, err := getCDP(cfg)
@@ -299,7 +310,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
     el.dispatchEvent(new Event('change', {bubbles: true}));
     return JSON.stringify({success: true, tag: el.tagName});
 })()
-`, int(elemID), jsonString(text))
+`, int(elemID)-1, jsonString(text))
 			cdp.send("Runtime.evaluate", map[string]any{
 				"expression":    script,
 				"returnByValue": true,
@@ -380,7 +391,7 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 		direction, _ := params["direction"].(string)
 		amount, _ := params["amount"].(float64)
 		if amount == 0 {
-			amount = 3
+			amount = 800
 		}
 
 		cdp, err := getCDP(cfg)
@@ -388,7 +399,7 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		pixels := int(amount * 100)
+		pixels := int(amount)
 		if direction == "up" {
 			pixels = -pixels
 		}
@@ -460,7 +471,7 @@ func getBrowserSnapshot(cdp *cdpClient) (map[string]any, error) {
         var r = el.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;
         var item = {
-            id: i,
+            id: i + 1,
             tag: el.tagName.toLowerCase(),
             text: (el.textContent || el.value || el.placeholder || el.alt || '').substring(0, 100).trim(),
             type: el.type || '',

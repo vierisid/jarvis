@@ -41,22 +41,14 @@ export function SitePreview({ project }: Props) {
     );
   }
 
-  // Use direct dev server URL for reliable asset loading + HMR
-  // The proxy is still available for API-level access, but the iframe
-  // works better pointing directly at the dev server on localhost
-  const previewUrl = project.devPort
-    ? `http://localhost:${project.devPort}/`
-    : `/api/sites/${project.id}/proxy/`;
+  // Initial load goes through the proxy, which sets a __proj cookie.
+  // Subsequent requests (scripts, assets) use absolute paths like /src/main.tsx
+  // which hit the main server's catch-all and get routed via the cookie.
+  const previewUrl = `/api/sites/${project.id}/proxy/`;
 
-  // Proxy path is same-origin with the dashboard — omit allow-same-origin
-  // so iframe JS cannot access Jarvis API/cookies/storage.
-  // Direct localhost path is already cross-origin (different port) so
-  // allow-same-origin is safe and required for the dev server to function.
-  // Omit allow-popups on both paths to block window.open() / target="_blank".
-  const isProxyPath = !project.devPort;
-  const sandboxValue = isProxyPath
-    ? "allow-scripts allow-forms"
-    : "allow-scripts allow-forms allow-same-origin";
+  // allow-same-origin is required so that cookies, ES modules, and
+  // framework features (HMR WebSockets, fetch) work correctly.
+  const sandboxValue = "allow-scripts allow-forms allow-same-origin allow-popups";
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }}>
