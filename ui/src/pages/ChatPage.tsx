@@ -158,6 +158,10 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
   const lastAutoFollowupRef = React.useRef<string | null>(null);
   useEffect(() => {
     if (!voice) return;
+    if (chatMode !== "auto") {
+      prevVoiceStateRef.current = voice.voiceState;
+      return;
+    }
     const prev = prevVoiceStateRef.current;
     if (prev === "speaking" && voice.voiceState === "idle") {
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -175,7 +179,7 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
       }
     }
     prevVoiceStateRef.current = voice.voiceState;
-  }, [voice, messages]);
+  }, [voice, messages, chatMode]);
 
   return (
     <div className="chat-page">
@@ -314,7 +318,7 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
           llmModel: effectiveModel || undefined,
         })}
         disabled={!isConnected}
-        fastMode={chatMode === "fast"}
+        chatMode={chatMode}
         voice={voice ? {
           voiceState: voice.voiceState,
           startRecording: voice.startRecording,
