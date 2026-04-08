@@ -55,7 +55,7 @@
     "@types/react-dom": "^19.2.3",
     "@xyflow/react": "^12.10.1",
     "codemirror": "^6.0.2",
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.26.0",
     "edge-tts-universal": "^1.4.0",
     "highlight.js": "^11.11.1",
     "jose": "^6.2.0",
