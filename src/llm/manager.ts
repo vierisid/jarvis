@@ -11,6 +11,8 @@ export class LLMManager {
   private primaryProvider = '';
   private fallbackChain: string[] = [];
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
+  private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
+  private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
   constructor() {}
 
@@ -69,66 +71,156 @@ export class LLMManager {
     this.fallbackChain = fallback.filter(n => newMap.has(n));
   }
 
-  async chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse> {
-    const providerNames = [this.primaryProvider, ...this.fallbackChain];
-    const errors: Array<{ provider: string; error: string }> = [];
+  /**
+   * Add request timeout wrapper for network resilience
+   */
+  private async withTimeout<T>(promise: Promise<T>, provider: string): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`LLM request to ${provider} timed out after ${LLMManager.REQUEST_TIMEOUT_MS}ms`)),
+          LLMManager.REQUEST_TIMEOUT_MS
+        )
+      )
+    ]);
+  }
 
-    for (const providerName of providerNames) {
-      const provider = this.providers.get(providerName);
-      if (!provider) continue;
+  /**
+   * Classify error for better retry logic
+   */
+  private shouldRetry(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    
+    const msg = error.message.toLowerCase();
+    // Retry on network/timeout errors, not on auth/validation errors
+    return msg.includes('timeout') || 
+           msg.includes('econnrefused') || 
+           msg.includes('enotfound') ||
+           msg.includes('network') ||
+           msg.includes('temporarily unavailable') ||
+           msg.includes('429') ||  // rate limit
+           msg.includes('503');    // service unavailable
+  }
 
-      for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
-        try {
-          return await provider.chat(messages, options);
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          errors.push({ provider: `${providerName} (attempt ${attempt})`, error: errorMsg });
-          console.error(`Provider ${providerName} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, errorMsg);
+  /**
+   * Temporarily override the primary provider for a single call.
+   * Used for per-message LLM selection from chat dashboard.
+   */
+  async chatWithOverride(
+    messages: LLMMessage[],
+    overridePrimary: string | null,
+    options?: LLMOptions
+  ): Promise<LLMResponse> {
+    const providerName = overridePrimary && this.providers.has(overridePrimary) ? overridePrimary : this.primaryProvider;
+    const provider = this.providers.get(providerName);
+    if (!provider) {
+      throw new Error(`Provider '${providerName}' not registered`);
+    }
+
+    const errors: string[] = [];
+    for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+      try {
+        const result = await this.withTimeout(provider.chat(messages, options), providerName);
+        if (LLMManager.isDebugging && attempt > 1) {
+          console.log(`[DEBUG] LLM ${providerName} succeeded on retry attempt ${attempt}`);
         }
+        return result;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`attempt ${attempt}: ${errorMsg}`);
+        
+        const shouldRetry = this.shouldRetry(err);
+        console.error(
+          `[LLM] Provider ${providerName} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
+        );
+        
+        // Don't retry on fatal errors (auth, validation)
+        if (!shouldRetry && attempt > 1) break;
       }
     }
 
     throw new Error(
-      `All providers failed:\n${errors.map(e => `  ${e.provider}: ${e.error}`).join('\n')}`
+      `Provider '${providerName}' failed after ${LLMManager.MAX_RETRIES_PER_PROVIDER} attempts:\n${errors.map(e => `  ${e}`).join('\n')}`
+    );
+  }
+
+  async chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse> {
+    const providerName = this.primaryProvider;
+    const provider = this.providers.get(providerName);
+    if (!provider) {
+      throw new Error(`Provider '${providerName}' not registered`);
+    }
+
+    const errors: string[] = [];
+    for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+      try {
+        const result = await this.withTimeout(provider.chat(messages, options), providerName);
+        if (LLMManager.isDebugging && attempt > 1) {
+          console.log(`[DEBUG] LLM ${providerName} succeeded on retry attempt ${attempt}`);
+        }
+        return result;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`attempt ${attempt}: ${errorMsg}`);
+        
+        const shouldRetry = this.shouldRetry(err);
+        console.error(
+          `[LLM] Provider ${providerName} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
+        );
+        
+        if (!shouldRetry && attempt > 1) break;
+      }
+    }
+
+    throw new Error(
+      `Provider '${providerName}' failed after ${LLMManager.MAX_RETRIES_PER_PROVIDER} attempts:\n${errors.map(e => `  ${e}`).join('\n')}`
     );
   }
 
   async *stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
-    const providerNames = [this.primaryProvider, ...this.fallbackChain];
-    const errors: Array<{ provider: string; error: string }> = [];
+    const providerName = this.primaryProvider;
+    const provider = this.providers.get(providerName);
+    if (!provider) {
+      yield { type: 'error', error: `Provider '${providerName}' not registered` };
+      return;
+    }
 
-    for (const providerName of providerNames) {
-      const provider = this.providers.get(providerName);
-      if (!provider) continue;
-
-      for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
-        try {
-          let hasError = false;
-          for await (const event of provider.stream(messages, options)) {
-            if (event.type === 'error') {
-              hasError = true;
-              errors.push({ provider: `${providerName} (attempt ${attempt})`, error: event.error });
-              console.error(`Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, event.error);
-              break;
-            }
-            yield event;
+    const errors: string[] = [];
+    for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+      try {
+        let hasError = false;
+        for await (const event of this.withTimeout(provider.stream(messages, options), providerName)) {
+          if (event.type === 'error') {
+            hasError = true;
+            errors.push(`attempt ${attempt}: ${event.error}`);
+            console.error(
+              `[LLM] Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
+            );
+            break;
           }
-
-          if (!hasError) {
-            return; // Successful stream completion
-          }
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          errors.push({ provider: `${providerName} (attempt ${attempt})`, error: errorMsg });
-          console.error(`Provider ${providerName} stream failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}):`, errorMsg);
+          yield event;
         }
+
+        if (!hasError) {
+          return;
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`attempt ${attempt}: ${errorMsg}`);
+        
+        const shouldRetry = this.shouldRetry(err);
+        console.error(
+          `[LLM] Provider ${providerName} stream failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
+        );
+        
+        if (!shouldRetry && attempt > 1) break;
       }
     }
 
     yield {
       type: 'error',
-      error: `All providers failed:\n${errors.map(e => `  ${e.provider}: ${e.error}`).join('\n')}`,
+      error: `Provider '${providerName}' failed after ${LLMManager.MAX_RETRIES_PER_PROVIDER} attempts:\n${errors.map(e => `  ${e}`).join('\n')}`,
     };
   }
-
 }
