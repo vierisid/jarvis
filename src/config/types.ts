@@ -134,6 +134,8 @@ export type JarvisConfig = {
     port: number;
     data_dir: string;
     db_path: string;
+    /** Public dashboard URL used for websocket/CORS origin checks, e.g. https://jarvis.example.com */
+    public_url?: string;
     /** External domain for the brain (used in sidecar JWT tokens). Env: JARVIS_BRAIN_DOMAIN */
     brain_domain?: string;
   };
@@ -147,6 +149,8 @@ export type JarvisConfig = {
   llm: {
     primary: string;  // provider name
     fallback: string[];
+    /** If true, LLM calls are only triggered by explicit user messages (disables autonomous/proactive loops). */
+    user_driven_only?: boolean;
     anthropic?: { api_key: string; model?: string };
     openai?: { api_key: string; model?: string };
     groq?: { api_key: string; model?: string };
@@ -181,6 +185,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     port: 3142,
     data_dir: '~/.jarvis',
     db_path: '~/.jarvis/jarvis.db',
+    public_url: '',
   },
   channels: {
     telegram: { enabled: false, bot_token: '', allowed_users: [] },
@@ -240,7 +245,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       model: 'gemini-3-flash-preview',
     },
     ollama: {
-      base_url: 'http://localhost:11434',
+      base_url: 'http://ollama:11434',
       model: 'llama3',
     },
     openrouter: {

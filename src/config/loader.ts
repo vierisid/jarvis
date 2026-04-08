@@ -96,7 +96,10 @@ function applyEnvOverrides(config: JarvisConfig): void {
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  const defaultPath = join(homedir(), '.jarvis', 'config.yaml');
+  const path = configPath || (process.env.JARVIS_HOME
+    ? join(process.env.JARVIS_HOME, 'config.yaml')
+    : defaultPath);
 
   const file = Bun.file(path);
   const exists = await file.exists();
@@ -131,7 +134,10 @@ export async function saveConfig(
   config: JarvisConfig,
   configPath?: string
 ): Promise<void> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  const defaultPath = join(homedir(), '.jarvis', 'config.yaml');
+  const path = configPath || (process.env.JARVIS_HOME
+    ? join(process.env.JARVIS_HOME, 'config.yaml')
+    : defaultPath);
 
   try {
     const yaml = YAML.stringify(config, {
