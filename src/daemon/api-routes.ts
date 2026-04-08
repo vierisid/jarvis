@@ -150,6 +150,9 @@ async function syncActiveRoleAuthorityLevel(ctx: ApiContext, authorityLevel: num
   const primary = ctx.agentService.getOrchestrator().getPrimary();
   if (!primary?.agent?.role) return;
   primary.agent.role.authority_level = authorityLevel;
+  if (primary.agent.authority) {
+    primary.agent.authority.max_authority_level = authorityLevel;
+  }
 }
 
 /**

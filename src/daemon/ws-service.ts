@@ -183,9 +183,9 @@ export class WebSocketService implements Service {
     const greeting = `Hi ${name}, how can I help you today?`;
 
     this.wsServer.sendToClient(ws, {
-      type: 'notification',
+      type: 'chat',
       payload: {
-        source: 'assistant_message',
+        source: 'proactive',
         text: greeting,
       },
       timestamp: Date.now(),
@@ -193,7 +193,7 @@ export class WebSocketService implements Service {
 
     if (!this.ttsProvider) return;
 
-    const requestId = `welcome-${Date.now()}`;
+    const requestId = `welcome-${crypto.randomUUID()}`;
     this.wsServer.sendToClient(ws, {
       type: 'tts_start',
       payload: { requestId },
@@ -203,15 +203,20 @@ export class WebSocketService implements Service {
 
     try {
       for await (const chunk of this.ttsProvider.synthesizeStream(greeting)) {
+        if (!this.wsServer.getClients().has(ws)) {
+          break;
+        }
         this.wsServer.sendBinary(ws, chunk);
       }
     } finally {
-      this.wsServer.sendToClient(ws, {
-        type: 'tts_end',
-        payload: { requestId },
-        id: requestId,
-        timestamp: Date.now(),
-      });
+      if (this.wsServer.getClients().has(ws)) {
+        this.wsServer.sendToClient(ws, {
+          type: 'tts_end',
+          payload: { requestId },
+          id: requestId,
+          timestamp: Date.now(),
+        });
+      }
     }
   }
 
