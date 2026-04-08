@@ -80,8 +80,8 @@ describe('Default Config', () => {
   test('has all required fields', () => {
     expect(DEFAULT_CONFIG.daemon).toBeDefined();
     expect(DEFAULT_CONFIG.daemon.port).toBe(3142);
-    expect(DEFAULT_CONFIG.daemon.data_dir).toBe('D:/jarvis');
-    expect(DEFAULT_CONFIG.daemon.db_path).toBe('D:/jarvis/jarvis.db');
+    expect(DEFAULT_CONFIG.daemon.data_dir).toBe('~/.jarvis');
+    expect(DEFAULT_CONFIG.daemon.db_path).toBe('~/.jarvis/jarvis.db');
 
     expect(DEFAULT_CONFIG.llm).toBeDefined();
     expect(DEFAULT_CONFIG.llm.primary).toBe('anthropic');

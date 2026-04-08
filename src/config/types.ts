@@ -183,8 +183,8 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   daemon: {
     port: 3142,
-    data_dir: 'D:/jarvis',
-    db_path: 'D:/jarvis/jarvis.db',
+    data_dir: '~/.jarvis',
+    db_path: '~/.jarvis/jarvis.db',
     public_url: '',
   },
   channels: {
@@ -223,7 +223,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       full_hours: 1,
       key_moment_hours: 24,
     },
-    capture_dir: 'D:/jarvis/captures',
+    capture_dir: '~/.jarvis/captures',
   },
   llm: {
     primary: 'anthropic',
@@ -265,7 +265,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   sites: {
     enabled: true,
-    projects_dir: 'D:/jarvis/projects',
+    projects_dir: '~/.jarvis/projects',
     port_range_start: 4000,
     port_range_end: 4999,
     auto_commit: true,

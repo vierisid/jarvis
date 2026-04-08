@@ -2,7 +2,10 @@
  * Encrypted secrets store for JARVIS.
  *
  * Stores secrets in an AES-256-GCM encrypted file (~/.jarvis/.secrets.enc)
- * with a random key stored in ~/.jarvis/.secrets.key (chmod 600).
+ * with a random key stored in ~/.jarvis/.secrets.key.
+ *
+ * On Unix-like systems (Linux, macOS): file permissions are set to 0600 (read-write owner only).
+ * On Windows: NTFS ACLs are relied upon, and chmodSync is skipped gracefully.
  *
  * This avoids depending on OS keychain daemons (which are unreliable on WSL2).
  */
@@ -10,7 +13,7 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const KEY_PATH = join(JARVIS_DIR, '.secrets.key');
@@ -18,11 +21,28 @@ const SECRETS_PATH = join(JARVIS_DIR, '.secrets.enc');
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
+const IS_WINDOWS = platform() === 'win32';
 
 function ensureDir(): void {
   if (!existsSync(JARVIS_DIR)) {
     mkdirSync(JARVIS_DIR, { recursive: true });
   }
+}
+
+/**
+ * Set file permissions to 0600 (read-write owner only) on Unix systems.
+ * On Windows, NTFS ACLs are used instead; this function is a no-op.
+ */
+function setSecurePermissions(filePath: string): void {
+  if (!IS_WINDOWS) {
+    try {
+      chmodSync(filePath, 0o600);
+    } catch (err) {
+      // Warn but don't fail — file is still encrypted
+      console.warn(`[Keychain] Warning: Failed to set secure permissions on ${filePath}:`, err instanceof Error ? err.message : String(err));
+    }
+  }
+  // Windows: Skip chmod, rely on NTFS ACLs (file is in user home directory, inherits secure permissions)
 }
 
 function getOrCreateKey(): Buffer {
@@ -32,8 +52,8 @@ function getOrCreateKey(): Buffer {
     return Buffer.from(hex, 'hex');
   }
   const key = randomBytes(32);
-  writeFileSync(KEY_PATH, key.toString('hex'), { mode: 0o600 });
-  try { chmodSync(KEY_PATH, 0o600); } catch {}
+  writeFileSync(KEY_PATH, key.toString('hex'), { mode: IS_WINDOWS ? undefined : 0o600 });
+  setSecurePermissions(KEY_PATH);
   return key;
 }
 
@@ -72,8 +92,8 @@ function saveSecrets(secrets: Record<string, string>): void {
   const key = getOrCreateKey();
   const json = JSON.stringify(secrets);
   const encrypted = encrypt(key, json);
-  writeFileSync(SECRETS_PATH, encrypted, { mode: 0o600 });
-  try { chmodSync(SECRETS_PATH, 0o600); } catch {}
+  writeFileSync(SECRETS_PATH, encrypted, { mode: IS_WINDOWS ? undefined : 0o600 });
+  setSecurePermissions(SECRETS_PATH);
 }
 
 export function getSecret(name: string): string | null {

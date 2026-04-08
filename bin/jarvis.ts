@@ -17,16 +17,12 @@ import { readFileSync, existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
+import { getJarvisVersion, runJarvisUpdate } from '../src/cli/update.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
 function getVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf-8'));
-    return pkg.version || '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+  return getJarvisVersion();
 }
 
 function printHelp(): void {
@@ -53,6 +49,8 @@ ${c.bold('Start options:')}
   --port <N>        Override daemon port (default: 3142)
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
+  --data-dir <path> Override data directory (default: ~/.jarvis)
+  --no-local-tools  Disable local tool execution (Docker/headless mode)
 
 ${c.bold('Logs options:')}
   -f, --follow      Follow log output (like tail -f)
@@ -73,6 +71,7 @@ ${c.bold('Examples:')}
 async function cmdStart(args: string[]): Promise<void> {
   const detach = args.includes('--detach') || args.includes('-d');
   const noOpen = args.includes('--no-open');
+  const noLocalTools = args.includes('--no-local-tools');
 
   // Parse --port
   let port: number | undefined;
@@ -83,6 +82,13 @@ async function cmdStart(args: string[]): Promise<void> {
       console.error(c.red('Error: --port requires a number between 1 and 65535'));
       process.exit(1);
     }
+  }
+
+  // Parse --data-dir
+  let dataDir: string | undefined;
+  const dataDirIdx = args.indexOf('--data-dir');
+  if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
+    dataDir = args[dataDirIdx + 1]!;
   }
 
   if (!detach) {
@@ -97,7 +103,7 @@ async function cmdStart(args: string[]): Promise<void> {
     process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
-    await startDaemon({ port, ...(port ? {} : {}) });
+    await startDaemon({ port, dataDir, noLocalTools });
 
     if (!noOpen) {
       openDashboard(port ?? 3142);
@@ -267,79 +273,13 @@ function cmdLogs(args: string[]): void {
 }
 
 async function cmdUpdate(): Promise<void> {
-  console.log(c.cyan('Checking for updates...\n'));
-
-  // Get current version
-  const currentVersion = getVersion();
-  console.log(`  Current version: ${c.bold(currentVersion)}`);
-
-  // Check if daemon is running (we'll restart it after update)
-  const wasRunning = isLocked();
-
-  // Stop daemon if running
-  if (wasRunning) {
-    console.log(c.dim('  Stopping daemon before update...'));
-    try {
-      process.kill(wasRunning, 'SIGTERM');
-      releaseLock();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch {
-      releaseLock();
-    }
-  }
-
-  // Update via git pull + bun install (not npm — package is not published)
-  console.log('');
-  const gitPull = Bun.spawnSync(['git', 'pull', '--ff-only'], {
-    cwd: PACKAGE_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
-  });
-
-  if (gitPull.exitCode !== 0) {
-    const stderr = gitPull.stderr.toString();
-    // If not a git repo, try the install dir
-    const installDir = join(require('node:os').homedir(), '.jarvis', 'daemon');
-    const gitPull2 = Bun.spawnSync(['git', 'pull', '--ff-only'], {
-      cwd: installDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-    });
-
-    if (gitPull2.exitCode !== 0) {
-      console.log(c.red('✗ Update failed (git pull):'));
-      console.log(c.dim(`  ${gitPull2.stderr.toString().trim() || stderr.trim()}`));
-      if (wasRunning) {
-        console.log(c.dim('\n  Restarting daemon...'));
-        await cmdStart(['--no-open']);
-      }
-      process.exit(1);
-    }
-  }
-
-  // Reinstall dependencies
-  const bunInstall = Bun.spawnSync(['bun', 'install'], {
-    cwd: PACKAGE_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
-  });
-
-  if (bunInstall.exitCode !== 0) {
-    console.log(c.yellow('! Dependencies may need manual refresh: bun install'));
-  }
-
-  // Get new version
-  const newVersion = getVersion();
-  if (newVersion === currentVersion) {
-    console.log(c.green(`✓ Already on the latest version (${currentVersion})`));
-  } else {
-    console.log(c.green(`✓ Updated: ${currentVersion} → ${newVersion}`));
-  }
-
-  // Restart daemon if it was running
-  if (wasRunning) {
-    console.log(c.dim('\nRestarting daemon...'));
-    await cmdStart(['--no-open']);
+  try {
+    await runJarvisUpdate();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(c.red('✗ Update failed:'));
+    console.log(c.dim(`  ${message}`));
+    process.exit(1);
   }
 }
 
@@ -348,18 +288,23 @@ function openDashboard(port: number): void {
   try {
     const platform = process.platform;
     if (platform === 'darwin') {
+      // macOS: use 'open' command
       Bun.spawn(['open', url], { stdio: ['ignore', 'ignore', 'ignore'] });
+    } else if (platform === 'win32') {
+      // Windows: use 'start' command (CMD.exe)
+      Bun.spawn(['cmd', '/c', `start ${url}`], { stdio: ['ignore', 'ignore', 'ignore'] });
     } else {
-      // Check WSL first
+      // Linux: check for WSL first, then fall back to xdg-open
       const { readFileSync } = require('node:fs');
       try {
         const version = readFileSync('/proc/version', 'utf-8');
         if (version.toLowerCase().includes('microsoft')) {
+          // WSL: use wslview to open in Windows browser
           Bun.spawn(['wslview', url], { stdio: ['ignore', 'ignore', 'ignore'] });
           return;
         }
       } catch {}
-      // Regular Linux
+      // Regular Linux: use xdg-open
       Bun.spawn(['xdg-open', url], { stdio: ['ignore', 'ignore', 'ignore'] });
     }
   } catch {
