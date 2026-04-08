@@ -20,6 +20,7 @@ import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } fr
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -42,6 +43,7 @@ export class WebSocketService implements Service {
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
+  private welcomeUserName: string | null = null;
 
   constructor(port: number, agentService: AgentService) {
     this.port = port;
@@ -91,6 +93,11 @@ export class WebSocketService implements Service {
     console.log('[WSService] TTS provider set');
   }
 
+  setWelcomeUserName(name?: string): void {
+    const trimmed = (name ?? '').trim();
+    this.welcomeUserName = trimmed.length > 0 ? trimmed : null;
+  }
+
   /**
    * Set the STT provider for voice input transcription.
    */
@@ -126,6 +133,10 @@ export class WebSocketService implements Service {
     this.wsServer.setPublicDir(dir);
   }
 
+  setCorsOrigin(origin: string): void {
+    this.wsServer.setCorsOrigin(origin);
+  }
+
   setAuthToken(token: string): void {
     this.wsServer.setAuthToken(token);
   }
@@ -138,8 +149,11 @@ export class WebSocketService implements Service {
       this.wsServer.setHandler({
         onMessage: (msg, ws) => this.routeMessage(msg, ws),
         onBinaryMessage: (data, ws) => this.handleVoiceAudio(data, ws),
-        onConnect: (_ws) => {
+        onConnect: (ws) => {
           console.log('[WSService] Client connected');
+          this.greetClientOnConnect(ws).catch((err) => {
+            console.error('[WSService] Client greeting failed:', err);
+          });
         },
         onDisconnect: (ws) => {
           // Clean up any pending voice session for this client
@@ -167,6 +181,43 @@ export class WebSocketService implements Service {
 
   status(): ServiceStatus {
     return this._status;
+  }
+
+  private async greetClientOnConnect(ws: ServerWebSocket<unknown>): Promise<void> {
+    const name = this.welcomeUserName ?? 'there';
+    const greeting = `Hi ${name}, how can I help you today?`;
+
+    this.wsServer.sendToClient(ws, {
+      type: 'notification',
+      payload: {
+        source: 'assistant_message',
+        text: greeting,
+      },
+      timestamp: Date.now(),
+    });
+
+    if (!this.ttsProvider) return;
+
+    const requestId = `welcome-${Date.now()}`;
+    this.wsServer.sendToClient(ws, {
+      type: 'tts_start',
+      payload: { requestId },
+      id: requestId,
+      timestamp: Date.now(),
+    });
+
+    try {
+      for await (const chunk of this.ttsProvider.synthesizeStream(greeting)) {
+        this.wsServer.sendBinary(ws, chunk);
+      }
+    } finally {
+      this.wsServer.sendToClient(ws, {
+        type: 'tts_end',
+        payload: { requestId },
+        id: requestId,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   /**
@@ -230,6 +281,19 @@ export class WebSocketService implements Service {
         action,
         task,
       },
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  private broadcastAssistantMessage(text: string, requestId?: string): void {
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'assistant_message',
+        text,
+      },
+      id: requestId,
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
@@ -511,9 +575,20 @@ export class WebSocketService implements Service {
    * Auto-creates a task for non-trivial messages so the task board tracks agent work.
    */
   private async handleChat(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
-    const payload = msg.payload as { text?: string; channel?: string; projectId?: string };
+    const payload = msg.payload as {
+      text?: string;
+      channel?: string;
+      projectId?: string;
+      fast_mode?: boolean;
+      chat_mode?: 'off' | 'fast' | 'auto';
+      llm_provider_override?: string;
+      llm_model_override?: string;
+    };
     const text = payload?.text;
     const projectId = payload?.projectId ?? null;
+    const chatMode = payload?.chat_mode ?? (payload?.fast_mode ? 'fast' : 'off');
+    const llmProviderOverride = payload?.llm_provider_override ?? null;
+    const llmModelOverride = payload?.llm_model_override ?? null;
 
     if (!text) {
       return {
@@ -599,6 +674,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     // Persist user message
     try {
       const conversation = getOrCreateConversation(channel);
+      recordUserProfileTurn(text);
       addMessage(conversation.id, { role: 'user', content: text });
 
       // Set default cwd for general tools (run_command, read_file, etc.)
@@ -608,7 +684,45 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         setDefaultCwd(projectPath);
       }
 
-      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext);
+      let streamResult: {
+        stream: AsyncIterable<any>;
+        onComplete: (fullText: string) => Promise<void>;
+      };
+
+      if (chatMode === 'fast') {
+        streamResult = this.agentService.streamFastMessage(text, channel);
+      } else if (chatMode === 'auto') {
+        const decision = await this.agentService.handleFastModeTurn(text, channel);
+        if (decision.kind === 'reply') {
+          const replyText = decision.response;
+          streamResult = {
+            stream: (async function* () {
+              if (replyText) {
+                yield { type: 'text', text: replyText };
+              }
+              yield {
+                type: 'done',
+                response: {
+                  content: replyText,
+                  tool_calls: [],
+                  usage: { input_tokens: 0, output_tokens: 0 },
+                  model: 'auto-fast-planner',
+                  finish_reason: 'stop',
+                },
+              };
+            })(),
+            onComplete: async () => {
+              await this.agentService.finalizeFastModeReply(text, replyText, channel);
+            },
+          };
+        } else {
+          streamResult = this.agentService.streamFastApprovedAction(decision.request, channel);
+        }
+      } else {
+        streamResult = this.agentService.streamMessage(text, channel, siteContext, llmProviderOverride, llmModelOverride);
+      }
+
+      const { stream, onComplete } = streamResult;
 
       // Set up streaming TTS: speak sentences as they arrive
       const ttsActive = !!(this.ttsProvider && ws);
@@ -693,6 +807,12 @@ If the user wants to create a new project, tell them to use the Site Builder pag
 
       // Persist assistant response
       addMessage(conversation.id, { role: 'assistant', content: fullText });
+
+      const followupPrompt = maybeCreateUserProfileFollowupPrompt();
+      if (followupPrompt) {
+        this.broadcastAssistantMessage(followupPrompt);
+        addMessage(conversation.id, { role: 'assistant', content: followupPrompt });
+      }
 
       // Mark task as completed
       if (taskCommitment) {

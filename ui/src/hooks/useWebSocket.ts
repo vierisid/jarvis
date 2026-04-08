@@ -112,6 +112,14 @@ export type SiteEvent = {
   timestamp: number;
 };
 
+export type ChatSendOptions = {
+  projectId?: string;
+  chatMode?: "off" | "fast" | "auto";
+  fastMode?: boolean;
+  llmProvider?: string;  // Override primary provider for this message
+  llmModel?: string;     // Override model for this message
+};
+
 export function useWebSocket() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -356,7 +364,14 @@ export function useWebSocket() {
       const siteEvent = msg.payload as SiteEvent;
       setSiteEvents((prev) => [...prev.slice(-100), siteEvent]);
     } else if (msg.type === "notification") {
-      const payload = msg.payload as { source?: string; action?: string; task?: TaskEvent["task"]; item?: ContentEvent["item"]; event?: any };
+      const payload = msg.payload as {
+        source?: string;
+        action?: string;
+        task?: TaskEvent["task"];
+        item?: ContentEvent["item"];
+        event?: any;
+        text?: string;
+      };
       if (payload.source === "task_update" && payload.task && payload.action) {
         const event: TaskEvent = {
           action: payload.action as TaskEvent["action"],
@@ -379,6 +394,16 @@ export function useWebSocket() {
           // so no need to duplicate here — just log for debugging
           console.log("[WS] Awareness suggestion:", awarenessEvent.data.title);
         }
+      } else if (payload.source === "assistant_message" && payload.text) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: msg.id ?? crypto.randomUUID(),
+            role: "assistant",
+            content: String(payload.text),
+            timestamp: msg.timestamp,
+          },
+        ]);
       }
     } else if (msg.type === "error") {
       voiceCallbacksRef.current?.onError(msg.payload?.message);
@@ -408,7 +433,7 @@ export function useWebSocket() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, options?: { projectId?: string; fastMode?: boolean }) => {
+    (text: string, options?: ChatSendOptions) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       const id = crypto.randomUUID();
@@ -430,8 +455,11 @@ export function useWebSocket() {
         type: "chat",
         payload: {
           text,
-          ...(options?.projectId ? { projectId: options.projectId } : {}),
+          ...(options?.chatMode ? { chat_mode: options.chatMode } : {}),
           ...(options?.fastMode ? { fast_mode: true } : {}),
+          ...(options?.projectId ? { projectId: options.projectId } : {}),
+          ...(options?.llmProvider ? { llm_provider_override: options.llmProvider } : {}),
+          ...(options?.llmModel ? { llm_model_override: options.llmModel } : {}),
         },
         id,
         timestamp: Date.now(),

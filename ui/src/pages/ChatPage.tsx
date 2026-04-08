@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useState } from "react";
-import type { ChatMessage } from "../hooks/useWebSocket";
+import React, { useEffect } from "react";
+import type { ChatMessage, ChatSendOptions } from "../hooks/useWebSocket";
 import type { UseVoiceReturn, VoiceState } from "../hooks/useVoice";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatInput } from "../components/chat/ChatInput";
@@ -8,14 +8,25 @@ import "../styles/chat.css";
 type ChatPageProps = {
   messages: ChatMessage[];
   isConnected: boolean;
-  sendMessage: (text: string, opts?: { fastMode?: boolean }) => void;
+  sendMessage: (text: string, options?: ChatSendOptions) => void;
   voice?: UseVoiceReturn;
 };
 
 type ChatMode = "off" | "fast" | "auto";
 
 export default function ChatPage({ messages, isConnected, sendMessage, voice }: ChatPageProps) {
-  const [chatMode, setChatMode] = useState<ChatMode>(() => {
+  // Available LLM providers for the dropdown
+  const providers = ["anthropic", "openai", "groq", "gemini", "ollama", "openrouter"];
+  const models: Record<string, string[]> = {
+    anthropic: ["claude-opus", "claude-sonnet-4", "claude-3-5-sonnet"],
+    openai: ["gpt-4o", "gpt-4-turbo", "gpt-4"],
+    groq: ["llama-3.3-70b", "mixtral-8x7b"],
+    gemini: ["gemini-2-flash", "gemini-pro"],
+    ollama: ["llama2", "llama3", "mistral"],
+    openrouter: ["anthropic/claude-3-5-sonnet", "openai/gpt-4-turbo"],
+  };
+
+  const [chatMode, setChatMode] = React.useState<ChatMode>(() => {
     try {
       const saved = localStorage.getItem("jarvis.chatMode");
       if (saved === "fast" || saved === "auto" || saved === "off") return saved;
@@ -25,6 +36,42 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
     }
   });
 
+  const [selectedProvider, setSelectedProvider] = React.useState<string>(() => {
+    try {
+      return localStorage.getItem("jarvis.selectedProvider") || "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [selectedModel, setSelectedModel] = React.useState<string>(() => {
+    try {
+      const savedProvider = localStorage.getItem("jarvis.selectedProvider") || "";
+      const savedPreset = localStorage.getItem("jarvis.selectedModelPreset");
+      const legacySaved = localStorage.getItem("jarvis.selectedModel");
+      const candidate = savedPreset || legacySaved || "";
+      const providerModels = models[savedProvider] ?? [];
+      return providerModels.includes(candidate) ? candidate : "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [customModel, setCustomModel] = React.useState<string>(() => {
+    try {
+      const savedProvider = localStorage.getItem("jarvis.selectedProvider") || "";
+      const savedCustom = localStorage.getItem("jarvis.selectedModelCustom");
+      const legacySaved = localStorage.getItem("jarvis.selectedModel");
+      const candidate = savedCustom || legacySaved || "";
+      const providerModels = models[savedProvider] ?? [];
+      return candidate && !providerModels.includes(candidate) ? candidate : "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [llmPickerExpanded, setLlmPickerExpanded] = React.useState<boolean>(false);
+
   useEffect(() => {
     try {
       localStorage.setItem("jarvis.chatMode", chatMode);
@@ -32,6 +79,30 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
       // ignore storage failures
     }
   }, [chatMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis.selectedProvider", selectedProvider);
+    } catch {
+      // ignore storage failures
+    }
+  }, [selectedProvider]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis.selectedModelPreset", selectedModel);
+    } catch {
+      // ignore storage failures
+    }
+  }, [selectedModel]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis.selectedModelCustom", customModel);
+    } catch {
+      // ignore storage failures
+    }
+  }, [customModel]);
 
   const voiceStatus = voice
     ? voice.voiceState === "speaking" || voice.ttsAudioPlaying
@@ -43,8 +114,8 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
           : null
     : null;
 
-  const chatModeLabel = chatMode === "fast" ? "Fast Chat" : chatMode === "auto" ? "Auto Chat" : "Chat";
-  const chatModeState = chatMode === "fast" ? "No tools" : chatMode === "auto" ? "Tools on" : "Off";
+  const chatModeLabel = chatMode === "fast" ? "Fast Chat" : chatMode === "auto" ? "Auto Chat" : "Standard Chat";
+  const chatModeState = chatMode === "fast" ? "No tools" : chatMode === "auto" ? "Smart route" : "Tools on";
   const chatModeClass = chatMode === "fast"
     ? "chat-fast-toggle-fast"
     : chatMode === "auto"
@@ -55,14 +126,52 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
     setChatMode((prev) => (prev === "off" ? "fast" : prev === "fast" ? "auto" : "off"));
   };
 
+  const providerModels = selectedProvider ? (models[selectedProvider] ?? []) : [];
+  const effectiveModel = customModel.trim() || selectedModel;
+  const llmSummary = selectedProvider
+    ? `${selectedProvider}${effectiveModel ? ` / ${effectiveModel}` : " / auto"}`
+    : "auto";
+
+  const handleProviderChange = (provider: string) => {
+    setSelectedProvider(provider);
+    if (!provider) {
+      setSelectedModel("");
+      setCustomModel("");
+      return;
+    }
+
+    const nextModels = models[provider] ?? [];
+    if (!nextModels.includes(selectedModel)) {
+      setSelectedModel("");
+    }
+  };
+
+  const isLikelyQuestion = (text: string) => {
+    const normalized = text.trim();
+    if (!normalized) return false;
+    if (/[?]["')\]]*$/.test(normalized)) return true;
+    return /\b(can|could|would|will|should|do|does|did|are|is|want|need|which|what|when|where|why|how)\b/i.test(normalized)
+      && /\b(you|your)\b/i.test(normalized);
+  };
+
   const prevVoiceStateRef = React.useRef<VoiceState>("idle");
+  const lastAutoFollowupRef = React.useRef<string | null>(null);
   useEffect(() => {
     if (!voice) return;
     const prev = prevVoiceStateRef.current;
     if (prev === "speaking" && voice.voiceState === "idle") {
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-      if (lastAssistant?.content.trim().endsWith("?")) {
-        voice.startRecording();
+      if (lastAssistant && isLikelyQuestion(lastAssistant.content) && lastAutoFollowupRef.current !== lastAssistant.id) {
+        lastAutoFollowupRef.current = lastAssistant.id;
+        // Retry in short bursts because browser mic/wake recognizer handoff can race right after TTS ends.
+        const retryDelays = [120, 420, 920];
+        retryDelays.forEach((delay) => {
+          window.setTimeout(() => {
+            if (!voice.ttsAudioPlaying && voice.voiceState === "idle") {
+              voice.startRecording();
+            }
+          }, delay);
+        });
       }
     }
     prevVoiceStateRef.current = voice.voiceState;
@@ -118,8 +227,7 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
       <button
         className={`chat-fast-toggle ${chatMode !== "off" ? "chat-fast-toggle-active" : ""} ${chatModeClass}`}
         type="button"
-        role="switch"
-        aria-checked={chatMode !== "off"}
+        aria-label={`Chat mode: ${chatModeLabel}. Click to cycle mode.`}
         onClick={cycleChatMode}
         title={`${chatModeLabel} mode`}
       >
@@ -132,8 +240,79 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
         </span>
       </button>
 
+      <div className={`chat-llm-selector ${llmPickerExpanded ? "chat-llm-selector-expanded" : ""}`}>
+        <button
+          type="button"
+          className="chat-llm-toggle"
+          onClick={() => setLlmPickerExpanded((prev) => !prev)}
+          aria-expanded={llmPickerExpanded}
+          title="LLM routing"
+        >
+          <span className="chat-llm-toggle-label">Agent</span>
+          <span className="chat-llm-toggle-value">{llmSummary}</span>
+          <span className="chat-llm-toggle-caret" aria-hidden="true">▾</span>
+        </button>
+
+        {llmPickerExpanded && (
+          <div className="chat-llm-popover">
+            <div className="llm-selector-group">
+              <label htmlFor="provider-select" className="llm-selector-label">Provider</label>
+              <select
+                id="provider-select"
+                value={selectedProvider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="llm-selector-input"
+              >
+                <option value="">Auto</option>
+                {providers.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="llm-selector-group">
+              <label htmlFor="model-select" className="llm-selector-label">Preset model</label>
+              <select
+                id="model-select"
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="llm-selector-input"
+                disabled={!selectedProvider}
+              >
+                <option value="">Auto</option>
+                {providerModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="llm-selector-group llm-selector-group-wide">
+              <label htmlFor="custom-model" className="llm-selector-label">Custom model</label>
+              <input
+                id="custom-model"
+                type="text"
+                className="llm-selector-input"
+                placeholder="optional: provider-specific model id"
+                value={customModel}
+                onChange={(e) => setCustomModel(e.target.value)}
+                disabled={!selectedProvider}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
       <ChatInput
-        onSend={(text) => sendMessage(text, { fastMode: chatMode === "fast" })}
+        onSend={(text) => sendMessage(text, { 
+          chatMode,
+          fastMode: chatMode === "fast",
+          llmProvider: selectedProvider || undefined,
+          llmModel: effectiveModel || undefined,
+        })}
         disabled={!isConnected}
         fastMode={chatMode === "fast"}
         voice={voice ? {
