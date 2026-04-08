@@ -93,6 +93,8 @@ import {
   getCapturesInRange,
 } from '../vault/awareness.ts';
 import type { SuggestionType } from '../awareness/types.ts';
+import { getUpdateStatus, startUpdateJob } from './update-manager.ts';
+import { getAutostartName, isAutostartInstalled } from '../cli/autostart.ts';
 
 export type ApiContext = {
   healthMonitor: HealthMonitor;
@@ -154,6 +156,39 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
+    },
+
+    // --- System: Update & Service ---
+    '/api/system/update': {
+      GET: async (req: Request) => {
+        const refresh = getSearchParams(req).get('refresh') === '1';
+        const status = await getUpdateStatus(refresh);
+        return json(status);
+      },
+      POST: async () => {
+        const result = await startUpdateJob();
+        return json(result, result.ok ? 200 : 409);
+      },
+    },
+
+    '/api/system/autostart': {
+      GET: () => {
+        const keepaliveSupported = process.platform === 'darwin' || process.platform === 'linux';
+        const installed = keepaliveSupported ? isAutostartInstalled() : false;
+        return json({
+          platform: process.platform,
+          manager: keepaliveSupported ? getAutostartName() : 'unsupported',
+          installed,
+          keepalive_supported: keepaliveSupported,
+          restart_supported: false,
+        });
+      },
+    },
+
+    '/api/system/autostart/restart': {
+      POST: () => {
+        return json({ ok: false, message: 'Service restart is not available from the dashboard on this branch yet.' }, 501);
+      },
     },
 
     // --- Vault: Entities ---
