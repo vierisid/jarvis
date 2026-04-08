@@ -218,6 +218,7 @@ $exe = '%s'
 $argLine = '%s'
 
 $p = $null
+$launchedViaShell = $false
 $errors = New-Object System.Collections.Generic.List[string]
 
 function Try-Launch([string]$filePath, [string]$argumentLine) {
@@ -230,7 +231,7 @@ function Try-Launch([string]$filePath, [string]$argumentLine) {
 try {
 	$p = Try-Launch $exe $argLine
 } catch {
-	$errors.Add($_.Exception.Message)
+	[void]$errors.Add($_.Exception.Message)
 }
 
 $normalized = [System.IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()
@@ -239,27 +240,31 @@ if (-not $p -and $normalized -eq 'spotify') {
 	try {
 		$p = Try-Launch 'spotify:' $argLine
 	} catch {
-		$errors.Add($_.Exception.Message)
+		[void]$errors.Add($_.Exception.Message)
 	}
 }
 
-if (-not $p -and $exe -match '^[a-zA-Z0-9._-]+$') {
+if (-not $p -and $exe -match '^[a-zA-Z0-9._-]+$' -and [string]::IsNullOrWhiteSpace($argLine)) {
 	try {
 		$cmdArgs = '/c start "" ' + $exe
-		if (-not [string]::IsNullOrWhiteSpace($argLine)) {
-			$cmdArgs += ' ' + $argLine
-		}
-		$p = Start-Process -FilePath 'cmd.exe' -ArgumentList $cmdArgs -PassThru -ErrorAction Stop
+		Start-Process -FilePath 'cmd.exe' -ArgumentList $cmdArgs -ErrorAction Stop | Out-Null
+		$launchedViaShell = $true
 	} catch {
-		$errors.Add($_.Exception.Message)
+		[void]$errors.Add($_.Exception.Message)
 	}
 }
 
 if (-not $p) {
-	throw ('Unable to launch app "' + $exe + '". Attempts: ' + ($errors -join ' | '))
+	if (-not $launchedViaShell) {
+		throw ('Unable to launch app "' + $exe + '". Attempts: ' + ($errors -join ' | '))
+	}
 }
 
-@{ success=$true; pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
+if ($launchedViaShell) {
+	@{ success=$true; pid=$null; name=$exe; shell_fallback=$true } | ConvertTo-Json -Compress
+} else {
+	@{ success=$true; pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
+}
 `, escaped, escapedArgs)
 
 	out, err := runPS(script, 10*time.Second)

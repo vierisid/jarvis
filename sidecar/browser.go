@@ -126,14 +126,23 @@ type cdpTarget struct {
 
 func fetchCDPTargets(ctx context.Context, port int) ([]cdpTarget, error) {
 	url := fmt.Sprintf("http://localhost:%d/json", port)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build CDP targets request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read CDP targets body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("CDP targets returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var targets []cdpTarget
 	if err := json.Unmarshal(body, &targets); err != nil {
 		return nil, fmt.Errorf("parse CDP targets: %w", err)
@@ -143,14 +152,23 @@ func fetchCDPTargets(ctx context.Context, port int) ([]cdpTarget, error) {
 
 func createCDPTarget(ctx context.Context, port int, pageURL string) (string, error) {
 	createURL := fmt.Sprintf("http://localhost:%d/json/new?%s", port, url.QueryEscape(pageURL))
-	req, _ := http.NewRequestWithContext(ctx, "GET", createURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", createURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build CDP target create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read created CDP target body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("create CDP target returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var target cdpTarget
 	if err := json.Unmarshal(body, &target); err != nil {
 		return "", fmt.Errorf("parse created CDP target: %w", err)
