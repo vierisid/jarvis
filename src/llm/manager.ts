@@ -190,7 +190,7 @@ export class LLMManager {
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       try {
         let hasError = false;
-        for await (const event of this.withTimeout(provider.stream(messages, options), providerName)) {
+        for await (const event of provider.stream(messages, options)) {
           if (event.type === 'error') {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
