@@ -34,6 +34,7 @@ const SNAPSHOT_SCRIPT = `(() => {
     'a', 'button', 'input', 'select', 'textarea', 'summary',
     '[role="button"]', '[role="link"]', '[role="tab"]', '[role="textbox"]',
     '[role="combobox"]', '[role="menuitem"]', '[role="option"]',
+    '[role="row"]', '[role="gridcell"]',
     '[onclick]', '[contenteditable="true"]', '[tabindex="0"]',
     '[data-testid]'
   ].join(', ');
@@ -53,11 +54,14 @@ const SNAPSHOT_SCRIPT = `(() => {
     const tag = el.tagName.toLowerCase();
     const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 100);
     const attrs = {};
-    for (const a of ['href', 'name', 'placeholder', 'type', 'value', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
+    for (const a of ['href', 'name', 'placeholder', 'type', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
       const v = el.getAttribute(a);
       if (v) attrs[a] = v.slice(0, 200);
     }
+    // Capture live value (JS property) for inputs — getAttribute('value') returns the HTML default
+    if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
     els.push({
+      _el: el,
       tag,
       text,
       attrs,
@@ -66,8 +70,9 @@ const SNAPSHOT_SCRIPT = `(() => {
     });
   });
 
-  // Assign sequential IDs
-  els.forEach((el, i) => { el.id = i + 1; });
+  // Assign sequential IDs and store DOM refs for later direct focus
+  window.__jarvis_elements = els.map(e => e._el);
+  els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
   // Get visible text, clean up whitespace
   let bodyText = document.body.innerText || '';
@@ -269,33 +274,62 @@ export class BrowserController {
   /**
    * Type text into an input element by its snapshot ID.
    * Optionally press Enter after typing.
+   *
+   * Uses DOM focus + targeted value clearing instead of coordinate-click + Ctrl+A.
+   * This prevents misclicks from wiping the wrong field (e.g., typing subject
+   * text into the To field in Gmail's compact compose window).
    */
   async type(elementId: number, text: string, submit: boolean = false): Promise<string> {
     await this.ensureConnected();
 
-    // Click to focus the element
-    const clickResult = await this.click(elementId);
-    if (clickResult.startsWith('Error:')) return clickResult;
+    const coords = this.elementCoords.get(elementId);
+    if (!coords) {
+      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+    }
 
-    await Bun.sleep(200);
+    // Focus the element via DOM (more reliable than coordinate click for typing)
+    const focusResult = await this.cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = window.__jarvis_elements && window.__jarvis_elements[${elementId - 1}];
+        if (!el) return 'not_found';
+        el.focus();
+        // Clear existing content based on element type
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+          el.value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
+          // For contenteditable divs, select all within this element only
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          // Delete the selection
+          document.execCommand('delete', false, null);
+        }
+        return 'ok';
+      })()`,
+      returnByValue: true,
+    });
 
-    // Clear existing content
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      key: 'a',
-      code: 'KeyA',
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      modifiers: 2, // Ctrl
-    });
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: 'a',
-      code: 'KeyA',
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      modifiers: 2,
-    });
+    const focusStatus = focusResult?.result?.value;
+    if (focusStatus === 'not_found') {
+      // Fallback: coordinate-based click (element refs may have been lost on navigation)
+      const clickResult = await this.click(elementId);
+      if (clickResult.startsWith('Error:')) return clickResult;
+      await Bun.sleep(200);
+      // Use Ctrl+A as fallback clearing (old behavior)
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type: 'keyDown', key: 'a', code: 'KeyA',
+        windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
+      });
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type: 'keyUp', key: 'a', code: 'KeyA',
+        windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
+      });
+    } else {
+      await Bun.sleep(200);
+    }
 
     // Insert text (like paste — much more reliable than char-by-char)
     await this.cdp.send('Input.insertText', { text });
@@ -357,6 +391,41 @@ export class BrowserController {
     await Bun.sleep(500); // Wait for lazy-loaded content
 
     return `Scrolled ${direction} by ${scrollAmount}px`;
+  }
+
+  /**
+   * Upload a file to a <input type="file"> element on the page.
+   * Uses CDP DOM.setFileInputFiles to bypass the native file picker.
+   * If no selector is provided, finds the first visible file input.
+   */
+  async uploadFile(filePath: string, selector?: string): Promise<string> {
+    await this.ensureConnected();
+
+    // Resolve the file input element
+    const query = selector || 'input[type="file"]';
+    const doc = await this.cdp.send('DOM.getDocument');
+    const node = await this.cdp.send('DOM.querySelector', {
+      nodeId: doc.root.nodeId,
+      selector: query,
+    });
+
+    if (!node.nodeId) {
+      return `Error: No file input found matching "${query}". Click the upload/attach button first to trigger the file input.`;
+    }
+
+    // Set the file on the input element via CDP
+    try {
+      await this.cdp.send('DOM.setFileInputFiles', {
+        files: [filePath],
+        nodeId: node.nodeId,
+      });
+    } catch (err) {
+      return `Error setting file: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    await Bun.sleep(1000); // Wait for the app to process the file
+
+    return `Uploaded file "${filePath}" to file input`;
   }
 
   /**

@@ -52,8 +52,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const voiceStateRef = useRef<VoiceState>("idle");
   const wakeEngineRef = useRef<any>(null);
   const wakeWordEnabledRef = useRef(wakeWordEnabled);
+  const speechWakeRef = useRef<any>(null);
+  const speechWakeActiveRef = useRef(false);
+  const speechWakeRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRecordingRef = useRef<(autoStop?: boolean) => void>(() => {});
   const autoStopRef = useRef(false);
+  const cancelTTSRef = useRef<() => void>(() => {});
 
   // Keep refs in sync with state for use inside callbacks
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
@@ -183,13 +187,109 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     }
   }, []);
 
+  const stopSpeechWakeRecognizer = useCallback(() => {
+    if (speechWakeRestartTimerRef.current) {
+      clearTimeout(speechWakeRestartTimerRef.current);
+      speechWakeRestartTimerRef.current = null;
+    }
+    speechWakeActiveRef.current = false;
+    if (speechWakeRef.current) {
+      // Keep handlers attached so the recognizer can be restarted reliably.
+      try { speechWakeRef.current.stop(); } catch {}
+    }
+  }, []);
+
+  const startSpeechWakeRecognizer = useCallback((): boolean => {
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      console.warn("[Voice] SpeechRecognition fallback unavailable in this browser");
+      return false;
+    }
+
+    if (!speechWakeRef.current) {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event: any) => {
+        if (voiceStateRef.current === "recording" || voiceStateRef.current === "processing") return;
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = String(event.results[i]?.[0]?.transcript || "").toLowerCase().trim();
+          if (!transcript) continue;
+          if (transcript.includes("hey jarvis") || transcript === "jarvis" || transcript.includes(" jarvis")) {
+            console.log(`[Voice] Speech wake phrase detected: "${transcript}"`);
+            if (voiceStateRef.current === "speaking") {
+              cancelTTSRef.current();
+              setTimeout(() => {
+                startRecordingRef.current(true);
+              }, 200);
+            } else {
+              setVoiceState("wake_detected");
+              setTimeout(() => {
+                if (voiceStateRef.current === "wake_detected") {
+                  startRecordingRef.current(true);
+                }
+              }, 200);
+            }
+            break;
+          }
+        }
+      };
+
+      recognition.onerror = (err: any) => {
+        console.warn("[Voice] Speech wake recognizer error:", err);
+      };
+
+      recognition.onend = () => {
+        speechWakeActiveRef.current = false;
+        if (!wakeWordEnabledRef.current || voiceStateRef.current === "recording" || voiceStateRef.current === "processing") return;
+        speechWakeRestartTimerRef.current = setTimeout(() => {
+          try {
+            speechWakeRef.current?.start();
+            speechWakeActiveRef.current = true;
+            console.log("[Voice] Speech wake recognizer restarted");
+          } catch {
+            // ignore repeated start races
+          }
+        }, 300);
+      };
+
+      speechWakeRef.current = recognition;
+    }
+
+    if (!speechWakeActiveRef.current && (voiceStateRef.current === "idle" || voiceStateRef.current === "speaking")) {
+      try {
+        speechWakeRef.current.start();
+        speechWakeActiveRef.current = true;
+        console.log("[Voice] Speech wake recognizer started — say 'Jarvis' or 'Hey Jarvis'");
+        return true;
+      } catch {
+        // ignore repeated start races
+        return false;
+      }
+    }
+
+    return speechWakeActiveRef.current;
+  }, []);
+
   // Initialize wake word engine when mic available and enabled
   useEffect(() => {
     if (isMicAvailable && wakeWordEnabled) {
-      startWakeWordEngine();
+      const speechWakeStarted = startSpeechWakeRecognizer();
+      // Use OpenWakeWord only if browser speech wake phrase recognition isn't available.
+      if (!speechWakeStarted) {
+        startWakeWordEngine();
+      } else {
+        stopWakeWordEngine();
+      }
     }
-    return () => { stopWakeWordEngine(); };
-  }, [isMicAvailable, wakeWordEnabled, startWakeWordEngine, stopWakeWordEngine]);
+    return () => {
+      stopWakeWordEngine();
+      stopSpeechWakeRecognizer();
+    };
+  }, [isMicAvailable, wakeWordEnabled, startWakeWordEngine, stopWakeWordEngine, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
 
   // Restart wake word listening when returning to idle (with delay for mic release)
   useEffect(() => {
@@ -213,6 +313,21 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       return () => clearTimeout(timer);
     }
   }, [voiceState]);
+
+  // Ensure speech fallback is active when idle or speaking so Jarvis can be interrupted while speaking.
+  useEffect(() => {
+    if (voiceState === "idle" || voiceState === "speaking") {
+      const speechWakeStarted = startSpeechWakeRecognizer();
+      if (!speechWakeStarted && wakeEngineRef.current) {
+        wakeEngineRef.current.start().catch(() => {});
+      }
+    } else if (voiceState === "recording" || voiceState === "processing") {
+      stopSpeechWakeRecognizer();
+    }
+    return () => {
+      stopSpeechWakeRecognizer();
+    };
+  }, [voiceState, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
 
   // --- TTS Playback ---
   const playNextTTSChunk = useCallback(() => {
@@ -286,6 +401,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     setVoiceState("idle");
     setTtsAudioPlaying(false);
   }, []);
+
+  useEffect(() => {
+    cancelTTSRef.current = cancelTTS;
+  }, [cancelTTS]);
 
   const handleError = useCallback(() => {
     ttsQueueRef.current = [];
@@ -487,8 +606,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
         wakeEngineRef.current.stop().catch(() => {});
         wakeEngineRef.current = null;
       }
+      stopSpeechWakeRecognizer();
     };
-  }, []);
+  }, [stopSpeechWakeRecognizer]);
 
   return {
     voiceState,

@@ -85,6 +85,11 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('5. `browser_evaluate` for advanced JavaScript interactions');
   lines.push('6. `browser_screenshot` for visual capture');
   lines.push('');
+  lines.push('### browser_upload_file');
+  lines.push('Upload a file to a file input element (bypasses the native file picker). Use this after clicking an upload/attach button.');
+  lines.push('- `file_path` (required): Absolute path to the file');
+  lines.push('- `selector`: CSS selector for the file input (default: first input[type="file"])');
+  lines.push('');
   lines.push('Rules:');
   lines.push('- For READ-ONLY tasks, `browser_navigate` already returns content. Don\'t snapshot just to read.');
   lines.push('- For INTERACTIVE tasks, snapshot after each action to verify.');

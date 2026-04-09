@@ -1,0 +1,225 @@
+app_name: Gmail
+domains:
+  - mail.google.com
+keywords:
+  - send an email
+  - send email
+  - compose email
+  - write an email
+  - check my email
+  - check email
+  - read my email
+  - read email
+  - my inbox
+  - check inbox
+  - reply to email
+  - forward email
+  - e-mail
+description: Gmail — compose, reply, search emails, manage labels, attachments, and inbox
+version: 4
+instructions: |
+  URL: https://mail.google.com
+
+  ### CRITICAL RULES — READ BEFORE DOING ANYTHING
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. That is it.
+  2. NEVER use browser_evaluate or browser_screenshot. They are banned for Gmail.
+  3. NEVER use desktop tools, sidecar tools, or any tool not listed in rule 1.
+  4. After clicking the Compose button, you MUST do a browser_snapshot and wait for compose elements to appear. The compose modal takes 2-3 seconds to render. If compose elements are missing, snapshot again.
+  5. The Sent folder link and the Send button look similar in many languages (e.g. "Invia" vs "Inviati" in Italian). ALWAYS identify the Send button by its aria-label containing "(Ctrl-Enter)". The Send button is a `<div>` with `role="button"` — the Sent folder is an `<a>` tag.
+  6. A simple "send email" = navigate -> snapshot -> click Compose -> snapshot (wait for compose) -> type To + Enter -> type Subject -> type Body -> click Send -> snapshot to verify. Maximum 10 tool calls.
+
+  ### IMPORTANT: UI LANGUAGE
+  Gmail adapts to the user's locale. All button labels and aria-labels may be in any language. The element references below use STRUCTURAL attributes (tag, role, name, contenteditable) that are STABLE across languages. Language-dependent text is noted but should NOT be the primary way to identify elements.
+
+  ### LAYOUT
+  Gmail has three areas:
+  - **Left sidebar**: Compose button, folder links (Inbox, Starred, Snoozed, Sent, Drafts), labels.
+  - **Main area**: Email list (inbox) OR single email thread view. Inbox has category tabs (Primary, Promotions, Social, Updates).
+  - **Top bar**: Search box, settings, account.
+  - **Compose window**: A floating modal at bottom-right. It renders AFTER the inbox elements in the snapshot (higher element IDs).
+
+  ### State Recognition
+  After navigating or snapshotting, check:
+  - **Google sign-in page**: URL contains accounts.google.com. -> Tell user: "Gmail requires Google sign-in. Please log in manually." Stop.
+  - **Loading**: 0 interactive elements or no email rows. -> Wait 3s, snapshot again. Max 2 retries.
+  - **Inbox ready**: you see `role="tab"` elements and `role="link"` email rows. -> Ready.
+  - **Email open**: page text shows email body content and you see a back-to-inbox button. -> Email view.
+  - **Compose open**: you see `<input> role="combobox"` (To field) and `<input> name="subjectbox"` (Subject). -> Compose is ready.
+
+  ### Element Reference (from REAL browser_snapshot output)
+  These are the EXACT elements as they appear in JARVIS's browser_snapshot. Match PRIMARILY by tag, role, name, and structural attributes. These are stable across languages.
+
+  **Top bar:**
+  - Search box: `<input> name="q" type="text">` — the search input. Always has name="q".
+  - Advanced search: `<button>` near the search box
+  - Settings: `<a> role="button">` with a settings-related aria-label
+
+  **Left sidebar:**
+  - Compose button: `<div> role="button">` — it is the FIRST `role="button"` element in the sidebar. Its text is the locale word for "Compose" (e.g., "Compose" in English, "Scrivi" in Italian).
+  - Folder links (Inbox, Starred, Sent, Drafts): `<a>` tags with href containing "#inbox", "#starred", "#sent", "#drafts" respectively. Use the href to identify them — NOT the text, which varies by language.
+    - Inbox: `<a> href="...#inbox">`
+    - Starred: `<a> href="...#starred">`
+    - Sent: `<a> href="...#sent">`
+    - Drafts: `<a> href="...#drafts">`
+    - Snoozed: `<a> href="...#snoozed">`
+
+  **Inbox tabs (role="tab"):**
+  - Primary: first `<div> role="tab">` — selected by default
+  - Promotions, Social, Updates: subsequent `<div> role="tab">` elements
+  - Tab text is locale-dependent. Match by `role="tab"` and position.
+
+  **Inbox toolbar:**
+  - Older page (pagination): a `<div> role="button">` with aria-label for "older" / next page. Look for the pagination controls near the "1–50 of N" text.
+  - Newer page: a `<div> role="button">` near the pagination area
+
+  **Email rows (inbox list):**
+  - Each email: `<div> role="link">` — contains subject + preview text (truncated to ~80 chars)
+  - IMPORTANT: The element text contains ONLY the subject + preview. The sender name is NOT in the element text — it is only visible in the PAGE TEXT.
+  - Star toggle: `<span> role="button">` (appears before each email row, one per email)
+  - Attachments: `<div> title="[filename]">` with text starting with the locale word for "Attachment:" — appears after the email element
+  - To find an email by sender: read the PAGE TEXT, which lists "Sender, Subject, date, preview" for each email. Then click the `<div> role="link">` whose text matches the subject.
+  - To open an email: click the `<div> role="link">` element.
+
+  **Email view (when an email is open):**
+  - Back to inbox: `<div> role="button">` — first button in the toolbar, navigates back to inbox
+  - Archive: `<div> role="button">` in the toolbar
+  - Delete: `<div> role="button">` in the toolbar
+  - Reply (header): `<div> role="button">` with reply-related aria-label on each message
+  - More options: `<div> role="button">` — dropdown with Reply All, Forward, etc.
+  - Reply link (bottom of thread): `<a>` or `<span> role="link">` — the first action link at the bottom
+  - Forward link (bottom of thread): `<a>` or `<span> role="link">` — the second action link at the bottom
+  - Email body: read the PAGE TEXT for email content. Links appear as `<a>` elements.
+
+  **Compose window (floating modal — elements appear AFTER inbox elements, with higher IDs):**
+  - To field: `<input> role="combobox">` — the ONLY combobox in the compose area. Type email address here, then press Enter to confirm.
+  - Cc link: `<span> role="link">` with text "Cc"
+  - Bcc link: `<span> role="link">` with text "Bcc" (or locale equivalent like "Ccn")
+  - Subject: `<input> name="subjectbox">` — ALWAYS has name="subjectbox" regardless of language. May also have placeholder or aria-label with the locale word for "Subject".
+  - Body: `<div> role="textbox" contenteditable="true">` — the message body. Match by role="textbox" + contenteditable="true".
+  - Send button: `<div> role="button">` whose aria-label contains "(Ctrl-Enter)". This is the ONLY reliable way to identify it across all languages. It is a `<div>`, NOT an `<a>` tag.
+  - Attach file: `<div> role="button">` with attach-related aria-label
+  - Delete draft: `<div> role="button">` with delete/discard-related aria-label
+
+  ---
+
+  ### TASK: Check inbox / read email list
+  1. `browser_navigate` to `https://mail.google.com` (skip if already there)
+  2. `browser_snapshot` — confirm you see `role="tab"` tabs and `role="link"` email elements
+  3. Read the PAGE TEXT to see emails with sender names, subjects, dates, and previews
+  4. Email elements only show subject+preview — to identify sender, read the page text
+  5. To check another tab: click the corresponding `role="tab"` element, then snapshot
+
+  ### TASK: Find a specific email (Nth email or by sender)
+  - **By sender**: Read the page text — it lists "Sender, Subject, date, preview" for each email. Find the sender, then click the `<div> role="link">` whose text matches that email's subject.
+  - **By position (e.g., 100th email)**: Each page shows ~50 emails. Click the "Older" pagination button to go to the next page. For the 100th email, paginate once, then find the last email on page 2.
+  - **By search**: Use the search box (see "Search for emails" below).
+  - NEVER use browser_evaluate to count or list emails. Use pagination buttons.
+
+  ### TASK: Open and read an email
+  1. From the inbox, find the email (by sender in page text or by subject in element text)
+  2. Click the `<div> role="link">` element to open the email
+  3. `browser_snapshot` — email content appears in the page text
+  4. For long emails: `browser_scroll` direction="down", then snapshot again
+
+  ### TASK: Compose and send a new email
+  1. Click the Compose button (first `<div> role="button">` in the sidebar area)
+  2. `browser_snapshot` — WAIT for compose elements. Look for `<input> role="combobox">` and `<input> name="subjectbox">`. If not found, wait 2-3 seconds and snapshot again.
+  3. Click the To field: `<input> role="combobox">`
+  4. `browser_type` the recipient email address
+  5. `browser_type` with `submit: true` to press Enter and confirm the recipient as a chip
+  6. Click the Subject field: `<input> name="subjectbox">`
+  7. `browser_type` the subject line (do NOT use submit:true)
+  8. Click the Body field: `<div> role="textbox" contenteditable="true">`
+  9. `browser_type` the email body (do NOT use submit:true)
+  10. Click the Send button: `<div> role="button">` whose aria-label contains "(Ctrl-Enter)". Do NOT click any `<a>` tag — those are folder links.
+  11. `browser_snapshot` — confirm the compose window is gone (no more combobox or subjectbox elements).
+
+  ### TASK: Reply to an email
+  1. Open the email (see "Open and read an email")
+  2. Click the Reply link at the bottom of the thread: `<a>` or `<span> role="link">` — usually the first action link after the email body
+  3. `browser_snapshot` — an inline reply area appears with a contenteditable body field
+  4. Click the reply body area (`<div> role="textbox" contenteditable="true">`) and `browser_type` the reply
+  5. Click the Send button (aria-label contains "(Ctrl-Enter)")
+  6. `browser_snapshot` — verify
+
+  ### TASK: Forward an email
+  1. Open the email
+  2. Click the Forward link at the bottom: the second action link after Reply
+  3. `browser_snapshot` — forward compose appears with quoted content
+  4. Fill in the To field (`<input> role="combobox">`) and type recipient + Enter
+  5. Optionally type additional text in the body
+  6. Click Send (aria-label contains "(Ctrl-Enter)")
+  7. `browser_snapshot` — verify
+
+  ### TASK: Search for emails
+  1. Click the search box: `<input> name="q">`
+  2. `browser_type` the search query. Gmail supports operators:
+     - `from:sender@email.com` — from a specific sender
+     - `to:recipient@email.com` — to a specific recipient
+     - `subject:keyword` — subject contains keyword
+     - `has:attachment` — has attachments
+     - `is:unread` / `is:starred` — status filters
+     - `after:2026/03/01 before:2026/04/01` — date range
+  3. `browser_type` with `submit: true` to execute search
+  4. `browser_snapshot` — results appear as email rows
+
+  ### TASK: Delete an email
+  1. Open the email
+  2. Click the Delete button in the toolbar (a `<div> role="button">` — usually the 4th toolbar button)
+  3. `browser_snapshot` — confirm you're back at inbox
+
+  ### TASK: Archive an email
+  1. Open the email
+  2. Click the Archive button in the toolbar (usually the 2nd toolbar button after back)
+  3. `browser_snapshot` — confirm
+
+  ### TASK: Star / Unstar an email
+  - Click the `<span> role="button">` star toggle next to the email row
+  - `browser_snapshot` — verify
+
+  ### TASK: Send email with attachment
+  1. Open compose and fill To, Subject, Body as above
+  2. Click the Attach button: a `<div> role="button">` with attach-related aria-label
+  3. Use `browser_upload_file` with the absolute file path
+  4. `browser_snapshot` — confirm attachment appears
+  5. Click Send
+
+  ### TASK: Navigate to Sent / Drafts / Starred
+  - Sent: click `<a> href="...#sent">` — match by href containing "#sent"
+  - Drafts: click `<a> href="...#drafts">`
+  - Starred: click `<a> href="...#starred">`
+  - Then `browser_snapshot` to see the folder contents
+
+  ### TASK: Paginate through emails
+  - Next page (older): click the Older pagination button (a `<div> role="button">` near the page counter text "1–50 of N")
+  - Previous page (newer): click the Newer pagination button
+  - Each page shows ~50 emails
+  - `browser_snapshot` after clicking to see the new page
+
+  ### TASK: Go back to inbox from email view
+  - Click the back button: first `<div> role="button">` in the email view toolbar
+  - Or click the Inbox link: `<a> href="...#inbox">`
+  - `browser_snapshot` — confirm inbox is visible
+
+  ---
+
+  ### Common Gotchas
+  - **Send vs Sent**: The Send button and Sent folder link look similar in many languages. Send button: `<div> role="button">` with "(Ctrl-Enter)" in aria-label. Sent folder: `<a>` tag with href containing "#sent". Match Send by "(Ctrl-Enter)" — this is stable across all languages.
+  - **Sender not in element text**: Email row elements only show subject+preview. To find emails by sender, read the PAGE TEXT.
+  - **Compose render delay**: Compose modal takes 2-3 seconds. ALWAYS verify compose elements exist in snapshot before typing.
+  - **To field confirmation**: After typing an email address in the combobox, you MUST press Enter (browser_type with submit:true) to confirm it as a recipient chip.
+  - **No submit:true on Subject/Body**: Only use submit:true on the To field (to confirm recipient) and the search box (to execute search). Never on Subject or Body.
+  - **Gmail pagination**: ~50 emails per page. Use the Older/Newer buttons. NEVER use browser_evaluate.
+  - **Dynamic class names**: Gmail generates random class names. NEVER use CSS class selectors.
+
+  ### Rules (MUST follow — violations waste time)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. Nothing else.
+  2. browser_evaluate is BANNED. browser_screenshot is BANNED.
+  3. After EVERY action, do ONE browser_snapshot to verify.
+  4. After clicking Compose, ALWAYS snapshot and confirm compose elements exist before typing.
+  5. Send button = `<div> role="button">` with "(Ctrl-Enter)" in aria-label. NEVER click an `<a>` tag to send.
+  6. Folder links: identify by href (#inbox, #sent, #drafts, #starred, #snoozed), NOT by text.
+  7. Sender names: read PAGE TEXT, not element text.
+  8. Pagination: click the Older/Newer buttons. NEVER use browser_evaluate.
+  9. If an element is not found after 2 retries, tell the user. Do NOT try workarounds.
+  10. Maximum tool calls for "send a simple email": 10.

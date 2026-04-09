@@ -425,7 +425,8 @@ export const getSystemInfoTool: ToolDefinition = {
 // --- Browser Tool Helpers ---
 
 const MAX_PAGE_TEXT = 2000;   // chars of visible page text
-const MAX_ELEMENTS = 50;      // interactive elements shown to LLM
+const MAX_ELEMENTS = 80;      // interactive elements shown to LLM
+const MAX_SAME_ROLE = 15;     // max elements with the same role (e.g., gridcell)
 
 function formatSnapshot(snap: PageSnapshot): string {
   const lines: string[] = [];
@@ -440,7 +441,70 @@ function formatSnapshot(snap: PageSnapshot): string {
   lines.push('');
 
   if (snap.elements.length > 0) {
-    const shown = snap.elements.slice(0, MAX_ELEMENTS);
+    // Prioritize: inputs/textboxes/buttons first, then cap repeated roles.
+    // Elements with UNIQUE aria-labels are always shown (they're distinct actions).
+    // Elements that share an aria-label (e.g. 50 star toggles) are capped.
+    // This prevents repetitive lists from hiding important action buttons like Send.
+
+    // Pre-count aria-label frequency to identify repeated vs unique labels
+    const labelFreq = new Map<string, number>();
+    for (const el of snap.elements) {
+      const label = el.attrs['aria-label'];
+      if (label) labelFreq.set(label, (labelFreq.get(label) || 0) + 1);
+    }
+
+    const roleCounts = new Map<string, number>();
+    const shown: typeof snap.elements = [];
+    const deferred: typeof snap.elements = [];
+
+    for (const el of snap.elements) {
+      const role = el.attrs.role || el.tag;
+      const count = roleCounts.get(role) || 0;
+      // Always include high-value elements (inputs, textboxes, contenteditable, buttons)
+      const isHighValue = el.tag === 'input' || el.tag === 'textarea' || el.tag === 'select'
+        || el.tag === 'button'
+        || el.attrs.contenteditable === 'true' || el.attrs.role === 'textbox';
+      // Elements with a unique aria-label are distinct actions (e.g. Send, Attach, Delete)
+      const hasUniqueLabel = el.attrs['aria-label'] && (labelFreq.get(el.attrs['aria-label']) || 0) === 1;
+      if (isHighValue || hasUniqueLabel) {
+        shown.push(el);
+      } else if (count < MAX_SAME_ROLE) {
+        shown.push(el);
+        roleCounts.set(role, count + 1);
+      } else {
+        deferred.push(el);
+      }
+    }
+
+    // Fill remaining budget with deferred elements
+    const budget = MAX_ELEMENTS - shown.length;
+    if (budget > 0) {
+      shown.push(...deferred.slice(0, budget));
+    }
+
+    // Sort by original ID order so positions make sense
+    shown.sort((a, b) => a.id - b.id);
+
+    // Highlight key interactive elements at the top so the LLM finds them immediately
+    const keyInputs = shown.filter(el =>
+      el.tag === 'input' || el.tag === 'textarea' || el.tag === 'select'
+      || el.attrs.contenteditable === 'true' || el.attrs.role === 'textbox'
+    );
+    const keyButtons = shown.filter(el =>
+      (el.tag === 'button' || el.attrs.role === 'button') && el.attrs['aria-label']
+    );
+    if (keyInputs.length > 0 || keyButtons.length > 0) {
+      lines.push('--- Key Elements ---');
+      for (const el of keyInputs) {
+        const label = el.attrs['aria-label'] || el.attrs.placeholder || el.attrs.name || el.tag;
+        lines.push(`[${el.id}] INPUT: ${label}${el.attrs.contenteditable ? ' (contenteditable)' : ''}`);
+      }
+      for (const el of keyButtons) {
+        lines.push(`[${el.id}] BUTTON: ${el.attrs['aria-label']}`);
+      }
+      lines.push('');
+    }
+
     lines.push(`--- Interactive Elements (${shown.length}/${snap.elements.length}) ---`);
     for (const el of shown) {
       const attrParts: string[] = [];
@@ -450,13 +514,15 @@ function formatSnapshot(snap: PageSnapshot): string {
       if (el.attrs.href) attrParts.push(`href="${el.attrs.href.slice(0, 80)}"`);
       if (el.attrs['aria-label']) attrParts.push(`aria-label="${el.attrs['aria-label']}"`);
       if (el.attrs.role) attrParts.push(`role="${el.attrs.role}"`);
+      if (el.attrs.contenteditable) attrParts.push(`contenteditable="${el.attrs.contenteditable}"`);
+      if (el.attrs['data-testid']) attrParts.push(`data-testid="${el.attrs['data-testid']}"`);
 
       const textStr = el.text ? ` "${el.text.slice(0, 50)}"` : '';
       const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';
       lines.push(`[${el.id}] ${el.tag}${textStr}${attrStr}`);
     }
-    if (snap.elements.length > MAX_ELEMENTS) {
-      lines.push(`... (${snap.elements.length - MAX_ELEMENTS} more elements not shown)`);
+    if (snap.elements.length > shown.length) {
+      lines.push(`(${snap.elements.length - shown.length} repeated list items hidden. All inputs, buttons, and textboxes are shown above.)`);
     }
   } else {
     lines.push('(no interactive elements found)');
@@ -633,6 +699,35 @@ export const browserScreenshotTool: ToolDefinition = {
   },
 };
 
+export const browserUploadFileTool: ToolDefinition = {
+  name: 'browser_upload_file',
+  description: 'Upload a file to a file input on the page. Use this after clicking an upload/attach button that triggers a file picker dialog. This bypasses the native file picker and sets the file directly via CDP.',
+  category: 'browser',
+  parameters: {
+    file_path: {
+      type: 'string',
+      description: 'Absolute path to the file to upload',
+      required: true,
+    },
+    selector: {
+      type: 'string',
+      description: 'CSS selector for the file input element (default: first input[type="file"] on the page)',
+      required: false,
+    },
+  },
+  execute: async (params) => {
+    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    try {
+      return await browser.uploadFile(
+        params.file_path as string,
+        params.selector as string | undefined,
+      );
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+};
+
 export const browserScrollTool: ToolDefinition = {
   name: 'browser_scroll',
   description: 'Scroll the page up or down. Use this when you need to see content below the fold. After scrolling, use browser_snapshot to see the new content.',
@@ -731,6 +826,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   browserClickTool,
   browserTypeTool,
   browserScrollTool,
+  browserUploadFileTool,
   browserEvaluateTool,
   browserScreenshotTool,
   ...DESKTOP_TOOLS,

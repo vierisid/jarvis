@@ -7,6 +7,7 @@
  *   jarvis stop                             Stop the running daemon
  *   jarvis status                           Show daemon status
  *   jarvis onboard                          Interactive setup wizard
+ *   jarvis uninstall                        Remove JARVIS from this machine
  *   jarvis doctor                           Check environment & connectivity
  *   jarvis version                          Print version
  *   jarvis help                             Show this help
@@ -45,6 +46,7 @@ ${c.bold('Commands:')}
   ${c.cyan('logs')}      Tail the daemon log file
   ${c.cyan('update')}    Update JARVIS to the latest version
   ${c.cyan('onboard')}   Interactive first-time setup wizard
+  ${c.cyan('uninstall')} Remove JARVIS and local data from this machine
   ${c.cyan('doctor')}    Check environment and connectivity
   ${c.cyan('version')}   Print version number
   ${c.cyan('help')}      Show this help message
@@ -68,6 +70,7 @@ ${c.bold('Examples:')}
   jarvis logs -f                Follow live log output
   jarvis update                 Update to latest version
   jarvis onboard                Run the setup wizard
+  jarvis uninstall              Remove JARVIS from this machine
   jarvis doctor                 Check if everything is working
 `);
 }
@@ -227,6 +230,11 @@ async function cmdOnboard(): Promise<void> {
 async function cmdDoctor(): Promise<void> {
   const { runDoctor } = await import('../src/cli/doctor.ts');
   await runDoctor();
+}
+
+async function cmdUninstall(): Promise<void> {
+  const { runUninstallWizard } = await import('../src/cli/uninstall.ts');
+  await runUninstallWizard(PACKAGE_ROOT);
 }
 
 async function cmdRestart(args: string[]): Promise<void> {
@@ -409,6 +417,10 @@ switch (command) {
     break;
   case 'doctor':
     await cmdDoctor();
+    break;
+  case 'uninstall':
+  case 'remove':
+    await cmdUninstall();
     break;
   case 'version':
   case '-v':

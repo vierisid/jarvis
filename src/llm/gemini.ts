@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type GeminiPart =
   | { text: string }
@@ -49,7 +50,7 @@ type GeminiStreamChunk = {
   };
 };
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000;
 
 export class GeminiProvider implements LLMProvider {
@@ -88,10 +89,14 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
     const url = `${this.baseUrl}/models/${model}:generateContent?key=${this.apiKey}`;
 
-    const { systemInstruction, contents } = this.convertMessages(messages);
+    // Compact history for Gemini's context limits
+    const budget = calculateHistoryBudget(32000);
+    const compactedMessages = compactHistory(messages, budget);
+
+    const { systemInstruction, contents } = this.convertMessages(compactedMessages);
     const body: Record<string, unknown> = { contents };
 
     if (systemInstruction) body.systemInstruction = systemInstruction;
@@ -111,10 +116,14 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
     const url = `${this.baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
-    const { systemInstruction, contents } = this.convertMessages(messages);
+    // Compact history for Gemini's context limits
+    const budget = calculateHistoryBudget(32000);
+    const compactedMessages = compactHistory(messages, budget);
+
+    const { systemInstruction, contents } = this.convertMessages(compactedMessages);
     const body: Record<string, unknown> = { contents };
 
     if (systemInstruction) body.systemInstruction = systemInstruction;

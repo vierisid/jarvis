@@ -671,4 +671,23 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_documents_format ON documents(format)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at)`);
+
+  // Webapp templates: per-app browser navigation instructions
+  db.run(`
+    CREATE TABLE IF NOT EXISTS webapp_templates (
+      id TEXT PRIMARY KEY,
+      app_name TEXT NOT NULL UNIQUE,
+      domains TEXT NOT NULL,
+      keywords TEXT NOT NULL DEFAULT '[]',
+      description TEXT NOT NULL DEFAULT '',
+      instructions TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      CHECK(enabled IN (0, 1))
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_webapp_app_name ON webapp_templates(app_name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_webapp_enabled ON webapp_templates(enabled)`);
 }

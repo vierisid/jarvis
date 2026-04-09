@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -90,17 +91,22 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+
+    // Compact history for large contexts (128k token limit)
+    const budget = calculateHistoryBudget(128000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
     };
 
     if (temperature !== undefined) body.temperature = temperature;
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
     const response = await fetch(this.apiUrl, {
@@ -122,11 +128,15 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+
+    // Compact history for large contexts (128k token limit)
+    const budget = calculateHistoryBudget(128000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
       stream: true,
     };
 
@@ -134,6 +144,7 @@ export class OpenAIProvider implements LLMProvider {
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
     const response = await fetch(this.apiUrl, {
@@ -292,7 +303,8 @@ export class OpenAIProvider implements LLMProvider {
         : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
       const msg: OpenAIMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: text,
+        // When assistant made tool calls, content must be null (not empty string)
+        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({

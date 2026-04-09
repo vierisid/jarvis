@@ -1,6 +1,6 @@
 {
   "name": "@usejarvis/brain",
-  "version": "0.1.0-alpha.1",
+  "version": "0.4.0",
   "description": "J.A.R.V.I.S. — Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
   "module": "src/daemon/index.ts",
   "type": "module",

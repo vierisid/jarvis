@@ -13,6 +13,7 @@ export type PromptContext = {
   contentPipeline?: string[];
   authorityRules?: string;
   activeGoals?: string;
+  webappInstructions?: string;
   hasSidecars?: boolean;
   effectiveAuthorityLevel?: number;
 };
@@ -127,6 +128,15 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   // Tool Guide (static reference, sidecar section conditional)
   sections.push(buildToolGuide(context?.hasSidecars ?? false));
   sections.push('');
+
+  // Webapp-specific browser instructions (loaded from DB on demand)
+  if (context?.webappInstructions) {
+    sections.push('# Webapp Navigation Instructions');
+    sections.push('The following instructions are specific to the web app the user is asking about. Follow these closely when interacting with this app via browser tools:');
+    sections.push('');
+    sections.push(context.webappInstructions);
+    sections.push('');
+  }
 
   // Current Context
   if (context) {

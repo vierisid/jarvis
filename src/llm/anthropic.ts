@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -52,7 +53,7 @@ type AnthropicStreamEvent =
   | { type: 'message_stop' }
   | { type: 'error'; error: { type: string; message: string } };
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000; // 5s, 10s, 20s
 
 export class AnthropicProvider implements LLMProvider {
@@ -105,9 +106,13 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens = 16384, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens = 16384, tools, tool_choice } = options;
 
-    const { system, messages: anthropicMessages } = this.convertMessages(messages);
+    // Compact history for Claude's context window
+    const budget = calculateHistoryBudget(200000);
+    const compactedMessages = compactHistory(messages, budget);
+
+    const { system, messages: anthropicMessages } = this.convertMessages(compactedMessages);
     const body: Record<string, unknown> = {
       model,
       messages: anthropicMessages,
@@ -118,6 +123,7 @@ export class AnthropicProvider implements LLMProvider {
     if (temperature !== undefined) body.temperature = temperature;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      // Anthropic uses budget_tokens for tool use (no explicit tool_choice needed)
     }
 
     const response = await this.fetchWithRetry(JSON.stringify(body));
@@ -126,9 +132,13 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens = 16384, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens = 16384, tools, tool_choice } = options;
 
-    const { system, messages: anthropicMessages } = this.convertMessages(messages);
+    // Compact history for Claude's context window
+    const budget = calculateHistoryBudget(200000);
+    const compactedMessages = compactHistory(messages, budget);
+
+    const { system, messages: anthropicMessages } = this.convertMessages(compactedMessages);
     const body: Record<string, unknown> = {
       model,
       messages: anthropicMessages,
@@ -138,6 +148,10 @@ export class AnthropicProvider implements LLMProvider {
 
     if (system) body.system = system;
     if (temperature !== undefined) body.temperature = temperature;
+    if (tools && tools.length > 0) {
+      body.tools = this.convertTools(tools);
+      // Anthropic automatically uses tools when provided (no explicit tool_choice needed)
+    }
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
     }

@@ -7,10 +7,13 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OpenRouterMessage = {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_call_id?: string;
+  tool_calls?: OpenRouterToolCall[];
 };
 
 type OpenRouterToolDef = {
@@ -88,17 +91,22 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+
+    // Compact history for better reliability across routed models
+    const budget = calculateHistoryBudget(100000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
     };
 
     if (temperature !== undefined) body.temperature = temperature;
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';
     }
 
     const response = await fetch(this.apiUrl, {
@@ -122,11 +130,15 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+
+    // Compact history for better reliability across routed models
+    const budget = calculateHistoryBudget(100000);
+    const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      messages: this.convertMessages(compactedMessages),
       stream: true,
     };
 
@@ -134,6 +146,7 @@ export class OpenRouterProvider implements LLMProvider {
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
+      body.tool_choice = tool_choice || 'auto';
     }
 
     const response = await fetch(this.apiUrl, {
@@ -290,10 +303,31 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): OpenRouterMessage[] {
-    return messages.map(m => ({
-      role: m.role as 'system' | 'user' | 'assistant',
-      content: m.content as string,
-    }));
+    return messages.map((m) => {
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+
+      const converted: OpenRouterMessage = {
+        role: m.role,
+        content: m.role === 'assistant' && m.tool_calls?.length ? (content || null) : content,
+      };
+
+      if (m.role === 'assistant' && m.tool_calls?.length) {
+        converted.tool_calls = m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        }));
+      }
+
+      if (m.role === 'tool' && m.tool_call_id) {
+        converted.tool_call_id = m.tool_call_id;
+      }
+
+      return converted;
+    });
   }
 
   private convertTools(tools: LLMTool[]): OpenRouterToolDef[] {

@@ -1,0 +1,230 @@
+app_name: WhatsApp
+domains:
+  - web.whatsapp.com
+keywords:
+  - send a message to
+  - send message to
+  - text message
+  - check my messages
+  - check messages
+  - read my messages
+  - unread messages
+  - whatsapp message
+description: WhatsApp Web messaging — send/read messages, search contacts, send media
+version: 3
+instructions: |
+  URL: https://web.whatsapp.com
+
+  ### CRITICAL RULES — READ BEFORE DOING ANYTHING
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. That is it.
+  2. NEVER use browser_evaluate or browser_screenshot. They are banned for WhatsApp.
+  3. NEVER use desktop tools, sidecar tools, or any tool not listed in rule 1.
+  4. To send a message: browser_click the input element, then browser_type with submit:true. This types the text AND presses Enter to send. Done.
+  5. A simple "send message" = navigate -> snapshot -> click chat -> snapshot -> click input -> type with submit:true -> snapshot to verify. Maximum 7 tool calls.
+
+  ### TWO-PANEL LAYOUT — IMPORTANT
+  WhatsApp Web is a two-panel layout. The left panel (chat list) and right panel (conversation) are ALWAYS both visible. After clicking a chat, the snapshot will contain BOTH the chat list gridcell elements AND the conversation elements. This is NORMAL — do NOT think the chat failed to open just because you still see gridcell elements. To confirm a chat is open, look for the message input element: `<div role="textbox" contenteditable="true" aria-label="Type a message...">`.
+
+  ### State Recognition
+  After navigating or snapshotting, check:
+  - **QR Code screen**: page text contains "Link with phone number" or a QR canvas. -> Tell user: "Scan the QR code with your phone: WhatsApp > Linked Devices > Link a Device." Stop.
+  - **Loading/Syncing**: page text shows "WhatsApp works with" or spinner, or 0 elements found. -> Wait 5s, snapshot again. Max 2 retries.
+  - **Chat list ready**: you see `<div role="gridcell">` elements with contact names. -> Ready.
+  - **Chat open**: you see `<div role="textbox" contenteditable="true" aria-label="Type a message...">` -> Conversation is open. You will ALSO still see gridcell elements from the left panel — this is expected.
+
+  ### Element Reference (from real snapshots)
+  These are the EXACT elements as they appear in browser_snapshot. Match by aria-label, role, placeholder, or text content. NEVER rely on numeric [id] values — they change every snapshot.
+
+  **Left panel — header:**
+  - Chats tab: `<button aria-label="Chats">`
+  - Status tab: `<button aria-label="Status">`
+  - Channels tab: `<button aria-label="Channels">`
+  - Communities tab: `<button aria-label="Communities">`
+  - New chat: `<button aria-label="New chat">`
+  - Menu: `<button aria-label="Menu">`
+
+  **Left panel — search & filters:**
+  - Search bar: `<input placeholder="Search or start a new chat" type="text">` — this is a regular input, NOT contenteditable
+  - Filter tabs: `<button role="tab" text="All">`, `<button role="tab" text="Unread">`, `<button role="tab" text="Favourites">`
+  - Archived: `<button aria-label="Archived">`
+
+  **Left panel — chat list:**
+  - Each chat: `<div role="gridcell" text="[ContactName] [time] [preview]">`
+  - The text field starts with the contact/group name, followed by timestamp and last message preview
+  - Unread chats have a green badge with the count (visible in page text)
+  - To open a chat: click the `<div role="gridcell">` whose text starts with the contact name
+
+  **Right panel — conversation header (visible when a chat is open):**
+  - Group/contact name: `<div role="button" text="[ChatName] [participants...]">` — click to view info
+  - Search in chat: `<button aria-label="Search">`
+  - Chat menu: `<button aria-label="Menu">` (same aria-label as left panel menu, but appears in right panel)
+
+  **Right panel — messages:**
+  - Message text: `<span data-testid="selectable-text">` — the text content IS the message
+  - Message sender (groups): `<div aria-label="Open chat details for [SenderName]" role="button">`
+  - Quoted replies: `<div aria-label="Quoted message" role="button">`
+  - Reactions: `<button aria-label="reaction [emoji]. View reactions">`
+  - @mentions: `<span role="button" text="@Name">`
+
+  **Right panel — input area (bottom):**
+  - Attach button: `<button aria-label="Attach">` (plus icon — NOT "clip")
+  - Emoji button: `<button aria-label="Emojis, GIFs, Stickers">`
+  - Message input: `<div role="textbox" contenteditable="true" aria-label="Type a message...">` — this is a contenteditable div. The aria-label says "Type a message" for 1:1 chats or "Type a message to group [name]" for groups.
+  - When input is EMPTY: `<button aria-label="Voice message">` appears (mic icon)
+  - When input has TEXT: the mic button is replaced by `<button aria-label="Send">` — but prefer using `submit: true` on browser_type to send via Enter key instead
+
+  ---
+
+  ### TASK: Open a chat with a specific contact
+  1. `browser_navigate` to `https://web.whatsapp.com` (skip if already there)
+  2. `browser_snapshot` — confirm you see `<div role="gridcell">` elements
+  3. Look for the contact in the chat list: find the `<div role="gridcell">` whose text starts with the contact name
+  4. If found: click that element. Skip to step 8.
+  5. If NOT found in the visible list: click the search `<input placeholder="Search or start a new chat">`
+  6. `browser_type` the contact name
+  7. `browser_snapshot` — click the matching result
+  8. `browser_snapshot` — confirm the conversation is open (you see the message input with `aria-label="Type a message..."`)
+
+  ### TASK: Send a text message
+  1. Open the target chat (see above)
+  2. Click the message input: `<div role="textbox" contenteditable="true" aria-label="Type a message...">`
+  3. `browser_type` the message text with `submit: true` (this presses Enter to send)
+  4. `browser_snapshot` — confirm the message appears as a `<span data-testid="selectable-text">` in the chat
+
+  ### TASK: Send a formatted message
+  Type formatting markers directly in the message — WhatsApp renders them after sending:
+  - Bold: `*text*`
+  - Italic: `_text_`
+  - Strikethrough: `~text~`
+  - Monospace: ` ```text``` `
+
+  ### TASK: Reply to a specific message (quote reply)
+  1. Open the target chat
+  2. `browser_snapshot` — find the message you want to reply to (each message is a `<span data-testid="selectable-text">`)
+  3. Hover over the target message — a down-arrow menu icon appears
+  4. Click the down-arrow icon
+  5. Click "Reply" in the dropdown
+  6. The input area now shows a quoted preview above it
+  7. `browser_type` the reply with `submit: true`
+
+  ### TASK: React to a message
+  1. Open the target chat
+  2. Hover over the target message — a smiley face icon appears
+  3. Click the smiley icon — a small emoji picker row appears
+  4. Click the desired emoji
+  5. `browser_snapshot` — confirm `<button aria-label="reaction [emoji]. View reactions">` appears
+
+  ### TASK: Forward a message
+  1. Open the chat, hover over the message -> click the down-arrow icon
+  2. Click "Forward" in the dropdown
+  3. A forwarding panel opens — search for and select target contact(s)
+  4. Click the green forward button at the bottom-right
+  5. `browser_snapshot` — confirm
+
+  ### TASK: Delete a message
+  1. Hover over the message -> click the down-arrow icon
+  2. Click "Delete" in the dropdown
+  3. Choose "Delete for me" or "Delete for everyone"
+  4. Confirm deletion
+
+  ### TASK: Star a message
+  1. Hover over the message -> click the down-arrow icon
+  2. Click "Star" in the dropdown
+
+  ### TASK: Check unread messages
+  1. `browser_navigate` to `https://web.whatsapp.com`
+  2. `browser_snapshot` — scan the `<div role="gridcell">` elements in the chat list
+  3. Unread chats have a green badge with the count in the page text
+  4. Alternatively: click the "Unread" filter tab (`<button role="tab" text="Unread">`) to show only unread chats
+  5. Report which contacts have unread messages
+
+  ### TASK: Read recent messages from a contact
+  1. Open the target chat
+  2. `browser_snapshot` — messages appear as `<span data-testid="selectable-text">` elements
+  3. In group chats, the sender is identified by `<div aria-label="Open chat details for [Name]">` above their messages
+  4. Read the page text — it contains the full conversation in order (newest at bottom)
+  5. For older messages: `browser_scroll` direction="up", then snapshot again
+
+  ### TASK: Search for a message (global)
+  1. Click the search bar: `<input placeholder="Search or start a new chat">`
+  2. `browser_type` the keyword
+  3. `browser_snapshot` — results show matching messages across all chats
+  4. Click a result to jump to that message in its chat
+
+  ### TASK: Search within a specific chat
+  1. Open the target chat
+  2. Click the search button in the chat header: `<button aria-label="Search">`
+  3. A search input appears — `browser_type` the keyword
+  4. `browser_snapshot` — use the up/down arrows to navigate between matches
+
+  ### TASK: Send a photo/video/document/audio file
+  1. Open the target chat
+  2. Click the attach button: `<button aria-label="Attach">`
+  3. A menu appears — click the appropriate option:
+     - "Photos & Videos" for images and video files
+     - "Document" for PDFs, audio files, or any other file type
+  4. After clicking the option, a hidden `<input type="file">` is created on the page
+  5. Use `browser_upload_file` with the absolute file path. No selector needed — it finds the file input automatically.
+     IMPORTANT: The file MUST be in the user's home directory (or subdirectory). Files in /tmp/ or other system paths may not be accessible to the browser due to sandboxing. If the file is elsewhere, copy it to the home directory first using run_command.
+  6. `browser_snapshot` — a preview screen appears showing the file with an optional caption input and a green send button
+  7. Add a caption if needed (click the caption input, browser_type the caption)
+  8. Click the green send button (look for `<button aria-label="Send">` or the green circle button)
+  9. `browser_snapshot` — confirm the file message appears in the chat
+
+  ### TASK: Create and send a poll
+  1. Open the target chat
+  2. Click `<button aria-label="Attach">`
+  3. Click "Poll" in the menu
+  4. Fill in the question and options (at least 2)
+  5. Click "Create poll" / send button
+
+  ### TASK: Start a new chat (not in recent list)
+  1. Click `<button aria-label="New chat">`
+  2. A contacts list appears with a search bar
+  3. Type the contact name or phone number
+  4. Click the matching contact
+  5. Conversation opens — send message
+
+  ### TASK: Create a new group
+  1. Click `<button aria-label="New chat">`
+  2. Click "New group" at the top
+  3. Search and select contacts to add
+  4. Click the green arrow to proceed
+  5. Type the group name
+  6. Click the green checkmark to create
+
+  ### TASK: View contact or group info
+  1. Open the chat
+  2. Click the chat name in the header: `<div role="button" text="[ChatName]...">`
+  3. Info panel slides in — `browser_snapshot` to read
+
+  ### TASK: Mute a chat
+  1. Open the chat
+  2. Click `<button aria-label="Menu">` in the chat header (right panel)
+  3. Click "Mute notifications"
+  4. Select duration, click "Mute"
+
+  ### TASK: Pin/Archive a chat
+  1. In the chat list, right-click is unreliable via CDP
+  2. Instead: open the chat -> click `<button aria-label="Menu">` -> select "Pin" or "Archive"
+
+  ### TASK: Leave a group
+  1. Open the group -> click the group name to open info
+  2. Scroll to bottom -> click "Exit group" -> confirm
+
+  ### TASK: Check message delivery status
+  Look at checkmarks next to sent messages in the page text:
+  - Single grey check: sent to server
+  - Double grey checks: delivered to phone
+  - Double blue checks: read by recipient
+
+  ---
+
+  ### Rules (MUST follow — violations waste time)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. Nothing else.
+  2. browser_evaluate is BANNED. browser_screenshot is BANNED. Do not use them under any circumstances.
+  3. After clicking a chat, you will STILL see gridcell elements from the left panel. This is normal. Look for aria-label="Type a message" to confirm the chat is open.
+  4. To type and send: browser_type with submit:true on the message input. This types AND sends via Enter in one call. Do NOT search for a send button.
+  5. After each action, do ONE browser_snapshot to verify. Not two. Not zero. One.
+  6. If an element is not found after 2 retries, tell the user. Do NOT try workarounds.
+  7. Maximum tool calls for "send a message": 7. If you are above that, you are doing something wrong.

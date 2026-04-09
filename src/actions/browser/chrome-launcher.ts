@@ -178,6 +178,15 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
   if (process.platform === 'linux') {
     args.push('--disable-dev-shm-usage');
     args.push('--no-sandbox'); // Required for Chromium in containers/WSL2
+    args.push('--window-size=1280,900');
+    args.push('--window-position=100,100');
+
+    // WSL2: force X11 display backend for WSLg visibility
+    const isWSL = existsSync('/proc/version') &&
+      readFileSync('/proc/version', 'utf-8').toLowerCase().includes('microsoft');
+    if (isWSL) {
+      args.push('--ozone-platform=x11');
+    }
   }
 
   // Open a blank tab so a target exists

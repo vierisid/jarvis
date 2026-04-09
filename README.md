@@ -181,6 +181,7 @@ jarvis status           # Check if running
 jarvis doctor           # Verify environment & connectivity
 jarvis logs -f          # Follow live logs
 jarvis update           # Update to latest version
+jarvis uninstall        # Remove JARVIS from this machine
 ```
 
 The dashboard is available at `http://localhost:3142` once the daemon is running.
