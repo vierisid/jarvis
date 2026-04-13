@@ -112,6 +112,65 @@ export type SiteEvent = {
   timestamp: number;
 };
 
+function extractNestedMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+  if (typeof record.error === "string" && record.error.trim()) return record.error.trim();
+  if (record.error && typeof record.error === "object") {
+    return extractNestedMessage(record.error);
+  }
+  return null;
+}
+
+function formatProviderErrorMessage(raw: string | undefined): string {
+  const fallback = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
+  if (!raw) return fallback;
+
+  let normalized = raw.trim();
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    normalized = extractNestedMessage(parsed) ?? normalized;
+  } catch {
+    const jsonMatch = normalized.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as unknown;
+        normalized = extractNestedMessage(parsed) ?? normalized;
+      } catch {
+        // Keep the original string when embedded JSON is malformed.
+      }
+    }
+  }
+
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered.includes("api key") ||
+    lowered.includes("authentication") ||
+    lowered.includes("unauthorized") ||
+    lowered.includes("invalid_api_key") ||
+    lowered.includes("invalid x-api-key") ||
+    lowered.includes("incorrect api key") ||
+    lowered.includes("401")
+  ) {
+    return "Couldn't reach your AI provider. Check your API key and model settings.";
+  }
+
+  if (
+    lowered.includes("timeout") ||
+    lowered.includes("temporarily unavailable") ||
+    lowered.includes("503") ||
+    lowered.includes("429") ||
+    lowered.includes("econnrefused") ||
+    lowered.includes("enotfound") ||
+    lowered.includes("network")
+  ) {
+    return "Couldn't reach your AI provider right now. Check your connection, provider status, or fallback settings.";
+  }
+
+  return fallback;
+}
+
 export function useWebSocket() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -399,12 +458,13 @@ export function useWebSocket() {
       }
     } else if (msg.type === "error") {
       voiceCallbacksRef.current?.onError(msg.payload?.message);
+      const friendlyMessage = formatProviderErrorMessage(msg.payload?.message);
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "system",
-          content: `Error: ${msg.payload?.message ?? "Unknown error"}`,
+          content: friendlyMessage,
           timestamp: msg.timestamp,
           source: "error",
         },
