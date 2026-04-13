@@ -1,0 +1,412 @@
+app_name: Google Sheets
+domains:
+  - docs.google.com
+keywords:
+  - spreadsheet
+  - google sheets
+  - gsheet
+  - open my spreadsheet
+  - create a spreadsheet
+  - new spreadsheet
+  - add a row
+  - insert a row
+  - delete a row
+  - add a column
+  - insert a column
+  - delete a column
+  - update the spreadsheet
+  - edit the spreadsheet
+  - edit the cell
+  - fill in the cell
+  - write in the cell
+  - enter data
+  - enter in the spreadsheet
+  - sort the data
+  - filter the data
+  - create a filter
+  - find and replace
+  - format the cells
+  - bold the cells
+  - add a formula
+  - sum formula
+  - vlookup
+  - check the spreadsheet
+  - read the spreadsheet
+  - what's in cell
+  - what does the spreadsheet say
+  - rename the sheet
+  - add a sheet
+  - add a tab
+description: Google Sheets — read, write, format cells, enter formulas, sort, filter, find/replace, manage rows/columns/sheets in spreadsheets.
+version: 2
+instructions: |
+  URL: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid={SHEET_ID}
+
+  ### TOOL INTERFACE — READ THIS FIRST
+
+  Google Sheets requires TWO types of tools working together:
+
+  **Browser tools** (for navigating, reading snapshots, clicking elements, typing text):
+  - `browser_navigate(url)` — open a URL
+  - `browser_snapshot()` — get page text + interactive elements with `[id]` numbers
+  - `browser_click(element_id)` — click an element by its `[id]`
+  - `browser_type(element_id, text, submit=true/false)` — type text into an element. `submit=true` presses **Enter** after typing. `submit` ONLY presses Enter — it CANNOT press Tab or any other key.
+  - `browser_scroll(direction)` — scroll the page
+
+  **Desktop tool** (for pressing keyboard shortcuts — Tab, Ctrl+B, Ctrl+J, etc.):
+  - `desktop_press_keys(keys)` — sends a keyboard shortcut to the active window. Keys are comma-separated: `"tab"`, `"enter"`, `"ctrl,b"`, `"ctrl,j"`, `"ctrl,shift,4"`, `"alt,slash"`.
+
+  **THERE IS NO `browser_press_key` TOOL.** For ANY key press that isn't Enter (which `submit=true` handles), you MUST use `desktop_press_keys`.
+
+  ### CRITICAL RULES
+  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. That is it.
+  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command (xdotool, xdg-open, etc.). Do NOT use them.
+  3. **Sheets renders its grid on `<canvas>`**: individual cells DO NOT appear in the snapshot. You CANNOT click on a cell. Use the **Name Box** to navigate to cells and the **formula bar** to read cell content.
+  4. **`browser_type` requires `element_id`**: you must take a `browser_snapshot` first to discover the `[id]` of the element you want to type into. Element IDs may change between snapshots.
+  5. **`browser_type(submit=true)` presses ENTER only**: it does NOT press Tab. For Tab, use `desktop_press_keys("tab")`.
+  6. **EVERY cell write MUST be committed**: either via `submit=true` (Enter) on `browser_type`, or via `desktop_press_keys("tab")` / `desktop_press_keys("enter")` after `browser_type(submit=false)`. If you don't commit, the content stays in the edit buffer and is LOST.
+  7. **Google Sheets is LOCALE-DEPENDENT**: button text is translated. Match elements by `[id]` from snapshots, not by text. Keyboard shortcuts are locale-independent.
+  8. **Auto-save**: Sheets auto-saves. No explicit save action needed.
+
+  ### FORBIDDEN ACTIONS
+  - **DO NOT use run_command or xdotool.** Use `desktop_press_keys` for all keyboard shortcuts.
+  - **DO NOT try to click on cells in the grid.** The grid is `<canvas>` — no clickable cell elements.
+  - **DO NOT type without committing.** Every `browser_type` that enters cell data must end with `submit=true` OR be followed by `desktop_press_keys("tab")` or `desktop_press_keys("enter")`.
+  - **DO NOT take a snapshot after every single cell write.** Write a batch of cells first, then snapshot once to verify.
+  - **DO NOT navigate cell-by-cell using the Name Box for sequential entry.** That's 3+ tool calls per cell. Use the column or row entry patterns below instead.
+
+  ### URL PATTERNS (locale-independent)
+  - Open existing spreadsheet: `https://docs.google.com/spreadsheets/d/{ID}/edit#gid={SHEET_ID}`
+  - Open at specific cell: append `&range=A1` or `&range=B5:C10`
+  - Create new blank: `https://docs.google.com/spreadsheets/create`
+  - Sheets home: `https://docs.google.com/spreadsheets/u/0/`
+
+  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+
+  Navigation:
+  - `"ctrl,j"` → focus Name Box (type cell ref in it with browser_type, submit=true)
+  - Arrow keys (`"up"`, `"down"`, `"left"`, `"right"`) → move one cell
+  - `"tab"` → commit + move right
+  - `"enter"` → commit + move down
+  - `"shift,tab"` → commit + move left
+  - `"shift,enter"` → commit + move up
+  - `"ctrl,home"` → go to A1
+  - `"ctrl,end"` → go to last data cell
+  - `"escape"` → cancel current edit
+
+  Editing:
+  - `"ctrl,z"` → undo
+  - `"ctrl,y"` → redo
+  - `"ctrl,c"` → copy
+  - `"ctrl,x"` → cut
+  - `"ctrl,v"` → paste
+  - `"ctrl,shift,v"` → paste values only
+  - `"ctrl,d"` → fill down
+  - `"ctrl,r"` → fill right
+  - `"ctrl,semicolon"` → insert current date
+  - `"delete"` → clear cell
+
+  Formatting:
+  - `"ctrl,b"` → bold
+  - `"ctrl,i"` → italic
+  - `"ctrl,u"` → underline
+  - `"ctrl,shift,1"` → number format
+  - `"ctrl,shift,2"` → time format
+  - `"ctrl,shift,3"` → date format
+  - `"ctrl,shift,4"` → currency format
+  - `"ctrl,shift,5"` → percentage format
+  - `"ctrl,backslash"` → clear formatting
+
+  Insert / Delete:
+  - `"ctrl,shift,equal"` → insert row/column
+  - `"ctrl,minus"` → delete row/column
+  - `"shift,f11"` → insert new sheet tab
+  - `"ctrl,k"` → insert link
+  - `"ctrl,alt,m"` → insert comment
+
+  Selection:
+  - `"shift,space"` → select entire row
+  - `"ctrl,space"` → select entire column
+  - `"ctrl,a"` → select all
+
+  Find / Replace:
+  - `"ctrl,f"` → find
+  - `"ctrl,h"` → find and replace
+
+  Sheet tabs:
+  - `"ctrl,shift,pagedown"` → next sheet
+  - `"ctrl,shift,pageup"` → previous sheet
+
+  Menu access:
+  - `"alt,slash"` → search menus (type any command)
+  - `"ctrl,shift,backslash"` → context menu (right-click equivalent)
+
+  View:
+  - `"ctrl,shift,f"` → toggle compact toolbar
+  - `"ctrl,backtick"` → show all formulas
+
+  ### SNAPSHOT FORMAT
+
+  `browser_snapshot` returns:
+  ```
+  Page: Spreadsheet Name - Google Sheets
+  URL: https://docs.google.com/spreadsheets/d/.../edit#gid=0
+
+  --- Page Text ---
+  (page text content — includes visible cell text from the grid)
+
+  --- Key Elements ---
+  [42] INPUT: A1 (contenteditable)        ← this is the inline cell editor, current cell ref
+  [43] INPUT: Name Box                     ← the Name Box (shows current cell ref like "A1")
+  [44] INPUT: formula bar (contenteditable) ← shows current cell content/formula
+
+  --- Interactive Elements ---
+  [45] button "Undo (Ctrl+Z)"
+  [46] button "Redo (Ctrl+Y)"
+  ...
+  ```
+
+  The three KEY elements to identify in every snapshot:
+  1. **Name Box**: an INPUT whose text is a cell reference like "A1", "B5". Use this for navigation: `browser_click([id])` to focus, then `browser_type([id], "C3", submit=true)` to navigate.
+  2. **Formula Bar**: an INPUT marked `(contenteditable)` whose text is the current cell's content. READ this to get cell values. Its value shows raw text/numbers/formulas.
+  3. **Inline Cell Editor**: an INPUT marked `(contenteditable)` — this is where typed text goes. It's the element you type INTO when writing cell values. It may be the same element as the formula bar, or a separate floating element on the canvas.
+
+  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
+
+  Since the snapshot uses JARVIS's format (not the chrome-devtools format), elements appear as `[id] tag "text" attrs...`. To find the Name Box and formula bar:
+  - **Name Box**: Look for an INPUT whose displayed text is a cell reference pattern (e.g., "A1", "B2", "AA100"). It's usually in the "Key Elements" section.
+  - **Formula Bar**: Look for an INPUT with `(contenteditable)` that contains the cell's actual content (text, number, or formula starting with "=").
+  - **Inline Editor**: When a cell is being edited, a focused contenteditable element appears. Its `[id]` is what you use for `browser_type`.
+
+  IMPORTANT: After `browser_type` with `submit=true` (which presses Enter and moves to the next cell), the inline editor element MAY keep the same `[id]` (because it's the same DOM element, just repositioned). Try reusing the same `[id]` for the next cell — if it fails with "element not found", take a new `browser_snapshot` to get the fresh `[id]`.
+
+  ### CORE PATTERNS
+
+  **Pattern A: Navigate to a cell**
+  1. `browser_snapshot()` — find the Name Box `[id]`.
+  2. `browser_click([name_box_id])` — focus the Name Box.
+  3. `browser_type([name_box_id], "B5", submit=true)` — type cell ref + Enter → navigates to B5.
+  Alternative: `desktop_press_keys("ctrl,j")` to focus Name Box, then take snapshot to find its `[id]`.
+
+  **Pattern B: Read a cell value**
+  1. Navigate to the cell (Pattern A).
+  2. `browser_snapshot()` — find the formula bar `[id]` and read its text content. That IS the cell value.
+
+  **Pattern C: Write one cell (then move DOWN)**
+  1. Navigate to the cell (Pattern A).
+  2. `browser_snapshot()` — find the inline editor `[id]`.
+  3. `browser_type([editor_id], "My Value", submit=true)` — types + presses Enter → committed, cursor moves DOWN.
+
+  **Pattern D: Write a COLUMN of values (most efficient for Sheets)**
+  This is the fastest write pattern because `submit=true` (Enter) naturally moves DOWN.
+  1. Navigate to the top cell (Pattern A): e.g., A1.
+  2. `browser_snapshot()` — find the inline editor `[id]`. Remember this ID.
+  3. `browser_type([editor_id], "value1", submit=true)` → A1 committed, cursor at A2.
+  4. `browser_type([editor_id], "value2", submit=true)` → A2 committed, cursor at A3.
+  5. `browser_type([editor_id], "value3", submit=true)` → A3 committed, cursor at A4.
+  6. Continue for each value. Each cell = 1 tool call.
+  7. If an element_id error occurs, take a `browser_snapshot()` and find the new editor `[id]`.
+
+  **Pattern E: Write a ROW of values (moving RIGHT)**
+  Uses `desktop_press_keys("tab")` instead of `submit=true`:
+  1. Navigate to the first cell of the row (Pattern A).
+  2. `browser_snapshot()` — find the inline editor `[id]`.
+  3. `browser_type([editor_id], "col1_value")` — types but does NOT press Enter (submit=false or omitted).
+  4. `desktop_press_keys("tab")` — commits and moves RIGHT.
+  5. `browser_type([editor_id], "col2_value")` — types in next cell.
+  6. `desktop_press_keys("tab")` — commits and moves RIGHT.
+  7. For the LAST cell in the row: `desktop_press_keys("enter")` — commits and moves to COLUMN A of the next row.
+  Each cell = 2 tool calls (type + tab/enter).
+
+  **Pattern F: Build a table (rows and columns combined)**
+  PLAN YOUR LAYOUT FIRST. Then choose the most efficient entry order:
+
+  **Option 1 — Column-by-column** (recommended when you have more rows than columns):
+  1. Navigate to A1, snapshot, get editor ID.
+  2. Write all of column A top-to-bottom using Pattern D (1 call/cell).
+  3. Navigate to B1 (Pattern A — 3 calls).
+  4. Write all of column B top-to-bottom using Pattern D.
+  5. Repeat for each column.
+  6. Snapshot once at end to verify.
+
+  **Option 2 — Row-by-row** (using Tab+Enter, good for wide tables):
+  1. Navigate to A1, snapshot, get editor ID.
+  2. Write row 1 using Pattern E (2 calls/cell, last cell uses Enter to go to next row).
+  3. Write row 2 using Pattern E (cursor is already on A2 from the Enter).
+  4. Repeat for each row.
+  5. Snapshot once at end to verify.
+
+  CRUCIAL: After the last Tab in a row, `desktop_press_keys("enter")` returns the cursor to column A of the next row. This is because Sheets remembers the "tab range" — the column where you started tabbing.
+
+  ---
+
+  ### TASK: Build a structured spreadsheet (e.g., calorie tracker)
+
+  This is the MOST IMPORTANT recipe. Example: build a calorie tracker.
+
+  Step 1 — PLAN the grid layout:
+  ```
+  Col A          Col B
+  Row 1: Meal        Calories     (headers)
+  Row 2: Breakfast   (empty)      (user input)
+  Row 3: Lunch       (empty)      (user input)
+  Row 4: Dinner      (empty)      (user input)
+  Row 5: (empty)     (empty)      (spacer)
+  Row 6: Total       =SUM(B2:B4) (formula)
+  Row 7: Goal        2000         (default)
+  Row 8: Remaining   =B7-B6      (formula)
+  ```
+
+  Step 2 — Write column A (labels), top-to-bottom:
+  1. `browser_snapshot()` → find Name Box `[id]`, say it's `[12]`.
+  2. `browser_click(12)` → focus Name Box.
+  3. `browser_type(12, "A1", submit=true)` → navigate to A1.
+  4. `browser_snapshot()` → find inline editor `[id]`, say it's `[55]`.
+  5. `browser_type(55, "Meal", submit=true)` → A1="Meal", cursor at A2.
+  6. `browser_type(55, "Breakfast", submit=true)` → A2, cursor at A3.
+  7. `browser_type(55, "Lunch", submit=true)` → A3, cursor at A4.
+  8. `browser_type(55, "Dinner", submit=true)` → A4, cursor at A5.
+  9. `browser_type(55, " ", submit=true)` → A5=spacer, cursor at A6.
+  10. `browser_type(55, "Total", submit=true)` → A6, cursor at A7.
+  11. `browser_type(55, "Goal", submit=true)` → A7, cursor at A8.
+  12. `browser_type(55, "Remaining", submit=true)` → A8.
+  (8 cells = 8 tool calls for the typing, plus 4 for setup = 12 total so far)
+
+  Step 3 — Write column B (values/formulas):
+  13. `browser_click(12)` → focus Name Box (reuse same [id] — it should persist).
+  14. `browser_type(12, "B2", submit=true)` → navigate to B2 (skip B1 header-less or do B1 too).
+  Wait — B1 needs "Calories". Let me navigate to B1.
+  13. `browser_click(12)` → focus Name Box.
+  14. `browser_type(12, "B1", submit=true)` → navigate to B1.
+  15. `browser_snapshot()` → find editor `[id]` (may have changed), say `[55]` still.
+  16. `browser_type(55, "Calories", submit=true)` → B1="Calories", cursor at B2.
+  17. `browser_type(55, " ", submit=true)` → B2=empty, cursor at B3.
+  18. `browser_type(55, " ", submit=true)` → B3=empty, cursor at B4.
+  19. `browser_type(55, " ", submit=true)` → B4=empty, cursor at B5.
+  20. `browser_type(55, " ", submit=true)` → B5=spacer, cursor at B6.
+  21. `browser_type(55, "=SUM(B2:B4)", submit=true)` → B6=formula, cursor at B7.
+  22. `browser_type(55, "2000", submit=true)` → B7=2000, cursor at B8.
+  23. `browser_type(55, "=B7-B6", submit=true)` → B8=formula.
+  (8 cells = 8 tool calls + 3 for navigation = 11 more calls)
+
+  Step 4 — Format headers bold:
+  24. `browser_click(12)` → Name Box.
+  25. `browser_type(12, "A1:B1", submit=true)` → select header range.
+  26. `desktop_press_keys("ctrl,b")` → bold.
+  (3 calls)
+
+  Step 5 — Verify:
+  27. `browser_click(12)` → Name Box.
+  28. `browser_type(12, "B6", submit=true)` → navigate to B6.
+  29. `browser_snapshot()` → check formula bar shows "=SUM(B2:B4)".
+  (3 calls)
+
+  TOTAL: ~29 tool calls for a complete calorie tracker. NOT 50+.
+
+  If element_id `[55]` stops working during the type sequence, take ONE `browser_snapshot()` to find the new ID, then continue. This adds at most 2-3 extra calls.
+
+  ### TASK: Read a specific cell value
+  1. `browser_snapshot()` → find Name Box `[id]`.
+  2. `browser_click([name_box_id])`.
+  3. `browser_type([name_box_id], "C5", submit=true)`.
+  4. `browser_snapshot()` → read the formula bar element's text. That IS the cell value.
+  Total: 4 tool calls.
+
+  ### TASK: Write a value to a single cell
+  1. Navigate to the cell (3 calls: snapshot, click name box, type ref+submit).
+  2. `browser_snapshot()` → find editor `[id]`.
+  3. `browser_type([editor_id], "My Value", submit=true)`.
+  Total: 5 tool calls.
+
+  ### TASK: Enter a formula
+  Same as writing a value, but text starts with `=`:
+  `browser_type([editor_id], "=SUM(A1:A10)", submit=true)`
+
+  ### TASK: Format cells
+  1. Navigate to cell or select range (type range like "A1:C5" into Name Box + submit).
+  2. `desktop_press_keys("ctrl,b")` for bold, `"ctrl,i"` for italic, etc.
+  3. `browser_snapshot()` to verify (toolbar buttons show pressed state).
+
+  ### TASK: Insert rows/columns
+  1. Navigate to a cell in the target row/column.
+  2. `desktop_press_keys("shift,space")` to select the entire row (or `"ctrl,space"` for column).
+  3. `desktop_press_keys("ctrl,shift,equal")` to insert.
+
+  ### TASK: Delete rows/columns
+  1. Select row (`"shift,space"`) or column (`"ctrl,space"`).
+  2. `desktop_press_keys("ctrl,minus")` to delete.
+
+  ### TASK: Find and replace
+  1. `desktop_press_keys("ctrl,h")` → opens Find and Replace dialog.
+  2. `browser_snapshot()` → find the Find textbox `[id]` (first INPUT in the dialog) and Replace textbox `[id]` (second INPUT).
+  3. `browser_type([find_id], "old text")`.
+  4. `browser_type([replace_id], "new text")`.
+  5. `browser_click([replace_all_button_id])` — the Replace All button is the THIRD button in the dialog (after Find and Replace single).
+
+  ### TASK: Sort data
+  1. Navigate to any cell in the column to sort by.
+  2. `desktop_press_keys("alt,slash")` → opens menu search.
+  3. `browser_snapshot()` → find the menu search combobox `[id]`.
+  4. `browser_type([combobox_id], "sort", submit=true)` → finds sort options.
+  5. `browser_snapshot()` → click the ascending/descending sort option.
+
+  ### TASK: Create a filter
+  1. Navigate to the data range.
+  2. `desktop_press_keys("alt,slash")` → menu search.
+  3. Type "filter" → select create filter option.
+
+  ### TASK: Add a new sheet tab
+  `desktop_press_keys("shift,f11")` — inserts a new sheet tab.
+
+  ### TASK: Switch sheet tabs
+  `desktop_press_keys("ctrl,shift,pagedown")` → next sheet.
+  `desktop_press_keys("ctrl,shift,pageup")` → previous sheet.
+
+  ### TASK: Rename the spreadsheet
+  1. `browser_snapshot()` → find the title textbox `[id]` (INPUT with the current document name).
+  2. `browser_click([title_id])` → focuses it.
+  3. `desktop_press_keys("ctrl,a")` → select all text.
+  4. `browser_type([title_id], "New Name", submit=true)`.
+
+  ### TASK: Create a new spreadsheet
+  `browser_navigate("https://docs.google.com/spreadsheets/create")` → opens a new blank spreadsheet.
+
+  ### TASK: Open an existing spreadsheet
+  1. `browser_navigate("https://docs.google.com/spreadsheets/u/0/")` → Sheets home.
+  2. `browser_snapshot()` → file list shows as elements with file names.
+  3. `browser_click([file_element_id])` → opens the spreadsheet.
+
+  ### TASK: Undo / Redo
+  `desktop_press_keys("ctrl,z")` → undo.
+  `desktop_press_keys("ctrl,y")` → redo.
+
+  ---
+
+  ### Common Gotchas
+  - **`submit=true` ONLY presses Enter**: it does NOT press Tab. For Tab, use `desktop_press_keys("tab")`. This is the #1 confusion.
+  - **EVERY cell write MUST be committed**: via `submit=true` (Enter) or `desktop_press_keys("tab"/"enter")`. Without it, content is NOT saved — it stays in the edit buffer and gets lost or merged with the next input.
+  - **Canvas grid**: cells are NOT in the a11y tree. Use Name Box + formula bar for all cell interaction.
+  - **Element IDs come from the last snapshot**: after state changes (typing, navigating), IDs MAY become stale. If `browser_type` fails with "element not found", take a new `browser_snapshot()`.
+  - **Reuse element IDs optimistically**: the inline editor usually keeps the same `[id]` across cell moves (Enter/Tab). Try reusing it — only take a new snapshot if it fails.
+  - **Enter moves DOWN, Tab moves RIGHT**: after committing, Enter advances to the cell below; Tab to the right. Use this for efficient sequential entry.
+  - **Enter-after-Tab returns to first column**: if you Tab across A1→B1→C1 then Enter, cursor goes to A2. This is the Tab+Enter flow for row-by-row entry.
+  - **Column-by-column is the most efficient pattern**: `submit=true` handles Enter natively (1 call/cell). Row-by-row needs Tab via desktop_press_keys (2 calls/cell).
+  - **Formula bar is the reading mechanism**: its text content shows the current cell's raw value/formula.
+  - **Name Box is the navigation mechanism**: type any cell ref ("A1", "B5:C10") and submit to navigate.
+  - **Auto-save**: no Save button needed. Changes are saved automatically.
+  - **Formulas start with `=`**: `=SUM(B2:B4)`, `=B7-B6`, etc. To enter literal text starting with `=`, prefix with `'`.
+  - **Don't snapshot after every cell write**: write all cells in a batch, then snapshot once to verify 2-3 key cells.
+  - **Keyboard shortcuts use `desktop_press_keys`**: `"ctrl,b"` for bold, `"ctrl,shift,4"` for currency, `"alt,slash"` for menu search, etc. ALL keyboard shortcuts go through this tool.
+  - **Menu search (`alt,slash`) is the universal fallback**: if you don't know the shortcut, search menus. Works in all locales.
+  - **Toolbar buttons have shortcuts in parentheses**: their aria-labels contain "(Ctrl+B)", "(Ctrl+Z)" etc. — stable across locales.
+
+  ### Rules (MUST follow)
+  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
+  2. Navigate to cells via Name Box (`browser_click` + `browser_type` with submit=true). NEVER click on the canvas.
+  3. Read cells from the formula bar text in snapshots. NEVER scrape the canvas.
+  4. EVERY `browser_type` into a cell MUST be committed: `submit=true` for Enter, or follow with `desktop_press_keys("tab")` for Tab. NO EXCEPTIONS.
+  5. For sequential column entry: use `submit=true` on each `browser_type` — 1 call per cell. For row entry: use `browser_type` without submit + `desktop_press_keys("tab")` — 2 calls per cell.
+  6. Reuse element IDs from the last snapshot. Only take a new snapshot when an ID fails.
+  7. Snapshot ONCE at the end of a write batch to verify, not after every cell.
+  8. All keyboard shortcuts go through `desktop_press_keys`. NEVER use run_command or xdotool.
+  9. Budget: building a table of N cells should take at most N + 10 tool calls (setup + writes + verify). If you exceed 2x that, stop and re-read this template.

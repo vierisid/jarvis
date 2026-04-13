@@ -244,7 +244,7 @@ instructions: |
     - `<checkbox "Tutto il giorno">` / "All day"
     - `<button "Fuso orario">` / "Timezone"
     - `<combobox "Ricorrenza">` / "Recurrence" — "Non si ripete" / "Does not repeat", "Daily", "Weekly", etc.
-  - Add guests: `<button "Aggiungi invitati" expandable>` / "Add guests" — click to reveal inline `<combobox "Invitati">` / "Guests". Type email address + Enter (submitKey) to add as a chip.
+  - Add guests: `<button "Aggiungi invitati" expandable>` / "Add guests" — click to reveal inline `<combobox "Invitati">` / "Guests". Type email address, then press Enter (browser_type with submit:true) to add as a chip.
   - Meet: `<button "Aggiungi videoconferenza di Google Meet">` / "Add Google Meet video conferencing" — toggle
   - Location: `<button "Aggiungi luogo" expandable>` / "Add location" — reveals inline combobox with autocomplete
   - Description: `<button "Aggiungi descrizione o un allegato di Google Drive" expandable>` / "Add description or Drive attachment"
@@ -410,7 +410,7 @@ instructions: |
      - Title: click `<textbox "Titolo">`, Ctrl+A, type new value.
      - Start/end date: click `<textbox "Data inizio">` / "Data fine", Ctrl+A, type `D/M/YYYY` + Enter.
      - Start/end time: click the `<combobox>` and type the new time ("3:00PM") or select from the list.
-     - Guests: click `<combobox "Invitati">`, type email, press Enter (submitKey). Repeat per guest.
+     - Guests: click `<combobox "Invitati">`, type email, press Enter (submit:true). Repeat per guest.
      - Description: click `<textbox "Descrizione">`, type.
      - Location: click `<combobox "Aggiungi posizione">`, type.
   7. Press `Ctrl+Enter` OR click `<button "Salva">` / "Save".
@@ -422,7 +422,7 @@ instructions: |
   ### TASK: Add guests to an existing event
   Use TASK "Edit an event". In the full editor:
   1. Click `<combobox "Invitati">` / "Guests".
-  2. `browser_type` each email address with submitKey="Enter" — each becomes a chip.
+  2. `browser_type` each email address with submit:true — each becomes a chip.
   3. Save.
 
   ### TASK: Add a Google Meet link to an existing event
