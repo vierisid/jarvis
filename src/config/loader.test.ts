@@ -74,6 +74,53 @@ llm:
     expect(loaded.authority).toBeDefined();
     expect(loaded.active_role).toBeDefined();
   });
+
+  test('saves YAML without forcing quoted keys', async () => {
+    await saveConfig(DEFAULT_CONFIG, TEST_CONFIG_PATH);
+    const text = await Bun.file(TEST_CONFIG_PATH).text();
+
+    expect(text).toContain('daemon:');
+    expect(text).toContain('channels:');
+    expect(text).not.toContain('"daemon":');
+    expect(text).not.toContain('"channels":');
+  });
+
+  test('round-trips channel config and multi-provider fallbacks', async () => {
+    const testConfig = structuredClone(DEFAULT_CONFIG);
+    testConfig.channels = {
+      telegram: {
+        enabled: true,
+        bot_token: 'telegram-token',
+        allowed_users: [12345],
+      },
+      discord: {
+        enabled: true,
+        bot_token: 'discord-token',
+        allowed_users: ['user-1'],
+        guild_id: 'guild-123',
+      },
+    };
+    testConfig.llm.primary = 'ollama';
+    testConfig.llm.fallback = ['gemini', 'openai'];
+    testConfig.llm.gemini = {
+      api_key: 'gemini-key',
+      model: 'gemini-3-flash-preview',
+    };
+    testConfig.llm.ollama = {
+      base_url: 'http://localhost:11434',
+      model: 'llama3.1',
+    };
+
+    await saveConfig(testConfig, TEST_CONFIG_PATH);
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+
+    expect(loaded.channels?.discord?.enabled).toBe(true);
+    expect(loaded.channels?.discord?.guild_id).toBe('guild-123');
+    expect(loaded.llm.primary).toBe('ollama');
+    expect(loaded.llm.fallback).toEqual(['gemini', 'openai']);
+    expect(loaded.llm.gemini?.model).toBe('gemini-3-flash-preview');
+    expect(loaded.llm.ollama?.model).toBe('llama3.1');
+  });
 });
 
 describe('Default Config', () => {
