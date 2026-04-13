@@ -1,0 +1,506 @@
+app_name: Google Calendar
+domains:
+  - calendar.google.com
+keywords:
+  - schedule a meeting
+  - schedule meeting
+  - book a meeting
+  - book meeting
+  - create an event
+  - create event
+  - add an event
+  - add event
+  - add to calendar
+  - add to my calendar
+  - put on my calendar
+  - check my calendar
+  - check calendar
+  - check my schedule
+  - what's on my calendar
+  - what's on my schedule
+  - what do i have
+  - my schedule today
+  - my schedule tomorrow
+  - am i free
+  - am i busy
+  - do i have anything
+  - cancel my meeting
+  - cancel the meeting
+  - delete the event
+  - delete the meeting
+  - reschedule
+  - move my meeting
+  - move the meeting
+  - search my calendar
+  - find the event
+  - google calendar
+  - gcal
+description: Google Calendar — create, edit, delete, search, reschedule events and meetings. Manage schedule, respond to invites, navigate dates/views.
+version: 1
+instructions: |
+  URL: https://calendar.google.com/calendar/u/0/r
+
+  ### CRITICAL RULES — READ BEFORE DOING ANYTHING
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. That is it.
+  2. NEVER use browser_evaluate. NEVER use browser_screenshot. Both are BANNED for Google Calendar with no exceptions. If you cannot complete the task with the 6 allowed tools, stop and report why — do NOT reach for evaluate or screenshot as a workaround.
+  3. NEVER use desktop tools, sidecar tools, or any tool not listed in rule 1.
+  4. **Google Calendar is a LOCALE-DEPENDENT app**: every button and aria-label is translated to the user's Google Account language (Italian, French, Japanese, Arabic, etc.). You have NO IDEA what language any given user runs. Therefore:
+     - NEVER match elements by hardcoded English text like "Save", "Create", "Add guests", "More options".
+     - NEVER match by Italian/other-locale text either — those are examples for this template, not selectors.
+     - ALWAYS match by ROLE + STRUCTURAL ATTRIBUTES (tag, role, haspopup, expandable, focusable, position within the main/dialog, URL patterns, aria descriptions that contain stable numeric/structural data).
+     - When locale-dependent text appears in this template, it is documentation (a hint that "this button exists and in English says X"), NOT a selector. You must rediscover it structurally in the actual snapshot.
+  5. **URL navigation REPLACES clicking** for almost every task. URLs are identical in every locale and every account. They are the single most important technique in this template. Before every action, ask: "Is there a URL for this?" If yes, use it.
+  6. **Keyboard shortcuts REPLACE clicking** for everything URL navigation can't cover. They are locale-independent keys.
+  7. Task budgets — if you exceed these, STOP and re-read this template:
+     - "Create a simple event" (title + start/end): **max 4 tool calls** (navigate-to-prefilled-eventedit → snapshot → save → snapshot).
+     - "Check my day/week": **max 2 tool calls** (navigate-to-view → snapshot).
+     - "Delete an event": **max 5 tool calls** (navigate-to-day → snapshot → click event → click delete → snapshot).
+     - "Search for event": **max 2 tool calls** (navigate-to-search-url → snapshot).
+
+  ### FORBIDDEN ACTIONS — DO NOT DO THESE (observed failure modes)
+  The following are guaranteed time-wasters. If you are tempted by any of them, STOP and use a URL or keyboard shortcut instead.
+  - **DO NOT click the big "Create" button** in the top-left. It opens a menu with Event/Task/Appointment in the user's locale — you don't know what the items say. Use `browser_navigate` to `/r/eventedit?text=...&dates=...` instead, OR press the keyboard shortcut `c` (which opens the full editor directly).
+  - **DO NOT click on empty grid cells / time slots to create an event.** The click target is ambiguous (columnheader vs gridcell vs the time grid), the resulting dialog is the same Quick Add which has its own traps, and the time it places the event at depends on pixel position. Use URL prefill instead.
+  - **DO NOT click "Insert into sidebar" / "Inserisci nella barra laterale" thinking it expands the dialog.** It pins the draft to the sidebar and does NOT reveal more fields. To get the full editor from Quick Add, click "More options" / "Altre opzioni" — but better yet, skip Quick Add entirely and navigate to `/r/eventedit?...` to land in the full editor directly.
+  - **DO NOT click Save before you have verified every field** in a snapshot. Calendar will happily save an event with the default placeholder date/time if you rush, producing wrong-day wrong-time events.
+  - **DO NOT try to fix a bad event by clicking on the grid**. Delete it via peek popup → Delete button (or Backspace on focused event), then recreate via URL prefill.
+  - **DO NOT assume English button text**. Not "Save", not "Create", not "Add guests", not "Delete". Match structurally.
+  - **DO NOT use browser_evaluate to scrape the DOM when you get lost.** Re-read the latest snapshot, or if truly stuck, navigate to a URL that resets state (`/r/week`).
+
+  ### PRIMARY PATHS — USE THESE FOR EVERY TASK
+
+  **1. Prefilled event creation via URL — THE ONLY acceptable path for "create event" tasks.**
+  Google Calendar supports a documented URL template that opens the full event editor with fields prefilled. This bypasses the locale-dependent Create button, Quick Add dialog, and their traps.
+
+  Base: `https://calendar.google.com/calendar/u/0/r/eventedit`
+
+  Query parameters (URL-encoded):
+  - `text=TITLE`                     — event title
+  - `dates=YYYYMMDDTHHmmSS/YYYYMMDDTHHmmSS` — start/end in local time (no Z). For all-day: `YYYYMMDD/YYYYMMDD`. The end day is EXCLUSIVE for all-day.
+  - `ctz=IANA/Timezone`              — timezone (e.g. `Europe/Rome`, `America/New_York`)
+  - `details=DESCRIPTION`            — event description (can include HTML)
+  - `location=LOCATION`              — location string
+  - `add=email1@x.com,email2@x.com`  — guest emails (comma-separated)
+  - `recur=RRULE:FREQ=WEEKLY;BYDAY=MO,WE` — recurrence rule
+  - `crm=AVAILABLE`                  — set to AVAILABLE to mark as free (default is BUSY)
+
+  Example — "Dentist tomorrow 3-4pm":
+  `https://calendar.google.com/calendar/u/0/r/eventedit?text=Dentist&dates=20260412T150000/20260412T160000&ctz=Europe/Rome`
+
+  Example with guest + Meet description:
+  `https://calendar.google.com/calendar/u/0/r/eventedit?text=Sync%20with%20Sam&dates=20260415T100000/20260415T110000&add=sam@example.com&location=Online&details=Weekly%20sync`
+
+  After navigating, you land in the FULL event editor with fields populated. Verify with `browser_snapshot`:
+  - URL contains `/r/eventedit`
+  - `<main>` has `description="Pagina di modifica eventi"` (Italian) / "Event edit page" (English) / etc. — in ALL locales this `<main>` is the only one with a long descriptive aria description while on /r/eventedit.
+  - There is exactly one `<textbox>` near the top of the main region whose value equals your title. That's the title field — NOT a selector, just verification.
+  - Then SAVE by pressing `Ctrl+Enter`. This keyboard shortcut is documented to save from the full editor and is locale-independent. Do NOT search for a Save button text. If `Ctrl+Enter` fails, only then fall back to clicking the primary button in the top-right of `<main>` (it is the ONLY non-expandable `<button>` in the top action bar of the event editor that is not the Cancel button).
+  - After saving, snapshot and verify the URL has changed away from `/r/eventedit` AND a live region contains a short status text (the save confirmation toast). URL change is the reliable signal.
+
+  **2. URL navigation (fastest for "check my X" tasks):**
+  All views and dates are addressable by URL. No clicking needed.
+  - Today in week view:   `/calendar/u/0/r/week`
+  - Today in day view:    `/calendar/u/0/r/day`
+  - Today in month view:  `/calendar/u/0/r/month`
+  - Today in agenda/list: `/calendar/u/0/r/agenda`
+  - Year view:            `/calendar/u/0/r/year`
+  - 4-day custom view:    `/calendar/u/0/r/customday`
+  - Specific date in week:  `/calendar/u/0/r/week/YYYY/M/D` (e.g. `/r/week/2026/4/14`)
+  - Specific date in day:   `/calendar/u/0/r/day/YYYY/M/D`
+  - Specific date in month: `/calendar/u/0/r/month/YYYY/M/D`
+  - Specific date in agenda:`/calendar/u/0/r/agenda/YYYY/M/D`
+  - Search events:          `/calendar/u/0/r/search?q=QUERY` (URL-encode QUERY)
+  - New event editor:       `/calendar/u/0/r/eventedit`
+
+  Month and day numbers have NO leading zeros (use `4` not `04`).
+
+  **3. Keyboard shortcuts (locale-independent, instant):**
+  Use these BEFORE looking for buttons. They work in every language.
+
+  Navigation:
+  - `t`        → jump to today
+  - `n` or `j` → next period (next week / day / month)
+  - `p` or `k` → previous period
+  - `g`        → open "Go to date" dialog (textbox named "Data" / "Date")
+
+  Views:
+  - `1` or `d` → day view
+  - `2` or `w` → week view
+  - `3` or `m` → month view
+  - `4` or `x` → custom 4-day view
+  - `5` or `a` → agenda / schedule view
+  - `6` or `y` → year view
+
+  Actions:
+  - `c`        → create event (opens full editor at /r/eventedit)
+  - `q`        → open Quick Add dialog for an ALL-DAY event
+  - `Shift+C`  → open Quick Add dialog for a TIMED event
+  - `e`        → edit the focused event (opens full editor)
+  - `Backspace` or `Delete` → delete the focused event (no confirmation — use Annulla/Undo in toast if wrong)
+  - `Ctrl+S` or `Ctrl+Enter` → save (ONLY works inside the full editor, NOT in Quick Add)
+  - `Ctrl+Z` or `z` → undo last action
+  - `Esc`      → close dialog / back to grid
+
+  Application:
+  - `/`        → focus global search bar
+  - `s`        → settings
+
+  IMPORTANT: Ctrl+Enter does NOT save from the Quick Add dialog. It only saves from the full editor. In Quick Add you must click the Salva/Save button.
+
+  ### LAYOUT
+  Calendar has four regions:
+  - **Top banner**: Today button, prev/next period, current period label, Search icon, Help, Settings menu, View switcher menu, Google apps launcher, account avatar.
+  - **Create button**: a large expandable button sitting just below the banner (NOT inside it). Has `expandable haspopup="menu"` — clicking opens a menu with Event / Task / Appointment schedule.
+  - **Left sidebar (drawer)**: mini-month navigator, booking pages section, "My calendars" checkbox list, "Other calendars" checkbox list.
+  - **Main grid**: the current view (day/week/month/agenda/year). The `<main>` element has an aria description like "Settimana del X, N eventi" / "Week of X, N events" — this is a STATE INDICATOR.
+  - **Right sidebar** (optional): tabs for Keep / Tasks / Contacts / Maps.
+
+  ### State Recognition
+  After navigating or snapshotting, check:
+  - **Not signed in**: URL is `workspace.google.com/.../products/calendar/` or `accounts.google.com/...`. -> Tell user: "Google Calendar requires sign-in. Please log in manually." Stop.
+  - **Loading**: `<main>` has no description or no columnheader/gridcell children. -> Wait 3s, snapshot again. Max 2 retries.
+  - **Grid ready**: `<main>` has description ending in "N eventi" / "N events", and you see `role="columnheader"` day headers and `role="gridcell"` day slots. -> Ready.
+  - **Event focused**: one of the event `<button>` elements has `focusable focused` attributes.
+  - **Peek popup open**: a `<dialog modal>` exists whose name equals the event title; it contains a "Modifica evento" / "Edit event" button and an "Elimina evento" / "Delete event" button.
+  - **Quick Add open**: `<dialog "Crea" modal>` or equivalent in locale, containing a textbox with placeholder like "Aggiungi titolo e orario" / "Add title and time".
+  - **Full editor**: URL contains `/r/eventedit`, `<main description="Pagina di modifica eventi">` / "Event edit page". Has `<textbox "Titolo">` / "Title" and a large `<button "Salva">` / "Save".
+  - **Search results**: URL is `/r/search?q=...`, `<main description="Risultati di ricerca. N eventi trovati.">` / "Search results. N events found."
+  - **Go to date dialog**: `<dialog>` with `<textbox>` named "Data" / "Date" and a "Vai" / "Go" button.
+  - **Action toast** (post-save/delete): a live region contains `StaticText "Evento salvato"` / "Event saved" or `"Evento eliminato"` / "Event deleted", plus an Annulla/Undo button.
+
+  ### Element Reference (from REAL browser_snapshot output)
+
+  **READ THIS FIRST**: Any text in quotes in this section is an EXAMPLE from ONE locale (Italian, where this template was captured). It is NOT a selector. The actual user's Calendar may be in any language — the button that says "Salva" in Italian says "Save" in English, "保存" in Japanese, "Enregistrer" in French, and so on. You MUST match elements by:
+  1. **ROLE** (button, textbox, combobox, dialog, gridcell, columnheader, main, banner, checkbox)
+  2. **STRUCTURAL ATTRIBUTES** (`expandable`, `haspopup="menu"`, `readonly`, `focusable focused`, `contenteditable`, `multiline`, `selected`, `pressed`, `autocomplete="list"`)
+  3. **POSITION** within the a11y tree (first button in the banner, only non-expandable button inside the event-editor main, button that is child of a specific gridcell, etc.)
+  4. **URL or aria-description patterns** that contain stable non-locale data (URL paths, numeric counts, date strings, structural keywords)
+
+  If you find yourself matching on literal locale text, STOP — you are making a mistake that will break the moment someone runs Calendar in a different language. The only locale-independent textual content in Calendar is:
+  - Keyboard shortcut hints inside aria-labels (rare — only a few, like "(Ctrl-Enter)" for save in some editors — Calendar does NOT have these)
+  - Names of email addresses (user input)
+  - Event titles the user created
+  - URL paths
+  Everything else is translated.
+
+  **Top banner (<banner>):**
+  - Drawer toggle: `<button expandable>` — first button, toggles left sidebar
+  - Heading: `<h1>` = "Calendar"
+  - Today: `<button>` — 1st action button after heading. Name contains today's date. PREFER pressing `t` instead.
+  - Previous period: `<button>` — 2nd action button. PREFER pressing `p` or `k`.
+  - Next period: `<button>` — 3rd action button. PREFER pressing `n` or `j`.
+  - Current period label: `<StaticText>` e.g. "aprile 2026"
+  - Search icon: `<button>` — icon button. PREFER pressing `/`.
+  - Settings menu: `<button expandable haspopup="menu">` with gear icon
+  - View switcher: `<button expandable haspopup="menu">` with `description` pointing to view change. Its NAME equals the current view ("Settimana"/"Week"). PREFER pressing `1`-`6`.
+
+  **Create button (just below banner):**
+  - `<button expandable haspopup="menu">` — the big Create button. Name is the locale word for "Create" (e.g. "Crea"). PREFER pressing `c`, `q`, or navigating to `/r/eventedit` directly.
+
+  **Left sidebar (inside a <generic> after the Create button):**
+  - Mini calendar prev/next month: `<button>` names contain "Previous month" / "Next month" equivalent.
+  - Mini calendar day cells: `<button>` names like `"11, Sabato, oggi"` — `DAY_NUM, DAY_NAME[, today]`. Today has `pressed` attribute.
+  - "My calendars" expand: `<button expandable expanded>`
+  - Calendar toggle checkboxes: `<checkbox>` with calendar name
+  - "Other calendars" expand: `<button expandable expanded>`
+  - Add other calendars: `<button expandable haspopup="menu">`
+
+  **Main grid — week/day/custom view:**
+  - `<main description="Settimana del X, N eventi">` — aria description contains period label AND event count. Use this to get a quick count.
+  - `<h1>` inside main — matches the description
+  - Day column headers: `<columnheader>` (readonly) wrapping a `<button "DAY_NAME, DATE">`. The day marked "today" has "oggi" / "today" in its name.
+  - All-day event slots (top of grid): `<gridcell "N evento di una giornata, DAY, DATE">` / "N all-day events" — one per day.
+  - Timed event slots: `<gridcell "N evento, DAY, DATE">` / "N events" — one per day.
+  - **Event buttons**: `<button>` children of gridcells. Aria-label pattern:
+    `"START a END, TITLE, CREATOR, STATUS, LOCATION, DATE"` (Italian — "a" is "to")
+    `"START to END, TITLE, CREATOR, STATUS, LOCATION, DATE"` (English)
+    - Example: `"10AM a 11AM, Jarvis guide and use cases, Vieri Balboni, Invito accettato, Nessuna posizione, 7 aprile 2026"`
+    - All-day events start with `"Tutto il giorno, "` / `"All day, "` instead of a time range.
+    - Subscribed calendar events (holidays, birthdays) replace CREATOR/STATUS with `"Calendario: NAME"` / `"Calendar: NAME"`.
+    - STATUS is one of: "Invito accettato"/"Accepted", "Richiede conferma"/"Awaiting", "Rifiutato"/"Declined", "Forse"/"Maybe", or absent for your own events.
+  - Focused event has `focusable focused` attributes — press `e` to edit or `Backspace` to delete it immediately.
+
+  **Main grid — month view:**
+  - Same pattern, but each day cell is a `<gridcell>` containing multiple event buttons stacked.
+
+  **Main grid — agenda/schedule view:**
+  - Flat list. Events grouped by day `<button>` with date, each event rendered as a `<button>` with the same aria-label pattern above.
+
+  **Main grid — search view (URL /r/search?q=...):**
+  - `<main description="Risultati di ricerca. N eventi trovati.">` / "Search results. N events found."
+  - Results grouped by day: `<button "DAY, DATE">` then event `<button>` buttons with the standard pattern.
+
+  **Quick Add dialog (after pressing `q` or `Shift+C`):**
+  - Dialog: `<dialog "Crea" modal>` / "Create"
+  - Close: `<button "Chiudi">` / "Close"
+  - Title textbox: `<textbox>` with placeholder "Aggiungi titolo e orario" / "Add title and time". NOTE: Does NOT parse natural language — you must set date/time separately.
+  - Mode tabs: `<tab "Evento">` / "Event" (selected), `<tab "Attività">` / "Task", `<tab "Programma degli appuntamenti">` / "Appointment schedule"
+  - Date/recurrence summary button: `<button expandable>` with text like "Saturday, 11 April - Saturday, 11 April Does not repeat" — click to expand the inline date picker.
+  - Add time button: `<button>` name contains "Aggiungi orario" / "Add time" — click to convert all-day to timed and reveal start/end time comboboxes.
+  - After "Add time" is clicked, these appear:
+    - `<textbox "Data inizio">` / "Start date" — accepts typed date like `14/4/2026` (locale) or `Apr 14 2026`. Press Enter to commit. The main grid scrolls to that week.
+    - `<combobox "Ora di inizio">` / "Start time" autocomplete list — options in 15-min increments ("3:00PM", "3:15PM"…). You can click an option OR type a value. Picking a start time auto-adjusts end time by 1 hour.
+    - `<combobox "Ora di fine">` / "End time" — same
+    - `<checkbox "Tutto il giorno">` / "All day"
+    - `<button "Fuso orario">` / "Timezone"
+    - `<combobox "Ricorrenza">` / "Recurrence" — "Non si ripete" / "Does not repeat", "Daily", "Weekly", etc.
+  - Add guests: `<button "Aggiungi invitati" expandable>` / "Add guests" — click to reveal inline `<combobox "Invitati">` / "Guests". Type email address + Enter (submitKey) to add as a chip.
+  - Meet: `<button "Aggiungi videoconferenza di Google Meet">` / "Add Google Meet video conferencing" — toggle
+  - Location: `<button "Aggiungi luogo" expandable>` / "Add location" — reveals inline combobox with autocomplete
+  - Description: `<button "Aggiungi descrizione o un allegato di Google Drive" expandable>` / "Add description or Drive attachment"
+  - Calendar/visibility/notification summary: `<button expandable>` with a long composite name — click to change
+  - More options: `<button "Altre opzioni">` / "More options" — navigates to the full editor with current values preserved
+  - Save: `<button "Salva">` / "Save" — click to save and close the dialog
+  - Add to sidebar: `<button "Inserisci nella barra laterale">` — ignore
+
+  Provisional placeholder on grid: while the Quick Add dialog is open a PROVISIONAL event button appears in the grid with the aria-label suffix "Creazione dell'evento in corso…" / "Creating event…". This is expected. It will be committed on save or removed on cancel.
+
+  **Peek popup (click on an existing event in the grid):**
+  - Dialog: `<dialog "EVENT_TITLE" modal>` — dialog name = event title
+  - Close: `<button "Chiudi">` / "Close"
+  - Edit: `<button "Modifica evento">` / "Edit event" — opens full editor
+  - Delete: `<button "Elimina evento">` / "Delete event" — deletes immediately, shows undo toast
+  - Email guests: `<button "Invia dettagli dell'evento per email">` / "Email event details"
+  - Options menu: `<button "Opzioni" expandable haspopup="menu">` / "Options" — duplicate, print, publish, copy to another calendar
+  - Heading: `<h1 "EVENT_TITLE">`
+  - Date text: `<StaticText "DAY, DATE">`
+  - Time text: `<StaticText "START - ENDPM">`
+  - Invite by link: `<button "Invita tramite link">` / "Invite via link"
+  - Reminder text: `<StaticText "N minutes before">`
+  - Organizer: `<StaticText "Organizer: NAME">`
+
+  **Full event editor (URL /r/eventedit or /r/eventedit/BASE64_ID):**
+  - `<main description="Pagina di modifica eventi">` / "Event edit page"
+  - Cancel: `<button "Annulla modifiche eventi">` / "Cancel changes"
+  - Title: `<textbox "Titolo">` / "Title"
+  - Save: `<button "Salva">` / "Save" — or press Ctrl+S / Ctrl+Enter
+  - More actions: `<button "Altre azioni" expandable haspopup="menu">` / "More actions" — delete, duplicate, print
+  - Start date: `<textbox "Data inizio">` value format "14 apr 2026" — accepts typed values + Enter
+  - Start time: `<combobox "Ora di inizio">`
+  - End time: `<combobox "Ora di fine">`
+  - End date: `<textbox "Data fine">`
+  - Timezone: `<button "Fuso orario">`
+  - All-day: `<checkbox "Tutto il giorno">` / "All day"
+  - Recurrence: `<combobox "Ricorrenza">` / "Recurrence"
+  - Guests combobox: `<combobox "Invitati">` / "Guests" — type + Enter to add
+  - Guest permissions (3 checkboxes): "modify event", "invite others", "see guest list"
+  - Meet: `<button "Aggiungi videoconferenza di Google Meet">` / "Add Google Meet video conferencing"
+  - Location: `<combobox "Aggiungi posizione">` / "Add location"
+  - Notification method: `<combobox "Metodo di notifica">` / "Notification method" — "Notification" or "Email"
+  - Notification amount: `<spinbutton "Minuti di anticipo per la notifica">` / "Minutes before"
+  - Notification unit: `<combobox "Selezione unità di tempo">` / "Time unit" — minutes/hours/days/weeks
+  - Remove notification: `<button "Rimuovi notifica">`
+  - Add notification: `<button "Aggiungi notifica">`
+  - Color: `<button "Colore calendario, colore evento" expandable haspopup="menu">` / "Calendar color, event color"
+  - Availability (busy/free): `<combobox "Disponibilità">` / "Availability" — "Occupato"/"Busy" or "Disponibile"/"Free"
+  - Visibility: `<combobox "Visibilità">` / "Visibility" — Default/Public/Private
+  - Drive attachment: `<button "Aggiungi un allegato di Google Drive">` / "Add Google Drive attachment"
+  - Description: `<textbox "Descrizione" multiline>` / "Description" — with Bold/Italic/Underline/List/Link/Clear-format buttons above it
+
+  **Search view (URL /r/search?q=QUERY or after pressing `/`):**
+  - Back: `<button "Indietro">` / "Back"
+  - Search heading: `<h1 "Cerca">` / "Search"
+  - Search input: `<combobox "Cerca" autocomplete="list">` / "Search" — focused automatically
+  - Clear search: `<button "Cancella ricerca">` / "Clear search" (appears when there's a query)
+  - Options: `<button "Opzioni di ricerca">` / "Search options" — advanced filters (date range, calendar, etc.)
+  - Submit: `<button "Cerca">` / "Search" — or press Enter in the combobox
+  - Results main: `<main description="Risultati di ricerca. N eventi trovati.">`
+
+  **Go to date dialog (after pressing `g`):**
+  - Dialog: `<dialog "Vai alla data" modal>` / "Go to date"
+  - Date textbox: `<textbox "Data">` / "Date"
+  - Cancel: `<button "Annulla">` / "Cancel"
+  - Go: `<button "Vai">` / "Go"
+
+  **Toasts (live region confirmations):**
+  - After save: `<StaticText "Evento salvato">` / "Event saved" + `<button "Annulla">` / "Undo"
+  - After delete: `<StaticText "Evento eliminato">` / "Event deleted" + `<button "Annulla">` / "Undo"
+  - These appear in a `live="polite"` generic — use them to confirm operations succeeded.
+
+  ---
+
+  ### TASK: Create a simple event (THE ONLY acceptable path — URL prefill)
+  Use this recipe for ANY "create/add/schedule/book X at TIME" request.
+
+  BEFORE you start: resolve the user's intent to concrete values.
+  - **Title**: from the user's phrase ("Meeting with Guglielmo" → `Meeting with Guglielmo`).
+  - **Date**: convert relative phrases ("next Monday", "tomorrow", "14 April") to an absolute `YYYYMMDD`. If the user says a day-of-week, compute the actual calendar date — VERIFY the day-of-week matches by checking today's date from the system context. If it does not match (e.g. user says "Monday April 14" but April 14 is a Tuesday), ASK the user which they meant before proceeding. Do NOT silently pick one.
+  - **Start/end time**: convert to `HHmmss`. Default duration = 1 hour if not specified.
+  - **Timezone**: use the user's known timezone. If unknown, omit `ctz` and Calendar will use the account default.
+
+  Then execute:
+  1. Build the URL:
+     `https://calendar.google.com/calendar/u/0/r/eventedit?text=URLENCODED_TITLE&dates=YYYYMMDDTHHmmSS/YYYYMMDDTHHmmSS[&ctz=IANA_TZ][&location=URLENCODED_LOC][&add=email1,email2][&details=URLENCODED_DESC][&recur=URLENCODED_RRULE]`
+  2. `browser_navigate` to the URL.
+  3. `browser_snapshot` — verify: URL contains `/r/eventedit`, AND the main region has a descriptive aria description (the event-editor one), AND there is a `<textbox>` in the main region whose current value equals your intended title. If any of those are wrong, STOP — do not save, report the state to the user.
+  4. `browser_type` a Ctrl+Enter keystroke (or whichever save key your tool supports for full-editor Ctrl+Enter). Locale-independent.
+  5. `browser_snapshot` — verify the URL has CHANGED (no longer contains `/r/eventedit`). URL change is the authoritative signal that save succeeded. A confirmation toast will usually also appear in a `live="polite"` generic, but do not depend on its text.
+
+  That's 4 tool calls, maximum. If you exceed this, you have departed from the recipe — stop and re-read.
+
+  ### TASK: Create an all-day event
+  Same as above but use date-only format:
+  - `dates=YYYYMMDD/YYYYMMDD` (end date is EXCLUSIVE — for a single-day all-day event use the next day as the end).
+  - Example for all day on 14 April 2026: `dates=20260414/20260415`
+
+  ### TASK: Create a recurring event
+  Same URL prefill approach plus `recur=RRULE:...`:
+  - Weekly on Monday, Wednesday, Friday: `recur=RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR`
+  - Daily for 10 occurrences: `recur=RRULE:FREQ=DAILY;COUNT=10`
+  - Every Tuesday until end of year: `recur=RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261231T000000Z`
+  URL-encode the `recur` value — `:` becomes `%3A`, `;` becomes `%3B`, `=` becomes `%3D`.
+
+  ### TASK: Check today's events
+  1. `browser_navigate` to `https://calendar.google.com/calendar/u/0/r/day`
+  2. `browser_snapshot`
+  3. Read the `<main description="DATE, N eventi">` heading for the count, then list the event button aria-labels. Each label has the format "START to END, TITLE, …, DATE".
+  4. Report back.
+
+  ### TASK: Check this week's events
+  1. `browser_navigate` to `https://calendar.google.com/calendar/u/0/r/week`
+  2. `browser_snapshot` — read event buttons grouped under each columnheader.
+
+  ### TASK: Check a specific day's events
+  1. `browser_navigate` to `/calendar/u/0/r/day/YYYY/M/D` (no leading zeros — e.g. `/r/day/2026/4/14`)
+  2. `browser_snapshot`
+  3. Read events.
+
+  ### TASK: Check events on a specific week/month
+  - Week: `/calendar/u/0/r/week/YYYY/M/D`
+  - Month: `/calendar/u/0/r/month/YYYY/M/D`
+
+  ### TASK: Check upcoming agenda (list view)
+  1. `browser_navigate` to `/calendar/u/0/r/agenda`
+  2. `browser_snapshot` — events appear as a flat list grouped by day.
+
+  ### TASK: Find an event by keyword (search)
+  1. `browser_navigate` to `https://calendar.google.com/calendar/u/0/r/search?q=URL_ENCODED_QUERY`
+  2. `browser_snapshot`
+  3. Read the main description ("Search results. N events found.") and the result buttons. Each result has the standard aria-label pattern.
+  4. To open a specific result, click its event `<button>`.
+
+  ### TASK: Find an event by date + title
+  Prefer navigating to the day: `/r/day/YYYY/M/D`, snapshot, then match by title substring in the event button aria-labels. Search (`/r/search`) is a fallback if you don't know the date.
+
+  ### TASK: Open and read an event's full details
+  1. Navigate to the day/week containing the event.
+  2. `browser_snapshot`
+  3. `browser_click` the event `<button>` — the peek popup dialog appears.
+  4. `browser_snapshot` — the dialog name = event title; read date/time/organizer/reminder from the StaticText children.
+  5. For full details (description, guests), click `<button "Modifica evento">` / "Edit event" to navigate to the full editor, then snapshot.
+
+  ### TASK: Delete an event (FASTEST — keyboard)
+  1. Navigate to the day/week containing the event.
+  2. `browser_snapshot`
+  3. `browser_click` the target event `<button>` — this focuses it AND opens the peek popup.
+  4. `browser_click` the peek's `<button "Elimina evento">` / "Delete event".
+  5. `browser_snapshot` — confirm toast `"Evento eliminato"` / "Event deleted" appears.
+
+  Alternative using keyboard (if event is already focused after a prior action):
+  1. Press `Backspace` — deletes immediately, no confirmation.
+  2. `browser_snapshot` — confirm toast.
+
+  ### TASK: Edit an event (change title, time, guests, etc.)
+  1. Navigate to the day containing the event.
+  2. `browser_snapshot`
+  3. `browser_click` the event `<button>` — peek opens.
+  4. `browser_click` `<button "Modifica evento">` / "Edit event" — full editor opens.
+  5. `browser_snapshot` — confirm you're in the editor (URL contains /r/eventedit/BASE64).
+  6. Edit fields:
+     - Title: click `<textbox "Titolo">`, Ctrl+A, type new value.
+     - Start/end date: click `<textbox "Data inizio">` / "Data fine", Ctrl+A, type `D/M/YYYY` + Enter.
+     - Start/end time: click the `<combobox>` and type the new time ("3:00PM") or select from the list.
+     - Guests: click `<combobox "Invitati">`, type email, press Enter (submitKey). Repeat per guest.
+     - Description: click `<textbox "Descrizione">`, type.
+     - Location: click `<combobox "Aggiungi posizione">`, type.
+  7. Press `Ctrl+Enter` OR click `<button "Salva">` / "Save".
+  8. `browser_snapshot` — confirm toast.
+
+  ### TASK: Reschedule an event (move to a new time)
+  Use TASK "Edit an event" above. Change start date, start time, end date, end time. Save.
+
+  ### TASK: Add guests to an existing event
+  Use TASK "Edit an event". In the full editor:
+  1. Click `<combobox "Invitati">` / "Guests".
+  2. `browser_type` each email address with submitKey="Enter" — each becomes a chip.
+  3. Save.
+
+  ### TASK: Add a Google Meet link to an existing event
+  1. Open event in full editor (Edit flow above).
+  2. `browser_click` `<button "Aggiungi videoconferenza di Google Meet">` / "Add Google Meet video conferencing".
+  3. `browser_snapshot` — the button is replaced by a Meet link display.
+  4. Save.
+
+  ### TASK: Check if a time slot is free ("am I free tomorrow at 3pm?")
+  1. `browser_navigate` to `/calendar/u/0/r/day/YYYY/M/D` for the target day.
+  2. `browser_snapshot`.
+  3. Scan event button aria-labels. Each label starts with "START to END". Check if any event overlaps the target time.
+  4. Report result.
+
+  ### TASK: Create event with attachment
+  1. Use TASK "Create a simple event" via URL prefill to reach the full editor.
+  2. `browser_click` `<button "Aggiungi un allegato di Google Drive">` / "Add Google Drive attachment".
+  3. This opens the Drive picker (separate modal). If the file is NOT in Drive, abort and tell the user to upload it manually, or use a Drive-hosted file.
+  4. Save.
+
+  ### TASK: Switch view (day/week/month/agenda/year)
+  Press the corresponding shortcut: `1`/`d` day, `2`/`w` week, `3`/`m` month, `4`/`x` custom, `5`/`a` agenda, `6`/`y` year.
+  OR navigate directly: `/calendar/u/0/r/{view}`.
+
+  ### TASK: Jump to today
+  Press `t` OR navigate to `/calendar/u/0/r/{current_view}` with no date.
+
+  ### TASK: Jump to a specific date
+  Navigate to `/calendar/u/0/r/{view}/YYYY/M/D`. This is faster than using the `g` dialog.
+
+  ### TASK: Respond to an invite (Yes/No/Maybe)
+  1. Navigate to the day containing the invite.
+  2. `browser_click` the event `<button>` — peek popup opens.
+  3. The peek contains RSVP buttons (`<button "Sì">` / "Yes", `<button "Forse">` / "Maybe", `<button "No">`) for invites you haven't responded to. Click one.
+  4. `browser_snapshot` — confirm.
+  Note: if you don't see RSVP buttons in the peek, the event was created by you (you're the organizer) — there's nothing to RSVP to.
+
+  ### TASK: Toggle a calendar on/off (show/hide a calendar)
+  1. In the left sidebar, find the `<checkbox "CALENDAR_NAME">` under "My calendars" / "Other calendars".
+  2. `browser_click` the checkbox.
+  3. `browser_snapshot` — grid updates.
+
+  ---
+
+  ### Common Gotchas
+  - **Locale is unknown and always will be**: Google Calendar's UI is fully translated. NEVER hardcode English (or any language) text as a selector. URL paths, keyboard shortcuts, and structural attributes are your ONLY stable handles.
+  - **URL navigation replaces clicks**: view switching, date jumps, search, and NEW event creation can all be done with a single `browser_navigate` call. Use it first, every time.
+  - **Month and day numbers in URLs have no leading zeros**: `/r/week/2026/4/14` not `/r/week/2026/04/14`.
+  - **eventedit URL params MUST be URL-encoded**: spaces → `%20`, `&` → `%26`, `:` → `%3A`, `/` in the value → `%2F`, `=` → `%3D`, etc.
+  - **`dates=` format is local time, no Z**: `20260414T150000/20260414T160000`. For all-day: `20260414/20260415` (end is EXCLUSIVE — a single-day all-day event uses the next day as the end).
+  - **Quick Add does NOT parse natural language in the title field**: typing "Lunch tomorrow 1pm" as the title does NOT set the time. This is why URL prefill exists — skip Quick Add entirely.
+  - **Ctrl+Enter saves ONLY in the full editor**, not in the Quick Add dialog. This is another reason to navigate straight to `/r/eventedit` instead of using Quick Add.
+  - **Picking a start time auto-adjusts end time by +1 hour**: if you set the start via picker, verify the end before saving.
+  - **Backspace deletes immediately with no confirmation**. The delete is undoable via the toast's undo button for a few seconds. Verify which event is focused (look for `focusable focused` attributes) BEFORE pressing Backspace.
+  - **Peek popup is modal and captures Esc**: one Esc closes the peek and returns you to the grid with the event still focused.
+  - **Quick Add draws a provisional event on the grid** while the dialog is open. The provisional event has extra text in its aria-label (something ending with an ellipsis, indicating "creating…"). Don't treat it as a saved event — wait for the dialog to close and the text suffix to disappear.
+  - **Deleted events leave focus on the next event**: after Backspace, the next event in the grid becomes the new `focusable focused` element. Don't accidentally delete it too.
+  - **Time combobox accepts typing**: click the combobox and type "3:00PM" + Enter, instead of scrolling through 96 options.
+  - **Date textbox accepts locale-formatted typing**: `14/4/2026`, `4/14/2026`, or `Apr 14 2026` can all work depending on the user's locale — BUT you don't need to worry about this because URL prefill makes date typing unnecessary.
+  - **Invite status shows in the aria-label**: one of the comma-separated fields indicates whether you accepted/declined/are awaiting response. The specific words are locale-dependent — if you need to find "pending invites", match by structural position (after creator, before location) and let the user's question tell you which status they care about, rather than hardcoding status words.
+  - **Subscribed calendar events (holidays, birthdays) have a different aria-label shape**: their structure replaces creator/status with something like "Calendar: NAME". You cannot delete them from the main grid (they belong to read-only calendars).
+  - **Account picker `/u/0/`**: the first Google account. If the user has multiple accounts, they may want `/u/1/`, `/u/2/`, etc. Default to `/u/0/` unless told otherwise.
+  - **Timezone matters for `dates=` in eventedit URLs**: times are interpreted in the account's calendar timezone unless you pass `ctz=IANA_TIMEZONE`. When in doubt, pass `ctz` explicitly to avoid ambiguity.
+  - **You cannot hand-construct a `/r/eventedit/BASE64` URL for an existing event**: the BASE64 ID is opaque. To edit an existing event, navigate to the day, click the event (peek opens), click the Edit button in the peek (structurally, not by text).
+  - **Search URL is `/r/search?q=URL_ENCODED_QUERY`**: one navigate — no need to press `/` and type.
+
+  ### Rules (MUST follow — violations waste time)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file. Nothing else.
+  2. browser_evaluate is BANNED. browser_screenshot is BANNED. Do not use them under any circumstances — if you are tempted to, STOP and re-read the template.
+  3. **Create events ONLY via URL prefill** at `/r/eventedit?text=...&dates=...`. Do NOT click the Create button. Do NOT click grid cells. Do NOT use Quick Add. There is no fallback — if the prefill URL doesn't give you a valid editor, report the failure to the user.
+  4. **Check the calendar / switch views / jump dates ONLY via URL navigation** (`/r/day`, `/r/week/YYYY/M/D`, `/r/search?q=...`). Keyboard shortcuts are a secondary option only if URL navigation isn't applicable.
+  5. **NEVER match elements by literal locale text.** Not English, not Italian, not any other language. Match by ROLE + structural attributes + position. Text in this template is DOCUMENTATION of what exists, not a selector.
+  6. Event aria-labels follow a consistent pattern: time range first (or all-day marker), then title, creator, status, location, date, all comma-separated. The specific separator word and all-day marker are locale-dependent — parse by commas and positions, not by literal words.
+  7. The `<main>` element's aria description always contains the current period label AND a digit (event count). This is your primary STATE indicator and it's locale-agnostic in structure even though locale-dependent in text — extract the number, don't depend on the surrounding words.
+  8. After clicking an event, a modal `<dialog>` appears whose `name` EQUALS the event title (your own string — language-free). Inside, find action buttons by role and position, not by name. The FIRST non-close action button in the peek is Edit; the SECOND is Delete. Confirm by position.
+  9. After EVERY mutating action (save/delete/edit), do ONE `browser_snapshot` and verify the URL changed appropriately (e.g. `/r/eventedit` disappearing after save, or the focused event's aria-label no longer present after delete). URL and tree changes are authoritative — do not rely on toast text.
+  10. When the user gives a RELATIVE date ("next Monday", "tomorrow") AND a specific day number, VERIFY consistency before acting. If they conflict (e.g. "Monday April 14" when April 14 is a Tuesday), ASK the user which they meant. Do not silently pick one.
+  11. After 2 consecutive failed attempts to locate or interact with an element, STOP. Do not invent workarounds, do not use browser_evaluate, do not try random clicks. Tell the user what you saw and what you expected.
+  12. Budgets: create event ≤ 4 tool calls. Check day/week ≤ 2 tool calls. Delete event ≤ 5 tool calls. Search ≤ 2 tool calls. If you exceed, you have departed from the recipe.
+  9. If an element is not found after 2 retries, tell the user. Do NOT try workarounds with browser_evaluate or random clicking.
+  10. Maximum tool calls for "create a simple event": 4 (navigate → snapshot → save → snapshot). Maximum for "check my day": 2 (navigate → snapshot). If you are above that, you are doing something wrong — recheck whether you should be using URL navigation instead.
