@@ -224,7 +224,11 @@ function cmdStatus(): void {
 
 async function cmdOnboard(): Promise<void> {
   const { runOnboard } = await import('../src/cli/onboard.ts');
+  const { runDoctor } = await import('../src/cli/doctor.ts');
   await runOnboard();
+  console.log('');
+  console.log(c.cyan('Running JARVIS doctor...'));
+  await runDoctor();
 }
 
 async function cmdDoctor(): Promise<void> {
