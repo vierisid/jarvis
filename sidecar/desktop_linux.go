@@ -434,7 +434,10 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	if executable == "" {
 		return nil, fmt.Errorf("missing required parameter: executable")
 	}
-	argsStr, _ := params["args"].(string)
+	argsStr, err := extractArgs(params)
+	if err != nil {
+		return nil, fmt.Errorf("launch_app: %w", err)
+	}
 
 	var cmdArgs []string
 	if argsStr != "" {
@@ -449,7 +452,7 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("launch_app failed to start %q: %w", executable, err)
+		return nil, fmt.Errorf("launch_app: failed to start %q: %w", executable, err)
 	}
 
 	// Detach: don't wait, let the child run independently
@@ -458,6 +461,9 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	pid := 0
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
+	}
+	if pid == 0 {
+		return nil, fmt.Errorf("launch_app: started %q but could not obtain process ID", executable)
 	}
 
 	// Derive a display name from the executable path

@@ -137,3 +137,169 @@ func TestListDirectory(t *testing.T) {
 		}
 	})
 }
+
+// ── extractArgs tests ────────────────────────────────────────────────
+
+func TestExtractArgs(t *testing.T) {
+	t.Run("missing args key returns empty string", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{"executable": "/bin/ls"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "" {
+			t.Errorf("expected empty string, got %q", s)
+		}
+	})
+
+	t.Run("nil args returns empty string", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{"args": nil})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "" {
+			t.Errorf("expected empty string, got %q", s)
+		}
+	})
+
+	t.Run("string args pass through", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{"args": "--verbose --output /tmp/foo"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "--verbose --output /tmp/foo" {
+			t.Errorf("expected pass-through, got %q", s)
+		}
+	})
+
+	t.Run("empty string args pass through", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{"args": ""})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "" {
+			t.Errorf("expected empty string, got %q", s)
+		}
+	})
+
+	t.Run("array of strings joins with spaces", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{
+			"args": []any{"--verbose", "--output", "/tmp/foo"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "--verbose --output /tmp/foo" {
+			t.Errorf("expected joined string, got %q", s)
+		}
+	})
+
+	t.Run("empty array returns empty string", func(t *testing.T) {
+		s, err := extractArgs(map[string]any{"args": []any{}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s != "" {
+			t.Errorf("expected empty string, got %q", s)
+		}
+	})
+
+	t.Run("array with non-string element returns error", func(t *testing.T) {
+		_, err := extractArgs(map[string]any{
+			"args": []any{"--verbose", 42},
+		})
+		if err == nil {
+			t.Fatal("expected error for non-string array element")
+		}
+	})
+
+	t.Run("unsupported type returns error", func(t *testing.T) {
+		_, err := extractArgs(map[string]any{"args": 123})
+		if err == nil {
+			t.Fatal("expected error for unsupported type")
+		}
+	})
+
+	t.Run("bool type returns error", func(t *testing.T) {
+		_, err := extractArgs(map[string]any{"args": true})
+		if err == nil {
+			t.Fatal("expected error for bool type")
+		}
+	})
+}
+
+// ── launch_app parameter validation tests ────────────────────────────
+
+func TestLaunchAppMissingExecutable(t *testing.T) {
+	_, err := handleLaunchApp(map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing executable")
+	}
+}
+
+func TestLaunchAppEmptyExecutable(t *testing.T) {
+	_, err := handleLaunchApp(map[string]any{"executable": ""})
+	if err == nil {
+		t.Fatal("expected error for empty executable")
+	}
+}
+
+func TestLaunchAppBadArgsType(t *testing.T) {
+	// args as a number should fail cleanly, not be silently cast
+	_, err := handleLaunchApp(map[string]any{
+		"executable": "/bin/echo",
+		"args":       42,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid args type")
+	}
+}
+
+func TestLaunchAppNonexistentBinary(t *testing.T) {
+	_, err := handleLaunchApp(map[string]any{
+		"executable": "/nonexistent/binary/that/does/not/exist",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent binary")
+	}
+}
+
+func TestLaunchAppSuccessReturnsNonZeroPid(t *testing.T) {
+	// Use a real binary that exists and exits quickly
+	result, err := handleLaunchApp(map[string]any{
+		"executable": "/bin/sleep",
+		"args":       "0.1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := result.Result.(map[string]any)
+	pid, ok := m["pid"].(int)
+	if !ok {
+		t.Fatalf("pid is not int: %T", m["pid"])
+	}
+	if pid == 0 {
+		t.Error("expected non-zero pid on success")
+	}
+	if m["success"] != true {
+		t.Error("expected success: true")
+	}
+}
+
+func TestLaunchAppArrayArgs(t *testing.T) {
+	// JSON-decoded arrays come as []any — verify they work
+	result, err := handleLaunchApp(map[string]any{
+		"executable": "/bin/sleep",
+		"args":       []any{"0.1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := result.Result.(map[string]any)
+	pid, ok := m["pid"].(int)
+	if !ok {
+		t.Fatalf("pid is not int: %T", m["pid"])
+	}
+	if pid == 0 {
+		t.Error("expected non-zero pid on success with array args")
+	}
+}

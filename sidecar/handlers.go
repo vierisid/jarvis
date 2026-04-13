@@ -420,3 +420,36 @@ func handleGetSystemInfo(params map[string]any) (*RPCResult, error) {
 		"go_version": runtime.Version(),
 	}}, nil
 }
+
+// --- Launch-App Helpers ---
+
+// extractArgs extracts the "args" parameter from an RPC params map.
+// It accepts:
+//   - string:  returned as-is (e.g. "--verbose --output /tmp/foo")
+//   - []any:   each element is fmt.Sprint'd and joined with spaces
+//   - missing: returns ("", nil)
+//
+// Returns an error if "args" is present but has an unsupported type,
+// so callers never silently ignore a malformed request.
+func extractArgs(params map[string]any) (string, error) {
+	raw, exists := params["args"]
+	if !exists || raw == nil {
+		return "", nil
+	}
+	switch v := raw.(type) {
+	case string:
+		return v, nil
+	case []any:
+		parts := make([]string, 0, len(v))
+		for i, elem := range v {
+			s, ok := elem.(string)
+			if !ok {
+				return "", fmt.Errorf("args[%d]: expected string, got %T", i, elem)
+			}
+			parts = append(parts, s)
+		}
+		return strings.Join(parts, " "), nil
+	default:
+		return "", fmt.Errorf("args: expected string or array, got %T", raw)
+	}
+}

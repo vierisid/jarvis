@@ -207,7 +207,10 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	if executable == "" {
 		return nil, fmt.Errorf("missing required parameter: executable")
 	}
-	args, _ := params["args"].(string)
+	args, err := extractArgs(params)
+	if err != nil {
+		return nil, fmt.Errorf("launch_app: %w", err)
+	}
 
 	escaped := strings.ReplaceAll(executable, "'", "''")
 	argsClause := ""
