@@ -112,6 +112,42 @@ export type SiteEvent = {
   timestamp: number;
 };
 
+export type SystemNotice = {
+  id: string;
+  title: string;
+  text: string;
+  level: "warning";
+};
+
+type SidecarEventPayload = {
+  source?: string;
+  event?: {
+    type?: string;
+    reason?: string;
+  };
+};
+
+function createSidecarNotice(payload: SidecarEventPayload, timestamp?: number): ChatMessage & { notice?: SystemNotice } {
+  const reason = payload.event?.reason?.trim();
+  const notice: SystemNotice = {
+    id: crypto.randomUUID(),
+    title: "Sidecar offline",
+    text: reason
+      ? `Jarvis sidecar disconnected: ${reason}. Dashboard features may be delayed until it reconnects.`
+      : "Jarvis sidecar disconnected. Dashboard features may be delayed until it reconnects.",
+    level: "warning",
+  };
+
+  return {
+    id: crypto.randomUUID(),
+    role: "system",
+    content: notice.text,
+    timestamp,
+    source: "system_notification",
+    notice,
+  };
+}
+
 export function useWebSocket() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -121,6 +157,7 @@ export function useWebSocket() {
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEvent[]>([]);
   const [goalEvents, setGoalEvents] = useState<GoalEvent[]>([]);
   const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
+  const [notices, setNotices] = useState<SystemNotice[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -386,6 +423,12 @@ export function useWebSocket() {
           // so no need to duplicate here — just log for debugging
           console.log("[WS] Awareness suggestion:", awarenessEvent.data.title);
         }
+      } else if (payload.source === "sidecar_event" && payload.event?.type === "sidecar_disconnect") {
+        const noticeMessage = createSidecarNotice(payload, msg.timestamp);
+        if (noticeMessage.notice) {
+          setNotices((prev) => [noticeMessage.notice!, ...prev.filter((item) => item.text !== noticeMessage.notice!.text)].slice(0, 3));
+        }
+        setMessages((prev) => [...prev, noticeMessage]);
       } else if (payload.source === "assistant_message" && payload.text) {
         setMessages((prev) => [
           ...prev,
@@ -457,8 +500,12 @@ export function useWebSocket() {
     []
   );
 
+  const dismissNotice = useCallback((noticeId: string) => {
+    setNotices((prev) => prev.filter((notice) => notice.id !== noticeId));
+  }, []);
+
   return {
-    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents,
+    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
     wsRef,
     voiceCallbacksRef,
   };
