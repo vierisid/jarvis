@@ -14,6 +14,8 @@ export type ProcessInfo = {
   memory: number;
 };
 
+const UNIX_PS_ARGS = ['-axo', 'pid=,pcpu=,pmem=,command='] as const;
+
 export class ProcessMonitor implements Observer {
   name = 'processes';
   private interval: Timer | null = null;
@@ -136,8 +138,8 @@ export class ProcessMonitor implements Observer {
 
     try {
       if (platform === 'linux' || platform === 'darwin') {
-        // Use ps command for Unix-like systems
-        const result = await Bun.$`ps aux --no-headers`.quiet();
+        // Use a portable ps format that works on both Linux and macOS.
+        const result = await Bun.$`ps ${UNIX_PS_ARGS[0]} ${UNIX_PS_ARGS[1]}`.quiet();
         const output = result.stdout.toString();
 
         return this.parsePS(output);
@@ -164,17 +166,17 @@ export class ProcessMonitor implements Observer {
     const lines = output.split('\n').filter(line => line.trim());
 
     for (const line of lines) {
-      // ps aux format: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+      // ps -axo pid=,pcpu=,pmem=,command= format: PID %CPU %MEM COMMAND
       const parts = line.trim().split(/\s+/);
 
-      if (parts.length < 11) {
+      if (parts.length < 4) {
         continue;
       }
 
-      const pid = parseInt(parts[1]!, 10);
-      const cpu = parseFloat(parts[2]!);
-      const memory = parseFloat(parts[3]!);
-      const name = parts.slice(10).join(' '); // COMMAND can have spaces
+      const pid = parseInt(parts[0]!, 10);
+      const cpu = parseFloat(parts[1]!);
+      const memory = parseFloat(parts[2]!);
+      const name = parts.slice(3).join(' '); // COMMAND can have spaces
 
       if (!isNaN(pid)) {
         processes.push({
