@@ -15,6 +15,17 @@ import { getActionForTool } from '../authority/tool-action-map.ts';
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
+const TOOLLESS_ACTION_WARNING = 'Your previous reply described tool actions as if they already happened, but no tool call was emitted. Do not narrate imaginary actions. If you need to act, emit the appropriate tool call. If you did not act, say that plainly.';
+const TOOLLESS_ACTION_PATTERNS = [
+  /\b(?:i|i've|i have|we)\s+(?:opened|launched|clicked|typed|pressed|saved|wrote|created|sent|filled|focused|navigated|scrolled|captured|took|uploaded|downloaded)\b/i,
+  /\b(?:done|finished)\s+(?:that|it)\b/i,
+];
+
+function responseClaimsExecutedAction(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return TOOLLESS_ACTION_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
@@ -228,6 +239,7 @@ export class AgentOrchestrator {
 
     const tools = this.getLLMTools();
     let finalText = '';
+    let toolValidationRetryUsed = false;
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -265,8 +277,23 @@ export class AgentOrchestrator {
         continue;
       }
 
+      if (
+        tools &&
+        tools.length > 0 &&
+        !toolValidationRetryUsed &&
+        llmResponse.tool_calls.length === 0 &&
+        responseClaimsExecutedAction(llmResponse.content)
+      ) {
+        toolValidationRetryUsed = true;
+        messages.push({ role: 'assistant', content: llmResponse.content });
+        messages.push({ role: 'system', content: TOOLLESS_ACTION_WARNING });
+        continue;
+      }
+
       // No tool calls — this is the final response
-      finalText = llmResponse.content;
+      finalText = toolValidationRetryUsed && responseClaimsExecutedAction(llmResponse.content)
+        ? 'I could not verify that action because the selected model described tool use without actually calling a tool. Please retry with a stronger tool-calling model or confirm the action manually.'
+        : llmResponse.content;
 
       // Warn on truncation
       if (llmResponse.finish_reason === 'length') {
@@ -323,6 +350,7 @@ export class AgentOrchestrator {
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
     let finalText = '';
     let responseModel = 'unknown';
+    let toolValidationRetryUsed = false;
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -361,9 +389,37 @@ export class AgentOrchestrator {
         };
       }
 
+      if (
+        tools &&
+        tools.length > 0 &&
+        !toolValidationRetryUsed &&
+        toolCalls.length === 0 &&
+        responseClaimsExecutedAction(accumulatedText)
+      ) {
+        toolValidationRetryUsed = true;
+        const retryNotice = '\n[Tool execution could not be verified. Retrying with stricter tool-use instructions.]\n';
+        finalText += retryNotice;
+        yield { type: 'text', text: retryNotice };
+        messages.push({
+          role: 'assistant',
+          content: accumulatedText,
+        });
+        messages.push({
+          role: 'system',
+          content: TOOLLESS_ACTION_WARNING,
+        });
+        continue;
+      }
+
       // No tool calls — this is the final response
       if (toolCalls.length === 0) {
-        finalText += accumulatedText;
+        if (toolValidationRetryUsed && responseClaimsExecutedAction(accumulatedText)) {
+          const warning = 'I could not verify that action because the selected model described tool use without actually calling a tool.';
+          finalText += warning;
+          yield { type: 'text', text: warning };
+        } else {
+          finalText += accumulatedText;
+        }
 
         // Check if we stopped due to token limit (truncation)
         const wasLength = doneResponse?.finish_reason === 'length';

@@ -12,7 +12,7 @@ type LLMConfig = {
   openrouter: { model: string; has_api_key: boolean } | null;
 };
 
-type TestResult = { ok: boolean; model?: string; error?: string };
+type TestResult = { ok: boolean; model?: string; error?: string; supports_tools?: boolean; warning?: string };
 
 const ANTHROPIC_MODELS = [
   "claude-opus-4-6",
@@ -338,6 +338,11 @@ export function LLMPanel() {
             </option>
           ))}
         </select>
+        {(primary === "ollama" || fallback.includes("ollama")) && (
+          <div style={warningStyle}>
+            Local/open-source models can be inconsistent at tool calling. Test the provider before relying on desktop or browser automation, and expect some models to narrate actions instead of executing them.
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -663,6 +668,11 @@ function ProviderSection({
               )}
             </div>
           </div>
+          {((provider === "ollama" && !testResult?.warning) || testResult?.warning) && (
+            <div style={{ ...warningStyle, marginTop: "8px", marginBottom: 0 }}>
+              {testResult?.warning ?? "Tool calling quality depends heavily on the selected local model. If automation matters, run Test Connection and verify the tool-use warning before relying on it."}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -750,6 +760,17 @@ const saveBtnStyle: React.CSSProperties = {
   borderRadius: "6px",
   color: "var(--j-accent)",
   cursor: "pointer",
+};
+
+const warningStyle: React.CSSProperties = {
+  marginTop: "8px",
+  padding: "8px 10px",
+  fontSize: "12px",
+  lineHeight: 1.45,
+  color: "#FDE68A",
+  background: "rgba(251, 191, 36, 0.08)",
+  border: "1px solid rgba(251, 191, 36, 0.22)",
+  borderRadius: "6px",
 };
 
 const primaryBadgeStyle: React.CSSProperties = {

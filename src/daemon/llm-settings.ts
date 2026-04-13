@@ -14,7 +14,7 @@ import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
-import type { LLMProvider } from '../llm/provider.ts';
+import type { LLMProvider, LLMTool } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
 
 // Keychain key names
@@ -44,6 +44,26 @@ export type LLMSettingsResponse = {
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
+};
+
+type ToolSupportProbeResult = {
+  supports_tools: boolean;
+  warning?: string;
+};
+
+const TOOL_SUPPORT_PROBE: LLMTool = {
+  name: 'confirm_tool_support',
+  description: 'A no-op tool used only to verify that the selected model can emit a tool call.',
+  parameters: {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'string',
+        description: 'Always set this to ok',
+      },
+    },
+    required: ['status'],
+  },
 };
 
 /**
@@ -375,7 +395,7 @@ export async function testLLMProvider(
     base_url?: string;
   },
   config: JarvisConfig,
-): Promise<{ ok: boolean; model?: string; error?: string }> {
+): Promise<{ ok: boolean; model?: string; error?: string; supports_tools?: boolean; warning?: string }> {
   try {
     let instance: LLMProvider;
 
@@ -412,8 +432,46 @@ export async function testLLMProvider(
       [{ role: 'user', content: 'Say OK' }],
       { max_tokens: 5 },
     );
-    return { ok: true, model: resp.model };
+    const toolSupport = await probeToolCallingSupport(instance);
+    return {
+      ok: true,
+      model: resp.model,
+      supports_tools: toolSupport.supports_tools,
+      warning: toolSupport.warning,
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function probeToolCallingSupport(instance: LLMProvider): Promise<ToolSupportProbeResult> {
+  try {
+    const response = await instance.chat(
+      [
+        {
+          role: 'user',
+          content: 'Call the confirm_tool_support tool with status set to ok. Do not answer with plain text.',
+        },
+      ],
+      {
+        max_tokens: 32,
+        tools: [TOOL_SUPPORT_PROBE],
+        tool_choice: 'required',
+      },
+    );
+
+    if (response.tool_calls.length > 0) {
+      return { supports_tools: true };
+    }
+
+    return {
+      supports_tools: false,
+      warning: 'This model answered in text instead of emitting a required tool call. Desktop and browser automation may be unreliable.',
+    };
+  } catch (err) {
+    return {
+      supports_tools: false,
+      warning: `This model did not pass the tool-calling check. Desktop and browser automation may be unreliable. (${err instanceof Error ? err.message : String(err)})`,
+    };
   }
 }

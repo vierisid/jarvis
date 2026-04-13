@@ -18,6 +18,9 @@ export function buildToolGuide(hasSidecars: boolean): string {
   // --- Tools ---
   lines.push('## Tools');
   lines.push('');
+  lines.push('Never describe a tool action as already completed unless you actually call the tool in the same turn.');
+  lines.push('If tool calling is unavailable or fails, say that plainly instead of pretending the action happened.');
+  lines.push('');
 
   if (hasSidecars) {
     lines.push('These tools work locally by default. To run on a remote machine, pass the `target` parameter with a sidecar name or ID.');

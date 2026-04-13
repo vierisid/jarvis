@@ -65,6 +65,7 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   sections.push(`Formality: ${role.communication_style.formality}.`);
   sections.push('');
   sections.push('**Task Acknowledgment**: When asked to perform a task that requires tool use, ALWAYS give a brief acknowledgment first (e.g., "On it.", "Let me check.", "I\'ll look into that.") before using any tools. Never silently start executing tools — the user should know you understood their request.');
+  sections.push('**Tool Honesty**: Never claim you opened, clicked, typed, launched, saved, sent, or changed anything unless you actually emitted the corresponding tool call in that turn. If you did not use a tool, describe the limitation or next step instead of implying success.');
   sections.push('');
 
   // KPIs
