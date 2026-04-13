@@ -1,26 +1,18 @@
 /**
- * Desktop Tools — Desktop Automation via Sidecar RPC or Local Execution
+ * Desktop Tools — Desktop Automation via Sidecar RPC
  *
- * 9 tools for controlling desktop applications. Each tool accepts a `target`
- * parameter to route to a specific sidecar. Without `target`, attempts local
- * execution (currently stub — TODO: implement per-platform AppController).
- * Respects --no-local-tools flag.
+ * 9 tools for controlling desktop applications. Each tool accepts an optional
+ * `target` parameter to route to a specific sidecar. Without `target`, the
+ * tool auto-resolves to the single connected sidecar that has the required
+ * capability (desktop or screenshot). When the choice is ambiguous or no
+ * sidecar is available, a clear error guides the user.
  *
  * The same tools work on all platforms (Windows, macOS, Linux). The sidecar
  * handles platform-specific implementation details internally.
  */
 
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecar } from './sidecar-route.ts';
-import { isNoLocalTools } from './local-tools-guard.ts';
-
-const LOCAL_NOT_IMPLEMENTED = 'Error: Local desktop tool execution is not yet implemented. Specify a "target" sidecar to route this command to a remote machine, or use list_sidecars to see available sidecars.';
-const LOCAL_DISABLED_MSG = 'Error: Local tool execution is disabled (--no-local-tools). Specify a "target" sidecar to route this command to a remote machine. Use list_sidecars to see available sidecars.';
-
-function localGuard(): string {
-  if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
-  return LOCAL_NOT_IMPLEMENTED;
-}
+import { routeToSidecarOrDefault } from './sidecar-route.ts';
 
 // --- Tool definitions ---
 
@@ -31,16 +23,13 @@ export const desktopListWindowsTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'list_windows', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'list_windows', params, 'desktop');
   },
 };
 
@@ -51,7 +40,7 @@ export const desktopSnapshotTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     pid: {
@@ -67,10 +56,7 @@ export const desktopSnapshotTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'get_window_tree', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'get_window_tree', params, 'desktop');
   },
 };
 
@@ -81,7 +67,7 @@ export const desktopClickTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     element_id: {
@@ -102,10 +88,7 @@ export const desktopClickTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'click_element', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'click_element', params, 'desktop');
   },
 };
 
@@ -116,7 +99,7 @@ export const desktopTypeTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     text: {
@@ -132,10 +115,7 @@ export const desktopTypeTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'type_text', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'type_text', params, 'desktop');
   },
 };
 
@@ -146,7 +126,7 @@ export const desktopPressKeysTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     keys: {
@@ -157,10 +137,7 @@ export const desktopPressKeysTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'press_keys', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'press_keys', params, 'desktop');
   },
 };
 
@@ -171,7 +148,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     executable: {
@@ -187,10 +164,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'launch_app', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'launch_app', params, 'desktop');
   },
 };
 
@@ -201,7 +175,7 @@ export const desktopScreenshotTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     pid: {
@@ -212,10 +186,7 @@ export const desktopScreenshotTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'capture_screen', params, 'screenshot');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'capture_screen', params, 'screenshot');
   },
 };
 
@@ -226,7 +197,7 @@ export const desktopFocusWindowTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     pid: {
@@ -237,10 +208,7 @@ export const desktopFocusWindowTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'focus_window', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'focus_window', params, 'desktop');
   },
 };
 
@@ -251,7 +219,7 @@ export const desktopFindElementTool: ToolDefinition = {
   parameters: {
     target: {
       type: 'string',
-      description: 'Sidecar name or ID to route this command to (omit for local execution)',
+      description: 'Sidecar name or ID to route this command to (omit to auto-select an available sidecar)',
       required: false,
     },
     pid: {
@@ -282,10 +250,7 @@ export const desktopFindElementTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) {
-      return routeToSidecar(target, 'find_element', params, 'desktop');
-    }
-    return localGuard();
+    return routeToSidecarOrDefault(target, 'find_element', params, 'desktop');
   },
 };
 

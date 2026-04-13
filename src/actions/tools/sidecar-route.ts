@@ -45,6 +45,84 @@ function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarInfo | n
 }
 
 /**
+ * Resolve a default sidecar for a given capability when no explicit target is provided.
+ *
+ * Returns the sidecar if exactly one connected sidecar has the capability.
+ * Returns an error message otherwise with actionable guidance.
+ */
+export function resolveDefaultSidecar(
+  requiredCapability: SidecarCapability,
+): { sidecar: SidecarInfo } | { error: string } {
+  if (!sidecarManager) {
+    return { error: 'Error: Sidecar system not initialized.' };
+  }
+
+  const sidecars = sidecarManager.listSidecars();
+  const connected = sidecars.filter((s) => s.connected);
+
+  // Filter to connected sidecars that have the capability and it is not unavailable
+  const capable = connected.filter(
+    (s) =>
+      s.capabilities?.includes(requiredCapability) &&
+      !s.unavailable_capabilities?.some((u) => u.name === requiredCapability),
+  );
+
+  if (capable.length === 1) {
+    return { sidecar: capable[0]! };
+  }
+
+  if (capable.length > 1) {
+    const names = capable.map((s) => s.name).join(', ');
+    return {
+      error: `Error: Multiple sidecars have the "${requiredCapability}" capability: ${names}. Specify a "target" to choose one.`,
+    };
+  }
+
+  // No capable sidecars found — build a helpful message
+  if (connected.length === 0) {
+    if (sidecars.length === 0) {
+      return { error: 'Error: No sidecars enrolled. Use list_sidecars to check sidecar availability.' };
+    }
+    return {
+      error: `Error: No sidecars are currently connected. ${sidecars.length} sidecar(s) enrolled but offline. Use list_sidecars to check status.`,
+    };
+  }
+
+  // Connected but none with the right capability
+  const availCaps = [...new Set(connected.flatMap((s) => s.capabilities ?? []))];
+  return {
+    error: `Error: No connected sidecar has the "${requiredCapability}" capability. Connected sidecar capabilities: ${availCaps.join(', ') || 'none'}. The sidecar may need "${requiredCapability}" enabled in its config.`,
+  };
+}
+
+/**
+ * Route an RPC call to a sidecar, with automatic default resolution.
+ *
+ * If `target` is provided, routes to that specific sidecar (existing behavior).
+ * If `target` is omitted, auto-resolves to the single connected sidecar
+ * that has the required capability. Returns an actionable error if the
+ * choice is ambiguous (multiple candidates) or impossible (none available).
+ */
+export async function routeToSidecarOrDefault(
+  target: string | undefined,
+  method: string,
+  params: Record<string, unknown>,
+  requiredCapability: SidecarCapability,
+): Promise<string> {
+  if (target) {
+    return routeToSidecar(target, method, params, requiredCapability);
+  }
+
+  const resolved = resolveDefaultSidecar(requiredCapability);
+  if ('error' in resolved) {
+    return resolved.error;
+  }
+
+  // Route using sidecar ID (exact match, no ambiguity)
+  return routeToSidecar(resolved.sidecar.id, method, params, requiredCapability);
+}
+
+/**
  * Route an RPC call to a sidecar. Returns the result string, or an error message.
  *
  * @param target - Sidecar name or ID
