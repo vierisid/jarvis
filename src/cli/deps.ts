@@ -22,6 +22,15 @@ export type DepStatus = {
   installable: boolean;
 };
 
+type PackageManager = 'apt' | 'dnf' | 'pacman' | 'brew';
+
+type CoreToolSpec = {
+  name: string;
+  command: string;
+  description: string;
+  packageNames: Partial<Record<PackageManager, string>>;
+};
+
 // ── Detection ─────────────────────────────────────────────────────────
 
 /**
@@ -74,6 +83,67 @@ export function checkBrowser(): DepStatus {
   };
 }
 
+function commandExists(command: string): { found: boolean; path?: string } {
+  const result = spawnSync(['which', command], { stdout: 'pipe', stderr: 'pipe' });
+  const found = result.exitCode === 0;
+  return {
+    found,
+    path: found ? result.stdout.toString().trim() : undefined,
+  };
+}
+
+export function getCoreToolSpecs(platform: ReturnType<typeof detectPlatform>): CoreToolSpec[] {
+  const specs: CoreToolSpec[] = [
+    {
+      name: 'git',
+      command: 'git',
+      description: 'site builder git operations and repository workflows',
+      packageNames: { apt: 'git', dnf: 'git', pacman: 'git', brew: 'git' },
+    },
+    {
+      name: 'curl',
+      command: 'curl',
+      description: 'network downloads and setup flows',
+      packageNames: { apt: 'curl', dnf: 'curl', pacman: 'curl', brew: 'curl' },
+    },
+  ];
+
+  if (platform === 'wsl') {
+    specs.push({
+      name: 'wslview',
+      command: 'wslview',
+      description: 'open OAuth links in the Windows browser from WSL',
+      packageNames: { apt: 'wslu', dnf: 'wslu', pacman: 'wslu' },
+    });
+  } else if (platform === 'linux') {
+    specs.push({
+      name: 'xdg-open',
+      command: 'xdg-open',
+      description: 'open OAuth links in your desktop browser',
+      packageNames: { apt: 'xdg-utils', dnf: 'xdg-utils', pacman: 'xdg-utils' },
+    });
+  }
+
+  return specs;
+}
+
+/**
+ * Check for core CLI tools JARVIS relies on for common workflows.
+ */
+export function checkCoreTools(): DepStatus[] {
+  const platform = detectPlatform();
+  return getCoreToolSpecs(platform).map((tool) => {
+    const result = commandExists(tool.command);
+    return {
+      name: tool.name,
+      found: result.found,
+      path: result.path,
+      message: result.found ? result.path! : `Not installed (${tool.description})`,
+      installable: true,
+    };
+  });
+}
+
 /**
  * Check for Linux X11 tools needed for app control.
  */
@@ -124,12 +194,64 @@ export function checkGoogleAuth(): DepStatus {
 /**
  * Detect the system package manager.
  */
-function detectPackageManager(): 'apt' | 'dnf' | 'pacman' | 'brew' | null {
+function detectPackageManager(): PackageManager | null {
   if (spawnSync(['which', 'apt'], { stdout: 'pipe' }).exitCode === 0) return 'apt';
   if (spawnSync(['which', 'dnf'], { stdout: 'pipe' }).exitCode === 0) return 'dnf';
   if (spawnSync(['which', 'pacman'], { stdout: 'pipe' }).exitCode === 0) return 'pacman';
   if (spawnSync(['which', 'brew'], { stdout: 'pipe' }).exitCode === 0) return 'brew';
   return null;
+}
+
+export function resolveCorePackages(
+  pm: PackageManager | null,
+  platform: ReturnType<typeof detectPlatform>,
+  missing: string[],
+): string[] {
+  if (!pm) return [];
+
+  const packageMap = new Map(
+    getCoreToolSpecs(platform).map((tool) => [tool.name, tool.packageNames[pm] ?? null]),
+  );
+
+  return [...new Set(
+    missing
+      .map((name) => packageMap.get(name) ?? null)
+      .filter(Boolean) as string[],
+  )];
+}
+
+function runPackageInstall(pm: PackageManager, packages: string[]): boolean {
+  if (packages.length === 0) return true;
+
+  if (pm === 'apt') {
+    console.log(c.dim(`  Running: sudo apt install -y ${packages.join(' ')}`));
+    const result = spawnSync(['sudo', 'apt', 'install', '-y', ...packages], {
+      stdout: 'inherit', stderr: 'inherit',
+    });
+    return result.exitCode === 0;
+  }
+
+  if (pm === 'dnf') {
+    console.log(c.dim(`  Running: sudo dnf install -y ${packages.join(' ')}`));
+    const result = spawnSync(['sudo', 'dnf', 'install', '-y', ...packages], {
+      stdout: 'inherit', stderr: 'inherit',
+    });
+    return result.exitCode === 0;
+  }
+
+  if (pm === 'pacman') {
+    console.log(c.dim(`  Running: sudo pacman -S --noconfirm ${packages.join(' ')}`));
+    const result = spawnSync(['sudo', 'pacman', '-S', '--noconfirm', ...packages], {
+      stdout: 'inherit', stderr: 'inherit',
+    });
+    return result.exitCode === 0;
+  }
+
+  console.log(c.dim(`  Running: brew install ${packages.join(' ')}`));
+  const result = spawnSync(['brew', 'install', ...packages], {
+    stdout: 'inherit', stderr: 'inherit',
+  });
+  return result.exitCode === 0;
 }
 
 /**
@@ -212,32 +334,23 @@ export async function installLinuxTools(missing: string[]): Promise<boolean> {
   if (packages.length === 0) return true;
 
   const unique = [...new Set(packages)];
+  return runPackageInstall(pm, unique);
+}
 
-  if (pm === 'apt') {
-    console.log(c.dim(`  Running: sudo apt install -y ${unique.join(' ')}`));
-    const result = spawnSync(['sudo', 'apt', 'install', '-y', ...unique], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
+/**
+ * Install missing core CLI tools.
+ */
+export async function installCoreTools(missing: string[]): Promise<boolean> {
+  const platform = detectPlatform();
+  const pm = detectPackageManager();
+  const packages = resolveCorePackages(pm, platform, missing);
+
+  if (!pm || packages.length === 0) {
+    printInfo('Install manually: ' + missing.join(', '));
+    return false;
   }
 
-  if (pm === 'dnf') {
-    console.log(c.dim(`  Running: sudo dnf install -y ${unique.join(' ')}`));
-    const result = spawnSync(['sudo', 'dnf', 'install', '-y', ...unique], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
-  }
-
-  if (pm === 'pacman') {
-    console.log(c.dim(`  Running: sudo pacman -S --noconfirm ${unique.join(' ')}`));
-    const result = spawnSync(['sudo', 'pacman', '-S', '--noconfirm', ...unique], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
-  }
-
-  return false;
+  return runPackageInstall(pm, packages);
 }
 
 /**
@@ -377,6 +490,9 @@ export async function runDependencyCheck(config: any): Promise<void> {
   // Collect all dependency statuses
   const deps: DepStatus[] = [];
 
+  const coreTools = checkCoreTools();
+  deps.push(...coreTools);
+
   deps.push(checkBrowser());
 
   const linuxTools = checkLinuxTools();
@@ -403,8 +519,21 @@ export async function runDependencyCheck(config: any): Promise<void> {
     return;
   }
 
-  printInfo(`${missing.length} optional ${missing.length === 1 ? 'dependency' : 'dependencies'} not found.`);
+  printInfo(`${missing.length} ${missing.length === 1 ? 'dependency' : 'dependencies'} not found.`);
   console.log('');
+
+  const missingCore = missing.filter(d => coreTools.some(core => core.name === d.name));
+  if (missingCore.length > 0) {
+    const names = missingCore.map(d => d.name).join(', ');
+    const install = await askYesNo(`Install core system tools (${names})?`, true);
+    if (install) {
+      const ok = await installCoreTools(missingCore.map(d => d.name));
+      if (ok) printOk('Core system tools installed!');
+      else printWarn('Some core tools may not have installed. Check manually.');
+    } else {
+      printInfo(`Skip. Install later with your package manager (${names}).`);
+    }
+  }
 
   // Offer to install each missing dependency
   // Group: browser
