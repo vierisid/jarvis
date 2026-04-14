@@ -207,12 +207,24 @@ export class WebSocketServer {
         }
 
         // 2. WebSocket upgrade — validate Origin to block cross-origin connections
-        //    (e.g., dev server iframes on different ports attempting ws://localhost:3142/ws)
+        //    (e.g., dev server iframes on different ports attempting ws://localhost:3142/ws).
+        //    Allow when Origin's host matches the request Host header, which covers
+        //    reverse-proxy deployments (Opencove, Cloudflare tunnel, ngrok, etc.).
         if (pathname === '/ws') {
           const origin = req.headers.get('origin');
-          const expectedOrigin = self.corsOrigin || `http://localhost:${self.port}`;
-          if (origin && origin !== expectedOrigin) {
-            return new Response('Forbidden: origin mismatch', { status: 403 });
+          if (origin) {
+            const expectedOrigin = self.corsOrigin || `http://localhost:${self.port}`;
+            let sameHost = false;
+            try {
+              const originHost = new URL(origin).host;
+              const requestHost = req.headers.get('host');
+              sameHost = !!requestHost && originHost === requestHost;
+            } catch {
+              sameHost = false;
+            }
+            if (origin !== expectedOrigin && !sameHost) {
+              return new Response('Forbidden: origin mismatch', { status: 403 });
+            }
           }
           const success = server.upgrade(req, { data: {} });
           if (success) return undefined;
