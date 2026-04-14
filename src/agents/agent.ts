@@ -104,6 +104,10 @@ export class AgentInstance {
     this.messageHistory.push({ role, content });
   }
 
+  setMessages(messages: LLMMessage[]): void {
+    this.messageHistory = [...messages];
+  }
+
   getMessages(): LLMMessage[] {
     return [...this.messageHistory];
   }

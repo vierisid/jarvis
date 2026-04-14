@@ -55,10 +55,13 @@ import { getKnowledgeForMessage } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { getUserProfile } from '../vault/user-profile.ts';
 import { getWebappInstructionsForMessage } from '../vault/webapp-templates.ts';
+import { getMessages, getRecentConversation } from '../vault/conversations.ts';
 import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import { getSidecarManager } from '../actions/tools/sidecar-route.ts';
+
+const PRIMARY_HISTORY_LIMIT = 40;
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -247,6 +250,8 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
+    this.syncPrimaryConversationHistory(channel, text);
+
     let systemPrompt = this.buildFullSystemPrompt(channel, text);
     if (siteContext) {
       systemPrompt += '\n\n' + siteContext;
@@ -274,6 +279,8 @@ export class AgentService implements Service, IAgentService {
    * Non-streaming message handler. Returns full response string.
    */
   async handleMessage(text: string, channel: string = 'websocket'): Promise<string> {
+    this.syncPrimaryConversationHistory(channel, text);
+
     const systemPrompt = this.buildFullSystemPrompt(channel, text);
 
     const response = await this.orchestrator.processMessage(systemPrompt, text);
@@ -463,6 +470,39 @@ export class AgentService implements Service, IAgentService {
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
     return `${rolePrompt}\n\n${personalityPrompt}`;
+  }
+
+  private syncPrimaryConversationHistory(channel: string, pendingUserMessage?: string): void {
+    const primary = this.orchestrator.getPrimary();
+    if (!primary) {
+      return;
+    }
+
+    try {
+      const recent = getRecentConversation(channel);
+      if (!recent) {
+        primary.setMessages([]);
+        return;
+      }
+
+      const restored = getMessages(recent.conversation.id, { limit: PRIMARY_HISTORY_LIMIT })
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      if (pendingUserMessage && restored.length > 0) {
+        const last = restored[restored.length - 1];
+        if (last?.role === 'user' && last.content === pendingUserMessage) {
+          restored.pop();
+        }
+      }
+
+      primary.setMessages(restored);
+    } catch (err) {
+      console.error('[AgentService] Error restoring conversation context:', err);
+    }
   }
 
   private buildHeartbeatPrompt(coalescedEvents?: string): string {
