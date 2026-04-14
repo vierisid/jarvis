@@ -176,39 +176,6 @@ export class AwarenessService implements Service {
     };
   }
 
-  getUsageEstimate(): {
-    capturesPerHour: number;
-    estimatedVisionCallsPerHour: number;
-    estimatedTokensPerHour: number;
-    note: string;
-  } {
-    const capturesPerHour = Math.max(1, Math.round(3600000 / Math.max(this.config.capture_interval_ms, 1000)));
-    if (!this.config.cloud_vision_enabled) {
-      return {
-        capturesPerHour,
-        estimatedVisionCallsPerHour: 0,
-        estimatedTokensPerHour: 0,
-        note: 'Cloud vision is disabled, so awareness will not spend LLM vision tokens.',
-      };
-    }
-
-    const estimatedVisionCallsPerHour = Math.max(
-      1,
-      Math.min(
-        capturesPerHour,
-        Math.round(3600000 / Math.max(this.config.cloud_vision_cooldown_ms, 1000))
-      )
-    );
-    const estimatedTokensPerHour = estimatedVisionCallsPerHour * 1400;
-
-    return {
-      capturesPerHour,
-      estimatedVisionCallsPerHour,
-      estimatedTokensPerHour,
-      note: 'Estimate is a worst-case approximation based on your capture rate and cloud-vision cooldown.',
-    };
-  }
-
   getCurrentSession() {
     return this.contextTracker.getCurrentSession();
   }
