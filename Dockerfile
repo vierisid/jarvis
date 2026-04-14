@@ -19,6 +19,8 @@ WORKDIR /app
 
 # Copy only dependency manifests for layer caching
 COPY package.json bun.lock ./
+# scripts/ holds the postinstall helper (ensure-bun.cjs) referenced by package.json
+COPY scripts/ scripts/
 
 # Install all dependencies (includes devDependencies needed for UI build)
 RUN bun install --frozen-lockfile
