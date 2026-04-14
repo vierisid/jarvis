@@ -115,7 +115,8 @@ Visit [opencove.host](https://opencove.host) to get started.
 ## 📋 Requirements
 
 - **Bun** >= 1.0 (installed automatically if missing)
-- **OS**: Windows, macOS, or Linux
+- **OS (native daemon install)**: macOS, Linux, or WSL
+- **Windows**: use WSL2 for the Bun install, or Docker for the daemon
 - **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
 - Google OAuth credentials (optional — Calendar and Gmail integration)
 - Telegram bot token (optional — notification channel)
@@ -132,6 +133,8 @@ Visit [opencove.host](https://opencove.host) to get started.
 bun install -g @usejarvis/brain
 jarvis onboard
 ```
+
+> **Note:** Native Windows installs are blocked for the JARVIS daemon. On Windows, use WSL2 for the Bun install above, or use the Docker install instead.
 
 ### Docker
 
@@ -157,6 +160,8 @@ jarvis onboard
 ```
 
 The install script sets up Bun, clones the repo, and links the `jarvis` CLI. Then run `jarvis onboard` to configure your assistant interactively.
+
+> **Note:** The one-liner only supports macOS, Linux, and WSL. Native Windows shells such as PowerShell, Git Bash, and CMD should use WSL2 or the Docker install instead.
 
 ### Manual
 

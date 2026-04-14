@@ -21,6 +21,12 @@ type AwarenessStatus = {
     suggestionsToday: number;
     isRunning: boolean;
   };
+  usageEstimate: {
+    capturesPerHour: number;
+    estimatedVisionCallsPerHour: number;
+    estimatedTokensPerHour: number;
+    note: string;
+  };
 };
 
 export default function AwarenessPage() {
@@ -64,6 +70,7 @@ export default function AwarenessPage() {
   const sessionMinutes = liveCtx?.currentSession ? Math.floor(liveCtx.currentSession.durationMs / 60000) : 0;
   const capturesHr = liveCtx?.capturesLastHour ?? 0;
   const suggestionsDay = liveCtx?.suggestionsToday ?? 0;
+  const usageEstimate = status?.usageEstimate;
 
   return (
     <div className="aw-page">
@@ -101,6 +108,17 @@ export default function AwarenessPage() {
           <div className="aw-stat-value" style={{ color: "#FBBF24" }}>{suggestionsDay}</div>
         </div>
         <div className="aw-stat">
+          <div className="aw-stat-label">Estimated Tokens / Hour</div>
+          <div className="aw-stat-value" style={{ color: "#34D399" }}>
+            {enabled ? `~${(usageEstimate?.estimatedTokensPerHour ?? 0).toLocaleString()}` : "0"}
+          </div>
+          <div className="aw-stat-sub">
+            {enabled
+              ? `${usageEstimate?.estimatedVisionCallsPerHour ?? 0}/hr worst case`
+              : "Enable awareness to estimate usage"}
+          </div>
+        </div>
+        <div className="aw-stat">
           <div className="aw-stat-label">Session</div>
           <div className="aw-stat-value" style={{ color: "#22D3EE", fontSize: sessionTopic ? 14 : 20 }}>
             {sessionTopic || (sessionMinutes > 0 ? `${sessionMinutes}m` : "—")}
@@ -108,6 +126,24 @@ export default function AwarenessPage() {
           {sessionTopic && sessionMinutes > 0 && <div className="aw-stat-sub">{sessionMinutes}m active</div>}
         </div>
       </div>
+
+      {usageEstimate ? (
+        <div
+          style={{
+            marginTop: "14px",
+            padding: "12px 14px",
+            borderRadius: "12px",
+            border: "1px solid rgba(52, 211, 153, 0.22)",
+            background: "rgba(15, 118, 110, 0.18)",
+            color: "rgba(255,255,255,0.86)",
+            fontSize: "13px",
+          }}
+        >
+          <strong style={{ color: "#A7F3D0" }}>Usage estimate</strong>{" "}
+          Awareness samples about {usageEstimate.capturesPerHour}/hr and may escalate up to{" "}
+          {usageEstimate.estimatedVisionCallsPerHour}/hr for cloud vision. {usageEstimate.note}
+        </div>
+      ) : null}
 
       {/* Tabs */}
       <div className="aw-tabs">

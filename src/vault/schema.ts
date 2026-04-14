@@ -690,4 +690,10 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_webapp_app_name ON webapp_templates(app_name)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_webapp_enabled ON webapp_templates(enabled)`);
+
+  // Migration: add keywords column to webapp_templates for DBs created before it existed
+  const webappCols = db.prepare("PRAGMA table_info(webapp_templates)").all() as { name: string }[];
+  if (!webappCols.some((c) => c.name === 'keywords')) {
+    db.run(`ALTER TABLE webapp_templates ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'`);
+  }
 }

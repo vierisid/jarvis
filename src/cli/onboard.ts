@@ -15,7 +15,7 @@ import {
 } from './helpers.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadConfig, saveConfig } from '../config/loader.ts';
-import { installAutostart, getAutostartName } from './autostart.ts';
+import { installAutostart, startAutostartService, getAutostartName, isAutostartSupported } from './autostart.ts';
 import { runDependencyCheck } from './deps.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { saveUserProfile } from '../vault/user-profile.ts';
@@ -581,21 +581,30 @@ export async function runOnboard(): Promise<void> {
     printInfo(`Using defaults: level ${config.authority.default_level}, governed: ${config.authority.governed_categories.join(', ')}`);
   }
 
-  // ── Step 10: Autostart ────────────────────────────────────────────
+  // ── Step 10: Keepalive ────────────────────────────────────────────
 
-  printStep(10, TOTAL_STEPS, 'Autostart');
+  printStep(10, TOTAL_STEPS, 'Keepalive');
   const platform = detectPlatform();
+  let enableKeepalive = false;
+  const keepaliveSupported = isAutostartSupported();
 
-  if (platform === 'wsl') {
-    printInfo('WSL detected. Autostart is not supported in WSL.');
+  if (!keepaliveSupported) {
+    if (platform === 'wsl') {
+      printInfo('WSL2 detected, but the user systemd service manager is not available in this session.');
+      printInfo('Enable systemd in WSL, then rerun onboard to use 24/7 keepalive mode.');
+    } else {
+      printInfo('Keepalive mode is not supported in this environment.');
+    }
     printInfo('Start JARVIS manually with: jarvis start');
   } else {
-    console.log(`  Autostart mechanism: ${c.bold(getAutostartName())}\n`);
-    const setupAutostart = await askYesNo('Start JARVIS automatically on login?', false);
-    if (setupAutostart) {
-      await installAutostart();
+    if (process.platform === 'linux' || process.platform === 'darwin') {
+      const platformHint = platform === 'wsl' ? ' on WSL2' : '';
+      console.log(`  Keepalive mode uses ${c.bold(getAutostartName())}${platformHint} to keep JARVIS running`);
+      console.log('  after you close the terminal, with automatic restart if the service exits.\n');
+      enableKeepalive = await askYesNo('Activate JARVIS keepalive mode?', false);
     } else {
-      printInfo('Skipped. Start manually with: jarvis start');
+      console.log(`  Autostart mechanism: ${c.bold(getAutostartName())}\n`);
+      enableKeepalive = await askYesNo('Start JARVIS automatically?', false);
     }
   }
 
@@ -661,6 +670,7 @@ export async function runOnboard(): Promise<void> {
     ['Telegram', config.channels?.telegram?.enabled ? 'enabled' : 'disabled'],
     ['Discord', config.channels?.discord?.enabled ? 'enabled' : 'disabled'],
     ['Authority', `level ${config.authority.default_level}`],
+    ['Keepalive', enableKeepalive ? 'enabled' : 'disabled'],
     ['Port', String(config.daemon.port)],
   ];
 
@@ -671,9 +681,17 @@ export async function runOnboard(): Promise<void> {
   console.log('');
 
   const doSave = await askYesNo('Save this configuration?', true);
+  let keepaliveStarted = false;
   if (doSave) {
     await saveConfig(config);
     printOk(`Config saved to ${CONFIG_PATH}`);
+
+    if (enableKeepalive) {
+      const installed = await installAutostart();
+      if (installed) {
+        keepaliveStarted = await startAutostartService();
+      }
+    }
 
     if (userProfileAnswers && Object.keys(userProfileAnswers).length > 0) {
       try {
@@ -693,7 +711,12 @@ export async function runOnboard(): Promise<void> {
 
   // Offer to start daemon
   console.log('');
-  const startNow = await askYesNo('Start JARVIS now?', true);
+  const keepaliveActive = doSave && keepaliveStarted;
+  const defaultStartNow = keepaliveActive ? false : true;
+  const startNowPrompt = keepaliveActive
+    ? 'Start another foreground JARVIS process now?'
+    : 'Start JARVIS now?';
+  const startNow = await askYesNo(startNowPrompt, defaultStartNow);
   if (startNow) {
     console.log(c.cyan('\nStarting J.A.R.V.I.S. daemon...\n'));
     closeRL();
@@ -701,7 +724,11 @@ export async function runOnboard(): Promise<void> {
     const { startDaemon } = await import('../daemon/index.ts');
     await startDaemon();
   } else {
-    console.log(c.dim('\nStart later with: jarvis start\n'));
+    if (keepaliveActive) {
+      console.log(c.dim('\nJARVIS keepalive mode is managing the daemon.\n'));
+    } else {
+      console.log(c.dim('\nStart later with: jarvis start\n'));
+    }
     closeRL();
   }
 }

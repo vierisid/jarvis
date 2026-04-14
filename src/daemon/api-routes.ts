@@ -105,6 +105,11 @@ import {
   getCapturesInRange,
 } from '../vault/awareness.ts';
 import type { SuggestionType } from '../awareness/types.ts';
+import {
+  getAutostartName,
+  isAutostartInstalled,
+  scheduleAutostartRestart,
+} from '../cli/autostart.ts';
 
 export type ApiContext = {
   healthMonitor: HealthMonitor;
@@ -769,6 +774,39 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           authority: config.authority,
           heartbeat: config.heartbeat,
           active_role: config.active_role,
+        });
+      },
+    },
+
+    '/api/system/autostart': {
+      GET: () => {
+        const installed = isAutostartInstalled();
+        const keepaliveSupported = process.platform === 'darwin' || process.platform === 'linux';
+        return json({
+          platform: process.platform,
+          manager: keepaliveSupported ? getAutostartName() : 'unsupported',
+          installed,
+          keepalive_supported: keepaliveSupported,
+          restart_supported: keepaliveSupported && installed,
+        });
+      },
+    },
+
+    '/api/system/autostart/restart': {
+      POST: () => {
+        if (!(process.platform === 'darwin' || process.platform === 'linux')) {
+          return error('24/7 restart is not supported on this platform.', 400);
+        }
+        if (!isAutostartInstalled()) {
+          return error('JARVIS keepalive mode is not installed yet.', 400);
+        }
+        const scheduled = scheduleAutostartRestart();
+        if (!scheduled) {
+          return error('Failed to schedule keepalive service restart.');
+        }
+        return json({
+          ok: true,
+          message: `Restarting the JARVIS 24/7 ${getAutostartName()} service.`,
         });
       },
     },
@@ -1612,6 +1650,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           status: ctx.awarenessService.status(),
           enabled: ctx.awarenessService.isEnabled(),
           liveContext: ctx.awarenessService.getLiveContext(),
+          usageEstimate: ctx.awarenessService.getUsageEstimate(),
         });
       },
     },

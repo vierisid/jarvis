@@ -75,6 +75,14 @@ ${c.bold('Examples:')}
 `);
 }
 
+function assertSupportedPlatform(): void {
+  if (process.platform !== 'win32') return;
+  console.error(c.red('Native Windows installs are not supported for the JARVIS daemon.'));
+  console.error(c.dim('Use WSL2 for the Bun install, or run JARVIS with Docker on Windows.'));
+  console.error(c.dim('The Windows sidecar is still supported separately.'));
+  process.exit(1);
+}
+
 async function cmdStart(args: string[]): Promise<void> {
   const detach = args.includes('--detach') || args.includes('-d');
   const noOpen = args.includes('--no-open');
@@ -386,6 +394,8 @@ function openDashboard(port: number): void {
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
+
+assertSupportedPlatform();
 
 const args = process.argv.slice(2);
 const command = args[0] || 'help';

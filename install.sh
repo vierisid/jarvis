@@ -56,6 +56,7 @@ detect_os() {
         echo "linux"
       fi
       ;;
+    MINGW*|MSYS*|CYGWIN*) echo "windows-native" ;;
     *) echo "unknown" ;;
   esac
 }
@@ -145,6 +146,13 @@ main() {
 
   if [ "$OS" = "unknown" ]; then
     err "Unsupported operating system. JARVIS supports macOS, Linux, and WSL."
+    exit 1
+  fi
+
+  if [ "$OS" = "windows-native" ]; then
+    err "Native Windows installs are not supported for the JARVIS daemon."
+    err "Use WSL2 for the Bun install, or run JARVIS with Docker on Windows."
+    err "The Windows sidecar is still supported separately."
     exit 1
   fi
 

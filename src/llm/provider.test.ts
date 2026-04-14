@@ -36,6 +36,8 @@ describe('LLM Provider Types', () => {
 });
 
 describe('LLMManager', () => {
+  const sampleMessages: LLMMessage[] = [{ role: 'user', content: 'Hello' }];
+
   test('can register providers', () => {
     const manager = new LLMManager();
     const anthropic = new AnthropicProvider('test-key');
@@ -92,6 +94,105 @@ describe('LLMManager', () => {
 
     manager.registerProvider(anthropic);
     expect(() => manager.setFallbackChain(['nonexistent'])).toThrow();
+  });
+
+  test('falls back to the next provider for chat failures', async () => {
+    const manager = new LLMManager();
+    const primary = {
+      name: 'primary',
+      listModels: async () => ['primary-model'],
+      chat: async () => {
+        throw new Error('401 invalid_api_key');
+      },
+      async *stream() {
+        yield { type: 'error' as const, error: '401 invalid_api_key' };
+      },
+    };
+    const fallback = {
+      name: 'fallback',
+      listModels: async () => ['fallback-model'],
+      chat: async () => ({
+        content: 'fallback ok',
+        tool_calls: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        model: 'fallback-model',
+        finish_reason: 'stop' as const,
+      }),
+      async *stream() {
+        yield { type: 'text' as const, text: 'fallback ok' };
+        yield {
+          type: 'done' as const,
+          response: {
+            content: 'fallback ok',
+            tool_calls: [],
+            usage: { input_tokens: 1, output_tokens: 1 },
+            model: 'fallback-model',
+            finish_reason: 'stop' as const,
+          },
+        };
+      },
+    };
+
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    manager.setPrimary('primary');
+    manager.setFallbackChain(['fallback']);
+
+    const response = await manager.chat(sampleMessages);
+    expect(response.content).toBe('fallback ok');
+    expect(response.model).toBe('fallback-model');
+  });
+
+  test('falls back to the next provider for stream failures before output', async () => {
+    const manager = new LLMManager();
+    const primary = {
+      name: 'primary',
+      listModels: async () => ['primary-model'],
+      chat: async () => {
+        throw new Error('503 temporarily unavailable');
+      },
+      async *stream() {
+        yield { type: 'error' as const, error: '503 temporarily unavailable' };
+      },
+    };
+    const fallback = {
+      name: 'fallback',
+      listModels: async () => ['fallback-model'],
+      chat: async () => ({
+        content: 'fallback stream ok',
+        tool_calls: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        model: 'fallback-model',
+        finish_reason: 'stop' as const,
+      }),
+      async *stream() {
+        yield { type: 'text' as const, text: 'fallback stream ok' };
+        yield {
+          type: 'done' as const,
+          response: {
+            content: 'fallback stream ok',
+            tool_calls: [],
+            usage: { input_tokens: 1, output_tokens: 1 },
+            model: 'fallback-model',
+            finish_reason: 'stop' as const,
+          },
+        };
+      },
+    };
+
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    manager.setPrimary('primary');
+    manager.setFallbackChain(['fallback']);
+
+    const events = [];
+    for await (const event of manager.stream(sampleMessages)) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream ok')).toBe(true);
+    expect(events.some((event) => event.type === 'done')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
   });
 });
 
