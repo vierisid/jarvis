@@ -14,21 +14,17 @@
  */
 
 import { join } from 'node:path';
-import { readFileSync, openSync } from 'node:fs';
+import { openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort } from '../src/cli/lifecycle.ts';
+import { getInstalledVersion } from '../src/cli/version.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
 function getVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf-8'));
-    return pkg.version || '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+  return getInstalledVersion(PACKAGE_ROOT);
 }
 
 function printHelp(): void {
