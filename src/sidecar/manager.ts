@@ -227,7 +227,7 @@ export class SidecarManager implements Service {
   /**
    * Enroll a new sidecar. Returns the signed JWT enrollment token.
    */
-  async enrollSidecar(name: string): Promise<{ token: string; sidecar: SidecarRecord }> {
+  async enrollSidecar(name: string, enrollmentOrigin?: string): Promise<{ token: string; sidecar: SidecarRecord }> {
     if (!this.privateKey) throw new Error('SidecarManager not started');
     if (!this.brainUrl) throw new Error('Brain URL not configured — call setBrainUrl() first');
 
@@ -250,13 +250,7 @@ export class SidecarManager implements Service {
     const id = generateId();
     const tokenId = generateId();
 
-    // Determine protocol based on brain URL
-    const isSecure = !this.brainUrl.includes('localhost') && !this.brainUrl.match(/:\d+$/);
-    const wsProtocol = isSecure ? 'wss' : 'ws';
-    const httpProtocol = isSecure ? 'https' : 'http';
-
-    const brainWs = `${wsProtocol}://${this.brainUrl}/sidecar/connect`;
-    const jwksUrl = `${httpProtocol}://${this.brainUrl}/api/sidecars/.well-known/jwks.json`;
+    const { brainWs, jwksUrl } = this.buildEnrollmentUrls(enrollmentOrigin || this.brainUrl);
 
     // Sign JWT
     const token = await new SignJWT({
@@ -281,6 +275,29 @@ export class SidecarManager implements Service {
     console.log(`[SidecarManager] Enrolled sidecar "${trimmed}" (${id})`);
 
     return { token, sidecar };
+  }
+
+  private buildEnrollmentUrls(brainBase: string): { brainWs: string; jwksUrl: string } {
+    const normalized = brainBase.trim();
+
+    if (/^https?:\/\//.test(normalized) || /^wss?:\/\//.test(normalized)) {
+      const parsed = new URL(normalized);
+      const host = parsed.host;
+      const wsProtocol = parsed.protocol === 'https:' || parsed.protocol === 'wss:' ? 'wss' : 'ws';
+      const httpProtocol = parsed.protocol === 'wss:' ? 'https' : parsed.protocol === 'ws:' ? 'http' : parsed.protocol.replace(':', '');
+      return {
+        brainWs: `${wsProtocol}://${host}/sidecar/connect`,
+        jwksUrl: `${httpProtocol}://${host}/api/sidecars/.well-known/jwks.json`,
+      };
+    }
+
+    const isSecure = !normalized.includes('localhost') && !normalized.match(/:\d+$/);
+    const wsProtocol = isSecure ? 'wss' : 'ws';
+    const httpProtocol = isSecure ? 'https' : 'http';
+    return {
+      brainWs: `${wsProtocol}://${normalized}/sidecar/connect`,
+      jwksUrl: `${httpProtocol}://${normalized}/api/sidecars/.well-known/jwks.json`,
+    };
   }
 
   // --------------- Registry (DB queries) ---------------
@@ -539,4 +556,3 @@ export class SidecarManager implements Service {
     };
   }
 }
-

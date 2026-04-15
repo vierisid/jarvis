@@ -2432,7 +2432,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
           const body = await req.json() as { name?: string };
           if (!body.name) return error('Missing "name" field');
-          const result = await ctx.sidecarManager.enrollSidecar(body.name);
+          const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+          const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+          const requestUrl = new URL(req.url);
+          const host = forwardedHost || req.headers.get('host') || requestUrl.host;
+          const protocol = forwardedProto || requestUrl.protocol.replace(':', '');
+          const enrollmentOrigin = host ? `${protocol}://${host}` : undefined;
+          const result = await ctx.sidecarManager.enrollSidecar(body.name, enrollmentOrigin);
           return json(result, 201);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

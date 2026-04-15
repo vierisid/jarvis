@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,9 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode token: %w", err)
 	}
+	if override := normalizeBrainOverride(config.Brain); override != "" {
+		claims.Brain = override
+	}
 
 	client := &SidecarClient{
 		config:         config,
@@ -51,6 +56,33 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client.runPreflight()
 	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.reloadConfig)
 	return client, nil
+}
+
+func normalizeBrainOverride(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "ws://") || strings.HasPrefix(trimmed, "wss://") {
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		u, err := url.Parse(trimmed)
+		if err != nil || u.Host == "" {
+			return trimmed
+		}
+		wsScheme := "ws"
+		if u.Scheme == "https" {
+			wsScheme = "wss"
+		}
+		return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, u.Host)
+	}
+
+	wsScheme := "wss"
+	if strings.Contains(trimmed, "localhost") || strings.Contains(trimmed, "127.0.0.1") || strings.Contains(trimmed, ":") {
+		wsScheme = "ws"
+	}
+	return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, trimmed)
 }
 
 func (c *SidecarClient) Start(ctx context.Context) {
