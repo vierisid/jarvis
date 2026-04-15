@@ -21,7 +21,7 @@ type FlatSnapshotElement = {
   name: string;
   value: string | null;
   depth: number;
-  bounds: UIElement['bounds'];
+  bounds: UIElement['bounds'] | null;
   properties: Record<string, unknown>;
 };
 
@@ -32,7 +32,7 @@ type LocalSnapshot = {
 };
 
 type SnapshotCapableController = AppController & {
-  snapshot?: (pid?: number) => Promise<{
+  snapshot?: (pid?: number, depth?: number) => Promise<{
     window: { pid: number; title: string; className: string };
     elements: Array<{
       id: number;
@@ -41,6 +41,8 @@ type SnapshotCapableController = AppController & {
       value: string | null;
       depth: number;
       isEnabled?: boolean;
+      bounds?: UIElement['bounds'];
+      properties?: Record<string, unknown>;
     }>;
     totalElements: number;
   }>;
@@ -121,8 +123,10 @@ function flattenElements(
 }
 
 async function buildLocalSnapshot(controller: SnapshotCapableController, pid?: number, depth: number = 8): Promise<LocalSnapshot> {
+  localElementCache.clear();
+
   if (typeof controller.snapshot === 'function') {
-    const snap = await controller.snapshot(pid);
+    const snap = await controller.snapshot(pid, depth);
     lastLocalSnapshot = {
       window: snap.window,
       elements: snap.elements.map((element) => ({
@@ -131,15 +135,16 @@ async function buildLocalSnapshot(controller: SnapshotCapableController, pid?: n
         name: element.name,
         value: element.value,
         depth: element.depth,
-        bounds: { x: 0, y: 0, width: 0, height: 0 },
-        properties: { isEnabled: element.isEnabled ?? true },
+        bounds: element.bounds ?? null,
+        properties: {
+          ...(element.properties ?? {}),
+          isEnabled: element.isEnabled ?? true,
+        },
       })),
       totalElements: snap.totalElements,
     };
     return lastLocalSnapshot;
   }
-
-  localElementCache.clear();
 
   const window = pid !== undefined
     ? (await controller.listWindows()).find((entry) => entry.pid === pid) ?? null
@@ -181,7 +186,7 @@ function formatSnapshot(snapshot: LocalSnapshot): string {
     if (element.value) details.push(`value="${element.value}"`);
     const className = typeof element.properties.className === 'string' ? element.properties.className : null;
     if (className) details.push(`class="${className}"`);
-    details.push(`bounds=${formatBounds(element.bounds)}`);
+    if (element.bounds) details.push(`bounds=${formatBounds(element.bounds)}`);
     lines.push(`${'  '.repeat(element.depth)}[${element.id}] ${element.role || 'element'}${details.length > 0 ? ` ${details.join(' ')}` : ''}`);
   }
 
@@ -346,11 +351,14 @@ export const desktopClickTool: ToolDefinition = {
     }
     return executeLocal(async (controller) => {
       const action = (params.action as string | undefined) ?? 'click';
-      if (typeof controller.clickById === 'function' && action === 'click') {
-        return controller.clickById(params.element_id as number);
-      }
       if (!['click', 'double_click', 'right_click', 'focus'].includes(action)) {
         return unsupportedAction(action);
+      }
+      if (typeof controller.clickById === 'function') {
+        if (action !== 'click') {
+          return unsupportedAction(action);
+        }
+        return controller.clickById(params.element_id as number);
       }
       const element = withAction(ensureCachedElement(params.element_id as number), action);
       await controller.clickElement(element);

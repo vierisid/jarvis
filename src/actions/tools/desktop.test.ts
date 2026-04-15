@@ -9,6 +9,7 @@ import {
 
 type FakeController = AppController & {
   launches: Array<{ executable: string; args?: string }>;
+  clickedActions: string[];
 };
 
 function createFakeElement(): UIElement {
@@ -38,8 +39,45 @@ function createFakeWindow(): WindowInfo {
 
 function createFakeController(): FakeController {
   const launches: Array<{ executable: string; args?: string }> = [];
+  const clickedActions: string[] = [];
   return {
     launches,
+    clickedActions,
+    async getActiveWindow() {
+      return createFakeWindow();
+    },
+    async getWindowTree() {
+      return [createFakeElement()];
+    },
+    async listWindows() {
+      return [createFakeWindow()];
+    },
+    async clickElement(element) {
+      clickedActions.push(String(element.properties.action ?? 'click'));
+    },
+    async typeText() {},
+    async pressKeys() {},
+    async captureScreen() {
+      return Buffer.from('png-data');
+    },
+    async captureWindow() {
+      return Buffer.from('png-data');
+    },
+    async focusWindow() {},
+    async launchApp(executable: string, args?: string) {
+      launches.push({ executable, args });
+      return { pid: 9001, executable, args: args ?? '' };
+    },
+  };
+}
+
+function createSnapshotController() {
+  const clickedIds: number[] = [];
+  let lastDepth: number | undefined;
+
+  return {
+    clickedIds,
+    lastDepth: () => lastDepth,
     async getActiveWindow() {
       return createFakeWindow();
     },
@@ -59,9 +97,29 @@ function createFakeController(): FakeController {
       return Buffer.from('png-data');
     },
     async focusWindow() {},
-    async launchApp(executable: string, args?: string) {
-      launches.push({ executable, args });
-      return { pid: 9001, executable, args: args ?? '' };
+    async snapshot(_pid?: number, depth?: number) {
+      lastDepth = depth;
+      return {
+        window: { pid: 42, title: 'Calculator', className: 'calc' },
+        elements: [
+          {
+            id: 7,
+            role: 'button',
+            name: 'Equals',
+            value: null,
+            depth: 1,
+            properties: {
+              className: 'calc-button',
+              automationId: 'equals-button',
+            },
+          },
+        ],
+        totalElements: 1,
+      };
+    },
+    async clickById(elementId: number) {
+      clickedIds.push(elementId);
+      return `Clicked ${elementId}`;
     },
   };
 }
@@ -138,6 +196,58 @@ describe('DESKTOP_TOOLS', () => {
 
     const clickResult = await clickTool!.execute({ element_id: 1 });
     expect(clickResult).toBe('Clicked element [1] with action "click".');
+  });
+
+  test('desktop_click supports local action variants on tree-based controllers', async () => {
+    const controller = createFakeController();
+    __setLocalDesktopControllerFactoryForTests(() => controller);
+    const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
+    const clickTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_click');
+
+    await snapshotTool!.execute({});
+    await clickTool!.execute({ element_id: 1, action: 'double_click' });
+    await clickTool!.execute({ element_id: 1, action: 'right_click' });
+    await clickTool!.execute({ element_id: 1, action: 'focus' });
+
+    expect(controller.clickedActions).toEqual(['double_click', 'right_click', 'focus']);
+  });
+
+  test('desktop_click returns unsupported actions for snapshot-based controllers', async () => {
+    const controller = createSnapshotController();
+    __setLocalDesktopControllerFactoryForTests(() => controller);
+    const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
+    const clickTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_click');
+
+    await snapshotTool!.execute({});
+    const result = await clickTool!.execute({ element_id: 7, action: 'double_click' });
+
+    expect(result).toBe('Error: Local desktop action "double_click" is not supported by this platform controller.');
+    expect(controller.clickedIds).toEqual([]);
+  });
+
+  test('desktop_snapshot honors depth and omits unknown bounds for snapshot controllers', async () => {
+    const controller = createSnapshotController();
+    __setLocalDesktopControllerFactoryForTests(() => controller);
+    const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
+
+    const result = await snapshotTool!.execute({ depth: 3 });
+
+    expect(controller.lastDepth()).toBe(3);
+    expect(String(result)).toContain('[7] button "Equals" class="calc-button"');
+    expect(String(result)).not.toContain('bounds=');
+  });
+
+  test('desktop_find_element matches snapshot controller properties', async () => {
+    const controller = createSnapshotController();
+    __setLocalDesktopControllerFactoryForTests(() => controller);
+    const findTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_find_element');
+
+    const result = await findTool!.execute({
+      automation_id: 'equals-button',
+      class_name: 'calc-button',
+    });
+
+    expect(result).toBe('[7] button "Equals"');
   });
 
   test('desktop_launch_app uses local launch support', async () => {

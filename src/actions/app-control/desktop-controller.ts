@@ -24,6 +24,8 @@ export type FlatElement = {
   value: string | null;
   depth: number;
   isEnabled: boolean;
+  bounds: UIElement['bounds'];
+  properties: Record<string, unknown>;
 };
 
 const DEFAULT_PORT = 9224;
@@ -147,7 +149,7 @@ export class DesktopController implements AppController {
    * Get a snapshot of a window's UI elements with sequential [id]s.
    * If no PID given, snapshots the active window.
    */
-  async snapshot(pid?: number): Promise<DesktopSnapshot> {
+  async snapshot(pid?: number, depth: number = 5): Promise<DesktopSnapshot> {
     await this.ensureConnected();
 
     // Get target window
@@ -159,7 +161,7 @@ export class DesktopController implements AppController {
     }
 
     // Get UI tree
-    const result = await this.send('getWindowTree', { pid: targetPid, depth: 5 }) as any;
+    const result = await this.send('getWindowTree', { pid: targetPid, depth }) as any;
 
     // Flatten tree into sequential IDs
     this.elementCache.clear();
@@ -405,6 +407,8 @@ export class DesktopController implements AppController {
         value: el.value || null,
         depth,
         isEnabled: el.isEnabled !== false,
+        bounds: uiElement.bounds,
+        properties: uiElement.properties,
       });
 
       // Recurse into children
