@@ -21,6 +21,7 @@ import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
+import type { AgentChatMessage } from '../agents/agent.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { BUILTIN_TOOLS, browser } from '../actions/tools/builtin.ts';
@@ -55,7 +56,7 @@ import { getKnowledgeForMessage } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { getUserProfile } from '../vault/user-profile.ts';
 import { getWebappInstructionsForMessage } from '../vault/webapp-templates.ts';
-import { getMessages, getRecentConversation } from '../vault/conversations.ts';
+import { getRecentConversation } from '../vault/conversations.ts';
 import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
@@ -485,7 +486,8 @@ export class AgentService implements Service, IAgentService {
         return;
       }
 
-      const restored = getMessages(recent.conversation.id, { limit: PRIMARY_HISTORY_LIMIT })
+      const restored: AgentChatMessage[] = recent.messages
+        .slice(-PRIMARY_HISTORY_LIMIT)
         .filter((message) => message.role === 'user' || message.role === 'assistant')
         .map((message) => ({
           role: message.role,

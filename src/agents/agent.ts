@@ -1,5 +1,4 @@
 import type { RoleDefinition } from '../roles/types.ts';
-import type { LLMMessage } from '../llm/provider.ts';
 
 export type AgentStatus = 'active' | 'idle' | 'terminated';
 
@@ -21,6 +20,11 @@ export type Agent = {
   authority: AuthorityBounds;
   memory_scope: string[];
   created_at: number;
+};
+
+export type AgentChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 };
 
 /**
@@ -56,7 +60,7 @@ function mergeAuthority(
 
 export class AgentInstance {
   public readonly agent: Agent;
-  private messageHistory: LLMMessage[];
+  private messageHistory: AgentChatMessage[];
 
   constructor(
     role: RoleDefinition,
@@ -104,11 +108,11 @@ export class AgentInstance {
     this.messageHistory.push({ role, content });
   }
 
-  setMessages(messages: LLMMessage[]): void {
+  setMessages(messages: AgentChatMessage[]): void {
     this.messageHistory = [...messages];
   }
 
-  getMessages(): LLMMessage[] {
+  getMessages(): AgentChatMessage[] {
     return [...this.messageHistory];
   }
 
