@@ -12,8 +12,8 @@ function readPackageVersion(packageRoot: string): string {
 }
 
 function runGit(args: string[], cwd: string): string | null {
-  const result = spawnSync(['git', ...args], {
-    cwd,
+  const gitBin = process.env.JARVIS_GIT_BIN || 'git';
+  const result = spawnSync([gitBin, '-C', cwd, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
   });
