@@ -207,17 +207,31 @@ export function resolveCorePackages(
   platform: ReturnType<typeof detectPlatform>,
   missing: string[],
 ): string[] {
-  if (!pm) return [];
+  return resolveCoreInstallPlan(pm, platform, missing).packages;
+}
+
+export function resolveCoreInstallPlan(
+  pm: PackageManager | null,
+  platform: ReturnType<typeof detectPlatform>,
+  missing: string[],
+): { packages: string[]; unresolved: string[] } {
+  if (!pm) {
+    return { packages: [], unresolved: [...new Set(missing)] };
+  }
 
   const packageMap = new Map(
     getCoreToolSpecs(platform).map((tool) => [tool.name, tool.packageNames[pm] ?? null]),
   );
 
-  return [...new Set(
+  const packages = [...new Set(
     missing
       .map((name) => packageMap.get(name) ?? null)
       .filter(Boolean) as string[],
   )];
+
+  const unresolved = missing.filter((name) => !packageMap.get(name));
+
+  return { packages, unresolved };
 }
 
 function runPackageInstall(pm: PackageManager, packages: string[]): boolean {
@@ -343,14 +357,29 @@ export async function installLinuxTools(missing: string[]): Promise<boolean> {
 export async function installCoreTools(missing: string[]): Promise<boolean> {
   const platform = detectPlatform();
   const pm = detectPackageManager();
-  const packages = resolveCorePackages(pm, platform, missing);
-
-  if (!pm || packages.length === 0) {
+  if (!pm) {
     printInfo('Install manually: ' + missing.join(', '));
     return false;
   }
 
-  return runPackageInstall(pm, packages);
+  const { packages, unresolved } = resolveCoreInstallPlan(pm, platform, missing);
+
+  if (packages.length === 0) {
+    printInfo('Install manually: ' + missing.join(', '));
+    return false;
+  }
+
+  if (unresolved.length > 0) {
+    printInfo(`No ${pm} package mapping for: ${[...new Set(unresolved)].join(', ')}`);
+  }
+
+  const installed = runPackageInstall(pm, packages);
+
+  if (unresolved.length > 0) {
+    printInfo(`Install manually: ${[...new Set(unresolved)].join(', ')}`);
+  }
+
+  return installed && unresolved.length === 0;
 }
 
 /**

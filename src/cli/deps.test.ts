@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { getCoreToolSpecs, resolveCorePackages } from './deps.ts';
+import { getCoreToolSpecs, resolveCoreInstallPlan, resolveCorePackages } from './deps.ts';
 
 describe('CLI dependency helpers', () => {
   test('includes git and curl in core tool specs', () => {
@@ -30,5 +30,12 @@ describe('CLI dependency helpers', () => {
 
   test('returns empty package list when package manager is unknown', () => {
     expect(resolveCorePackages(null, 'linux', ['git', 'curl'])).toEqual([]);
+  });
+
+  test('reports unresolved core tools when the package manager has no mapping', () => {
+    expect(resolveCoreInstallPlan('brew', 'linux', ['git', 'xdg-open'])).toEqual({
+      packages: ['git'],
+      unresolved: ['xdg-open'],
+    });
   });
 });
