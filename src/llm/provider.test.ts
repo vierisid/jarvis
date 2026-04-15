@@ -541,9 +541,61 @@ describe('Groq request shaping', () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
+    const originalSize = JSON.stringify(messages).length;
+    const compactedSize = JSON.stringify(body.messages).length;
 
     expect(body.messages[0].role).toBe('system');
     expect(body.messages.at(-1).content).toBe('latest question');
-    expect(body.messages.length).toBeLessThan(messages.length);
+    expect(compactedSize).toBeLessThan(originalSize);
+  });
+
+  test('GroqProvider retries with a tighter payload when Groq rejects an oversized request', async () => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const callCount = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.length;
+
+      if (callCount === 1) {
+        return new Response('message is too large', { status: 413 });
+      }
+
+      return new Response(JSON.stringify({
+        id: 'cmpl_retry',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: 'llama-test',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: `retry ok ${body.messages.length}` },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key') as any;
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'S'.repeat(14_000) },
+      { role: 'user', content: 'U'.repeat(10_000) },
+      { role: 'assistant', content: 'A'.repeat(10_000) },
+      { role: 'user', content: 'Can you still answer?' },
+    ];
+
+    const response = await provider.chat(messages);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+
+    expect(response.content).toContain('retry ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
 });

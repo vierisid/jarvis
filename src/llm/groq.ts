@@ -7,8 +7,6 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { compactHistory, calculateHistoryBudget } from './history.ts';
-
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -86,6 +84,12 @@ export class GroqProvider implements LLMProvider {
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
   private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
   private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
+  private static readonly RETRY_PROMPT_CHAR_BUDGET = 12_000;
+  private static readonly MAX_SYSTEM_MESSAGE_CHARS = 8_000;
+  private static readonly MAX_USER_MESSAGE_CHARS = 3_500;
+  private static readonly MAX_ASSISTANT_MESSAGE_CHARS = 3_500;
+  private static readonly MAX_TOOL_MESSAGE_CHARS = 2_000;
+  private static readonly MIN_RECENT_MESSAGES = 6;
 
   constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
     this.apiKey = apiKey;
@@ -93,16 +97,20 @@ export class GroqProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const body = this.buildRequestBody(messages, options, false);
+    let response = await this.sendRequest(
+      this.buildRequestBody(messages, options, false, GroqProvider.SAFE_PROMPT_CHAR_BUDGET)
+    );
 
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (this.isRequestTooLargeError(response.status, errorText)) {
+        response = await this.sendRequest(
+          this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
+        );
+      } else {
+        throw new Error(`Groq API error (${response.status}): ${errorText}`);
+      }
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -114,17 +122,32 @@ export class GroqProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const body = this.buildRequestBody(messages, options, true);
+    const body = this.buildRequestBody(
+      messages,
+      options,
+      true,
+      GroqProvider.SAFE_PROMPT_CHAR_BUDGET,
+    );
     const responseModel = typeof body.model === 'string' ? body.model : this.defaultModel;
 
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    let response = await this.sendRequest(body);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (this.isRequestTooLargeError(response.status, errorText)) {
+        response = await this.sendRequest(
+          this.buildRequestBody(
+            messages,
+            options,
+            true,
+            GroqProvider.RETRY_PROMPT_CHAR_BUDGET,
+          )
+        );
+      } else {
+        yield { type: 'error', error: `Groq API error (${response.status}): ${errorText}` };
+        return;
+      }
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -261,11 +284,16 @@ export class GroqProvider implements LLMProvider {
     }
   }
 
-  private buildRequestBody(messages: LLMMessage[], options: LLMOptions, stream: boolean): Record<string, unknown> {
+  private buildRequestBody(
+    messages: LLMMessage[],
+    options: LLMOptions,
+    stream: boolean,
+    promptBudget: number
+  ): Record<string, unknown> {
     const { model = this.defaultModel, temperature, max_tokens, tools } = options;
     const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(this.compactMessages(messages, tools)),
+      messages: this.convertMessages(this.compactMessages(messages, promptBudget, tools)),
     };
 
     if (stream) body.stream = true;
@@ -278,6 +306,17 @@ export class GroqProvider implements LLMProvider {
     }
 
     return body;
+  }
+
+  private async sendRequest(body: Record<string, unknown>): Promise<Response> {
+    return fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
   }
 
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
@@ -304,38 +343,84 @@ export class GroqProvider implements LLMProvider {
     });
   }
 
-  private compactMessages(messages: LLMMessage[], tools?: LLMTool[]): LLMMessage[] {
-    if (messages.length <= 2) return messages;
-
+  private compactMessages(messages: LLMMessage[], promptBudget: number, tools?: LLMTool[]): LLMMessage[] {
     const toolOverhead = tools && tools.length > 0
       ? Math.min(
         GroqProvider.SAFE_TOOL_OVERHEAD_CHARS,
         JSON.stringify(this.convertTools(tools)).length,
       )
       : 0;
-    const budget = Math.max(8_000, GroqProvider.SAFE_PROMPT_CHAR_BUDGET - toolOverhead);
-    const systemMessage = messages[0]?.role === 'system' ? messages[0] : null;
-    const compacted: LLMMessage[] = [];
-    let used = systemMessage ? this.measureMessage(systemMessage) : 0;
+    const budget = Math.max(6_000, promptBudget - toolOverhead);
+    const normalized = messages.map((message) => this.normalizeMessage(message));
+    const systemMessages = normalized.filter((message) => message.role === 'system');
+    const nonSystemMessages = normalized.filter((message) => message.role !== 'system');
+    const usedBySystems = systemMessages.reduce((sum, message) => sum + this.measureMessage(message), 0);
+    let remainingBudget = Math.max(budget - usedBySystems, 0);
 
-    if (systemMessage) compacted.push(systemMessage);
-
-    const startIndex = systemMessage ? 1 : 0;
-    const keptTail: LLMMessage[] = [];
-
-    for (let i = messages.length - 1; i >= startIndex; i--) {
-      const current = messages[i]!;
-      const size = this.measureMessage(current);
-      if (keptTail.length > 0 && used + size > budget) {
-        break;
-      }
-      keptTail.push(current);
-      used += size;
+    if (nonSystemMessages.length === 0) {
+      return systemMessages;
     }
 
-    keptTail.reverse();
-    compacted.push(...keptTail);
-    return compacted;
+    const recentCount = Math.min(nonSystemMessages.length, GroqProvider.MIN_RECENT_MESSAGES);
+    const olderMessages = nonSystemMessages.slice(0, nonSystemMessages.length - recentCount);
+    const recentMessages = nonSystemMessages.slice(-recentCount);
+    const recentBudget = Math.max(Math.floor(remainingBudget / Math.max(recentCount, 1)) - 64, 240);
+    const selectedOlder: LLMMessage[] = [];
+    const selectedRecent: LLMMessage[] = [];
+
+    for (const message of recentMessages) {
+      const candidate = this.normalizeMessage(message, recentBudget);
+      const candidateSize = this.measureMessage(candidate);
+      if (candidateSize <= remainingBudget) {
+        selectedRecent.push(candidate);
+        remainingBudget -= candidateSize;
+      }
+    }
+
+    for (let i = olderMessages.length - 1; i >= 0; i--) {
+      const candidate = olderMessages[i]!;
+      const candidateSize = this.measureMessage(candidate);
+      if (candidateSize <= remainingBudget) {
+        selectedOlder.unshift(candidate);
+        remainingBudget -= candidateSize;
+      }
+    }
+
+    return [...systemMessages, ...selectedOlder, ...selectedRecent];
+  }
+
+  private normalizeMessage(message: LLMMessage, overrideBudget?: number): LLMMessage {
+    const content = typeof message.content === 'string'
+      ? message.content
+      : message.content.map((block) => block.type === 'text' ? block.text : '[image]').join('\n');
+    const budget = overrideBudget ?? this.getMessageBudget(message.role);
+    return {
+      ...message,
+      content: this.truncateText(content, budget),
+    };
+  }
+
+  private getMessageBudget(role: LLMMessage['role']): number {
+    switch (role) {
+      case 'system':
+        return GroqProvider.MAX_SYSTEM_MESSAGE_CHARS;
+      case 'tool':
+        return GroqProvider.MAX_TOOL_MESSAGE_CHARS;
+      case 'assistant':
+        return GroqProvider.MAX_ASSISTANT_MESSAGE_CHARS;
+      case 'user':
+      default:
+        return GroqProvider.MAX_USER_MESSAGE_CHARS;
+    }
+  }
+
+  private truncateText(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    if (maxChars <= 80) return text.slice(0, maxChars);
+    const head = Math.floor(maxChars * 0.65);
+    const tail = Math.max(maxChars - head - 29, 0);
+    const suffix = tail > 0 ? text.slice(-tail) : '';
+    return `${text.slice(0, head)}\n...[truncated for Groq]...\n${suffix}`;
   }
 
   private measureMessage(message: LLMMessage): number {
@@ -344,6 +429,10 @@ export class GroqProvider implements LLMProvider {
       : message.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
     const toolCallsSize = message.tool_calls ? JSON.stringify(message.tool_calls).length : 0;
     return content.length + toolCallsSize + 128;
+  }
+
+  private isRequestTooLargeError(status: number, errorText: string): boolean {
+    return status === 413 || /message is too large|request too large|context length|too many tokens|payload too large/i.test(errorText);
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {
