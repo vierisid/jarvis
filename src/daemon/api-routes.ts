@@ -1352,7 +1352,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             has_api_key: !!tts.sarvam.api_key,
             model: tts.sarvam.model ?? 'bulbul:v3',
             language: tts.sarvam.language ?? 'en-IN',
-            speaker: tts.sarvam.speaker ?? 'meera',
+            speaker: tts.sarvam.speaker ?? 'anushka',
+            sampling_rate: tts.sarvam.sampling_rate ?? 48000,
           } : null,
         });
       },
@@ -1663,9 +1664,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.action) return error('Missing "action" field');
           ctx.learner.resetPattern(body.action, body.tool_name ?? '');
           return json({ ok: true });
-        } catch (err) {
-          return error('Invalid request body');
-        }
+        } catch (err) { return error('Invalid request body'); }
       },
     },
 

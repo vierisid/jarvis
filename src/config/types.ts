@@ -49,6 +49,7 @@ export type TTSConfig = {
     model?: string;
     language?: string;
     speaker?: string;
+    sampling_rate?: number;
   };
 };
 

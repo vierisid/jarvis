@@ -101,6 +101,7 @@ export function ChannelsPanel() {
   const [sarvModel, setSarvModel] = useState("bulbul:v3");
   const [sarvLanguage, setSarvLanguage] = useState("en-IN");
   const [sarvSpeaker, setSarvSpeaker] = useState("anushka");
+  const [sarvQuality, setSarvQuality] = useState(48000);
 
   // Messages
   const [msg, setMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
@@ -144,6 +145,7 @@ export function ChannelsPanel() {
         setSarvModel(ttsCfg.sarvam.model);
         setSarvLanguage(ttsCfg.sarvam.language);
         setSarvSpeaker(ttsCfg.sarvam.speaker);
+        if (ttsCfg.sarvam.sampling_rate) setSarvQuality(ttsCfg.sarvam.sampling_rate);
       }
     }
   }, [ttsCfg]);
@@ -246,6 +248,7 @@ export function ChannelsPanel() {
           model: sarvModel,
           language: sarvLanguage,
           speaker: sarvSpeaker,
+          sampling_rate: sarvQuality,
         };
       }
 
@@ -624,6 +627,19 @@ export function ChannelsPanel() {
                 <option value="kabir">Kabir (Male)</option>
                 <option value="arya">Arya (Female)</option>
                 <option value="hitesh">Hitesh (Male)</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Fidelity / Quality</span>
+              <select
+                style={inputStyle}
+                value={sarvQuality}
+                onChange={e => setSarvQuality(Number(e.target.value))}
+              >
+                <option value={24000}>Standard (24kHz)</option>
+                <option value={48000}>High Fidelity (48kHz)</option>
+                <option value={16000}>Low (16kHz)</option>
               </select>
             </div>
           </>

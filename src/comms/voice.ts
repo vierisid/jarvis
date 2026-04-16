@@ -325,12 +325,14 @@ export class SarvamTTSProvider implements TTSProvider {
   private model: string;
   private language: string;
   private speaker: string;
+  private samplingRate: number;
 
   constructor(config: NonNullable<TTSConfig['sarvam']>) {
     this.apiKey = config.api_key;
     this.model = config.model ?? 'bulbul:v3';
     this.language = config.language ?? 'en-IN';
     this.speaker = config.speaker ?? 'anushka';
+    this.samplingRate = config.sampling_rate ?? 48000;
   }
 
   async synthesize(text: string): Promise<Buffer> {
@@ -345,6 +347,7 @@ export class SarvamTTSProvider implements TTSProvider {
         model: this.model,
         target_language_code: this.language,
         speaker: this.speaker,
+        speech_sample_rate: this.samplingRate,
       }),
     });
 
