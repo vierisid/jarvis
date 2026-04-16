@@ -1,5 +1,37 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+const SPEECH_WAKE_INTERRUPT_COMMANDS = new Set([
+  "stop",
+  "wait",
+  "pause",
+  "listen",
+  "quiet",
+  "sorry",
+  "question",
+  "hold on",
+  "one sec",
+  "one second",
+]);
+
+export function matchesSpeechWakePhrase(transcript: string): boolean {
+  const normalized = transcript
+    .toLowerCase()
+    .replace(/[.,!?;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return false;
+  if (normalized === "jarvis" || normalized === "hey jarvis") return true;
+
+  const prefix = normalized.startsWith("hey jarvis ") ? "hey jarvis " : normalized.startsWith("jarvis ") ? "jarvis " : null;
+  if (!prefix) return false;
+
+  const remainder = normalized.slice(prefix.length).trim();
+  if (!remainder) return true;
+
+  return SPEECH_WAKE_INTERRUPT_COMMANDS.has(remainder);
+}
+
 export type VoiceState =
   | "idle"           // listening for wake word (if enabled) or waiting for PTT
   | "wake_detected"  // brief visual feedback before recording starts
@@ -218,7 +250,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = String(event.results[i]?.[0]?.transcript || "").toLowerCase().trim();
           if (!transcript) continue;
-          if (transcript.includes("hey jarvis") || transcript === "jarvis" || transcript.includes(" jarvis")) {
+          if (matchesSpeechWakePhrase(transcript)) {
             console.log(`[Voice] Speech wake phrase detected: "${transcript}"`);
             if (voiceStateRef.current === "speaking") {
               cancelTTSRef.current();
