@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { existsSync, mkdirSync } from 'node:fs';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 
