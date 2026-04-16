@@ -354,8 +354,9 @@ export class SarvamTTSProvider implements TTSProvider {
     }
 
     const result = await response.json() as any;
-    if (result.audio_content) {
-      return Buffer.from(result.audio_content, 'base64');
+    const base64Audio = result.audio_content || (result.audios && result.audios[0]);
+    if (base64Audio) {
+      return Buffer.from(base64Audio, 'base64');
     }
     throw new Error('Sarvam TTS returned no audio content');
   }
