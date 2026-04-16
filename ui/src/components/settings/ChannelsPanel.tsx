@@ -38,21 +38,7 @@ type TTSConfigData = {
     model: string;
     language: string;
     speaker: string;
-  } | null;
-};
-
-type TTSConfigData = {
-  enabled: boolean;
-  provider: string;
-  voice: string;
-  rate: string;
-  volume: string;
-  elevenlabs: {
-    has_api_key: boolean;
-    voice_id: string | null;
-    model: string;
-    stability: number;
-    similarity_boost: number;
+    sampling_rate: number;
   } | null;
 };
 
