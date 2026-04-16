@@ -1320,14 +1320,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const freshConfig = await loadConfig();
 
           if (!freshConfig.stt) freshConfig.stt = {} as any;
+          const stt = freshConfig.stt!;
 
           // Preserve keys for each provider if not provided in the update
           const providers = ['openai', 'groq', 'sarvam'] as const;
           for (const p of providers) {
             const incoming = body[p] as Record<string, unknown> | undefined;
-            const existing = freshConfig.stt[p];
+            const existing = stt[p];
             if (incoming) {
-              freshConfig.stt[p] = {
+              stt[p] = {
                 ...existing,
                 ...incoming,
                 api_key: (incoming.api_key as string) || (existing as any)?.api_key || '',
@@ -1336,7 +1337,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             }
           }
 
-          freshConfig.stt = { ...freshConfig.stt, ...body } as any;
+          freshConfig.stt = { ...stt, ...body } as any;
           await saveConfig(freshConfig);
           ctx.config.stt = freshConfig.stt;
           return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
