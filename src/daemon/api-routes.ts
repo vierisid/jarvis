@@ -1307,6 +1307,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           provider: stt?.provider ?? 'openai',
           has_openai_key: !!stt?.openai?.api_key,
           has_groq_key: !!stt?.groq?.api_key,
+          has_sarvam_key: !!stt?.sarvam?.api_key,
           local_endpoint: stt?.local?.endpoint ?? null,
           local_server_type: stt?.local?.server_type ?? 'whisper_cpp',
         });
@@ -1335,12 +1336,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',
-          elevenlabs: tts?.elevenlabs ? {
-            has_api_key: !!tts.elevenlabs.api_key,
-            voice_id: tts.elevenlabs.voice_id ?? null,
-            model: tts.elevenlabs.model ?? 'eleven_flash_v2_5',
             stability: tts.elevenlabs.stability ?? 0.5,
             similarity_boost: tts.elevenlabs.similarity_boost ?? 0.75,
+          } : null,
+          sarvam: tts?.sarvam ? {
+            has_api_key: !!tts.sarvam.api_key,
+            model: tts.sarvam.model ?? 'bulbul:v3',
+            language: tts.sarvam.language ?? 'en-IN',
+            speaker: tts.sarvam.speaker ?? 'meera',
           } : null,
         });
       },
@@ -1363,6 +1366,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               ...incomingEl,
               // Keep existing API key if new one not provided
               api_key: (incomingEl.api_key as string) || existingEl?.api_key || '',
+            } as any;
+          }
+
+          const incomingSarvam = body.sarvam as Record<string, unknown> | undefined;
+          const existingSarvam = freshConfig.tts?.sarvam;
+          delete body.sarvam;
+
+          if (incomingSarvam) {
+            freshConfig.tts!.sarvam = {
+              ...existingSarvam,
+              ...incomingSarvam,
+              api_key: (incomingSarvam.api_key as string) || existingSarvam?.api_key || '',
             } as any;
           }
 

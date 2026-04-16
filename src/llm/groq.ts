@@ -81,15 +81,22 @@ type GroqStreamChunk = {
 
 export class GroqProvider implements LLMProvider {
   name = 'groq';
-  private apiKey: string;
+  private apiKeys: string[];
+  private currentKeyIndex = 0;
   private defaultModel: string;
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
   private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
   private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
 
-  constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
-    this.apiKey = apiKey;
+  constructor(apiKey: string | string[], defaultModel = 'llama-3.3-70b-versatile') {
+    this.apiKeys = Array.isArray(apiKey) ? apiKey : [apiKey];
     this.defaultModel = defaultModel;
+  }
+
+  private getApiKey(): string {
+    const key = this.apiKeys[this.currentKeyIndex];
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    return key!;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -98,7 +105,7 @@ export class GroqProvider implements LLMProvider {
     const response = await fetch(this.apiUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${this.getApiKey()}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -120,7 +127,7 @@ export class GroqProvider implements LLMProvider {
     const response = await fetch(this.apiUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${this.getApiKey()}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -241,7 +248,7 @@ export class GroqProvider implements LLMProvider {
     try {
       const response = await fetch('https://api.groq.com/openai/v1/models', {
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          'Authorization': `Bearer ${this.getApiKey()}`,
         },
       });
 
