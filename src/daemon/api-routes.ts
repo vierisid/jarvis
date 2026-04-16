@@ -1321,6 +1321,21 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           if (!freshConfig.stt) freshConfig.stt = {} as any;
 
+          // Preserve keys for each provider if not provided in the update
+          const providers = ['openai', 'groq', 'sarvam'] as const;
+          for (const p of providers) {
+            const incoming = body[p] as Record<string, unknown> | undefined;
+            const existing = freshConfig.stt[p];
+            if (incoming) {
+              freshConfig.stt[p] = {
+                ...existing,
+                ...incoming,
+                api_key: (incoming.api_key as string) || (existing as any)?.api_key || '',
+              } as any;
+              delete body[p];
+            }
+          }
+
           freshConfig.stt = { ...freshConfig.stt, ...body } as any;
           await saveConfig(freshConfig);
           ctx.config.stt = freshConfig.stt;
@@ -1389,6 +1404,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             freshConfig.tts!.sarvam = {
               ...existingSarvam,
               ...incomingSarvam,
+              // Keep existing API key if new one not provided
               api_key: (incomingSarvam.api_key as string) || existingSarvam?.api_key || '',
             } as any;
           }
