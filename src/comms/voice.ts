@@ -330,7 +330,7 @@ export class SarvamTTSProvider implements TTSProvider {
     this.apiKey = config.api_key;
     this.model = config.model ?? 'bulbul:v3';
     this.language = config.language ?? 'en-IN';
-    this.speaker = config.speaker ?? 'meera';
+    this.speaker = config.speaker ?? 'anushka';
   }
 
   async synthesize(text: string): Promise<Buffer> {

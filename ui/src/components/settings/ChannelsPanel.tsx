@@ -100,7 +100,7 @@ export function ChannelsPanel() {
   const [sarvApiKey, setSarvApiKey] = useState("");
   const [sarvModel, setSarvModel] = useState("bulbul:v3");
   const [sarvLanguage, setSarvLanguage] = useState("en-IN");
-  const [sarvSpeaker, setSarvSpeaker] = useState("meera");
+  const [sarvSpeaker, setSarvSpeaker] = useState("anushka");
 
   // Messages
   const [msg, setMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
@@ -610,14 +610,21 @@ export function ChannelsPanel() {
             </div>
             
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Speaker (ID)</span>
-              <input
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Speaker</span>
+              <select
                 style={inputStyle}
-                type="text"
-                placeholder="Speaker ID (e.g. meera, ajit)"
                 value={sarvSpeaker}
                 onChange={e => setSarvSpeaker(e.target.value)}
-              />
+              >
+                <option value="anushka">Anushka (Female)</option>
+                <option value="amit">Amit (Male)</option>
+                <option value="priya">Priya (Female)</option>
+                <option value="rohan">Rohan (Male)</option>
+                <option value="simran">Simran (Female)</option>
+                <option value="kabir">Kabir (Male)</option>
+                <option value="arya">Arya (Female)</option>
+                <option value="hitesh">Hitesh (Male)</option>
+              </select>
             </div>
           </>
         )}
