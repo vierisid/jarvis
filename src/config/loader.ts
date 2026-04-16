@@ -96,7 +96,22 @@ function applyEnvOverrides(config: JarvisConfig): void {
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  let path = configPath;
+
+  if (!path) {
+    const dataDir = process.env.JARVIS_HOME || process.env.JARVIS_DATA_DIR;
+    if (dataDir) {
+      // Prioritize config.yaml in the root of the data dir (useful for Docker mounts)
+      const rootConfig = join(dataDir, 'config.yaml');
+      if (await Bun.file(rootConfig).exists()) {
+        path = rootConfig;
+      }
+    }
+    
+    if (!path) {
+      path = expandTilde('~/.jarvis/config.yaml');
+    }
+  }
 
   const file = Bun.file(path);
   const exists = await file.exists();
@@ -135,9 +150,29 @@ export async function saveConfig(
   config: JarvisConfig,
   configPath?: string
 ): Promise<void> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  let path = configPath;
+
+  if (!path) {
+    const dataDir = process.env.JARVIS_HOME || process.env.JARVIS_DATA_DIR;
+    if (dataDir) {
+      const rootConfig = join(dataDir, 'config.yaml');
+      if (await Bun.file(rootConfig).exists()) {
+        path = rootConfig;
+      }
+    }
+    
+    if (!path) {
+      path = expandTilde('~/.jarvis/config.yaml');
+    }
+  }
 
   try {
+    // Ensure parent directory exists
+    const dirname = join(path, '..');
+    if (!existsSync(dirname)) {
+      mkdirSync(dirname, { recursive: true });
+    }
+
     const yaml = YAML.stringify(config, {
       indent: 2,
       lineWidth: 100,
