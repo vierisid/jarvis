@@ -24,15 +24,16 @@ export type ChannelConfig = {
 };
 
 export type STTConfig = {
-  provider: 'openai' | 'groq' | 'local';
+  provider: 'openai' | 'groq' | 'local' | 'sarvam';
   openai?: { api_key: string; model?: string };
   groq?: { api_key: string; model?: string };
   local?: { endpoint: string; model?: string; server_type?: 'whisper_cpp' | 'openai_compatible' };
+  sarvam?: { api_key: string; model?: string };
 };
 
 export type TTSConfig = {
   enabled: boolean;
-  provider?: 'edge' | 'elevenlabs';  // default: 'edge'
+  provider?: 'edge' | 'elevenlabs' | 'sarvam';  // default: 'edge'
   voice?: string;       // e.g. 'en-US-AriaNeural' (edge)
   rate?: string;        // e.g. '+0%', '+10%' (edge)
   volume?: string;      // e.g. '+0%' (edge)
@@ -42,6 +43,12 @@ export type TTSConfig = {
     model?: string;           // 'eleven_flash_v2_5' | 'eleven_multilingual_v2'
     stability?: number;       // 0-1
     similarity_boost?: number; // 0-1
+  };
+  sarvam?: {
+    api_key: string;
+    model?: string;
+    language?: string;
+    speaker?: string;
   };
 };
 

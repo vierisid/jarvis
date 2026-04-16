@@ -1295,6 +1295,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true, message: 'Channel config saved. Restart JARVIS to apply changes.' });
         } catch (err) {
+          console.error('[API] Error saving channels config:', err);
           return error('Invalid request body');
         }
       },
@@ -1307,6 +1308,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           provider: stt?.provider ?? 'openai',
           has_openai_key: !!stt?.openai?.api_key,
           has_groq_key: !!stt?.groq?.api_key,
+          has_sarvam_key: !!stt?.sarvam?.api_key,
           local_endpoint: stt?.local?.endpoint ?? null,
           local_server_type: stt?.local?.server_type ?? 'whisper_cpp',
         });
@@ -1316,11 +1318,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
+
+          if (!freshConfig.stt) freshConfig.stt = {} as any;
+
           freshConfig.stt = { ...freshConfig.stt, ...body } as any;
           await saveConfig(freshConfig);
           ctx.config.stt = freshConfig.stt;
           return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
         } catch (err) {
+          console.error('[API] Error saving STT config:', err);
           return error('Invalid request body');
         }
       },
@@ -1342,6 +1348,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             stability: tts.elevenlabs.stability ?? 0.5,
             similarity_boost: tts.elevenlabs.similarity_boost ?? 0.75,
           } : null,
+          sarvam: tts?.sarvam ? {
+            has_api_key: !!tts.sarvam.api_key,
+            model: tts.sarvam.model ?? 'bulbul:v3',
+            language: tts.sarvam.language ?? 'en-IN',
+            speaker: tts.sarvam.speaker ?? 'meera',
+          } : null,
         });
       },
       POST: async (req: Request) => {
@@ -1349,6 +1361,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
+
+          if (!freshConfig.tts) freshConfig.tts = {} as any;
 
           // Deep-merge elevenlabs sub-object to preserve API key across saves
           const incomingEl = body.elevenlabs as Record<string, unknown> | undefined;
@@ -1366,6 +1380,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             } as any;
           }
 
+          const incomingSarvam = body.sarvam as Record<string, unknown> | undefined;
+          const existingSarvam = freshConfig.tts?.sarvam;
+          delete body.sarvam;
+
+          if (incomingSarvam) {
+            freshConfig.tts!.sarvam = {
+              ...existingSarvam,
+              ...incomingSarvam,
+              api_key: (incomingSarvam.api_key as string) || existingSarvam?.api_key || '',
+            } as any;
+          }
+
           await saveConfig(freshConfig);
           ctx.config.tts = freshConfig.tts;
 
@@ -1380,6 +1406,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true, message: 'TTS config saved.' });
         } catch (err) {
+          console.error('[API] Error saving TTS config:', err);
           return error('Invalid request body');
         }
       },

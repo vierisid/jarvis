@@ -159,6 +159,40 @@ export class LocalWhisperSTT implements STTProvider {
 }
 
 /**
+ * Sarvam AI STT — uses Sarvam's Speech-to-Text API.
+ */
+export class SarvamSTT implements STTProvider {
+  private apiKey: string;
+  private model: string;
+
+  constructor(apiKey: string, model: string = 'saaras:v3') {
+    this.apiKey = apiKey;
+    this.model = model;
+  }
+
+  async transcribe(audio: Buffer): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+    formData.append('model', this.model);
+    formData.append('language_code', 'en-IN'); 
+
+    const response = await fetch('https://api.sarvam.ai/speech-to-text', {
+      method: 'POST',
+      headers: { 'api-subscription-key': this.apiKey },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Sarvam STT error (${response.status}): ${err}`);
+    }
+
+    const result = await response.json() as any;
+    return result.transcript || result.text || '';
+  }
+}
+
+/**
  * Factory: create the right STT provider from config.
  * Returns null if the selected provider lacks required credentials.
  */
@@ -172,6 +206,9 @@ export function createSTTProvider(config: STTConfig): STTProvider | null {
       return new GroqWhisperSTT(config.groq.api_key, config.groq.model);
     case 'local':
       return new LocalWhisperSTT(config.local?.endpoint, config.local?.model, config.local?.server_type);
+    case 'sarvam':
+      if (!config.sarvam?.api_key) return null;
+      return new SarvamSTT(config.sarvam.api_key, config.sarvam.model);
     default:
       return null;
   }
@@ -281,6 +318,57 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 }
 
 /**
+ * Sarvam AI TTS Provider — high-quality Indian language voices via Sarvam AI.
+ */
+export class SarvamTTSProvider implements TTSProvider {
+  private apiKey: string;
+  private model: string;
+  private language: string;
+  private speaker: string;
+
+  constructor(config: NonNullable<TTSConfig['sarvam']>) {
+    this.apiKey = config.api_key;
+    this.model = config.model ?? 'bulbul:v3';
+    this.language = config.language ?? 'en-IN';
+    this.speaker = config.speaker ?? 'anushka';
+  }
+
+  async synthesize(text: string): Promise<Buffer> {
+    const response = await fetch('https://api.sarvam.ai/text-to-speech', {
+      method: 'POST',
+      headers: {
+        'api-subscription-key': this.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text,
+        model: this.model,
+        target_language_code: this.language,
+        speaker: this.speaker,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Sarvam TTS error (${response.status}): ${err}`);
+    }
+
+    const result = await response.json() as any;
+    if (result.audio_content) {
+      return Buffer.from(result.audio_content, 'base64');
+    }
+    throw new Error('Sarvam TTS returned no audio content');
+  }
+
+  async *synthesizeStream(text: string): AsyncIterable<Buffer> {
+    const audio = await this.synthesize(text);
+    if (audio.length > 0) {
+      yield audio;
+    }
+  }
+}
+
+/**
  * Fetch available voices from ElevenLabs API.
  */
 export async function listElevenLabsVoices(apiKey: string): Promise<{
@@ -315,6 +403,11 @@ export function createTTSProvider(config: TTSConfig): TTSProvider | null {
   if (config.provider === 'elevenlabs') {
     if (!config.elevenlabs?.api_key) return null;
     return new ElevenLabsTTSProvider(config.elevenlabs);
+  }
+
+  if (config.provider === 'sarvam') {
+    if (!config.sarvam?.api_key) return null;
+    return new SarvamTTSProvider(config.sarvam);
   }
 
   // Default: Edge TTS

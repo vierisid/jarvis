@@ -15,8 +15,30 @@ type STTConfigData = {
   provider: string;
   has_openai_key: boolean;
   has_groq_key: boolean;
+  has_sarvam_key: boolean;
   local_endpoint: string | null;
   local_server_type: string;
+};
+
+type TTSConfigData = {
+  enabled: boolean;
+  provider: string;
+  voice: string;
+  rate: string;
+  volume: string;
+  elevenlabs: {
+    has_api_key: boolean;
+    voice_id: string | null;
+    model: string;
+    stability: number;
+    similarity_boost: number;
+  } | null;
+  sarvam: {
+    has_api_key: boolean;
+    model: string;
+    language: string;
+    speaker: string;
+  } | null;
 };
 
 type TTSConfigData = {
@@ -74,6 +96,12 @@ export function ChannelsPanel() {
   const [elVoices, setElVoices] = useState<ElevenLabsVoice[]>([]);
   const [elVoicesLoading, setElVoicesLoading] = useState(false);
 
+  // Sarvam TTS form
+  const [sarvApiKey, setSarvApiKey] = useState("");
+  const [sarvModel, setSarvModel] = useState("bulbul:v3");
+  const [sarvLanguage, setSarvLanguage] = useState("en-IN");
+  const [sarvSpeaker, setSarvSpeaker] = useState("anushka");
+
   // Messages
   const [msg, setMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
@@ -111,6 +139,11 @@ export function ChannelsPanel() {
       if (ttsCfg.elevenlabs) {
         setElVoiceId(ttsCfg.elevenlabs.voice_id ?? "");
         setElModel(ttsCfg.elevenlabs.model);
+      }
+      if (ttsCfg.sarvam) {
+        setSarvModel(ttsCfg.sarvam.model);
+        setSarvLanguage(ttsCfg.sarvam.language);
+        setSarvSpeaker(ttsCfg.sarvam.speaker);
       }
     }
   }, [ttsCfg]);
@@ -173,6 +206,8 @@ export function ChannelsPanel() {
         body.openai = { api_key: sttKey };
       } else if (sttProvider === "groq" && sttKey) {
         body.groq = { api_key: sttKey };
+      } else if (sttProvider === "sarvam" && sttKey) {
+        body.sarvam = { api_key: sttKey };
       } else if (sttProvider === "local") {
         body.local = { endpoint: sttEndpoint, server_type: sttServerType };
       }
@@ -204,6 +239,13 @@ export function ChannelsPanel() {
           ...(elApiKey ? { api_key: elApiKey } : {}),
           voice_id: elVoiceId || undefined,
           model: elModel,
+        };
+      } else if (ttsProvider === "sarvam") {
+        body.sarvam = {
+          ...(sarvApiKey ? { api_key: sarvApiKey } : {}),
+          model: sarvModel,
+          language: sarvLanguage,
+          speaker: sarvSpeaker,
         };
       }
 
@@ -349,19 +391,21 @@ export function ChannelsPanel() {
         >
           <option value="openai">OpenAI Whisper</option>
           <option value="groq">Groq Whisper</option>
+          <option value="sarvam">Sarvam AI</option>
           <option value="local">Local Whisper (whisper.cpp)</option>
         </select>
 
-        {(sttProvider === "openai" || sttProvider === "groq") && (
+        {(sttProvider === "openai" || sttProvider === "groq" || sttProvider === "sarvam") && (
           <>
             <input
               style={inputStyle}
               type="password"
-              placeholder={`${sttProvider === "openai" ? "OpenAI" : "Groq"} API Key (leave empty to keep existing)`}
+              placeholder={`${sttProvider === "openai" ? "OpenAI" : sttProvider === "groq" ? "Groq" : "Sarvam"} API Key (leave empty to keep existing)`}
               value={sttKey}
               onChange={e => setSttKey(e.target.value)}
             />
             {((sttProvider === "openai" && sttCfg?.has_openai_key) ||
+              (sttProvider === "sarvam" && sttCfg?.has_sarvam_key) ||
               (sttProvider === "groq" && sttCfg?.has_groq_key)) && (
               <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>
                 API key configured
@@ -423,6 +467,7 @@ export function ChannelsPanel() {
           >
             <option value="edge">Edge TTS (Free)</option>
             <option value="elevenlabs">ElevenLabs (API Key)</option>
+            <option value="sarvam">Sarvam AI (Indian Languages)</option>
           </select>
         </div>
 
@@ -512,6 +557,73 @@ export function ChannelsPanel() {
               >
                 <option value="eleven_flash_v2_5">Flash v2.5 (Fast, low latency)</option>
                 <option value="eleven_multilingual_v2">Multilingual v2 (Higher quality)</option>
+              </select>
+            </div>
+          </>
+        )}
+
+        {ttsProvider === "sarvam" && (
+          <>
+            <p style={hintStyle}>
+              High-quality text-to-speech for Indian languages.
+            </p>
+
+            <input
+              style={inputStyle}
+              type="password"
+              placeholder="Sarvam AI Subscription Key (leave empty to keep existing)"
+              value={sarvApiKey}
+              onChange={e => setSarvApiKey(e.target.value)}
+            />
+            {ttsCfg?.sarvam?.has_api_key && (
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>
+                API key configured
+              </span>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Model</span>
+              <select
+                style={inputStyle}
+                value={sarvModel}
+                onChange={e => setSarvModel(e.target.value)}
+              >
+                <option value="bulbul:v3">Bulbul v3 (State of the art)</option>
+                <option value="bulbul:v2">Bulbul v2</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Language</span>
+              <select
+                style={inputStyle}
+                value={sarvLanguage}
+                onChange={e => setSarvLanguage(e.target.value)}
+              >
+                <option value="en-IN">English (Indian Accent)</option>
+                <option value="hi-IN">Hindi</option>
+                <option value="ta-IN">Tamil</option>
+                <option value="te-IN">Telugu</option>
+                <option value="kn-IN">Kannada</option>
+                <option value="ml-IN">Malayalam</option>
+              </select>
+            </div>
+            
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Speaker</span>
+              <select
+                style={inputStyle}
+                value={sarvSpeaker}
+                onChange={e => setSarvSpeaker(e.target.value)}
+              >
+                <option value="anushka">Anushka (Female)</option>
+                <option value="amit">Amit (Male)</option>
+                <option value="priya">Priya (Female)</option>
+                <option value="rohan">Rohan (Male)</option>
+                <option value="simran">Simran (Female)</option>
+                <option value="kabir">Kabir (Male)</option>
+                <option value="arya">Arya (Female)</option>
+                <option value="hitesh">Hitesh (Male)</option>
               </select>
             </div>
           </>
