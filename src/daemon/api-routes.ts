@@ -1295,6 +1295,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true, message: 'Channel config saved. Restart JARVIS to apply changes.' });
         } catch (err) {
+          console.error('[API] Error saving channels config:', err);
           return error('Invalid request body');
         }
       },
@@ -1317,11 +1318,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
+
+          if (!freshConfig.stt) freshConfig.stt = {} as any;
+
           freshConfig.stt = { ...freshConfig.stt, ...body } as any;
           await saveConfig(freshConfig);
           ctx.config.stt = freshConfig.stt;
           return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
         } catch (err) {
+          console.error('[API] Error saving STT config:', err);
           return error('Invalid request body');
         }
       },
@@ -1336,6 +1341,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',
+          elevenlabs: tts?.elevenlabs ? {
+            has_api_key: !!tts.elevenlabs.api_key,
+            voice_id: tts.elevenlabs.voice_id ?? null,
+            model: tts.elevenlabs.model ?? 'eleven_flash_v2_5',
             stability: tts.elevenlabs.stability ?? 0.5,
             similarity_boost: tts.elevenlabs.similarity_boost ?? 0.75,
           } : null,
@@ -1352,6 +1361,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
+
+          if (!freshConfig.tts) freshConfig.tts = {} as any;
 
           // Deep-merge elevenlabs sub-object to preserve API key across saves
           const incomingEl = body.elevenlabs as Record<string, unknown> | undefined;
@@ -1395,6 +1406,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true, message: 'TTS config saved.' });
         } catch (err) {
+          console.error('[API] Error saving TTS config:', err);
           return error('Invalid request body');
         }
       },
