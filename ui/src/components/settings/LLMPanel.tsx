@@ -117,6 +117,7 @@ export function LLMPanel() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [ollamaCustomModel, setOllamaCustomModel] = useState("");
+  const [ollamaType, setOllamaType] = useState<"local" | "cloud">("local");
 
   // OpenRouter
   const [openrouterKey, setOpenrouterKey] = useState("");
@@ -178,6 +179,7 @@ export function LLMPanel() {
     }
     if (config.ollama) {
       setOllamaBaseUrl(config.ollama.base_url);
+      setOllamaType(config.ollama.base_url.includes("localhost") || config.ollama.base_url.includes("127.0.0.1") ? "local" : "cloud");
       const m = config.ollama.model;
       if (OLLAMA_MODELS.includes(m)) {
         setOllamaModel(m);
@@ -426,6 +428,12 @@ export function LLMPanel() {
           hideApiKey
           baseUrl={ollamaBaseUrl}
           onBaseUrlChange={setOllamaBaseUrl}
+          ollamaType={ollamaType}
+          onOllamaTypeChange={(type) => {
+            setOllamaType(type);
+            if (type === "local") setOllamaBaseUrl("http://localhost:11434");
+            else setOllamaBaseUrl("https://");
+          }}
         />
 
         <ProviderSection
@@ -505,6 +513,8 @@ type ProviderSectionProps = {
   hideApiKey?: boolean;
   baseUrl?: string;
   onBaseUrlChange?: (v: string) => void;
+  ollamaType?: "local" | "cloud";
+  onOllamaTypeChange?: (v: "local" | "cloud") => void;
 };
 
 function ToggleSwitch({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
@@ -552,6 +562,7 @@ function ProviderSection({
   isFallback, onFallbackToggle,
   expanded, onToggleExpand,
   hideApiKey, baseUrl, onBaseUrlChange,
+  ollamaType, onOllamaTypeChange,
 }: ProviderSectionProps) {
   return (
     <div style={providerCardStyle}>
@@ -603,7 +614,40 @@ function ProviderSection({
 
           {baseUrl !== undefined && onBaseUrlChange && (
             <div>
-              <div style={fieldLabelStyle}>Base URL</div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "4px",
+                }}
+              >
+                <div style={fieldLabelStyle}>Base URL</div>
+                {onOllamaTypeChange && (
+                  <div style={{ display: "flex", gap: "4px" }}>
+                    <button
+                      onClick={() => onOllamaTypeChange("local")}
+                      style={{
+                        ...typeBtnStyle,
+                        background: ollamaType === "local" ? "var(--j-accent)" : "rgba(255,255,255,0.05)",
+                        color: ollamaType === "local" ? "#fff" : "var(--j-text-dim)",
+                      }}
+                    >
+                      Local
+                    </button>
+                    <button
+                      onClick={() => onOllamaTypeChange("cloud")}
+                      style={{
+                        ...typeBtnStyle,
+                        background: ollamaType === "cloud" ? "var(--j-accent)" : "rgba(255,255,255,0.05)",
+                        color: ollamaType === "cloud" ? "#fff" : "var(--j-text-dim)",
+                      }}
+                    >
+                      Cloud
+                    </button>
+                  </div>
+                )}
+              </div>
               <input
                 type="text"
                 value={baseUrl}
@@ -760,6 +804,16 @@ const primaryBadgeStyle: React.CSSProperties = {
   padding: "1px 6px",
   borderRadius: "3px",
   letterSpacing: "0.5px",
+};
+
+const typeBtnStyle: React.CSSProperties = {
+  padding: "2px 8px",
+  fontSize: "10px",
+  fontWeight: 600,
+  border: "none",
+  borderRadius: "4px",
+  cursor: "pointer",
+  transition: "all 0.2s",
 };
 
 function dotStyle(active: boolean): React.CSSProperties {
