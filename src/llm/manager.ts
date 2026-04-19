@@ -162,9 +162,17 @@ export class LLMManager {
   }
 
   async *stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
+    yield* this.streamWithOverride(messages, null, options);
+  }
+
+  async *streamWithOverride(
+    messages: LLMMessage[],
+    overridePrimary: string | null,
+    options?: LLMOptions
+  ): AsyncIterable<LLMStreamEvent> {
     const failures: string[] = [];
 
-    for (const providerName of this.getProviderSequence()) {
+    for (const providerName of this.getProviderSequence(overridePrimary)) {
       const provider = this.providers.get(providerName);
       if (!provider) {
         failures.push(`Provider '${providerName}' not registered`);

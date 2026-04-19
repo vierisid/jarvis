@@ -21,6 +21,8 @@ import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { NVIDIAProvider } from '../llm/nvidia.ts';
+import { LLMRouter } from '../llm/router.ts';
+import { IntentEvaluator } from '../agents/evaluator.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -76,11 +78,15 @@ export class AgentService implements Service, IAgentService {
   private researchQueue: ResearchQueue | null = null;
   private taskManager: AgentTaskManager | null = null;
   private authorityEngine: AuthorityEngine | null = null;
+  private router: LLMRouter;
+  private evaluator: IntentEvaluator;
 
   constructor(config: JarvisConfig) {
     this.config = config;
     this.llmManager = new LLMManager();
     this.orchestrator = new AgentOrchestrator();
+    this.router = new LLMRouter(this.llmManager, this.config);
+    this.evaluator = new IntentEvaluator(this.llmManager, this.router);
   }
 
   /**
@@ -133,6 +139,7 @@ export class AgentService implements Service, IAgentService {
     try {
       // 1. Create LLM providers from config
       this.registerProviders();
+      this.router.refreshAvailability();
 
       // 2. Load role YAML
       this.role = this.loadActiveRole();
@@ -248,12 +255,33 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    let systemPrompt = this.buildFullSystemPrompt(channel, text);
-    if (siteContext) {
       systemPrompt += '\n\n' + siteContext;
     }
 
-    const stream = this.orchestrator.streamMessage(systemPrompt, text);
+    const { stream, onComplete } = this.createDynamicStream(text, systemPrompt);
+
+    return { stream, onComplete };
+  }
+
+  private createDynamicStream(text: string, systemPrompt: string): {
+    stream: AsyncIterable<LLMStreamEvent>;
+    onComplete: (fullText: string) => Promise<void>;
+  } {
+    // Create a wrapper async iterable to handle the dynamic evaluation
+    const self = this;
+    const stream = (async function* () {
+      try {
+        const intent = await self.evaluator.evaluate(text);
+        const providerName = self.router.getBestProvider(intent);
+        console.log(`[AgentService] Routing turn to ${providerName} (Intent: ${intent})`);
+
+        for await (const event of self.orchestrator.streamMessage(systemPrompt, text, providerName)) {
+          yield event;
+        }
+      } catch (err) {
+        yield { type: 'error', error: `Routing error: ${err}` };
+      }
+    })();
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
@@ -277,7 +305,11 @@ export class AgentService implements Service, IAgentService {
   async handleMessage(text: string, channel: string = 'websocket'): Promise<string> {
     const systemPrompt = this.buildFullSystemPrompt(channel, text);
 
-    const response = await this.orchestrator.processMessage(systemPrompt, text);
+    const intent = await this.evaluator.evaluate(text);
+    const providerName = this.router.getBestProvider(intent);
+    console.log(`[AgentService] Routing turn to ${providerName} (Intent: ${intent})`);
+
+    const response = await this.orchestrator.processMessage(systemPrompt, text, providerName);
 
     // Run extraction and learning in parallel (non-blocking but tracked)
     Promise.allSettled([
