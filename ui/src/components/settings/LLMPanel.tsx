@@ -62,6 +62,12 @@ const OLLAMA_MODELS = [
   "phi3",
 ];
 
+const NVIDIA_MODELS = [
+  "usdcode",
+  "mistral-nemo-minitron-8b-base",
+  "gemma-2-2b-it",
+];
+
 const OPENROUTER_MODELS = [
   "anthropic/claude-sonnet-4",
   "anthropic/claude-opus-4",
@@ -75,7 +81,7 @@ const OPENROUTER_MODELS = [
   "mistralai/mistral-large",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "groq", "gemini", "ollama", "openrouter"] as const;
+const PROVIDERS = ["anthropic", "openai", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -84,6 +90,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
   ollama: "Ollama",
   openrouter: "OpenRouter",
+  nvidia: "NVIDIA NIM",
 };
 
 export function LLMPanel() {
@@ -122,6 +129,11 @@ export function LLMPanel() {
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [openrouterModel, setOpenrouterModel] = useState("anthropic/claude-sonnet-4");
   const [openrouterCustomModel, setOpenrouterCustomModel] = useState("");
+
+  // NVIDIA
+  const [nvidiaKey, setNvidiaKey] = useState("");
+  const [nvidiaModel, setNvidiaModel] = useState("mistral-nemo-minitron-8b-base");
+  const [nvidiaCustomModel, setNvidiaCustomModel] = useState("");
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -197,6 +209,18 @@ export function LLMPanel() {
         setOpenrouterCustomModel(m);
       }
     }
+    // @ts-ignore - config might have nvidia from backend
+    if (config.nvidia) {
+      // @ts-ignore
+      const m = config.nvidia.model;
+      if (NVIDIA_MODELS.includes(m)) {
+        setNvidiaModel(m);
+        setNvidiaCustomModel("");
+      } else {
+        setNvidiaModel("custom");
+        setNvidiaCustomModel(m);
+      }
+    }
   }, [config]);
 
   const resolveModel = (selected: string, custom: string) =>
@@ -233,6 +257,10 @@ export function LLMPanel() {
           model: resolveModel(openrouterModel, openrouterCustomModel),
           ...(openrouterKey ? { api_key: openrouterKey } : {}),
         },
+        nvidia: {
+          model: resolveModel(nvidiaModel, nvidiaCustomModel),
+          ...(nvidiaKey ? { api_key: nvidiaKey } : {}),
+        },
       };
       const resp = await api<{ ok: boolean; message: string }>("/api/config/llm", {
         method: "POST",
@@ -244,6 +272,7 @@ export function LLMPanel() {
       setGroqKey("");
       setGeminiKey("");
       setOpenrouterKey("");
+      setNvidiaKey("");
       refetch();
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Save failed", type: "error" });
@@ -276,6 +305,9 @@ export function LLMPanel() {
       } else if (provider === "openrouter") {
         body.api_key = openrouterKey || undefined;
         body.model = resolveModel(openrouterModel, openrouterCustomModel);
+      } else if (provider === "nvidia") {
+        body.api_key = nvidiaKey || undefined;
+        body.model = resolveModel(nvidiaModel, nvidiaCustomModel);
       }
       const result = await api<TestResult>("/api/config/llm/test", {
         method: "POST",
@@ -468,6 +500,28 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("groq")}
           expanded={!!expanded.groq}
           onToggleExpand={() => setExpanded((s) => ({ ...s, groq: !s.groq }))}
+        />
+
+        <ProviderSection
+          name="NVIDIA NIM"
+          provider="nvidia"
+          isPrimary={primary === "nvidia"}
+          // @ts-ignore
+          hasKey={config.nvidia?.has_api_key ?? false}
+          apiKey={nvidiaKey}
+          onApiKeyChange={setNvidiaKey}
+          model={nvidiaModel}
+          customModel={nvidiaCustomModel}
+          onModelChange={setNvidiaModel}
+          onCustomModelChange={setNvidiaCustomModel}
+          models={NVIDIA_MODELS}
+          testing={testing === "nvidia"}
+          testResult={testResult.nvidia}
+          onTest={() => handleTest("nvidia")}
+          isFallback={fallback.includes("nvidia")}
+          onFallbackToggle={() => toggleFallback("nvidia")}
+          expanded={!!expanded.nvidia}
+          onToggleExpand={() => setExpanded((s) => ({ ...s, nvidia: !s.nvidia }))}
         />
       </div>
 
