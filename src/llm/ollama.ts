@@ -9,6 +9,10 @@ import type {
 } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
+/**
+ * Ollama provider for local and cloud models.
+ */
+
 type OllamaMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -75,10 +79,12 @@ export class OllamaProvider implements LLMProvider {
   name = 'ollama';
   private baseUrl: string;
   private defaultModel: string;
+  private apiKey?: string;
 
-  constructor(baseUrl = 'http://localhost:11434', defaultModel = 'llama3') {
+  constructor(baseUrl = 'http://localhost:11434', defaultModel = 'llama3', apiKey?: string) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
     this.defaultModel = defaultModel;
+    this.apiKey = apiKey;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -106,6 +112,7 @@ export class OllamaProvider implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify(body),
     });
@@ -144,6 +151,7 @@ export class OllamaProvider implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify(body),
     });
@@ -230,7 +238,9 @@ export class OllamaProvider implements LLMProvider {
 
   async listModels(): Promise<string[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`);
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {},
+      });
 
       if (!response.ok) {
         throw new Error(`Failed to list models: ${response.status}`);

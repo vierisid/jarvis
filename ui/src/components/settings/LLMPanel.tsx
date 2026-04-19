@@ -118,6 +118,7 @@ export function LLMPanel() {
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [ollamaCustomModel, setOllamaCustomModel] = useState("");
   const [ollamaType, setOllamaType] = useState<"local" | "cloud">("local");
+  const [ollamaKey, setOllamaKey] = useState("");
 
   // OpenRouter
   const [openrouterKey, setOpenrouterKey] = useState("");
@@ -179,6 +180,7 @@ export function LLMPanel() {
     }
     if (config.ollama) {
       setOllamaBaseUrl(config.ollama.base_url);
+      setOllamaKey(config.ollama.api_key || "");
       setOllamaType(config.ollama.base_url.includes("localhost") || config.ollama.base_url.includes("127.0.0.1") ? "local" : "cloud");
       const m = config.ollama.model;
       if (OLLAMA_MODELS.includes(m)) {
@@ -230,6 +232,7 @@ export function LLMPanel() {
         ollama: {
           base_url: ollamaBaseUrl,
           model: resolveModel(ollamaModel, ollamaCustomModel),
+          ...(ollamaKey ? { api_key: ollamaKey } : {}),
         },
         openrouter: {
           model: resolveModel(openrouterModel, openrouterCustomModel),
@@ -246,6 +249,8 @@ export function LLMPanel() {
       setGroqKey("");
       setGeminiKey("");
       setOpenrouterKey("");
+      setNvidiaKey("");
+      setOllamaKey("");
       refetch();
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Save failed", type: "error" });
@@ -274,6 +279,7 @@ export function LLMPanel() {
         body.model = resolveModel(geminiModel, geminiCustomModel);
       } else if (provider === "ollama") {
         body.base_url = ollamaBaseUrl;
+        body.api_key = ollamaKey || undefined;
         body.model = resolveModel(ollamaModel, ollamaCustomModel);
       } else if (provider === "openrouter") {
         body.api_key = openrouterKey || undefined;
@@ -410,9 +416,9 @@ export function LLMPanel() {
           name="Ollama"
           provider="ollama"
           isPrimary={primary === "ollama"}
-          hasKey={!!config.ollama}
-          apiKey=""
-          onApiKeyChange={() => {}}
+          hasKey={!!config.ollama && !!config.ollama.api_key}
+          apiKey={ollamaKey}
+          onApiKeyChange={setOllamaKey}
           model={ollamaModel}
           customModel={ollamaCustomModel}
           onModelChange={setOllamaModel}
@@ -425,7 +431,7 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("ollama")}
           expanded={!!expanded.ollama}
           onToggleExpand={() => setExpanded((s) => ({ ...s, ollama: !s.ollama }))}
-          hideApiKey
+          hideApiKey={ollamaType === "local"}
           baseUrl={ollamaBaseUrl}
           onBaseUrlChange={setOllamaBaseUrl}
           ollamaType={ollamaType}

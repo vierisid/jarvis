@@ -388,7 +388,8 @@ export class AgentService implements Service, IAgentService {
     if (llm.ollama) {
       const provider = new OllamaProvider(
         llm.ollama.base_url,
-        llm.ollama.model
+        llm.ollama.model,
+        llm.ollama.api_key
       );
       this.llmManager.registerProvider(provider);
       hasProvider = true;

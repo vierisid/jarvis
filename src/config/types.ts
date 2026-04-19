@@ -151,7 +151,7 @@ export type JarvisConfig = {
     openai?: { api_key: string; model?: string };
     groq?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
-    ollama?: { base_url?: string; model?: string };
+    ollama?: { base_url?: string; model?: string; api_key?: string };
     openrouter?: { api_key: string; model?: string };
   };
   personality: {
@@ -242,6 +242,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     ollama: {
       base_url: 'http://localhost:11434',
       model: 'llama3',
+      api_key: '',
     },
     openrouter: {
       api_key: '',
