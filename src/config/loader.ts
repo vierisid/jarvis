@@ -85,6 +85,11 @@ function applyEnvOverrides(config: JarvisConfig): void {
     config.llm.openrouter.api_key = env.JARVIS_OPENROUTER_KEY;
   }
 
+  if (env.NVIDIA_API_KEY) {
+    if (!config.llm.nvidia) config.llm.nvidia = { api_key: '', model: 'mistral-nemo-minitron-8b-base' };
+    config.llm.nvidia.api_key = env.NVIDIA_API_KEY;
+  }
+
   if (env.JARVIS_BRAIN_DOMAIN) {
     config.daemon.brain_domain = env.JARVIS_BRAIN_DOMAIN;
   }

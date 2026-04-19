@@ -4,6 +4,7 @@ import { OpenAIProvider } from './openai.ts';
 import { GroqProvider } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
+import { NVIDIAProvider } from './nvidia.ts';
 import { LLMManager } from './manager.ts';
 import { guardImageSize, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
@@ -32,6 +33,11 @@ describe('LLM Provider Types', () => {
   test('OpenRouterProvider can be instantiated', () => {
     const provider = new OpenRouterProvider('test-key', 'anthropic/claude-sonnet-4');
     expect(provider.name).toBe('openrouter');
+  });
+
+  test('NVIDIAProvider can be instantiated', () => {
+    const provider = new NVIDIAProvider('test-key');
+    expect(provider.name).toBe('nvidia');
   });
 });
 
@@ -251,6 +257,11 @@ describe('Provider URLs', () => {
     const provider = new OllamaProvider('http://localhost:11434/') as any;
     expect(provider.baseUrl).toBe('http://localhost:11434');
   });
+
+  test('NVIDIAProvider uses correct API URL', () => {
+    const provider = new NVIDIAProvider('test-key') as any;
+    expect(provider.apiUrl).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
+  });
 });
 
 describe('Default Models', () => {
@@ -277,6 +288,11 @@ describe('Default Models', () => {
   test('OpenRouterProvider has correct default model', () => {
     const provider = new OpenRouterProvider('test-key') as any;
     expect(provider.defaultModel).toBe('anthropic/claude-sonnet-4');
+  });
+
+  test('NVIDIAProvider has correct default model', () => {
+    const provider = new NVIDIAProvider('test-key') as any;
+    expect(provider.defaultModel).toBe('mistral-nemo-minitron-8b-base');
   });
 
   test('can override default models', () => {

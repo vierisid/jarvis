@@ -41,6 +41,12 @@ llm:
   #   api_key: "sk-or-..."
   #   model: "anthropic/claude-sonnet-4"
 
+  # NVIDIA NIM (standard, free NVIDIA NIM OpenAI-compatible API)
+  # NVIDIA_API_KEY env variable replaces this if set
+  # nvidia:
+  #   api_key: "nvapi-..."
+  #   model: "mistral-nemo-minitron-8b-base" # Alternatives: usdcode, gemma-2-2b-it
+
   # Ollama (local models) configuration
   ollama:
     base_url: "http://localhost:11434"

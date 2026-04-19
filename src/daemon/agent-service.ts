@@ -20,6 +20,7 @@ import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
+import { NVIDIAProvider } from '../llm/nvidia.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -382,6 +383,17 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered OpenRouter provider');
+    }
+
+    // Register NVIDIA
+    if (llm.nvidia?.api_key) {
+      const provider = new NVIDIAProvider(
+        llm.nvidia.api_key,
+        llm.nvidia.model
+      );
+      this.llmManager.registerProvider(provider);
+      hasProvider = true;
+      console.log('[AgentService] Registered NVIDIA provider');
     }
 
     // Register Ollama (always available, no API key needed)
