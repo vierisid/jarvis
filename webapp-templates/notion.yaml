@@ -1,0 +1,383 @@
+app_name: Notion
+domains:
+  - notion.so
+  - www.notion.so
+keywords:
+  - notion
+  - on notion
+  - in notion
+  - open notion
+  - open my notion
+  - my notion
+  - notion page
+  - notion note
+  - notion doc
+  - create a notion page
+  - create notion page
+  - new notion page
+  - new page in notion
+  - add a notion page
+  - make a notion page
+  - take a note in notion
+  - add a note in notion
+  - save to notion
+  - save a note to notion
+  - write in notion
+  - write to notion
+  - append to notion
+  - add to notion
+  - edit notion page
+  - update my notion
+  - search notion
+  - find in notion
+  - find my notion page
+  - notion database
+  - add a row in notion
+  - add an entry to notion
+  - add to notion database
+  - add a task in notion
+  - notion task
+  - notion todo
+  - add todo to notion
+  - check off in notion
+  - share notion page
+  - share my notion
+  - delete notion page
+  - favorite in notion
+  - star in notion
+  - comment on notion
+  - add a comment in notion
+description: Notion — create/edit pages, insert blocks via slash menu, add to databases, toggle todos, search with Quick Find, comment, share, and manage the page tree.
+version: 1
+instructions: |
+  URL: https://www.notion.so/{WORKSPACE}/{PAGE-ID-OR-SLUG}
+
+  ### TOOL INTERFACE — READ THIS FIRST
+
+  **Browser tools** (allowed):
+  - `browser_navigate(url)` — open a URL
+  - `browser_snapshot()` — returns page text + interactive DOM elements
+  - `browser_click(element_id)` — click by `[id]`
+  - `browser_type(element_id, text, submit=true/false)` — type. `submit=true` presses Enter.
+  - `browser_scroll(direction)` — scroll the page
+  - `browser_upload_file(element_id, path)` — upload file (for image blocks, attachments)
+
+  **Desktop tool** (allowed):
+  - `desktop_press_keys(keys)` — e.g. `"ctrl,k"` (Quick Find), `"ctrl,n"` (new page), `"escape"`.
+
+  ### CRITICAL RULES
+  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. That is it.
+  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command. Do NOT use them.
+  3. **Every block in Notion is a DOM element**: unlike Slides/Sheets/Docs canvas, each block (paragraph, heading, todo, toggle, etc.) is a real contenteditable you can click and type into. This makes Notion the EASIEST Google-Workspace-style app to automate.
+  4. **The slash menu (`/`) is the universal block inserter**: type `/` in an empty line or at the end of a block, Notion opens a menu of block types. Type a name, press Enter, insert.
+  5. **Markdown shortcuts are faster than slash for common blocks**:
+     - `# ` + text → Heading 1
+     - `## ` + text → Heading 2
+     - `### ` + text → Heading 3
+     - `- ` + text → bulleted list item
+     - `1. ` + text → numbered list item
+     - `[] ` + text → to-do (checkbox)
+     - `> ` + text → toggle block
+     - `""` + text → quote
+     - ` ``` ` → code block
+     Prefer markdown for bullets/headings/todos; use slash for embeds, databases, callouts, etc.
+  6. **Quick Find (`ctrl,k`) is the navigation golden path**: fuzzy-searches all pages across your workspace. Type page name → Enter → you're there. Use this instead of drilling down the sidebar tree.
+  7. **Notion is LOCALE-DEPENDENT**: button labels and tooltips are translated. Match elements by role, `[id]`, or position, NOT English text alone. Page titles and block content are user-set and stable.
+  8. **Auto-save**: Notion auto-saves everything. No save button, no manual commit.
+
+  ### FORBIDDEN ACTIONS
+  - **DO NOT use `run_command` or xdotool.** All keypresses go through `desktop_press_keys`.
+  - **DO NOT try to drag block handles** to reorder — the drag handle (six-dot icon on hover) is not reliably clickable via automation. Use cut/paste (`ctrl,shift,x` / `ctrl,v` on a selected block) or move up/down shortcuts instead.
+  - **DO NOT match sidebar items / page tree nodes by English text alone.** Page titles are user-set (stable), but UI section headers ("Private", "Workspace", "Shared") are translated.
+  - **DO NOT snapshot after every typed word.** Snapshot on state changes (opened a page, slash menu open, dialog open).
+  - **DO NOT assume a newly-inserted block's `[id]` matches the previous block's `[id]`.** Each block has its own contenteditable element; `[id]`s change after Enter creates a new block.
+
+  ### URL PATTERNS (locale-independent)
+  - Open a page: `https://www.notion.so/{WORKSPACE}/{page-title-slug}-{PAGE_ID}` or `https://www.notion.so/{PAGE_ID}` (Notion redirects the bare ID to the full URL).
+  - Workspace home: `https://www.notion.so/{WORKSPACE}`
+  - Create a new page at the workspace root: keyboard `ctrl,n` is usually faster than crafting a URL. There is no stable "create" URL.
+
+  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+
+  Global navigation:
+  - `"ctrl,k"` → **Quick Find** (search pages + command palette)
+  - `"ctrl,p"` → also Quick Find (alias)
+  - `"ctrl,n"` → new page (at current location's level)
+  - `"ctrl,shift,n"` → new Notion window
+  - `"ctrl,["` → go back
+  - `"ctrl,]"` → go forward
+  - `"ctrl,backslash"` → toggle sidebar
+  - `"ctrl,shift,l"` → toggle dark mode
+  - `"ctrl,comma"` → open settings
+
+  Block editing (cursor inside a block):
+  - `"/"` → open slash menu at cursor
+  - `"@"` → open mentions menu (people, pages, dates)
+  - `"enter"` (via `submit=true`) → new block below
+  - `"shift,enter"` → soft line break inside the current block (no new block)
+  - `"tab"` → indent the current block (nest under previous)
+  - `"shift,tab"` → outdent
+  - `"escape"` → exit editing, select the block
+  - `"ctrl,a"` → select current block text; press again to select the whole block; again to select all blocks on page
+  - `"ctrl,d"` → duplicate the selected block
+  - `"backspace"` on an empty block → delete the block
+  - `"ctrl,shift,m"` → add a comment on the current block
+
+  Text formatting (with selection OR at cursor):
+  - `"ctrl,b"` → bold
+  - `"ctrl,i"` → italic
+  - `"ctrl,u"` → underline
+  - `"ctrl,e"` → inline code
+  - `"ctrl,shift,s"` → strikethrough
+  - `"ctrl,k"` → add link to selection (also Quick Find — context-dependent)
+
+  Move selected blocks (with block selected via Escape):
+  - `"ctrl,shift,up"` → move block up
+  - `"ctrl,shift,down"` → move block down
+
+  ### SNAPSHOT FORMAT
+
+  ```
+  Page: Notion – Page Title
+  URL: https://www.notion.so/WorkspaceName/Page-Title-abc123
+  --- Page Text ---
+  (page text — includes title, headings, and block content)
+  --- Interactive Elements ---
+  [5] button "Toggle sidebar"
+  [6] link "Home"
+  [7] button "Search"
+  ...
+  [20] link "My Page 1"                       ← sidebar page tree entry (text = user-set page title)
+  [21] link "Meeting Notes"
+  [22] link "Projects"
+  ...
+  [50] input contenteditable "Untitled"       ← page title (at top of main area)
+  [51] input contenteditable                  ← first block (body paragraph or heading)
+  [52] input contenteditable                  ← second block
+  [53] checkbox                               ← todo checkbox (when block is a to-do)
+  ...
+  [80] button "Share"                         ← top-right share button
+  [81] button "More actions"                  ← three-dot menu (top-right)
+  ```
+
+  Key elements to identify:
+  1. **Sidebar page tree**: `link` elements with user-set page titles as text. Match by title.
+  2. **Page title contenteditable**: the first contenteditable at the top of the main area. Its placeholder is "Untitled" (or locale equivalent).
+  3. **Block contenteditables**: each block is its own contenteditable. The `[id]` increments down the page. Match by position (Nth block) or by content substring in the text.
+  4. **To-do checkboxes**: a `checkbox` role element appears inside to-do blocks. Click to toggle.
+  5. **Slash menu** (after typing `/`): appears as a popup with menu items. Snapshot AFTER typing `/` to see it.
+  6. **Quick Find dialog** (after `ctrl,k`): modal with a search INPUT and result list.
+  7. **Share button**: top-right. Opens a panel with permission/invite controls.
+
+  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
+  - **Page tree links**: match by the user-set page title (stable across locales).
+  - **Block `[id]`s are positional**: the Nth block on the page is usually at `[id]` incrementing from the page title. The title is first, then block 1, block 2, etc.
+  - **Empty blocks are still contenteditables**: a fresh block shows as a contenteditable with empty text. Clicking it focuses the block so you can type.
+  - **Slash menu items**: after you type `/`, a new set of elements appears (menu items). They have text like "Text", "Heading 1", "To-do list", "Bulleted list", "Page", etc. The text IS localized — if the user's Notion is in another language, match by position or use arrow keys + Enter instead of clicking.
+
+  ### CORE PATTERNS
+
+  **Pattern A: Navigate to a page via Quick Find**
+  1. `desktop_press_keys("ctrl,k")` → opens Quick Find.
+  2. `browser_snapshot()` → find the search INPUT `[id]`.
+  3. `browser_type([search_id], "page name")` → results appear below.
+  4. `browser_snapshot()` → verify the first result is the intended page.
+  5. `desktop_press_keys("enter")` → navigates to the page.
+  6. `browser_snapshot()` → confirm title matches in the main area.
+
+  **Pattern B: Create a new page**
+  1. `desktop_press_keys("ctrl,n")` → opens a new untitled page.
+  2. `browser_snapshot()` → find the page title contenteditable `[id]` (the first contenteditable, placeholder "Untitled").
+  3. `browser_type([title_id], "Page Title", submit=true)` → sets title, cursor moves to the first body block.
+
+  **Pattern C: Type body text (paragraph blocks)**
+  After creating/opening a page and having the cursor in an empty block:
+  1. `browser_snapshot()` → find the first body block contenteditable `[id]`, call it `B`.
+  2. `browser_type(B, "First paragraph", submit=true)` → creates a new block below.
+  3. `browser_snapshot()` (optional — the new block has a different `[id]`). Call the new block `B2`.
+  4. `browser_type(B2, "Second paragraph", submit=true)`.
+  5. Continue. Every `submit=true` creates a new block.
+
+  **Pattern D: Insert a block via markdown shortcut (fastest for headings/lists/todos)**
+  1. Cursor in an empty block.
+  2. `browser_type(B, "# ")` → converts the block to Heading 1; cursor stays in the heading block.
+  3. `browser_type(B, "My Heading Title", submit=true)` → heading typed, Enter creates a new paragraph block below.
+  Variants:
+  - `"## "` → Heading 2
+  - `"### "` → Heading 3
+  - `"- "` → bulleted list item
+  - `"1. "` → numbered list item
+  - `"[] "` → to-do (checkbox)
+  - `"> "` → toggle block
+  - `"\"\"\" "` (three quotes + space) → quote
+  - ` "```" ` (three backticks) → code block (followed by language name + Enter to start coding)
+
+  **Pattern E: Insert a block via slash menu (for non-markdown block types)**
+  1. Cursor in an empty block.
+  2. `browser_type(B, "/")` → opens slash menu.
+  3. `browser_snapshot()` → menu appears with block-type options.
+  4. `browser_type(B, "callout")` → filters the menu (or just navigate with arrow keys).
+  5. `desktop_press_keys("enter")` → inserts the Callout block.
+  6. `browser_snapshot()` → find the new block's contenteditable and start typing.
+
+  Common slash-menu items: `/text`, `/heading 1`, `/page`, `/todo`, `/bullet`, `/numbered`, `/toggle`, `/callout`, `/quote`, `/divider`, `/code`, `/image`, `/embed`, `/link`, `/database`, `/table`.
+
+  **Pattern F: Toggle a to-do checkbox**
+  1. Navigate to the page (Pattern A).
+  2. `browser_snapshot()` → find the checkbox `[id]` for the target to-do. Identify by matching the to-do text in the adjacent contenteditable.
+  3. `browser_click([checkbox_id])` → toggles checked/unchecked.
+
+  ---
+
+  ### TASK: Open an existing page
+  Pattern A. Budget: ~4 tool calls.
+
+  ### TASK: Create a new page with a title
+  Pattern B. Budget: ~3 tool calls.
+
+  ### TASK: Create a new page with heading + body paragraphs
+  1. Pattern B — create page and set title.
+  2. Pattern D — insert heading (`"# "` shortcut + text).
+  3. Pattern C — type body paragraphs.
+  Example for a 1-heading + 3-paragraph page: ~7–9 tool calls.
+
+  ### TASK: Append text to an existing page
+  1. Pattern A — navigate to the page.
+  2. `browser_snapshot()` → find the LAST block's contenteditable `[id]` (highest-numbered contenteditable in the body).
+  3. `browser_click([last_block_id])` → focus at its end.
+  4. `desktop_press_keys("end")` → cursor at end of block.
+  5. `browser_type([last_block_id], "", submit=true)` → creates a new empty block below.
+  6. `browser_snapshot()` → find the new block's `[id]`.
+  7. `browser_type([new_block_id], "New content", submit=true)`.
+
+  ### TASK: Add a to-do item to a page
+  1. Navigate to the page (Pattern A).
+  2. Go to the end of the page and create a new block (append flow above, steps 2–5).
+  3. `browser_type([new_block_id], "[] Buy milk", submit=true)` → markdown shortcut creates a to-do with the text.
+
+  ### TASK: Check off a to-do
+  Pattern F.
+
+  ### TASK: Add a row to a database
+  Notion databases render as inline tables / boards / lists / galleries. Each row is a button or link you can click to open.
+  1. Navigate to the page containing the database (Pattern A).
+  2. `browser_snapshot()` → find the "+ New" button at the top (or bottom) of the database view. It's usually labeled "New" with a plus icon — match by position (first action button in the database toolbar) or by the `+` glyph.
+  3. `browser_click([new_row_id])` → opens a new row (usually as a side-peek panel or inline).
+  4. `browser_snapshot()` → find the row's title contenteditable `[id]`.
+  5. `browser_type([title_id], "Row title", submit=true)`.
+  6. To set other properties: `browser_snapshot()` → find each property field `[id]` and either click+type or click to open its dropdown.
+  7. `desktop_press_keys("escape")` → closes the row peek.
+
+  ### TASK: Search Notion (Quick Find)
+  1. `desktop_press_keys("ctrl,k")`.
+  2. `browser_snapshot()` → search INPUT `[id]`.
+  3. `browser_type([search_id], "query text")`.
+  4. `browser_snapshot()` → results list. Click a result or press Enter to open the top match.
+
+  ### TASK: Add a comment to a block
+  1. Navigate to the page and locate the target block.
+  2. `browser_click([block_id])` → cursor in block.
+  3. `desktop_press_keys("ctrl,shift,m")` → opens comment compose (usually a floating panel or sidebar).
+  4. `browser_snapshot()` → find the comment contenteditable.
+  5. `browser_type([comment_id], "My comment text")` — do NOT use submit=true (Enter inserts newline in the comment box).
+  6. `browser_snapshot()` → find the "Comment" / "Send" button (primary button in the comment panel).
+  7. `browser_click([send_id])`.
+
+  ### TASK: Share a page
+  1. Open the page.
+  2. `browser_snapshot()` → find the "Share" button (top-right).
+  3. `browser_click([share_id])` → opens Share panel.
+  4. For public link: toggle "Share to web" (switch element in the panel).
+  5. To invite by email:
+     a. `browser_snapshot()` → find the "Add people, emails, groups…" INPUT.
+     b. `browser_type([people_id], "recipient@example.com", submit=true)` → adds as a chip.
+     c. `browser_snapshot()` → find the Invite button (primary button).
+     d. `browser_click([invite_id])`.
+
+  ### TASK: Delete a page
+  1. Open the page.
+  2. `browser_snapshot()` → find the three-dot "More actions" button (top-right, next to Share).
+  3. `browser_click([more_id])` → menu opens.
+  4. `browser_snapshot()` → find the "Delete" / "Move to Trash" menu item (usually near the bottom of the menu).
+  5. `browser_click([delete_id])`.
+
+  ### TASK: Favorite / star a page
+  Option 1 (menu):
+  1. Open the page.
+  2. Click the three-dot menu (top-right).
+  3. Click "Add to Favorites".
+  Option 2 (keyboard):
+  - Unfortunately there is no universal stable shortcut for favoriting. Use the menu.
+
+  ### TASK: Move a block up or down
+  1. Navigate to the page.
+  2. `browser_click([block_id])` → cursor in target block.
+  3. `desktop_press_keys("escape")` → select the block (exit editing mode).
+  4. `desktop_press_keys("ctrl,shift,up")` or `"ctrl,shift,down"` → moves the block one position.
+
+  ### TASK: Indent / outdent a block (nest under the block above)
+  1. Cursor in the block.
+  2. `desktop_press_keys("tab")` → indent (nest under previous block).
+  3. `desktop_press_keys("shift,tab")` → outdent.
+
+  ### TASK: Upload an image
+  1. Navigate to the page and click into an empty block.
+  2. `browser_type(B, "/image")` → slash menu filters to image block.
+  3. `desktop_press_keys("enter")` → inserts image block; file picker tab appears.
+  4. `browser_snapshot()` → find the "Upload" tab button, then the file input inside it.
+  5. `browser_click([upload_tab_id])` if not already on the Upload tab.
+  6. `browser_snapshot()` → find the hidden `<input type="file">` `[id]`.
+  7. `browser_upload_file([file_input_id], "/absolute/path/to/image.png")`.
+
+  ### TASK: Mention a person or page in a block
+  1. Cursor in a block.
+  2. `browser_type(B, "@")` → opens mentions menu.
+  3. `browser_snapshot()` → menu appears with people + pages + date options.
+  4. `browser_type(B, "name or page title")` → filters.
+  5. `desktop_press_keys("enter")` → inserts the mention.
+  6. Continue typing the rest of the block, then `submit=true` to finish.
+
+  ### TASK: Link to another page inline
+  1. Cursor in a block.
+  2. `browser_type(B, "[[")` → opens link-to-page menu.
+  3. `browser_type(B, "page name")` → filters.
+  4. `desktop_press_keys("enter")` → inserts a page link.
+
+  ### TASK: Toggle the sidebar
+  `desktop_press_keys("ctrl,backslash")`.
+
+  ### TASK: Go back / forward in navigation history
+  - Back: `desktop_press_keys("ctrl,[")`.
+  - Forward: `desktop_press_keys("ctrl,]")`.
+
+  ---
+
+  ### Common Gotchas
+  - **Each block has its own `[id]`**: after `submit=true` creates a new block, the new block's contenteditable has a DIFFERENT `[id]` from the previous one. You typically need a new snapshot OR you can optimistically try `[id] + 1` (not reliable — prefer snapshot).
+  - **Slash menu items are localized**: the menu item text for "Heading 1" / "To-do list" etc. is translated. Prefer typing a few letters to filter (e.g. `"todo"`, `"h1"`) then pressing Enter on the highlighted item, rather than clicking a specific item by text.
+  - **Markdown shortcuts require a SPACE after the syntax**: `"# "` (with trailing space) converts to H1, not `"#"`. Same for `"- "`, `"[] "`, `"1. "`, etc.
+  - **`[] ` for to-do**: that's bracket-bracket-space (two chars + space). Some docs show `[ ]` (with a space inside) — both work in current Notion.
+  - **Nested to-do lists use `tab`**: after typing a todo, `desktop_press_keys("tab")` nests it under the previous.
+  - **Quick Find (`ctrl,k`) overloads with "add link"**: when a text selection is active, `ctrl,k` opens the link-insertion popup instead of Quick Find. Clear selection (click elsewhere or press `escape`) before invoking Quick Find.
+  - **Escape has context-dependent behavior**: in edit mode it selects the current block; in block-select mode it deselects; in a modal it closes the modal. Pay attention to state.
+  - **Page title supports `submit=true`**: the top-of-page title contenteditable accepts `submit=true` to commit and move focus into the body.
+  - **Comment composer does NOT want `submit=true`**: Enter inside a comment is a newline. Commit by clicking the Send / Comment button explicitly.
+  - **Databases in an inline page**: the database appears as a table/board inside the page. Its "+ New" button and column headers are DOM elements. Row titles link into the row's expanded page.
+  - **Auto-save**: there's no Save button. Changes persist instantly.
+  - **Undo works**: `ctrl,z` undoes recent edits. Useful recovery if you typed into the wrong block.
+  - **Sidebar page tree is DOM**: every page is a link with the page's title as text. Safe to match by title.
+  - **"Share to web" publishes publicly**: toggling this exposes the page at a public URL. Treat as a destructive/visible action — confirm user intent.
+  - **Locale matters for action buttons**: Share, Add to Favorites, Move to Trash, etc. are translated. Match by position in the menu or icon-role, not English text.
+  - **Notion periodically A/B-tests UI**: if a documented button isn't in the snapshot, fall back to the three-dot menu which exposes most actions.
+
+  ### Rules (MUST follow)
+  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
+  2. Use Quick Find (`ctrl,k`) to navigate to any page. Sidebar drilling is a fallback.
+  3. Use markdown shortcuts (`"# "`, `"- "`, `"[] "`) for common block types. Slash menu (`/`) for rarer block types.
+  4. Every `submit=true` in a body block creates a NEW block; the new block has a NEW `[id]`. Snapshot after submit=true when you need to continue typing in the newly-created block.
+  5. Inside comment composers, `submit=true` inserts a newline, NOT send — click the send/comment button explicitly.
+  6. Page title contenteditable: `submit=true` is CORRECT (commits and moves to body).
+  7. Match UI buttons by role / position / icon, NEVER by English text alone. Page titles and block content ARE stable (user-set).
+  8. Snapshot on major state changes only: page navigated, slash menu opened, dialog opened, database row expanded.
+  9. Budget: "create a page with 3 paragraphs" ≈ 8–10 tool calls. "add a todo to an existing page" ≈ 5–7. "search Notion" ≈ 4. If you exceed 2x, re-read this template.
+  10. For image/file uploads: use slash `/image` or `/file`, then `browser_upload_file` on the revealed file input.
