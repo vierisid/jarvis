@@ -1,0 +1,371 @@
+app_name: Google Drive
+domains:
+  - drive.google.com
+keywords:
+  - google drive
+  - gdrive
+  - my drive
+  - open drive
+  - open my drive
+  - check my drive
+  - show my drive
+  - find a file
+  - find the file
+  - find my file
+  - search my drive
+  - search drive
+  - look for a file
+  - open the file
+  - open my file
+  - upload a file
+  - upload to drive
+  - upload file to drive
+  - create a folder
+  - create folder
+  - new folder
+  - make a folder
+  - rename the file
+  - rename the folder
+  - rename this file
+  - move the file
+  - move the folder
+  - move to folder
+  - delete the file
+  - delete the folder
+  - trash the file
+  - restore from trash
+  - empty trash
+  - share the file
+  - share the folder
+  - give access to
+  - star the file
+  - unstar the file
+  - starred files
+  - recent files
+  - shared with me
+  - what's in my drive
+  - what's in this folder
+  - list files in
+  - files in my folder
+description: Google Drive — navigate My Drive / Shared with me / Recent / Starred / Trash, search files, create folders, upload files, open/rename/move/delete/share/star files and folders.
+version: 1
+instructions: |
+  URL: https://drive.google.com/drive/my-drive
+
+  ### TOOL INTERFACE — READ THIS FIRST
+
+  Google Drive works with standard browser tools plus uploads:
+
+  **Browser tools**:
+  - `browser_navigate(url)` — open a URL
+  - `browser_snapshot()` — returns page text + interactive DOM elements
+  - `browser_click(element_id)` — click by `[id]`
+  - `browser_type(element_id, text, submit=true/false)` — type into inputs. `submit=true` presses Enter.
+  - `browser_scroll(direction)` — scroll file list
+  - `browser_upload_file(element_id, path)` — upload a file to a file input
+
+  **Desktop tool** (for keyboard shortcuts):
+  - `desktop_press_keys(keys)` — e.g. `"slash"` (focus search), `"enter"` (open selected), `"delete"` (move to trash), `"r"` (rename selected).
+
+  ### CRITICAL RULES
+  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. That is it.
+  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command. Do NOT use them.
+  3. **URL navigation beats clicking** in Drive: every view (My Drive, Shared with me, Recent, Starred, Trash, specific folder, search results) has a stable URL. ALWAYS ask "is there a URL for this?" before clicking.
+  4. **Files and folders ARE DOM elements**: unlike Sheets/Slides/Docs canvas, Drive lists are real interactive elements. You CAN click them by `[id]`.
+  5. **Google Drive is LOCALE-DEPENDENT**: button labels (New, Share, Rename, etc.) are translated. Match by role, by position, by URL when possible, or by `(Ctrl+…)` / `(⌘+…)` hints in aria-labels. NEVER match by English text alone.
+  6. **Single-click selects, double-click opens**: in JARVIS snapshots, `browser_click` fires ONE click. To open a file, either double-click equivalent (click + Enter) or click once + `desktop_press_keys("enter")`.
+  7. **Keyboard shortcuts need focus to NOT be in an input**: if the search box or a dialog has focus, single-letter shortcuts like `r` (rename) will just type the letter. When shortcuts misfire, first press Escape to release input focus.
+  8. **Upload uses `browser_upload_file`**: Drive's "File upload" button reveals a hidden `<input type="file">` element. Target that element's `[id]` with `browser_upload_file(id, "/absolute/path")`.
+
+  ### FORBIDDEN ACTIONS
+  - **DO NOT use `run_command`.** All keyboard input goes through `desktop_press_keys`.
+  - **DO NOT match "New" / "Share" / "Rename" / "Delete" buttons by English text.** Match by position, role, or `(Ctrl+…)` hint.
+  - **DO NOT snapshot after every keystroke.** Snapshot after a state change (selected a file, opened a dialog, finished a search).
+  - **DO NOT try to drag-and-drop to move files.** Use the "Move to" dialog instead (via `z` shortcut or right-click menu or toolbar).
+  - **DO NOT rely on single-letter shortcuts when an input has focus.** Press Escape first.
+
+  ### URL PATTERNS (locale-independent — PREFER these over clicking)
+  - My Drive (home): `https://drive.google.com/drive/my-drive`
+  - Shared with me: `https://drive.google.com/drive/shared-with-me`
+  - Recent: `https://drive.google.com/drive/recent`
+  - Starred: `https://drive.google.com/drive/starred`
+  - Trash: `https://drive.google.com/drive/trash`
+  - Computers (backup & sync): `https://drive.google.com/drive/computers`
+  - Specific folder: `https://drive.google.com/drive/folders/{FOLDER_ID}`
+  - Search results: `https://drive.google.com/drive/search?q={url-encoded-query}`
+
+  **Search operators** (use these in the search URL or search box):
+  - `type:folder` — folders only
+  - `type:document` / `type:spreadsheet` / `type:presentation` / `type:pdf` / `type:image` / `type:video`
+  - `owner:me` / `owner:email@example.com`
+  - `before:2026-01-01` / `after:2026-01-01` — date filters
+  - `title:exact-name` — name matches
+  - `to:email@example.com` / `from:email@example.com` — sharing filters
+  - `is:starred` / `is:trashed`
+  - Free text — searches file names AND content
+
+  Example: `https://drive.google.com/drive/search?q=type%3Adocument%20owner%3Ame%20quarterly`
+
+  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+
+  These fire only when the file grid has focus — NOT when an input or dialog is focused. Press `escape` first if shortcuts misbehave.
+
+  Navigation (file list focus):
+  - `"slash"` → focus search box
+  - `"up"` / `"down"` / `"left"` / `"right"` → move selection
+  - `"j"` / `"k"` → next / previous item (Gmail-style, if enabled)
+  - `"home"` / `"end"` → first / last item
+  - `"pagedown"` / `"pageup"` → scroll a page at a time
+
+  Selection:
+  - `"x"` → toggle selection of focused item
+  - `"ctrl,a"` → select all visible
+  - `"escape"` → deselect all
+  - `"shift,down"` / `"shift,up"` → extend selection
+
+  Open:
+  - `"enter"` or `"o"` → open selected item (file opens in a new tab; folder navigates into it)
+
+  Create (with file grid focused):
+  - `"c"` → opens the New/Create menu (equivalent to clicking "New")
+  - `"shift,f"` → new folder
+  - `"shift,t"` → new Google Doc
+  - `"shift,s"` → new Google Sheet
+  - `"shift,p"` → new Google Slides deck
+  - `"shift,u"` → upload file (opens file picker — prefer `browser_upload_file` instead)
+
+  Actions on selected file/folder:
+  - `"r"` → rename (opens rename dialog with name highlighted)
+  - `"n"` → rename (alternate; behavior may vary by Drive version — `r` is safer)
+  - `"s"` → toggle star
+  - `"z"` → move to (opens folder picker)
+  - `"period"` (`.`) → share (opens Share dialog)
+  - `"delete"` → move to trash
+  - `"shift,z"` → add a shortcut
+  - `"ctrl,c"` / `"ctrl,v"` → copy / paste (for shortcuts, not file content)
+
+  View:
+  - `"g,l"` → list view (press `g` then `l`)
+  - `"g,r"` → grid view (press `g` then `r`)
+  - `"v"` → toggle details panel
+
+  Help:
+  - `"question"` (`?` / `shift,slash`) → shortcuts help dialog
+
+  Menu access (universal fallback):
+  - Drive doesn't have a `alt,slash` menu search like Docs/Sheets/Slides. Use URL navigation + on-screen buttons instead.
+
+  ### SNAPSHOT FORMAT
+
+  `browser_snapshot` returns:
+  ```
+  Page: My Drive - Google Drive
+  URL: https://drive.google.com/drive/my-drive
+  --- Page Text ---
+  (page text — lists visible file names, owners, modified dates)
+  --- Interactive Elements ---
+  [12] button "New"                                    ← top-left "New" button (locale-translated, match by position)
+  [13] input "Search in Drive"                         ← top search box (aria-label localized)
+  [14] link "My Drive"                                 ← breadcrumb
+  ...
+  [40] button "Q2 report.docx"                         ← file row (or gridcell)
+  [41] button "Team Folder"                            ← folder row
+  [42] button "meeting-notes.pdf"
+  ...
+  [80] button "Share"                                  ← appears after selecting a file (toolbar, top-right)
+  ```
+
+  Key elements to identify:
+  1. **Search box**: top of the page, placeholder is locale-translated but role is `search` or it's an INPUT near the top. Prefer `desktop_press_keys("slash")` to focus it.
+  2. **New button**: top-left. Match by position (first button in the main toolbar). Opens the creation menu on click.
+  3. **Breadcrumbs**: `link` elements at the top of the file area showing the current path. Click to navigate up.
+  4. **File/folder rows**: each file or folder is an interactive element (button, row, or gridcell depending on view). The element text contains the file name.
+  5. **Toolbar actions** (Share, Download, Move, Delete, etc.): appear once a file is selected, typically in the top-right area.
+  6. **Context menu**: appears after right-click — but we can't right-click. Use keyboard shortcuts instead (`r`, `.`, `z`, `delete`).
+
+  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
+  - **Files and folders**: match the element whose text equals or contains the file name. In list view, the name is usually the first column; in grid view, it's the element label. If multiple files share a name, also check the page text which includes owner and modified date.
+  - **Type hints from icons**: the file type icon is not in the element text, but the page text may include "Google Docs", "Google Sheets", "Folder" etc.
+  - **Differentiating files from folders**: folders usually have a different role or icon descriptor. The safest disambiguation: use URL navigation with `folders/{ID}` for folders and let files open in new tabs via `enter`.
+
+  ### CORE PATTERNS
+
+  **Pattern A: Navigate to a view**
+  - My Drive: `browser_navigate("https://drive.google.com/drive/my-drive")`.
+  - Trash, Starred, etc.: use the URL patterns above.
+  - A specific folder: `browser_navigate("https://drive.google.com/drive/folders/{ID}")`.
+
+  **Pattern B: Search for a file**
+  1. `browser_navigate("https://drive.google.com/drive/search?q={encoded-query}")` — fastest, one step.
+  2. `browser_snapshot()` → results appear as file rows.
+  3. Alternative using the UI:
+     a. `desktop_press_keys("slash")` → focus search box.
+     b. `browser_snapshot()` → find the search INPUT `[id]`.
+     c. `browser_type([search_id], "quarterly", submit=true)`.
+     d. `browser_snapshot()` → results.
+
+  **Pattern C: Open a file**
+  1. Navigate to the view or search result.
+  2. `browser_snapshot()` → find the file's element `[id]` by matching name.
+  3. `browser_click([file_id])` → selects it.
+  4. `desktop_press_keys("enter")` → opens it (new tab for Docs/Sheets/Slides, or preview for others).
+
+  **Pattern D: Rename a file**
+  1. Navigate + snapshot + click to select the file (Pattern C step 2–3).
+  2. `desktop_press_keys("r")` → opens rename dialog.
+  3. `browser_snapshot()` → find the rename INPUT `[id]` (the name is pre-filled and selected).
+  4. `browser_type([rename_id], "New Name", submit=true)` → commits the rename.
+
+  **Pattern E: Move a file to another folder**
+  1. Select the file (Pattern C step 2–3).
+  2. `desktop_press_keys("z")` → opens "Move to" folder picker.
+  3. `browser_snapshot()` → find the target folder in the picker.
+  4. `browser_click([folder_id])` → navigates into it.
+  5. `browser_snapshot()` → find the "Move" button (usually the primary / right-most button in the dialog footer).
+  6. `browser_click([move_button_id])`.
+
+  **Pattern F: Delete (move to trash)**
+  1. Select the file (Pattern C step 2–3).
+  2. `desktop_press_keys("delete")` → moves to trash; a "Moved to trash" toast appears.
+  3. `browser_snapshot()` → verify toast and that file is gone from the list.
+
+  **Pattern G: Share a file**
+  1. Select the file.
+  2. `desktop_press_keys("period")` → opens Share dialog.
+  3. `browser_snapshot()` → find the "Add people and groups" INPUT.
+  4. `browser_type([people_id], "recipient@example.com", submit=true)` → adds as a chip.
+  5. `browser_snapshot()` → find the Send / Done button (primary button, usually last in the dialog footer).
+  6. `browser_click([send_id])`.
+
+  **Pattern H: Upload a file**
+  1. `browser_snapshot()` → find the "New" button `[id]` (top-left).
+  2. `browser_click([new_id])` → opens creation menu.
+  3. `browser_snapshot()` → find the "File upload" menu item.
+  4. `browser_click([upload_id])` → reveals a hidden `<input type="file">`.
+  5. `browser_snapshot()` → find that file input element `[id]` (it becomes visible in the snapshot after the menu click).
+  6. `browser_upload_file([file_input_id], "/absolute/path/to/file.pdf")`.
+  7. `browser_snapshot()` → verify upload toast / new file in the list.
+
+  ---
+
+  ### TASK: Open My Drive
+  1. `browser_navigate("https://drive.google.com/drive/my-drive")`.
+  2. `browser_snapshot()` → list of files/folders in root.
+
+  ### TASK: List files in a specific folder
+  - If you know the folder ID: `browser_navigate("https://drive.google.com/drive/folders/{FOLDER_ID}")`.
+  - Otherwise:
+    1. Navigate to My Drive or search.
+    2. `browser_snapshot()` → find the folder.
+    3. `browser_click([folder_id])` + `desktop_press_keys("enter")` → navigate in.
+
+  ### TASK: Search for a file
+  Use Pattern B. Prefer the URL approach: `https://drive.google.com/drive/search?q=...`.
+
+  ### TASK: Open a specific file
+  Use Pattern C.
+
+  ### TASK: Create a new folder
+  1. `browser_snapshot()` → find the "New" button `[id]` (top-left position).
+  2. `browser_click([new_id])`.
+  3. `browser_snapshot()` → find the "New folder" menu item (first item in the menu; match by position).
+  4. `browser_click([new_folder_id])`.
+  5. `browser_snapshot()` → find the folder name INPUT in the dialog.
+  6. `browser_type([name_id], "Folder Name", submit=true)`.
+
+  Shortcut alternative (when grid has focus):
+  1. `desktop_press_keys("shift,f")` → opens New Folder dialog directly.
+  2. `browser_snapshot()` → find the name INPUT.
+  3. `browser_type([name_id], "Folder Name", submit=true)`.
+
+  ### TASK: Create a new Google Doc / Sheet / Slide
+  - Preferred (fastest): navigate to the create URL directly.
+    - New Doc: `browser_navigate("https://docs.google.com/document/create")`.
+    - New Sheet: `browser_navigate("https://docs.google.com/spreadsheets/create")`.
+    - New Slides: `browser_navigate("https://docs.google.com/presentation/create")`.
+  - Or, from Drive: `desktop_press_keys("shift,t")` / `"shift,s"` / `"shift,p"`.
+
+  ### TASK: Rename a file or folder
+  Use Pattern D.
+
+  ### TASK: Move a file to a folder
+  Use Pattern E.
+
+  ### TASK: Delete a file (move to trash)
+  Use Pattern F.
+
+  ### TASK: Permanently delete a file
+  1. `browser_navigate("https://drive.google.com/drive/trash")`.
+  2. Select the file (Pattern C step 2–3).
+  3. `desktop_press_keys("delete")` → "Delete forever" confirm dialog.
+  4. `browser_snapshot()` → find and click the confirm button.
+
+  ### TASK: Empty the trash
+  1. `browser_navigate("https://drive.google.com/drive/trash")`.
+  2. `browser_snapshot()` → find the "Empty trash" button (usually top-right of the trash view).
+  3. `browser_click([empty_id])`.
+  4. `browser_snapshot()` → confirm dialog appears. Click the confirm button.
+
+  ### TASK: Star / unstar a file
+  1. Select the file.
+  2. `desktop_press_keys("s")` → toggles star.
+  3. `browser_snapshot()` → verify.
+
+  ### TASK: Share a file
+  Use Pattern G.
+
+  ### TASK: Upload a file
+  Use Pattern H.
+
+  ### TASK: Check what's in "Shared with me"
+  1. `browser_navigate("https://drive.google.com/drive/shared-with-me")`.
+  2. `browser_snapshot()` → list of shared files.
+
+  ### TASK: Check recent files
+  1. `browser_navigate("https://drive.google.com/drive/recent")`.
+  2. `browser_snapshot()` → recently opened / modified files.
+
+  ### TASK: List starred files
+  1. `browser_navigate("https://drive.google.com/drive/starred")`.
+  2. `browser_snapshot()`.
+
+  ### TASK: Find files modified in a date range
+  1. `browser_navigate("https://drive.google.com/drive/search?q=after%3A2026-01-01%20before%3A2026-04-01")`.
+  2. `browser_snapshot()`.
+
+  ### TASK: Find only folders / only documents / only PDFs
+  - Folders: `?q=type%3Afolder`
+  - Google Docs: `?q=type%3Adocument`
+  - PDFs: `?q=type%3Apdf`
+  - Spreadsheets: `?q=type%3Aspreadsheet`
+
+  ### TASK: Navigate back up a folder
+  1. `browser_snapshot()` → find the parent folder link in the breadcrumb row (top of the file area). The breadcrumb lists the path left-to-right.
+  2. `browser_click([parent_id])`.
+
+  ---
+
+  ### Common Gotchas
+  - **URLs beat clicks**: EVERY view has a URL. Use URL navigation over clicking sidebar links — sidebar labels are locale-dependent.
+  - **Single-letter shortcuts need grid focus**: if you just typed in the search box, press `escape` before using `r`, `s`, `z`, etc. Otherwise they'll be typed as letters.
+  - **Files open in NEW TABS**: opening a Doc/Sheet/Slides from Drive spawns a new tab. Your automation context may stay on the Drive tab. To work on the opened file, either `browser_navigate` directly to its doc URL, or switch tabs via your browser tool's tab API if needed.
+  - **"New" button position is stable; its text is not**: the top-left "New" button's label is translated (e.g., "Nuovo" in Italian). Match by position (first button in the main toolbar) or by the menu items it reveals.
+  - **Rename dialog: submit=true commits**: the rename INPUT DOES accept `submit=true` to commit — this is a regular text input, not a canvas editor.
+  - **Move to vs Move folder**: `z` opens a folder picker where you NAVIGATE INTO the destination first, then click the Move button. Do not click the folder name expecting an instant move — that just navigates.
+  - **Delete in Trash view**: in Trash, `delete` permanently deletes (after confirm). In all other views, `delete` moves to trash.
+  - **Shared with me files may not have rename/delete**: if the user doesn't own a file, some actions are disabled. Expect the shortcut to no-op or the toolbar button to be missing.
+  - **Search operators are powerful**: use `type:`, `owner:`, `before:/after:`, `title:`, `is:starred`, etc. to scope searches precisely. URL-encode the query (`:` → `%3A`, space → `%20`).
+  - **Grid view vs list view**: element roles differ slightly. Grid cells vs rows. The matching strategy (name text inside the element) works for both. If unclear, force list view with `desktop_press_keys("g,l")` first.
+  - **Page text contains file names + modified dates**: for "list recent files" tasks, you can read the page text directly rather than counting elements.
+  - **Auto-save doesn't apply to Drive ops**: file operations (rename, move, delete) take effect immediately — no save button. But SOME ops show a toast with "Undo" for ~5 seconds.
+
+  ### Rules (MUST follow)
+  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
+  2. PREFER URL navigation over clicking for switching views (My Drive / Trash / Shared / folder / search).
+  3. Match "New" / "Share" / "Rename" / "Delete" buttons by position or `(Ctrl+…)` hint, NEVER by English text.
+  4. For keyboard shortcuts: ensure the grid (not an input) has focus — press `escape` first if unsure.
+  5. Open a selected file with `desktop_press_keys("enter")` — not by double-clicking.
+  6. Upload files via `browser_upload_file` on the hidden file input that appears after clicking New → File upload.
+  7. Snapshot ONCE per major state change.
+  8. Budget: "find and open a file" ≈ 3–4 tool calls. "rename a file" ≈ 5 tool calls. "upload a file" ≈ 6 tool calls. If you exceed 2x, re-read this template.
+  9. Search operators URL-encoded in the `?q=` parameter are the most powerful search pattern. Prefer them over typing in the search box.
