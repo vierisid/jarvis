@@ -8,7 +8,7 @@ type LLMConfig = {
   openai: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
-  ollama: { base_url: string; model: string } | null;
+  ollama: { base_url: string; model: string; has_api_key: boolean } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
 };
 
@@ -180,7 +180,7 @@ export function LLMPanel() {
     }
     if (config.ollama) {
       setOllamaBaseUrl(config.ollama.base_url);
-      setOllamaKey(config.ollama.api_key || "");
+      setOllamaKey(""); // don't expose key
       setOllamaType(config.ollama.base_url.includes("localhost") || config.ollama.base_url.includes("127.0.0.1") ? "local" : "cloud");
       const m = config.ollama.model;
       if (OLLAMA_MODELS.includes(m)) {
@@ -232,7 +232,7 @@ export function LLMPanel() {
         ollama: {
           base_url: ollamaBaseUrl,
           model: resolveModel(ollamaModel, ollamaCustomModel),
-          ...(ollamaKey ? { api_key: ollamaKey } : {}),
+          ...(ollamaKey && ollamaType === "cloud" ? { api_key: ollamaKey } : {}),
         },
         openrouter: {
           model: resolveModel(openrouterModel, openrouterCustomModel),
@@ -279,7 +279,7 @@ export function LLMPanel() {
         body.model = resolveModel(geminiModel, geminiCustomModel);
       } else if (provider === "ollama") {
         body.base_url = ollamaBaseUrl;
-        body.api_key = ollamaKey || undefined;
+        body.api_key = (ollamaType === "cloud" && ollamaKey) ? ollamaKey : undefined;
         body.model = resolveModel(ollamaModel, ollamaCustomModel);
       } else if (provider === "openrouter") {
         body.api_key = openrouterKey || undefined;
@@ -416,7 +416,7 @@ export function LLMPanel() {
           name="Ollama"
           provider="ollama"
           isPrimary={primary === "ollama"}
-          hasKey={!!config.ollama && !!config.ollama.api_key}
+          hasKey={config.ollama?.has_api_key ?? false}
           apiKey={ollamaKey}
           onApiKeyChange={setOllamaKey}
           model={ollamaModel}
