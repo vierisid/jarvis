@@ -1,0 +1,375 @@
+app_name: Google Slides
+domains:
+  - docs.google.com
+keywords:
+  - google slides
+  - gslides
+  - slide deck
+  - slideshow
+  - presentation
+  - create a presentation
+  - make a presentation
+  - new presentation
+  - build a deck
+  - make a deck
+  - new deck
+  - add a slide
+  - new slide
+  - add a new slide
+  - duplicate slide
+  - delete slide
+  - reorder slides
+  - move the slide
+  - edit the slide
+  - edit my slides
+  - change the title slide
+  - insert an image on the slide
+  - add speaker notes
+  - speaker notes
+  - present the deck
+  - present the slides
+  - start the slideshow
+  - play the presentation
+  - start presentation
+description: Google Slides — create decks, add/delete/duplicate/reorder slides, edit titles and body text, insert images, change layouts, manage speaker notes, start presentations.
+version: 1
+instructions: |
+  URL: https://docs.google.com/presentation/d/{PRESENTATION_ID}/edit#slide=id.{SLIDE_ID}
+
+  ### TOOL INTERFACE — READ THIS FIRST
+
+  Google Slides requires TWO types of tools working together:
+
+  **Browser tools** (navigation, snapshots, clicking DOM elements, typing):
+  - `browser_navigate(url)` — open a URL
+  - `browser_snapshot()` — returns page text + interactive DOM elements with `[id]` numbers
+  - `browser_click(element_id)` — click by `[id]`
+  - `browser_type(element_id, text, submit=true/false)` — type text. `submit=true` presses **Enter** only (not Tab, not Escape).
+  - `browser_scroll(direction)`
+
+  **Desktop tool** (for every keyboard shortcut other than Enter):
+  - `desktop_press_keys(keys)` — comma-separated keys. e.g. `"ctrl,m"`, `"tab"`, `"escape"`, `"alt,slash"`, `"ctrl,f5"`, `"pagedown"`.
+
+  **THERE IS NO `browser_press_key` TOOL.** All keypresses that aren't "Enter via submit=true" go through `desktop_press_keys`.
+
+  ### CRITICAL RULES
+  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. That is it.
+  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command (xdotool, xdg-open, etc.). Do NOT use them.
+  3. **The slide canvas is `<canvas>`**: text boxes, shapes, and images inside a slide DO NOT appear in the snapshot. You CANNOT click a title/body/shape by DOM. You interact with slide content via **Tab** (cycle placeholders) + **Enter** (enter text edit mode) + `browser_type` into the contenteditable that appears.
+  4. **The filmstrip (left panel) IS in the DOM**: each slide thumbnail is a real interactive element. Click thumbnails to switch slides.
+  5. **`browser_type(submit=true)` presses ENTER only**: inside a title or body placeholder, Enter creates a NEW LINE or a new bullet — it does NOT commit. For committing a text edit, use `desktop_press_keys("escape")`.
+  6. **Google Slides is LOCALE-DEPENDENT**: toolbar/menu text is translated. Match DOM elements by `[id]` from a fresh snapshot, by role, or by the `(Ctrl+X)` shortcut hint in aria-labels (which stays English across locales). Keyboard shortcuts themselves are locale-independent.
+  7. **Auto-save**: Slides auto-saves. No save action needed.
+  8. **Menu search (`alt,slash`) is the universal fallback**: for any command you don't have a shortcut for, press `alt,slash`, type the command name, and pick the suggestion. Works in every locale.
+
+  ### FORBIDDEN ACTIONS
+  - **DO NOT click into the canvas expecting DOM elements to appear for text boxes.** They won't. Use Tab + Enter instead.
+  - **DO NOT use `submit=true` when typing into a slide title or body placeholder.** Submit=true presses Enter, which inserts a newline/bullet. Use plain `browser_type` and commit with `desktop_press_keys("escape")`.
+  - **DO NOT use `run_command` or xdotool.** Every keyboard shortcut goes through `desktop_press_keys`.
+  - **DO NOT snapshot after every keystroke.** Snapshot once per major state change (new slide, entered edit mode, exited edit mode, inserted image).
+  - **DO NOT match toolbar/menu buttons by English text alone.** Users may be in any locale. Match by role or by the "(Ctrl+…)" substring in the aria-label.
+
+  ### URL PATTERNS (locale-independent)
+  - Create new blank deck: `https://docs.google.com/presentation/create`
+  - Slides home / file picker: `https://docs.google.com/presentation/u/0/`
+  - Open existing deck: `https://docs.google.com/presentation/d/{ID}/edit`
+  - Open at a specific slide: `https://docs.google.com/presentation/d/{ID}/edit#slide=id.{SLIDE_ID}` (first slide is `id.p`)
+  - Published view (read-only, no editing): `https://docs.google.com/presentation/d/{ID}/pub` — use ONLY if deck was explicitly published
+
+  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+
+  Slide-level (filmstrip or editor focus):
+  - `"ctrl,m"` → insert new slide after current
+  - `"ctrl,d"` → duplicate current slide
+  - `"delete"` → delete the focused slide (when thumbnail is focused)
+  - `"ctrl,up"` → move slide up one position
+  - `"ctrl,down"` → move slide down one position
+  - `"ctrl,shift,up"` → move slide to top
+  - `"ctrl,shift,down"` → move slide to bottom
+  - `"pagedown"` → next slide
+  - `"pageup"` → previous slide
+  - `"home"` → first slide
+  - `"end"` → last slide
+
+  Navigation within a slide (editor focus, NOT in text edit mode):
+  - `"tab"` → cycle to next object/placeholder on the slide (title → body → image → …)
+  - `"shift,tab"` → previous object
+  - `"enter"` → enter text edit mode on the currently selected object
+  - `"escape"` → exit text edit mode AND exit object selection (press twice to go from edit mode back to filmstrip context)
+  - Arrow keys → nudge the selected object 1px; with `shift` = 10px
+
+  Text formatting (inside a text placeholder, in edit mode):
+  - `"ctrl,b"` / `"ctrl,i"` / `"ctrl,u"` → bold / italic / underline
+  - `"ctrl,shift,l"` → left align
+  - `"ctrl,shift,e"` → center align
+  - `"ctrl,shift,r"` → right align
+  - `"ctrl,shift,j"` → justify
+  - `"ctrl,a"` → select all text in the current text box
+  - `"ctrl,k"` → insert link
+
+  Clipboard / undo:
+  - `"ctrl,z"` → undo
+  - `"ctrl,y"` → redo
+  - `"ctrl,c"` / `"ctrl,v"` / `"ctrl,x"` → copy / paste / cut
+
+  Find / Replace:
+  - `"ctrl,f"` → find
+  - `"ctrl,h"` → find and replace
+
+  View / Present:
+  - `"ctrl,f5"` → start presentation from current slide
+  - `"escape"` → exit presentation mode
+  - `"ctrl,alt,shift,s"` → toggle speaker notes panel
+  - `"ctrl,alt,plus"` → zoom in
+  - `"ctrl,alt,minus"` → zoom out
+
+  Menu access (the universal fallback):
+  - `"alt,slash"` → open menu search. Then `browser_type` the command name and submit.
+
+  ### SNAPSHOT FORMAT
+
+  `browser_snapshot` returns:
+  ```
+  Page: Deck Name - Google Slides
+  URL: https://docs.google.com/presentation/d/.../edit#slide=id.p
+  --- Page Text ---
+  (page text — often contains the current slide's text content for accessibility)
+  --- Interactive Elements ---
+  [42] input "Deck Name"                      ← deck title INPUT (top-left)
+  [43] button "Undo (Ctrl+Z)"                 ← toolbar buttons have "(Ctrl+…)" hints
+  ...
+  [88] option "Slide 1" selected              ← filmstrip thumbnail (active)
+  [89] option "Slide 2"                       ← filmstrip thumbnail
+  ...
+  ```
+
+  When a text placeholder is in EDIT mode, one additional element appears:
+  ```
+  [112] input contenteditable                  ← the live text editor for the focused placeholder
+  ```
+
+  Key elements to find:
+  1. **Deck title INPUT** (top-left): INPUT whose value is the current deck name. Use to rename.
+  2. **Filmstrip thumbnails**: elements with role `option` (or `listitem`) and an aria-label containing a slide number. The active slide has `selected` / `aria-selected=true`.
+  3. **Toolbar buttons**: identify by the `(Ctrl+…)` substring in their aria-label — that substring is locale-stable.
+  4. **Contenteditable text input**: appears ONLY while you are in text edit mode on a placeholder. Use its `[id]` for `browser_type`.
+
+  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
+  - **Filmstrip thumbnails**: the left panel lists all slides. Each is an `option`/`listitem` with an aria-label like "Slide 1" (English) or locale equivalent. Prefer matching by the position/order (first = slide 1) over text.
+  - **Toolbar**: toolbar buttons have English `(Ctrl+…)` in their aria-labels regardless of locale. E.g., "Bold (Ctrl+B)" / "Grassetto (Ctrl+B)" — match on `(Ctrl+B)`.
+  - **Canvas**: the slide editing surface is a single `<canvas>` element. It has no clickable descendants.
+  - **Menu search combobox**: after `alt,slash`, a search input appears. Snapshot and find the new input — it's the menu search combobox.
+
+  ### CORE PATTERNS
+
+  **Pattern A: Select a slide (via filmstrip)**
+  1. `browser_snapshot()` — find the thumbnail `[id]` for slide N.
+  2. `browser_click([thumbnail_id])`.
+  Alternative (keyboard-only): `desktop_press_keys("home")` then `"pagedown"` N-1 times.
+
+  **Pattern B: Add a new blank slide**
+  1. `desktop_press_keys("ctrl,m")` — inserts a new slide AFTER the current one and selects it.
+  2. `browser_snapshot()` to verify (optional — only if you need the new thumbnail's id).
+
+  **Pattern C: Enter text into a placeholder (title or body)**
+  After selecting the slide (filmstrip has focus):
+  1. `desktop_press_keys("tab")` — moves focus INTO the slide editor and selects the FIRST placeholder (usually the title).
+  2. `desktop_press_keys("tab")` again → selects the next placeholder (body). Keep tabbing to reach the one you want.
+  3. `desktop_press_keys("enter")` — enters text edit mode on the selected placeholder.
+  4. `browser_snapshot()` — find the contenteditable input `[id]` that just appeared.
+  5. `browser_type([input_id], "Your text")` — do NOT use submit=true.
+  6. `desktop_press_keys("escape")` — commits the text and returns to object selection.
+  7. To continue to the next placeholder: another `"tab"` + `"enter"` cycle.
+
+  **Pattern D: Replace existing text (e.g. swap a title)**
+  1. Select slide (Pattern A).
+  2. `desktop_press_keys("tab")` → focus first placeholder.
+  3. `desktop_press_keys("enter")` → edit mode.
+  4. `desktop_press_keys("ctrl,a")` → select all existing text.
+  5. `browser_snapshot()` → find the contenteditable `[id]`.
+  6. `browser_type([input_id], "New text")` → replaces the selection.
+  7. `desktop_press_keys("escape")` → commit.
+
+  **Pattern E: Write a multi-bullet body**
+  Inside a body placeholder, Enter creates a new bullet.
+  1. Enter edit mode on the body placeholder (Pattern C, steps 1–4).
+  2. `browser_type([input_id], "First bullet")`.
+  3. `desktop_press_keys("enter")` → new bullet.
+  4. `browser_type([input_id], "Second bullet")`.
+  5. `desktop_press_keys("enter")` → new bullet.
+  6. `browser_type([input_id], "Third bullet")`.
+  7. `desktop_press_keys("escape")` → commit and exit.
+
+  **Pattern F: Duplicate / delete / reorder a slide**
+  1. Click the thumbnail (Pattern A).
+  2. Duplicate: `desktop_press_keys("ctrl,d")`.
+  3. Delete: `desktop_press_keys("delete")`.
+  4. Move up/down: `desktop_press_keys("ctrl,up")` / `"ctrl,down"`.
+
+  ---
+
+  ### TASK: Create a new blank presentation
+  1. `browser_navigate("https://docs.google.com/presentation/create")`.
+  2. `browser_snapshot()` — confirm the filmstrip shows 1 slide. The deck title defaults to "Untitled presentation".
+
+  ### TASK: Open an existing presentation
+  - If you know the presentation ID: `browser_navigate("https://docs.google.com/presentation/d/{ID}/edit")`.
+  - Otherwise:
+    1. `browser_navigate("https://docs.google.com/presentation/u/0/")`.
+    2. `browser_snapshot()` → file rows appear as interactive elements.
+    3. `browser_click([row_id])` for the deck you want.
+
+  ### TASK: Rename the presentation
+  1. `browser_snapshot()` → find the deck title INPUT at the top (it holds the current deck name).
+  2. `browser_click([title_id])`.
+  3. `desktop_press_keys("ctrl,a")` → select all.
+  4. `browser_type([title_id], "New Deck Name", submit=true)` — submit=true IS correct here because this is the title INPUT, not a slide placeholder.
+
+  ### TASK: Add a new slide
+  1. `desktop_press_keys("ctrl,m")`.
+  2. Optional: `browser_snapshot()` to grab the new thumbnail's `[id]`.
+
+  ### TASK: Build a basic deck (title slide + N content slides)
+
+  **Plan**: 1 title slide + N content slides = N+1 slides.
+
+  **Step 1 — Title slide** (deck opens on it after creation):
+  1. `desktop_press_keys("tab")` → focus the title placeholder (first object).
+  2. `desktop_press_keys("enter")` → enter edit mode.
+  3. `browser_snapshot()` → find the contenteditable `[id]`, call it `E`.
+  4. `browser_type(E, "My Deck Title")` — no submit.
+  5. `desktop_press_keys("escape")` → commit.
+  6. `desktop_press_keys("tab")` → focus the subtitle placeholder.
+  7. `desktop_press_keys("enter")` → edit mode.
+  8. (If `E` still works, reuse it. Otherwise snapshot again and update `E`.)
+  9. `browser_type(E, "Subtitle or author")`.
+  10. `desktop_press_keys("escape")`.
+
+  **Step 2 — For each content slide** (repeat N times):
+  1. `desktop_press_keys("ctrl,m")` → new slide (inserted after current, selected).
+  2. `desktop_press_keys("tab")` → focus title placeholder.
+  3. `desktop_press_keys("enter")` → edit mode.
+  4. Reuse `E` (or re-snapshot if stale): `browser_type(E, "Slide N title")`.
+  5. `desktop_press_keys("escape")`.
+  6. `desktop_press_keys("tab")` → focus body placeholder.
+  7. `desktop_press_keys("enter")`.
+  8. `browser_type(E, "Bullet one")`.
+  9. `desktop_press_keys("enter")` → new bullet.
+  10. `browser_type(E, "Bullet two")`.
+  11. `desktop_press_keys("escape")`.
+
+  **Step 3 — Verify**:
+  - `browser_snapshot()` once at the end. Confirm the filmstrip has N+1 thumbnails.
+
+  Budget: roughly 10 tool calls for the title slide + ~11 per content slide. A 5-slide deck ≈ ~50 tool calls.
+
+  ### TASK: Edit the title of an existing slide
+  1. Pattern A — select the slide.
+  2. Pattern D — replace the title text.
+
+  ### TASK: Edit body / bullets of an existing slide
+  1. Pattern A — select the slide.
+  2. `desktop_press_keys("tab")` then `"tab"` again → focus body (skip the title).
+  3. `desktop_press_keys("enter")` → edit mode on body.
+  4. Either append (just type) or replace (`"ctrl,a"` first, then type).
+  5. Use Pattern E for multi-bullet body.
+
+  ### TASK: Insert an image from a URL
+  1. `desktop_press_keys("alt,slash")` → opens menu search.
+  2. `browser_snapshot()` → find the menu search combobox `[id]`.
+  3. `browser_type([combobox_id], "Insert image by URL", submit=true)` → menu search routes to Insert → Image → By URL. Arrow keys + Enter may be needed if multiple suggestions appear.
+  4. `browser_snapshot()` → find the URL input field in the dialog.
+  5. `browser_type([url_field_id], "https://example.com/image.png", submit=true)`.
+  6. `browser_snapshot()` → verify image inserted on the slide (the inserted image becomes the currently-selected object).
+
+  Alternative: use menu search to pick "Insert image from Drive" or "Upload from computer" (uses `browser_upload_file` — not in the allowed list for this template; avoid).
+
+  ### TASK: Change the layout of a slide
+  1. Select slide (Pattern A).
+  2. `desktop_press_keys("alt,slash")` → menu search.
+  3. `browser_snapshot()` → find the combobox.
+  4. `browser_type([combobox_id], "Apply layout", submit=true)`.
+  5. `browser_snapshot()` → a layout picker appears. Click the desired layout thumbnail by its `[id]`.
+
+  ### TASK: Duplicate a slide
+  1. `browser_snapshot()` → find the thumbnail `[id]`.
+  2. `browser_click([thumbnail_id])`.
+  3. `desktop_press_keys("ctrl,d")`.
+
+  ### TASK: Delete a slide
+  1. `browser_click([thumbnail_id])`.
+  2. `desktop_press_keys("delete")`.
+
+  ### TASK: Reorder slides
+  1. Click thumbnail.
+  2. `desktop_press_keys("ctrl,up")` to move up, `"ctrl,down"` to move down. Repeat.
+
+  ### TASK: Add speaker notes
+  1. Select slide (Pattern A).
+  2. `desktop_press_keys("ctrl,alt,shift,s")` → toggles speaker notes panel visible.
+  3. `browser_snapshot()` → find the speaker notes textbox (a contenteditable).
+  4. `browser_click([notes_id])`.
+  5. `browser_type([notes_id], "Remember to mention quarterly numbers")` — no submit (would just add a newline).
+  6. `desktop_press_keys("escape")` → commits and exits the notes field.
+
+  ### TASK: Read all slide content (e.g. summarize the deck)
+  - Slide content appears in the page text of each snapshot (for a11y).
+  1. `desktop_press_keys("home")` → navigate to slide 1.
+  2. `browser_snapshot()` → read slide 1 content from page text.
+  3. `desktop_press_keys("pagedown")` → slide 2.
+  4. `browser_snapshot()` → read slide 2.
+  5. Repeat until you've covered all slides (check the filmstrip in any snapshot to know the total count).
+
+  ### TASK: Find and replace across the deck
+  1. `desktop_press_keys("ctrl,h")` → opens Find and Replace.
+  2. `browser_snapshot()` → find the "Find" INPUT and "Replace" INPUT.
+  3. `browser_type([find_id], "old phrase")`.
+  4. `browser_type([replace_id], "new phrase")`.
+  5. `browser_click([replace_all_button_id])` — "Replace all" is usually the last button in the dialog row.
+
+  ### TASK: Start presenting
+  1. To present from current slide: `desktop_press_keys("ctrl,f5")`.
+  2. To present from the first slide: `desktop_press_keys("home")` first, THEN `desktop_press_keys("ctrl,f5")`.
+  3. `desktop_press_keys("pagedown")` / `"pageup"` to navigate slides in presenter mode.
+  4. `desktop_press_keys("escape")` to exit presenter mode.
+
+  ### TASK: Format selected text (bold / italic / align)
+  1. You must be in text edit mode with a selection.
+  2. `desktop_press_keys("ctrl,a")` if you want to format the whole text block.
+  3. `desktop_press_keys("ctrl,b")` (or `"ctrl,i"`, `"ctrl,u"`, `"ctrl,shift,e"` for center, etc.).
+  4. `desktop_press_keys("escape")` to commit.
+
+  ### TASK: Undo / Redo
+  - `desktop_press_keys("ctrl,z")` → undo.
+  - `desktop_press_keys("ctrl,y")` → redo.
+
+  ---
+
+  ### Common Gotchas
+  - **Canvas**: the slide editor is `<canvas>`. You CANNOT click a title or body placeholder by DOM. Every in-slide interaction flows through Tab / Enter / Escape + `browser_type`.
+  - **`submit=true` inside slide text = newline**: NEVER use `submit=true` when typing into a slide title or body placeholder. Enter inside that contenteditable inserts a line break or a new bullet. Use `desktop_press_keys("escape")` to commit instead.
+  - **Exception — the deck title INPUT**: the top-left deck title is a real INPUT, not a slide placeholder. For that, `browser_type(submit=true)` IS the right way to commit a rename.
+  - **Tab cycles placeholders; Enter enters edit mode; Escape exits**: memorize this triad. It's how all canvas editing works.
+  - **First Tab from the filmstrip moves focus INTO the slide**: if you just clicked a thumbnail, the filmstrip has focus. One `"tab"` puts focus on the first placeholder of the slide. A second `"tab"` moves to the next placeholder.
+  - **Contenteditable `[id]` is only visible in edit mode**: the text input element for a placeholder appears in the snapshot ONLY after you've pressed Enter to start editing. Snapshot AFTER pressing Enter, not before.
+  - **Reuse editor IDs optimistically**: within a single slide, the same contenteditable `[id]` often persists across `escape` + `tab` + `enter` cycles to a different placeholder. Try reusing it; snapshot again only if a `browser_type` call errors on a stale id.
+  - **Escape twice to fully back out**: one Escape exits text edit mode (object still selected); a second Escape deselects the object.
+  - **Filmstrip thumbnails are DOM**: they're `option`/`listitem` elements. Click them directly. Don't use Tab from the filmstrip area — that enters the slide.
+  - **Locale-dependent toolbar text**: buttons are translated. Match on the `(Ctrl+…)` hint in aria-labels, which stays English. For commands without a visible shortcut hint, use `alt,slash` menu search.
+  - **Menu search is the universal fallback**: `alt,slash` works for every menu command, every locale.
+  - **Shortcut drift between Docs apps**: Slides shares most shortcuts with Docs/Sheets but NOT all. `"ctrl,m"` (new slide) is Slides-only. `"ctrl,j"` (name box) does NOT exist in Slides — that's Sheets. When in doubt, use `alt,slash`.
+  - **Auto-save**: no Save button, no prompt on close.
+  - **Presenting**: `"ctrl,f5"` from current slide. To present from the beginning, go to slide 1 first (`"home"`) then `"ctrl,f5"`.
+  - **Page text in snapshots often contains visible slide text**: useful for "summarize this deck" tasks without OCR.
+
+  ### Rules (MUST follow)
+  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
+  2. Canvas cannot be clicked. Use Tab + Enter + `browser_type` + Escape for all in-slide text editing.
+  3. Inside slide placeholders, `browser_type` WITHOUT submit. Commit with `desktop_press_keys("escape")`.
+  4. Deck title INPUT (top-left) DOES accept `submit=true` — that's the one exception.
+  5. Switch slides via the filmstrip thumbnails or `pageup/pagedown/home/end`.
+  6. `ctrl,m` = new slide, `ctrl,d` = duplicate, `delete` on focused thumbnail = remove.
+  7. For commands without a known shortcut: `alt,slash` menu search.
+  8. Snapshot ONCE per major state change. Not after every keystroke.
+  9. Budget: a 5-slide deck (title + 4 content with bullets) should take ~50 tool calls. If you exceed 2x that, stop and re-read this template.
+  10. Match toolbar/menu elements by `(Ctrl+…)` in aria-labels or by role/position — NEVER by English text alone.
