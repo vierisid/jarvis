@@ -100,6 +100,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: artifacts
+          pattern: sidecar-*
 
       - name: Extract version from tag
         id: version
@@ -203,6 +204,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: artifacts
+          pattern: sidecar-*
 
       - name: Extract version from tag
         id: version
