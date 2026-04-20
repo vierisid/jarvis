@@ -1,0 +1,364 @@
+app_name: Slack
+domains:
+  - app.slack.com
+  - slack.com
+keywords:
+  - slack
+  - on slack
+  - send a slack message
+  - send slack message
+  - slack message
+  - message on slack
+  - slack dm
+  - dm on slack
+  - direct message on slack
+  - slack direct message
+  - slack channel
+  - post to channel
+  - post in channel
+  - send to channel on slack
+  - send to slack channel
+  - reply on slack
+  - slack reply
+  - slack thread
+  - thread on slack
+  - reply to thread on slack
+  - check slack
+  - check my slack
+  - read slack
+  - read my slack
+  - slack notifications
+  - unread on slack
+  - slack unread
+  - mark slack as read
+  - search slack
+  - find on slack
+  - find in slack
+  - set slack status
+  - set status on slack
+  - slack status
+  - away on slack
+  - do not disturb on slack
+  - slack huddle
+  - react on slack
+  - slack reaction
+  - react to message on slack
+  - mention on slack
+  - save message on slack
+  - bookmark on slack
+description: Slack — send DMs and channel messages, reply in threads, react with emoji, search, set status, navigate channels/DMs via quick switcher, manage mentions and unreads.
+version: 1
+instructions: |
+  URL: https://app.slack.com/client/{WORKSPACE_ID}/{CHANNEL_OR_DM_ID}
+
+  ### TOOL INTERFACE — READ THIS FIRST
+
+  **Browser tools** (allowed):
+  - `browser_navigate(url)` — open a URL
+  - `browser_snapshot()` — returns page text + interactive DOM elements with `[id]` numbers
+  - `browser_click(element_id)` — click by `[id]`
+  - `browser_type(element_id, text, submit=true/false)` — type. `submit=true` presses Enter only.
+  - `browser_scroll(direction)` — scroll messages or sidebar
+  - `browser_upload_file(element_id, path)` — attach a file
+
+  **Desktop tool** (allowed):
+  - `desktop_press_keys(keys)` — e.g. `"ctrl,k"` (quick switcher), `"ctrl,enter"` (force-send message), `"escape"` (close modal).
+
+  ### CRITICAL RULES
+  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. That is it.
+  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command (xdotool, xdg-open, etc.). Do NOT use them.
+  3. **The Quick Switcher (`ctrl,k`) is the golden path** for navigating to ANY channel, DM, or user. Type a name → press Enter → you're there. One shortcut replaces clicking through the sidebar and handles autocomplete. USE IT for almost every navigation task.
+  4. **`ctrl,enter` ALWAYS sends a message** regardless of the user's Enter-key preference. `submit=true` (plain Enter) only sends if "Send with Enter" is enabled — otherwise it inserts a newline. PREFER `ctrl,enter` for reliability across accounts.
+  5. **Slack is LOCALE-DEPENDENT**: sidebar labels, buttons, and menu items are translated. Match elements by `[id]`, by role, by position, or by `(Ctrl+…)` / `(⌘+…)` hints in aria-labels. NEVER by English text alone.
+  6. **Workspaces**: a user may have multiple workspaces in the workspace switcher (leftmost column). If the wrong one is active, click the correct workspace icon before doing anything.
+  7. **Threads open in the RIGHT sidebar**, not inline. When you click "Reply in thread" on a message, the thread view opens on the right with its own compose input.
+  8. **Auto-read on view**: channels mark themselves as read when you look at them. Just viewing a channel clears its unread badge.
+
+  ### FORBIDDEN ACTIONS
+  - **DO NOT use `run_command` or xdotool.** All keypresses go through `desktop_press_keys`.
+  - **DO NOT rely on single-letter shortcuts when compose has focus.** Every letter gets typed into the message. Press `escape` to release compose focus first.
+  - **DO NOT match sidebar channel / DM entries by English name text.** Channel names ARE user-provided (e.g. "#general") and stable, but the ROLE of "Direct messages" vs "Channels" headers is localized. Match channels/DMs by their own name (stable) OR navigate via Quick Switcher.
+  - **DO NOT send sensitive messages without confirming the target**: the Quick Switcher is fuzzy — "john" may match multiple people. After pressing Enter, take a snapshot and confirm the channel/DM header shows the intended recipient BEFORE typing the message.
+  - **DO NOT snapshot after every keystroke.** Snapshot on state changes (opened a channel, opened the thread sidebar, opened a dialog).
+
+  ### URL PATTERNS (locale-independent)
+  - Workspace home: `https://app.slack.com/client/{WORKSPACE_ID}`
+  - Specific channel: `https://app.slack.com/client/{WORKSPACE_ID}/{CHANNEL_ID}` (channel IDs start with `C`)
+  - Specific DM: `https://app.slack.com/client/{WORKSPACE_ID}/{DM_ID}` (DM IDs start with `D`)
+  - Threads view: `https://app.slack.com/client/{WORKSPACE_ID}/threads`
+  - Mentions & reactions (Activity): `https://app.slack.com/client/{WORKSPACE_ID}/activity`
+  - Unreads: `https://app.slack.com/client/{WORKSPACE_ID}/unreads`
+  - Saved (bookmarks): `https://app.slack.com/client/{WORKSPACE_ID}/saved`
+
+  In practice you usually don't know channel/DM IDs — use the Quick Switcher (`ctrl,k`) instead of crafting URLs.
+
+  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+
+  Navigation (golden path):
+  - `"ctrl,k"` → **Quick Switcher** — jump to any channel, DM, or user by fuzzy name
+  - `"ctrl,shift,l"` → Browse channels
+  - `"ctrl,shift,k"` → Browse direct messages
+  - `"ctrl,f"` → Search (workspace-wide)
+  - `"alt,up"` / `"alt,down"` → Previous / next channel in sidebar order
+  - `"alt,shift,up"` / `"alt,shift,down"` → Previous / next UNREAD channel
+  - `"ctrl,shift,m"` → Activity (mentions & reactions)
+  - `"ctrl,shift,u"` → Unreads
+  - `"ctrl,shift,t"` → Threads
+  - `"ctrl,shift,s"` → Saved items
+  - `"ctrl,shift,a"` → All DMs
+  - `"ctrl,1"` ... `"ctrl,9"` → switch to Nth workspace
+
+  In the message compose box:
+  - `"ctrl,enter"` → **SEND** the message (works regardless of Enter-key preference)
+  - `"enter"` (via `submit=true`) → sends IF "Send with Enter" is enabled, else inserts newline
+  - `"shift,enter"` → new line (always)
+  - `"up"` in empty compose → edit your last message
+  - `"escape"` → release compose focus (useful before single-letter shortcuts)
+  - `"ctrl,b"` / `"ctrl,i"` → bold / italic
+  - `"ctrl,shift,x"` → strikethrough
+  - `"ctrl,shift,c"` → inline code
+  - `"ctrl,shift,u"` → blockquote (NOTE: conflicts with global Unreads shortcut only when compose is focused)
+  - `"alt,shift,8"` → bulleted list
+  - `"alt,shift,7"` → numbered list
+
+  Reading / interacting with messages (compose NOT focused):
+  - `"escape"` → mark current channel's messages as read
+  - `"ctrl,."` → toggle the right sidebar (threads, files, etc.)
+
+  Status / presence:
+  - `"ctrl,shift,y"` → toggle away / active
+
+  Help:
+  - `"ctrl,slash"` → show all shortcuts
+
+  ### SNAPSHOT FORMAT
+
+  ```
+  Page: Slack | ChannelName | WorkspaceName
+  URL: https://app.slack.com/client/T.../C...
+  --- Page Text ---
+  (page text — includes visible messages with sender names, timestamps, and text content)
+  --- Interactive Elements ---
+  [5] button "Workspace Name"                           ← workspace switcher (leftmost)
+  [10] button "Home"                                    ← global nav: Home / DMs / Activity / etc.
+  [11] button "DMs"
+  [12] button "Activity"
+  [13] button "More"
+  [20] button "Search" or input "Search Workspace"       ← top search box (aria-label localized)
+  ...
+  [45] link "# general"                                 ← channel entries in sidebar (name is user-set, stable)
+  [46] link "# random"
+  [47] link "Jane Doe"                                  ← DM entries (user name)
+  ...
+  [80] input contenteditable "Message #general..."      ← the message composer
+  [81] button "Send"                                    ← send button (appears when input has text)
+  [82] button "Attach"                                  ← paperclip for file uploads
+  [83] button "Formatting"                              ← Aa formatting toolbar
+  [84] button "Emoji"                                   ← emoji picker
+  ...
+  [100] button "Reply in thread"                         ← appears on message hover — NOT always in snapshot; use Quick Switcher flow to enter threads
+  ```
+
+  Key elements to identify:
+  1. **Workspace switcher** (far left): list of workspace icons. Match by initials or logo alt text.
+  2. **Global nav buttons** (Home / DMs / Activity / More): second column.
+  3. **Sidebar channel/DM list**: `link` or `button` elements with the channel name (`#general`) or person's name as text.
+  4. **Message composer**: the contenteditable INPUT with aria-label / placeholder matching "Message {channel}" or "Message {person}". This is where you type.
+  5. **Send button**: appears with aria-label containing "Send" (locale-translated). The send button text is NOT stable across locales; prefer using `ctrl,enter` instead.
+  6. **Individual messages** (in the main panel): each message is a group of elements with the sender's name, timestamp, and body text. To REACT or REPLY, hover is needed — but message action buttons often appear in the snapshot already.
+
+  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
+  - **Channel / DM entries in the sidebar**: match by the channel name ("#general") or person's full name as element text. These are stable because they're user-set, not translated.
+  - **The composer**: after Quick Switcher takes you to a channel, the composer is the single unlabeled contenteditable near the bottom. Its aria-label follows the pattern "Message {channel-or-person}" — you can match on "Message" as a substring but this is locale-dependent. Safer: match by position (only contenteditable at the bottom of the page).
+  - **Send button**: after typing in the composer, a Send button appears — but again, text is localized. **PREFER `ctrl,enter` over clicking Send.**
+  - **Thread sidebar**: when opened, the right pane has its own contenteditable composer with placeholder "Reply…" or locale equivalent.
+
+  ### CORE PATTERNS
+
+  **Pattern A: Jump to any channel or DM via Quick Switcher (golden path)**
+  1. `desktop_press_keys("ctrl,k")` → opens Quick Switcher modal.
+  2. `browser_snapshot()` → find the switcher INPUT `[id]`.
+  3. `browser_type([switcher_id], "channel-or-person-name")` → fuzzy suggestions appear. Do NOT submit yet.
+  4. `browser_snapshot()` → verify the top suggestion is the right target. The first result is pre-selected.
+  5. `desktop_press_keys("enter")` → jumps to that channel/DM.
+  6. `browser_snapshot()` → confirm the channel header in the main panel matches the intended target.
+
+  **Pattern B: Send a message in the current channel/DM**
+  1. Ensure you're on the target channel/DM (Pattern A if needed).
+  2. `browser_snapshot()` → find the composer contenteditable `[id]`, call it `C`.
+  3. `browser_click(C)` → focus the composer.
+  4. `browser_type(C, "Your message text")` — do NOT use submit=true; Enter behavior depends on the user's preference.
+  5. `desktop_press_keys("ctrl,enter")` → sends the message (works in both Enter-modes).
+  6. `browser_snapshot()` → verify the message appears in the message list (look for the text in page text).
+
+  **Pattern C: Send a multi-line message**
+  1. Focus composer (Pattern B steps 1–3).
+  2. `browser_type(C, "First line")`.
+  3. `desktop_press_keys("shift,enter")` → new line within the same message.
+  4. `browser_type(C, "Second line")`.
+  5. `desktop_press_keys("ctrl,enter")` → sends.
+
+  **Pattern D: Reply in a thread**
+  1. Open the channel containing the parent message (Pattern A).
+  2. Scroll if needed: `browser_scroll(down)` / `up` to find the message.
+  3. `browser_snapshot()` → find the "Reply in thread" button (or thread icon) associated with the target message. If not visible, hover isn't possible via our tools — instead, click the message's timestamp element, which opens the thread.
+  4. `browser_click([thread_id])` → thread opens in the right sidebar.
+  5. `browser_snapshot()` → find the thread's own composer (contenteditable in the right pane).
+  6. `browser_click([thread_composer_id])`, `browser_type(…, "Your reply")`, `desktop_press_keys("ctrl,enter")`.
+
+  **Pattern E: Search across Slack**
+  1. `desktop_press_keys("ctrl,f")` → opens search.
+  2. `browser_snapshot()` → find the search INPUT `[id]`.
+  3. `browser_type([search_id], "query text", submit=true)` → runs search.
+  4. `browser_snapshot()` → results list. Click a result to jump to it.
+
+  Search modifiers:
+  - `from:@username` → messages from a person
+  - `in:#channel` → messages in a channel
+  - `has:link` / `has:pin` / `has:star`
+  - `before:2026-01-01` / `after:2026-01-01`
+  - `-from:@me` → exclude
+
+  **Pattern F: React to a message with an emoji**
+  1. Navigate to the channel and locate the message.
+  2. `browser_snapshot()` → find the "Add reaction" button for the target message (smiley icon).
+  3. `browser_click([reaction_id])` → emoji picker opens.
+  4. `browser_snapshot()` → find the emoji search INPUT in the picker.
+  5. `browser_type([emoji_search_id], "thumbsup")` → filters emoji.
+  6. `browser_snapshot()` → click the emoji element (first result usually highlighted).
+  7. `browser_click([emoji_id])` → reaction applied.
+
+  ---
+
+  ### TASK: Send a DM to a specific person
+  1. Pattern A: Quick Switcher with the person's name.
+  2. Pattern B: send message.
+  Budget: ~6 tool calls.
+
+  ### TASK: Send a message to a channel
+  1. Pattern A: Quick Switcher with channel name (type `#channel-name` or just the name).
+  2. Pattern B: send message.
+  Budget: ~6 tool calls.
+
+  ### TASK: Reply to a thread
+  1. Pattern A to reach the channel.
+  2. Pattern D to open thread + reply.
+  Budget: ~8–10 tool calls.
+
+  ### TASK: React to a message with emoji
+  Pattern F. Budget: ~6–8 tool calls.
+
+  ### TASK: Search for messages
+  Pattern E. Budget: ~4 tool calls.
+
+  ### TASK: Check unread messages
+  1. `desktop_press_keys("ctrl,shift,u")` → Unreads view.
+  2. `browser_snapshot()` → reads the unread messages from page text.
+  Alternative: `alt,shift,down` repeatedly to cycle through channels with unreads.
+
+  ### TASK: Check mentions & reactions (Activity)
+  1. `desktop_press_keys("ctrl,shift,m")` → Activity view.
+  2. `browser_snapshot()` → page text shows recent @mentions and reactions.
+
+  ### TASK: Check threads you're following
+  1. `desktop_press_keys("ctrl,shift,t")` → Threads view.
+  2. `browser_snapshot()`.
+
+  ### TASK: Set status (e.g. "In a meeting")
+  1. `browser_snapshot()` → find the profile avatar button (usually top-right).
+  2. `browser_click([avatar_id])` → opens profile menu.
+  3. `browser_snapshot()` → find the "Update your status" / status area (first item in menu).
+  4. `browser_click([status_id])` → opens status modal.
+  5. `browser_snapshot()` → find the status text INPUT.
+  6. `browser_type([status_input_id], "In a meeting", submit=false)`.
+  7. Optionally choose an emoji or preset.
+  8. `browser_snapshot()` → find the Save button (primary button in modal footer).
+  9. `browser_click([save_id])`.
+
+  ### TASK: Toggle away / active
+  1. `desktop_press_keys("ctrl,shift,y")` → toggles presence.
+
+  ### TASK: Upload a file to the current channel
+  1. Ensure you're on the target channel (Pattern A).
+  2. `browser_snapshot()` → find the attach / paperclip button near the composer.
+  3. `browser_click([attach_id])` → menu opens.
+  4. `browser_snapshot()` → find "Upload from your computer" option.
+  5. `browser_click([upload_id])` → reveals hidden `<input type="file">`.
+  6. `browser_snapshot()` → find the file input `[id]`.
+  7. `browser_upload_file([file_input_id], "/absolute/path/to/file.pdf")`.
+  8. `browser_snapshot()` → a preview/caption dialog appears in the composer. Optionally add a caption.
+  9. `desktop_press_keys("ctrl,enter")` → sends the file.
+
+  ### TASK: Edit your last message in a channel
+  1. Ensure you're on the channel (Pattern A).
+  2. `browser_click([composer_id])` → focus empty composer.
+  3. `desktop_press_keys("up")` → loads your last message into edit mode.
+  4. `browser_snapshot()` → find the edit composer (may be a different `[id]` from the main composer).
+  5. Modify text via `browser_type` / selection shortcuts.
+  6. `desktop_press_keys("ctrl,enter")` → saves edit.
+
+  ### TASK: Save (bookmark) a message
+  1. Navigate to the message (Pattern A + scroll if needed).
+  2. `browser_snapshot()` → find the "More actions" button on the message (three-dot icon).
+  3. `browser_click([more_id])` → menu opens.
+  4. `browser_snapshot()` → find the "Save" menu item.
+  5. `browser_click([save_id])`.
+  Alternative: view saved messages anytime via `desktop_press_keys("ctrl,shift,s")`.
+
+  ### TASK: Switch workspaces (multiple Slack orgs)
+  - `desktop_press_keys("ctrl,1")` for the first workspace, `"ctrl,2"` for the second, etc.
+  - Or click the workspace icon in the far-left sidebar.
+
+  ### TASK: Mark a channel as read
+  - Open the channel (Pattern A) — viewing it auto-reads messages.
+  - Or `desktop_press_keys("escape")` while in a channel to mark-all-read.
+
+  ### TASK: Start a Huddle in the current channel
+  1. Ensure you're on the channel.
+  2. `browser_snapshot()` → find the Huddle toggle (headphones icon, usually bottom-left of channel header or in the DM/channel details area). This button's position varies by Slack UI version — match by the headphones icon's aria-label containing "Huddle" or similar.
+  3. `browser_click([huddle_id])` → starts / joins a huddle.
+  Note: Huddle usage may require additional permissions or may not be available in free workspaces.
+
+  ### TASK: Use a slash command
+  Slash commands are typed in the message composer.
+  1. Focus composer.
+  2. `browser_type(C, "/remind me at 5pm to stand up")` — the slash menu auto-completes.
+  3. `desktop_press_keys("ctrl,enter")` → executes the command.
+  Common slash commands:
+  - `/remind me at 5pm to do X`
+  - `/dm @user text`
+  - `/status set :coffee: grabbing coffee`
+  - `/away` / `/active`
+  - `/shortcuts` — opens the shortcut menu
+
+  ---
+
+  ### Common Gotchas
+  - **Quick Switcher is the fastest path to anywhere**: `ctrl,k` → type name → Enter. Replaces 90% of sidebar clicking. Works for channels, DMs, users, and apps.
+  - **`ctrl,enter` is the SAFE send key**: it always sends, regardless of the user's "Send with Enter" preference. `submit=true` (Enter) is unreliable — use `ctrl,enter` explicitly.
+  - **`shift,enter` = new line** within a message. Use for multi-line composes.
+  - **Confirm the target BEFORE typing**: the Quick Switcher is fuzzy. "john" may match multiple people. Always snapshot after Enter to verify the channel/DM header, THEN type the message.
+  - **Single-letter shortcuts need compose de-focused**: `j`/`k`, `up`/`down`, `escape` (mark read), etc. don't fire when the composer has focus. Press `escape` first.
+  - **Multiple workspaces**: `ctrl,1..9` switches workspaces. Always verify which workspace you're in via the page title or workspace header.
+  - **Thread composes have their own `[id]`**: when you open a thread, there's a separate contenteditable in the right sidebar. Don't try to reuse the main channel's composer `[id]`.
+  - **Auto-read on view**: simply opening a channel marks it read. No explicit mark-read action needed.
+  - **Send button is locale-dependent**: its aria-label is translated. Prefer `ctrl,enter` over clicking Send.
+  - **Sidebar channel names are stable**: channel names like "#general" are user-set and consistent. Safe to match by name text. But the section headers ("Channels", "Direct messages") are translated.
+  - **Emoji picker**: after opening, type the emoji name to filter. `:thumbsup:` / `:tada:` work as well via direct text input in the composer (Slack auto-converts shortcodes).
+  - **Slash commands auto-complete**: after typing `/`, Slack shows a menu. For well-known commands like `/remind`, you can type the whole thing and press `ctrl,enter` without needing to click suggestions.
+  - **Typing indicator**: when you type, Slack shows "User is typing" to the recipient. Be aware if the user wants discretion.
+  - **Edit window**: Slack allows editing messages indefinitely by default, but admins may restrict. If edit fails, the edit window may be closed.
+  - **File upload caption**: after `browser_upload_file`, the composer shows a preview with optional caption. You can add text before the final `ctrl,enter` send.
+  - **Message action buttons may not appear until hover**: if a "Reply in thread" or "Add reaction" button isn't in the snapshot, it's because Slack only renders them on hover. Workaround: click the message's timestamp to open the thread view directly.
+
+  ### Rules (MUST follow)
+  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_upload_file, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
+  2. Use Quick Switcher (`ctrl,k`) as the primary navigation. Sidebar clicking is a fallback.
+  3. Use `ctrl,enter` to send messages — NOT plain Enter. This is the #1 reliability rule.
+  4. ALWAYS confirm the channel/DM header matches the intended target before typing a sensitive message.
+  5. Match UI buttons by role / position / `(Ctrl+…)` hints, NEVER by English text alone.
+  6. `shift,enter` for multi-line composes within a single message.
+  7. Press `escape` to release compose focus before using single-letter or global shortcuts.
+  8. Snapshot on major state changes (entered channel, opened thread, opened modal) — not every keystroke.
+  9. Budget: "send a DM" ≈ 6 tool calls. "reply in a thread" ≈ 8–10. "search and find a message" ≈ 4. If you exceed 2x, re-read this template.
+  10. For file uploads, use `browser_upload_file` on the hidden file input revealed after clicking the attach menu.
