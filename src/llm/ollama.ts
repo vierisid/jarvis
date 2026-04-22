@@ -71,14 +71,59 @@ type OllamaModelInfo = {
   digest: string;
 };
 
+export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
+
+export function normalizeOllamaBaseUrl(baseUrl = DEFAULT_OLLAMA_BASE_URL): string {
+  const trimmed = baseUrl.trim().replace(/\/$/, '');
+  if (!trimmed) return DEFAULT_OLLAMA_BASE_URL;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname === 'localhost') {
+      parsed.hostname = '127.0.0.1';
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return trimmed;
+  }
+}
+
 export class OllamaProvider implements LLMProvider {
   name = 'ollama';
   private baseUrl: string;
   private defaultModel: string;
 
-  constructor(baseUrl = 'http://localhost:11434', defaultModel = 'llama3') {
-    this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+  constructor(baseUrl = DEFAULT_OLLAMA_BASE_URL, defaultModel = 'llama3') {
+    this.baseUrl = normalizeOllamaBaseUrl(baseUrl);
     this.defaultModel = defaultModel;
+  }
+
+  private async sendRequest(body: Record<string, unknown>, allowToolRetry: boolean): Promise<Response> {
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok && allowToolRetry) {
+      const errorText = await response.text();
+      if (response.status === 400 && errorText.includes('does not support tools')) {
+        const retryBody = { ...body };
+        delete retryBody.tools;
+        return fetch(`${this.baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(retryBody),
+        });
+      }
+      throw new Error(`Ollama API error (${response.status}): ${errorText}`);
+    }
+
+    return response;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -102,13 +147,7 @@ export class OllamaProvider implements LLMProvider {
       body.tools = this.convertTools(tools);
     }
 
-    const response = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    const response = await this.sendRequest(body, !!(tools && tools.length > 0));
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -140,13 +179,13 @@ export class OllamaProvider implements LLMProvider {
       body.tools = this.convertTools(tools);
     }
 
-    const response = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await this.sendRequest(body, !!(tools && tools.length > 0));
+    } catch (err) {
+      yield { type: 'error', error: err instanceof Error ? err.message : String(err) };
+      return;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

@@ -90,6 +90,7 @@ export class GroqProvider implements LLMProvider {
   private static readonly MAX_ASSISTANT_MESSAGE_CHARS = 3_500;
   private static readonly MAX_TOOL_MESSAGE_CHARS = 2_000;
   private static readonly MIN_RECENT_MESSAGES = 6;
+  private static readonly DEFAULT_MAX_TOKENS = 2048;
 
   constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
     this.apiKey = apiKey;
@@ -290,7 +291,7 @@ export class GroqProvider implements LLMProvider {
     stream: boolean,
     promptBudget: number
   ): Record<string, unknown> {
-    const { model = this.defaultModel, temperature, max_tokens, tools } = options;
+    const { model = this.defaultModel, temperature, max_tokens = GroqProvider.DEFAULT_MAX_TOKENS, tools } = options;
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(this.compactMessages(messages, promptBudget, tools)),
@@ -298,7 +299,7 @@ export class GroqProvider implements LLMProvider {
 
     if (stream) body.stream = true;
     if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
+    body.max_completion_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = 'auto';

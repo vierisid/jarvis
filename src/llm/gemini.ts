@@ -52,6 +52,7 @@ type GeminiStreamChunk = {
 
 const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000;
+const DEFAULT_MAX_TOKENS = 2048;
 
 export class GeminiProvider implements LLMProvider {
   name = 'gemini';
@@ -89,7 +90,7 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
     const url = `${this.baseUrl}/models/${model}:generateContent?key=${this.apiKey}`;
 
     // Compact history for Gemini's context limits
@@ -103,7 +104,7 @@ export class GeminiProvider implements LLMProvider {
 
     const generationConfig: Record<string, unknown> = {};
     if (temperature !== undefined) generationConfig.temperature = temperature;
-    if (max_tokens !== undefined) generationConfig.maxOutputTokens = max_tokens;
+    generationConfig.maxOutputTokens = max_tokens;
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
     if (tools && tools.length > 0) {
@@ -116,7 +117,7 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
     const url = `${this.baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
     // Compact history for Gemini's context limits
@@ -130,7 +131,7 @@ export class GeminiProvider implements LLMProvider {
 
     const generationConfig: Record<string, unknown> = {};
     if (temperature !== undefined) generationConfig.temperature = temperature;
-    if (max_tokens !== undefined) generationConfig.maxOutputTokens = max_tokens;
+    generationConfig.maxOutputTokens = max_tokens;
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
     if (tools && tools.length > 0) {

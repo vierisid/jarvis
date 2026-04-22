@@ -55,6 +55,7 @@ type AnthropicStreamEvent =
 
 const MAX_RETRIES = 0;
 const RETRY_BASE_DELAY_MS = 5000; // 5s, 10s, 20s
+const DEFAULT_MAX_TOKENS = 2048;
 
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic';
@@ -106,7 +107,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens = 16384, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
 
     // Compact history for Claude's context window
     const budget = calculateHistoryBudget(200000);
@@ -132,7 +133,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens = 16384, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
 
     // Compact history for Claude's context window
     const budget = calculateHistoryBudget(200000);

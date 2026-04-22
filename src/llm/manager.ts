@@ -10,9 +10,11 @@ export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
   private primaryProvider = '';
   private fallbackChain: string[] = [];
+  private providerCooldowns: Map<string, number> = new Map();
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
   private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
+  private static readonly DEFAULT_RATE_LIMIT_COOLDOWN_MS = 15 * 60 * 1000;
 
   constructor() {}
 
@@ -103,13 +105,58 @@ export class LLMManager {
 
     const msg = error.message.toLowerCase();
     // Retry on network/timeout errors, not on auth/validation errors
-    return msg.includes('timeout') ||
+    return (msg.includes('timeout') ||
       msg.includes('econnrefused') ||
       msg.includes('enotfound') ||
       msg.includes('network') ||
       msg.includes('temporarily unavailable') ||
-      msg.includes('429') ||  // rate limit
-      msg.includes('503');    // service unavailable
+      msg.includes('503')) && !this.extractRateLimitCooldownMs(error);
+  }
+
+  private getCooldownUntil(providerName: string): number | null {
+    const until = this.providerCooldowns.get(providerName);
+    if (!until) return null;
+    if (Date.now() >= until) {
+      this.providerCooldowns.delete(providerName);
+      return null;
+    }
+    return until;
+  }
+
+  private formatCooldown(providerName: string): string | null {
+    const until = this.getCooldownUntil(providerName);
+    if (!until) return null;
+    const remainingMs = Math.max(0, until - Date.now());
+    const totalSeconds = Math.ceil(remainingMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return `Provider '${providerName}' temporarily skipped due to rate limit (${parts.join(' ')} remaining)`;
+  }
+
+  private extractRateLimitCooldownMs(error: unknown): number | null {
+    if (!(error instanceof Error)) return null;
+    const msg = error.message.toLowerCase();
+    if (!msg.includes('rate limit') && !msg.includes('429')) {
+      return null;
+    }
+
+    const original = error.message;
+    const tryAgainMatch = original.match(/try again in\s+((?:(?:\d+(?:\.\d+)?)h)?(?:(?:\d+(?:\.\d+)?)m)?(?:(?:\d+(?:\.\d+)?)s)?)/i);
+    const durationText = tryAgainMatch?.[1]?.trim();
+    const parsed = durationText ? this.parseDurationMs(durationText) : 0;
+    return parsed > 0 ? parsed : LLMManager.DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+  }
+
+  private parseDurationMs(raw: string): number {
+    const hours = parseFloat(raw.match(/(\d+(?:\.\d+)?)h/i)?.[1] ?? '0');
+    const minutes = parseFloat(raw.match(/(\d+(?:\.\d+)?)m/i)?.[1] ?? '0');
+    const seconds = parseFloat(raw.match(/(\d+(?:\.\d+)?)s/i)?.[1] ?? '0');
+    return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
   }
 
   /**
@@ -124,6 +171,12 @@ export class LLMManager {
     const failures: string[] = [];
 
     for (const providerName of this.getProviderSequence(overridePrimary)) {
+      const cooldownMessage = this.formatCooldown(providerName);
+      if (cooldownMessage) {
+        failures.push(cooldownMessage);
+        continue;
+      }
+
       const provider = this.providers.get(providerName);
       if (!provider) {
         failures.push(`Provider '${providerName}' not registered`);
@@ -141,6 +194,11 @@ export class LLMManager {
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
+
+          const cooldownMs = this.extractRateLimitCooldownMs(err);
+          if (cooldownMs) {
+            this.providerCooldowns.set(providerName, Date.now() + cooldownMs);
+          }
 
           const shouldRetry = this.shouldRetry(err);
           console.error(
@@ -165,6 +223,12 @@ export class LLMManager {
     const failures: string[] = [];
 
     for (const providerName of this.getProviderSequence()) {
+      const cooldownMessage = this.formatCooldown(providerName);
+      if (cooldownMessage) {
+        failures.push(cooldownMessage);
+        continue;
+      }
+
       const provider = this.providers.get(providerName);
       if (!provider) {
         failures.push(`Provider '${providerName}' not registered`);
@@ -201,6 +265,11 @@ export class LLMManager {
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
+
+          const cooldownMs = this.extractRateLimitCooldownMs(err);
+          if (cooldownMs) {
+            this.providerCooldowns.set(providerName, Date.now() + cooldownMs);
+          }
 
           const shouldRetry = this.shouldRetry(err);
           console.error(

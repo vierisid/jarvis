@@ -32,13 +32,21 @@ export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-gu
  * Convert a ToolDefinition's parameters to JSON Schema for LLM tool use.
  */
 export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
+  const compact = (text: string, maxLen: number): string => {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLen) return normalized;
+    const sentence = normalized.match(/^(.{1,120}?[.!?])(?:\s|$)/)?.[1];
+    if (sentence && sentence.length <= maxLen) return sentence;
+    return normalized.slice(0, maxLen - 1).trimEnd() + '…';
+  };
+
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
 
   for (const [name, param] of Object.entries(tool.parameters)) {
     properties[name] = {
       type: param.type,
-      description: param.description,
+      description: compact(param.description, 96),
     };
     if (param.required) {
       required.push(name);
@@ -47,7 +55,7 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
 
   return {
     name: tool.name,
-    description: tool.description,
+    description: compact(tool.description, 160),
     parameters: {
       type: 'object',
       properties,

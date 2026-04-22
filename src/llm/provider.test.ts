@@ -200,6 +200,56 @@ describe('LLMManager', () => {
     expect(events.some((event) => event.type === 'done')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
   });
+
+  test('temporarily cools down rate-limited providers', async () => {
+    const manager = new LLMManager();
+    let primaryCalls = 0;
+    const primary = {
+      name: 'primary',
+      listModels: async () => ['primary-model'],
+      chat: async () => {
+        primaryCalls += 1;
+        throw new Error('429 rate_limit_exceeded: Please try again in 2m30s');
+      },
+      async *stream() {
+        yield { type: 'error' as const, error: '429 rate_limit_exceeded: Please try again in 2m30s' };
+      },
+    };
+    const fallback = {
+      name: 'fallback',
+      listModels: async () => ['fallback-model'],
+      chat: async () => ({
+        content: 'fallback ok',
+        tool_calls: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        model: 'fallback-model',
+        finish_reason: 'stop' as const,
+      }),
+      async *stream() {
+        yield { type: 'text' as const, text: 'fallback ok' };
+        yield {
+          type: 'done' as const,
+          response: {
+            content: 'fallback ok',
+            tool_calls: [],
+            usage: { input_tokens: 1, output_tokens: 1 },
+            model: 'fallback-model',
+            finish_reason: 'stop' as const,
+          },
+        };
+      },
+    };
+
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    manager.setPrimary('primary');
+    manager.setFallbackChain(['fallback']);
+
+    await manager.chat(sampleMessages);
+    await manager.chat(sampleMessages);
+
+    expect(primaryCalls).toBe(1);
+  });
 });
 
 describe('Message Types', () => {
@@ -250,12 +300,17 @@ describe('Provider URLs', () => {
 
   test('OllamaProvider uses correct base URL', () => {
     const provider = new OllamaProvider() as any;
-    expect(provider.baseUrl).toBe('http://localhost:11434');
+    expect(provider.baseUrl).toBe('http://127.0.0.1:11434');
   });
 
   test('OllamaProvider removes trailing slash from base URL', () => {
     const provider = new OllamaProvider('http://localhost:11434/') as any;
-    expect(provider.baseUrl).toBe('http://localhost:11434');
+    expect(provider.baseUrl).toBe('http://127.0.0.1:11434');
+  });
+
+  test('OllamaProvider normalizes localhost to IPv4 loopback', () => {
+    const provider = new OllamaProvider('http://localhost:11434') as any;
+    expect(provider.baseUrl).toBe('http://127.0.0.1:11434');
   });
 
   test('NVIDIAProvider uses correct API URL', () => {
@@ -299,7 +354,7 @@ describe('Default Models', () => {
     const anthropic = new AnthropicProvider('key', 'custom-model') as any;
     const openai = new OpenAIProvider('key', 'custom-model') as any;
     const groq = new GroqProvider('key', 'custom-model') as any;
-    const ollama = new OllamaProvider('http://localhost:11434', 'custom-model') as any;
+    const ollama = new OllamaProvider('http://127.0.0.1:11434', 'custom-model') as any;
     const openrouter = new OpenRouterProvider('key', 'custom-model') as any;
 
     expect(anthropic.defaultModel).toBe('custom-model');
@@ -613,5 +668,57 @@ describe('Groq request shaping', () => {
     expect(response.content).toContain('retry ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+});
+
+describe('Ollama tool fallback', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('retries without tools when model does not support them', async () => {
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.tools) {
+        return new Response(
+          JSON.stringify({ error: 'registry.ollama.ai/library/llama3:latest does not support tools' }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(JSON.stringify({
+        model: 'llama3',
+        created_at: new Date().toISOString(),
+        message: { role: 'assistant', content: 'fallback ok' },
+        done: true,
+        prompt_eval_count: 12,
+        eval_count: 6,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new OllamaProvider('http://127.0.0.1:11434', 'llama3');
+    const response = await provider.chat(
+      [{ role: 'user', content: 'Hello' }],
+      {
+        tools: [
+          {
+            name: 'weather_lookup',
+            description: 'Look up weather',
+            parameters: { type: 'object', properties: {}, required: [] },
+          },
+        ],
+      },
+    );
+
+    expect(response.content).toBe('fallback ok');
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(firstBody.tools).toBeDefined();
+    expect(secondBody.tools).toBeUndefined();
   });
 });

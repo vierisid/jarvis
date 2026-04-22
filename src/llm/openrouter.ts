@@ -84,6 +84,7 @@ export class OpenRouterProvider implements LLMProvider {
   private apiKey: string;
   private defaultModel: string;
   private apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
+  private static readonly DEFAULT_MAX_TOKENS = 2048;
 
   constructor(apiKey: string, defaultModel = 'anthropic/claude-sonnet-4') {
     this.apiKey = apiKey;
@@ -91,7 +92,7 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = OpenRouterProvider.DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
 
     // Compact history for better reliability across routed models
     const budget = calculateHistoryBudget(100000);
@@ -103,7 +104,7 @@ export class OpenRouterProvider implements LLMProvider {
     };
 
     if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
+    body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';
@@ -130,7 +131,7 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens = OpenRouterProvider.DEFAULT_MAX_TOKENS, tools, tool_choice } = options;
 
     // Compact history for better reliability across routed models
     const budget = calculateHistoryBudget(100000);
@@ -143,7 +144,7 @@ export class OpenRouterProvider implements LLMProvider {
     };
 
     if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
+    body.max_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';
