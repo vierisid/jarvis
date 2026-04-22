@@ -46,7 +46,7 @@ func launchChromeIfNeeded(cfg *SidecarConfig) {
 	}
 
 	// Check if Chrome is already listening
-	url := fmt.Sprintf("http://localhost:%d/json/version", port)
+	url := localCDPHTTPURL(port, "/json/version")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)

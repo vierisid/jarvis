@@ -60,7 +60,7 @@ func newCDPClient(port int) (*cdpClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("http://localhost:%d/json", port)
+	url := localCDPHTTPURL(port, "/json")
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -87,6 +87,7 @@ func newCDPClient(port int) (*cdpClient, error) {
 	if wsURL == "" {
 		return nil, fmt.Errorf("no CDP page target found on port %d", port)
 	}
+	wsURL = preferIPv4Loopback(wsURL)
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
