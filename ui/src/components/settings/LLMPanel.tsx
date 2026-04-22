@@ -4,7 +4,7 @@ import { useApiData, api } from "../../hooks/useApi";
 type LLMConfig = {
   primary: string;
   fallback: string[];
-  anthropic: { model: string; has_api_key: boolean } | null;
+  anthropic: { model: string; has_api_key: boolean; use_puter: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
@@ -104,6 +104,7 @@ export function LLMPanel() {
   const [anthropicKey, setAnthropicKey] = useState("");
   const [anthropicModel, setAnthropicModel] = useState("claude-sonnet-4-5-20250929");
   const [anthropicCustomModel, setAnthropicCustomModel] = useState("");
+  const [anthropicUsePuter, setAnthropicUsePuter] = useState(false);
 
   // OpenAI
   const [openaiKey, setOpenaiKey] = useState("");
@@ -150,6 +151,7 @@ export function LLMPanel() {
 
     if (config.anthropic) {
       const m = config.anthropic.model;
+      setAnthropicUsePuter(config.anthropic.use_puter);
       if (ANTHROPIC_MODELS.includes(m)) {
         setAnthropicModel(m);
         setAnthropicCustomModel("");
@@ -235,6 +237,7 @@ export function LLMPanel() {
         fallback,
         anthropic: {
           model: resolveModel(anthropicModel, anthropicCustomModel),
+          use_puter: anthropicUsePuter,
           ...(anthropicKey ? { api_key: anthropicKey } : {}),
         },
         openai: {
@@ -370,6 +373,11 @@ export function LLMPanel() {
             </option>
           ))}
         </select>
+        {primary === "anthropic" && anthropicUsePuter && !(config.anthropic?.has_api_key || anthropicKey) && (
+          <div style={{ ...warningStyle, marginTop: "10px", marginBottom: 0 }}>
+            Free Version (Puter) powers only the browser Chat page. Keep another server-backed provider configured if you want daemon-side agents, tools, and automation to stay available.
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -377,7 +385,7 @@ export function LLMPanel() {
           name="Anthropic"
           provider="anthropic"
           isPrimary={primary === "anthropic"}
-          hasKey={config.anthropic?.has_api_key ?? false}
+          hasKey={(config.anthropic?.has_api_key ?? false) || anthropicUsePuter}
           apiKey={anthropicKey}
           onApiKeyChange={setAnthropicKey}
           model={anthropicModel}
@@ -392,6 +400,31 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("anthropic")}
           expanded={!!expanded.anthropic}
           onToggleExpand={() => setExpanded((s) => ({ ...s, anthropic: !s.anthropic }))}
+          testDisabled={anthropicUsePuter}
+          extraContent={(
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: "12px",
+                padding: "8px 10px",
+                borderRadius: "6px",
+                border: "1px solid rgba(0, 212, 255, 0.14)",
+                background: "rgba(0, 212, 255, 0.04)",
+              }}
+            >
+              <div>
+                <div style={{ ...fieldLabelStyle, marginBottom: "2px", color: "var(--j-text)" }}>
+                  Free Version (Puter)
+                </div>
+                <div style={{ fontSize: "12px", color: "var(--j-text-dim)", lineHeight: 1.45 }}>
+                  Uses Puter sign-in for free Claude access on the Chat page instead of an Anthropic API key.
+                </div>
+              </div>
+              <ToggleSwitch checked={anthropicUsePuter} onChange={() => setAnthropicUsePuter((value) => !value)} />
+            </label>
+          )}
         />
 
         <ProviderSection
@@ -559,6 +592,8 @@ type ProviderSectionProps = {
   hideApiKey?: boolean;
   baseUrl?: string;
   onBaseUrlChange?: (v: string) => void;
+  testDisabled?: boolean;
+  extraContent?: React.ReactNode;
 };
 
 function ToggleSwitch({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
@@ -605,7 +640,7 @@ function ProviderSection({
   models, testing, testResult, onTest,
   isFallback, onFallbackToggle,
   expanded, onToggleExpand,
-  hideApiKey, baseUrl, onBaseUrlChange,
+  hideApiKey, baseUrl, onBaseUrlChange, testDisabled, extraContent,
 }: ProviderSectionProps) {
   return (
     <div style={providerCardStyle}>
@@ -689,6 +724,8 @@ function ProviderSection({
             </div>
           </div>
 
+          {extraContent}
+
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
             {!isPrimary && (
               <label
@@ -707,7 +744,7 @@ function ProviderSection({
               </label>
             )}
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>
-              <button onClick={onTest} disabled={testing} style={testBtnStyle}>
+              <button onClick={onTest} disabled={testing || testDisabled} style={testBtnStyle}>
                 {testing ? "Testing..." : "Test Connection"}
               </button>
               {testResult && (
@@ -804,6 +841,16 @@ const saveBtnStyle: React.CSSProperties = {
   borderRadius: "6px",
   color: "var(--j-accent)",
   cursor: "pointer",
+};
+
+const warningStyle: React.CSSProperties = {
+  padding: "8px 10px",
+  fontSize: "12px",
+  lineHeight: 1.45,
+  color: "#FDE68A",
+  background: "rgba(251, 191, 36, 0.08)",
+  border: "1px solid rgba(251, 191, 36, 0.22)",
+  borderRadius: "6px",
 };
 
 const primaryBadgeStyle: React.CSSProperties = {

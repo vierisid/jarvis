@@ -28,6 +28,7 @@ const KEY_OPENROUTER = 'llm.openrouter.api_key';
 const SETTING_PRIMARY = 'llm.primary';
 const SETTING_FALLBACK = 'llm.fallback';
 const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
+const SETTING_ANTHROPIC_USE_PUTER = 'llm.anthropic.use_puter';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
 const SETTING_GROQ_MODEL = 'llm.groq.model';
 const SETTING_GEMINI_MODEL = 'llm.gemini.model';
@@ -38,7 +39,7 @@ const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
 export type LLMSettingsResponse = {
   primary: string;
   fallback: string[];
-  anthropic: { model: string; has_api_key: boolean } | null;
+  anthropic: { model: string; has_api_key: boolean; use_puter: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
@@ -56,6 +57,10 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const fallback = fallbackRaw ? JSON.parse(fallbackRaw) : config.llm.fallback;
 
   const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
+  const dbAnthropicUsePuter = getSetting(SETTING_ANTHROPIC_USE_PUTER);
+  const anthropicUsePuter = dbAnthropicUsePuter === null
+    ? !!config.llm.anthropic?.use_puter
+    : dbAnthropicUsePuter === 'true';
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
@@ -73,7 +78,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   return {
     primary,
     fallback,
-    anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey },
+    anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey, use_puter: anthropicUsePuter },
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
@@ -90,7 +95,7 @@ export function saveLLMSettings(
   body: {
     primary?: string;
     fallback?: string[];
-    anthropic?: { api_key?: string; model?: string };
+    anthropic?: { api_key?: string; model?: string; use_puter?: boolean };
     openai?: { api_key?: string; model?: string };
     groq?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
@@ -113,12 +118,16 @@ export function saveLLMSettings(
     if (body.anthropic.model) {
       setSetting(SETTING_ANTHROPIC_MODEL, body.anthropic.model);
     }
+    if (body.anthropic.use_puter !== undefined) {
+      setSetting(SETTING_ANTHROPIC_USE_PUTER, String(body.anthropic.use_puter));
+    }
     if (body.anthropic.api_key) {
       setSecret(KEY_ANTHROPIC, body.anthropic.api_key);
     }
     config.llm.anthropic = {
       ...config.llm.anthropic,
       model: body.anthropic.model ?? config.llm.anthropic?.model,
+      use_puter: body.anthropic.use_puter ?? config.llm.anthropic?.use_puter ?? false,
       api_key: body.anthropic.api_key ?? getAnthropicApiKey(config) ?? '',
     };
   }
@@ -248,14 +257,18 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
 
   // Anthropic
   const dbAnthropicModel = getSetting(SETTING_ANTHROPIC_MODEL);
+  const dbAnthropicUsePuter = getSetting(SETTING_ANTHROPIC_USE_PUTER);
   const keychainAnthropicKey = getSecret(KEY_ANTHROPIC);
-  if (dbAnthropicModel || keychainAnthropicKey) {
+  if (dbAnthropicModel || dbAnthropicUsePuter !== null || keychainAnthropicKey) {
     config.llm.anthropic = {
       ...config.llm.anthropic,
       api_key: (!process.env.JARVIS_API_KEY && keychainAnthropicKey)
         ? keychainAnthropicKey
         : (config.llm.anthropic?.api_key ?? ''),
       model: dbAnthropicModel ?? config.llm.anthropic?.model,
+      use_puter: dbAnthropicUsePuter === null
+        ? (config.llm.anthropic?.use_puter ?? false)
+        : dbAnthropicUsePuter === 'true',
     };
   }
 

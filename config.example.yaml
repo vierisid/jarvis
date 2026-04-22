@@ -25,6 +25,7 @@ llm:
   anthropic:
     api_key: "sk-ant-..."
     model: "claude-sonnet-4-5-20250929"
+    use_puter: false  # Browser Chat page only; uses Puter sign-in instead of an Anthropic API key
 
   # OpenAI (GPT) configuration
   openai:

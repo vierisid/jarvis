@@ -155,7 +155,7 @@ export type JarvisConfig = {
   llm: {
     primary: string;  // provider name
     fallback: string[];
-    anthropic?: { api_key: string; model?: string };
+    anthropic?: { api_key: string; model?: string; use_puter?: boolean };
     openai?: { api_key: string; model?: string };
     groq?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
@@ -235,6 +235,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     anthropic: {
       api_key: '',
       model: 'claude-sonnet-4-6',
+      use_puter: false,
     },
     openai: {
       api_key: '',

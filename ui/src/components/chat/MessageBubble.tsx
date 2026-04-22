@@ -37,6 +37,7 @@ export function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const timestamp = new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const senderName = message.source === "puter" ? "Claude (Puter)" : "JARVIS";
 
   // System messages — notification cards
   if (isSystem) {
@@ -69,7 +70,7 @@ export function MessageBubble({ message }: Props) {
       {!isUser && (
         <div className="chat-sender">
           <div className="chat-sender-orb" />
-          <span className="chat-sender-name">JARVIS</span>
+          <span className="chat-sender-name">{senderName}</span>
           <span className="chat-sender-ts">{timestamp}</span>
         </div>
       )}
