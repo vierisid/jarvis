@@ -1513,7 +1513,7 @@
   position: fixed;
   right: 24px;
   top: 24px;
-  z-index: 40;
+  z-index: 310;
   max-width: 360px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -1529,12 +1529,13 @@
 }
 
 /* === Spawn modal === */
+/* z-index must beat .ag-header (200), .ag-stats-bar (190), .ag-tab-bar (180). */
 .ag-spawn-overlay {
   position: fixed;
   inset: 0;
   background: rgba(3, 6, 12, 0.72);
   backdrop-filter: blur(8px);
-  z-index: 50;
+  z-index: 300;
   display: flex;
   align-items: flex-start;
   justify-content: center;
