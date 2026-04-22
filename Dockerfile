@@ -61,6 +61,8 @@ RUN mkdir -p ui/public/openwakeword/models ui/public/ort && \
 RUN bun build ui/index.html --outdir ui/dist
 
 # ─── Stage 3: Production image ─────────────────────────────────────
+FROM oven/bun:1-slim AS production
+
 # ca-certificates: HTTPS calls to LLM APIs
 # git: required by the Site Builder for project version control
 # dos2unix: fix Windows line-ending issues in entrypoint scripts
