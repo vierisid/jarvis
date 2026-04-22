@@ -1124,6 +1124,14 @@
   z-index: 20;
 }
 
+/* Anchors the rings to the core's footprint so they center on the emoji,
+   not on the middle of the core + label + badge stack. */
+.ag-orb-cluster {
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+
 .ag-orb-ring-outer {
   position: absolute;
   border-radius: 50%;

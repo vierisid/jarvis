@@ -259,25 +259,27 @@ export default function OrbitalView({ agents, agentActivity }: Props) {
 
         {/* Center Orb — Personal Assistant */}
         <div className="ag-center-orb" style={{ left: "50%", top: "48%" }}>
-          <div
-            className="ag-orb-ring-outer"
-            style={{
-              width: "116px",
-              height: "116px",
-              top: "50%",
-              left: "50%",
-            }}
-          />
-          <div
-            className="ag-orb-ring-inner"
-            style={{
-              width: "96px",
-              height: "96px",
-              top: "50%",
-              left: "50%",
-            }}
-          />
-          <div className="ag-orb-core">🤖</div>
+          <div className="ag-orb-cluster">
+            <div
+              className="ag-orb-ring-outer"
+              style={{
+                width: "116px",
+                height: "116px",
+                top: "50%",
+                left: "50%",
+              }}
+            />
+            <div
+              className="ag-orb-ring-inner"
+              style={{
+                width: "96px",
+                height: "96px",
+                top: "50%",
+                left: "50%",
+              }}
+            />
+            <div className="ag-orb-core">🤖</div>
+          </div>
           <div className="ag-orb-label">Personal Assistant</div>
           <div className="ag-orb-badge">PRIMARY · AUTH 5</div>
         </div>
