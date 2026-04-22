@@ -80,6 +80,12 @@ export default function OfficePage({ agentActivity }: Props) {
     return () => clearInterval(interval);
   }, [fetchAgents, fetchSpecialists]);
 
+  useEffect(() => {
+    if (!spawnMessage) return;
+    const timer = setTimeout(() => setSpawnMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [spawnMessage]);
+
   function getLive(roleId: string): LiveAgentInfo | null {
     return (
       liveAgents.find(
