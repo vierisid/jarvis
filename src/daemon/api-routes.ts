@@ -195,10 +195,9 @@ function buildAgentSnapshots(ctx: ApiContext) {
   const agents = orchestrator.getAllAgents().map((agent) => {
     const base = agent.toJSON();
     const latestTask = latestTaskByAgent.get(agent.id);
-    const busy = busyAgents.has(agent.id) || base.status === 'active' || Boolean(base.current_task);
     return {
       ...base,
-      busy,
+      busy: busyAgents.has(agent.id),
       latest_task: latestTask ? {
         id: latestTask.id,
         status: latestTask.status,
@@ -626,12 +625,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
 
           const latestTask = taskManager.getAgentTask(spawned.agent.id);
-          const busy = taskManager.isAgentBusy(spawned.agent.id)
-            || spawned.agent.status === 'active'
-            || Boolean(spawned.agent.agent.current_task);
           return json({
             ...spawned.agent.toJSON(),
-            busy,
+            busy: taskManager.isAgentBusy(spawned.agent.id),
             latest_task: latestTask ? {
               id: latestTask.id,
               status: latestTask.status,

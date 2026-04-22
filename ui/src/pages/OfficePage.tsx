@@ -48,16 +48,6 @@ export default function OfficePage({ agentActivity }: Props) {
   const [spawnTask, setSpawnTask] = useState("");
   const [spawnContext, setSpawnContext] = useState("");
 
-  function isAgentActive(agent: AgentWithLive): boolean {
-    if (agent.isPrimary) return true;
-    return Boolean(
-      agent.live?.busy
-      || agent.live?.status === "active"
-      || agent.live?.current_task
-      || agent.live?.latest_task?.status === "running"
-    );
-  }
-
   const fetchAgents = useCallback(async () => {
     try {
       const data = await api<LiveAgentInfo[]>("/api/agents");
@@ -114,7 +104,7 @@ export default function OfficePage({ agentActivity }: Props) {
     : allAgents;
 
   // Stats
-  const activeCount = allAgents.filter((agent) => isAgentActive(agent)).length;
+  const activeCount = allAgents.filter((a) => a.isPrimary || a.live?.busy).length;
   const totalCount = AGENT_ROSTER.length;
 
   const selectedSpecialistMeta = specialists.find((specialist) => specialist.id === selectedSpecialist) ?? null;

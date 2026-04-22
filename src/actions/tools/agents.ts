@@ -153,6 +153,10 @@ export function listPersistentAgents(deps: AgentToolDeps) {
 export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
   if (!agentId) throw new Error('"agentId" is required');
 
+  if (deps.orchestrator.getPrimary()?.id === agentId) {
+    throw new Error('Cannot terminate the primary agent.');
+  }
+
   const agent = deps.orchestrator.getAgent(agentId);
   if (!agent) throw new Error(`Agent "${agentId}" not found`);
   if (!agentRegistries.has(agentId)) {
