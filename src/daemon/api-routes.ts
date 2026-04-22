@@ -43,6 +43,7 @@ import {
 } from '../vault/content-pipeline.ts';
 import {
   assignPersistentAgentTask,
+  HttpError,
   listPersistentAgents,
   spawnPersistentAgent,
   terminatePersistentAgent,
@@ -157,6 +158,11 @@ function json(data: unknown, status = 200): Response {
 
 function error(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+function errorFromException(err: unknown): Response {
+  if (err instanceof HttpError) return error(err.message, err.status);
+  return error(err instanceof Error ? err.message : String(err), 500);
 }
 
 function getSearchParams(req: Request): URLSearchParams {
@@ -639,7 +645,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             assignment,
           }, 201);
         } catch (err) {
-          return error(err instanceof Error ? err.message : String(err));
+          return errorFromException(err);
         }
       },
     },
@@ -670,7 +676,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           };
           return json(terminatePersistentAgent(deps, req.params.id));
         } catch (err) {
-          return error(err instanceof Error ? err.message : String(err));
+          return errorFromException(err);
         }
       },
     },

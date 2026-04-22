@@ -23,6 +23,13 @@ export type AgentToolDeps = {
   onProgress?: ProgressCallback;
 };
 
+export class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
 // Track scoped registries for persistent agents so they can be reused across tasks
 const agentRegistries = new Map<string, ReturnType<typeof createScopedToolRegistry>>();
 
@@ -37,17 +44,17 @@ export type PersistentAgentSummary = {
 
 export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) {
   if (!specialistId) {
-    throw new Error('A specialist role is required to spawn an agent.');
+    throw new HttpError(400, 'A specialist role is required to spawn an agent.');
   }
 
   const role = deps.specialists.get(specialistId);
   if (!role) {
-    throw new Error(`Unknown specialist "${specialistId}". Available: ${Array.from(deps.specialists.keys()).join(', ')}`);
+    throw new HttpError(400, `Unknown specialist "${specialistId}". Available: ${Array.from(deps.specialists.keys()).join(', ')}`);
   }
 
   const primary = deps.orchestrator.getPrimary();
   if (!primary) {
-    throw new Error('No primary agent exists');
+    throw new HttpError(503, 'No primary agent exists');
   }
 
   const agent = deps.orchestrator.spawnSubAgent(primary.id, role);
@@ -77,19 +84,19 @@ export async function assignPersistentAgentTask(
   params: { agentId: string; task: string; context?: string }
 ) {
   const { agentId, task, context = '' } = params;
-  if (!agentId) throw new Error('"agentId" is required');
-  if (!task) throw new Error('"task" is required');
+  if (!agentId) throw new HttpError(400, '"agentId" is required');
+  if (!task) throw new HttpError(400, '"task" is required');
 
   const agent = deps.orchestrator.getAgent(agentId);
-  if (!agent) throw new Error(`Agent "${agentId}" not found. Use list to see active agents.`);
+  if (!agent) throw new HttpError(404, `Agent "${agentId}" not found. Use list to see active agents.`);
 
   if (deps.taskManager.isAgentBusy(agentId)) {
-    throw new Error(`Agent "${agent.agent.role.name}" is already running a task.`);
+    throw new HttpError(409, `Agent "${agent.agent.role.name}" is already running a task.`);
   }
 
   const scopedRegistry = agentRegistries.get(agentId);
   if (!scopedRegistry) {
-    throw new Error(`No tool registry for agent "${agentId}". Was it spawned via manage_agents?`);
+    throw new HttpError(500, `No tool registry for agent "${agentId}". Was it spawned via manage_agents?`);
   }
 
   deps.onProgress?.({
@@ -151,16 +158,16 @@ export function listPersistentAgents(deps: AgentToolDeps) {
 }
 
 export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
-  if (!agentId) throw new Error('"agentId" is required');
+  if (!agentId) throw new HttpError(400, '"agentId" is required');
 
   if (deps.orchestrator.getPrimary()?.id === agentId) {
-    throw new Error('Cannot terminate the primary agent.');
+    throw new HttpError(400, 'Cannot terminate the primary agent.');
   }
 
   const agent = deps.orchestrator.getAgent(agentId);
-  if (!agent) throw new Error(`Agent "${agentId}" not found`);
+  if (!agent) throw new HttpError(404, `Agent "${agentId}" not found`);
   if (!agentRegistries.has(agentId)) {
-    throw new Error(`Agent "${agentId}" is not a persistent managed agent.`);
+    throw new HttpError(404, `Agent "${agentId}" is not a persistent managed agent.`);
   }
 
   const name = agent.agent.role.name;
