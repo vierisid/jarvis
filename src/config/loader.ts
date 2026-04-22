@@ -70,6 +70,16 @@ function applyEnvOverrides(config: JarvisConfig): void {
     config.llm.openai.api_key = env.JARVIS_OPENAI_KEY;
   }
 
+  if (env.JARVIS_XAI_KEY) {
+    if (!config.llm.xai) config.llm.xai = { api_key: '', model: 'grok-4-0709' };
+    config.llm.xai.api_key = env.JARVIS_XAI_KEY;
+  }
+
+  if (env.JARVIS_DEEPSEEK_KEY) {
+    if (!config.llm.deepseek) config.llm.deepseek = { api_key: '', model: 'deepseek-chat' };
+    config.llm.deepseek.api_key = env.JARVIS_DEEPSEEK_KEY;
+  }
+
   if (env.JARVIS_GROQ_KEY) {
     if (!config.llm.groq) config.llm.groq = { api_key: '', model: 'llama-3.3-70b-versatile' };
     config.llm.groq.api_key = env.JARVIS_GROQ_KEY;

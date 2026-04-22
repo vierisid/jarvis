@@ -770,6 +770,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             fallback: config.llm.fallback,
             anthropic: config.llm.anthropic ? { model: config.llm.anthropic.model } : null,
             openai: config.llm.openai ? { model: config.llm.openai.model } : null,
+            xai: config.llm.xai ? { model: config.llm.xai.model } : null,
+            deepseek: config.llm.deepseek ? { model: config.llm.deepseek.model } : null,
             groq: config.llm.groq ? { model: config.llm.groq.model } : null,
             ollama: config.llm.ollama ?? null,
           },

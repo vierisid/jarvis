@@ -4,7 +4,14 @@
  * Run with: bun run src/llm/test.ts
  */
 
-import { LLMManager, AnthropicProvider, OpenAIProvider, OllamaProvider } from './index.ts';
+import {
+  LLMManager,
+  AnthropicProvider,
+  OpenAIProvider,
+  XAIProvider,
+  DeepSeekProvider,
+  OllamaProvider,
+} from './index.ts';
 import { loadConfig } from '../config/index.ts';
 
 async function testProviders() {
@@ -30,6 +37,24 @@ async function testProviders() {
     );
     manager.registerProvider(openai);
     console.log('Registered OpenAI provider');
+  }
+
+  if (config.llm.xai?.api_key) {
+    const xai = new XAIProvider(
+      config.llm.xai.api_key,
+      config.llm.xai.model
+    );
+    manager.registerProvider(xai);
+    console.log('Registered xAI provider');
+  }
+
+  if (config.llm.deepseek?.api_key) {
+    const deepseek = new DeepSeekProvider(
+      config.llm.deepseek.api_key,
+      config.llm.deepseek.model
+    );
+    manager.registerProvider(deepseek);
+    console.log('Registered DeepSeek provider');
   }
 
   if (config.llm.ollama) {
