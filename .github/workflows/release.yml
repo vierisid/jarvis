@@ -39,6 +39,36 @@ jobs:
       - run: bun test
       - run: bunx tsc --noEmit
 
+  # ─── Gate: validate Docker build before publishing anything ────
+  # Runs a no-push multi-arch build so a broken Dockerfile fails the entire
+  # release (npm, GitHub Release, Docker push) rather than just one job.
+  build-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (validate, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: VERSION=${{ steps.version.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ─── Cross-compile Go sidecars ─────────────────────────────────
   build-sidecar:
     needs: test
@@ -87,7 +117,7 @@ jobs:
 
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
-    needs: build-sidecar
+    needs: [build-sidecar, build-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -160,7 +190,7 @@ jobs:
 
   # ─── Publish main brain package to npm ─────────────────────────
   publish-brain:
-    needs: test
+    needs: [test, build-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -193,7 +223,7 @@ jobs:
 
   # ─── Create GitHub Release with binaries ───────────────────────
   github-release:
-    needs: build-sidecar
+    needs: [build-sidecar, build-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -272,7 +302,7 @@ jobs:
 
   # ─── Build and push Docker images ──────────────────────────────
   publish-docker:
-    needs: test
+    needs: build-docker
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -320,6 +350,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
 
+      # Layers are already populated in the GHA cache by the build-docker
+      # validation job, so this build is effectively cache-hit + registry push.
       - name: Build and push Docker image
         if: env.DRY_RUN != 'true'
         uses: docker/build-push-action@v6

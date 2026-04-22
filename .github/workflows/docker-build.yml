@@ -1,0 +1,44 @@
+name: Docker Build
+
+# Validates the Dockerfile builds cleanly when image-relevant files change.
+# Catches regressions like broken stages, missing FROMs, or deps that fail
+# to install in the container — before they reach the release workflow.
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/docker-build.yml"
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # PR check is single-arch for speed; release workflow validates linux/amd64 + linux/arm64.
+      - name: Build Docker image (validate)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: jarvis:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
