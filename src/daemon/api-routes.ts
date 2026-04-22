@@ -663,6 +663,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Bun.serve matches literal paths (e.g. /api/agents/specialists) before patterns, so order is irrelevant.
     '/api/agents/:id': {
       DELETE: (req: Request & { params: { id: string } }) => {
         try {
