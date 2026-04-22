@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../hooks/useApi";
 import type { AgentActivityEvent } from "../hooks/useWebSocket";
 import CommandCenterView from "../components/office/CommandCenterView";
@@ -47,6 +47,7 @@ export default function OfficePage({ agentActivity }: Props) {
   const [selectedSpecialist, setSelectedSpecialist] = useState("software-engineer");
   const [spawnTask, setSpawnTask] = useState("");
   const [spawnContext, setSpawnContext] = useState("");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -85,6 +86,19 @@ export default function OfficePage({ agentActivity }: Props) {
     const timer = setTimeout(() => setSpawnMessage(null), 4000);
     return () => clearTimeout(timer);
   }, [spawnMessage]);
+
+  useEffect(() => {
+    if (spawnOpen) dialogRef.current?.focus();
+  }, [spawnOpen]);
+
+  useEffect(() => {
+    if (!spawnOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !spawning) setSpawnOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [spawnOpen, spawning]);
 
   function getLive(roleId: string): LiveAgentInfo | null {
     return (
@@ -265,6 +279,8 @@ export default function OfficePage({ agentActivity }: Props) {
 
       {spawnMessage && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: "fixed",
             right: "24px",
@@ -300,6 +316,11 @@ export default function OfficePage({ agentActivity }: Props) {
           }}
         >
           <div
+            ref={dialogRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="spawn-dialog-title"
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "min(560px, 100%)",
@@ -311,18 +332,21 @@ export default function OfficePage({ agentActivity }: Props) {
               padding: "20px",
               boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
               flexShrink: 0,
+              outline: "none",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
               <div>
-                <div style={{ color: "var(--text-1)", fontSize: "16px", fontWeight: 600 }}>Spawn Agent</div>
+                <div id="spawn-dialog-title" style={{ color: "var(--text-1)", fontSize: "16px", fontWeight: 600 }}>Spawn Agent</div>
                 <div style={{ color: "var(--text-3)", fontSize: "12px", marginTop: "6px", lineHeight: 1.6 }}>
                   Create a persistent specialist and optionally assign a task immediately.
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setSpawnOpen(false)}
                 disabled={spawning}
+                aria-label="Close"
                 style={modalDismissButtonStyle}
               >
                 ×
