@@ -8,7 +8,7 @@
 [![bun](https://img.shields.io/npm/v/@usejarvis/brain?label=bun&logo=bun&color=%23f9f1e1)](https://bun.sh/packages/@usejarvis/brain)
 [![License](https://img.shields.io/badge/license-RSALv2-blue)](LICENSE)
 [![Runtime](https://img.shields.io/badge/runtime-Bun-%23f9f1e1)](https://bun.sh)
-[![Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FzfmXvE586Q%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=Discord&logo=discord&color=5865F2&suffix=%20members)](https://discord.gg/zfmXvE586Q)
+[![Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FytG2PHQ6rW%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=Discord&logo=discord&color=5865F2&suffix=%20members)](https://discord.gg/ytG2PHQ6rW)
 [![Website](https://img.shields.io/badge/website-usejarvis.dev-black)](https://usejarvis.dev)
 
 *An always-on autonomous AI daemon with desktop awareness, multi-agent hierarchy, visual workflows, and goal pursuit.*
@@ -409,7 +409,7 @@ See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 
 ## 💬 Community
 
-- [Discord](https://discord.gg/nE3hcaFYZP) — Chat with other users, ask questions, share workflows
+- [Discord](https://discord.gg/ytG2PHQ6rW) — Chat with other users, ask questions, share workflows
 - [Website](https://usejarvis.dev) — Project homepage and documentation
 - [GitHub Issues](https://github.com/vierisid/jarvis/issues) — Bug reports and feature requests
 
