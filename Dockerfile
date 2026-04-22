@@ -65,9 +65,8 @@ FROM oven/bun:1-slim AS production
 
 # ca-certificates: HTTPS calls to LLM APIs
 # git: required by the Site Builder for project version control
-# dos2unix: fix Windows line-ending issues in entrypoint scripts
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates git make procps libc-dev dos2unix && \
+    apt-get install -y --no-install-recommends ca-certificates git make procps libc-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -84,9 +83,6 @@ COPY --from=build /app/ui/public ./ui/public
 # Copy version-stamped package.json from build stage (not the original)
 COPY --from=build /app/package.json ./
 COPY tsconfig.json ./
-
-# Fix potential line-ending issues for Linux execution
-RUN dos2unix bin/jarvis.ts && chmod +x bin/jarvis.ts
 
 # Install jarvis as a global command
 # Note: `bun link` can't be used here — it symlinks through /root/.bun/ which

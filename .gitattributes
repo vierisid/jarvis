@@ -1,0 +1,4 @@
+# Normalize line endings to LF on checkout regardless of host OS.
+# Prevents Windows (core.autocrlf=true) checkouts from introducing CRLF,
+# which breaks shebang-based executables (e.g. bin/jarvis.ts) in Linux containers.
+* text=auto eol=lf
