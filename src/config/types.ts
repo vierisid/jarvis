@@ -249,7 +249,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       model: 'gemini-3-flash-preview',
     },
     ollama: {
-      base_url: 'http://localhost:11434',
+      base_url: 'http://127.0.0.1:11434',
       model: 'llama3',
     },
     openrouter: {

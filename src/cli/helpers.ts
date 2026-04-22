@@ -95,6 +95,10 @@ export function ask(question: string, defaultValue?: string): Promise<string> {
  * Ask for a secret (API key, token). Masks input with asterisks.
  */
 export function askSecret(question: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    return ask(question);
+  }
+
   return new Promise((resolve) => {
     const r = getRL();
     process.stdout.write(`${c.cyan('?')} ${question}: `);

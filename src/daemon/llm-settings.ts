@@ -12,7 +12,7 @@ import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
-import { OllamaProvider } from '../llm/ollama.ts';
+import { DEFAULT_OLLAMA_BASE_URL, OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -60,7 +60,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
-  const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? 'http://localhost:11434';
+  const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? DEFAULT_OLLAMA_BASE_URL;
 
   const openrouterModel = getSetting(SETTING_OPENROUTER_MODEL) ?? config.llm.openrouter?.model ?? 'anthropic/claude-sonnet-4';
 
@@ -307,7 +307,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
       model: dbOllamaModel ?? config.llm.ollama?.model,
       base_url: (!process.env.JARVIS_OLLAMA_URL && dbOllamaUrl)
         ? dbOllamaUrl
-        : (config.llm.ollama?.base_url ?? 'http://localhost:11434'),
+        : (config.llm.ollama?.base_url ?? DEFAULT_OLLAMA_BASE_URL),
     };
   }
 

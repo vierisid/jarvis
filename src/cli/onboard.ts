@@ -20,6 +20,7 @@ import { runDependencyCheck } from './deps.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { saveUserProfile } from '../vault/user-profile.ts';
 import { USER_PROFILE_QUESTIONS, normalizeUserProfileAnswers } from '../user/profile.ts';
+import { DEFAULT_OLLAMA_BASE_URL, normalizeOllamaBaseUrl } from '../llm/ollama.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
@@ -275,7 +276,7 @@ export async function runOnboard(): Promise<void> {
     if (config.llm.openrouter) config.llm.openrouter.model = model;
 
   } else if (provider === 'ollama') {
-    const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? 'http://localhost:11434');
+    const url = await ask('Ollama base URL', config.llm.ollama?.base_url ?? DEFAULT_OLLAMA_BASE_URL);
 
     const currentModel = config.llm.ollama?.model ?? 'llama3';
     const ollamaModels = [
@@ -316,17 +317,44 @@ export async function runOnboard(): Promise<void> {
         manager.registerProvider(new OllamaProvider(config.llm.ollama?.base_url, config.llm.ollama?.model));
       }
 
+      if (!manager.getProvider(provider)) {
+        if (provider === 'ollama') {
+          throw new Error('Ollama was selected, but no Ollama configuration was captured.');
+        }
+        throw new Error(`No ${provider} credentials were captured. Re-enter the API key or edit ~/.jarvis/config.yaml manually.`);
+      }
+
       manager.setPrimary(provider);
-      const resp = await Promise.race([
-        manager.chat(
-          [{ role: 'user', content: 'Say "JARVIS online" in 3 words.' }],
-          { max_tokens: 20 },
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timed out (15s)')), 15_000),
-        ),
-      ]);
-      spin.stop(`Connected! Model: ${resp.model}`);
+
+      if (provider === 'ollama') {
+        const ollamaBaseUrl = normalizeOllamaBaseUrl(config.llm.ollama?.base_url);
+        const response = await Promise.race([
+          fetch(`${ollamaBaseUrl}/api/tags`),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timed out (10s)')), 10_000),
+          ),
+        ]);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Ollama API error (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json() as { models?: Array<{ name?: string }> };
+        const modelCount = data.models?.length ?? 0;
+        spin.stop(`Connected to Ollama at ${ollamaBaseUrl} (${modelCount} model${modelCount === 1 ? '' : 's'})`);
+      } else {
+        const resp = await Promise.race([
+          manager.chat(
+            [{ role: 'user', content: 'Say "JARVIS online" in 3 words.' }],
+            { max_tokens: 20 },
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timed out (15s)')), 15_000),
+          ),
+        ]);
+        spin.stop(`Connected! Model: ${resp.model}`);
+      }
     } catch (err) {
       spin.stop();
       printErr(`Connection failed: ${err}`);
@@ -378,7 +406,7 @@ export async function runOnboard(): Promise<void> {
       } else if (fb === 'ollama') {
         const setupOllama = await askYesNo('Configure Ollama as fallback?', false);
         if (setupOllama) {
-          const url = await ask('Ollama URL', 'http://localhost:11434');
+          const url = await ask('Ollama URL', DEFAULT_OLLAMA_BASE_URL);
           const model = await ask('Ollama model', 'llama3');
           config.llm.ollama = { base_url: url, model };
         }
