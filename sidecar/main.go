@@ -19,7 +19,7 @@ func main() {
 		fmt.Println(`jarvis-sidecar — Jarvis sidecar client (Go)
 
 Usage:
-  jarvis-sidecar --token <jwt>    Enroll and start (saves token to config)
+  jarvis-sidecar --token <jwt>    Enroll, answer onboarding prompts, and start
   jarvis-sidecar                  Start using saved token
   jarvis-sidecar --help           Show this help`)
 		os.Exit(0)
@@ -31,7 +31,9 @@ Usage:
 	}
 
 	if *token != "" {
-		cfg.Token = *token
+		if err := applyEnrollmentToken(cfg, *token, os.Stdin, os.Stdout, isInteractiveTerminal(os.Stdin) && isInteractiveTerminal(os.Stdout)); err != nil {
+			log.Fatalf("[sidecar] Failed to apply enrollment token: %v", err)
+		}
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("[sidecar] Failed to save config: %v", err)
 		}
@@ -61,4 +63,12 @@ Usage:
 	}()
 
 	client.Start(ctx)
+}
+
+func isInteractiveTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }

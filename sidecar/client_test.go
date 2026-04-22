@@ -47,3 +47,19 @@ func TestNormalizeBrainOverrideAcceptsHTTPOrigin(t *testing.T) {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
+
+func TestNormalizeBrainOverridePreservesReverseProxyPath(t *testing.T) {
+	got := normalizeBrainOverride("https://brain.example.com/jarvis")
+	want := "wss://brain.example.com/jarvis/sidecar/connect"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestNormalizeBrainOverrideAddsMissingWebsocketPath(t *testing.T) {
+	got := normalizeBrainOverride("wss://brain.example.com")
+	want := "wss://brain.example.com/sidecar/connect"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}

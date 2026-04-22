@@ -64,7 +64,16 @@ func normalizeBrainOverride(raw string) string {
 		return ""
 	}
 	if strings.HasPrefix(trimmed, "ws://") || strings.HasPrefix(trimmed, "wss://") {
-		return trimmed
+		u, err := url.Parse(trimmed)
+		if err != nil || u.Host == "" {
+			return trimmed
+		}
+		if u.Path == "" || u.Path == "/" {
+			u.Path = "/sidecar/connect"
+		}
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String()
 	}
 	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
 		u, err := url.Parse(trimmed)
@@ -75,14 +84,40 @@ func normalizeBrainOverride(raw string) string {
 		if u.Scheme == "https" {
 			wsScheme = "wss"
 		}
-		return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, u.Host)
+		path := strings.TrimRight(u.Path, "/")
+		if !strings.HasSuffix(path, "/sidecar/connect") {
+			path += "/sidecar/connect"
+		}
+		if path == "" {
+			path = "/sidecar/connect"
+		}
+		u.Scheme = wsScheme
+		u.Path = path
+		u.RawPath = ""
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String()
 	}
 
 	wsScheme := "wss"
 	if strings.Contains(trimmed, "localhost") || strings.Contains(trimmed, "127.0.0.1") || strings.Contains(trimmed, ":") {
 		wsScheme = "ws"
 	}
-	return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, trimmed)
+
+	host := trimmed
+	path := ""
+	if slash := strings.Index(trimmed, "/"); slash >= 0 {
+		host = trimmed[:slash]
+		path = trimmed[slash:]
+	}
+	path = strings.TrimRight(path, "/")
+	if !strings.HasSuffix(path, "/sidecar/connect") {
+		path += "/sidecar/connect"
+	}
+	if path == "" {
+		path = "/sidecar/connect"
+	}
+	return fmt.Sprintf("%s://%s%s", wsScheme, host, path)
 }
 
 func (c *SidecarClient) Start(ctx context.Context) {

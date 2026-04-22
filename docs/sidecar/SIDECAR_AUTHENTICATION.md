@@ -78,7 +78,7 @@ The brain creates a signed JWT containing:
 
 ### Step 3: User Copies Token to Sidecar
 
-The dashboard displays the JWT as a copyable string. The user pastes it into the sidecar process configuration (e.g., `~/.jarvis-sidecar/config.yaml`).
+The dashboard displays the JWT as a copyable string. The user runs `jarvis-sidecar --token <jwt>` on the target machine. During first-run onboarding, the sidecar prompts for the dashboard URL before saving `~/.jarvis-sidecar/config.yaml`, which lets the user override the token's default URL for reverse-proxied deployments.
 
 ### Step 4: Sidecar Verifies Token
 

@@ -25,6 +25,8 @@ GOOS=windows go build -o jarvis-sidecar.exe .
 ./jarvis-sidecar
 ```
 
+On first enrollment, the sidecar prompts for the dashboard URL before saving `~/.jarvis-sidecar/config.yaml`. Press Enter to keep the URL embedded in the token, or provide your reverse-proxied dashboard URL to override it.
+
 ## File Structure
 
 ### Core
@@ -32,7 +34,7 @@ GOOS=windows go build -o jarvis-sidecar.exe .
 | File | Purpose |
 |---|---|
 | `main.go` | Entry point, flag parsing, signal handling |
-| `config.go` | YAML config loading/saving (`~/.jarvis/sidecar.yaml`) |
+| `config.go` | YAML config loading/saving (`~/.jarvis-sidecar/config.yaml`) |
 | `types.go` | Shared types: capabilities, RPC messages, config structs |
 | `client.go` | WebSocket client, reconnect loop, preflight integration |
 | `handlers.go` | RPC handler registry (terminal, filesystem, clipboard, screenshot, config, system info) |

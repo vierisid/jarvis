@@ -224,6 +224,8 @@ Paste and run the copied command on the machine where you installed the sidecar:
 jarvis-sidecar --token <your-token>
 ```
 
+The first enrollment run prompts for the dashboard URL before saving the sidecar config. Press Enter to keep the URL from the token, or enter your reverse-proxied dashboard URL if this machine should connect somewhere other than the default.
+
 The sidecar saves the token locally, so on subsequent runs you just need:
 
 ```bash
