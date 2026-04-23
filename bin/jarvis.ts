@@ -376,7 +376,6 @@ switch (command) {
     await cmdDoctor();
     break;
   case 'uninstall':
-  case 'remove':
     await cmdUninstall();
     break;
   case 'version':
