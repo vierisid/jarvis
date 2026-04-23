@@ -53,12 +53,15 @@
     "@codemirror/view": "^6.40.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@xenova/transformers": "^2.17.2",
     "@xyflow/react": "^12.10.1",
     "codemirror": "^6.0.2",
     "discord.js": "^14.25.1",
     "edge-tts-universal": "^1.4.0",
     "highlight.js": "^11.11.1",
     "jose": "^6.2.0",
+    "lucide-react": "^1.9.0",
+    "onnxruntime-web": "^1.20.1",
     "openwakeword-wasm-browser": "^0.1.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -68,9 +71,7 @@
     "sharp": "^0.34.5",
     "tailwindcss": "^4.2.1",
     "tesseract.js": "^7.0.0",
-    "yaml": "^2.7.0",
-    "@xenova/transformers": "^2.17.2",
-    "onnxruntime-web": "^1.20.1"
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/bun": "latest"

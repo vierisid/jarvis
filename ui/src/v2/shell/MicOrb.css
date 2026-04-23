@@ -1,0 +1,64 @@
+.v2-orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.v2-orb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: var(--r-pill);
+}
+
+.v2-orb__svg {
+  overflow: visible;
+  display: block;
+}
+
+/* breathing ring for listening / speaking / awaiting-approval */
+@keyframes v2-orb-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  50%      { transform: scale(1.08); opacity: 0.6; }
+}
+
+@keyframes v2-orb-breathe-fast {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  50%      { transform: scale(1.04); opacity: 0.7; }
+}
+
+/* orbit for thinking dots */
+@keyframes v2-orb-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* horizontal listening pulse */
+@keyframes v2-orb-line {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+/* waveform bars */
+@keyframes v2-orb-wave-a { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+@keyframes v2-orb-wave-b { 0%, 100% { transform: scaleY(0.55); } 50% { transform: scaleY(0.8); } }
+@keyframes v2-orb-wave-c { 0%, 100% { transform: scaleY(0.9);  } 50% { transform: scaleY(0.45); } }
+@keyframes v2-orb-wave-d { 0%, 100% { transform: scaleY(0.6);  } 50% { transform: scaleY(0.95); } }
+@keyframes v2-orb-wave-e { 0%, 100% { transform: scaleY(0.4);  } 50% { transform: scaleY(0.7);  } }
+
+/* awaiting-approval amber ring — slow pulse, continuous */
+@keyframes v2-orb-approve {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-orb *[class*="v2-orb-anim"] {
+    animation: none !important;
+  }
+}

@@ -105,6 +105,21 @@
   line-height: var(--lh-body);
 }
 
+.v2-placeholder__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.v2-placeholder__hint {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
 .v2-placeholder__meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
