@@ -19,6 +19,8 @@ import {
   LLMManager,
   AnthropicProvider,
   OpenAIProvider,
+  CerebrasProvider,
+  LiteLLMProvider,
   OllamaProvider,
 } from '../src/llm/index.ts';
 
@@ -126,6 +128,47 @@ async function testProviders(config: any): Promise<void> {
     console.log('○ OpenAI: Not configured');
   }
 
+  // Test Cerebras
+  if (config.llm.cerebras?.api_key) {
+    if (config.llm.cerebras.api_key === '') {
+      console.log('⚠️  Cerebras: API key not set');
+    } else {
+      try {
+        const provider = new CerebrasProvider(
+          config.llm.cerebras.api_key,
+          config.llm.cerebras.model
+        );
+        const models = await provider.listModels();
+        manager.registerProvider(provider);
+        console.log(`✓ Cerebras: Connected (${models.length} models available)`);
+        hasProvider = true;
+      } catch (err) {
+        console.log(`✗ Cerebras: Connection failed - ${err}`);
+      }
+    }
+  } else {
+    console.log('○ Cerebras: Not configured');
+  }
+
+  // Test LiteLLM
+  if (config.llm.litellm?.base_url) {
+    try {
+      const provider = new LiteLLMProvider(
+        config.llm.litellm.base_url,
+        config.llm.litellm.model,
+        config.llm.litellm.api_key ?? ''
+      );
+      const models = await provider.listModels();
+      manager.registerProvider(provider);
+      console.log(`✓ LiteLLM: Connected (${models.length} models available)`);
+      hasProvider = true;
+    } catch (err) {
+      console.log(`✗ LiteLLM: Connection failed - ${err}`);
+    }
+  } else {
+    console.log('○ LiteLLM: Not configured');
+  }
+
   // Test Ollama
   if (config.llm.ollama) {
     try {
@@ -150,7 +193,7 @@ async function testProviders(config: any): Promise<void> {
 
   if (!hasProvider) {
     console.log('⚠️  No working providers found!');
-    console.log('   Please add at least one API key to your config.\n');
+    console.log('   Please add at least one provider configuration to your config.\n');
     return;
   }
 
