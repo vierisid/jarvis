@@ -185,11 +185,35 @@ jarvis stop             # Stop the daemon
 jarvis status           # Check if running
 jarvis doctor           # Verify environment & connectivity
 jarvis logs -f          # Follow live logs
-jarvis update           # Update to latest version
-jarvis uninstall        # Remove JARVIS from this machine
 ```
 
 The dashboard is available at `http://localhost:3142` once the daemon is running.
+
+### Updating
+
+`jarvis update` detects how you installed JARVIS and runs the right update command. Equivalent manual commands per install method:
+
+| Install method | `jarvis update` dispatches to |
+| --- | --- |
+| Bun global (`bun install -g @usejarvis/brain`) | `bun update -g @usejarvis/brain` |
+| `install.sh` (git clone under `~/.jarvis/daemon`) | `git pull --ff-only` + `bun install` |
+| Docker | Refused — run `docker pull <image> && docker rm -f jarvis && docker run ...` on the host |
+| Developer checkout | Refused — run `git pull` yourself |
+
+Run `jarvis doctor` to see what was detected and the exact commands for your install.
+
+### Removing JARVIS
+
+`jarvis uninstall` stops the daemon, removes autostart hooks, deletes `~/.jarvis`, and — where applicable — runs the correct package-manager uninstall. It does **not** touch sidecars.
+
+| Install method | `jarvis uninstall` dispatches to |
+| --- | --- |
+| Bun global | `bun uninstall -g @usejarvis/brain` + side-effect cleanup |
+| `install.sh` | `rm -rf ~/.jarvis/daemon` + CLI wrapper + side-effect cleanup |
+| Docker | Refused — run `docker rm -f jarvis` (and optionally `docker volume rm jarvis-data`) on the host |
+| Developer checkout | Side-effect cleanup only — your checkout is left in place |
+
+> **Tip:** If you already ran `bun uninstall -g @usejarvis/brain` without going through `jarvis uninstall`, your daemon may still be running and `~/.jarvis` is still on disk. Run `jarvis doctor` before uninstalling to see what will be cleaned up, or stop the daemon and remove `~/.jarvis` manually.
 
 ---
 

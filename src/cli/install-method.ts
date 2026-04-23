@@ -152,3 +152,45 @@ export function describeInstallMethod(info: InstallMethodInfo): string {
   };
   return labels[info.method];
 }
+
+export interface MethodCommands {
+  update: string;
+  uninstall: string;
+}
+
+/**
+ * Canonical update and uninstall commands for the given install method.
+ * `jarvis update` / `jarvis uninstall` delegate to these internally — the
+ * point of surfacing them here is so users can run them directly (e.g.
+ * from a doctor report) and understand what the CLI would do on their
+ * behalf.
+ */
+export function getMethodCommands(method: InstallMethod): MethodCommands {
+  switch (method) {
+    case 'docker':
+      return {
+        update: 'docker pull <image> && docker rm -f jarvis && docker run -d ... <image>',
+        uninstall: 'docker rm -f jarvis   # and `docker volume rm jarvis-data` to delete data',
+      };
+    case 'bun-global':
+      return {
+        update: 'jarvis update   # runs `bun update -g @usejarvis/brain`',
+        uninstall: 'jarvis uninstall   # runs `bun uninstall -g @usejarvis/brain` and cleans up',
+      };
+    case 'script':
+      return {
+        update: 'jarvis update   # runs `git pull` + `bun install`',
+        uninstall: 'jarvis uninstall   # removes ~/.jarvis and the CLI wrapper',
+      };
+    case 'dev':
+      return {
+        update: 'git pull && bun install   # manage your dev checkout yourself',
+        uninstall: 'rm -rf <your checkout>   # `jarvis uninstall` only cleans side effects',
+      };
+    case 'unknown':
+      return {
+        update: '(install method unknown — see `jarvis doctor`)',
+        uninstall: '(install method unknown — see `jarvis doctor`)',
+      };
+  }
+}

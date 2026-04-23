@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   c, printBanner, printOk, printWarn, printErr, printInfo, startSpinner, closeRL,
 } from './helpers.ts';
-import { detectInstallMethod, describeInstallMethod } from './install-method.ts';
+import { detectInstallMethod, describeInstallMethod, getMethodCommands } from './install-method.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
@@ -241,6 +241,12 @@ export async function runDoctor(): Promise<void> {
   } else {
     console.log(c.green('\nAll checks passed! JARVIS is ready.\n'));
   }
+
+  const commands = getMethodCommands(installInfo.method);
+  console.log(c.bold('Manage this install:'));
+  console.log(`  ${c.cyan('Update:   ')} ${commands.update}`);
+  console.log(`  ${c.cyan('Uninstall:')} ${commands.uninstall}`);
+  console.log('');
 
   closeRL();
 }

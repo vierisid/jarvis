@@ -7,7 +7,7 @@
  *   jarvis stop                             Stop the running daemon
  *   jarvis status                           Show daemon status
  *   jarvis onboard                          Interactive setup wizard
- *   jarvis uninstall                        Remove JARVIS from this machine
+ *   jarvis uninstall                        Remove JARVIS (detects install method)
  *   jarvis doctor                           Check environment & connectivity
  *   jarvis version                          Print version
  *   jarvis help                             Show this help
@@ -41,9 +41,9 @@ ${c.bold('Commands:')}
   ${c.cyan('restart')}   Restart the daemon (stop + start)
   ${c.cyan('status')}    Show daemon status
   ${c.cyan('logs')}      Tail the daemon log file
-  ${c.cyan('update')}    Update JARVIS to the latest version
+  ${c.cyan('update')}    Update JARVIS (dispatches based on install method)
   ${c.cyan('onboard')}   Interactive first-time setup wizard
-  ${c.cyan('uninstall')} Remove JARVIS and local data from this machine
+  ${c.cyan('uninstall')} Remove JARVIS (dispatches based on install method)
   ${c.cyan('doctor')}    Check environment and connectivity
   ${c.cyan('version')}   Print version number
   ${c.cyan('help')}      Show this help message
