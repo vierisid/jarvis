@@ -1,0 +1,164 @@
+/* v2 shell scoped styles.
+   All rules live under .jarvis-v2-root so the redesign cannot bleed into
+   the legacy UI while the feature flag is in play. */
+
+.jarvis-v2-root {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--lh-body);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.jarvis-v2-root *,
+.jarvis-v2-root *::before,
+.jarvis-v2-root *::after {
+  box-sizing: border-box;
+}
+
+.jarvis-v2-root h1,
+.jarvis-v2-root h2,
+.jarvis-v2-root h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.jarvis-v2-root code,
+.jarvis-v2-root pre,
+.jarvis-v2-root kbd {
+  font-family: var(--font-mono);
+}
+
+.jarvis-v2-root ::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ── Phase 0 placeholder only — remove when Phase 2 lands ── */
+
+.v2-placeholder {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  padding: var(--s-10) var(--s-12);
+}
+
+.v2-placeholder__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-placeholder__brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  display: inline-block;
+}
+
+.v2-placeholder__body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--s-6);
+  max-width: 720px;
+}
+
+.v2-placeholder__eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.v2-placeholder__title {
+  font-size: var(--text-3xl);
+  font-weight: 500;
+  max-width: 18ch;
+}
+
+.v2-placeholder__title em {
+  font-style: italic;
+  color: var(--accent);
+}
+
+.v2-placeholder__lede {
+  font-size: var(--text-lg);
+  color: var(--ink-2);
+  max-width: 52ch;
+  line-height: var(--lh-body);
+}
+
+.v2-placeholder__meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-6);
+  padding-top: var(--s-6);
+  border-top: var(--hair);
+  max-width: 640px;
+}
+
+.v2-placeholder__meta-cell dt {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s-1);
+}
+
+.v2-placeholder__meta-cell dd {
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+
+.v2-placeholder__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-placeholder__back {
+  background: none;
+  border: var(--hair);
+  padding: var(--s-2) var(--s-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: var(--r-0);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.v2-placeholder__back:hover {
+  background: var(--paper-3);
+}
+
+.v2-placeholder__back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
