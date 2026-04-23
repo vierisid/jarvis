@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchesSpeechWakePhrase, shouldSpeechWakeBeRunning } from "./useVoice.ts";
+import { matchesSpeechWakePhrase, shouldSpeechWakeBeRunning, classifySpeechWakeError } from "./useVoice.ts";
 
 describe("matchesSpeechWakePhrase", () => {
   test("accepts direct wake phrases", () => {
@@ -55,5 +55,33 @@ describe("shouldSpeechWakeBeRunning", () => {
 
   test("webspeech requires SpeechRecognition to be available", () => {
     expect(shouldSpeechWakeBeRunning({ ...base, speechRecognitionAvailable: false })).toBe(false);
+  });
+
+  test("stops running once speechWakeFatal is set, even if everything else is fine", () => {
+    expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true })).toBe(false);
+    expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true, voiceState: "speaking" })).toBe(false);
+    expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true, wakeEngine: "auto" })).toBe(false);
+  });
+});
+
+describe("classifySpeechWakeError", () => {
+  test("aborted and no-speech are expected lifecycle events", () => {
+    expect(classifySpeechWakeError("aborted")).toBe("expected");
+    expect(classifySpeechWakeError("no-speech")).toBe("expected");
+  });
+
+  test("audio-capture and network are transient", () => {
+    expect(classifySpeechWakeError("audio-capture")).toBe("transient");
+    expect(classifySpeechWakeError("network")).toBe("transient");
+  });
+
+  test("not-allowed and service-not-allowed are fatal (user/env action required)", () => {
+    expect(classifySpeechWakeError("not-allowed")).toBe("fatal");
+    expect(classifySpeechWakeError("service-not-allowed")).toBe("fatal");
+  });
+
+  test("bad-grammar and language-not-supported are fatal (config problems)", () => {
+    expect(classifySpeechWakeError("bad-grammar")).toBe("fatal");
+    expect(classifySpeechWakeError("language-not-supported")).toBe("fatal");
   });
 });

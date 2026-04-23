@@ -56,6 +56,32 @@ type SpeechWakeState = "stopped" | "starting" | "running" | "stopping";
 /** Minimum ms between two accepted wake matches. Prevents interim-result bursts. */
 const WAKE_COOLDOWN_MS = 500;
 
+/** After this many consecutive transient errors without a successful start, stop retrying. */
+const SPEECH_WAKE_MAX_CONSECUTIVE_ERRORS = 3;
+
+/**
+ * Classify a SpeechRecognition error so the caller can decide what to do:
+ *  - "expected":  normal part of the API lifecycle; ignore.
+ *  - "transient": may recover; retry with existing restart logic.
+ *  - "fatal":     user or environment requires manual intervention; stop.
+ * Exported for unit testing.
+ */
+export function classifySpeechWakeError(code: SpeechRecognitionErrorCode): "expected" | "transient" | "fatal" {
+  switch (code) {
+    case "aborted":
+    case "no-speech":
+      return "expected";
+    case "not-allowed":
+    case "service-not-allowed":
+    case "bad-grammar":
+    case "language-not-supported":
+      return "fatal";
+    case "audio-capture":
+    case "network":
+      return "transient";
+  }
+}
+
 /**
  * Pure decision function: given current inputs, should the Web Speech wake
  * recognizer be running right now? Exported for unit testing.
@@ -66,8 +92,11 @@ export function shouldSpeechWakeBeRunning(inputs: {
   voiceState: VoiceState;
   wakeEngine: WakeEngineChoice;
   speechRecognitionAvailable: boolean;
+  /** True once the recognizer has hit a non-recoverable error. */
+  speechWakeFatal?: boolean;
 }): boolean {
-  const { isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechRecognitionAvailable } = inputs;
+  const { isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
+  if (speechWakeFatal) return false;
   if (!isMicAvailable || !wakeWordEnabled || !speechRecognitionAvailable) return false;
   if (voiceState !== "idle" && voiceState !== "speaking") return false;
   if (wakeEngine === "openwakeword") return false;
@@ -103,6 +132,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
   const [ttsAudioPlaying, setTtsAudioPlaying] = useState(false);
   const [activeWakeEngine, setActiveWakeEngine] = useState<ActiveWakeEngine>("none");
+  const [speechWakeFatal, setSpeechWakeFatal] = useState(false);
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -125,6 +155,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const speechWakeRef = useRef<SpeechRecognition | null>(null);
   const speechWakeStateRef = useRef<SpeechWakeState>("stopped");
   const speechWakeRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechWakeFatalRef = useRef(false);
+  const speechWakeConsecutiveErrorsRef = useRef(0);
   const lastWakeAtRef = useRef(0);
   const isMicAvailableRef = useRef(false);
   const configuredWakeEngineRef = useRef<WakeEngineChoice>(wakeEngine);
@@ -137,6 +169,14 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   useEffect(() => { wakeWordEnabledRef.current = wakeWordEnabled; }, [wakeWordEnabled]);
   useEffect(() => { isMicAvailableRef.current = isMicAvailable; }, [isMicAvailable]);
   useEffect(() => { configuredWakeEngineRef.current = wakeEngine; }, [wakeEngine]);
+  useEffect(() => { speechWakeFatalRef.current = speechWakeFatal; }, [speechWakeFatal]);
+
+  // Reset fatal state when the user changes engine choice or toggles wake word.
+  // A config change is a clear signal that the user wants us to retry.
+  useEffect(() => {
+    setSpeechWakeFatal(false);
+    speechWakeConsecutiveErrorsRef.current = 0;
+  }, [wakeEngine, wakeWordEnabled]);
 
   // --- AudioContext helper ---
   const getAudioContext = useCallback((): AudioContext => {
@@ -271,6 +311,20 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // The public API is startSpeechWakeIfNeeded / stopSpeechWakeIfNeeded — both
   // idempotent and safe to call from any code path.
 
+  // Promote the speech-wake recognizer to "permanently failed" until the user
+  // changes config (which resets the flag). For "auto", fall back to local OWW.
+  const markSpeechWakeFatal = useCallback((): void => {
+    speechWakeFatalRef.current = true;
+    setSpeechWakeFatal(true);
+    setIsWakeWordReady(false);
+    if (configuredWakeEngineRef.current === "auto") {
+      startWakeWordEngine();
+      setActiveWakeEngine("openwakeword");
+    } else {
+      setActiveWakeEngine("none");
+    }
+  }, [startWakeWordEngine]);
+
   const shouldSpeechWakeRun = useCallback((): boolean => {
     return shouldSpeechWakeBeRunning({
       isMicAvailable: isMicAvailableRef.current,
@@ -278,6 +332,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       voiceState: voiceStateRef.current,
       wakeEngine: configuredWakeEngineRef.current,
       speechRecognitionAvailable: isSpeechRecognitionAvailable(),
+      speechWakeFatal: speechWakeFatalRef.current,
     });
   }, [isSpeechRecognitionAvailable]);
 
@@ -298,6 +353,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
 
       recognition.onstart = () => {
         speechWakeStateRef.current = "running";
+        // A successful start means any prior transient error streak is resolved.
+        speechWakeConsecutiveErrorsRef.current = 0;
+        setIsWakeWordReady(true);
       };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -347,7 +405,22 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        console.warn(`[Voice] Speech wake recognizer error: ${event.error}`, event.message);
+        const kind = classifySpeechWakeError(event.error);
+        if (kind === "expected") return; // aborted / no-speech are part of normal lifecycle
+
+        if (kind === "transient") {
+          speechWakeConsecutiveErrorsRef.current += 1;
+          console.warn(`[Voice] Speech wake transient error (${speechWakeConsecutiveErrorsRef.current}/${SPEECH_WAKE_MAX_CONSECUTIVE_ERRORS}): ${event.error}`, event.message);
+          if (speechWakeConsecutiveErrorsRef.current >= SPEECH_WAKE_MAX_CONSECUTIVE_ERRORS) {
+            console.error(`[Voice] Speech wake disabled after ${SPEECH_WAKE_MAX_CONSECUTIVE_ERRORS} consecutive "${event.error}" errors`);
+            markSpeechWakeFatal();
+          }
+          return; // otherwise let the existing onend-driven restart handle it
+        }
+
+        // kind === "fatal"
+        console.error(`[Voice] Speech wake recognizer fatal error: ${event.error}`, event.message);
+        markSpeechWakeFatal();
       };
 
       recognition.onend = () => {
@@ -444,10 +517,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       voiceState,
       wakeEngine,
       speechRecognitionAvailable: isSpeechRecognitionAvailable(),
+      speechWakeFatal,
     });
     if (shouldRun) startSpeechWakeIfNeeded();
     else stopSpeechWakeIfNeeded();
-  }, [isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
+  }, [isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechWakeFatal, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
 
   // Restart wake word listening when returning to idle (with delay for mic release)
   useEffect(() => {
