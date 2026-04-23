@@ -20,7 +20,6 @@ import {
   AnthropicProvider,
   OpenAIProvider,
   CerebrasProvider,
-  LiteLLMProvider,
   OllamaProvider,
 } from '../src/llm/index.ts';
 
@@ -148,25 +147,6 @@ async function testProviders(config: any): Promise<void> {
     }
   } else {
     console.log('○ Cerebras: Not configured');
-  }
-
-  // Test LiteLLM
-  if (config.llm.litellm?.base_url) {
-    try {
-      const provider = new LiteLLMProvider(
-        config.llm.litellm.base_url,
-        config.llm.litellm.model,
-        config.llm.litellm.api_key ?? ''
-      );
-      const models = await provider.listModels();
-      manager.registerProvider(provider);
-      console.log(`✓ LiteLLM: Connected (${models.length} models available)`);
-      hasProvider = true;
-    } catch (err) {
-      console.log(`✗ LiteLLM: Connection failed - ${err}`);
-    }
-  } else {
-    console.log('○ LiteLLM: Not configured');
   }
 
   // Test Ollama

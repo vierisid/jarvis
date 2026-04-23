@@ -771,7 +771,6 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             anthropic: config.llm.anthropic ? { model: config.llm.anthropic.model } : null,
             openai: config.llm.openai ? { model: config.llm.openai.model } : null,
             cerebras: config.llm.cerebras ? { model: config.llm.cerebras.model } : null,
-            litellm: config.llm.litellm ? { model: config.llm.litellm.model, base_url: config.llm.litellm.base_url } : null,
             groq: config.llm.groq ? { model: config.llm.groq.model } : null,
             ollama: config.llm.ollama ?? null,
           },

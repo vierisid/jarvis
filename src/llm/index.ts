@@ -13,7 +13,6 @@ export type {
 export { AnthropicProvider } from './anthropic.ts';
 export { OpenAIProvider } from './openai.ts';
 export { CerebrasProvider } from './cerebras.ts';
-export { LiteLLMProvider } from './litellm.ts';
 export { GroqProvider } from './groq.ts';
 export { GeminiProvider } from './gemini.ts';
 export { OllamaProvider } from './ollama.ts';

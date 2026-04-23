@@ -11,7 +11,6 @@ import type { JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { CerebrasProvider } from '../llm/cerebras.ts';
-import { LiteLLMProvider } from '../llm/litellm.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
@@ -23,7 +22,6 @@ import type { LLMManager } from '../llm/manager.ts';
 const KEY_ANTHROPIC = 'llm.anthropic.api_key';
 const KEY_OPENAI = 'llm.openai.api_key';
 const KEY_CEREBRAS = 'llm.cerebras.api_key';
-const KEY_LITELLM = 'llm.litellm.api_key';
 const KEY_GROQ = 'llm.groq.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
 const KEY_OPENROUTER = 'llm.openrouter.api_key';
@@ -34,8 +32,6 @@ const SETTING_FALLBACK = 'llm.fallback';
 const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
 const SETTING_CEREBRAS_MODEL = 'llm.cerebras.model';
-const SETTING_LITELLM_MODEL = 'llm.litellm.model';
-const SETTING_LITELLM_BASE_URL = 'llm.litellm.base_url';
 const SETTING_GROQ_MODEL = 'llm.groq.model';
 const SETTING_GEMINI_MODEL = 'llm.gemini.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
@@ -48,7 +44,6 @@ export type LLMSettingsResponse = {
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
   cerebras: { model: string; has_api_key: boolean } | null;
-  litellm: { base_url: string; model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
@@ -67,8 +62,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
   const cerebrasModel = getSetting(SETTING_CEREBRAS_MODEL) ?? config.llm.cerebras?.model ?? 'gpt-oss-120b';
-  const litellmModel = getSetting(SETTING_LITELLM_MODEL) ?? config.llm.litellm?.model ?? 'openai/gpt-4o-mini';
-  const litellmBaseUrl = getSetting(SETTING_LITELLM_BASE_URL) ?? config.llm.litellm?.base_url ?? 'http://localhost:4000/v1';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
@@ -79,7 +72,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
   const hasCerebrasKey = hasSecret(KEY_CEREBRAS) || !!config.llm.cerebras?.api_key;
-  const hasLiteLLMKey = hasSecret(KEY_LITELLM) || !!config.llm.litellm?.api_key;
   const hasGroqKey = hasSecret(KEY_GROQ) || !!config.llm.groq?.api_key;
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
   const hasOpenrouterKey = hasSecret(KEY_OPENROUTER) || !!config.llm.openrouter?.api_key;
@@ -90,7 +82,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey },
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     cerebras: { model: cerebrasModel, has_api_key: hasCerebrasKey },
-    litellm: { base_url: litellmBaseUrl, model: litellmModel, has_api_key: hasLiteLLMKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
     ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
@@ -109,7 +100,6 @@ export function saveLLMSettings(
     anthropic?: { api_key?: string; model?: string };
     openai?: { api_key?: string; model?: string };
     cerebras?: { api_key?: string; model?: string };
-    litellm?: { api_key?: string; base_url?: string; model?: string };
     groq?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
     ollama?: { base_url?: string; model?: string };
@@ -168,25 +158,6 @@ export function saveLLMSettings(
       ...config.llm.cerebras,
       model: body.cerebras.model ?? config.llm.cerebras?.model,
       api_key: body.cerebras.api_key ?? getCerebrasApiKey(config) ?? '',
-    };
-  }
-
-  // LiteLLM
-  if (body.litellm) {
-    if (body.litellm.model) {
-      setSetting(SETTING_LITELLM_MODEL, body.litellm.model);
-    }
-    if (body.litellm.base_url) {
-      setSetting(SETTING_LITELLM_BASE_URL, body.litellm.base_url);
-    }
-    if (body.litellm.api_key) {
-      setSecret(KEY_LITELLM, body.litellm.api_key);
-    }
-    config.llm.litellm = {
-      ...config.llm.litellm,
-      model: body.litellm.model ?? config.llm.litellm?.model,
-      base_url: body.litellm.base_url ?? config.llm.litellm?.base_url,
-      api_key: body.litellm.api_key ?? getLiteLLMApiKey(config) ?? '',
     };
   }
 
@@ -273,13 +244,6 @@ function getCerebrasApiKey(config: JarvisConfig): string | null {
 }
 
 /**
- * Resolve the LiteLLM API key: keychain > config.yaml > env var.
- */
-function getLiteLLMApiKey(config: JarvisConfig): string | null {
-  return getSecret(KEY_LITELLM) ?? config.llm.litellm?.api_key ?? null;
-}
-
-/**
  * Resolve the Groq API key: keychain > config.yaml > env var.
  */
 function getGroqApiKey(config: JarvisConfig): string | null {
@@ -348,23 +312,6 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
         ? keychainCerebrasKey
         : (config.llm.cerebras?.api_key ?? ''),
       model: dbCerebrasModel ?? config.llm.cerebras?.model,
-    };
-  }
-
-  // LiteLLM
-  const dbLiteLLMModel = getSetting(SETTING_LITELLM_MODEL);
-  const dbLiteLLMUrl = getSetting(SETTING_LITELLM_BASE_URL);
-  const keychainLiteLLMKey = getSecret(KEY_LITELLM);
-  if (dbLiteLLMModel || dbLiteLLMUrl || keychainLiteLLMKey) {
-    config.llm.litellm = {
-      ...config.llm.litellm,
-      api_key: (!process.env.JARVIS_LITELLM_KEY && keychainLiteLLMKey)
-        ? keychainLiteLLMKey
-        : (config.llm.litellm?.api_key ?? ''),
-      model: dbLiteLLMModel ?? config.llm.litellm?.model,
-      base_url: (!process.env.JARVIS_LITELLM_URL && dbLiteLLMUrl)
-        ? dbLiteLLMUrl
-        : (config.llm.litellm?.base_url ?? 'http://localhost:4000/v1'),
     };
   }
 
@@ -441,10 +388,6 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new CerebrasProvider(llm.cerebras.api_key, llm.cerebras.model));
     console.log('[LLM] Hot-reloaded Cerebras provider');
   }
-  if (llm.litellm?.base_url) {
-    providers.push(new LiteLLMProvider(llm.litellm.base_url, llm.litellm.model, llm.litellm.api_key ?? ''));
-    console.log('[LLM] Hot-reloaded LiteLLM provider');
-  }
   if (llm.groq?.api_key) {
     providers.push(new GroqProvider(llm.groq.api_key, llm.groq.model));
     console.log('[LLM] Hot-reloaded Groq provider');
@@ -495,12 +438,6 @@ export async function testLLMProvider(
       const key = opts.api_key || getSecret(KEY_CEREBRAS) || config.llm.cerebras?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new CerebrasProvider(key, opts.model ?? config.llm.cerebras?.model);
-    } else if (opts.provider === 'litellm') {
-      instance = new LiteLLMProvider(
-        opts.base_url ?? config.llm.litellm?.base_url,
-        opts.model ?? config.llm.litellm?.model,
-        opts.api_key || getSecret(KEY_LITELLM) || config.llm.litellm?.api_key || '',
-      );
     } else if (opts.provider === 'groq') {
       const key = opts.api_key || getSecret(KEY_GROQ) || config.llm.groq?.api_key;
       if (!key) return { ok: false, error: 'API key required' };

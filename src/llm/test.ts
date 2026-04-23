@@ -4,7 +4,7 @@
  * Run with: bun run src/llm/test.ts
  */
 
-import { LLMManager, AnthropicProvider, OpenAIProvider, CerebrasProvider, LiteLLMProvider, OllamaProvider } from './index.ts';
+import { LLMManager, AnthropicProvider, OpenAIProvider, CerebrasProvider, OllamaProvider } from './index.ts';
 import { loadConfig } from '../config/index.ts';
 
 async function testProviders() {
@@ -39,16 +39,6 @@ async function testProviders() {
     );
     manager.registerProvider(cerebras);
     console.log('Registered Cerebras provider');
-  }
-
-  if (config.llm.litellm?.base_url) {
-    const litellm = new LiteLLMProvider(
-      config.llm.litellm.base_url,
-      config.llm.litellm.model,
-      config.llm.litellm.api_key ?? ''
-    );
-    manager.registerProvider(litellm);
-    console.log('Registered LiteLLM provider');
   }
 
   if (config.llm.ollama) {

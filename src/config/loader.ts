@@ -75,16 +75,6 @@ function applyEnvOverrides(config: JarvisConfig): void {
     config.llm.cerebras.api_key = env.JARVIS_CEREBRAS_KEY;
   }
 
-  if (env.JARVIS_LITELLM_KEY) {
-    if (!config.llm.litellm) config.llm.litellm = { api_key: '', base_url: 'http://localhost:4000/v1', model: 'openai/gpt-4o-mini' };
-    config.llm.litellm.api_key = env.JARVIS_LITELLM_KEY;
-  }
-
-  if (env.JARVIS_LITELLM_URL) {
-    if (!config.llm.litellm) config.llm.litellm = { api_key: '', base_url: 'http://localhost:4000/v1', model: 'openai/gpt-4o-mini' };
-    config.llm.litellm.base_url = env.JARVIS_LITELLM_URL;
-  }
-
   if (env.JARVIS_GROQ_KEY) {
     if (!config.llm.groq) config.llm.groq = { api_key: '', model: 'llama-3.3-70b-versatile' };
     config.llm.groq.api_key = env.JARVIS_GROQ_KEY;

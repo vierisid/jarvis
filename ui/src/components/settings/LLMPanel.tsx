@@ -7,7 +7,6 @@ type LLMConfig = {
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
   cerebras: { model: string; has_api_key: boolean } | null;
-  litellm: { base_url: string; model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
@@ -42,13 +41,6 @@ const CEREBRAS_MODELS = [
   "llama-3.3-70b",
   "llama-4-scout-17b-16e-instruct",
   "qwen-3-235b-a22b-instruct-2507",
-];
-
-const LITELLM_MODELS = [
-  "openai/gpt-4o-mini",
-  "anthropic/claude-3-5-sonnet-latest",
-  "groq/llama-3.3-70b-versatile",
-  "ollama/llama3.1",
 ];
 
 const GROQ_MODELS = [
@@ -98,13 +90,12 @@ const OPENROUTER_MODELS = [
   "mistralai/mistral-large",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "cerebras", "litellm", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
+const PROVIDERS = ["anthropic", "openai", "cerebras", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   cerebras: "Cerebras",
-  litellm: "LiteLLM",
   groq: "Groq",
   gemini: "Gemini",
   ollama: "Ollama",
@@ -133,12 +124,6 @@ export function LLMPanel() {
   const [cerebrasKey, setCerebrasKey] = useState("");
   const [cerebrasModel, setCerebrasModel] = useState("gpt-oss-120b");
   const [cerebrasCustomModel, setCerebrasCustomModel] = useState("");
-
-  // LiteLLM
-  const [litellmKey, setLitellmKey] = useState("");
-  const [litellmBaseUrl, setLitellmBaseUrl] = useState("http://localhost:4000/v1");
-  const [litellmModel, setLitellmModel] = useState("openai/gpt-4o-mini");
-  const [litellmCustomModel, setLitellmCustomModel] = useState("");
 
   // Groq
   const [groqKey, setGroqKey] = useState("");
@@ -206,17 +191,6 @@ export function LLMPanel() {
       } else {
         setCerebrasModel("custom");
         setCerebrasCustomModel(m);
-      }
-    }
-    if (config.litellm) {
-      setLitellmBaseUrl(config.litellm.base_url);
-      const m = config.litellm.model;
-      if (LITELLM_MODELS.includes(m)) {
-        setLitellmModel(m);
-        setLitellmCustomModel("");
-      } else {
-        setLitellmModel("custom");
-        setLitellmCustomModel(m);
       }
     }
     if (config.groq) {
@@ -296,11 +270,6 @@ export function LLMPanel() {
           model: resolveModel(cerebrasModel, cerebrasCustomModel),
           ...(cerebrasKey ? { api_key: cerebrasKey } : {}),
         },
-        litellm: {
-          base_url: litellmBaseUrl,
-          model: resolveModel(litellmModel, litellmCustomModel),
-          ...(litellmKey ? { api_key: litellmKey } : {}),
-        },
         groq: {
           model: resolveModel(groqModel, groqCustomModel),
           ...(groqKey ? { api_key: groqKey } : {}),
@@ -330,7 +299,6 @@ export function LLMPanel() {
       setAnthropicKey("");
       setOpenaiKey("");
       setCerebrasKey("");
-      setLitellmKey("");
       setGroqKey("");
       setGeminiKey("");
       setOpenrouterKey("");
@@ -358,10 +326,6 @@ export function LLMPanel() {
       } else if (provider === "cerebras") {
         body.api_key = cerebrasKey || undefined;
         body.model = resolveModel(cerebrasModel, cerebrasCustomModel);
-      } else if (provider === "litellm") {
-        body.api_key = litellmKey || undefined;
-        body.base_url = litellmBaseUrl;
-        body.model = resolveModel(litellmModel, litellmCustomModel);
       } else if (provider === "groq") {
         body.api_key = groqKey || undefined;
         body.model = resolveModel(groqModel, groqCustomModel);
@@ -503,29 +467,6 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("cerebras")}
           expanded={!!expanded.cerebras}
           onToggleExpand={() => setExpanded((s) => ({ ...s, cerebras: !s.cerebras }))}
-        />
-
-        <ProviderSection
-          name="LiteLLM"
-          provider="litellm"
-          isPrimary={primary === "litellm"}
-          hasKey={!!config.litellm?.base_url}
-          apiKey={litellmKey}
-          onApiKeyChange={setLitellmKey}
-          model={litellmModel}
-          customModel={litellmCustomModel}
-          onModelChange={setLitellmModel}
-          onCustomModelChange={setLitellmCustomModel}
-          models={LITELLM_MODELS}
-          testing={testing === "litellm"}
-          testResult={testResult.litellm}
-          onTest={() => handleTest("litellm")}
-          isFallback={fallback.includes("litellm")}
-          onFallbackToggle={() => toggleFallback("litellm")}
-          expanded={!!expanded.litellm}
-          onToggleExpand={() => setExpanded((s) => ({ ...s, litellm: !s.litellm }))}
-          baseUrl={litellmBaseUrl}
-          onBaseUrlChange={setLitellmBaseUrl}
         />
 
         <ProviderSection
