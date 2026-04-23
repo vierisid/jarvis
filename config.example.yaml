@@ -31,11 +31,6 @@ llm:
     api_key: "sk-..."
     model: "gpt-4o"
 
-  # xAI (Grok, OpenAI-compatible) configuration
-  # xai:
-  #   api_key: "xai-..."
-  #   model: "grok-4-0709"
-
   # DeepSeek (OpenAI-compatible) configuration
   # deepseek:
   #   api_key: "sk-..."

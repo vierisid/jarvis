@@ -8,7 +8,6 @@ import {
   LLMManager,
   AnthropicProvider,
   OpenAIProvider,
-  XAIProvider,
   DeepSeekProvider,
   OllamaProvider,
 } from './index.ts';
@@ -37,15 +36,6 @@ async function testProviders() {
     );
     manager.registerProvider(openai);
     console.log('Registered OpenAI provider');
-  }
-
-  if (config.llm.xai?.api_key) {
-    const xai = new XAIProvider(
-      config.llm.xai.api_key,
-      config.llm.xai.model
-    );
-    manager.registerProvider(xai);
-    console.log('Registered xAI provider');
   }
 
   if (config.llm.deepseek?.api_key) {

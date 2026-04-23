@@ -157,7 +157,6 @@ export type JarvisConfig = {
     fallback: string[];
     anthropic?: { api_key: string; model?: string };
     openai?: { api_key: string; model?: string };
-    xai?: { api_key: string; model?: string };
     deepseek?: { api_key: string; model?: string };
     groq?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
@@ -241,10 +240,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     openai: {
       api_key: '',
       model: 'gpt-5.4',
-    },
-    xai: {
-      api_key: '',
-      model: 'grok-4-0709',
     },
     deepseek: {
       api_key: '',

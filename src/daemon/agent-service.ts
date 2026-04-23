@@ -16,7 +16,6 @@ import type { PersonalityModel } from '../personality/model.ts';
 import { LLMManager } from '../llm/manager.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
-import { XAIProvider } from '../llm/xai.ts';
 import { DeepSeekProvider } from '../llm/deepseek.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
@@ -352,17 +351,6 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered OpenAI provider');
-    }
-
-    // Register xAI
-    if (llm.xai?.api_key) {
-      const provider = new XAIProvider(
-        llm.xai.api_key,
-        llm.xai.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered xAI provider');
     }
 
     // Register DeepSeek

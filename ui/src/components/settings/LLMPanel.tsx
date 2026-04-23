@@ -6,7 +6,6 @@ type LLMConfig = {
   fallback: string[];
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
-  xai: { model: string; has_api_key: boolean } | null;
   deepseek: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
@@ -35,13 +34,6 @@ const OPENAI_MODELS = [
   "gpt-4.1",
   "o3",
   "o4-mini",
-];
-
-const XAI_MODELS = [
-  "grok-4-0709",
-  "grok-code-fast-1",
-  "grok-3",
-  "grok-3-mini",
 ];
 
 const DEEPSEEK_MODELS = [
@@ -96,12 +88,11 @@ const OPENROUTER_MODELS = [
   "mistralai/mistral-large",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "xai", "deepseek", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
+const PROVIDERS = ["anthropic", "openai", "deepseek", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
-  xai: "xAI",
   deepseek: "DeepSeek",
   groq: "Groq",
   gemini: "Gemini",
@@ -126,11 +117,6 @@ export function LLMPanel() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-5.4");
   const [openaiCustomModel, setOpenaiCustomModel] = useState("");
-
-  // xAI
-  const [xaiKey, setXaiKey] = useState("");
-  const [xaiModel, setXaiModel] = useState("grok-4-0709");
-  const [xaiCustomModel, setXaiCustomModel] = useState("");
 
   // DeepSeek
   const [deepseekKey, setDeepseekKey] = useState("");
@@ -193,16 +179,6 @@ export function LLMPanel() {
       } else {
         setOpenaiModel("custom");
         setOpenaiCustomModel(m);
-      }
-    }
-    if (config.xai) {
-      const m = config.xai.model;
-      if (XAI_MODELS.includes(m)) {
-        setXaiModel(m);
-        setXaiCustomModel("");
-      } else {
-        setXaiModel("custom");
-        setXaiCustomModel(m);
       }
     }
     if (config.deepseek) {
@@ -288,10 +264,6 @@ export function LLMPanel() {
           model: resolveModel(openaiModel, openaiCustomModel),
           ...(openaiKey ? { api_key: openaiKey } : {}),
         },
-        xai: {
-          model: resolveModel(xaiModel, xaiCustomModel),
-          ...(xaiKey ? { api_key: xaiKey } : {}),
-        },
         deepseek: {
           model: resolveModel(deepseekModel, deepseekCustomModel),
           ...(deepseekKey ? { api_key: deepseekKey } : {}),
@@ -324,7 +296,6 @@ export function LLMPanel() {
       setMessage({ text: resp.message, type: "ok" });
       setAnthropicKey("");
       setOpenaiKey("");
-      setXaiKey("");
       setDeepseekKey("");
       setGroqKey("");
       setGeminiKey("");
@@ -350,9 +321,6 @@ export function LLMPanel() {
       } else if (provider === "openai") {
         body.api_key = openaiKey || undefined;
         body.model = resolveModel(openaiModel, openaiCustomModel);
-      } else if (provider === "xai") {
-        body.api_key = xaiKey || undefined;
-        body.model = resolveModel(xaiModel, xaiCustomModel);
       } else if (provider === "deepseek") {
         body.api_key = deepseekKey || undefined;
         body.model = resolveModel(deepseekModel, deepseekCustomModel);
@@ -476,27 +444,6 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("openai")}
           expanded={!!expanded.openai}
           onToggleExpand={() => setExpanded((s) => ({ ...s, openai: !s.openai }))}
-        />
-
-        <ProviderSection
-          name="xAI"
-          provider="xai"
-          isPrimary={primary === "xai"}
-          hasKey={config.xai?.has_api_key ?? false}
-          apiKey={xaiKey}
-          onApiKeyChange={setXaiKey}
-          model={xaiModel}
-          customModel={xaiCustomModel}
-          onModelChange={setXaiModel}
-          onCustomModelChange={setXaiCustomModel}
-          models={XAI_MODELS}
-          testing={testing === "xai"}
-          testResult={testResult.xai}
-          onTest={() => handleTest("xai")}
-          isFallback={fallback.includes("xai")}
-          onFallbackToggle={() => toggleFallback("xai")}
-          expanded={!!expanded.xai}
-          onToggleExpand={() => setExpanded((s) => ({ ...s, xai: !s.xai }))}
         />
 
         <ProviderSection

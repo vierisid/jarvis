@@ -19,7 +19,6 @@ import {
   LLMManager,
   AnthropicProvider,
   OpenAIProvider,
-  XAIProvider,
   DeepSeekProvider,
   OllamaProvider,
 } from '../src/llm/index.ts';
@@ -126,28 +125,6 @@ async function testProviders(config: any): Promise<void> {
     }
   } else {
     console.log('○ OpenAI: Not configured');
-  }
-
-  // Test xAI
-  if (config.llm.xai?.api_key) {
-    if (config.llm.xai.api_key === '') {
-      console.log('⚠️  xAI: API key not set');
-    } else {
-      try {
-        const provider = new XAIProvider(
-          config.llm.xai.api_key,
-          config.llm.xai.model
-        );
-        const models = await provider.listModels();
-        manager.registerProvider(provider);
-        console.log(`✓ xAI: Connected (${models.length} models available)`);
-        hasProvider = true;
-      } catch (err) {
-        console.log(`✗ xAI: Connection failed - ${err}`);
-      }
-    }
-  } else {
-    console.log('○ xAI: Not configured');
   }
 
   // Test DeepSeek

@@ -1,7 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
-import { XAIProvider } from './xai.ts';
 import { DeepSeekProvider } from './deepseek.ts';
 import { GroqProvider } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
@@ -25,11 +24,6 @@ describe('LLM Provider Types', () => {
   test('GroqProvider can be instantiated', () => {
     const provider = new GroqProvider('test-key', 'test-model');
     expect(provider.name).toBe('groq');
-  });
-
-  test('XAIProvider can be instantiated', () => {
-    const provider = new XAIProvider('test-key', 'grok-4-0709');
-    expect(provider.name).toBe('xai');
   });
 
   test('DeepSeekProvider can be instantiated', () => {
@@ -255,11 +249,6 @@ describe('Provider URLs', () => {
     expect(provider.apiUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
   });
 
-  test('XAIProvider uses correct API URL', () => {
-    const provider = new XAIProvider('test-key') as any;
-    expect(provider.apiUrl).toBe('https://api.x.ai/v1/chat/completions');
-  });
-
   test('DeepSeekProvider uses correct API URL', () => {
     const provider = new DeepSeekProvider('test-key') as any;
     expect(provider.apiUrl).toBe('https://api.deepseek.com/chat/completions');
@@ -310,11 +299,6 @@ describe('Default Models', () => {
   test('OpenRouterProvider has correct default model', () => {
     const provider = new OpenRouterProvider('test-key') as any;
     expect(provider.defaultModel).toBe('anthropic/claude-sonnet-4');
-  });
-
-  test('XAIProvider has correct default model', () => {
-    const provider = new XAIProvider('test-key') as any;
-    expect(provider.defaultModel).toBe('grok-4-0709');
   });
 
   test('DeepSeekProvider has correct default model', () => {
