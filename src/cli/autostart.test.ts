@@ -4,6 +4,7 @@ import {
   decodeLaunchctlOutput,
   isLaunchdAlreadyLoaded,
   probeSystemdUserService,
+  scheduleSystemdRestart,
   type SpawnResultLike,
   type SpawnSyncFn,
 } from './autostart.ts';
@@ -153,6 +154,30 @@ describe('isLaunchdAlreadyLoaded', () => {
   test('returns false for unrelated failure messages', () => {
     const stderr = new TextEncoder().encode('Load failed: 5: Input/output error');
     expect(isLaunchdAlreadyLoaded({ exitCode: 1, stderr })).toBe(false);
+  });
+});
+
+describe('scheduleSystemdRestart', () => {
+  test('uses --no-block so caller returns before systemd cycles the unit', () => {
+    const calls: string[][] = [];
+    const spawn: SpawnSyncFn = (cmd) => {
+      calls.push(cmd);
+      return ok;
+    };
+    expect(scheduleSystemdRestart(spawn)).toBe(true);
+    expect(calls[0]).toEqual(['systemctl', '--user', '--no-block', 'restart', 'jarvis.service']);
+  });
+
+  test('returns false when systemctl exits non-zero', () => {
+    const spawn: SpawnSyncFn = () => ({ exitCode: 5 });
+    expect(scheduleSystemdRestart(spawn)).toBe(false);
+  });
+
+  test('returns false when spawn throws', () => {
+    const spawn: SpawnSyncFn = () => {
+      throw new Error('boom');
+    };
+    expect(scheduleSystemdRestart(spawn)).toBe(false);
   });
 });
 

@@ -181,11 +181,15 @@ async function startSystemdService(): Promise<boolean> {
   }
 }
 
-function scheduleSystemdRestart(): boolean {
-  return spawnDetachedShell(
-    'sleep 1; systemctl --user restart jarvis.service >/dev/null 2>&1',
-    ['bash', 'systemctl'],
-  );
+export function scheduleSystemdRestart(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
+  // --no-block returns immediately; systemd queues the restart through its own
+  // lifecycle, so the calling HTTP handler can return before the unit cycles.
+  try {
+    const res = spawnSync(['systemctl', '--user', '--no-block', 'restart', 'jarvis.service']);
+    return res.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function uninstallSystemd(): Promise<boolean> {
