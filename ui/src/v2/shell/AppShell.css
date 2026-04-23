@@ -1,0 +1,41 @@
+/* v2 shell layout — header · thread+rail · composer
+   Grid areas keep the rail full-height beside the thread+composer column. */
+
+.v2-shell {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "header   header"
+    "thread   rail"
+    "composer rail";
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.v2-shell__header {
+  grid-area: header;
+  border-bottom: var(--hair);
+}
+
+.v2-shell__thread {
+  grid-area: thread;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.v2-shell__composer {
+  grid-area: composer;
+  border-top: var(--hair);
+}
+
+.v2-shell__rail {
+  grid-area: rail;
+  border-left: var(--hair);
+  background: var(--paper-2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
