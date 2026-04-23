@@ -111,6 +111,29 @@ export function classifySpeechWakeError(code: SpeechRecognitionErrorCode): "expe
 }
 
 /**
+ * Pure decision function: which wake engine should own the mic right now?
+ * Consolidates the engine-selection rules (config + SpeechRecognition
+ * availability + fatal state) so the effect that drives OpenWakeWord /
+ * the active-engine indicator can't drift from the test expectations.
+ * Exported for unit testing.
+ */
+export function selectActiveWakeEngine(inputs: {
+  isMicAvailable: boolean;
+  wakeWordEnabled: boolean;
+  wakeEngine: WakeEngineChoice;
+  speechRecognitionAvailable: boolean;
+  speechWakeFatal: boolean;
+}): ActiveWakeEngine {
+  const { isMicAvailable, wakeWordEnabled, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
+  if (!isMicAvailable || !wakeWordEnabled) return "none";
+  if (wakeEngine === "openwakeword") return "openwakeword";
+  const speechUsable = speechRecognitionAvailable && !speechWakeFatal;
+  if (wakeEngine === "webspeech") return speechUsable ? "webspeech" : "none";
+  // "auto": prefer the browser recognizer when usable, fall back to local.
+  return speechUsable ? "webspeech" : "openwakeword";
+}
+
+/**
  * Pure decision function: given current inputs, should the Web Speech wake
  * recognizer be running right now? Exported for unit testing.
  */
@@ -340,18 +363,13 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // idempotent and safe to call from any code path.
 
   // Promote the speech-wake recognizer to "permanently failed" until the user
-  // changes config (which resets the flag). For "auto", fall back to local OWW.
+  // changes config (which resets the flag). The engine-selection effect picks
+  // up the new state and handles the OWW fallback for "auto".
   const markSpeechWakeFatal = useCallback((): void => {
     speechWakeFatalRef.current = true;
     setSpeechWakeFatal(true);
     setIsWakeWordReady(false);
-    if (configuredWakeEngineRef.current === "auto") {
-      startWakeWordEngine();
-      setActiveWakeEngine("openwakeword");
-    } else {
-      setActiveWakeEngine("none");
-    }
-  }, [startWakeWordEngine]);
+  }, []);
 
   const shouldSpeechWakeRun = useCallback((): boolean => {
     return shouldSpeechWakeBeRunning({
@@ -507,38 +525,21 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   }, []);
 
   // Engine selection effect. Picks which wake engine should own the mic based
-  // on config + SpeechRecognition availability, and drives the OpenWakeWord
-  // side. The speech-wake recognizer itself is driven by the reconcile effect
-  // below so we avoid two code paths fighting over a single recognizer.
+  // on config + SpeechRecognition availability + fatal state via the pure
+  // selector. Imperatively drives the OpenWakeWord side here; the speech-wake
+  // recognizer is driven by the reconcile effect below.
   useEffect(() => {
-    if (!(isMicAvailable && wakeWordEnabled)) {
-      stopWakeWordEngine();
-      setActiveWakeEngine("none");
-      return;
-    }
-
-    const speechAvailable = isSpeechRecognitionAvailable();
-
-    switch (wakeEngine) {
-      case "openwakeword":
-        startWakeWordEngine();
-        setActiveWakeEngine("openwakeword");
-        break;
-      case "webspeech":
-        stopWakeWordEngine();
-        setActiveWakeEngine(speechAvailable ? "webspeech" : "none");
-        break;
-      case "auto":
-        if (speechAvailable) {
-          stopWakeWordEngine();
-          setActiveWakeEngine("webspeech");
-        } else {
-          startWakeWordEngine();
-          setActiveWakeEngine("openwakeword");
-        }
-        break;
-    }
-  }, [isMicAvailable, wakeWordEnabled, wakeEngine, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
+    const active = selectActiveWakeEngine({
+      isMicAvailable,
+      wakeWordEnabled,
+      wakeEngine,
+      speechRecognitionAvailable: isSpeechRecognitionAvailable(),
+      speechWakeFatal,
+    });
+    setActiveWakeEngine(active);
+    if (active === "openwakeword") startWakeWordEngine();
+    else stopWakeWordEngine();
+  }, [isMicAvailable, wakeWordEnabled, wakeEngine, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
 
   // Single reconcile effect for the Web Speech recognizer. Computes desired
   // running state from inputs and nudges the state machine toward it. Has no

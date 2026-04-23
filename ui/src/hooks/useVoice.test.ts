@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { matchesSpeechWakePhrase, matchesSpeechWakePrefix, shouldSpeechWakeBeRunning, classifySpeechWakeError } from "./useVoice.ts";
+import {
+  matchesSpeechWakePhrase,
+  matchesSpeechWakePrefix,
+  shouldSpeechWakeBeRunning,
+  classifySpeechWakeError,
+  selectActiveWakeEngine,
+} from "./useVoice.ts";
 
 describe("matchesSpeechWakePhrase (strict; used during TTS playback)", () => {
   test("accepts direct wake phrases", () => {
@@ -39,6 +45,24 @@ describe("matchesSpeechWakePrefix (loose; used when idle)", () => {
   test("rejects empty or whitespace-only transcripts", () => {
     expect(matchesSpeechWakePrefix("")).toBe(false);
     expect(matchesSpeechWakePrefix("   ")).toBe(false);
+  });
+});
+
+describe("matcher normalization (shared by both matchers)", () => {
+  test("handles mixed case and surrounding whitespace", () => {
+    expect(matchesSpeechWakePrefix("   HEY JARVIS   ")).toBe(true);
+    expect(matchesSpeechWakePhrase("   JARVIS, STOP!   ")).toBe(true);
+  });
+
+  test("collapses stacked punctuation and multiple spaces", () => {
+    expect(matchesSpeechWakePhrase("Jarvis... stop!!")).toBe(true);
+    expect(matchesSpeechWakePrefix("hey   jarvis    play   music")).toBe(true);
+  });
+
+  test("is not fooled by mid-word 'jarvis' substrings", () => {
+    // "starjarvis" is one token; without a word boundary it must not match.
+    expect(matchesSpeechWakePrefix("starjarvis")).toBe(false);
+    expect(matchesSpeechWakePhrase("starjarvis stop")).toBe(false);
   });
 });
 
@@ -86,6 +110,48 @@ describe("shouldSpeechWakeBeRunning", () => {
     expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true })).toBe(false);
     expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true, voiceState: "speaking" })).toBe(false);
     expect(shouldSpeechWakeBeRunning({ ...base, speechWakeFatal: true, wakeEngine: "auto" })).toBe(false);
+  });
+});
+
+describe("selectActiveWakeEngine", () => {
+  const base = {
+    isMicAvailable: true,
+    wakeWordEnabled: true,
+    wakeEngine: "openwakeword" as const,
+    speechRecognitionAvailable: true,
+    speechWakeFatal: false,
+  };
+
+  test("returns 'none' when mic is unavailable or wake word is disabled", () => {
+    expect(selectActiveWakeEngine({ ...base, isMicAvailable: false })).toBe("none");
+    expect(selectActiveWakeEngine({ ...base, wakeWordEnabled: false })).toBe("none");
+  });
+
+  test("'openwakeword' always resolves to openwakeword (privacy-preserving path)", () => {
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "openwakeword" })).toBe("openwakeword");
+    // Even with speech available, config wins:
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "openwakeword", speechRecognitionAvailable: true })).toBe("openwakeword");
+    // Fatal speech-wake state is irrelevant when config doesn't want it.
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "openwakeword", speechWakeFatal: true })).toBe("openwakeword");
+  });
+
+  test("'webspeech' resolves to webspeech when available, else 'none' (hard mode)", () => {
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "webspeech" })).toBe("webspeech");
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "webspeech", speechRecognitionAvailable: false })).toBe("none");
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "webspeech", speechWakeFatal: true })).toBe("none");
+  });
+
+  test("'auto' prefers webspeech but gracefully falls back to openwakeword", () => {
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "auto" })).toBe("webspeech");
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "auto", speechRecognitionAvailable: false })).toBe("openwakeword");
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "auto", speechWakeFatal: true })).toBe("openwakeword");
+    // Both unavailable → still falls back to openwakeword rather than silently no-op.
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "auto", speechRecognitionAvailable: false, speechWakeFatal: true })).toBe("openwakeword");
+  });
+
+  test("mic/toggle gates override everything else", () => {
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "auto", isMicAvailable: false })).toBe("none");
+    expect(selectActiveWakeEngine({ ...base, wakeEngine: "openwakeword", wakeWordEnabled: false })).toBe("none");
   });
 });
 
