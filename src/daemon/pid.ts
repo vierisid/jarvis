@@ -33,18 +33,12 @@ const LOG_PATH = join(LOG_DIR, 'jarvis.log');
 // system headers — works on Linux, macOS, and any POSIX platform
 // without hardcoding a shared library path.
 
-const isWindows = process.platform === 'win32';
-
-let flock: any = null;
-if (!isWindows) {
-  const lib = cc({
-    source: flockSource,
-    symbols: {
-      do_flock: { args: ['i32', 'i32'], returns: 'i32' },
-    },
-  });
-  flock = lib.symbols;
-}
+const { symbols: flock } = cc({
+  source: flockSource,
+  symbols: {
+    do_flock: { args: ['i32', 'i32'], returns: 'i32' },
+  },
+});
 
 const LOCK_EX = 2;  // Exclusive lock
 const LOCK_NB = 4;  // Non-blocking
@@ -64,33 +58,17 @@ let lockFd: number | null = null;
  * Returns true if the lock was acquired, false if another instance holds it.
  */
 export function acquireLock(pid: number): boolean {
-  if (lockFd !== null) return false;
-
   try {
     mkdirSync(JARVIS_DIR, { recursive: true });
-
-    if (isWindows) {
-      const existingPid = readPid();
-      if (existingPid !== null && existingPid !== pid) {
-        try {
-          process.kill(existingPid, 0);
-          return false;
-        } catch {
-          // Process not running, stale lock file
-        }
-      }
-    }
 
     // Open (or create) the lock file — don't truncate before locking
     const fd = openSync(LOCK_PATH, constants.O_WRONLY | constants.O_CREAT, 0o644);
 
     // Try non-blocking exclusive lock
-    if (!isWindows) {
-      const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
-      if (result !== 0) {
-        closeSync(fd);
-        return false;
-      }
+    const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
+    if (result !== 0) {
+      closeSync(fd);
+      return false;
     }
 
     // Lock acquired — truncate and write PID for display purposes
@@ -121,28 +99,17 @@ export function isLocked(): number | null {
   }
 
   try {
-    if (!isWindows) {
-      // Try non-blocking exclusive lock to probe
-      const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
-      if (result === 0) {
-        // Lock acquired — no daemon running. Release immediately.
-        flock.do_flock(fd, LOCK_UN);
-        closeSync(fd);
-        return null;
-      }
+    // Try non-blocking exclusive lock to probe
+    const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
+    if (result === 0) {
+      // Lock acquired — no daemon running. Release immediately.
+      flock.do_flock(fd, LOCK_UN);
+      closeSync(fd);
+      return null;
     }
-    
-    // Lock held by another process (or we are on Windows) — daemon is running
+    // Lock held by another process — daemon is running
     closeSync(fd);
     const pid = readPid();
-
-    if (isWindows && pid !== null) {
-      try {
-        process.kill(pid, 0);
-      } catch {
-        return null;
-      }
-    }
 
     // Container safety: if PID is 1 and we're inside a container,
     // the lock file is stale from a previous container lifecycle
