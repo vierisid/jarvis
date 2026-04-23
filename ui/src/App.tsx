@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { useVoice } from "./hooks/useVoice";
+import { useVoice, type WakeEngineChoice } from "./hooks/useVoice";
+import { useApiData } from "./hooks/useApi";
 import "./styles/sidebar.css";
+
+type PublicConfig = {
+  voice?: { wake_engine?: WakeEngineChoice };
+};
 
 import ChatPage from "./pages/ChatPage";
 
@@ -106,7 +111,9 @@ export function App() {
   const [route, setRoute] = useState<Route>(getRoute);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(getSettingsSection);
   const ws = useWebSocket();
-  const voice = useVoice({ wsRef: ws.wsRef });
+  const { data: publicConfig } = useApiData<PublicConfig>("/api/config", []);
+  const wakeEngine = publicConfig?.voice?.wake_engine ?? "openwakeword";
+  const voice = useVoice({ wsRef: ws.wsRef, wakeEngine });
 
   // Wire voice callbacks into WS hook
   useEffect(() => {

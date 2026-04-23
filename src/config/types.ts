@@ -23,6 +23,20 @@ export type ChannelConfig = {
   };
 };
 
+export type WakeEngine = 'openwakeword' | 'webspeech' | 'auto';
+
+export type VoiceConfig = {
+  /**
+   * Wake-word engine used by the browser UI.
+   *  - "openwakeword": local on-device model (default, private).
+   *  - "webspeech":    browser SpeechRecognition (Chromium only; streams audio
+   *                    to the browser vendor's cloud for transcription).
+   *  - "auto":         prefer webspeech when available, fall back to openwakeword.
+   * Env: JARVIS_WAKE_ENGINE
+   */
+  wake_engine: WakeEngine;
+};
+
 export type STTConfig = {
   provider: 'openai' | 'groq' | 'local' | 'sarvam';
   openai?: { api_key: string; model?: string };
@@ -150,6 +164,7 @@ export type JarvisConfig = {
   channels?: ChannelConfig;
   stt?: STTConfig;
   tts?: TTSConfig;
+  voice?: VoiceConfig;
   desktop?: DesktopConfig;
   awareness?: AwarenessConfig;
   llm: {
@@ -204,6 +219,9 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     voice: 'en-US-AriaNeural',
     rate: '+0%',
     volume: '+0%',
+  },
+  voice: {
+    wake_engine: 'openwakeword',
   },
   desktop: {
     enabled: true,

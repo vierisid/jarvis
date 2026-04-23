@@ -40,9 +40,17 @@ export type VoiceState =
   | "speaking"       // receiving and playing TTS audio
   | "error";         // recoverable — returns to idle after timeout
 
+/** User-facing engine choice (see server config `voice.wake_engine`). */
+export type WakeEngineChoice = "openwakeword" | "webspeech" | "auto";
+
+/** Which engine is actually running right now (reported back to UI). */
+export type ActiveWakeEngine = "openwakeword" | "webspeech" | "none";
+
 export type UseVoiceOptions = {
   wsRef: React.MutableRefObject<WebSocket | null>;
   wakeWordEnabled?: boolean;
+  /** Default "openwakeword" (local). "webspeech" uses Chromium's cloud STT. */
+  wakeEngine?: WakeEngineChoice;
 };
 
 export type UseVoiceReturn = {
@@ -53,6 +61,7 @@ export type UseVoiceReturn = {
   isWakeWordReady: boolean;
   ttsAudioPlaying: boolean;
   cancelTTS: () => void;
+  activeWakeEngine: ActiveWakeEngine;
   // Called by useWebSocket for TTS events
   handleTTSBinary: (data: ArrayBuffer) => void;
   handleTTSStart: (requestId: string) => void;
@@ -60,11 +69,12 @@ export type UseVoiceReturn = {
   handleError: (message?: string) => void;
 };
 
-export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword" }: UseVoiceOptions): UseVoiceReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
   const [ttsAudioPlaying, setTtsAudioPlaying] = useState(false);
+  const [activeWakeEngine, setActiveWakeEngine] = useState<ActiveWakeEngine>("none");
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -306,22 +316,39 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     return speechWakeActiveRef.current;
   }, []);
 
-  // Initialize wake word engine when mic available and enabled
+  // Initialize wake word engine when mic available and enabled.
+  // Engine choice is driven by config (voice.wake_engine) — defaulting to the
+  // local OpenWakeWord path to avoid streaming ambient audio to cloud STT.
   useEffect(() => {
-    if (isMicAvailable && wakeWordEnabled) {
-      const speechWakeStarted = startSpeechWakeRecognizer();
-      // Use OpenWakeWord only if browser speech wake phrase recognition isn't available.
-      if (!speechWakeStarted) {
-        startWakeWordEngine();
-      } else {
+    if (!(isMicAvailable && wakeWordEnabled)) {
+      setActiveWakeEngine("none");
+      return;
+    }
+
+    if (wakeEngine === "openwakeword") {
+      startWakeWordEngine();
+      setActiveWakeEngine("openwakeword");
+    } else if (wakeEngine === "webspeech") {
+      const started = startSpeechWakeRecognizer();
+      setActiveWakeEngine(started ? "webspeech" : "none");
+    } else {
+      // "auto": prefer the browser recognizer when present, fall back to local.
+      const started = startSpeechWakeRecognizer();
+      if (started) {
         stopWakeWordEngine();
+        setActiveWakeEngine("webspeech");
+      } else {
+        startWakeWordEngine();
+        setActiveWakeEngine("openwakeword");
       }
     }
+
     return () => {
       stopWakeWordEngine();
       stopSpeechWakeRecognizer();
+      setActiveWakeEngine("none");
     };
-  }, [isMicAvailable, wakeWordEnabled, startWakeWordEngine, stopWakeWordEngine, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
+  }, [isMicAvailable, wakeWordEnabled, wakeEngine, startWakeWordEngine, stopWakeWordEngine, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
 
   // Restart wake word listening when returning to idle (with delay for mic release)
   useEffect(() => {
@@ -346,12 +373,18 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     }
   }, [voiceState]);
 
-  // Ensure speech fallback is active when idle or speaking so Jarvis can be interrupted while speaking.
+  // Keep the configured wake engine armed when idle or speaking (enables barge-in).
   useEffect(() => {
     if (voiceState === "idle" || voiceState === "speaking") {
-      const speechWakeStarted = startSpeechWakeRecognizer();
-      if (!speechWakeStarted && wakeEngineRef.current) {
-        wakeEngineRef.current.start().catch(() => {});
+      if (wakeEngine === "openwakeword") {
+        wakeEngineRef.current?.start().catch(() => {});
+      } else if (wakeEngine === "webspeech") {
+        startSpeechWakeRecognizer();
+      } else {
+        const started = startSpeechWakeRecognizer();
+        if (!started && wakeEngineRef.current) {
+          wakeEngineRef.current.start().catch(() => {});
+        }
       }
     } else if (voiceState === "recording" || voiceState === "processing") {
       stopSpeechWakeRecognizer();
@@ -359,7 +392,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     return () => {
       stopSpeechWakeRecognizer();
     };
-  }, [voiceState, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
+  }, [voiceState, wakeEngine, startSpeechWakeRecognizer, stopSpeechWakeRecognizer]);
 
   // --- TTS Playback ---
   const playNextTTSChunk = useCallback(() => {
@@ -650,6 +683,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     isWakeWordReady,
     ttsAudioPlaying,
     cancelTTS,
+    activeWakeEngine,
     handleTTSBinary,
     handleTTSStart,
     handleTTSEnd,

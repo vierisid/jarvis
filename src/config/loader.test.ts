@@ -203,6 +203,47 @@ daemon:
   });
 });
 
+describe('Voice Config', () => {
+  afterEach(async () => {
+    delete process.env.JARVIS_WAKE_ENGINE;
+    if (existsSync(TEST_CONFIG_PATH)) {
+      await unlink(TEST_CONFIG_PATH);
+    }
+  });
+
+  test('defaults wake_engine to openwakeword (privacy-preserving local path)', async () => {
+    const config = await loadConfig('/tmp/jarvis-voice-defaults.yaml');
+    expect(config.voice?.wake_engine).toBe('openwakeword');
+  });
+
+  test('round-trips user-supplied wake_engine', async () => {
+    const yaml = `
+voice:
+  wake_engine: webspeech
+`;
+    await Bun.write(TEST_CONFIG_PATH, yaml);
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.voice?.wake_engine).toBe('webspeech');
+  });
+
+  test('JARVIS_WAKE_ENGINE env override wins over YAML', async () => {
+    const yaml = `
+voice:
+  wake_engine: openwakeword
+`;
+    await Bun.write(TEST_CONFIG_PATH, yaml);
+    process.env.JARVIS_WAKE_ENGINE = 'auto';
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.voice?.wake_engine).toBe('auto');
+  });
+
+  test('invalid JARVIS_WAKE_ENGINE is ignored, default is preserved', async () => {
+    process.env.JARVIS_WAKE_ENGINE = 'siri';
+    const config = await loadConfig('/tmp/jarvis-voice-invalid-env.yaml');
+    expect(config.voice?.wake_engine).toBe('openwakeword');
+  });
+});
+
 describe('Path Expansion', () => {
   test('expands tilde in paths', async () => {
     const config = await loadConfig();

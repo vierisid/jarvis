@@ -98,6 +98,16 @@ function applyEnvOverrides(config: JarvisConfig): void {
     if (!config.auth) config.auth = {};
     config.auth.token = env.JARVIS_AUTH_TOKEN;
   }
+
+  if (env.JARVIS_WAKE_ENGINE) {
+    const engine = env.JARVIS_WAKE_ENGINE;
+    if (engine === 'openwakeword' || engine === 'webspeech' || engine === 'auto') {
+      if (!config.voice) config.voice = { wake_engine: 'openwakeword' };
+      config.voice.wake_engine = engine;
+    } else {
+      console.warn(`[Config] Invalid JARVIS_WAKE_ENGINE="${engine}" — must be openwakeword|webspeech|auto; ignoring.`);
+    }
+  }
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {

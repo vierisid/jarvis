@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import type { VoiceState } from "../../hooks/useVoice";
+import type { VoiceState, ActiveWakeEngine } from "../../hooks/useVoice";
 
 type VoiceProps = {
   voiceState: VoiceState;
@@ -9,7 +9,14 @@ type VoiceProps = {
   isWakeWordReady: boolean;
   ttsAudioPlaying: boolean;
   cancelTTS: () => void;
+  activeWakeEngine: ActiveWakeEngine;
 };
+
+function engineLabel(engine: ActiveWakeEngine): string {
+  if (engine === "openwakeword") return "local wake";
+  if (engine === "webspeech") return "cloud wake (browser)";
+  return "wake off";
+}
 
 type Props = {
   onSend: (text: string) => void;
@@ -54,8 +61,9 @@ export function ChatInput({ onSend, disabled, voice }: Props) {
     if (!voice) return "";
     if (voice.ttsAudioPlaying) return "Stop speaking";
     if (voice.voiceState === "recording") return "Click to send";
-    if (voice.isWakeWordReady) return 'Say "Hey JARVIS" or click to speak';
-    return "Click to speak";
+    const engineSuffix = ` · ${engineLabel(voice.activeWakeEngine)}`;
+    if (voice.isWakeWordReady) return `Say "Hey JARVIS" or click to speak${engineSuffix}`;
+    return `Click to speak${engineSuffix}`;
   };
 
   const getMicIcon = () => {

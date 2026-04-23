@@ -89,6 +89,7 @@ export default function ChatPage({ messages, isConnected, sendMessage, voice }: 
           isWakeWordReady: voice.isWakeWordReady,
           ttsAudioPlaying: voice.ttsAudioPlaying,
           cancelTTS: voice.cancelTTS,
+          activeWakeEngine: voice.activeWakeEngine,
         } : undefined}
       />
     </div>

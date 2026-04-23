@@ -777,6 +777,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           authority: config.authority,
           heartbeat: config.heartbeat,
           active_role: config.active_role,
+          voice: config.voice ?? { wake_engine: 'openwakeword' },
         });
       },
     },
