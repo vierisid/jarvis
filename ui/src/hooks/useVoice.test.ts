@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { matchesSpeechWakePhrase, shouldSpeechWakeBeRunning, classifySpeechWakeError } from "./useVoice.ts";
+import { matchesSpeechWakePhrase, matchesSpeechWakePrefix, shouldSpeechWakeBeRunning, classifySpeechWakeError } from "./useVoice.ts";
 
-describe("matchesSpeechWakePhrase", () => {
+describe("matchesSpeechWakePhrase (strict; used during TTS playback)", () => {
   test("accepts direct wake phrases", () => {
     expect(matchesSpeechWakePhrase("Jarvis")).toBe(true);
     expect(matchesSpeechWakePhrase("hey jarvis")).toBe(true);
@@ -9,11 +9,36 @@ describe("matchesSpeechWakePhrase", () => {
     expect(matchesSpeechWakePhrase("Hey Jarvis, hold on")).toBe(true);
   });
 
-  test("rejects longer sentences that merely mention jarvis", () => {
+  test("rejects longer sentences that merely mention jarvis (echo protection)", () => {
     expect(matchesSpeechWakePhrase("Jarvis is already working on that")).toBe(false);
     expect(matchesSpeechWakePhrase("Can you tell Jarvis to send that")).toBe(false);
     expect(matchesSpeechWakePhrase("I said Jarvis in the middle of a sentence")).toBe(false);
     expect(matchesSpeechWakePhrase("Hey Jarvis can you help")).toBe(false);
+  });
+});
+
+describe("matchesSpeechWakePrefix (loose; used when idle)", () => {
+  test("accepts bare wake phrases", () => {
+    expect(matchesSpeechWakePrefix("Jarvis")).toBe(true);
+    expect(matchesSpeechWakePrefix("hey jarvis")).toBe(true);
+  });
+
+  test("accepts wake phrase followed by any command in one utterance", () => {
+    expect(matchesSpeechWakePrefix("hey jarvis turn off the lights")).toBe(true);
+    expect(matchesSpeechWakePrefix("jarvis what's the weather")).toBe(true);
+    expect(matchesSpeechWakePrefix("Hey Jarvis, play some music")).toBe(true);
+    expect(matchesSpeechWakePrefix("jarvis can you help me")).toBe(true);
+  });
+
+  test("rejects utterances that merely contain jarvis mid-sentence", () => {
+    expect(matchesSpeechWakePrefix("Can you tell Jarvis to send that")).toBe(false);
+    expect(matchesSpeechWakePrefix("I said Jarvis in the middle of a sentence")).toBe(false);
+    expect(matchesSpeechWakePrefix("that was Jarvis talking")).toBe(false);
+  });
+
+  test("rejects empty or whitespace-only transcripts", () => {
+    expect(matchesSpeechWakePrefix("")).toBe(false);
+    expect(matchesSpeechWakePrefix("   ")).toBe(false);
   });
 });
 

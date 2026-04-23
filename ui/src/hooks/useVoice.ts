@@ -13,23 +13,51 @@ const SPEECH_WAKE_INTERRUPT_COMMANDS = new Set([
   "one second",
 ]);
 
-export function matchesSpeechWakePhrase(transcript: string): boolean {
-  const normalized = transcript
+function normalizeTranscript(transcript: string): string {
+  return transcript
     .toLowerCase()
     .replace(/[.,!?;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
 
+function getWakePrefix(normalized: string): "hey jarvis " | "jarvis " | null {
+  if (normalized.startsWith("hey jarvis ")) return "hey jarvis ";
+  if (normalized.startsWith("jarvis ")) return "jarvis ";
+  return null;
+}
+
+/**
+ * Strict matcher used during TTS playback (voiceState === "speaking").
+ * Accepts bare wake phrases ("jarvis", "hey jarvis") or wake + a short
+ * whitelisted interrupt command. Prevents Jarvis's own TTS from self-triggering
+ * when the reply contains the word "jarvis" inside a sentence.
+ */
+export function matchesSpeechWakePhrase(transcript: string): boolean {
+  const normalized = normalizeTranscript(transcript);
   if (!normalized) return false;
   if (normalized === "jarvis" || normalized === "hey jarvis") return true;
 
-  const prefix = normalized.startsWith("hey jarvis ") ? "hey jarvis " : normalized.startsWith("jarvis ") ? "jarvis " : null;
+  const prefix = getWakePrefix(normalized);
   if (!prefix) return false;
 
   const remainder = normalized.slice(prefix.length).trim();
   if (!remainder) return true;
 
   return SPEECH_WAKE_INTERRUPT_COMMANDS.has(remainder);
+}
+
+/**
+ * Loose matcher used when idle. Accepts any utterance that starts with the
+ * wake phrase, so natural "hey jarvis turn off the lights" wakes in one breath
+ * without waiting for Chrome to emit a bare-wake interim first.
+ * NOT safe to use while Jarvis is speaking — use matchesSpeechWakePhrase there.
+ */
+export function matchesSpeechWakePrefix(transcript: string): boolean {
+  const normalized = normalizeTranscript(transcript);
+  if (!normalized) return false;
+  if (normalized === "jarvis" || normalized === "hey jarvis") return true;
+  return getWakePrefix(normalized) != null;
 }
 
 export type VoiceState =
@@ -361,10 +389,16 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         if (voiceStateRef.current === "recording" || voiceStateRef.current === "processing") return;
 
+        // Strict matcher during speaking to keep TTS echo from self-triggering;
+        // loose prefix matcher when idle so "hey jarvis <command>" wakes in one breath.
+        const matcher = voiceStateRef.current === "speaking"
+          ? matchesSpeechWakePhrase
+          : matchesSpeechWakePrefix;
+
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = String(event.results[i]?.[0]?.transcript ?? "").toLowerCase().trim();
           if (!transcript) continue;
-          if (!matchesSpeechWakePhrase(transcript)) continue;
+          if (!matcher(transcript)) continue;
 
           const now = Date.now();
           if (now - lastWakeAtRef.current < WAKE_COOLDOWN_MS) return;
