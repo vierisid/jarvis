@@ -1,0 +1,120 @@
+/* Shared bubble styling for all non-card ThreadItem kinds.
+   Each kind gets a modifier for author + typographic treatment. */
+
+.v2-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-1) 0;
+  position: relative;
+}
+
+.v2-item__meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+
+.v2-item__who {
+  color: var(--ink-3);
+}
+
+.v2-item__who--jarvis {
+  color: var(--accent);
+}
+
+.v2-item__tag {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.v2-item__time {
+  color: var(--ink-3);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: none;
+}
+
+.v2-item__body {
+  font-size: var(--text-md);
+  line-height: var(--lh-body);
+  color: var(--ink);
+}
+
+/* ── user-voice / user-text ── */
+.v2-item--user .v2-item__body {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-2);
+}
+
+.v2-item__mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+/* ── jarvis-speech ── */
+.v2-item--speech .v2-item__body {
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+.v2-item__speaking-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  margin-left: 6px;
+  vertical-align: 2px;
+  animation: v2-speaking 1.2s ease-in-out infinite;
+}
+
+@keyframes v2-speaking {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.75); }
+}
+
+/* ── jarvis-thought ── */
+.v2-item--thought {
+  padding-left: var(--s-4);
+  border-left: 2px dotted var(--ink-3);
+  margin-left: 2px;
+}
+
+.v2-item--thought .v2-item__body {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+/* ── result ── */
+.v2-item--result {
+  padding: var(--s-3) var(--s-4);
+  background: var(--paper-2);
+  border: var(--hair);
+  border-radius: var(--r-2);
+  gap: var(--s-2);
+}
+
+.v2-item--result .v2-item__body {
+  font-family: var(--font-sans);
+}
+
+.v2-item__detail {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: var(--lh-body);
+  margin-top: var(--s-1);
+}

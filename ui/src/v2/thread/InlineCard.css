@@ -1,0 +1,92 @@
+/* InlineCard — compressed preview of any object (workflow, memory, tool,
+   agent, authority, log) inside the thread. "Focus" expands to a Room. */
+
+.v2-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: flex-start;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  background: var(--paper-2);
+  border: var(--hair);
+  border-radius: var(--r-2);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.v2-card:hover {
+  background: var(--paper-3);
+}
+
+.v2-card__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-1);
+  background: var(--paper);
+  border: var(--hair);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.v2-card__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.v2-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.v2-card__type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.v2-card__title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+  margin: 0;
+  display: inline;
+}
+
+.v2-card__summary {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: var(--lh-body);
+}
+
+.v2-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-1);
+}
+
+.v2-card__meta-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+
+.v2-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
