@@ -1,0 +1,72 @@
+/* Jarvis Dashboard — design tokens (v2 redesign)
+   Source: design_handoff_jarvis_redesign/tokens.css
+   Riso palette, voice-first, one accent only.
+   Change here, change everywhere.
+
+   Coexists with the legacy --j-* tokens in globals.css without conflict.
+   Only the v2 shell (ui/src/v2/) consumes these. */
+
+:root {
+  /* ── Color ──────────────────────────────── */
+  --paper:        #F5F2EB;   /* bone, page bg */
+  --paper-2:      #EEE9DC;   /* card bg, subtle fills */
+  --paper-3:      #E3DCC8;   /* hover / pressed surfaces */
+  --rule:         #1A1A1A;   /* hairlines, borders */
+  --ink:          #1A1A1A;   /* primary text */
+  --ink-2:        #4A4A46;   /* secondary text */
+  --ink-3:        #7A766D;   /* tertiary / meta */
+  --accent:       #C23A2A;   /* vermilion — ONE accent, use sparingly */
+  --accent-ink:   #FFFFFF;   /* text on accent */
+  --ok:           #2E5E3A;   /* muted forest, confirmations only */
+  --warn:         #8A6A1F;   /* muted ochre, awaiting-approval only */
+
+  /* ── Type ───────────────────────────────── */
+  --font-sans:    "Inter Tight", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-display: "Fraunces", "Inter Tight", serif;  /* headings only */
+
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-md:   15px;   /* body default */
+  --text-lg:   18px;
+  --text-xl:   24px;
+  --text-2xl:  34px;
+  --text-3xl:  48px;
+
+  --lh-tight:  1.15;
+  --lh-body:   1.45;
+
+  /* ── Space (4px grid) ───────────────────── */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  20px;
+  --s-6:  24px;
+  --s-8:  32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+
+  /* ── Radii ──────────────────────────────── */
+  --r-0: 0;          /* default — riso is flat */
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-pill: 999px;
+
+  /* ── Lines ──────────────────────────────── */
+  --hair:   1px solid var(--rule);
+  --hair-2: 2px solid var(--rule);
+
+  /* ── Motion ─────────────────────────────── */
+  --ease-out: cubic-bezier(.2, .7, .2, 1);
+  --dur-fast: 120ms;
+  --dur-med:  220ms;
+  --dur-slow: 360ms;
+
+  /* ── Z ──────────────────────────────────── */
+  --z-rail:    10;
+  --z-palette: 50;
+  --z-room:    60;
+  --z-toast:   70;
+}
