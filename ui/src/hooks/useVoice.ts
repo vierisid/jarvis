@@ -84,7 +84,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   const voiceStateRef = useRef<VoiceState>("idle");
   const wakeEngineRef = useRef<any>(null);
   const wakeWordEnabledRef = useRef(wakeWordEnabled);
-  const speechWakeRef = useRef<any>(null);
+  const speechWakeRef = useRef<SpeechRecognition | null>(null);
   const speechWakeActiveRef = useRef(false);
   const speechWakeRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRecordingRef = useRef<(autoStop?: boolean) => void>(() => {});
@@ -232,7 +232,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   }, []);
 
   const startSpeechWakeRecognizer = useCallback((): boolean => {
-    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) {
       console.warn("[Voice] SpeechRecognition fallback unavailable in this browser");
       return false;
@@ -244,11 +244,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
       recognition.interimResults = true;
       recognition.lang = "en-US";
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
         if (voiceStateRef.current === "recording" || voiceStateRef.current === "processing") return;
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = String(event.results[i]?.[0]?.transcript || "").toLowerCase().trim();
+          const transcript = String(event.results[i]?.[0]?.transcript ?? "").toLowerCase().trim();
           if (!transcript) continue;
           if (matchesSpeechWakePhrase(transcript)) {
             console.log(`[Voice] Speech wake phrase detected: "${transcript}"`);
@@ -270,8 +270,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
         }
       };
 
-      recognition.onerror = (err: any) => {
-        console.warn("[Voice] Speech wake recognizer error:", err);
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.warn(`[Voice] Speech wake recognizer error: ${event.error}`, event.message);
       };
 
       recognition.onend = () => {
