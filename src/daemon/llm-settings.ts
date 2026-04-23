@@ -11,7 +11,6 @@ import type { JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { XAIProvider } from '../llm/xai.ts';
-import { DeepSeekProvider } from '../llm/deepseek.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
@@ -23,7 +22,6 @@ import type { LLMManager } from '../llm/manager.ts';
 const KEY_ANTHROPIC = 'llm.anthropic.api_key';
 const KEY_OPENAI = 'llm.openai.api_key';
 const KEY_XAI = 'llm.xai.api_key';
-const KEY_DEEPSEEK = 'llm.deepseek.api_key';
 const KEY_GROQ = 'llm.groq.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
 const KEY_OPENROUTER = 'llm.openrouter.api_key';
@@ -34,7 +32,6 @@ const SETTING_FALLBACK = 'llm.fallback';
 const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
 const SETTING_XAI_MODEL = 'llm.xai.model';
-const SETTING_DEEPSEEK_MODEL = 'llm.deepseek.model';
 const SETTING_GROQ_MODEL = 'llm.groq.model';
 const SETTING_GEMINI_MODEL = 'llm.gemini.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
@@ -47,7 +44,6 @@ export type LLMSettingsResponse = {
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
   xai: { model: string; has_api_key: boolean } | null;
-  deepseek: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
@@ -66,7 +62,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
   const xaiModel = getSetting(SETTING_XAI_MODEL) ?? config.llm.xai?.model ?? 'grok-4-0709';
-  const deepseekModel = getSetting(SETTING_DEEPSEEK_MODEL) ?? config.llm.deepseek?.model ?? 'deepseek-chat';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
@@ -77,7 +72,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
   const hasXAIKey = hasSecret(KEY_XAI) || !!config.llm.xai?.api_key;
-  const hasDeepSeekKey = hasSecret(KEY_DEEPSEEK) || !!config.llm.deepseek?.api_key;
   const hasGroqKey = hasSecret(KEY_GROQ) || !!config.llm.groq?.api_key;
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
   const hasOpenrouterKey = hasSecret(KEY_OPENROUTER) || !!config.llm.openrouter?.api_key;
@@ -88,7 +82,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey },
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     xai: { model: xaiModel, has_api_key: hasXAIKey },
-    deepseek: { model: deepseekModel, has_api_key: hasDeepSeekKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
     ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
@@ -107,7 +100,6 @@ export function saveLLMSettings(
     anthropic?: { api_key?: string; model?: string };
     openai?: { api_key?: string; model?: string };
     xai?: { api_key?: string; model?: string };
-    deepseek?: { api_key?: string; model?: string };
     groq?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
     ollama?: { base_url?: string; model?: string };
@@ -166,21 +158,6 @@ export function saveLLMSettings(
       ...config.llm.xai,
       model: body.xai.model ?? config.llm.xai?.model,
       api_key: body.xai.api_key ?? getXAIApiKey(config) ?? '',
-    };
-  }
-
-  // DeepSeek
-  if (body.deepseek) {
-    if (body.deepseek.model) {
-      setSetting(SETTING_DEEPSEEK_MODEL, body.deepseek.model);
-    }
-    if (body.deepseek.api_key) {
-      setSecret(KEY_DEEPSEEK, body.deepseek.api_key);
-    }
-    config.llm.deepseek = {
-      ...config.llm.deepseek,
-      model: body.deepseek.model ?? config.llm.deepseek?.model,
-      api_key: body.deepseek.api_key ?? getDeepSeekApiKey(config) ?? '',
     };
   }
 
@@ -267,13 +244,6 @@ function getXAIApiKey(config: JarvisConfig): string | null {
 }
 
 /**
- * Resolve the DeepSeek API key: keychain > config.yaml > env var.
- */
-function getDeepSeekApiKey(config: JarvisConfig): string | null {
-  return getSecret(KEY_DEEPSEEK) ?? config.llm.deepseek?.api_key ?? null;
-}
-
-/**
  * Resolve the Groq API key: keychain > config.yaml > env var.
  */
 function getGroqApiKey(config: JarvisConfig): string | null {
@@ -342,19 +312,6 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
         ? keychainXaiKey
         : (config.llm.xai?.api_key ?? ''),
       model: dbXaiModel ?? config.llm.xai?.model,
-    };
-  }
-
-  // DeepSeek
-  const dbDeepseekModel = getSetting(SETTING_DEEPSEEK_MODEL);
-  const keychainDeepseekKey = getSecret(KEY_DEEPSEEK);
-  if (dbDeepseekModel || keychainDeepseekKey) {
-    config.llm.deepseek = {
-      ...config.llm.deepseek,
-      api_key: (!process.env.JARVIS_DEEPSEEK_KEY && keychainDeepseekKey)
-        ? keychainDeepseekKey
-        : (config.llm.deepseek?.api_key ?? ''),
-      model: dbDeepseekModel ?? config.llm.deepseek?.model,
     };
   }
 
@@ -431,10 +388,6 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new XAIProvider(llm.xai.api_key, llm.xai.model));
     console.log('[LLM] Hot-reloaded xAI provider');
   }
-  if (llm.deepseek?.api_key) {
-    providers.push(new DeepSeekProvider(llm.deepseek.api_key, llm.deepseek.model));
-    console.log('[LLM] Hot-reloaded DeepSeek provider');
-  }
   if (llm.groq?.api_key) {
     providers.push(new GroqProvider(llm.groq.api_key, llm.groq.model));
     console.log('[LLM] Hot-reloaded Groq provider');
@@ -485,10 +438,6 @@ export async function testLLMProvider(
       const key = opts.api_key || getSecret(KEY_XAI) || config.llm.xai?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new XAIProvider(key, opts.model ?? config.llm.xai?.model);
-    } else if (opts.provider === 'deepseek') {
-      const key = opts.api_key || getSecret(KEY_DEEPSEEK) || config.llm.deepseek?.api_key;
-      if (!key) return { ok: false, error: 'API key required' };
-      instance = new DeepSeekProvider(key, opts.model ?? config.llm.deepseek?.model);
     } else if (opts.provider === 'groq') {
       const key = opts.api_key || getSecret(KEY_GROQ) || config.llm.groq?.api_key;
       if (!key) return { ok: false, error: 'API key required' };

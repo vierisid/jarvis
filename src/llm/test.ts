@@ -9,7 +9,6 @@ import {
   AnthropicProvider,
   OpenAIProvider,
   XAIProvider,
-  DeepSeekProvider,
   OllamaProvider,
 } from './index.ts';
 import { loadConfig } from '../config/index.ts';
@@ -46,15 +45,6 @@ async function testProviders() {
     );
     manager.registerProvider(xai);
     console.log('Registered xAI provider');
-  }
-
-  if (config.llm.deepseek?.api_key) {
-    const deepseek = new DeepSeekProvider(
-      config.llm.deepseek.api_key,
-      config.llm.deepseek.model
-    );
-    manager.registerProvider(deepseek);
-    console.log('Registered DeepSeek provider');
   }
 
   if (config.llm.ollama) {

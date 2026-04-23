@@ -158,7 +158,6 @@ export type JarvisConfig = {
     anthropic?: { api_key: string; model?: string };
     openai?: { api_key: string; model?: string };
     xai?: { api_key: string; model?: string };
-    deepseek?: { api_key: string; model?: string };
     groq?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
     ollama?: { base_url?: string; model?: string };
@@ -245,10 +244,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     xai: {
       api_key: '',
       model: 'grok-4-0709',
-    },
-    deepseek: {
-      api_key: '',
-      model: 'deepseek-chat',
     },
     groq: {
       api_key: '',

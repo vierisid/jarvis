@@ -17,7 +17,6 @@ import { LLMManager } from '../llm/manager.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { XAIProvider } from '../llm/xai.ts';
-import { DeepSeekProvider } from '../llm/deepseek.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
@@ -363,17 +362,6 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered xAI provider');
-    }
-
-    // Register DeepSeek
-    if (llm.deepseek?.api_key) {
-      const provider = new DeepSeekProvider(
-        llm.deepseek.api_key,
-        llm.deepseek.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered DeepSeek provider');
     }
 
     // Register Groq

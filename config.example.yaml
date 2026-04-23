@@ -36,11 +36,6 @@ llm:
   #   api_key: "xai-..."
   #   model: "grok-4-0709"
 
-  # DeepSeek (OpenAI-compatible) configuration
-  # deepseek:
-  #   api_key: "sk-..."
-  #   model: "deepseek-chat"
-
   # Groq (OpenAI-compatible) configuration
   # groq:
   #   api_key: "gsk_..."

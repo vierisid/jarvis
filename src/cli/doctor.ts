@@ -91,7 +91,6 @@ export async function runDoctor(): Promise<void> {
         AnthropicProvider,
         OpenAIProvider,
         XAIProvider,
-        DeepSeekProvider,
         GroqProvider,
         GeminiProvider,
         OllamaProvider,
@@ -106,8 +105,6 @@ export async function runDoctor(): Promise<void> {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
       } else if (primary === 'xai' && config.llm?.xai?.api_key) {
         manager.registerProvider(new XAIProvider(config.llm.xai.api_key, config.llm.xai.model));
-      } else if (primary === 'deepseek' && config.llm?.deepseek?.api_key) {
-        manager.registerProvider(new DeepSeekProvider(config.llm.deepseek.api_key, config.llm.deepseek.model));
       } else if (primary === 'groq' && config.llm?.groq?.api_key) {
         manager.registerProvider(new GroqProvider(config.llm.groq.api_key, config.llm.groq.model));
       } else if (primary === 'gemini' && config.llm?.gemini?.api_key) {

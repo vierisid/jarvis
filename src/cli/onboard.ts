@@ -75,7 +75,6 @@ export async function runOnboard(): Promise<void> {
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
     { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
     { label: 'xAI (Grok)', value: 'xai' as const, description: 'xAI Grok models via direct API' },
-    { label: 'DeepSeek', value: 'deepseek' as const, description: 'DeepSeek chat and reasoning models' },
     { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
     { label: 'OpenRouter', value: 'openrouter' as const, description: 'Access hundreds of models via single API key' },
@@ -197,39 +196,6 @@ export async function runOnboard(): Promise<void> {
     const modelChoice = await askChoice('Choose a model:', xaiModels, isPreset ? currentModel : 'custom');
     const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
     if (config.llm.xai) config.llm.xai.model = model;
-
-  } else if (provider === 'deepseek') {
-    const existing = config.llm.deepseek?.api_key;
-    if (existing && existing.length > 5) {
-      const keep = await askYesNo(`API key found (${existing.slice(0, 10)}...). Keep it?`, true);
-      if (!keep) {
-        const key = await askSecret('Enter your DeepSeek API key');
-        if (key) config.llm.deepseek = { ...config.llm.deepseek, api_key: key };
-      }
-    } else {
-      const configureNow = await askYesNo('Add your DeepSeek API key now?', true);
-      if (configureNow) {
-        const key = await askSecret('Enter your DeepSeek API key (from platform.deepseek.com)');
-        if (key) {
-          config.llm.deepseek = { ...config.llm.deepseek, api_key: key };
-        } else {
-          printWarn('No API key set. JARVIS won\'t work without one.');
-        }
-      } else {
-        printWarn('No API key set. JARVIS won\'t work without one.');
-      }
-    }
-
-    const currentModel = config.llm.deepseek?.model ?? 'deepseek-chat';
-    const deepseekModels = [
-      { label: 'DeepSeek Chat', value: 'deepseek-chat', description: 'General-purpose chat model with tool calling' },
-      { label: 'DeepSeek Reasoner', value: 'deepseek-reasoner', description: 'Reasoning-focused model' },
-      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
-    ];
-    const isPreset = deepseekModels.some(m => m.value === currentModel);
-    const modelChoice = await askChoice('Choose a model:', deepseekModels, isPreset ? currentModel : 'custom');
-    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
-    if (config.llm.deepseek) config.llm.deepseek.model = model;
 
   } else if (provider === 'groq') {
     const existing = config.llm.groq?.api_key;
@@ -374,7 +340,6 @@ export async function runOnboard(): Promise<void> {
         AnthropicProvider,
         OpenAIProvider,
         XAIProvider,
-        DeepSeekProvider,
         GroqProvider,
         GeminiProvider,
         OllamaProvider,
@@ -388,8 +353,6 @@ export async function runOnboard(): Promise<void> {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
       } else if (provider === 'xai' && config.llm.xai?.api_key) {
         manager.registerProvider(new XAIProvider(config.llm.xai.api_key, config.llm.xai.model));
-      } else if (provider === 'deepseek' && config.llm.deepseek?.api_key) {
-        manager.registerProvider(new DeepSeekProvider(config.llm.deepseek.api_key, config.llm.deepseek.model));
       } else if (provider === 'groq' && config.llm.groq?.api_key) {
         manager.registerProvider(new GroqProvider(config.llm.groq.api_key, config.llm.groq.model));
       } else if (provider === 'gemini' && config.llm.gemini?.api_key) {
@@ -419,7 +382,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'xai', 'deepseek', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'xai', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
@@ -446,12 +409,6 @@ export async function runOnboard(): Promise<void> {
         if (configureProvider) {
           const key = await askSecret('xAI API key (for fallback)');
           if (key) config.llm.xai = { ...config.llm.xai, api_key: key, model: config.llm.xai?.model ?? 'grok-4-0709' };
-        }
-      } else if (fb === 'deepseek' && (!config.llm.deepseek?.api_key || config.llm.deepseek.api_key === '')) {
-        const configureProvider = await askYesNo('Configure DeepSeek as a fallback provider?', false);
-        if (configureProvider) {
-          const key = await askSecret('DeepSeek API key (for fallback)');
-          if (key) config.llm.deepseek = { ...config.llm.deepseek, api_key: key, model: config.llm.deepseek?.model ?? 'deepseek-chat' };
         }
       } else if (fb === 'groq' && (!config.llm.groq?.api_key || config.llm.groq.api_key === '')) {
         const configureProvider = await askYesNo('Configure Groq as a fallback provider?', false);
