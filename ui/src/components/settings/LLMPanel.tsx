@@ -6,7 +6,6 @@ type LLMConfig = {
   fallback: string[];
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
-  cerebras: { model: string; has_api_key: boolean } | null;
   litellm: { base_url: string; model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
@@ -35,13 +34,6 @@ const OPENAI_MODELS = [
   "gpt-4.1",
   "o3",
   "o4-mini",
-];
-
-const CEREBRAS_MODELS = [
-  "gpt-oss-120b",
-  "llama-3.3-70b",
-  "llama-4-scout-17b-16e-instruct",
-  "qwen-3-235b-a22b-instruct-2507",
 ];
 
 const LITELLM_MODELS = [
@@ -98,12 +90,11 @@ const OPENROUTER_MODELS = [
   "mistralai/mistral-large",
 ];
 
-const PROVIDERS = ["anthropic", "openai", "cerebras", "litellm", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
+const PROVIDERS = ["anthropic", "openai", "litellm", "groq", "gemini", "ollama", "openrouter", "nvidia"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
-  cerebras: "Cerebras",
   litellm: "LiteLLM",
   groq: "Groq",
   gemini: "Gemini",
@@ -128,11 +119,6 @@ export function LLMPanel() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-5.4");
   const [openaiCustomModel, setOpenaiCustomModel] = useState("");
-
-  // Cerebras
-  const [cerebrasKey, setCerebrasKey] = useState("");
-  const [cerebrasModel, setCerebrasModel] = useState("gpt-oss-120b");
-  const [cerebrasCustomModel, setCerebrasCustomModel] = useState("");
 
   // LiteLLM
   const [litellmKey, setLitellmKey] = useState("");
@@ -196,16 +182,6 @@ export function LLMPanel() {
       } else {
         setOpenaiModel("custom");
         setOpenaiCustomModel(m);
-      }
-    }
-    if (config.cerebras) {
-      const m = config.cerebras.model;
-      if (CEREBRAS_MODELS.includes(m)) {
-        setCerebrasModel(m);
-        setCerebrasCustomModel("");
-      } else {
-        setCerebrasModel("custom");
-        setCerebrasCustomModel(m);
       }
     }
     if (config.litellm) {
@@ -292,10 +268,6 @@ export function LLMPanel() {
           model: resolveModel(openaiModel, openaiCustomModel),
           ...(openaiKey ? { api_key: openaiKey } : {}),
         },
-        cerebras: {
-          model: resolveModel(cerebrasModel, cerebrasCustomModel),
-          ...(cerebrasKey ? { api_key: cerebrasKey } : {}),
-        },
         litellm: {
           base_url: litellmBaseUrl,
           model: resolveModel(litellmModel, litellmCustomModel),
@@ -329,7 +301,6 @@ export function LLMPanel() {
       setMessage({ text: resp.message, type: "ok" });
       setAnthropicKey("");
       setOpenaiKey("");
-      setCerebrasKey("");
       setLitellmKey("");
       setGroqKey("");
       setGeminiKey("");
@@ -355,9 +326,6 @@ export function LLMPanel() {
       } else if (provider === "openai") {
         body.api_key = openaiKey || undefined;
         body.model = resolveModel(openaiModel, openaiCustomModel);
-      } else if (provider === "cerebras") {
-        body.api_key = cerebrasKey || undefined;
-        body.model = resolveModel(cerebrasModel, cerebrasCustomModel);
       } else if (provider === "litellm") {
         body.api_key = litellmKey || undefined;
         body.base_url = litellmBaseUrl;
@@ -482,27 +450,6 @@ export function LLMPanel() {
           onFallbackToggle={() => toggleFallback("openai")}
           expanded={!!expanded.openai}
           onToggleExpand={() => setExpanded((s) => ({ ...s, openai: !s.openai }))}
-        />
-
-        <ProviderSection
-          name="Cerebras"
-          provider="cerebras"
-          isPrimary={primary === "cerebras"}
-          hasKey={config.cerebras?.has_api_key ?? false}
-          apiKey={cerebrasKey}
-          onApiKeyChange={setCerebrasKey}
-          model={cerebrasModel}
-          customModel={cerebrasCustomModel}
-          onModelChange={setCerebrasModel}
-          onCustomModelChange={setCerebrasCustomModel}
-          models={CEREBRAS_MODELS}
-          testing={testing === "cerebras"}
-          testResult={testResult.cerebras}
-          onTest={() => handleTest("cerebras")}
-          isFallback={fallback.includes("cerebras")}
-          onFallbackToggle={() => toggleFallback("cerebras")}
-          expanded={!!expanded.cerebras}
-          onToggleExpand={() => setExpanded((s) => ({ ...s, cerebras: !s.cerebras }))}
         />
 
         <ProviderSection

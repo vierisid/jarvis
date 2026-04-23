@@ -31,11 +31,6 @@ llm:
     api_key: "sk-..."
     model: "gpt-4o"
 
-  # Cerebras (OpenAI-compatible) configuration
-  # cerebras:
-  #   api_key: "csk-..."
-  #   model: "gpt-oss-120b"
-
   # LiteLLM gateway (OpenAI-compatible proxy) configuration
   # litellm:
   #   api_key: "sk-optional"

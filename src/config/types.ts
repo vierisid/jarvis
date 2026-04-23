@@ -157,7 +157,6 @@ export type JarvisConfig = {
     fallback: string[];
     anthropic?: { api_key: string; model?: string };
     openai?: { api_key: string; model?: string };
-    cerebras?: { api_key: string; model?: string };
     litellm?: { api_key?: string; base_url?: string; model?: string };
     groq?: { api_key: string; model?: string };
     gemini?: { api_key: string; model?: string };
@@ -241,10 +240,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     openai: {
       api_key: '',
       model: 'gpt-5.4',
-    },
-    cerebras: {
-      api_key: '',
-      model: 'gpt-oss-120b',
     },
     litellm: {
       api_key: '',

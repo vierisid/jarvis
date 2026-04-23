@@ -74,7 +74,6 @@ export async function runOnboard(): Promise<void> {
   const provider = await askChoice('Choose your primary LLM provider:', [
     { label: 'Anthropic (Claude)', value: 'anthropic' as const, description: 'Best quality, recommended' },
     { label: 'OpenAI (GPT)', value: 'openai' as const, description: 'Good alternative' },
-    { label: 'Cerebras', value: 'cerebras' as const, description: 'Fast OpenAI-compatible Cerebras inference' },
     { label: 'LiteLLM', value: 'litellm' as const, description: 'OpenAI-compatible proxy/gateway for many providers' },
     { label: 'Google (Gemini)', value: 'gemini' as const, description: 'Google AI models' },
     { label: 'Ollama (Local)', value: 'ollama' as const, description: 'Free, runs locally' },
@@ -162,41 +161,6 @@ export async function runOnboard(): Promise<void> {
     const modelChoice = await askChoice('Choose a model:', openaiModels, isPreset ? currentModel : 'custom');
     const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
     if (config.llm.openai) config.llm.openai.model = model;
-
-  } else if (provider === 'cerebras') {
-    const existing = config.llm.cerebras?.api_key;
-    if (existing && existing.length > 5) {
-      const keep = await askYesNo(`API key found (${existing.slice(0, 10)}...). Keep it?`, true);
-      if (!keep) {
-        const key = await askSecret('Enter your Cerebras API key');
-        if (key) config.llm.cerebras = { ...config.llm.cerebras, api_key: key };
-      }
-    } else {
-      const configureNow = await askYesNo('Add your Cerebras API key now?', true);
-      if (configureNow) {
-        const key = await askSecret('Enter your Cerebras API key (from inference.cerebras.ai)');
-        if (key) {
-          config.llm.cerebras = { ...config.llm.cerebras, api_key: key };
-        } else {
-          printWarn('No API key set. JARVIS won\'t work without one.');
-        }
-      } else {
-        printWarn('No API key set. JARVIS won\'t work without one.');
-      }
-    }
-
-    const currentModel = config.llm.cerebras?.model ?? 'gpt-oss-120b';
-    const cerebrasModels = [
-      { label: 'GPT-OSS 120B', value: 'gpt-oss-120b', description: 'Open-weight flagship on Cerebras' },
-      { label: 'Llama 3.3 70B', value: 'llama-3.3-70b', description: 'Balanced large instruct model' },
-      { label: 'Llama 4 Scout 17B', value: 'llama-4-scout-17b-16e-instruct', description: 'Smaller fast instruct model' },
-      { label: 'Qwen 3 235B', value: 'qwen-3-235b-a22b-instruct-2507', description: 'Large multilingual instruct model' },
-      { label: 'Custom', value: 'custom', description: 'Enter model name manually' },
-    ];
-    const isPreset = cerebrasModels.some(m => m.value === currentModel);
-    const modelChoice = await askChoice('Choose a model:', cerebrasModels, isPreset ? currentModel : 'custom');
-    const model = modelChoice === 'custom' ? await ask('Enter model name', currentModel) : modelChoice;
-    if (config.llm.cerebras) config.llm.cerebras.model = model;
 
   } else if (provider === 'litellm') {
     const baseUrl = await ask('LiteLLM base URL', config.llm.litellm?.base_url ?? 'http://localhost:4000/v1');
@@ -365,15 +329,13 @@ export async function runOnboard(): Promise<void> {
   if (testConn) {
     const spin = startSpinner('Testing connection...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, CerebrasProvider, LiteLLMProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, LiteLLMProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
 
       if (provider === 'anthropic' && config.llm.anthropic?.api_key) {
         manager.registerProvider(new AnthropicProvider(config.llm.anthropic.api_key, config.llm.anthropic.model));
       } else if (provider === 'openai' && config.llm.openai?.api_key) {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
-      } else if (provider === 'cerebras' && config.llm.cerebras?.api_key) {
-        manager.registerProvider(new CerebrasProvider(config.llm.cerebras.api_key, config.llm.cerebras.model));
       } else if (provider === 'litellm' && config.llm.litellm?.base_url) {
         manager.registerProvider(new LiteLLMProvider(config.llm.litellm.base_url, config.llm.litellm.model, config.llm.litellm.api_key ?? ''));
       } else if (provider === 'groq' && config.llm.groq?.api_key) {
@@ -405,7 +367,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'cerebras', 'litellm', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'litellm', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
@@ -426,12 +388,6 @@ export async function runOnboard(): Promise<void> {
         if (configureProvider) {
           const key = await askSecret('OpenAI API key (for fallback)');
           if (key) config.llm.openai = { ...config.llm.openai, api_key: key, model: config.llm.openai?.model ?? 'gpt-5.4' };
-        }
-      } else if (fb === 'cerebras' && (!config.llm.cerebras?.api_key || config.llm.cerebras.api_key === '')) {
-        const configureProvider = await askYesNo('Configure Cerebras as a fallback provider?', false);
-        if (configureProvider) {
-          const key = await askSecret('Cerebras API key (for fallback)');
-          if (key) config.llm.cerebras = { ...config.llm.cerebras, api_key: key, model: config.llm.cerebras?.model ?? 'gpt-oss-120b' };
         }
       } else if (fb === 'litellm') {
         const configureProvider = await askYesNo('Configure LiteLLM as a fallback provider?', false);

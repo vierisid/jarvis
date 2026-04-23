@@ -10,7 +10,6 @@ import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain
 import type { JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
-import { CerebrasProvider } from '../llm/cerebras.ts';
 import { LiteLLMProvider } from '../llm/litellm.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
@@ -22,7 +21,6 @@ import type { LLMManager } from '../llm/manager.ts';
 // Keychain key names
 const KEY_ANTHROPIC = 'llm.anthropic.api_key';
 const KEY_OPENAI = 'llm.openai.api_key';
-const KEY_CEREBRAS = 'llm.cerebras.api_key';
 const KEY_LITELLM = 'llm.litellm.api_key';
 const KEY_GROQ = 'llm.groq.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
@@ -33,7 +31,6 @@ const SETTING_PRIMARY = 'llm.primary';
 const SETTING_FALLBACK = 'llm.fallback';
 const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
-const SETTING_CEREBRAS_MODEL = 'llm.cerebras.model';
 const SETTING_LITELLM_MODEL = 'llm.litellm.model';
 const SETTING_LITELLM_BASE_URL = 'llm.litellm.base_url';
 const SETTING_GROQ_MODEL = 'llm.groq.model';
@@ -47,7 +44,6 @@ export type LLMSettingsResponse = {
   fallback: string[];
   anthropic: { model: string; has_api_key: boolean } | null;
   openai: { model: string; has_api_key: boolean } | null;
-  cerebras: { model: string; has_api_key: boolean } | null;
   litellm: { base_url: string; model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
@@ -66,7 +62,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
 
   const anthropicModel = getSetting(SETTING_ANTHROPIC_MODEL) ?? config.llm.anthropic?.model ?? 'claude-sonnet-4-6';
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
-  const cerebrasModel = getSetting(SETTING_CEREBRAS_MODEL) ?? config.llm.cerebras?.model ?? 'gpt-oss-120b';
   const litellmModel = getSetting(SETTING_LITELLM_MODEL) ?? config.llm.litellm?.model ?? 'openai/gpt-4o-mini';
   const litellmBaseUrl = getSetting(SETTING_LITELLM_BASE_URL) ?? config.llm.litellm?.base_url ?? 'http://localhost:4000/v1';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
@@ -78,7 +73,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
 
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
-  const hasCerebrasKey = hasSecret(KEY_CEREBRAS) || !!config.llm.cerebras?.api_key;
   const hasLiteLLMKey = hasSecret(KEY_LITELLM) || !!config.llm.litellm?.api_key;
   const hasGroqKey = hasSecret(KEY_GROQ) || !!config.llm.groq?.api_key;
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
@@ -89,7 +83,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     fallback,
     anthropic: { model: anthropicModel, has_api_key: hasAnthropicKey },
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
-    cerebras: { model: cerebrasModel, has_api_key: hasCerebrasKey },
     litellm: { base_url: litellmBaseUrl, model: litellmModel, has_api_key: hasLiteLLMKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
@@ -108,7 +101,6 @@ export function saveLLMSettings(
     fallback?: string[];
     anthropic?: { api_key?: string; model?: string };
     openai?: { api_key?: string; model?: string };
-    cerebras?: { api_key?: string; model?: string };
     litellm?: { api_key?: string; base_url?: string; model?: string };
     groq?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
@@ -153,21 +145,6 @@ export function saveLLMSettings(
       ...config.llm.openai,
       model: body.openai.model ?? config.llm.openai?.model,
       api_key: body.openai.api_key ?? getOpenAIApiKey(config) ?? '',
-    };
-  }
-
-  // Cerebras
-  if (body.cerebras) {
-    if (body.cerebras.model) {
-      setSetting(SETTING_CEREBRAS_MODEL, body.cerebras.model);
-    }
-    if (body.cerebras.api_key) {
-      setSecret(KEY_CEREBRAS, body.cerebras.api_key);
-    }
-    config.llm.cerebras = {
-      ...config.llm.cerebras,
-      model: body.cerebras.model ?? config.llm.cerebras?.model,
-      api_key: body.cerebras.api_key ?? getCerebrasApiKey(config) ?? '',
     };
   }
 
@@ -266,13 +243,6 @@ function getOpenAIApiKey(config: JarvisConfig): string | null {
 }
 
 /**
- * Resolve the Cerebras API key: keychain > config.yaml > env var.
- */
-function getCerebrasApiKey(config: JarvisConfig): string | null {
-  return getSecret(KEY_CEREBRAS) ?? config.llm.cerebras?.api_key ?? null;
-}
-
-/**
  * Resolve the LiteLLM API key: keychain > config.yaml > env var.
  */
 function getLiteLLMApiKey(config: JarvisConfig): string | null {
@@ -335,19 +305,6 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
         ? keychainOpenaiKey
         : (config.llm.openai?.api_key ?? ''),
       model: dbOpenaiModel ?? config.llm.openai?.model,
-    };
-  }
-
-  // Cerebras
-  const dbCerebrasModel = getSetting(SETTING_CEREBRAS_MODEL);
-  const keychainCerebrasKey = getSecret(KEY_CEREBRAS);
-  if (dbCerebrasModel || keychainCerebrasKey) {
-    config.llm.cerebras = {
-      ...config.llm.cerebras,
-      api_key: (!process.env.JARVIS_CEREBRAS_KEY && keychainCerebrasKey)
-        ? keychainCerebrasKey
-        : (config.llm.cerebras?.api_key ?? ''),
-      model: dbCerebrasModel ?? config.llm.cerebras?.model,
     };
   }
 
@@ -437,10 +394,6 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new OpenAIProvider(llm.openai.api_key, llm.openai.model));
     console.log('[LLM] Hot-reloaded OpenAI provider');
   }
-  if (llm.cerebras?.api_key) {
-    providers.push(new CerebrasProvider(llm.cerebras.api_key, llm.cerebras.model));
-    console.log('[LLM] Hot-reloaded Cerebras provider');
-  }
   if (llm.litellm?.base_url) {
     providers.push(new LiteLLMProvider(llm.litellm.base_url, llm.litellm.model, llm.litellm.api_key ?? ''));
     console.log('[LLM] Hot-reloaded LiteLLM provider');
@@ -491,10 +444,6 @@ export async function testLLMProvider(
       const key = opts.api_key || getSecret(KEY_OPENAI) || config.llm.openai?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new OpenAIProvider(key, opts.model ?? config.llm.openai?.model);
-    } else if (opts.provider === 'cerebras') {
-      const key = opts.api_key || getSecret(KEY_CEREBRAS) || config.llm.cerebras?.api_key;
-      if (!key) return { ok: false, error: 'API key required' };
-      instance = new CerebrasProvider(key, opts.model ?? config.llm.cerebras?.model);
     } else if (opts.provider === 'litellm') {
       instance = new LiteLLMProvider(
         opts.base_url ?? config.llm.litellm?.base_url,

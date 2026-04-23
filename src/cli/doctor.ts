@@ -88,7 +88,7 @@ export async function runDoctor(): Promise<void> {
   if (config) {
     const spin = startSpinner('Testing LLM connectivity...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, CerebrasProvider, LiteLLMProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, LiteLLMProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
       const primary = config.llm?.primary ?? 'anthropic';
 
@@ -96,8 +96,6 @@ export async function runDoctor(): Promise<void> {
         manager.registerProvider(new AnthropicProvider(config.llm.anthropic.api_key, config.llm.anthropic.model));
       } else if (primary === 'openai' && config.llm?.openai?.api_key) {
         manager.registerProvider(new OpenAIProvider(config.llm.openai.api_key, config.llm.openai.model));
-      } else if (primary === 'cerebras' && config.llm?.cerebras?.api_key) {
-        manager.registerProvider(new CerebrasProvider(config.llm.cerebras.api_key, config.llm.cerebras.model));
       } else if (primary === 'litellm' && config.llm?.litellm?.base_url) {
         manager.registerProvider(new LiteLLMProvider(config.llm.litellm.base_url, config.llm.litellm.model, config.llm.litellm.api_key ?? ''));
       } else if (primary === 'groq' && config.llm?.groq?.api_key) {
