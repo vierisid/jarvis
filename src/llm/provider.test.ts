@@ -1,6 +1,8 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
+import { CerebrasProvider } from './cerebras.ts';
+import { LiteLLMProvider } from './litellm.ts';
 import { GroqProvider } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
@@ -18,6 +20,16 @@ describe('LLM Provider Types', () => {
   test('OpenAIProvider can be instantiated', () => {
     const provider = new OpenAIProvider('test-key', 'test-model');
     expect(provider.name).toBe('openai');
+  });
+
+  test('CerebrasProvider can be instantiated', () => {
+    const provider = new CerebrasProvider('test-key', 'gpt-oss-120b');
+    expect(provider.name).toBe('cerebras');
+  });
+
+  test('LiteLLMProvider can be instantiated', () => {
+    const provider = new LiteLLMProvider('http://localhost:4000/v1', 'openai/gpt-4o-mini');
+    expect(provider.name).toBe('litellm');
   });
 
   test('GroqProvider can be instantiated', () => {
@@ -243,6 +255,16 @@ describe('Provider URLs', () => {
     expect(provider.apiUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
   });
 
+  test('CerebrasProvider uses correct API URL', () => {
+    const provider = new CerebrasProvider('test-key') as any;
+    expect(provider.apiUrl).toBe('https://api.cerebras.ai/v1/chat/completions');
+  });
+
+  test('LiteLLMProvider uses configured API URL', () => {
+    const provider = new LiteLLMProvider('http://localhost:4000/v1') as any;
+    expect(provider.apiUrl).toBe('http://localhost:4000/v1/chat/completions');
+  });
+
   test('GroqProvider uses correct API URL', () => {
     const provider = new GroqProvider('test-key') as any;
     expect(provider.apiUrl).toBe('https://api.groq.com/openai/v1/chat/completions');
@@ -288,6 +310,16 @@ describe('Default Models', () => {
   test('OpenRouterProvider has correct default model', () => {
     const provider = new OpenRouterProvider('test-key') as any;
     expect(provider.defaultModel).toBe('anthropic/claude-sonnet-4');
+  });
+
+  test('CerebrasProvider has correct default model', () => {
+    const provider = new CerebrasProvider('test-key') as any;
+    expect(provider.defaultModel).toBe('gpt-oss-120b');
+  });
+
+  test('LiteLLMProvider has correct default model', () => {
+    const provider = new LiteLLMProvider() as any;
+    expect(provider.defaultModel).toBe('openai/gpt-4o-mini');
   });
 
   test('NVIDIAProvider has correct default model', () => {

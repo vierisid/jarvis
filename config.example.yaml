@@ -31,6 +31,17 @@ llm:
     api_key: "sk-..."
     model: "gpt-4o"
 
+  # Cerebras (OpenAI-compatible) configuration
+  # cerebras:
+  #   api_key: "csk-..."
+  #   model: "gpt-oss-120b"
+
+  # LiteLLM gateway (OpenAI-compatible proxy) configuration
+  # litellm:
+  #   api_key: "sk-optional"
+  #   base_url: "http://localhost:4000/v1"
+  #   model: "openai/gpt-4o-mini"
+
   # Groq (OpenAI-compatible) configuration
   # groq:
   #   api_key: "gsk_..."
