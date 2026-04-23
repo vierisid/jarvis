@@ -3,6 +3,7 @@ import {
   canUseSystemdUserService,
   decodeLaunchctlOutput,
   isLaunchdAlreadyLoaded,
+  probeSystemdUserService,
   type SpawnResultLike,
   type SpawnSyncFn,
 } from './autostart.ts';
@@ -58,6 +59,65 @@ describe('canUseSystemdUserService', () => {
       throw new Error('ENOENT');
     };
     expect(canUseSystemdUserService(spawn)).toBe(false);
+  });
+});
+
+describe('probeSystemdUserService', () => {
+  test('captures stderr from systemctl --version failure', () => {
+    const stderr = new TextEncoder().encode('bash: systemctl: command not found');
+    const spawn = makeSpawn({
+      'systemctl --user --version': { exitCode: 127, stderr },
+    });
+    const result = probeSystemdUserService(spawn);
+    expect(result.supported).toBe(false);
+    expect(result.reason).toContain('systemctl: command not found');
+  });
+
+  test('captures stderr when bus is unreachable (WSL2 without systemd)', () => {
+    const stderr = new TextEncoder().encode('Failed to connect to bus: No such file or directory');
+    const spawn = makeSpawn({
+      'systemctl --user --version': ok,
+      'systemctl --user is-system-running': { exitCode: 1, stderr },
+      'systemctl --user show-environment': { exitCode: 1, stderr },
+    });
+    const result = probeSystemdUserService(spawn);
+    expect(result.supported).toBe(false);
+    expect(result.reason).toContain('Failed to connect to bus');
+  });
+
+  test('returns supported=true with no reason when bus is reachable', () => {
+    const spawn = makeSpawn({
+      'systemctl --user --version': ok,
+      'systemctl --user is-system-running': ok,
+    });
+    expect(probeSystemdUserService(spawn)).toEqual({ supported: true });
+  });
+
+  test('returns supported=true when show-environment fallback succeeds', () => {
+    const spawn = makeSpawn({
+      'systemctl --user --version': ok,
+      'systemctl --user is-system-running': fail,
+      'systemctl --user show-environment': ok,
+    });
+    expect(probeSystemdUserService(spawn)).toEqual({ supported: true });
+  });
+
+  test('reports spawn exception message', () => {
+    const spawn: SpawnSyncFn = () => {
+      throw new Error('ENOENT: systemctl missing');
+    };
+    const result = probeSystemdUserService(spawn);
+    expect(result.supported).toBe(false);
+    expect(result.reason).toContain('ENOENT');
+  });
+
+  test('first line only when stderr has multiple lines', () => {
+    const stderr = new TextEncoder().encode('line one\nline two\nline three');
+    const spawn = makeSpawn({
+      'systemctl --user --version': { exitCode: 1, stderr },
+    });
+    const result = probeSystemdUserService(spawn);
+    expect(result.reason).toBe('line one');
   });
 });
 

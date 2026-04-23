@@ -66,28 +66,42 @@ export type SpawnSyncFn = (cmd: string[], opts?: { stdout?: 'ignore'; stderr?: '
 
 const defaultSpawnSync: SpawnSyncFn = (cmd, opts) => Bun.spawnSync(cmd, opts as never) as unknown as SpawnResultLike;
 
-export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
+export type SystemdProbeResult = { supported: boolean; reason?: string };
+
+function firstNonEmpty(...outputs: (Uint8Array | ArrayBuffer | null | undefined)[]): string {
+  for (const o of outputs) {
+    const text = decodeLaunchctlOutput(o).trim();
+    if (text) return text.split('\n')[0]!.slice(0, 200);
+  }
+  return '';
+}
+
+export function probeSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSync): SystemdProbeResult {
   try {
     const version = spawnSync(['systemctl', '--user', '--version']);
-    if (version.exitCode !== 0) return false;
+    if (version.exitCode !== 0) {
+      return { supported: false, reason: firstNonEmpty(version.stderr, version.stdout) || 'systemctl --user not available' };
+    }
 
-    const state = spawnSync(['systemctl', '--user', 'is-system-running'], {
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
-
+    const state = spawnSync(['systemctl', '--user', 'is-system-running']);
     // "running" exits 0, degraded/offline can still manage units and usually exits non-zero.
     // We only need the user manager to be reachable, not fully healthy.
-    if (state.exitCode === 0) return true;
+    if (state.exitCode === 0) return { supported: true };
 
-    const env = spawnSync(['systemctl', '--user', 'show-environment'], {
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
-    return env.exitCode === 0;
-  } catch {
-    return false;
+    const env = spawnSync(['systemctl', '--user', 'show-environment']);
+    if (env.exitCode === 0) return { supported: true };
+
+    return {
+      supported: false,
+      reason: firstNonEmpty(env.stderr, env.stdout, state.stderr, state.stdout) || 'user systemd manager unreachable',
+    };
+  } catch (err) {
+    return { supported: false, reason: err instanceof Error ? err.message : String(err) };
   }
+}
+
+export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
+  return probeSystemdUserService(spawnSync).supported;
 }
 
 // ── systemd (Linux) ──────────────────────────────────────────────────
@@ -408,10 +422,18 @@ export function isAutostartInstalled(): boolean {
  * Linux and WSL2 require a reachable user systemd instance.
  */
 export function isAutostartSupported(): boolean {
+  return checkAutostartSupport().supported;
+}
+
+/**
+ * Like isAutostartSupported, but returns why it isn't when the answer is no —
+ * useful for surfacing real diagnostics (e.g., WSL2 bus unreachable) in onboarding.
+ */
+export function checkAutostartSupport(): SystemdProbeResult {
   if (process.platform === 'darwin') {
-    return true;
+    return { supported: true };
   }
-  return canUseSystemdUserService();
+  return probeSystemdUserService();
 }
 
 /**

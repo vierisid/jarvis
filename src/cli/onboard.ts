@@ -15,7 +15,7 @@ import {
 } from './helpers.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadConfig, saveConfig } from '../config/loader.ts';
-import { installAutostart, startAutostartService, getAutostartName, isAutostartSupported } from './autostart.ts';
+import { installAutostart, startAutostartService, getAutostartName, checkAutostartSupport } from './autostart.ts';
 import { runDependencyCheck } from './deps.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { saveUserProfile } from '../vault/user-profile.ts';
@@ -627,14 +627,17 @@ export async function runOnboard(): Promise<void> {
   printStep(10, TOTAL_STEPS, 'Keepalive');
   const platform = detectPlatform();
   let enableKeepalive = false;
-  const keepaliveSupported = isAutostartSupported();
+  const support = checkAutostartSupport();
 
-  if (!keepaliveSupported) {
+  if (!support.supported) {
     if (platform === 'wsl') {
       printInfo('WSL2 detected, but the user systemd service manager is not available in this session.');
       printInfo('Enable systemd in WSL, then rerun onboard to use 24/7 keepalive mode.');
     } else {
       printInfo('Keepalive mode is not supported in this environment.');
+    }
+    if (support.reason) {
+      console.log(c.dim(`  (${support.reason})`));
     }
     printInfo('Start JARVIS manually with: jarvis start');
   } else {
