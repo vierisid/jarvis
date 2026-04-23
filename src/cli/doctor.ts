@@ -10,9 +10,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   c, printBanner, printOk, printWarn, printErr, printInfo, startSpinner, closeRL,
 } from './helpers.ts';
+import { detectInstallMethod, describeInstallMethod } from './install-method.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
+const PACKAGE_ROOT = join(import.meta.dir, '..', '..');
 
 interface CheckResult {
   name: string;
@@ -36,7 +38,17 @@ export async function runDoctor(): Promise<void> {
     results.push({ name: 'Bun Runtime', status: 'warn', message: `v${bunVersion} (>= 1.0.0 recommended)` });
   }
 
-  // ── Check 2: Data Directory ───────────────────────────────────────
+  // ── Check 2: Install Method ───────────────────────────────────────
+
+  const installInfo = detectInstallMethod(PACKAGE_ROOT);
+  const installMessage = `${describeInstallMethod(installInfo)} — ${installInfo.reason}`;
+  results.push({
+    name: 'Install Method',
+    status: installInfo.method === 'unknown' ? 'warn' : 'ok',
+    message: installMessage,
+  });
+
+  // ── Check 3: Data Directory ───────────────────────────────────────
 
   if (existsSync(JARVIS_DIR)) {
     results.push({ name: 'Data Directory', status: 'ok', message: JARVIS_DIR });

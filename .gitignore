@@ -52,3 +52,6 @@ sidecar/desktop-bridge/bin/
 sidecar/desktop-bridge/obj/
 
 eng.traineddata
+
+# install-method marker — written at install time, never committed
+.install-method

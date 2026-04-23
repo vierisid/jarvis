@@ -261,6 +261,12 @@ main() {
   fi
   ok "Dependencies installed"
 
+  # Stamp install-method marker so `jarvis update` / `jarvis uninstall` know
+  # this is a script install (git clone) and dispatch to `git pull` / `rm -rf`
+  # rather than `bun uninstall -g` or docker instructions.
+  printf '{"method":"script","installedAt":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "$INSTALL_DIR/.install-method"
+
   # Create shell wrapper directly (avoids bun link registry lookups)
   rm -f "$HOME/.bun/bin/jarvis" 2>/dev/null || true
   local bun_bin="$HOME/.bun/bin"
