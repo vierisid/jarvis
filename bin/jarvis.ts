@@ -309,79 +309,10 @@ function cmdLogs(args: string[]): void {
 }
 
 async function cmdUpdate(): Promise<void> {
-  console.log(c.cyan('Checking for updates...\n'));
-
-  // Get current version
-  const currentVersion = getVersion();
-  console.log(`  Current version: ${c.bold(currentVersion)}`);
-
-  // Check if daemon is running (we'll restart it after update)
-  const wasRunning = isLocked();
-
-  // Stop daemon if running
-  if (wasRunning) {
-    console.log(c.dim('  Stopping daemon before update...'));
-    try {
-      process.kill(wasRunning, 'SIGTERM');
-      releaseLock();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch {
-      releaseLock();
-    }
-  }
-
-  // Update via git pull + bun install (not npm — package is not published)
-  console.log('');
-  const gitPull = Bun.spawnSync(['git', 'pull', '--ff-only'], {
-    cwd: PACKAGE_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
-  });
-
-  if (gitPull.exitCode !== 0) {
-    const stderr = gitPull.stderr.toString();
-    // If not a git repo, try the install dir
-    const installDir = join(require('node:os').homedir(), '.jarvis', 'daemon');
-    const gitPull2 = Bun.spawnSync(['git', 'pull', '--ff-only'], {
-      cwd: installDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-    });
-
-    if (gitPull2.exitCode !== 0) {
-      console.log(c.red('✗ Update failed (git pull):'));
-      console.log(c.dim(`  ${gitPull2.stderr.toString().trim() || stderr.trim()}`));
-      if (wasRunning) {
-        console.log(c.dim('\n  Restarting daemon...'));
-        await cmdStart(['--no-open']);
-      }
-      process.exit(1);
-    }
-  }
-
-  // Reinstall dependencies
-  const bunInstall = Bun.spawnSync(['bun', 'install'], {
-    cwd: PACKAGE_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
-  });
-
-  if (bunInstall.exitCode !== 0) {
-    console.log(c.yellow('! Dependencies may need manual refresh: bun install'));
-  }
-
-  // Get new version
-  const newVersion = getVersion();
-  if (newVersion === currentVersion) {
-    console.log(c.green(`✓ Already on the latest version (${currentVersion})`));
-  } else {
-    console.log(c.green(`✓ Updated: ${currentVersion} → ${newVersion}`));
-  }
-
-  // Restart daemon if it was running
-  if (wasRunning) {
-    console.log(c.dim('\nRestarting daemon...'));
-    await cmdStart(['--no-open']);
+  const { runUpdate } = await import('../src/cli/update.ts');
+  const result = await runUpdate({ packageRoot: PACKAGE_ROOT });
+  if (result.exitCode !== 0) {
+    process.exit(result.exitCode);
   }
 }
 
