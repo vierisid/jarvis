@@ -56,12 +56,22 @@ function getJarvisPath(): string {
   return join(import.meta.dir, '../../bin/jarvis.ts');
 }
 
-function canUseSystemdUserService(): boolean {
+export type SpawnResultLike = {
+  exitCode: number;
+  stdout?: Uint8Array | ArrayBuffer | null;
+  stderr?: Uint8Array | ArrayBuffer | null;
+};
+
+export type SpawnSyncFn = (cmd: string[], opts?: { stdout?: 'ignore'; stderr?: 'ignore' }) => SpawnResultLike;
+
+const defaultSpawnSync: SpawnSyncFn = (cmd, opts) => Bun.spawnSync(cmd, opts as never) as unknown as SpawnResultLike;
+
+export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
   try {
-    const version = Bun.spawnSync(['systemctl', '--user', '--version']);
+    const version = spawnSync(['systemctl', '--user', '--version']);
     if (version.exitCode !== 0) return false;
 
-    const state = Bun.spawnSync(['systemctl', '--user', 'is-system-running'], {
+    const state = spawnSync(['systemctl', '--user', 'is-system-running'], {
       stdout: 'ignore',
       stderr: 'ignore',
     });
@@ -70,7 +80,7 @@ function canUseSystemdUserService(): boolean {
     // We only need the user manager to be reachable, not fully healthy.
     if (state.exitCode === 0) return true;
 
-    const env = Bun.spawnSync(['systemctl', '--user', 'show-environment'], {
+    const env = spawnSync(['systemctl', '--user', 'show-environment'], {
       stdout: 'ignore',
       stderr: 'ignore',
     });
@@ -252,7 +262,7 @@ async function installLaunchd(): Promise<boolean> {
   }
 }
 
-function decodeLaunchctlOutput(output: Uint8Array | ArrayBuffer | null | undefined): string {
+export function decodeLaunchctlOutput(output: Uint8Array | ArrayBuffer | null | undefined): string {
   if (!output) {
     return '';
   }
@@ -267,9 +277,7 @@ function decodeLaunchctlOutput(output: Uint8Array | ArrayBuffer | null | undefin
   }
 }
 
-function isLaunchdAlreadyLoaded(
-  result: { exitCode: number; stdout?: Uint8Array | ArrayBuffer | null; stderr?: Uint8Array | ArrayBuffer | null },
-): boolean {
+export function isLaunchdAlreadyLoaded(result: SpawnResultLike): boolean {
   if (result.exitCode === 0) {
     return false;
   }
