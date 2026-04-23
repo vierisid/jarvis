@@ -8,7 +8,6 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
@@ -280,16 +279,15 @@ async function installLaunchd(): Promise<boolean> {
   }
 }
 
+const utf8Decoder = new TextDecoder('utf-8');
+
 export function decodeLaunchctlOutput(output: Uint8Array | ArrayBuffer | null | undefined): string {
   if (!output) {
     return '';
   }
 
   try {
-    if (output instanceof Uint8Array) {
-      return Buffer.from(output).toString('utf8');
-    }
-    return Buffer.from(new Uint8Array(output)).toString('utf8');
+    return utf8Decoder.decode(output);
   } catch {
     return '';
   }
@@ -309,24 +307,37 @@ export function isLaunchdAlreadyLoaded(result: SpawnResultLike): boolean {
   );
 }
 
+function launchctlReason(result: SpawnResultLike): string {
+  const combined = `${decodeLaunchctlOutput(result.stderr)}\n${decodeLaunchctlOutput(result.stdout)}`.trim();
+  const first = combined.split('\n').find((line) => line.trim().length > 0);
+  return (first ?? `exit ${result.exitCode}`).slice(0, 200);
+}
+
 async function startLaunchdService(): Promise<boolean> {
   try {
     const getuid = process.getuid;
     const uid = typeof getuid === 'function' ? getuid.call(process) : undefined;
 
+    let bootstrapReason: string | null = null;
     if (typeof uid === 'number') {
       const bootstrap = Bun.spawnSync(['launchctl', 'bootstrap', `gui/${uid}`, LAUNCHD_PLIST]);
       if (bootstrap.exitCode === 0 || isLaunchdAlreadyLoaded(bootstrap)) {
         printOk('JARVIS launch agent is running.');
         return true;
       }
+      bootstrapReason = launchctlReason(bootstrap);
     } else {
-      printWarn('Could not determine the current user UID; skipping launchctl bootstrap and falling back to launchctl load.');
+      bootstrapReason = 'could not determine current user UID';
+      printWarn('Skipping launchctl bootstrap — no UID; falling back to launchctl load.');
     }
 
     const load = Bun.spawnSync(['launchctl', 'load', LAUNCHD_PLIST]);
     if (load.exitCode !== 0 && !isLaunchdAlreadyLoaded(load)) {
-      printWarn('Installed launchd plist, but could not start it immediately. It should start on next login.');
+      const loadReason = launchctlReason(load);
+      printWarn(
+        `Installed launchd plist, but could not start it immediately. It should start on next login. ` +
+          `(bootstrap: ${bootstrapReason}; load: ${loadReason})`,
+      );
       return false;
     }
 
