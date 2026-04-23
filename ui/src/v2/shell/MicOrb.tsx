@@ -129,21 +129,24 @@ export function MicOrb({
           strokeDasharray={discDash}
         />
 
-        {/* thinking — three orbiting dots inside the dark disc */}
+        {/* thinking — three orbiting dots inside the dark disc.
+            Uses native SVG animateTransform per-circle with explicit `0 0`
+            rotation center — avoids CSS transform-box quirks on <g> where
+            the group's fill-box offsets the effective pivot. */}
         {state === "thinking" && (
-          <g
-            className="v2-orb-anim-orbit"
-            style={{
-              transformOrigin: "center",
-              animation: "v2-orb-orbit 1.6s linear infinite",
-            }}
-          >
-            {[0, 1, 2].map((i) => {
-              const angle = (i * 120 * Math.PI) / 180;
-              const cx = Math.sin(angle) * (r * 0.55);
-              const cy = -Math.cos(angle) * (r * 0.55);
-              return <circle key={i} cx={cx} cy={cy} r={3} fill={innerTone} />;
-            })}
+          <g>
+            {[0, 1, 2].map((i) => (
+              <circle key={i} cx={0} cy={-r / 2} r={3} fill={innerTone}>
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  from={`${i * 120} 0 0`}
+                  to={`${i * 120 + 360} 0 0`}
+                  dur="1.6s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            ))}
           </g>
         )}
 
