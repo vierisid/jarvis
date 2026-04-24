@@ -165,11 +165,46 @@ export type ProviderErrorFormatted = {
   detail: string;
 };
 
-export function formatProviderErrorMessage(raw: string | undefined): ProviderErrorFormatted {
-  const fallbackSummary = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
-  if (!raw) return { summary: fallbackSummary, detail: "" };
+/**
+ * Canonical error codes emitted by the server. Keep in sync with
+ * `LLMErrorCode` in src/llm/provider.ts.
+ */
+export type ProviderErrorCode =
+  | "auth"
+  | "rate_limit"
+  | "network"
+  | "bad_request"
+  | "not_found"
+  | "server"
+  | "unknown";
 
-  const original = raw.trim();
+function summaryForCode(code: ProviderErrorCode | undefined): string | null {
+  switch (code) {
+    case "auth":
+      return "Couldn't reach your AI provider. Check your API key and model settings.";
+    case "rate_limit":
+      return "Your AI provider is rate-limiting requests. Wait a moment, or check your usage and billing.";
+    case "network":
+      return "Couldn't reach your AI provider right now. Check your connection, provider status, or fallback settings.";
+    case "bad_request":
+      return "The AI provider rejected the request. The model or parameters may be invalid.";
+    case "not_found":
+      return "The AI provider couldn't find the requested resource. Check your model settings.";
+    case "server":
+      return "The AI provider had a server error. Try again in a moment.";
+    default:
+      return null;
+  }
+}
+
+export function formatProviderErrorMessage(
+  raw: string | undefined,
+  code?: ProviderErrorCode,
+): ProviderErrorFormatted {
+  const fallbackSummary = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
+  if (!raw && !code) return { summary: fallbackSummary, detail: "" };
+
+  const original = (raw ?? "").trim();
   let normalized = original;
   try {
     const parsed = JSON.parse(normalized) as unknown;
@@ -184,6 +219,14 @@ export function formatProviderErrorMessage(raw: string | undefined): ProviderErr
         // Keep the original string when embedded JSON is malformed.
       }
     }
+  }
+
+  // Prefer the server-supplied structured code when available — the emission
+  // site knows the HTTP status and error type, and doesn't need us to guess
+  // from string contents.
+  const codeSummary = summaryForCode(code);
+  if (codeSummary) {
+    return { summary: codeSummary, detail: normalized };
   }
 
   const lowered = normalized.toLowerCase();
@@ -530,6 +573,7 @@ export function useWebSocket() {
       }
     } else if (msg.type === "error") {
       const rawMessage = msg.payload?.message;
+      const rawCode = typeof msg.payload?.code === "string" ? (msg.payload.code as ProviderErrorCode) : undefined;
       voiceCallbacksRef.current?.onError(rawMessage);
 
       // Always preserve the raw payload in the console for debugging.
@@ -544,7 +588,7 @@ export function useWebSocket() {
       let content: string;
       let detail: string | undefined;
       if (isChatCorrelated) {
-        const formatted = formatProviderErrorMessage(rawMessage);
+        const formatted = formatProviderErrorMessage(rawMessage, rawCode);
         content = formatted.summary;
         detail = formatted.detail && formatted.detail !== formatted.summary ? formatted.detail : undefined;
       } else {

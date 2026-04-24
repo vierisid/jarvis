@@ -19,6 +19,7 @@ import type { EmergencyState } from '../authority/emergency.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
+import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 
@@ -775,10 +776,12 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         }
       }
 
+      const message = error instanceof Error ? error.message : 'Chat processing failed';
       return {
         type: 'error',
         payload: {
-          message: error instanceof Error ? error.message : 'Chat processing failed',
+          message,
+          code: classifyErrorString(message),
         },
         id: requestId,
         timestamp: Date.now(),

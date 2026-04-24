@@ -4,7 +4,9 @@ import type {
   LLMOptions,
   LLMResponse,
   LLMStreamEvent,
+  LLMErrorCode,
 } from './provider.ts';
+import { classifyErrorString } from './provider.ts';
 
 export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
@@ -163,6 +165,7 @@ export class LLMManager {
 
   async *stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
     const failures: string[] = [];
+    let lastErrorCode: LLMErrorCode | undefined;
 
     for (const providerName of this.getProviderSequence()) {
       const provider = this.providers.get(providerName);
@@ -180,11 +183,16 @@ export class LLMManager {
             if (event.type === 'error') {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
+              lastErrorCode = event.code ?? classifyErrorString(event.error);
               console.error(
                 `[LLM] Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
               );
               if (emittedContent) {
-                yield { type: 'error', error: this.formatFailure(providerName, errors) };
+                yield {
+                  type: 'error',
+                  error: this.formatFailure(providerName, errors),
+                  code: lastErrorCode,
+                };
                 return;
               }
               break;
@@ -201,6 +209,7 @@ export class LLMManager {
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
+          lastErrorCode = classifyErrorString(errorMsg);
 
           const shouldRetry = this.shouldRetry(err);
           console.error(
@@ -208,7 +217,11 @@ export class LLMManager {
           );
 
           if (emittedContent) {
-            yield { type: 'error', error: this.formatFailure(providerName, errors) };
+            yield {
+              type: 'error',
+              error: this.formatFailure(providerName, errors),
+              code: lastErrorCode,
+            };
             return;
           }
 
@@ -219,9 +232,11 @@ export class LLMManager {
       failures.push(this.formatFailure(providerName, errors));
     }
 
+    const aggregated = failures.join('\n\n');
     yield {
       type: 'error',
-      error: failures.join('\n\n'),
+      error: aggregated,
+      code: lastErrorCode ?? classifyErrorString(aggregated),
     };
   }
 }

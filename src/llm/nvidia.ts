@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OpenAIMessage = {
@@ -158,12 +159,16 @@ export class NVIDIAProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      yield { type: 'error', error: `NVIDIA API error (${response.status}): ${errorText}` };
+      yield {
+        type: 'error',
+        error: `NVIDIA API error (${response.status}): ${errorText}`,
+        code: classifyHttpStatus(response.status),
+      };
       return;
     }
 
     if (!response.body) {
-      yield { type: 'error', error: 'No response body' };
+      yield { type: 'error', error: 'No response body', code: 'network' };
       return;
     }
 
@@ -246,7 +251,7 @@ export class NVIDIAProvider implements LLMProvider {
           toolCalls.push(toolCall);
           yield { type: 'tool_call', tool_call: toolCall };
         } catch (err) {
-          yield { type: 'error', error: `Failed to parse tool call arguments: ${err}` };
+          yield { type: 'error', error: `Failed to parse tool call arguments: ${err}`, code: 'bad_request' };
         }
       }
 
@@ -262,7 +267,7 @@ export class NVIDIAProvider implements LLMProvider {
         },
       };
     } catch (err) {
-      yield { type: 'error', error: `Stream error: ${err}` };
+      yield { type: 'error', error: `Stream error: ${err}`, code: 'network' };
     }
   }
 

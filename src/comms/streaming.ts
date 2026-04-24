@@ -1,4 +1,5 @@
 import type { LLMStreamEvent } from '../llm/provider.ts';
+import { classifyErrorString } from '../llm/provider.ts';
 import type { WebSocketServer, WSMessage } from './websocket.ts';
 
 export type RelayOptions = {
@@ -88,6 +89,7 @@ export class StreamRelay {
             type: 'error',
             payload: {
               message: event.error,
+              code: event.code ?? classifyErrorString(event.error),
               requestId,
             },
             id: requestId,
@@ -129,10 +131,12 @@ export class StreamRelay {
     } catch (error) {
       console.error('[StreamRelay] Error relaying stream:', error);
 
+      const message = error instanceof Error ? error.message : 'Stream relay error';
       const errorMessage: WSMessage = {
         type: 'error',
         payload: {
-          message: error instanceof Error ? error.message : 'Stream relay error',
+          message,
+          code: classifyErrorString(message),
           requestId,
         },
         id: requestId,

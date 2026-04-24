@@ -6,7 +6,7 @@ import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { LLMManager } from './manager.ts';
-import { guardImageSize, type LLMMessage, type ContentBlock } from './provider.ts';
+import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
 describe('LLM Provider Types', () => {
@@ -712,5 +712,75 @@ describe('Groq request shaping', () => {
     expect(events.join('')).toBe('retry-stream ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+});
+
+describe('classifyHttpStatus', () => {
+  test('401/403 → auth', () => {
+    expect(classifyHttpStatus(401)).toBe('auth');
+    expect(classifyHttpStatus(403)).toBe('auth');
+  });
+
+  test('429 → rate_limit', () => {
+    expect(classifyHttpStatus(429)).toBe('rate_limit');
+  });
+
+  test('404 → not_found', () => {
+    expect(classifyHttpStatus(404)).toBe('not_found');
+  });
+
+  test('400/422 → bad_request', () => {
+    expect(classifyHttpStatus(400)).toBe('bad_request');
+    expect(classifyHttpStatus(422)).toBe('bad_request');
+  });
+
+  test('502/503/504 → network (transient)', () => {
+    expect(classifyHttpStatus(502)).toBe('network');
+    expect(classifyHttpStatus(503)).toBe('network');
+    expect(classifyHttpStatus(504)).toBe('network');
+  });
+
+  test('other 5xx → server', () => {
+    expect(classifyHttpStatus(500)).toBe('server');
+    expect(classifyHttpStatus(501)).toBe('server');
+  });
+
+  test('200 and unknowns → unknown', () => {
+    expect(classifyHttpStatus(200)).toBe('unknown');
+    expect(classifyHttpStatus(418)).toBe('unknown');
+  });
+});
+
+describe('classifyErrorString', () => {
+  test('auth via 401 / unauthorized / api key', () => {
+    expect(classifyErrorString('HTTP 401 Unauthorized')).toBe('auth');
+    expect(classifyErrorString('invalid x-api-key')).toBe('auth');
+    expect(classifyErrorString('Incorrect API key provided')).toBe('auth');
+  });
+
+  test('rate_limit via 429 / quota / rate limit', () => {
+    expect(classifyErrorString('OpenAI API error (429): rate_limit_exceeded')).toBe('rate_limit');
+    expect(classifyErrorString('You exceeded your current quota')).toBe('rate_limit');
+    expect(classifyErrorString('Too Many Requests')).toBe('rate_limit');
+  });
+
+  test('network via 503 / timeout / econnrefused', () => {
+    expect(classifyErrorString('Service temporarily unavailable (503)')).toBe('network');
+    expect(classifyErrorString('fetch failed: ECONNREFUSED')).toBe('network');
+    expect(classifyErrorString('Request timeout')).toBe('network');
+  });
+
+  test('word-boundary: 4295 does not collide with 429', () => {
+    expect(classifyErrorString('prompt has 4295 tokens')).not.toBe('rate_limit');
+  });
+
+  test('word-boundary: 14018 does not collide with 401', () => {
+    expect(classifyErrorString('context at 14018 tokens')).not.toBe('auth');
+  });
+
+  test('unknown when nothing matches', () => {
+    expect(classifyErrorString('something unexpected happened')).toBe('unknown');
+    expect(classifyErrorString(undefined)).toBe('unknown');
+    expect(classifyErrorString('')).toBe('unknown');
   });
 });

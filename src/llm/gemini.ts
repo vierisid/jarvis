@@ -7,6 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
+import { classifyErrorString } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type GeminiPart =
@@ -141,12 +142,13 @@ export class GeminiProvider implements LLMProvider {
     try {
       response = await this.fetchWithRetry(url, JSON.stringify(body));
     } catch (err) {
-      yield { type: 'error', error: err instanceof Error ? err.message : String(err) };
+      const message = err instanceof Error ? err.message : String(err);
+      yield { type: 'error', error: message, code: classifyErrorString(message) };
       return;
     }
 
     if (!response.body) {
-      yield { type: 'error', error: 'No response body' };
+      yield { type: 'error', error: 'No response body', code: 'network' };
       return;
     }
 
@@ -223,7 +225,7 @@ export class GeminiProvider implements LLMProvider {
         },
       };
     } catch (err) {
-      yield { type: 'error', error: `Stream error: ${err}` };
+      yield { type: 'error', error: `Stream error: ${err}`, code: 'network' };
     }
   }
 
