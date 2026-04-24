@@ -85,6 +85,108 @@ llm:
     expect(text).not.toContain('"channels":');
   });
 
+  test('loadConfig does not mutate DEFAULT_CONFIG', async () => {
+    // Regression test: a previous implementation of deepMerge returned
+    // DEFAULT_CONFIG by reference when the parsed YAML was empty/null, so
+    // subsequent tilde-expansion mutated the shared defaults.
+    const snapshot = structuredClone(DEFAULT_CONFIG);
+
+    // 1) Empty / comment-only file — exercises the `doc.toJS() ?? {}` branch.
+    await Bun.write(TEST_CONFIG_PATH, '# empty config\n');
+    await loadConfig(TEST_CONFIG_PATH);
+    expect(DEFAULT_CONFIG).toEqual(snapshot);
+
+    // 2) Partial config — exercises deepMerge with nested overlap.
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 12345\n');
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.port).toBe(12345);
+    expect(DEFAULT_CONFIG).toEqual(snapshot);
+
+    // 3) Missing config file — the "defaults only" path.
+    await loadConfig('/tmp/jarvis-loader-mutation-absent.yaml');
+    expect(DEFAULT_CONFIG).toEqual(snapshot);
+  });
+
+  test('returns defaults cleanly for an empty config file', async () => {
+    await Bun.write(TEST_CONFIG_PATH, '');
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.port).toBe(DEFAULT_CONFIG.daemon.port);
+    expect(loaded.llm.primary).toBe(DEFAULT_CONFIG.llm.primary);
+    expect(loaded.daemon.data_dir).not.toContain('~');
+  });
+
+  test('returns defaults cleanly for a comment-only config file', async () => {
+    await Bun.write(TEST_CONFIG_PATH, '# just a header\n# no content yet\n');
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.port).toBe(DEFAULT_CONFIG.daemon.port);
+    expect(loaded.personality.core_traits).toEqual(DEFAULT_CONFIG.personality.core_traits);
+  });
+
+  test('parse errors include line:column diagnostics', async () => {
+    const badYaml = 'daemon:\n  port: 3142\n    bad_indent: true\n';
+    await Bun.write(TEST_CONFIG_PATH, badYaml);
+
+    try {
+      await loadConfig(TEST_CONFIG_PATH);
+      throw new Error('expected loadConfig to throw');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain(TEST_CONFIG_PATH);
+      // The `yaml` library embeds "at line X, column Y:" in each error message.
+      expect(msg).toMatch(/line \d+, column \d+/);
+    }
+  });
+
+  test('preserves ambiguous scalar strings through save → load round-trip', async () => {
+    // With defaultStringType: 'PLAIN', YAML will auto-quote values that would
+    // otherwise type-coerce (booleans, numbers, dates). Verify the round-trip
+    // keeps them as strings so, e.g., a numeric-looking discord ID or a
+    // boolean-looking API token never silently mutates on reload.
+    const testConfig = structuredClone(DEFAULT_CONFIG);
+    testConfig.channels = {
+      telegram: {
+        enabled: true,
+        bot_token: 'yes',          // YAML 1.1 boolean trap
+        allowed_users: [12345],
+      },
+      discord: {
+        enabled: true,
+        bot_token: '2026-04-14',   // date-ish string
+        allowed_users: ['1234567890'],  // numeric-only string user ID
+        guild_id: '123.45',         // numeric-looking string
+      },
+    };
+
+    await saveConfig(testConfig, TEST_CONFIG_PATH);
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+
+    expect(loaded.channels?.telegram?.bot_token).toBe('yes');
+    expect(typeof loaded.channels?.telegram?.bot_token).toBe('string');
+    expect(loaded.channels?.discord?.bot_token).toBe('2026-04-14');
+    expect(typeof loaded.channels?.discord?.bot_token).toBe('string');
+    expect(loaded.channels?.discord?.guild_id).toBe('123.45');
+    expect(typeof loaded.channels?.discord?.guild_id).toBe('string');
+    expect(loaded.channels?.discord?.allowed_users).toEqual(['1234567890']);
+    expect(typeof loaded.channels?.discord?.allowed_users?.[0]).toBe('string');
+  });
+
+  test('save → load → save is idempotent after path normalization', async () => {
+    // loadConfig tilde-expands `daemon.data_dir` / `daemon.db_path`, so the
+    // very first save-load cycle will rewrite those values. After that, any
+    // further round-trip must be byte-identical — otherwise the YAML encoder
+    // is drifting (reordering keys, changing quoting, etc.).
+    await saveConfig(DEFAULT_CONFIG, TEST_CONFIG_PATH);
+    const stabilized = await loadConfig(TEST_CONFIG_PATH);
+    await saveConfig(stabilized, TEST_CONFIG_PATH);
+    const firstText = await Bun.file(TEST_CONFIG_PATH).text();
+
+    const reloaded = await loadConfig(TEST_CONFIG_PATH);
+    await saveConfig(reloaded, TEST_CONFIG_PATH);
+    const secondText = await Bun.file(TEST_CONFIG_PATH).text();
+
+    expect(secondText).toBe(firstText);
+  });
+
   test('round-trips channel config and multi-provider fallbacks', async () => {
     const testConfig = structuredClone(DEFAULT_CONFIG);
     testConfig.channels = {

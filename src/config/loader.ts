@@ -13,11 +13,13 @@ function expandTilde(filepath: string): string {
 
 function deepMerge(target: any, source: any): any {
   if (!source || typeof source !== 'object') {
-    return source !== undefined ? source : target;
+    // If source is absent, return a clone of target so callers (or subsequent
+    // mutation of the returned value) can never alias shared defaults.
+    return source !== undefined ? source : structuredClone(target);
   }
 
   if (Array.isArray(source)) {
-    return source;
+    return [...source];
   }
 
   const result = { ...target };
@@ -125,12 +127,20 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     return config;
   }
 
-  // File exists — parse errors should be fatal
+  // File exists — parse errors should be fatal.
+  // `merge: true` enables YAML merge keys (`<<: *anchor`) so configs can share
+  // blocks across environments. Removing this flag would silently break any
+  // config that relies on anchors — keep it unless you're sure.
   const text = await file.text();
   const doc = YAML.parseDocument(text, { merge: true });
   if (doc.errors.length > 0) {
-    throw new Error(doc.errors.map((entry) => entry.message).join('\n'));
+    // `yaml`'s error.message already embeds `at line X, column Y:` and a caret
+    // diagram, so no need to prefix our own position info.
+    const formatted = doc.errors.map((entry) => entry.message);
+    throw new Error(`Failed to parse YAML config at ${path}:\n  ${formatted.join('\n  ')}`);
   }
+  // `doc.toJS()` returns null for an empty (or comment-only) file — coerce to
+  // an empty object so downstream merges fall back cleanly to defaults.
   const parsed = (doc.toJS() ?? {}) as Partial<JarvisConfig>;
 
   // Deep merge with defaults to ensure all required fields exist
