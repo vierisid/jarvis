@@ -1,0 +1,127 @@
+/* Markdown prose inside thread bubbles.
+   Inherits font-family / size / line-height from the parent bubble so the
+   "serif at 16/1.6" treatment flows through paragraphs, lists, quotes, etc. */
+
+.v2-md {
+  font: inherit;
+  color: inherit;
+}
+
+.v2-md > *:first-child { margin-top: 0; }
+.v2-md > *:last-child  { margin-bottom: 0; }
+
+.v2-md__p {
+  margin: 0 0 0.75em;
+  font: inherit;
+}
+.v2-md__p:last-child { margin-bottom: 0; }
+
+.v2-md strong { font-weight: 600; color: var(--ink); }
+.v2-md em     { font-style: italic; }
+.v2-md del    { color: var(--ink-3); }
+
+.v2-md h1,
+.v2-md h2,
+.v2-md h3,
+.v2-md h4 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 1em 0 0.4em;
+}
+.v2-md h1 { font-size: 1.25em; }
+.v2-md h2 { font-size: 1.15em; }
+.v2-md h3 { font-size: 1.05em; }
+.v2-md h4 { font-size: 1em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); }
+
+.v2-md ul,
+.v2-md ol {
+  margin: 0 0 0.75em;
+  padding-left: 1.25em;
+}
+.v2-md li { margin-bottom: 0.25em; }
+.v2-md li > p { margin: 0; }
+
+.v2-md blockquote {
+  margin: 0.5em 0 0.75em;
+  padding: 0.2em 0 0.2em 0.9em;
+  border-left: 2px solid var(--rule);
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.v2-md hr {
+  border: 0;
+  border-top: var(--hair);
+  margin: 1em 0;
+}
+
+.v2-md__link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.v2-md__link:hover { text-decoration-thickness: 2px; }
+
+.v2-md__code-inline {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  background: var(--paper-2);
+  border: var(--hair-soft);
+  border-radius: var(--r-1);
+  white-space: break-spaces;
+}
+
+.v2-md pre {
+  margin: 0.5em 0 0.75em;
+  padding: var(--s-3) var(--s-4);
+  background: var(--paper-2);
+  border: var(--hair);
+  border-radius: var(--r-2);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+.v2-md pre code,
+.v2-md__code-block {
+  font-family: var(--font-mono);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  white-space: pre;
+}
+
+.v2-md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  margin: 0.5em 0 0.75em;
+  font-family: var(--font-sans);
+}
+.v2-md th,
+.v2-md td {
+  border: var(--hair-soft);
+  padding: 4px 10px;
+  text-align: left;
+}
+.v2-md th {
+  background: var(--paper-2);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* Task list (GFM) */
+.v2-md input[type="checkbox"] {
+  margin-right: 6px;
+  transform: translateY(1px);
+}

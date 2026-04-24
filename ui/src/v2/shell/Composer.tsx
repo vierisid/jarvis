@@ -1,16 +1,18 @@
 import React, { useRef, useState } from "react";
-import { Send } from "lucide-react";
-import { Icon, KBD } from "../ui";
+import { ArrowRight } from "lucide-react";
+import { Icon } from "../ui";
 import "./Composer.css";
 
 export interface ComposerProps {
   onSubmit?: (text: string) => void;
+  onSlash?: () => void;
   placeholder?: string;
   disabled?: boolean;
 }
 
 export function Composer({
   onSubmit,
+  onSlash,
   placeholder = "Ask Jarvis, or press / to summon a tool…",
   disabled,
 }: ComposerProps) {
@@ -55,16 +57,21 @@ export function Composer({
           disabled={disabled}
           aria-label="Message Jarvis"
         />
-        <span className="v2-composer__slash" aria-hidden="true">
-          <KBD>/</KBD>
-        </span>
+        <button
+          type="button"
+          className="v2-composer__slash"
+          onClick={onSlash}
+          aria-label="Open command palette"
+        >
+          /
+        </button>
         <button
           type="submit"
           className="v2-composer__send"
           disabled={disabled || value.trim().length === 0}
           aria-label="Send"
         >
-          <Icon icon={Send} size="sm" />
+          <Icon icon={ArrowRight} size={12} strokeWidth={2} />
         </button>
       </div>
     </form>
