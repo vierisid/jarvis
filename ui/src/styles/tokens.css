@@ -11,7 +11,9 @@
   --paper:        #F5F2EB;   /* bone, page bg */
   --paper-2:      #EEE9DC;   /* card bg, subtle fills */
   --paper-3:      #E3DCC8;   /* hover / pressed surfaces */
-  --rule:         #1A1A1A;   /* hairlines, borders */
+  --rule:         #CBC3B2;   /* default hairlines & borders (paper-tinted beige) */
+  --rule-soft:    #DFD9CC;   /* interior dividers inside the rail, subtle separators */
+  --rule-bold:    #1A1A1A;   /* hard black — rare structural emphasis only */
   --ink:          #1A1A1A;   /* primary text */
   --ink-2:        #4A4A46;   /* secondary text */
   --ink-3:        #7A766D;   /* tertiary / meta */
@@ -23,7 +25,7 @@
   /* ── Type ───────────────────────────────── */
   --font-sans:    "Inter Tight", "Helvetica Neue", system-ui, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
-  --font-display: "Fraunces", "Inter Tight", serif;  /* headings only */
+  --font-display: "Fraunces", "Inter Tight", serif;  /* display + body speech */
 
   --text-xs:   11px;
   --text-sm:   13px;
@@ -55,8 +57,9 @@
   --r-pill: 999px;
 
   /* ── Lines ──────────────────────────────── */
-  --hair:   1px solid var(--rule);
-  --hair-2: 2px solid var(--rule);
+  --hair:      1px solid var(--rule);
+  --hair-soft: 1px solid var(--rule-soft);
+  --hair-2:    2px solid var(--rule);
 
   /* ── Motion ─────────────────────────────── */
   --ease-out: cubic-bezier(.2, .7, .2, 1);

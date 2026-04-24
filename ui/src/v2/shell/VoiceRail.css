@@ -11,7 +11,7 @@
   flex-direction: column;
   align-items: center;
   padding: var(--s-5) var(--s-4) var(--s-4);
-  border-bottom: var(--hair);
+  border-bottom: var(--hair-soft);
 }
 
 .v2-rail__label {
@@ -69,7 +69,7 @@
 /* ── Hint + status block ── */
 .v2-rail__hint {
   padding: var(--s-3) var(--s-4);
-  border-bottom: var(--hair);
+  border-bottom: var(--hair-soft);
 }
 
 .v2-rail__hint-text {
@@ -185,7 +185,7 @@
 /* ── Mic status footer ── */
 .v2-rail__mic {
   padding: var(--s-3) var(--s-4);
-  border-top: var(--hair);
+  border-top: var(--hair-soft);
 }
 
 .v2-rail__mic-head {

@@ -6,7 +6,7 @@
   grid-template-columns: 1fr 260px;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "header   header"
+    "header   rail"
     "thread   rail"
     "composer rail";
   height: 100%;

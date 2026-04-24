@@ -11,7 +11,7 @@
 
 .v2-item__meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--s-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -22,12 +22,21 @@
   line-height: 1.2;
 }
 
+.v2-item__meta-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+  display: inline-block;
+}
+
 .v2-item__who {
   color: var(--ink-3);
 }
 
 .v2-item__who--jarvis {
-  color: var(--accent);
+  color: var(--ink-3);
 }
 
 .v2-item__tag {
@@ -43,8 +52,9 @@
 }
 
 .v2-item__body {
-  font-size: var(--text-md);
-  line-height: var(--lh-body);
+  font-family: var(--font-display);
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--ink);
 }
 
@@ -65,7 +75,7 @@
 
 /* ── jarvis-speech ── */
 .v2-item--speech .v2-item__body {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   color: var(--ink);
 }
 
@@ -88,7 +98,7 @@
 /* ── jarvis-thought ── */
 .v2-item--thought {
   padding-left: var(--s-4);
-  border-left: 2px dotted var(--ink-3);
+  border-left: 2px dotted var(--rule);
   margin-left: 2px;
 }
 
@@ -97,6 +107,7 @@
   font-style: italic;
   color: var(--ink-3);
   font-size: var(--text-sm);
+  line-height: 1.5;
 }
 
 /* ── result ── */
@@ -109,7 +120,9 @@
 }
 
 .v2-item--result .v2-item__body {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  line-height: var(--lh-body);
 }
 
 .v2-item__detail {
