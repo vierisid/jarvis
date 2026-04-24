@@ -24,6 +24,7 @@ export type ChatMessage = {
   source?: string; // 'heartbeat', 'proactive', 'sub-agent'
   priority?: string;
   isStreaming?: boolean;
+  detail?: string; // raw error/debug payload, rendered collapsed in the chat
 };
 
 export type TaskEvent = {
@@ -148,7 +149,7 @@ function createSidecarNotice(payload: SidecarEventPayload, timestamp?: number): 
   };
 }
 
-function extractNestedMessage(value: unknown): string | null {
+export function extractNestedMessage(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
@@ -159,11 +160,17 @@ function extractNestedMessage(value: unknown): string | null {
   return null;
 }
 
-function formatProviderErrorMessage(raw: string | undefined): string {
-  const fallback = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
-  if (!raw) return fallback;
+export type ProviderErrorFormatted = {
+  summary: string;
+  detail: string;
+};
 
-  let normalized = raw.trim();
+export function formatProviderErrorMessage(raw: string | undefined): ProviderErrorFormatted {
+  const fallbackSummary = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
+  if (!raw) return { summary: fallbackSummary, detail: "" };
+
+  const original = raw.trim();
+  let normalized = original;
   try {
     const parsed = JSON.parse(normalized) as unknown;
     normalized = extractNestedMessage(parsed) ?? normalized;
@@ -180,6 +187,7 @@ function formatProviderErrorMessage(raw: string | undefined): string {
   }
 
   const lowered = normalized.toLowerCase();
+
   if (
     lowered.includes("api key") ||
     lowered.includes("authentication") ||
@@ -187,24 +195,42 @@ function formatProviderErrorMessage(raw: string | undefined): string {
     lowered.includes("invalid_api_key") ||
     lowered.includes("invalid x-api-key") ||
     lowered.includes("incorrect api key") ||
-    lowered.includes("401")
+    /\b401\b/.test(lowered)
   ) {
-    return "Couldn't reach your AI provider. Check your API key and model settings.";
+    return {
+      summary: "Couldn't reach your AI provider. Check your API key and model settings.",
+      detail: normalized,
+    };
+  }
+
+  if (
+    lowered.includes("rate limit") ||
+    lowered.includes("too many requests") ||
+    lowered.includes("insufficient_quota") ||
+    lowered.includes("quota") ||
+    /\b429\b/.test(lowered)
+  ) {
+    return {
+      summary: "Your AI provider is rate-limiting requests. Wait a moment, or check your usage and billing.",
+      detail: normalized,
+    };
   }
 
   if (
     lowered.includes("timeout") ||
     lowered.includes("temporarily unavailable") ||
-    lowered.includes("503") ||
-    lowered.includes("429") ||
     lowered.includes("econnrefused") ||
     lowered.includes("enotfound") ||
-    lowered.includes("network")
+    lowered.includes("network") ||
+    /\b503\b/.test(lowered)
   ) {
-    return "Couldn't reach your AI provider right now. Check your connection, provider status, or fallback settings.";
+    return {
+      summary: "Couldn't reach your AI provider right now. Check your connection, provider status, or fallback settings.",
+      detail: normalized,
+    };
   }
 
-  return fallback;
+  return { summary: fallbackSummary, detail: normalized };
 }
 
 export function useWebSocket() {
@@ -223,6 +249,7 @@ export function useWebSocket() {
   const toolCallsRef = useRef<ToolCall[]>([]);
   const subAgentEventsRef = useRef<SubAgentEvent[]>([]);
   const voiceCallbacksRef = useRef<VoiceCallbacks | null>(null);
+  const pendingChatIdsRef = useRef<Set<string>>(new Set());
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -428,6 +455,8 @@ export function useWebSocket() {
       streamIdRef.current = null;
       toolCallsRef.current = [];
       subAgentEventsRef.current = [];
+      // A successful completion ends any in-flight chat request correlation.
+      pendingChatIdsRef.current.clear();
     } else if (msg.type === "goal_event") {
       const goalEvent = msg.payload as GoalEvent;
       setGoalEvents((prev) => [...prev.slice(-100), goalEvent]);
@@ -500,14 +529,37 @@ export function useWebSocket() {
         ]);
       }
     } else if (msg.type === "error") {
-      voiceCallbacksRef.current?.onError(msg.payload?.message);
-      const friendlyMessage = formatProviderErrorMessage(msg.payload?.message);
+      const rawMessage = msg.payload?.message;
+      voiceCallbacksRef.current?.onError(rawMessage);
+
+      // Always preserve the raw payload in the console for debugging.
+      console.error("[WS] Error frame:", msg.payload);
+
+      // Only apply the provider-friendly formatter when the error correlates
+      // with a chat request we sent. Other errors (protocol, config, STT) are
+      // already human-readable and shouldn't be reshaped.
+      const isChatCorrelated = msg.id != null && pendingChatIdsRef.current.has(msg.id);
+      if (msg.id != null) pendingChatIdsRef.current.delete(msg.id);
+
+      let content: string;
+      let detail: string | undefined;
+      if (isChatCorrelated) {
+        const formatted = formatProviderErrorMessage(rawMessage);
+        content = formatted.summary;
+        detail = formatted.detail && formatted.detail !== formatted.summary ? formatted.detail : undefined;
+      } else {
+        content = typeof rawMessage === "string" && rawMessage.trim()
+          ? rawMessage
+          : "An unexpected error occurred.";
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "system",
-          content: friendlyMessage,
+          content,
+          detail,
           timestamp: msg.timestamp,
           source: "error",
         },
@@ -544,6 +596,10 @@ export function useWebSocket() {
           source: options?.projectId ? `site:${options.projectId}` : undefined,
         },
       ]);
+
+      // Track this request ID so we can correlate any incoming error frame
+      // with the chat request that provoked it.
+      pendingChatIdsRef.current.add(id);
 
       // Send to server
       const msg: WSMessage = {

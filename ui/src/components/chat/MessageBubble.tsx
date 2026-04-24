@@ -55,6 +55,12 @@ export function MessageBubble({ message }: Props) {
             <div className={`chat-system-text ${type === "error" ? "chat-system-text-error" : ""}`}>
               <MarkdownContent content={message.content} />
             </div>
+            {message.detail ? (
+              <details className="chat-system-detail">
+                <summary>Show details</summary>
+                <pre className="chat-system-detail-pre">{message.detail}</pre>
+              </details>
+            ) : null}
             <div className="chat-system-ts">{timestamp}</div>
           </div>
         </div>
