@@ -120,6 +120,21 @@ export type SystemNotice = {
   level: "warning";
 };
 
+export type ApprovalImpact = "read" | "write" | "destructive" | "external";
+
+export type PendingApproval = {
+  id: string;
+  shortId: string;
+  intent: string;
+  category: string;
+  impact: ApprovalImpact;
+  agentName: string;
+  toolName: string;
+  urgency: "urgent" | "normal";
+  reason: string;
+  timestamp: number;
+};
+
 type SidecarEventPayload = {
   source?: string;
   event?: {
@@ -286,6 +301,7 @@ export function useWebSocket() {
   const [goalEvents, setGoalEvents] = useState<GoalEvent[]>([]);
   const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
   const [notices, setNotices] = useState<SystemNotice[]>([]);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -570,6 +586,42 @@ export function useWebSocket() {
             timestamp: msg.timestamp,
           },
         ]);
+      } else if (payload.source === "approval_request") {
+        const p = payload as {
+          request?: {
+            id: string;
+            agent_name: string;
+            tool_name: string;
+            action_category: string;
+            urgency: "urgent" | "normal";
+            reason: string;
+          };
+          shortId?: string;
+          impact?: ApprovalImpact;
+          intent?: string;
+        };
+        if (p.request) {
+          const pending: PendingApproval = {
+            id: p.request.id,
+            shortId: p.shortId ?? p.request.id.slice(0, 8),
+            intent: p.intent ?? p.request.reason ?? p.request.tool_name,
+            category: p.request.action_category,
+            impact: p.impact ?? "write",
+            agentName: p.request.agent_name,
+            toolName: p.request.tool_name,
+            urgency: p.request.urgency,
+            reason: p.request.reason,
+            timestamp: msg.timestamp,
+          };
+          setApprovals((prev) =>
+            prev.some((a) => a.id === pending.id) ? prev : [...prev, pending],
+          );
+        }
+      } else if (payload.source === "approval_update") {
+        const requestId = (payload as { request?: { id: string } }).request?.id;
+        if (requestId) {
+          setApprovals((prev) => prev.filter((a) => a.id !== requestId));
+        }
       }
     } else if (msg.type === "error") {
       const rawMessage = msg.payload?.message;
@@ -666,6 +718,7 @@ export function useWebSocket() {
 
   return {
     messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
+    approvals,
     wsRef,
     voiceCallbacksRef,
   };

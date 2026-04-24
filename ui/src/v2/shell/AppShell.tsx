@@ -54,8 +54,26 @@ export function AppShell() {
 /* ─────────── Live shell — Phase 3B-1 ─────────── */
 
 function AppShellLive() {
-  const { items, isConnected, send } = useLiveThread();
+  const { items, isConnected, send, approve, cancel } = useLiveThread();
   const connection: ConnectionState = isConnected ? "live" : "offline";
+
+  const handleApprove = useCallback(
+    (id: string) => {
+      approve(id).catch((err) => {
+        console.error("[v2] approve failed", err);
+      });
+    },
+    [approve],
+  );
+
+  const handleCancel = useCallback(
+    (id: string) => {
+      cancel(id).catch((err) => {
+        console.error("[v2] cancel failed", err);
+      });
+    },
+    [cancel],
+  );
 
   return (
     <ShellLayout
@@ -68,9 +86,8 @@ function AppShellLive() {
           : "Waiting for daemon…"
       }
       onSubmit={send}
-      // 3B-2 will wire real approve/cancel → /api/authority/approvals/:id/approve|deny
-      onApprove={() => undefined}
-      onCancel={() => undefined}
+      onApprove={handleApprove}
+      onCancel={handleCancel}
       onFocusCard={() => undefined}
     />
   );

@@ -125,6 +125,33 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
     sections.push('');
   }
 
+  // Intent Gating — semantic approval layer above tool-name-based gating.
+  // This section must stay visible in every agent prompt, even when no
+  // authority rules are configured, because the LLM can always accomplish
+  // a gated action by composing lower-level tools (browser, desktop).
+  sections.push('# Intent Gating (ALWAYS FOLLOW)');
+  sections.push('Before performing any of the following **gated actions**, you MUST call the `request_approval` tool first, and wait for it to return `[APPROVED]` before proceeding:');
+  sections.push('');
+  sections.push('- **send_email** — sending an email to anyone');
+  sections.push('- **send_message** — sending a message in any channel (Slack, Telegram, Discord, SMS, chat apps, etc.)');
+  sections.push('- **make_payment** — any financial transaction, purchase, or subscription');
+  sections.push('- **install_software** — installing, upgrading, or removing any package or app');
+  sections.push('- **modify_settings** — changing system or account settings');
+  sections.push('- **delete_data** — deleting files, records, or persistent state');
+  sections.push('- **execute_command** — running shell commands that mutate state (git push, rm, npm install, docker run, etc.)');
+  sections.push('- **terminate_agent** — stopping a running agent');
+  sections.push('');
+  sections.push('This rule applies **regardless of which lower-level tools you plan to use**. Example: if you intend to click the Send button in Gmail via `browser_click`, you MUST call `request_approval` with `action_category: "send_email"` FIRST.');
+  sections.push('');
+  sections.push('Rules:');
+  sections.push('1. Call `request_approval` with a clear `intent` sentence (e.g. `"Send email to alice@example.com with subject Weekly Update"`).');
+  sections.push('2. If it returns `[APPROVED]`, proceed with the action immediately. Do not ask again.');
+  sections.push('3. If it returns `[DENIED]`, STOP. Tell the user briefly that the action was blocked.');
+  sections.push('4. If it returns `[EXPIRED]` or `[PENDING]`, ask the user directly whether to proceed.');
+  sections.push('5. NEVER write "APPROVAL REQUIRED", "Do you approve?", or any similar pseudo-approval message yourself. Always use the tool — the tool is what shows the real approval card to the user.');
+  sections.push('6. Read-only actions (reading files, browsing info pages, running `ls`, checking status) do NOT need `request_approval`.');
+  sections.push('');
+
   // Tool Guide (static reference, sidecar section conditional)
   sections.push(buildToolGuide(context?.hasSidecars ?? false));
   sections.push('');
