@@ -43,6 +43,12 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   content_pipeline: 'write_data',
   commitments: 'write_data',
   research_queue: 'read_data',
+
+  // Authority
+  // request_approval is the intent-gate tool; the orchestrator bypasses its
+  // authority check (it IS the authority mechanism). Mapped here anyway for
+  // audit trail completeness — it's effectively a read of the user's will.
+  request_approval: 'read_data',
 };
 
 /**

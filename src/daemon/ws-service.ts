@@ -16,6 +16,7 @@ import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
+import { impactFromCategory } from '../roles/authority.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
@@ -294,12 +295,16 @@ export class WebSocketService implements Service {
    */
   broadcastApprovalRequest(request: ApprovalRequest): void {
     const shortId = request.id.slice(0, 8);
+    const impact = impactFromCategory(request.action_category);
+    const intent = formatApprovalIntent(request);
     const message: WSMessage = {
       type: 'notification',
       payload: {
         source: 'approval_request',
         request,
         shortId,
+        impact,
+        intent,
       },
       priority: request.urgency === 'urgent' ? 'urgent' : 'normal',
       timestamp: Date.now(),
@@ -475,6 +480,8 @@ export class WebSocketService implements Service {
       payload: {
         source: 'approval_update',
         request,
+        impact: impactFromCategory(request.action_category),
+        intent: formatApprovalIntent(request),
       },
       timestamp: Date.now(),
     };
@@ -922,4 +929,71 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       timestamp: Date.now(),
     };
   }
+}
+
+/**
+ * Build a short imperative sentence describing an approval request, for use
+ * as the `intent` field in the dashboard ApprovalCard. Prefers the LLM-supplied
+ * reason when it looks like a complete sentence; otherwise synthesizes one
+ * from tool_name + arguments.
+ */
+function formatApprovalIntent(request: ApprovalRequest): string {
+  const reason = (request.reason ?? '').trim();
+
+  // `reason` is usually an imperative sentence drafted by the LLM (e.g.,
+  // "Reply to Anya — move Monday review to 3pm"). Keep it as-is when present.
+  if (reason.length > 0) return reason;
+
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(request.tool_arguments ?? '{}');
+  } catch {
+    // fall through with empty args
+  }
+
+  // Per-tool fallbacks for the common destructive/external intents.
+  switch (request.tool_name) {
+    case 'send_email': {
+      const to = asString(args.to) ?? 'someone';
+      const subject = asString(args.subject);
+      return subject
+        ? `Send email to ${to} — "${subject}"`
+        : `Send email to ${to}`;
+    }
+    case 'send_message': {
+      const channel = asString(args.channel) ?? 'channel';
+      return `Send message via ${channel}`;
+    }
+    case 'run_command':
+    case 'execute_command': {
+      const cmd = asString(args.command) ?? 'a shell command';
+      return `Run: ${cmd}`;
+    }
+    case 'delete_file':
+    case 'delete_data': {
+      const path = asString(args.path) ?? asString(args.target) ?? 'the target';
+      return `Delete ${path}`;
+    }
+    case 'install_software': {
+      const pkg = asString(args.package) ?? asString(args.name) ?? 'software';
+      return `Install ${pkg}`;
+    }
+    case 'make_payment': {
+      const amount = asString(args.amount) ?? asString(args.total);
+      const to = asString(args.recipient) ?? asString(args.to) ?? 'recipient';
+      return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
+    }
+    case 'spawn_agent': {
+      const role = asString(args.role) ?? 'an agent';
+      return `Spawn ${role}`;
+    }
+    default: {
+      const verb = request.tool_name.replace(/_/g, ' ');
+      return `${verb}`.replace(/^./, (c) => c.toUpperCase());
+    }
+  }
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
 }

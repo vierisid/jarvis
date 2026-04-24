@@ -491,6 +491,20 @@ export class AgentOrchestrator {
       return `[SYSTEM ${state.toUpperCase()}] All tool execution is currently suspended. The user has ${state} the system.`;
     }
 
+    // 1a. Bypass for the intent-gating tool itself.
+    // request_approval IS the authority mechanism — gating it would recurse.
+    // Its arguments carry the semantic action_category, so auditing happens
+    // inside the tool on resolution.
+    if (toolCall.name === 'request_approval') {
+      try {
+        const raw = await this.toolRegistry.execute(toolCall.name, toolCall.arguments);
+        if (isToolResult(raw)) return raw.content.map(guardImageSize);
+        return typeof raw === 'string' ? raw : JSON.stringify(raw);
+      } catch (err) {
+        return `Error executing request_approval: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     // 2. Authority check
     const primary = this.getPrimary();
     if (this.authorityEngine && primary) {

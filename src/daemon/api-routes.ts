@@ -1510,10 +1510,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const approved = ctx.approvalManager.approve(requestId, 'dashboard');
         if (!approved) return error('Request not found or already decided', 404);
 
-        // Execute the approved tool
-        const result = await ctx.deferredExecutor.executeApproved(requestId);
+        // Intent-declaration approvals have no deferred tool to execute —
+        // the originating `request_approval` tool call is blocked waiting for
+        // the DB status to flip (via waitForResolution polling). Skipping
+        // executeApproved avoids a recursive call into the tool registry.
+        let result = '';
+        if (approved.tool_name !== 'request_approval') {
+          result = await ctx.deferredExecutor.executeApproved(requestId);
+        }
 
-        // Broadcast the update
+        // Broadcast the update (removes the card from the dashboard thread)
         const updated = ctx.approvalManager.getRequest(requestId);
         if (updated) ctx.wsService?.broadcastApprovalUpdate(updated);
 

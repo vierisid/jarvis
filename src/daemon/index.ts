@@ -525,11 +525,32 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const toolRegistry = orchestrator.getToolRegistry();
     if (toolRegistry) {
       deferredExecutor.setToolRegistry(toolRegistry);
+
+      // Register the request_approval intent-gating tool now that approval
+      // infrastructure is wired. Registered here (not in agent-service) because
+      // the tool needs both approvalManager and approvalDelivery, which are
+      // owned by the daemon composition root.
+      const { createRequestApprovalTool } = await import('../actions/tools/approval-tool.ts');
+      const requestApprovalTool = createRequestApprovalTool({
+        approvalManager,
+        approvalDelivery,
+        getCurrentAgent: () => {
+          const primary = orchestrator.getPrimary();
+          if (!primary) return null;
+          return { id: primary.id, name: primary.agent.role.name };
+        },
+      });
+      if (!toolRegistry.has('request_approval')) {
+        toolRegistry.register(requestApprovalTool);
+        console.log('[Daemon] Registered request_approval intent-gate tool');
+      }
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
     deferredExecutor.setResultCallback((requestId, request, result) => {
-      // Notify via WS and channels that an approved action was executed
+      // Notify via WS and channels that an approved action was executed.
+      // Skip for intent-only approvals — they have no deferred execution.
+      if (request.tool_name === 'request_approval') return;
       const text = `[EXECUTED] ${request.tool_name}: ${result.slice(0, 200)}`;
       wsService.broadcastNotification(text, 'normal');
     });

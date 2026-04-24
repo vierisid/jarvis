@@ -9,6 +9,36 @@ export type ActionCategory =
   | 'access_browser' | 'control_app';
 
 /**
+ * High-level impact classification used by the dashboard ApprovalCard.
+ * Mirrors the VOICE_SCHEMA.md contract from the v2 redesign.
+ *   read        — observes state, no side effects
+ *   write       — mutates local state (files, DB, agents, messages)
+ *   external    — reaches off-device (email, browser navigation)
+ *   destructive — irreversible or costly (delete, payment, install, terminate, exec)
+ */
+export type Impact = 'read' | 'write' | 'external' | 'destructive';
+
+export const IMPACT_MAP: Record<ActionCategory, Impact> = {
+  read_data:        'read',
+  write_data:       'write',
+  send_message:     'write',
+  spawn_agent:      'write',
+  control_app:      'write',
+  access_browser:   'external',
+  send_email:       'external',
+  execute_command:  'destructive',
+  install_software: 'destructive',
+  make_payment:     'destructive',
+  modify_settings:  'destructive',
+  delete_data:      'destructive',
+  terminate_agent:  'destructive',
+};
+
+export function impactFromCategory(category: ActionCategory): Impact {
+  return IMPACT_MAP[category];
+}
+
+/**
  * Maps action categories to minimum required authority level
  *
  * Authority levels:

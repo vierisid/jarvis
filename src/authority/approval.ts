@@ -193,4 +193,32 @@ export class ApprovalManager {
     );
     return result.changes;
   }
+
+  /**
+   * Block until a pending request resolves (approved / denied / expired / executed),
+   * or until the timeout fires — whichever comes first. Polling-based so it stays
+   * robust across the approve/deny paths (REST endpoint, channel handler, etc.)
+   * without needing to instrument every resolution site with event emission.
+   *
+   * Returns the latest request state. If the request is missing, throws.
+   * If the timeout fires, returns the still-pending request — callers should
+   * treat `status === 'pending'` as a timeout and respond accordingly.
+   */
+  async waitForResolution(
+    requestId: string,
+    opts: { timeoutMs?: number; pollMs?: number } = {},
+  ): Promise<ApprovalRequest> {
+    const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min default
+    const pollMs = opts.pollMs ?? 250;
+    const start = Date.now();
+
+    while (true) {
+      const current = this.getRequest(requestId);
+      if (!current) throw new Error(`Approval request ${requestId} not found`);
+      if (current.status !== 'pending') return current;
+
+      if (Date.now() - start >= timeoutMs) return current;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
 }
