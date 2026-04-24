@@ -4,7 +4,7 @@
  *
  * Usage:
  *   jarvis start [--port N] [-d|--detach]   Start the daemon
- *   jarvis stop                             Stop the running daemon
+ *   jarvis stop [--port N]                  Stop the running daemon
  *   jarvis status                           Show daemon status
  *   jarvis onboard                          Interactive setup wizard
  *   jarvis uninstall                        Remove JARVIS (detects install method)
@@ -18,7 +18,7 @@ import { openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { ensurePortReleased, getConfiguredPort } from '../src/cli/lifecycle.ts';
+import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
@@ -171,9 +171,28 @@ async function cmdStart(args: string[]): Promise<void> {
   }
 }
 
-async function cmdStop(): Promise<void> {
+async function cmdStop(args: string[] = []): Promise<void> {
   const pid = isLocked();
-  const port = getConfiguredPort();
+
+  // Parse `--port N` for the no-lockfile recovery path. Ignored when the
+  // lockfile recorded the daemon's actual port (authoritative).
+  let cliPort: number | undefined;
+  const portIdx = args.indexOf('--port');
+  if (portIdx !== -1 && args[portIdx + 1]) {
+    const parsed = parseInt(args[portIdx + 1]!, 10);
+    if (isNaN(parsed) || parsed < 1 || parsed > 65535) {
+      console.error(c.red('Error: --port requires a number between 1 and 65535'));
+      process.exit(1);
+    }
+    cliPort = parsed;
+  }
+
+  const resolution = resolveStopPort({ cliPort });
+  const port = resolution.port;
+  if (resolution.source !== 'lockfile' && resolution.source !== 'default') {
+    console.log(c.dim(`  Using port ${port} (from ${resolution.source})`));
+  }
+
   if (!pid) {
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
@@ -353,7 +372,7 @@ switch (command) {
     await cmdStart(commandArgs);
     break;
   case 'stop':
-    await cmdStop();
+    await cmdStop(commandArgs);
     break;
   case 'restart':
     await cmdRestart(commandArgs);

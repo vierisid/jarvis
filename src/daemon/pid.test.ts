@@ -7,6 +7,8 @@ import {
   isLocked,
   releaseLock,
   readPid,
+  readLockedPort,
+  writeLockedPort,
   getPidPath,
   getLogPath,
   getLogDir,
@@ -187,6 +189,77 @@ describe('Process Lock Manager', () => {
       mkdirSync(JARVIS_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '-1');
       expect(readPid()).toBeNull();
+    });
+  });
+
+  // ── readLockedPort / writeLockedPort ─────────────────────────────
+
+  describe('readLockedPort', () => {
+    test('returns null when no lock file exists', () => {
+      expect(readLockedPort()).toBeNull();
+    });
+
+    test('returns null for legacy PID-only lock file', () => {
+      mkdirSync(JARVIS_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '12345');
+      expect(readLockedPort()).toBeNull();
+    });
+
+    test('returns the port from a two-line lock file', () => {
+      mkdirSync(JARVIS_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '12345\n9000\n');
+      expect(readLockedPort()).toBe(9000);
+    });
+
+    test('returns null for out-of-range port', () => {
+      mkdirSync(JARVIS_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '12345\n99999\n');
+      expect(readLockedPort()).toBeNull();
+    });
+
+    test('returns null for non-numeric port line', () => {
+      mkdirSync(JARVIS_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '12345\nabc\n');
+      expect(readLockedPort()).toBeNull();
+    });
+
+    test('readPid still works for two-line format', () => {
+      mkdirSync(JARVIS_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '12345\n9000\n');
+      expect(readPid()).toBe(12345);
+    });
+  });
+
+  describe('writeLockedPort', () => {
+    test('is a no-op when no lock is held by this process', () => {
+      // No acquireLock — lockFd is null.
+      writeLockedPort(9000);
+      expect(existsSync(LOCK_PATH)).toBe(false);
+    });
+
+    test('records port alongside PID when lock is held', () => {
+      acquireLock(process.pid);
+      writeLockedPort(9000);
+      const content = readFileSync(LOCK_PATH, 'utf-8');
+      expect(content.split(/\r?\n/)[0]).toBe(String(process.pid));
+      expect(readLockedPort()).toBe(9000);
+      expect(readPid()).toBe(process.pid);
+    });
+
+    test('ignores invalid ports', () => {
+      acquireLock(process.pid);
+      writeLockedPort(0);
+      writeLockedPort(70000);
+      writeLockedPort(Number.NaN);
+      expect(readLockedPort()).toBeNull();
+      expect(readPid()).toBe(process.pid);
+    });
+
+    test('overwrites an earlier recorded port', () => {
+      acquireLock(process.pid);
+      writeLockedPort(9000);
+      writeLockedPort(3142);
+      expect(readLockedPort()).toBe(3142);
     });
   });
 

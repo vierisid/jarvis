@@ -144,16 +144,60 @@ export function releaseLock(): void {
 
 /**
  * Read the PID from the lock file. Returns null if no file or invalid content.
+ *
+ * Lock file format (either form is accepted):
+ *   PID            (legacy — single line)
+ *   PID\nPORT      (current — PID on line 1, bound port on line 2)
  */
 export function readPid(): number | null {
   if (!existsSync(LOCK_PATH)) return null;
   try {
-    const content = readFileSync(LOCK_PATH, 'utf-8').trim();
-    const pid = parseInt(content, 10);
+    const content = readFileSync(LOCK_PATH, 'utf-8');
+    const firstLine = content.split(/\r?\n/, 1)[0]?.trim() ?? '';
+    const pid = parseInt(firstLine, 10);
     if (isNaN(pid) || pid <= 0) return null;
     return pid;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the port the locked daemon bound to, if it recorded one.
+ * Returns null for legacy lock files that contain only a PID.
+ */
+export function readLockedPort(): number | null {
+  if (!existsSync(LOCK_PATH)) return null;
+  try {
+    const content = readFileSync(LOCK_PATH, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const raw = lines[1]?.trim();
+    if (!raw) return null;
+    const port = parseInt(raw, 10);
+    if (isNaN(port) || port < 1 || port > 65535) return null;
+    return port;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record the port the daemon has successfully bound to. Called from the
+ * daemon itself after port resolution so `jarvis stop` knows exactly which
+ * port to verify, regardless of how the daemon was launched (CLI flag, env
+ * var, config file, or default).
+ *
+ * No-op if the lock isn't held by this process.
+ */
+export function writeLockedPort(port: number): void {
+  if (lockFd === null) return;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  try {
+    const pid = process.pid;
+    ftruncateSync(lockFd, 0);
+    writeSync(lockFd, `${pid}\n${port}\n`, 0);
+  } catch (err) {
+    console.error(`[PID] Failed to record port ${port} in lock file: ${err}`);
   }
 }
 

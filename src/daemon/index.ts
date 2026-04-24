@@ -13,6 +13,7 @@ import { initDatabase, closeDb } from "../vault/schema.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
+import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { ObserverService } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -243,6 +244,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     healthCheckInterval: userConfig?.healthCheckInterval ?? 30000,
     noLocalTools: userConfig?.noLocalTools ?? false,
   };
+
+  // Record the actual bound port in the lockfile so `jarvis stop` knows which
+  // port to verify even when the daemon was started with --port, JARVIS_PORT,
+  // or a mid-run config change. No-op if we don't hold the lock (e.g. tests).
+  writeLockedPort(port);
 
   // If dbPath is relative, make it absolute within dataDir
   if (!path.isAbsolute(config.dbPath)) {
