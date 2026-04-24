@@ -179,6 +179,18 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('Manage persistent background agents for long-running tasks.');
   lines.push('');
 
+  // --- Authority / intent gating ---
+  lines.push('## Authority Gating');
+  lines.push('');
+  lines.push('### request_approval');
+  lines.push('**Required BEFORE any gated semantic action.** Creates an inline approval card for the user. Blocks until they decide, then returns `[APPROVED]` / `[DENIED]` / `[EXPIRED]`.');
+  lines.push('- `action_category` (required): one of `send_email`, `send_message`, `make_payment`, `install_software`, `modify_settings`, `delete_data`, `execute_command`, `terminate_agent`');
+  lines.push('- `intent` (required): a short imperative sentence, e.g. `"Send email to alice@example.com with subject Weekly Update"`');
+  lines.push('- `context` (optional): 1–2 sentence rationale');
+  lines.push('');
+  lines.push('Call this BEFORE you start composing/clicking/running — not after. See the "Intent Gating" section of the system prompt for when it is required.');
+  lines.push('');
+
   // --- Other ---
   lines.push('## Other Tools');
   lines.push('');

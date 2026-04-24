@@ -262,8 +262,9 @@ export class CommitmentExecutor {
       'Instructions:',
       '1. Use your available tools (browser, terminal, file operations) to complete this task.',
       '2. Be thorough — actually perform the work, don\'t just describe it.',
-      '3. After completion, summarize what you did.',
-      '4. If the task is impossible or unclear, explain why and suggest alternatives.',
+      '3. **Intent Gating still applies.** If this task involves sending email/messages, payments, installs, destructive ops, or any other gated category, you MUST call `request_approval` first and wait for `[APPROVED]` before acting. Do NOT write "APPROVAL REQUIRED" yourself — always use the tool.',
+      '4. After completion, summarize what you did.',
+      '5. If the task is impossible or unclear, explain why and suggest alternatives.',
       '',
       'BEGIN EXECUTION.',
     ].join('\n');

@@ -94,6 +94,11 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   } else {
     sections.push('- No tools assigned.');
   }
+  // `request_approval` is always available to every primary agent, regardless
+  // of role.tools. Exposing it here (and reinforcing in Intent Gating below)
+  // keeps the LLM from concluding it isn't "in configuration" when it only
+  // glances at this list.
+  sections.push('- request_approval (authority) — always available; see Intent Gating below');
   sections.push('');
 
   // Sub-roles (if any)
@@ -130,6 +135,9 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   // authority rules are configured, because the LLM can always accomplish
   // a gated action by composing lower-level tools (browser, desktop).
   sections.push('# Intent Gating (ALWAYS FOLLOW)');
+  sections.push('');
+  sections.push('**`request_approval` is always available to you.** It is a built-in system tool registered on every primary agent, independent of the Available Tools list above. Do not say "the approval tool isn\'t available" — it is. Call it like any other tool.');
+  sections.push('');
   sections.push('Before performing any of the following **gated actions**, you MUST call the `request_approval` tool first, and wait for it to return `[APPROVED]` before proceeding:');
   sections.push('');
   sections.push('- **send_email** — sending an email to anyone');
