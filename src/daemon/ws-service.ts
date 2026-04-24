@@ -598,11 +598,16 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       } catch { /* ignore — site builder may not be fully started */ }
     }
 
-    // Auto-create a task for non-trivial messages
-    const isTrivial = text.trim().length < 10;
+    // Auto-create a commitment only when the message has commitment-phrasing
+    // (a scheduled, recurring, or explicitly deferred intent). Previously every
+    // message >10 chars became a tracked commitment, which caused the
+    // CommitmentExecutor to re-run the same request after the primary agent
+    // already handled it — producing duplicate cards and bypassing intent gating.
+    // A conversational request ("send email to X") is handled synchronously by
+    // the streaming agent and doesn't need a tracked task.
     let taskCommitment: Commitment | null = null;
 
-    if (!isTrivial) {
+    if (looksLikeCommitment(text)) {
       try {
         const taskLabel = text.length > 80 ? text.slice(0, 77) + '...' : text;
         taskCommitment = createCommitment(taskLabel, {
@@ -929,6 +934,49 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       timestamp: Date.now(),
     };
   }
+}
+
+/**
+ * Heuristic: does this chat text look like a commitment (scheduled, recurring,
+ * or explicitly deferred intent) that deserves to be tracked by the
+ * CommitmentExecutor? Returns false for conversational requests that the
+ * primary streaming agent already handles in real time.
+ *
+ * Positive signals (any one triggers):
+ *   - "remind me to …", "tell me when …"
+ *   - "every day/week/month/monday/…", "daily/weekly"
+ *   - time anchors: "at 3pm", "tomorrow", "on Friday", "next week"
+ *   - explicit scheduling verbs: "schedule", "plan", "book"
+ *
+ * Anything else — including "send email to X", "open Y", "run Z", questions —
+ * is treated as a synchronous conversational request.
+ */
+function looksLikeCommitment(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 10) return false;
+  const lower = t.toLowerCase();
+
+  // Explicit commitment phrases
+  const phrasePatterns = [
+    /\bremind me\b/,
+    /\btell me when\b/,
+    /\b(schedule|plan|book)\b/,
+    /\bevery (day|week|month|morning|evening|night|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/,
+    /\b(daily|weekly|monthly|hourly)\b/,
+  ];
+  for (const rx of phrasePatterns) {
+    if (rx.test(lower)) return true;
+  }
+
+  // Time anchors — "at 3pm", "at 10:30", "by 5pm", "at noon"
+  if (/\b(at|by)\s+(\d{1,2}(:\d{2})?\s*(am|pm)?|noon|midnight)\b/.test(lower)) return true;
+
+  // Day anchors — "tomorrow", "next week", "on Friday", "this evening"
+  if (/\b(tomorrow|tonight|this (morning|afternoon|evening|night))\b/.test(lower)) return true;
+  if (/\bnext (week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lower)) return true;
+  if (/\bon (mon|tue|wed|thu|fri|sat|sun)(day)?\b/.test(lower)) return true;
+
+  return false;
 }
 
 /**
