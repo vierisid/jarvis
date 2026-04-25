@@ -394,7 +394,9 @@ export function useWebSocket() {
 
       // Rehydrate any pending approval requests so a daemon restart (or a
       // dashboard reload mid-approval) doesn't strand the user with no
-      // visible card. Server is authoritative; we replace local state.
+      // visible card. Server is authoritative.
+      // Phase 5B: REST now includes `intent` + `impact` directly (matches
+      // WS broadcast shape), so no more client-side derivation.
       try {
         const resp = await fetch("/api/authority/approvals?status=pending");
         if (resp.ok) {
@@ -406,17 +408,15 @@ export function useWebSocket() {
             urgency: "urgent" | "normal";
             reason: string;
             created_at: number;
+            intent?: string;
+            impact?: ApprovalImpact;
           }>;
           const rehydrated: PendingApproval[] = rows.map((r) => ({
             id: r.id,
             shortId: r.id.slice(0, 8),
-            intent: r.reason || r.tool_name,
+            intent: r.intent ?? r.reason ?? r.tool_name,
             category: r.action_category,
-            // Server doesn't include impact in the REST response yet; derive
-            // a safe default. Categories the daemon classifies as destructive
-            // still show the right impact at runtime via the WS broadcast,
-            // and a daemon shim can fill this later if needed.
-            impact: deriveImpactFromCategory(r.action_category),
+            impact: r.impact ?? deriveImpactFromCategory(r.action_category),
             agentName: r.agent_name,
             toolName: r.tool_name,
             urgency: r.urgency,

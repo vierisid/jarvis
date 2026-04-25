@@ -19,6 +19,107 @@ export type Observation = {
   created_at: number;
 };
 
+/**
+ * Normalized presentation shape for an observation, used by surfaces that
+ * need to render observations without knowing each type's data schema.
+ * Computed by `summarizeObservation()`.
+ */
+export type ObservationSummary = {
+  id: string;
+  type: ObservationType;
+  title: string;
+  summary: string;
+  created_at: number;
+};
+
+/**
+ * Project the type-dependent `data` payload of an Observation into a stable
+ * `{ title, summary }` pair suitable for cards, palette rows, log lists.
+ *
+ * Falls back to a generic title/summary when the observation type doesn't
+ * have a known shape — never throws, never returns null.
+ */
+export function summarizeObservation(o: Observation): ObservationSummary {
+  const d = o.data ?? {};
+  const str = (k: string): string | undefined => {
+    const v = (d as Record<string, unknown>)[k];
+    return typeof v === 'string' && v.length > 0 ? v : undefined;
+  };
+
+  let title = humanizeType(o.type);
+  let summary = '';
+
+  switch (o.type) {
+    case 'file_change': {
+      const path = str('path') ?? str('file');
+      const op = str('op') ?? str('action') ?? 'changed';
+      if (path) title = `${op}: ${path}`;
+      summary = str('detail') ?? str('description') ?? '';
+      break;
+    }
+    case 'notification': {
+      title = str('title') ?? title;
+      summary = str('body') ?? str('message') ?? str('text') ?? '';
+      break;
+    }
+    case 'clipboard': {
+      title = 'Clipboard';
+      summary = (str('text') ?? '').slice(0, 200);
+      break;
+    }
+    case 'app_activity': {
+      const app = str('app') ?? str('name');
+      const action = str('action') ?? 'active';
+      title = app ? `${app} · ${action}` : title;
+      summary = str('detail') ?? str('description') ?? '';
+      break;
+    }
+    case 'calendar': {
+      title = str('title') ?? str('summary') ?? title;
+      summary = str('description') ?? str('location') ?? '';
+      break;
+    }
+    case 'email': {
+      title = str('subject') ?? title;
+      const from = str('from');
+      summary = from ? `From ${from}` : (str('preview') ?? '');
+      break;
+    }
+    case 'browser': {
+      title = str('title') ?? str('url') ?? title;
+      summary = str('url') ?? '';
+      break;
+    }
+    case 'process': {
+      const name = str('name') ?? str('process');
+      const action = str('action') ?? 'event';
+      title = name ? `${name} · ${action}` : title;
+      summary = str('command') ?? str('detail') ?? '';
+      break;
+    }
+    case 'screen_capture': {
+      title = 'Screen capture';
+      summary = str('window') ?? str('app') ?? '';
+      break;
+    }
+    default: {
+      summary = str('description') ?? str('summary') ?? str('text') ?? '';
+    }
+  }
+
+  return {
+    id: o.id,
+    type: o.type,
+    title,
+    summary: summary.length > 240 ? summary.slice(0, 237) + '…' : summary,
+    created_at: o.created_at,
+  };
+}
+
+function humanizeType(t: ObservationType): string {
+  return t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 type ObservationRow = {
   id: string;
   type: ObservationType;

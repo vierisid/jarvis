@@ -26,7 +26,7 @@ import { findRelationships, getEntityRelationships } from '../vault/relationship
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCommitmentStatus, reorderCommitments } from '../vault/commitments.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
-import { getRecentObservations } from '../vault/observations.ts';
+import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { getPersonality } from '../personality/model.ts';
 import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import {
@@ -512,7 +512,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const params = getSearchParams(req);
         const type = params.get('type') as ObservationType | undefined;
         const limit = parseInt(params.get('limit') ?? '50') || 50;
-        return json(getRecentObservations(type, limit));
+        const summarized = params.get('summarized') === 'true';
+        const obs = getRecentObservations(type, limit);
+        if (!summarized) return json(obs);
+        // Phase 5B: when ?summarized=true, project each row into the
+        // stable {title, summary, type, created_at} shape the dashboard
+        // can render uniformly across all observation types.
+        return json(obs.map((o) => ({ ...summarizeObservation(o), data: o.data })));
       },
     },
 
@@ -1489,15 +1495,34 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager) return json([]);
         const params = getSearchParams(req);
         const status = params.get('status');
-        if (status === 'pending') {
-          return json(ctx.approvalManager.getPending());
-        }
-        return json(ctx.approvalManager.getHistory({
-          limit: parseInt(params.get('limit') ?? '50') || 50,
-          action: (params.get('action') as ActionCategory) || undefined,
-          agentId: params.get('agent_id') || undefined,
-          status: (params.get('status') as any) || undefined,
+        const rows =
+          status === 'pending'
+            ? ctx.approvalManager.getPending()
+            : ctx.approvalManager.getHistory({
+                limit: parseInt(params.get('limit') ?? '50') || 50,
+                action: (params.get('action') as ActionCategory) || undefined,
+                agentId: params.get('agent_id') || undefined,
+                status: (params.get('status') as any) || undefined,
+              });
+
+        // Phase 5B audit fix: enrich the REST response with the same
+        // `intent` + `impact` fields the WS broadcasts already carry, so
+        // dashboard rehydration on reconnect doesn't have to derive them
+        // client-side from `tool_name` + `action_category`.
+        const { impactFromCategory } = require('../roles/authority.ts');
+        const wsService = ctx.wsService as
+          | { computeApprovalIntent?: (r: typeof rows[number]) => string }
+          | undefined;
+
+        const enriched = rows.map((r) => ({
+          ...r,
+          impact: impactFromCategory(r.action_category as ActionCategory),
+          intent:
+            wsService?.computeApprovalIntent?.(r) ??
+            (r.reason && r.reason.trim() ? r.reason : r.tool_name),
         }));
+
+        return json(enriched);
       },
     },
 
@@ -1543,6 +1568,62 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         ctx.wsService?.broadcastApprovalUpdate(denied);
 
         return json({ ok: true });
+      },
+    },
+
+    /**
+     * Palette recent picks — daemon-side LRU surviving reload + cross-device.
+     * The UI also keeps a localStorage cache as an offline fallback.
+     */
+    '/api/palette/recent': {
+      GET: (req: Request) => {
+        const { listRecentObjects } = require('../vault/recent-objects.ts');
+        const params = getSearchParams(req);
+        const limit = Math.min(parseInt(params.get('limit') ?? '5') || 5, 50);
+        const rows = listRecentObjects(limit) as Array<{
+          object_type: string;
+          object_id: string;
+          title: string;
+          summary: string | null;
+          meta: string | null;
+          picked_at: number;
+        }>;
+        return json({
+          recent: rows.map((r) => ({
+            type: r.object_type,
+            id: r.object_id,
+            ref: r.object_id,
+            title: r.title,
+            summary: r.summary ?? undefined,
+            meta: r.meta ?? undefined,
+            pickedAt: r.picked_at,
+          })),
+        });
+      },
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json()) as {
+            type?: string;
+            id?: string;
+            title?: string;
+            summary?: string;
+            meta?: string;
+          };
+          if (!body.type || !body.id || !body.title) {
+            return error('type, id, and title are required', 400);
+          }
+          const { recordRecentObject } = require('../vault/recent-objects.ts');
+          recordRecentObject({
+            object_type: body.type,
+            object_id: body.id,
+            title: body.title,
+            summary: body.summary,
+            meta: body.meta,
+          });
+          return json({ ok: true });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : 'failed', 500);
+        }
       },
     },
 
@@ -1612,18 +1693,30 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             description?: string;
             enabled?: boolean;
             tags?: string[];
+            current_version?: number;
+            execution_count?: number;
+            last_executed_at?: number | null;
           }>;
           let added = 0;
           for (const w of wfs) {
             if (added >= perType) break;
             if (!matches(w.name) && !matches(w.description)) continue;
+            // Phase 5B: enrich the meta line with version + run count when
+            // available so the palette row tells the user what they're picking
+            // beyond just tags.
+            const metaParts: string[] = [];
+            if (typeof w.current_version === 'number') metaParts.push(`v${w.current_version}`);
+            if (typeof w.execution_count === 'number') {
+              metaParts.push(`${w.execution_count} ${w.execution_count === 1 ? 'run' : 'runs'}`);
+            }
+            if (w.tags && w.tags.length > 0) metaParts.push(w.tags.join(' · '));
             results.push({
               type: 'workflow',
               id: w.id,
               ref: w.id,
               title: w.name,
               summary: w.description,
-              meta: w.tags && w.tags.length > 0 ? w.tags.join(' · ') : undefined,
+              meta: metaParts.length > 0 ? metaParts.join(' · ') : undefined,
               status: w.enabled
                 ? { label: 'Enabled', tone: 'ok' }
                 : { label: 'Disabled', tone: 'neutral' },
@@ -1738,26 +1831,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           console.warn('[palette] authority search failed:', err);
         }
 
-        // 6. Logs (recent observations)
+        // 6. Logs (recent observations) — normalized via summarizeObservation
         try {
           const obs = getRecentObservations(undefined, perType * 4);
           let added = 0;
           for (const o of obs) {
             if (added >= perType) break;
-            const title = `${o.type}`;
-            const data = (o.data ?? {}) as Record<string, unknown>;
-            const summary =
-              (typeof data.summary === 'string' && data.summary)
-              || (typeof data.description === 'string' && data.description)
-              || (typeof data.text === 'string' && data.text)
-              || '';
-            if (!matches(title) && !matches(summary)) continue;
+            const sum = summarizeObservation(o);
+            if (!matches(sum.title) && !matches(sum.summary)) continue;
             results.push({
               type: 'log',
               id: o.id,
               ref: o.id,
-              title,
-              summary: summary.slice(0, 140) || undefined,
+              title: sum.title,
+              summary: sum.summary || undefined,
               meta: new Date(o.created_at).toLocaleTimeString(),
             });
             added++;
