@@ -1,16 +1,31 @@
-import React from "react";
+import React, { Suspense } from "react";
 import type { RoomKey } from "../router";
 import { RoomPlaceholder } from "./RoomPlaceholder";
+
+const ToolsRoom = React.lazy(() =>
+  import("./tools/ToolsRoom").then((m) => ({ default: m.ToolsRoom })),
+);
 
 /**
  * Mounts the right Room component for the active route key.
  *
- * Phase 6.0 ships placeholder bodies for every key so navigation works
- * end-to-end before any real Room is built. As each Phase 6.x sub-phase
- * lands, swap its `<RoomPlaceholder>` for the real Room implementation
- * (lazy-loaded via `React.lazy` to keep the home shell light).
+ * Phase 6.0 shipped placeholder bodies for every key. Each Phase 6.x
+ * sub-phase swaps in a lazy-loaded real Room. Suspense fallback keeps
+ * the slide-up animation from waiting on the chunk download.
  */
 export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
+  if (roomKey === "tools") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="tools"
+        title="Tools"
+        phaseTag="Loading…"
+        description="Fetching tool catalog…"
+      />}>
+        <ToolsRoom />
+      </Suspense>
+    );
+  }
   const meta = ROOM_META[roomKey];
   return (
     <RoomPlaceholder

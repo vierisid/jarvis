@@ -1,0 +1,376 @@
+/* Phase 6.1 — Tools Room. Two-pane: list left, detail right.
+   Establishes the standard Room layout pattern reused by Phase 6.2+. */
+
+.v2-tools {
+  display: grid;
+  grid-template-columns: minmax(360px, 460px) 1fr;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* ── List pane ── */
+
+.v2-tools__list-pane {
+  display: flex;
+  flex-direction: column;
+  border-right: var(--hair-soft);
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.v2-tools__filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5) var(--s-3);
+  border-bottom: var(--hair-soft);
+}
+
+.v2-tools__search {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 8px 12px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  color: var(--ink-3);
+  transition: border-color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
+}
+
+.v2-tools__search:focus-within {
+  background: var(--paper);
+  border-color: var(--ink);
+}
+
+.v2-tools__search-input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+
+.v2-tools__search-input::placeholder {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.v2-tools__filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.v2-tools__filter-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.v2-tools__filter-btn:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.v2-tools__filter-btn[data-active="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.v2-tools__filter-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-tools__list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: var(--s-2) 0;
+  overflow-y: auto;
+}
+
+.v2-tools__row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--s-3);
+  padding: 10px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.v2-tools__row:hover {
+  background: var(--paper-2);
+}
+
+.v2-tools__row[data-active="true"] {
+  background: var(--paper-2);
+  border-left-color: var(--accent);
+}
+
+.v2-tools__row-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper-2);
+  border: var(--hair-soft);
+  border-radius: var(--r-1);
+  color: var(--ink-2);
+}
+
+.v2-tools__row[data-active="true"] .v2-tools__row-icon {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.v2-tools__row-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.v2-tools__row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.v2-tools__row-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.v2-tools__row-summary {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.v2-tools__row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+.v2-tools__error,
+.v2-tools__empty {
+  padding: var(--s-6) var(--s-5);
+  text-align: center;
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.v2-tools__error {
+  color: var(--warn);
+}
+
+/* ── Detail pane ── */
+
+.v2-tools__detail-pane {
+  background: var(--paper);
+  overflow-y: auto;
+  padding: var(--s-8) var(--s-10);
+}
+
+.v2-tools__detail-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.v2-tools__detail {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+}
+
+.v2-tools__detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.v2-tools__detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.v2-tools__detail-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  color: var(--ink);
+  margin: 0;
+  word-break: break-word;
+}
+
+.v2-tools__detail-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+}
+
+.v2-tools__detail-desc {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  margin: 0;
+}
+
+.v2-tools__detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.v2-tools__detail-section-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  padding-bottom: var(--s-2);
+  border-bottom: var(--hair-soft);
+}
+
+.v2-tools__detail-empty-line {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.v2-tools__params {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.v2-tools__param {
+  padding: var(--s-3) var(--s-4);
+  background: var(--paper-2);
+  border: var(--hair-soft);
+  border-radius: var(--r-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.v2-tools__param-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.v2-tools__param-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.v2-tools__param-type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  padding: 1px 6px;
+  border: var(--hair-soft);
+  border-radius: var(--r-1);
+}
+
+.v2-tools__param-req {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.v2-tools__param-desc {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+/* ── Mobile collapse: stack list above detail when narrow ── */
+@media (max-width: 900px) {
+  .v2-tools--expanded {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(240px, 50%) 1fr;
+  }
+  .v2-tools--expanded .v2-tools__list-pane {
+    border-right: 0;
+    border-bottom: var(--hair-soft);
+  }
+}
+
+/* ── Inline mode: single pane, no detail; expanding a row inflates its
+       parameters underneath the row instead. ── */
+.v2-tools--inline {
+  grid-template-columns: 1fr;
+}
+
+.v2-tools--inline .v2-tools__list-pane {
+  border-right: 0;
+}
+
+.v2-tools--inline .v2-tools__filters {
+  padding: var(--s-3) var(--s-4) var(--s-2);
+}
+
+.v2-tools__row-params {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: var(--hair-soft);
+}

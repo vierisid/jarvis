@@ -183,6 +183,8 @@ export type UseVoiceReturn = {
   micLevel: number;
   /** Live interim STT text shown under the orb during recording. Empty when not listening. */
   partialTranscript: string;
+  /** Snap state to idle. For non-streaming responses (e.g. Room nav) where no tts_start arrives. */
+  forceIdle: () => void;
 };
 
 export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword" }: UseVoiceOptions): UseVoiceReturn {
@@ -858,6 +860,22 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     stopRecordingInternal();
   }, [stopRecordingInternal]);
 
+  /**
+   * Snap the voice state back to idle, regardless of where it currently is.
+   * Used when a non-streaming server response (e.g. Room navigation that
+   * intercepts the chat path) means no `tts_start` will ever arrive to clear
+   * the `processing` state via the normal lifecycle. Without this, the orb
+   * stays in `thinking` until the 30s safety timeout fires.
+   */
+  const forceIdle = useCallback(() => {
+    // Drain any in-flight TTS just in case
+    ttsQueueRef.current = [];
+    ttsPlayingRef.current = false;
+    ttsRequestIdRef.current = null;
+    setTtsAudioPlaying(false);
+    setVoiceState("idle");
+  }, []);
+
   // --- Mute toggle (Phase 4A) ---
   const setMuted = useCallback((next: boolean) => {
     setMutedState(next);
@@ -973,5 +991,6 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     setMuted,
     micLevel,
     partialTranscript,
+    forceIdle,
   };
 }

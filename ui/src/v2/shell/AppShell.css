@@ -3,7 +3,7 @@
 
 .v2-shell {
   display: grid;
-  grid-template-columns: 1fr 260px;
+  grid-template-columns: 1fr var(--v2-rail-width);
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
     "header   rail"

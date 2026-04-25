@@ -45,6 +45,7 @@ const VALID_OBJECT_TYPES: ReadonlySet<ObjectRefType> = new Set([
   'log',
   'file',
   'url',
+  'thread',
 ]);
 
 const SYSTEM_PROMPT = `You are a voice intent classifier for an agentic AI assistant.
@@ -54,12 +55,15 @@ Given a user's voice transcript and the recent conversation context, return a si
 Schema:
 {
   "verb": "ask" | "show" | "run" | "create" | "update" | "delete" | "grant" | "revoke" | "pause" | "resume" | "unknown",
-  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"file"|"url", "query": string } | null,
+  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"file"|"url"|"thread", "query": string } | null,
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
   "alternatives": [ { "label": string, "verb": ..., "object": ..., "args": ..., "impact": ... } ]  (0-2 items, only when ambiguous)
 }
+
+Object type "thread" is special: it represents the home conversation view
+(no Room open). Use it for "back" / "close" / "return" navigation intents.
 
 Verb meanings:
 - ask: read-only Q&A ("what's on my calendar?")
@@ -93,6 +97,18 @@ Transcript: "what did i miss this morning?"
 
 Transcript: "open workflows"
 {"verb":"show","object":{"type":"workflow"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "go back to the thread"
+{"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "close the room"
+{"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.95}
+
+Transcript: "back"
+{"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.85}
+
+Transcript: "return to the home view"
+{"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.95}
 
 Transcript: "send an email to alice about the meeting"
 {"verb":"create","object":{"type":"url","query":"email to alice"},"args":{"to":"alice","topic":"meeting"},"impact":"external","confidence":0.78,"alternatives":[{"label":"Send the email now","verb":"run","object":null,"args":{"to":"alice"},"impact":"external"},{"label":"Just draft it for review","verb":"create","object":null,"args":{"to":"alice"},"impact":"write"}]}

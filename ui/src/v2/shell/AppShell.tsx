@@ -13,7 +13,9 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
-import { openRoom, type RoomKey } from "../router";
+import { closeRoom, openRoom, type RoomKey } from "../router";
+import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
+import type { LayoutRect } from "../rooms/useRoomLayout";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -48,6 +50,23 @@ function objectTypeToRoomKey(t: ObjectType): RoomKey {
 
 function paletteTypeToRoomKey(t: PaletteResultType): RoomKey {
   return objectTypeToRoomKey(PALETTE_TYPE_TO_OBJECT_TYPE[t]);
+}
+
+const ROOM_KEYS_SET: ReadonlySet<RoomKey> = new Set([
+  "workflows",
+  "memory",
+  "tools",
+  "agents",
+  "authority",
+  "logs",
+  "calendar",
+  "goals",
+  "sites",
+  "settings",
+]);
+
+function isRoomKey(k: string): k is RoomKey {
+  return ROOM_KEYS_SET.has(k as RoomKey);
 }
 
 const VOICE_CYCLE: VoiceState[] = [
@@ -104,6 +123,102 @@ function AppShellLive() {
     voice.handleTTSEnd,
     voice.handleError,
   ]);
+
+  // Daemon-driven navigation (voice "open workflows" → navigate_room,
+  // "back to the thread" → navigate_home). Phase 6.1.5: opening goes to
+  // an inline RoomWindow in the thread (not the overlay); "back" closes
+  // the overlay if it's open, otherwise closes the most-recent inline
+  // window. `voice.forceIdle()` so the orb leaves processing immediately
+  // (chat path is bypassed → no tts_start to clear it via TTS lifecycle).
+  const navKey = live.roomNavRequest?.key;
+  const navTs = live.roomNavRequest?.ts;
+  useEffect(() => {
+    if (typeof navKey !== "string") return;
+    if (navKey === "home") {
+      // Prefer closing the overlay if any Room is currently expanded;
+      // else close the most-recent inline window.
+      if (window.location.hash.startsWith("#/_room_")) {
+        closeRoom();
+      } else {
+        live.closeMostRecentRoomWindow();
+      }
+    } else if (isRoomKey(navKey)) {
+      live.openRoomWindow(navKey);
+    } else {
+      console.warn("[v2] navigate request with unknown key:", navKey);
+      return;
+    }
+    voice.forceIdle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navKey, navTs]);
+
+  // Daemon-driven RoomWindow chrome control (voice "close" / "minimize"
+  // / "expand" / "restore"). Resolves "most_recent" to the most-recently-
+  // added window in the items list; named targets to the matching window.
+  const wcAction = live.windowControlRequest?.action;
+  const wcTarget = live.windowControlRequest?.target;
+  const wcTs = live.windowControlRequest?.ts;
+  useEffect(() => {
+    if (!wcAction || !wcTarget) return;
+
+    // Find the room-window we should operate on.
+    const windows = live.items.filter(
+      (i): i is Extract<ThreadItem, { kind: "room-window" }> => i.kind === "room-window",
+    );
+
+    let target: Extract<ThreadItem, { kind: "room-window" }> | undefined;
+    if (wcTarget === "most_recent") {
+      target = windows[windows.length - 1];
+    } else if (isRoomKey(wcTarget)) {
+      // Most-recent matching key (in case the same room was opened twice).
+      for (let i = windows.length - 1; i >= 0; i--) {
+        if (windows[i]!.roomKey === wcTarget) {
+          target = windows[i];
+          break;
+        }
+      }
+    }
+
+    if (!target) {
+      // No matching window. For "expand" we can still open the room
+      // overlay directly (graceful degradation: user said "expand tools"
+      // but no inline tools window exists → just open the overlay).
+      if (wcAction === "expand" && wcTarget !== "most_recent" && isRoomKey(wcTarget)) {
+        openRoom(wcTarget);
+      }
+      voice.forceIdle();
+      return;
+    }
+
+    switch (wcAction) {
+      case "close":
+        live.closeRoomWindow(target.id);
+        break;
+      case "minimize":
+        live.setRoomWindowStateById(target.id, "minimized");
+        break;
+      case "restore":
+        live.setRoomWindowStateById(target.id, "inline");
+        break;
+      case "expand":
+        openRoom(target.roomKey as RoomKey);
+        break;
+      case "reorder":
+        // handled below via the global path; shouldn't reach here with target
+        break;
+    }
+    voice.forceIdle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wcAction, wcTarget, wcTs]);
+
+  // Reorder is global: bring all floating windows back to inline. Runs in
+  // a separate effect so it doesn't depend on a target window existing.
+  useEffect(() => {
+    if (wcAction !== "reorder") return;
+    live.reorderAllToInline();
+    voice.forceIdle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wcAction, wcTs]);
 
   const awaitingApproval = live.approvals.length > 0;
   const voiceState = mapVoiceState(voice.voiceState, {
@@ -182,9 +297,10 @@ function AppShellLive() {
   const handlePickObject = useCallback(
     (result: PaletteResult, openInRoom: boolean) => {
       if (openInRoom) {
-        // Phase 6.0: Shift+Enter opens the matching Room directly,
-        // bypassing the inline preview. The Room body itself lands per
-        // sub-phase 6.1+; until then it shows a placeholder.
+        // Phase 6.0: Shift+Enter opens the matching Room directly as the
+        // fullscreen overlay (skipping the inline window). For object
+        // results this means jumping straight into the Room where the
+        // object lives.
         openRoom(paletteTypeToRoomKey(result.type));
         return;
       }
@@ -200,23 +316,16 @@ function AppShellLive() {
     [live],
   );
 
-  // Per the handoff "previews → InlineCard first" rule, picking a Room from
-  // the palette injects a Room-preview card into the thread by default. The
-  // card's Focus button opens the fullscreen Room. Shift+Enter (openInRoom)
-  // skips the preview and opens the Room directly.
+  // Phase 6.1.5: picking a Room from the palette opens it as an inline
+  // RoomWindow at the bottom of the thread (the room-window IS the preview).
+  // Shift+Enter still opens the fullscreen overlay directly.
   const handlePickRoom = useCallback(
     (entry: PaletteNavEntry, openInRoom: boolean) => {
       if (openInRoom) {
         openRoom(entry.key as RoomKey);
         return;
       }
-      live.injectCard({
-        objectType: navKeyToObjectType(entry.key) as ObjectType,
-        ref: `room:${entry.key}`,
-        title: entry.label,
-        summary: entry.hint,
-        meta: "Room",
-      });
+      live.openRoomWindow(entry.key as RoomKey);
     },
     [live],
   );
@@ -238,11 +347,21 @@ function AppShellLive() {
         onFocusCard={(id) => {
           const item = live.items.find((i) => i.id === id);
           if (item && item.kind === "card") {
-            // Phase 6.0: Focus on an InlineCard opens the matching Room.
-            // Each Room body lands per sub-phase 6.1+.
-            openRoom(objectTypeToRoomKey(item.objectType));
+            // Phase 6.1.5: Focus on an object InlineCard opens that Room
+            // as an inline RoomWindow (consistent with palette Room picks).
+            live.openRoomWindow(objectTypeToRoomKey(item.objectType));
           }
         }}
+        onRoomClose={(id) => live.closeRoomWindow(id)}
+        onRoomMinimize={(id) => live.setRoomWindowStateById(id, "minimized")}
+        onRoomRestore={(id) => live.setRoomWindowStateById(id, "inline")}
+        onRoomExpand={(id) => {
+          const item = live.items.find((i) => i.id === id);
+          if (item && item.kind === "room-window") {
+            openRoom(item.roomKey as RoomKey);
+          }
+        }}
+        onRoomLayoutChange={(id, next) => live.setRoomWindowLayout(id, next)}
         onClarifier={handleClarifier}
         onRepeatBack={handleRepeatBack}
         voiceState={voiceState}
@@ -253,6 +372,19 @@ function AppShellLive() {
         onSuggestion={handleSuggestion}
         onToggleMute={handleToggleMute}
         onOpenPalette={openPalette}
+      />
+      <FloatingWindowsLayer
+        windows={live.roomWindows}
+        onClose={(id) => live.closeRoomWindow(id)}
+        onMinimize={(id) => live.setRoomWindowStateById(id, "minimized")}
+        onRestore={(id) => live.setRoomWindowStateById(id, "inline")}
+        onExpand={(id) => {
+          const item = live.items.find((i) => i.id === id);
+          if (item && item.kind === "room-window") {
+            openRoom(item.roomKey as RoomKey);
+          }
+        }}
+        onLayoutChange={(id, next) => live.setRoomWindowLayout(id, next)}
       />
       <CommandPalette
         open={paletteOpen}
@@ -418,6 +550,12 @@ interface ShellLayoutProps {
   onFocusCard: (id: string) => void;
   onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
   onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
+  // Phase 6.1.5 / 6.1.6 — RoomWindow controls
+  onRoomClose?: (id: string) => void;
+  onRoomMinimize?: (id: string) => void;
+  onRoomRestore?: (id: string) => void;
+  onRoomExpand?: (id: string) => void;
+  onRoomLayoutChange?: (id: string, next: { mode: "inline" } | { mode: "floating"; rect: LayoutRect }) => void;
   devAppend?: () => void;
   // Voice
   voiceState: VoiceState;
@@ -442,6 +580,11 @@ function ShellLayout({
   onFocusCard,
   onClarifier,
   onRepeatBack,
+  onRoomClose,
+  onRoomMinimize,
+  onRoomRestore,
+  onRoomExpand,
+  onRoomLayoutChange,
   devAppend,
   voiceState,
   suggestions,
@@ -473,6 +616,11 @@ function ShellLayout({
           onFocusCard={onFocusCard}
           onClarifier={onClarifier}
           onRepeatBack={onRepeatBack}
+          onRoomClose={onRoomClose}
+          onRoomMinimize={onRoomMinimize}
+          onRoomRestore={onRoomRestore}
+          onRoomExpand={onRoomExpand}
+          onRoomLayoutChange={onRoomLayoutChange}
           dev={devAppend ? { onAppend: devAppend } : undefined}
         />
       </div>

@@ -1629,24 +1629,35 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     /**
      * Tool registry exposure for the ⌘K palette and the Phase 6 Tools Room.
-     * Returns every registered tool with its category and high-level metadata.
+     * Returns every registered tool with its category, impact classification,
+     * and parameter list. Impact is derived via the same `tool-action-map` +
+     * `impactFromCategory` chain the orchestrator uses at gate time, so the
+     * Room shows exactly the impact the user would actually face on call.
      */
     '/api/tools': {
       GET: () => {
         const orchestrator = ctx.agentService.getOrchestrator();
         const registry = orchestrator.getToolRegistry();
         if (!registry) return json([]);
-        const tools = registry.list().map((t) => ({
-          name: t.name,
-          category: t.category,
-          description: t.description,
-          parameters: Object.entries(t.parameters).map(([k, v]) => ({
-            name: k,
-            type: v.type,
-            description: v.description,
-            required: v.required,
-          })),
-        }));
+        const { getActionForTool } = require('../authority/tool-action-map.ts');
+        const { impactFromCategory } = require('../roles/authority.ts');
+        const tools = registry.list().map((t) => {
+          const actionCategory = getActionForTool(t.name, t.category);
+          const impact = impactFromCategory(actionCategory);
+          return {
+            name: t.name,
+            category: t.category,
+            actionCategory,
+            impact,
+            description: t.description,
+            parameters: Object.entries(t.parameters).map(([k, v]) => ({
+              name: k,
+              type: v.type,
+              description: v.description,
+              required: v.required,
+            })),
+          };
+        });
         return json(tools);
       },
     },

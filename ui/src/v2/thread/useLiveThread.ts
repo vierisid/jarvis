@@ -30,10 +30,16 @@ import type { Impact, ObjectType, ThreadItem } from "./types";
  * else.
  */
 type InjectedCard = Extract<ThreadItem, { kind: "card" }>;
+type RoomWindowItem = Extract<ThreadItem, { kind: "room-window" }>;
+
+import type { RoomKey } from "../router";
+import { useRoomLayout, type LayoutRect } from "../rooms/useRoomLayout";
 
 export function useLiveThread() {
   const ws = useWebSocket();
   const [injectedCards, setInjectedCards] = useState<InjectedCard[]>([]);
+  const [roomWindows, setRoomWindows] = useState<RoomWindowItem[]>([]);
+  const layoutStore = useRoomLayout();
 
   const items = useMemo<ThreadItem[]>(() => {
     const chatItems = ws.messages
@@ -84,6 +90,12 @@ export function useLiveThread() {
       ...c,
     }));
 
+    // Phase 6.1.5 — inline Room windows. Same insertion model as cards.
+    const windows: (ThreadItem & { __ts: number })[] = roomWindows.map((w) => ({
+      __ts: tsFromInjectedId(w.id),
+      ...w,
+    }));
+
     // Merge by timestamp; stable sort keeps insertion order on ties.
     const merged = [
       ...chatItems,
@@ -91,10 +103,11 @@ export function useLiveThread() {
       ...clarifierItems,
       ...repeatBackItems,
       ...injected,
+      ...windows,
     ].sort((a, b) => a.__ts - b.__ts);
 
     return merged.map(({ __ts: _ts, ...rest }) => rest as ThreadItem);
-  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks, injectedCards]);
+  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks, injectedCards, roomWindows]);
 
   /**
    * Inject a synthetic `card` ThreadItem at the bottom of the thread.
@@ -126,6 +139,101 @@ export function useLiveThread() {
     },
     [],
   );
+
+  /**
+   * Phase 6.1.5 / 6.1.6 — open a Room as a browser-window-style card.
+   * Layout (inline vs floating + rect) is restored from per-room
+   * localStorage so re-opening a Room remembers where the user last placed
+   * it. If the Room is already open, focus it (move to bottom of items,
+   * restore from minimized) and keep its current layout instead of
+   * resetting to the saved one.
+   */
+  const openRoomWindow = useCallback(
+    (key: RoomKey) => {
+      const savedLayout = layoutStore.getLayout(key);
+      setRoomWindows((prev) => {
+        const existing = prev.find((w) => w.roomKey === key);
+        if (existing) {
+          const others = prev.filter((w) => w.roomKey !== key);
+          const now = Date.now();
+          return [
+            ...others,
+            {
+              ...existing,
+              id: `room-${now}-${Math.random().toString(36).slice(2, 8)}`,
+              state: "inline",
+              layout: existing.layout,
+              t: formatTime(now),
+            },
+          ];
+        }
+        const now = Date.now();
+        return [
+          ...prev,
+          {
+            kind: "room-window",
+            id: `room-${now}-${Math.random().toString(36).slice(2, 8)}`,
+            roomKey: key,
+            state: "inline",
+            layout: savedLayout,
+            t: formatTime(now),
+          },
+        ];
+      });
+    },
+    [layoutStore],
+  );
+
+  /**
+   * Phase 6.1.6 — set a Room window's layout (inline vs floating + rect).
+   * Persists to per-room localStorage so the next open restores it.
+   */
+  const setRoomWindowLayout = useCallback(
+    (id: string, layout: { mode: "inline" } | { mode: "floating"; rect: LayoutRect }) => {
+      let key: RoomKey | null = null;
+      setRoomWindows((prev) =>
+        prev.map((w) => {
+          if (w.id !== id) return w;
+          key = w.roomKey;
+          return { ...w, layout };
+        }),
+      );
+      if (key) layoutStore.setLayout(key, layout);
+    },
+    [layoutStore],
+  );
+
+  /**
+   * Phase 6.1.6 — voice "reorder" / "tidy up": bring every floating window
+   * back to inline placement and clear the persisted layouts.
+   */
+  const reorderAllToInline = useCallback(() => {
+    setRoomWindows((prev) =>
+      prev.map((w) =>
+        w.layout.mode === "floating" ? { ...w, layout: { mode: "inline" as const } } : w,
+      ),
+    );
+    layoutStore.resetAllLayouts();
+  }, [layoutStore]);
+
+  const closeRoomWindow = useCallback((id: string) => {
+    setRoomWindows((prev) => prev.filter((w) => w.id !== id));
+  }, []);
+
+  const setRoomWindowStateById = useCallback((id: string, state: "inline" | "minimized") => {
+    setRoomWindows((prev) => prev.map((w) => (w.id === id ? { ...w, state } : w)));
+  }, []);
+
+  /** Close the most-recently opened inline Room window. Used by voice "close the room". */
+  const closeMostRecentRoomWindow = useCallback((): boolean => {
+    let closed = false;
+    setRoomWindows((prev) => {
+      if (prev.length === 0) return prev;
+      closed = true;
+      return prev.slice(0, -1);
+    });
+    return closed;
+  }, []);
 
   const approve = useCallback(async (id: string) => {
     const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/approve`, {
@@ -173,6 +281,10 @@ export function useLiveThread() {
     resolveRepeatBack,
     /** Daemon-emitted thinking flag (between STT-final and stream/tts start). */
     thinking: ws.thinking,
+    /** Daemon-driven Room navigation request (voice "open workflows" etc.). */
+    roomNavRequest: ws.roomNavRequest,
+    /** Daemon-driven RoomWindow chrome control (voice "close", "expand", "minimize"). */
+    windowControlRequest: ws.windowControlRequest,
     /** Exposed so the v2 shell can pass the same WS to `useVoice`. */
     wsRef: ws.wsRef,
     /** Exposed so the v2 shell can wire TTS callbacks from `useVoice`. */
@@ -181,6 +293,16 @@ export function useLiveThread() {
     approvals: ws.approvals,
     /** Phase 5A: palette pushes synthetic cards into the thread via this. */
     injectCard,
+    /** Phase 6.1.5: room-window helpers. */
+    openRoomWindow,
+    closeRoomWindow,
+    setRoomWindowStateById,
+    closeMostRecentRoomWindow,
+    /** Phase 6.1.6: layout helpers (floating + reorder). */
+    setRoomWindowLayout,
+    reorderAllToInline,
+    /** Currently open room windows (read-only). */
+    roomWindows,
   };
 }
 

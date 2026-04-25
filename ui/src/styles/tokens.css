@@ -72,4 +72,10 @@
   --z-palette: 50;
   --z-room:    60;
   --z-toast:   70;
+
+  /* ── Layout ───────────────────────────────
+     Width of the persistent VoiceRail column. Shared by AppShell's grid
+     and the RoomShell overlay so opening a Room leaves the rail visible
+     and interactive (per the handoff "voice is always available" rule). */
+  --v2-rail-width: 260px;
 }

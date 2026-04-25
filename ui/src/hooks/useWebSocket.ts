@@ -356,6 +356,12 @@ export function useWebSocket() {
   const [clarifiers, setClarifiers] = useState<PendingClarifier[]>([]);
   const [repeatBacks, setRepeatBacks] = useState<PendingRepeatBack[]>([]);
   const [thinking, setThinking] = useState(false);
+  const [roomNavRequest, setRoomNavRequest] = useState<{ key: string; ts: number } | null>(null);
+  const [windowControlRequest, setWindowControlRequest] = useState<{
+    action: "close" | "minimize" | "expand" | "restore" | "reorder";
+    target: string; // RoomKey or "most_recent"
+    ts: number;
+  } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -777,6 +783,31 @@ export function useWebSocket() {
           setClarifiers((prev) => prev.filter((c) => c.id !== id));
           setRepeatBacks((prev) => prev.filter((r) => r.id !== id));
         }
+      } else if (payload.source === "navigate_room") {
+        // Daemon-driven Room navigation (voice "open workflows" etc.).
+        // Bumping `ts` on every emit guarantees React sees a new value
+        // even if the user navigates to the same Room twice in a row.
+        const key = (payload as { key?: string }).key;
+        if (typeof key === "string") {
+          setRoomNavRequest({ key, ts: msg.timestamp });
+        }
+      } else if (payload.source === "navigate_home") {
+        // Daemon-driven home/back navigation (voice "back to thread", etc.).
+        // Reuses the same channel as Room nav so AppShell only watches one
+        // signal — distinguished by key === "home".
+        setRoomNavRequest({ key: "home", ts: msg.timestamp });
+      } else if (payload.source === "window_control") {
+        // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
+        // "minimize" etc.) — daemon regex-matches and broadcasts here so
+        // the UI can drive RoomWindow chrome without an LLM round-trip.
+        const action = (payload as { action?: string }).action;
+        const target = (payload as { target?: string }).target;
+        if (
+          (action === "close" || action === "minimize" || action === "expand" || action === "restore" || action === "reorder") &&
+          typeof target === "string"
+        ) {
+          setWindowControlRequest({ action, target, ts: msg.timestamp });
+        }
       }
     } else if (msg.type === "error") {
       const rawMessage = msg.payload?.message;
@@ -877,6 +908,8 @@ export function useWebSocket() {
     clarifiers,
     repeatBacks,
     thinking,
+    roomNavRequest,
+    windowControlRequest,
     wsRef,
     voiceCallbacksRef,
   };

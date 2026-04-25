@@ -1,0 +1,182 @@
+/* Phase 6.1.5 / 6.1.6 — Room window as browser-window-style card.
+   Inline mode flows in the thread; floating mode is absolute-positioned
+   in a portal layer over the thread (z 30). */
+
+.v2-roomwin {
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  box-shadow: 0 1px 0 0 rgba(26, 26, 26, 0.04), 4px 4px 0 0 rgba(26, 26, 26, 0.04);
+}
+
+.v2-roomwin--focus-pulse {
+  animation: v2-roomwin-pulse 600ms var(--ease-out);
+}
+
+@keyframes v2-roomwin-pulse {
+  0%, 100% { box-shadow: 0 1px 0 0 rgba(26, 26, 26, 0.04), 4px 4px 0 0 rgba(26, 26, 26, 0.04); }
+  50%      { box-shadow: 0 0 0 3px rgba(194, 58, 42, 0.18), 4px 4px 0 0 rgba(26, 26, 26, 0.04); }
+}
+
+/* ── Chrome (header bar) ── */
+
+.v2-roomwin__chrome {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 8px 12px;
+  background: var(--paper-2);
+  border-bottom: var(--hair-soft);
+  user-select: none;
+  cursor: default;
+}
+
+.v2-roomwin--minimized .v2-roomwin__chrome {
+  border-bottom: 0;
+  cursor: pointer;
+}
+
+.v2-roomwin__lights {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.v2-roomwin__light {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(26, 26, 26, 0.18);
+  cursor: pointer;
+  padding: 0;
+  transition: filter var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
+}
+
+/* Pastel mac-style traffic lights — softened to match riso bone palette.
+   Restrained saturation so they don't fight the vermilion accent. */
+.v2-roomwin__light--close    { background: #D88B85; }  /* dusty rose */
+.v2-roomwin__light--minimize { background: #D4B47A; }  /* warm sand */
+.v2-roomwin__light--expand   { background: #95B89A; }  /* sage */
+
+.v2-roomwin__light:hover {
+  filter: brightness(1.08) saturate(1.1);
+  transform: scale(1.05);
+}
+
+.v2-roomwin__light:active {
+  transform: scale(0.92);
+}
+
+.v2-roomwin__light:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-roomwin__title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+  text-align: center;
+  letter-spacing: -0.005em;
+}
+
+.v2-roomwin__meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ── Body ── */
+
+.v2-roomwin__body {
+  /* Responsive height (inline mode): never less than 280px, never more
+     than 600px; targets ~half the viewport in between. */
+  height: clamp(280px, 50vh, 600px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.v2-roomwin__body > * {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (max-width: 700px) {
+  .v2-roomwin__body {
+    height: clamp(240px, 60vh, 480px);
+  }
+}
+
+/* ── Floating mode (Phase 6.1.6) ── */
+
+.v2-roomwin--floating {
+  /* Position is set inline by the React component; this overrides only
+     box-model concerns the floating layer needs. */
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  box-shadow:
+    0 1px 0 0 rgba(26, 26, 26, 0.04),
+    6px 8px 0 0 rgba(26, 26, 26, 0.08),
+    0 0 0 0 rgba(26, 26, 26, 0);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.v2-roomwin--floating.v2-roomwin--focused {
+  z-index: 35;
+  box-shadow:
+    0 1px 0 0 rgba(26, 26, 26, 0.04),
+    6px 8px 0 0 rgba(26, 26, 26, 0.12);
+}
+
+/* In floating mode the body fills the window minus the chrome bar. Override
+   the inline `clamp()` height because the parent rect controls dimensions. */
+.v2-roomwin--floating .v2-roomwin__body {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.v2-roomwin--floating.v2-roomwin--minimized {
+  /* Minimized + floating: collapse to chrome only; height auto so the
+     element shrinks to the chrome height. */
+  height: auto !important;
+}
+
+/* ── Resize handle (bottom-right corner, floating only) ── */
+
+.v2-roomwin__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 50%,
+      var(--ink-3) 50% 60%,
+      transparent 60% 70%,
+      var(--ink-3) 70% 80%,
+      transparent 80% 100%
+    );
+  opacity: 0.5;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.v2-roomwin__resize:hover {
+  opacity: 1;
+}

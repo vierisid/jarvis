@@ -1,0 +1,25 @@
+/* Phase 6.1.6 — overlay container for free-floating Room windows.
+   Sits over the thread but under the palette / room overlay / toast.
+   Pointer-events disabled at the layer; individual windows re-enable
+   so clicks elsewhere fall through to the thread. */
+
+.v2-floating-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Match the AppShell rail-leaving-area: don't cover the rail's column. */
+  right: var(--v2-rail-width);
+  bottom: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.v2-floating-layer > .v2-roomwin {
+  pointer-events: auto;
+}
+
+@media (max-width: 900px) {
+  .v2-floating-layer {
+    display: none;
+  }
+}
