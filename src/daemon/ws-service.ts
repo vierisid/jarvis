@@ -540,6 +540,23 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'voice_text': {
+        // Browser-side STT path: the dashboard already has a final transcript
+        // (via the Web Speech API) and prefers it over daemon Whisper. Skip
+        // STT entirely and run the same downstream pipeline.
+        const payload = msg.payload as { requestId?: string; text?: string };
+        const requestId = payload?.requestId ?? msg.id ?? crypto.randomUUID();
+        const text = (payload?.text ?? '').trim();
+        // If we have an in-flight audio session (parallel paths), drop it so
+        // we don't double-process the same utterance.
+        this.voiceSessions.delete(ws);
+        if (!text) return undefined;
+        this.processVoiceTranscript(text, requestId, ws).catch(err =>
+          console.error('[WSService] voice_text pipeline error:', err)
+        );
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -862,98 +879,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     try {
       const transcript = await this.sttProvider.transcribe(audioBuffer);
       if (!transcript.trim()) return;
-
-      console.log('[WSService] Voice transcript:', transcript);
-
-      // Echo transcript back so the UI shows it as a user message immediately,
-      // regardless of which routing path the classifier picks.
-      this.wsServer.sendToClient(ws, {
-        type: 'chat',
-        payload: { text: transcript, source: 'voice_transcript' },
-        id: session.requestId,
-        timestamp: Date.now(),
-      });
-
-      // Window-control fast-path (Phase 6.1.5 follow-up): regex-match short
-      // imperatives like "close", "expand the tools room", "minimize",
-      // "shut" — these don't need the LLM classifier. Short-circuit on
-      // match and broadcast the control to the dashboard directly.
-      const winCtrl = matchWindowControl(transcript);
-      if (winCtrl) {
-        console.log(
-          `[WSService] Window control: ${winCtrl.action} → ${winCtrl.target}`,
-        );
-        this.broadcastWindowControl(winCtrl, session.requestId);
-        this.broadcastAssistantAck(
-          ackForWindowControl(winCtrl),
-          session.requestId,
-        );
-        return;
-      }
-
-      // Run intent classifier. Failure-tolerant: returns a permissive intent
-      // (verb=ask, confidence=0.85) on any error so we always land on `act`.
-      const llm = this.agentService.getLLMManager();
-      const recentTurns = this.recentTurns('websocket');
-      const intent = await classifyVoiceIntent(transcript, recentTurns, llm);
-      const route = routeByConfidence(intent);
-
-      console.log(
-        `[WSService] Voice intent: verb=${intent.verb} impact=${intent.impact} ` +
-        `confidence=${intent.confidence.toFixed(2)} → ${route}`,
-      );
-
-      // Thinking signal: between STT-final and either chat-stream-start or
-      // a clarifier broadcast. Lets the v2 orb show its thinking state with
-      // accurate timing instead of inferring from the React side.
-      this.broadcastThinkingStart(session.requestId);
-
-      // Navigation interception: handle "back to thread" first (closes any
-      // open Room) and then Room-opening intents. Both bypass the chat
-      // agent (which has no concept of Rooms or the home view).
-      if (route === 'act' && intentIsBackToThread(intent)) {
-        this.broadcastNavigateHome(session.requestId);
-        this.broadcastAssistantAck("Going back to the thread.", session.requestId);
-        this.broadcastThinkingEnd(session.requestId);
-        return;
-      }
-
-      const roomKey = route === 'act' ? intentToRoomKey(intent) : null;
-      if (roomKey) {
-        this.broadcastRoomNavigation(roomKey, session.requestId);
-        this.broadcastAssistantAck(`Opening the ${roomKey} room.`, session.requestId);
-        this.broadcastThinkingEnd(session.requestId);
-        return;
-      }
-
-      if (route === 'act') {
-        // Normal chat flow — thinking_end will be emitted on first stream chunk.
-        await this.handleChat({
-          type: 'chat',
-          payload: { text: transcript },
-          id: session.requestId,
-          timestamp: Date.now(),
-        }, ws);
-      } else {
-        // Hold the transcript and ask the user to confirm before acting.
-        const pending: PendingVoiceConfirmation = {
-          id: intent.id,
-          intent,
-          transcript,
-          ws,
-          channel: 'websocket',
-          kind: route === 'clarify' ? 'clarifier' : 'repeat_back',
-          createdAt: Date.now(),
-        };
-        this.pendingVoiceConfirmations.set(pending.id, pending);
-        if (route === 'clarify') {
-          this.broadcastClarifierRequest(pending);
-        } else {
-          this.broadcastRepeatBackRequest(pending);
-        }
-        // Thinking ends at the moment we hand control back to the user.
-        this.broadcastThinkingEnd(session.requestId);
-      }
+      await this.processVoiceTranscript(transcript, session.requestId, ws);
     } catch (err) {
       console.error('[WSService] Voice session error:', err);
       const message = err instanceof Error ? err.message : 'Voice processing failed';
@@ -962,6 +888,114 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         payload: { message },
         timestamp: Date.now(),
       });
+    }
+  }
+
+  /**
+   * Shared post-STT pipeline. Called by both `handleVoiceSession` (after
+   * Whisper) and the `voice_text` handler (which skips STT and uses a
+   * browser-supplied transcript). Echoes the transcript, runs the
+   * window-control fast-path, then the intent classifier, and finally
+   * routes by confidence (act / clarify / repeat-back).
+   */
+  private async processVoiceTranscript(
+    transcript: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+  ): Promise<void> {
+    const trimmed = transcript.trim();
+    if (!trimmed) return;
+
+    console.log('[WSService] Voice transcript:', trimmed);
+
+    // Echo transcript back so the UI shows it as a user message immediately,
+    // regardless of which routing path the classifier picks.
+    this.wsServer.sendToClient(ws, {
+      type: 'chat',
+      payload: { text: trimmed, source: 'voice_transcript' },
+      id: requestId,
+      timestamp: Date.now(),
+    });
+
+    // Window-control fast-path (Phase 6.1.5 follow-up): regex-match short
+    // imperatives like "close", "expand the tools room", "minimize",
+    // "shut" — these don't need the LLM classifier. Short-circuit on
+    // match and broadcast the control to the dashboard directly.
+    const winCtrl = matchWindowControl(trimmed);
+    if (winCtrl) {
+      console.log(
+        `[WSService] Window control: ${winCtrl.action} → ${winCtrl.target}`,
+      );
+      this.broadcastWindowControl(winCtrl, requestId);
+      this.broadcastAssistantAck(
+        ackForWindowControl(winCtrl),
+        requestId,
+      );
+      return;
+    }
+
+    // Run intent classifier. Failure-tolerant: returns a permissive intent
+    // (verb=ask, confidence=0.85) on any error so we always land on `act`.
+    const llm = this.agentService.getLLMManager();
+    const recentTurns = this.recentTurns('websocket');
+    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm);
+    const route = routeByConfidence(intent);
+
+    console.log(
+      `[WSService] Voice intent: verb=${intent.verb} impact=${intent.impact} ` +
+      `confidence=${intent.confidence.toFixed(2)} → ${route}`,
+    );
+
+    // Thinking signal: between STT-final and either chat-stream-start or
+    // a clarifier broadcast. Lets the v2 orb show its thinking state with
+    // accurate timing instead of inferring from the React side.
+    this.broadcastThinkingStart(requestId);
+
+    // Navigation interception: handle "back to thread" first (closes any
+    // open Room) and then Room-opening intents. Both bypass the chat
+    // agent (which has no concept of Rooms or the home view).
+    if (route === 'act' && intentIsBackToThread(intent)) {
+      this.broadcastNavigateHome(requestId);
+      this.broadcastAssistantAck("Going back to the thread.", requestId);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
+    const roomKey = route === 'act' ? intentToRoomKey(intent) : null;
+    if (roomKey) {
+      this.broadcastRoomNavigation(roomKey, requestId);
+      this.broadcastAssistantAck(`Opening the ${roomKey} room.`, requestId);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
+    if (route === 'act') {
+      // Normal chat flow — thinking_end will be emitted on first stream chunk.
+      await this.handleChat({
+        type: 'chat',
+        payload: { text: trimmed },
+        id: requestId,
+        timestamp: Date.now(),
+      }, ws);
+    } else {
+      // Hold the transcript and ask the user to confirm before acting.
+      const pending: PendingVoiceConfirmation = {
+        id: intent.id,
+        intent,
+        transcript: trimmed,
+        ws,
+        channel: 'websocket',
+        kind: route === 'clarify' ? 'clarifier' : 'repeat_back',
+        createdAt: Date.now(),
+      };
+      this.pendingVoiceConfirmations.set(pending.id, pending);
+      if (route === 'clarify') {
+        this.broadcastClarifierRequest(pending);
+      } else {
+        this.broadcastRepeatBackRequest(pending);
+      }
+      // Thinking ends at the moment we hand control back to the user.
+      this.broadcastThinkingEnd(requestId);
     }
   }
 

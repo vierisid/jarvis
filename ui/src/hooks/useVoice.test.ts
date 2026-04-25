@@ -75,15 +75,15 @@ describe("shouldSpeechWakeBeRunning", () => {
     speechRecognitionAvailable: true,
   };
 
-  test("runs in idle and speaking (for barge-in)", () => {
+  test("runs in every state except recording and error (mid-thought interrupts allowed)", () => {
     expect(shouldSpeechWakeBeRunning(base)).toBe(true);
     expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "speaking" })).toBe(true);
+    expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "processing" })).toBe(true);
+    expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "wake_detected" })).toBe(true);
   });
 
-  test("does not run during recording, processing, wake_detected, or error", () => {
+  test("does not run during active recording or error", () => {
     expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "recording" })).toBe(false);
-    expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "processing" })).toBe(false);
-    expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "wake_detected" })).toBe(false);
     expect(shouldSpeechWakeBeRunning({ ...base, voiceState: "error" })).toBe(false);
   });
 
