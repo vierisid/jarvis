@@ -149,7 +149,10 @@ export function shouldSpeechWakeBeRunning(inputs: {
   const { isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
   if (speechWakeFatal) return false;
   if (!isMicAvailable || !wakeWordEnabled || !speechRecognitionAvailable) return false;
-  if (voiceState !== "idle" && voiceState !== "speaking") return false;
+  // Run in every state except active recording (which owns the mic for the
+  // live transcript recognizer). Includes processing/wake_detected/speaking
+  // so "Jarvis" can interrupt mid-thought, not just kick off from idle.
+  if (voiceState === "recording" || voiceState === "error") return false;
   if (wakeEngine === "openwakeword") return false;
   return true; // "webspeech" or "auto" with the API available
 }
@@ -199,6 +202,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const [partialTranscript, setPartialTranscript] = useState("");
   const mutedRef = useRef(false);
   const transcriptRecognizerRef = useRef<any>(null);
+  // Final transcript captured from the browser SpeechRecognition during the
+  // current recording. When present, we prefer this over uploading WAV for
+  // daemon Whisper because it's typically more accurate for short utterances.
+  const finalBrowserTranscriptRef = useRef("");
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -229,6 +236,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const startRecordingRef = useRef<(autoStop?: boolean) => void>(() => {});
   const autoStopRef = useRef(false);
   const cancelTTSRef = useRef<() => void>(() => {});
+  const forceIdleRef = useRef<() => void>(() => {});
 
   // Keep refs in sync with state for use inside callbacks
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
@@ -421,7 +429,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        if (voiceStateRef.current === "recording" || voiceStateRef.current === "processing") return;
+        // Don't process wakes while we're already capturing the user
+        // (recording owns the transcript recognizer). All other states
+        // — including processing and wake_detected — accept wake events
+        // so "Jarvis" can interrupt mid-thought.
+        if (voiceStateRef.current === "recording") return;
 
         // Strict matcher during speaking to keep TTS echo from self-triggering;
         // loose prefix matcher when idle so "hey jarvis <command>" wakes in one breath.
@@ -439,7 +451,13 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
           lastWakeAtRef.current = now;
 
           console.log(`[Voice] Speech wake phrase detected: "${transcript}"`);
-          if (voiceStateRef.current === "speaking") cancelTTSRef.current();
+          const s = voiceStateRef.current;
+          if (s === "speaking") {
+            cancelTTSRef.current();
+          } else if (s === "processing" || s === "wake_detected") {
+            // Mid-thought interrupt: drop the in-flight turn before re-arming.
+            forceIdleRef.current();
+          }
           setVoiceState("wake_detected");
 
           // Hand the mic off cleanly: wait for the recognizer's own end event
@@ -499,7 +517,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
           speechWakeRestartTimerRef.current = null;
         }
         if (wasStopping) return;
-        // Chrome ends continuous sessions ~every 30s; retry if we still need to run.
+        // Chrome ends continuous sessions ~every 30s; retry if we still need
+        // to run. The selector now permits processing/wake_detected/speaking,
+        // so "Jarvis" can interrupt anywhere except active recording.
         if (!shouldSpeechWakeRun()) return;
         speechWakeRestartTimerRef.current = setTimeout(() => {
           speechWakeRestartTimerRef.current = null;
@@ -713,10 +733,39 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   }, [voiceState, cancelTTS]);
 
   // --- Send audio to server ---
+  // If the browser SpeechRecognition produced a final transcript during the
+  // recording, prefer it: send `voice_text` (skipping daemon Whisper) because
+  // the browser STT is typically more accurate for short utterances and
+  // matches what the user saw under the orb. Otherwise fall back to uploading
+  // the WAV audio for daemon-side STT.
   const sendAudioToServer = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (pcmChunksRef.current.length === 0) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pcmChunksRef.current = [];
+      finalBrowserTranscriptRef.current = "";
+      return;
+    }
+
+    const browserText = finalBrowserTranscriptRef.current.trim();
+    finalBrowserTranscriptRef.current = "";
+
+    if (browserText) {
+      const requestId = crypto.randomUUID();
+      ws.send(JSON.stringify({
+        type: "voice_text",
+        payload: { requestId, text: browserText },
+        timestamp: Date.now(),
+      }));
+      pcmChunksRef.current = [];
+      setVoiceState("processing");
+      return;
+    }
+
+    if (pcmChunksRef.current.length === 0) {
+      // Nothing to send — return to idle so we don't get stuck on processing.
+      setVoiceState("idle");
+      return;
+    }
 
     const requestId = crypto.randomUUID();
     const wavBuffer = encodeWav(pcmChunksRef.current, sampleRateRef.current);
@@ -876,6 +925,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     setVoiceState("idle");
   }, []);
 
+  useEffect(() => {
+    forceIdleRef.current = forceIdle;
+  }, [forceIdle]);
+
   // --- Mute toggle (Phase 4A) ---
   const setMuted = useCallback((next: boolean) => {
     setMutedState(next);
@@ -900,17 +953,38 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     if (!SpeechRecognitionCtor) return;
 
     if (voiceState === "recording" && !mutedRef.current) {
+      // Reset captured transcript at the start of each recording.
+      finalBrowserTranscriptRef.current = "";
       try {
         const rec = new SpeechRecognitionCtor();
         rec.continuous = true;
         rec.interimResults = true;
         rec.lang = "en-US";
         rec.onresult = (event: any) => {
-          let text = "";
+          // Build the full interim string (for the visual transcript) and
+          // capture finals into the ref so stopRecording can use them as
+          // the upload payload.
+          let interim = "";
+          let finalsAdded = "";
           for (let i = event.resultIndex; i < event.results.length; i++) {
-            text += String(event.results[i]?.[0]?.transcript ?? "");
+            const result = event.results[i];
+            const text = String(result?.[0]?.transcript ?? "");
+            if (!text) continue;
+            if (result?.isFinal) {
+              finalsAdded += (finalsAdded ? " " : "") + text.trim();
+            } else {
+              interim += text;
+            }
           }
-          setPartialTranscript(text.trim());
+          if (finalsAdded) {
+            finalBrowserTranscriptRef.current = (
+              finalBrowserTranscriptRef.current
+                ? finalBrowserTranscriptRef.current + " " + finalsAdded
+                : finalsAdded
+            ).trim();
+          }
+          const display = (finalBrowserTranscriptRef.current + " " + interim).trim();
+          setPartialTranscript(display);
         };
         rec.onerror = () => {/* ignore — display path only */};
         rec.onend = () => {/* will be re-created on next recording */};

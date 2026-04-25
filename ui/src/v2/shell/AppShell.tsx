@@ -16,6 +16,7 @@ import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import { closeRoom, openRoom, type RoomKey } from "../router";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
 import type { LayoutRect } from "../rooms/useRoomLayout";
+import { useSpacebarPTT } from "../voice/useSpacebarPTT";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -262,6 +263,9 @@ function AppShellLive() {
 
   // Tap-orb is a manual record/stop toggle (PTT-style). Wake-word listening
   // continues in the background; both paths produce identical thread items.
+  // From any "busy" state (speaking/processing/wake_detected), tapping
+  // interrupts the in-flight turn and starts a fresh recording — the user
+  // shouldn't have to wait for Jarvis to finish thinking to talk over it.
   const handleTapOrb = useCallback(() => {
     if (voice.muted) return;
     if (voice.voiceState === "recording") {
@@ -269,11 +273,31 @@ function AppShellLive() {
     } else if (voice.voiceState === "idle") {
       voice.startRecording();
     } else if (voice.voiceState === "speaking") {
-      // Tapping the orb during TTS interrupts and starts listening.
       voice.cancelTTS();
+      voice.startRecording();
+    } else if (voice.voiceState === "processing" || voice.voiceState === "wake_detected") {
+      // No TTS yet — just snap back to idle and re-arm.
+      voice.forceIdle();
       voice.startRecording();
     }
   }, [voice]);
+
+  // Universal interrupt: wherever we are, drop everything and go to idle.
+  // Used by the spacebar PTT hook so a held Space always starts fresh.
+  const interruptAndArm = useCallback(() => {
+    if (voice.voiceState === "speaking") voice.cancelTTS();
+    else voice.forceIdle();
+    voice.startRecording();
+  }, [voice]);
+
+  // Global push-to-talk: hold Space (outside text fields) to record.
+  useSpacebarPTT({
+    enabled: !voice.muted && live.isConnected,
+    voiceState: voice.voiceState,
+    startRecording: voice.startRecording,
+    stopRecording: voice.stopRecording,
+    interrupt: interruptAndArm,
+  });
 
   const handleToggleMute = useCallback(() => {
     voice.setMuted(!voice.muted);
