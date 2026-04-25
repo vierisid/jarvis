@@ -75,6 +75,12 @@ export function useLiveThread() {
     dismissNotice: ws.dismissNotice,
     approve,
     cancel,
+    /** Exposed so the v2 shell can pass the same WS to `useVoice`. */
+    wsRef: ws.wsRef,
+    /** Exposed so the v2 shell can wire TTS callbacks from `useVoice`. */
+    voiceCallbacksRef: ws.voiceCallbacksRef,
+    /** Pending approvals (kept for components that need raw access). */
+    approvals: ws.approvals,
   };
 }
 

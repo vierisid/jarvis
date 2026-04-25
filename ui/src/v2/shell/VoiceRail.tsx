@@ -1,5 +1,6 @@
 import React from "react";
 import { MicOrb, type OrbState } from "./MicOrb";
+import { TranscriptBubble } from "../voice/TranscriptBubble";
 import "./VoiceRail.css";
 
 export type VoiceState =
@@ -33,6 +34,8 @@ export interface VoiceRailProps {
   suggestions?: string[];
   vu?: number;
   device?: string;
+  /** Live partial STT shown under the orb. Empty string hides the bubble. */
+  partialTranscript?: string;
   onTapOrb?: () => void;
   onSuggestion?: (text: string) => void;
   onToggleMute?: () => void;
@@ -43,6 +46,7 @@ export function VoiceRail({
   suggestions = [],
   vu = 0,
   device = "Default microphone",
+  partialTranscript = "",
   onTapOrb,
   onSuggestion,
   onToggleMute,
@@ -75,6 +79,9 @@ export function VoiceRail({
             ⌴ Hold
           </span>
         </div>
+        {state === "listening" && (
+          <TranscriptBubble text={partialTranscript} />
+        )}
       </div>
 
       <div className="v2-rail__hint">
