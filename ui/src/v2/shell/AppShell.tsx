@@ -8,7 +8,7 @@ import type { ThreadItem } from "../thread/types";
 import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
-import { useSuggestions } from "../voice/useSuggestions";
+import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
 import "./AppShell.css";
 
 const VOICE_CYCLE: VoiceState[] = [
@@ -70,8 +70,9 @@ function AppShellLive() {
   const voiceState = mapVoiceState(voice.voiceState, {
     muted: voice.muted,
     awaitingApproval,
+    daemonThinking: live.thinking,
   });
-  const suggestions = useSuggestions(live.items);
+  const suggestions = useLLMSuggestions(live.items, { enabled: live.isConnected });
 
   const handleApprove = useCallback(
     (id: string) => {
@@ -83,6 +84,24 @@ function AppShellLive() {
   const handleCancel = useCallback(
     (id: string) => {
       live.cancel(id).catch((err) => console.error("[v2] cancel failed", err));
+    },
+    [live],
+  );
+
+  const handleClarifier = useCallback(
+    (id: string, decision: "confirm" | "cancel") => {
+      live
+        .resolveClarifier(id, decision)
+        .catch((err) => console.error("[v2] clarifier resolve failed", err));
+    },
+    [live],
+  );
+
+  const handleRepeatBack = useCallback(
+    (id: string, decision: "confirm" | "cancel") => {
+      live
+        .resolveRepeatBack(id, decision)
+        .catch((err) => console.error("[v2] repeat-back resolve failed", err));
     },
     [live],
   );
@@ -129,6 +148,8 @@ function AppShellLive() {
       onApprove={handleApprove}
       onCancel={handleCancel}
       onFocusCard={() => undefined}
+      onClarifier={handleClarifier}
+      onRepeatBack={handleRepeatBack}
       voiceState={voiceState}
       suggestions={suggestions}
       vu={voice.micLevel}
@@ -236,6 +257,8 @@ interface ShellLayoutProps {
   onApprove: (id: string) => void;
   onCancel: (id: string) => void;
   onFocusCard: (id: string) => void;
+  onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
+  onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
   devAppend?: () => void;
   // Voice
   voiceState: VoiceState;
@@ -256,6 +279,8 @@ function ShellLayout({
   onApprove,
   onCancel,
   onFocusCard,
+  onClarifier,
+  onRepeatBack,
   devAppend,
   voiceState,
   suggestions,
@@ -286,6 +311,8 @@ function ShellLayout({
           onApprove={onApprove}
           onCancel={onCancel}
           onFocusCard={onFocusCard}
+          onClarifier={onClarifier}
+          onRepeatBack={onRepeatBack}
           dev={devAppend ? { onAppend: devAppend } : undefined}
         />
       </div>

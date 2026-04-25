@@ -74,6 +74,36 @@ export type ThreadItem =
       summary: string;
       detail?: string;
       t: string;
+    }
+  | {
+      kind: "clarifier";
+      id: string;
+      transcript: string;
+      /** Daemon's best guess; see VoiceIntentLite. */
+      primary: VoiceIntentLite;
+      /** Optional alternatives shown alongside the primary. */
+      alternatives: VoiceIntentLite[];
+      confidence: number;
+      t: string;
+    }
+  | {
+      kind: "repeat-back";
+      id: string;
+      transcript: string;
+      confidence: number;
+      t: string;
     };
+
+/**
+ * Lite version of the daemon-side `Intent` that the UI actually renders.
+ * Only the fields the cards need — the full `args` and `object.id` aren't
+ * surfaced in v1 of the clarifier card.
+ */
+export type VoiceIntentLite = {
+  /** Human-readable label, e.g. "Send the email now". */
+  label: string;
+  verb: string;
+  impact: Impact;
+};
 
 export type ThreadItemKind = ThreadItem["kind"];

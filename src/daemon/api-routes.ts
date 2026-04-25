@@ -1546,6 +1546,80 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Voice clarifier / repeat-back resolution.
+     * The daemon holds a pending utterance when the classifier confidence is
+     * <0.85; the dashboard renders a clarifier or repeat-back card; this
+     * endpoint resolves it. `confirm` forwards the held transcript to the
+     * chat agent; `cancel` drops the request silently (the user-voice
+     * ThreadItem stays in the thread, no assistant reply follows).
+     */
+    '/api/voice/clarifier/:id/confirm': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.wsService) return error('WS service not configured', 500);
+        const result = await ctx.wsService.resolveVoiceConfirmation(req.params.id, 'confirm');
+        if (!result.ok) return error(result.reason ?? 'resolve failed', 404);
+        return json({ ok: true });
+      },
+    },
+    '/api/voice/clarifier/:id/cancel': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.wsService) return error('WS service not configured', 500);
+        const result = await ctx.wsService.resolveVoiceConfirmation(req.params.id, 'cancel');
+        if (!result.ok) return error(result.reason ?? 'resolve failed', 404);
+        return json({ ok: true });
+      },
+    },
+    '/api/voice/repeat-back/:id/confirm': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.wsService) return error('WS service not configured', 500);
+        const result = await ctx.wsService.resolveVoiceConfirmation(req.params.id, 'confirm');
+        if (!result.ok) return error(result.reason ?? 'resolve failed', 404);
+        return json({ ok: true });
+      },
+    },
+    '/api/voice/repeat-back/:id/cancel': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.wsService) return error('WS service not configured', 500);
+        const result = await ctx.wsService.resolveVoiceConfirmation(req.params.id, 'cancel');
+        if (!result.ok) return error(result.reason ?? 'resolve failed', 404);
+        return json({ ok: true });
+      },
+    },
+
+    /**
+     * LLM-quality "Try saying" suggestions for the voice rail. Body:
+     * `{ recentTurns: [{ role: 'user'|'assistant', text: string }, ...] }`.
+     * Returns `{ suggestions: string[] }` (3–5 items, never destructive).
+     * Empty array on cold-start or any LLM failure — the client falls back
+     * to its heuristic in that case.
+     */
+    '/api/voice/suggestions': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json()) as { recentTurns?: unknown };
+          const llm = ctx.agentService.getLLMManager();
+          const turns = Array.isArray(body.recentTurns)
+            ? body.recentTurns
+                .filter(
+                  (t): t is { role: 'user' | 'assistant'; text: string } =>
+                    !!t && typeof t === 'object'
+                    && (((t as { role?: unknown }).role === 'user') || ((t as { role?: unknown }).role === 'assistant'))
+                    && typeof (t as { text?: unknown }).text === 'string',
+                )
+                .slice(-5)
+            : [];
+
+          const { generateVoiceSuggestions } = await import('../agents/voice-suggestions.ts');
+          const suggestions = await generateVoiceSuggestions(turns, llm);
+          return json({ suggestions });
+        } catch (err) {
+          console.warn('[api] voice suggestions error:', err);
+          return json({ suggestions: [] });
+        }
+      },
+    },
+
     '/api/authority/audit': {
       GET: (req: Request) => {
         if (!ctx.auditTrail) return json([]);

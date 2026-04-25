@@ -135,6 +135,28 @@ export type PendingApproval = {
   timestamp: number;
 };
 
+export type VoiceIntentLite = {
+  label: string;
+  verb: string;
+  impact: ApprovalImpact;
+};
+
+export type PendingClarifier = {
+  id: string;
+  transcript: string;
+  primary: VoiceIntentLite;
+  alternatives: VoiceIntentLite[];
+  confidence: number;
+  timestamp: number;
+};
+
+export type PendingRepeatBack = {
+  id: string;
+  transcript: string;
+  confidence: number;
+  timestamp: number;
+};
+
 type SidecarEventPayload = {
   source?: string;
   event?: {
@@ -331,6 +353,9 @@ export function useWebSocket() {
   const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
   const [notices, setNotices] = useState<SystemNotice[]>([]);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [clarifiers, setClarifiers] = useState<PendingClarifier[]>([]);
+  const [repeatBacks, setRepeatBacks] = useState<PendingRepeatBack[]>([]);
+  const [thinking, setThinking] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -428,10 +453,19 @@ export function useWebSocket() {
         // Voice signal messages → route to voice hook
         if (msg.type === "tts_start") {
           voiceCallbacksRef.current?.onTTSStart(msg.payload?.requestId);
+          setThinking(false); // speaking supersedes thinking
           return;
         }
         if (msg.type === "tts_end") {
           voiceCallbacksRef.current?.onTTSEnd();
+          return;
+        }
+        if (msg.type === "thinking_start") {
+          setThinking(true);
+          return;
+        }
+        if (msg.type === "thinking_end") {
+          setThinking(false);
           return;
         }
 
@@ -688,6 +722,61 @@ export function useWebSocket() {
         if (requestId) {
           setApprovals((prev) => prev.filter((a) => a.id !== requestId));
         }
+      } else if (payload.source === "clarifier_request") {
+        const p = payload as {
+          id?: string;
+          transcript?: string;
+          intent?: {
+            verb?: string;
+            impact?: string;
+            confidence?: number;
+            object?: { type?: string; query?: string } | null;
+            alternatives?: Array<{ label?: string; verb?: string; impact?: string }>;
+          };
+        };
+        if (!p.id || !p.transcript || !p.intent) return;
+        const primaryLabel = buildIntentLabel(p.intent.verb ?? "ask", p.intent.object ?? null, p.transcript);
+        const primary: VoiceIntentLite = {
+          label: primaryLabel,
+          verb: p.intent.verb ?? "ask",
+          impact: (p.intent.impact as ApprovalImpact) ?? "read",
+        };
+        const alternatives: VoiceIntentLite[] = (p.intent.alternatives ?? [])
+          .map((a) => ({
+            label: typeof a.label === "string" && a.label.length > 0 ? a.label : `${a.verb ?? "ask"}`,
+            verb: a.verb ?? "ask",
+            impact: (a.impact as ApprovalImpact) ?? "read",
+          }))
+          .slice(0, 2);
+        const pending: PendingClarifier = {
+          id: p.id,
+          transcript: p.transcript,
+          primary,
+          alternatives,
+          confidence: typeof p.intent.confidence === "number" ? p.intent.confidence : 0.7,
+          timestamp: msg.timestamp,
+        };
+        setClarifiers((prev) =>
+          prev.some((c) => c.id === pending.id) ? prev : [...prev, pending],
+        );
+      } else if (payload.source === "repeat_back_request") {
+        const p = payload as { id?: string; transcript?: string; confidence?: number };
+        if (!p.id || !p.transcript) return;
+        const pending: PendingRepeatBack = {
+          id: p.id,
+          transcript: p.transcript,
+          confidence: typeof p.confidence === "number" ? p.confidence : 0.4,
+          timestamp: msg.timestamp,
+        };
+        setRepeatBacks((prev) =>
+          prev.some((r) => r.id === pending.id) ? prev : [...prev, pending],
+        );
+      } else if (payload.source === "voice_confirmation_resolved") {
+        const id = (payload as { id?: string }).id;
+        if (id) {
+          setClarifiers((prev) => prev.filter((c) => c.id !== id));
+          setRepeatBacks((prev) => prev.filter((r) => r.id !== id));
+        }
       }
     } else if (msg.type === "error") {
       const rawMessage = msg.payload?.message;
@@ -785,7 +874,42 @@ export function useWebSocket() {
   return {
     messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
     approvals,
+    clarifiers,
+    repeatBacks,
+    thinking,
     wsRef,
     voiceCallbacksRef,
   };
+}
+
+/**
+ * Render a short imperative label for a voice intent. The classifier emits
+ * structured fields (verb + object); we synthesize a sentence good enough
+ * for the clarifier card heading. Falls back to the raw transcript when
+ * structure is missing.
+ */
+function buildIntentLabel(
+  verb: string,
+  object: { type?: string; query?: string } | null,
+  transcript: string,
+): string {
+  const obj = object?.query ?? object?.type ?? "";
+  const verbLabel: Record<string, string> = {
+    ask: "Answer about",
+    show: "Open",
+    run: "Run",
+    create: "Create",
+    update: "Update",
+    delete: "Delete",
+    grant: "Grant authority for",
+    revoke: "Revoke authority for",
+    pause: "Pause",
+    resume: "Resume",
+    unknown: "Handle",
+  };
+  const head = verbLabel[verb] ?? "Handle";
+  if (obj) return `${head} ${obj}`;
+  // No object — echo the user's words as the most informative thing we can say.
+  const trimmed = transcript.trim();
+  return trimmed.length > 0 ? `${head}: "${trimmed}"` : head;
 }
