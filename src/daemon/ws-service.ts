@@ -1028,6 +1028,15 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     this.wsServer.broadcast(message);
   }
 
+  /**
+   * Public exposure of `formatApprovalIntent` so api-routes can produce the
+   * same intent string for REST responses (Phase 5B audit fix). Falls back
+   * to `reason || tool_name` if the helper isn't available.
+   */
+  computeApprovalIntent(request: ApprovalRequest): string {
+    return formatApprovalIntent(request);
+  }
+
   /** Voice pipeline: STT-final received, agent now reasoning. */
   broadcastThinkingStart(requestId: string): void {
     this.wsServer.broadcast({

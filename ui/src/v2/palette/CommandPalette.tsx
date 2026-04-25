@@ -82,7 +82,7 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const { results: objectResults, loading } = usePaletteSearch(query, { enabled: open && enabled });
-  const { recent, remember } = usePaletteRecent();
+  const { recent, remember } = usePaletteRecent({ enabled });
 
   // Filter Room nav entries client-side. Always keep all 10 visible when
   // the query is empty — the panel doubles as a "go anywhere" affordance.

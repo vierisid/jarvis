@@ -696,4 +696,22 @@ function createTables(db: Database): void {
   if (!webappCols.some((c) => c.name === 'keywords')) {
     db.run(`ALTER TABLE webapp_templates ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'`);
   }
+
+  // Recent objects: cross-device LRU of palette picks. The dashboard primarily
+  // reads `picked_at` desc and dedupes on (object_type, object_id) so the same
+  // pick repeated bumps the timestamp instead of accumulating rows.
+  // Capped externally — the API trims to 50 most-recent on insert.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS recent_objects (
+      id TEXT PRIMARY KEY,
+      object_type TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      meta TEXT,
+      picked_at INTEGER NOT NULL,
+      UNIQUE(object_type, object_id)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_recent_objects_picked ON recent_objects(picked_at DESC)`);
 }
