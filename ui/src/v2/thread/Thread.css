@@ -24,6 +24,32 @@
   gap: var(--s-6);
 }
 
+/* Per-item wrapper — used by NotificationDrawer's "jump to in thread"
+   to scroll a specific approval/clarifier into view and briefly outline it. */
+.v2-thread__item {
+  scroll-margin-top: var(--s-8);
+  scroll-margin-bottom: var(--s-8);
+  border-radius: var(--r-2);
+  transition: box-shadow var(--dur-med) var(--ease-out);
+}
+
+.v2-thread__item--flash {
+  animation: v2-thread-flash 1.6s var(--ease-out);
+}
+
+@keyframes v2-thread-flash {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+  20%  { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-thread__item--flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
 /* Empty state */
 .v2-thread__empty {
   display: flex;

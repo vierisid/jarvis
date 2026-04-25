@@ -20,7 +20,21 @@ export interface HeaderProps {
   mode?: Mode;
   onModeChange?: (next: Mode) => void;
   onPalette?: () => void;
-  hasNotifications?: boolean;
+  /**
+   * Count of unread notifications. 0 = no badge. Anything > 9 is rendered
+   * as "9+" so a noisy queue doesn't blow the bell's pill width.
+   */
+  notificationCount?: number;
+  /** Marks the bell visually pressed while the drawer is open. */
+  notificationsOpen?: boolean;
+  /** Optional bell click handler — also receives ⌥N hotkey upstream. */
+  onToggleNotifications?: () => void;
+  /**
+   * Render-prop slot for the drawer itself. The Header positions the bell
+   * inside a `position: relative` wrapper so the drawer can anchor to it
+   * without the AppShell needing to know the bell's coordinates.
+   */
+  notificationsSlot?: React.ReactNode;
   identity?: string;
 }
 
@@ -29,9 +43,17 @@ export function Header({
   mode = "active",
   onModeChange,
   onPalette,
-  hasNotifications = false,
+  notificationCount = 0,
+  notificationsOpen = false,
+  onToggleNotifications,
+  notificationsSlot,
   identity = "Today · morning",
 }: HeaderProps) {
+  const hasUnread = notificationCount > 0;
+  const badgeText = notificationCount > 9 ? "9+" : String(notificationCount);
+  const bellLabel = hasUnread
+    ? `Notifications, ${notificationCount} unread`
+    : "Notifications";
   return (
     <header className="v2-header" role="banner">
       <div className="v2-header__left">
@@ -60,14 +82,26 @@ export function Header({
           <KBD>⌘K</KBD>
         </button>
 
-        <button
-          type="button"
-          className="v2-header__iconbtn"
-          aria-label={hasNotifications ? "Notifications (unread)" : "Notifications"}
-        >
-          <Icon icon={Bell} size="md" />
-          {hasNotifications && <span className="v2-header__notif-dot" aria-hidden="true" />}
-        </button>
+        <span className="v2-header__notif-anchor">
+          <button
+            type="button"
+            data-notif-toggle
+            className="v2-header__iconbtn"
+            data-active={notificationsOpen ? "true" : undefined}
+            aria-label={bellLabel}
+            aria-haspopup="dialog"
+            aria-expanded={notificationsOpen}
+            onClick={onToggleNotifications}
+          >
+            <Icon icon={Bell} size="md" />
+            {hasUnread && (
+              <span className="v2-header__notif-badge" aria-hidden="true">
+                {badgeText}
+              </span>
+            )}
+          </button>
+          {notificationsSlot}
+        </span>
 
         <div className="v2-header__mode" role="group" aria-label="Daemon mode">
           {MODES.map((m) => (
