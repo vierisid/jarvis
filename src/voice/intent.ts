@@ -59,6 +59,27 @@ export type Intent = {
   confidence: number;
   /** Optional alternative interpretations for clarifier UI. */
   alternatives?: Array<Pick<Intent, "verb" | "object" | "args" | "impact"> & { label: string }>;
+  /**
+   * Phase 6.3.5 — when the user is asking the UI of a specific Room to do
+   * something (switch tabs, open a dialog, fill a form, toggle a filter),
+   * the classifier returns a structured action here instead of routing the
+   * utterance to the chat agent. The daemon broadcasts this directly to
+   * the dashboard via a `room_action` notification; the UI's action bus
+   * dispatches to whichever Room is currently registered.
+   *
+   * Always read-only impact (it's a UI command, not a daemon action) — the
+   * daemon doesn't gate this through the soft-approval pipeline.
+   */
+  room_action?: RoomAction;
+};
+
+export type RoomAction = {
+  /** Which Room the action targets. The UI bus rejects mismatches. */
+  room: RoomKey;
+  /** Per-Room action name. Documented in the classifier prompt. */
+  action: string;
+  /** Optional structured args (e.g. `{ specialist, task, context }` for spawn). */
+  args?: Record<string, unknown>;
 };
 
 /**

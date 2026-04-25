@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Search, Terminal } from "lucide-react";
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
+import { useRoomActions } from "../useRoomActionBus";
 import "./ToolsRoom.css";
 
 type Impact = "read" | "write" | "destructive" | "external";
@@ -115,6 +116,37 @@ export function ToolsRoomBody({ mode }: { mode: RoomBodyMode }) {
     () => (selectedName ? filtered.find((t) => t.name === selectedName) ?? null : null),
     [filtered, selectedName],
   );
+
+  // Phase 6.3.5 — voice-driven Room actions.
+  useRoomActions("tools", (action, args) => {
+    switch (action) {
+      case "set_filter": {
+        const f = String(args.filter);
+        if (f === "all" || f === "read" || f === "write" || f === "external" || f === "destructive") {
+          setFilter(f as Filter);
+          return true;
+        }
+        return false;
+      }
+      case "search":
+        setQuery(typeof args.query === "string" ? args.query : "");
+        return true;
+      case "select": {
+        const name = typeof args.name === "string" ? args.name : "";
+        if (!name) return false;
+        // Fuzzy: prefer exact, then case-insensitive includes.
+        const exact = (tools ?? []).find((t) => t.name === name);
+        const fuzzy = exact ?? (tools ?? []).find((t) =>
+          t.name.toLowerCase().includes(name.toLowerCase()),
+        );
+        if (!fuzzy) return false;
+        setSelectedName(fuzzy.name);
+        return true;
+      }
+      default:
+        return false;
+    }
+  });
 
   return (
     <div className={`v2-tools v2-tools--${mode}`}>

@@ -20,6 +20,7 @@ import { useSpacebarPTT } from "../voice/useSpacebarPTT";
 import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
+import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -419,6 +420,7 @@ function AppShellLive() {
         agentActivity: live.agentActivity,
       }}
     >
+      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} />
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
@@ -495,6 +497,30 @@ function AppShellLive() {
       />
     </LiveDataProvider>
   );
+}
+
+/**
+ * Tiny bridge: lives inside RoomActionBusProvider, reads the dispatcher,
+ * and fires it whenever a new `roomActionRequest` arrives from the WS.
+ * Also force-idles the voice orb (the Room handles the action itself, no
+ * tts_start ever fires to clear `processing`).
+ */
+function RoomActionBridge({
+  request,
+  forceIdle,
+}: {
+  request: { room: string; action: string; args: Record<string, unknown>; ts: number } | null;
+  forceIdle: () => void;
+}) {
+  const { dispatch } = useRoomActionDispatcher();
+  const ts = request?.ts;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!request) return;
+    dispatch(request);
+    forceIdle();
+  }, [ts]);
+  return null;
 }
 
 /* ─────────── Mock shell — Phase 3A fixture (no WS, no mic) ─────────── */

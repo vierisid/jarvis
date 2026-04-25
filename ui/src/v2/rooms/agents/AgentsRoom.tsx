@@ -21,6 +21,7 @@ import {
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
+import { useRoomActions } from "../useRoomActionBus";
 import {
   useAgentsData,
   type AgentRosterEntry,
@@ -82,6 +83,46 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
     },
     [data],
   );
+
+  // Phase 6.3.5 — voice-driven Room actions. Each action mirrors a UI
+  // affordance the user could click; the daemon's classifier emits these
+  // when an utterance maps cleanly. Returns false on unknown action so
+  // the bus can log it instead of pretending it succeeded.
+  useRoomActions("agents", (action, args) => {
+    switch (action) {
+      case "switch_tab": {
+        const tab = String(args.tab);
+        if (tab === "command" || tab === "orbital" || tab === "builder") {
+          setActiveTab(tab);
+          return true;
+        }
+        return false;
+      }
+      case "open_spawn_dialog":
+        setSpawnOpen(true);
+        return true;
+      case "close_dialog":
+        setSpawnOpen(false);
+        return true;
+      case "set_search":
+        setSearch(typeof args.query === "string" ? args.query : "");
+        return true;
+      case "spawn_agent": {
+        const specialist = typeof args.specialist === "string" ? args.specialist : "";
+        if (!specialist) return false;
+        // Fire and forget — the spawn helper toasts on success/failure.
+        // We do NOT open the dialog: voice spawn is fully autonomous.
+        handleSpawn({
+          specialist,
+          task: typeof args.task === "string" ? args.task : "",
+          context: typeof args.context === "string" ? args.context : "",
+        });
+        return true;
+      }
+      default:
+        return false;
+    }
+  });
 
   return (
     <div className={`v2-agents v2-agents--${mode}`}>

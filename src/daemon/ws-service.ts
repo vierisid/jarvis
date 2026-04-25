@@ -986,6 +986,19 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       return;
     }
 
+    // Phase 6.3.5 — Room action interception. When the classifier emits a
+    // structured `room_action`, drive the Room's UI directly via the
+    // dashboard's action bus. Bypasses chat (the LLM has no concept of
+    // tabs/dialogs/filters). Same confidence gating as chat — low-confidence
+    // room actions still go through the clarifier.
+    if (route === 'act' && intent.room_action) {
+      const ra = intent.room_action;
+      this.broadcastRoomAction(ra, requestId);
+      this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
     if (route === 'act') {
       // Normal chat flow — thinking_end will be emitted on first stream chunk.
       await this.handleChat({
@@ -1161,6 +1174,28 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         source: 'window_control',
         action: ctrl.action,
         target: ctrl.target,
+        requestId,
+      },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Phase 6.3.5 — drive a Room's UI directly from voice. The dashboard's
+   * action bus dispatches to whichever Room is currently mounted matching
+   * `room`. Args are per-action and validated client-side.
+   */
+  broadcastRoomAction(
+    action: { room: string; action: string; args?: Record<string, unknown> },
+    requestId?: string,
+  ): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: {
+        source: 'room_action',
+        room: action.room,
+        action: action.action,
+        args: action.args ?? {},
         requestId,
       },
       timestamp: Date.now(),
@@ -1402,5 +1437,52 @@ function ackForWindowControl(ctrl: WindowControl): string {
       return `Restoring ${target}.`;
     case 'reorder':
       return `Tidying up. Bringing all rooms back inline.`;
+  }
+}
+
+/**
+ * Phase 6.3.5 — short ack for Room action voice commands. Reads naturally
+ * for the most common per-Room actions; falls back to a generic "Done" for
+ * anything not enumerated so future Room action vocabularies don't need
+ * code changes here.
+ */
+function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+  const a = ra.args ?? {};
+  switch (ra.action) {
+    case 'switch_tab':
+      return `Switching to ${String(a.tab ?? 'tab')} view.`;
+    case 'open_spawn_dialog':
+      return `Opening the spawn dialog.`;
+    case 'close_dialog':
+      return `Closing the dialog.`;
+    case 'set_search':
+      return `Searching for ${String(a.query ?? '')}.`;
+    case 'spawn_agent': {
+      const spec = String(a.specialist ?? 'agent').replace(/-/g, ' ');
+      return a.task ? `Spawning a ${spec} for ${String(a.task)}.` : `Spawning a ${spec}.`;
+    }
+    case 'set_filter':
+      return `Filtering by ${String(a.filter ?? '')}.`;
+    case 'search':
+      return `Searching for ${String(a.query ?? '')}.`;
+    case 'select':
+      return `Selecting ${String(a.name ?? '')}.`;
+    case 'toggle_source':
+      return `Toggling ${String(a.source ?? '')} logs.`;
+    case 'set_time_window': {
+      const w = String(a.window ?? '');
+      const label =
+        w === '1h' ? 'last hour' :
+        w === '24h' ? 'last day' :
+        w === '7d' ? 'last week' :
+        w === 'all' ? 'all time' : w;
+      return `Showing ${label}.`;
+    }
+    case 'toggle_live_tail':
+      return `Toggling live tail.`;
+    case 'refresh':
+      return `Refreshing.`;
+    default:
+      return `Done.`;
   }
 }
