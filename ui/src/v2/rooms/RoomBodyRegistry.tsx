@@ -1,6 +1,7 @@
 import React from "react";
 import type { RoomKey } from "../router";
 import { ToolsRoomBody } from "./tools/ToolsRoom";
+import { LogsRoomBody } from "./logs/LogsRoom";
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -16,7 +17,7 @@ export type RoomBodyComponent = React.ComponentType<{ mode: RoomBodyMode }>;
 
 const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   tools: ToolsRoomBody,
-  // 6.2 — logs
+  logs: LogsRoomBody,
   // 6.3 — agents
   // 6.4 — workflows
   // 6.5 — memory

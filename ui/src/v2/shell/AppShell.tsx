@@ -19,6 +19,7 @@ import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
 import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import { NotificationDrawer } from "../notifications/NotificationDrawer";
+import { LiveDataProvider } from "./LiveDataContext";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -408,7 +409,16 @@ function AppShellLive() {
   );
 
   return (
-    <>
+    <LiveDataProvider
+      value={{
+        approvals: live.approvals,
+        clarifiers: live.clarifiers,
+        repeatBacks: live.repeatBacks,
+        notices: live.notices,
+        taskEvents: live.taskEvents,
+        agentActivity: live.agentActivity,
+      }}
+    >
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
@@ -483,7 +493,7 @@ function AppShellLive() {
         onPickObject={handlePickObject}
         onPickRoom={handlePickRoom}
       />
-    </>
+    </LiveDataProvider>
   );
 }
 

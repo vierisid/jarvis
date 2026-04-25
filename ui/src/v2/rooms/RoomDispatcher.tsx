@@ -6,6 +6,10 @@ const ToolsRoom = React.lazy(() =>
   import("./tools/ToolsRoom").then((m) => ({ default: m.ToolsRoom })),
 );
 
+const LogsRoom = React.lazy(() =>
+  import("./logs/LogsRoom").then((m) => ({ default: m.LogsRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -23,6 +27,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Fetching tool catalog…"
       />}>
         <ToolsRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "logs") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="logs"
+        title="Logs"
+        phaseTag="Loading…"
+        description="Loading event stream…"
+      />}>
+        <LogsRoom />
       </Suspense>
     );
   }
