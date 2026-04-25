@@ -362,6 +362,12 @@ export function useWebSocket() {
     target: string; // RoomKey or "most_recent"
     ts: number;
   } | null>(null);
+  const [roomActionRequest, setRoomActionRequest] = useState<{
+    room: string;
+    action: string;
+    args: Record<string, unknown>;
+    ts: number;
+  } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -796,6 +802,23 @@ export function useWebSocket() {
         // Reuses the same channel as Room nav so AppShell only watches one
         // signal — distinguished by key === "home".
         setRoomNavRequest({ key: "home", ts: msg.timestamp });
+      } else if (payload.source === "room_action") {
+        // Phase 6.3.5 — Room control via voice. Daemon broadcasts a
+        // structured action; the UI's action bus dispatches to whichever
+        // Room is currently registered. `ts` bumps so the same action
+        // repeated produces a new effect.
+        const p = payload as { room?: string; action?: string; args?: unknown };
+        if (typeof p.room === "string" && typeof p.action === "string") {
+          setRoomActionRequest({
+            room: p.room,
+            action: p.action,
+            args:
+              p.args && typeof p.args === "object"
+                ? (p.args as Record<string, unknown>)
+                : {},
+            ts: msg.timestamp,
+          });
+        }
       } else if (payload.source === "window_control") {
         // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
         // "minimize" etc.) — daemon regex-matches and broadcasts here so
@@ -910,6 +933,7 @@ export function useWebSocket() {
     thinking,
     roomNavRequest,
     windowControlRequest,
+    roomActionRequest,
     wsRef,
     voiceCallbacksRef,
   };

@@ -17,8 +17,23 @@ import {
   type Intent,
   type ObjectRef,
   type ObjectRefType,
+  type RoomAction,
+  type RoomKey,
   type Verb,
 } from '../voice/intent.ts';
+
+const VALID_ROOMS: ReadonlySet<RoomKey> = new Set([
+  'workflows',
+  'memory',
+  'tools',
+  'agents',
+  'authority',
+  'logs',
+  'calendar',
+  'goals',
+  'sites',
+  'settings',
+]);
 
 const VALID_VERBS: ReadonlySet<Verb> = new Set([
   'ask',
@@ -59,7 +74,8 @@ Schema:
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
-  "alternatives": [ { "label": string, "verb": ..., "object": ..., "args": ..., "impact": ... } ]  (0-2 items, only when ambiguous)
+  "alternatives": [ { "label": string, "verb": ..., "object": ..., "args": ..., "impact": ... } ]  (0-2 items, only when ambiguous),
+  "room_action": { "room": RoomKey, "action": string, "args": { ... } } | null
 }
 
 Object type "thread" is special: it represents the home conversation view
@@ -90,6 +106,53 @@ Confidence guidance:
 - For garbled audio (just noise, single syllables, broken words), set verb="unknown" and confidence below 0.4
 - ALWAYS lower confidence for destructive/external impact unless the utterance is precise
 
+Room actions:
+
+When the user is asking the dashboard UI of a specific Room to do
+something — switch tabs, open a dialog, fill a form, toggle a filter,
+search inside the Room — return a "room_action" object instead of the
+normal verb/object routing. Set verb="show", impact="read", confidence
+on the room_action's clarity (>=0.85 to act). The dashboard's action bus
+dispatches it to the matching Room. If no Room action matches, return
+"room_action": null.
+
+Available Room actions:
+
+agents room ("room": "agents"):
+- "switch_tab" — args: { "tab": "command" | "orbital" }
+   matches "switch to orbital view", "show command center", "go to orbital"
+- "open_spawn_dialog" — args: {}
+   matches "open spawn dialog", "spawn an agent" (without specifics)
+- "close_dialog" — args: {}
+   matches "close the dialog", "cancel the spawn"
+- "set_search" — args: { "query": string }
+   matches "search for analyst", "filter agents by software"
+- "spawn_agent" — args: { "specialist": string, "task"?: string, "context"?: string }
+   matches "spawn a software engineer with task add OAuth", "spawn the research analyst"
+   The "specialist" must match a known specialist id like
+   "software-engineer", "research-analyst", "data-analyst",
+   "content-writer", "system-administrator", "legal-advisor",
+   "financial-analyst", "hr-specialist", "project-coordinator",
+   "marketing-strategist", "customer-support".
+
+tools room ("room": "tools"):
+- "set_filter" — args: { "filter": "all" | "read" | "write" | "external" | "destructive" }
+   matches "filter by destructive", "show all tools", "show read tools"
+- "search" — args: { "query": string }
+   matches "search for browser", "find git tools"
+- "select" — args: { "name": string }
+   matches "select web_search", "show the git_commit tool"
+
+logs room ("room": "logs"):
+- "toggle_source" — args: { "source": "awareness" | "authority" | "agents" | "tasks" | "sidecar" }
+   matches "toggle awareness", "hide tasks", "show only authority logs"
+- "set_time_window" — args: { "window": "1h" | "24h" | "7d" | "all" }
+   matches "show last hour", "show all time", "filter to last day"
+- "toggle_live_tail" — args: {}
+   matches "turn on live tail", "stop live updates", "live mode"
+- "refresh" — args: {}
+   matches "refresh logs", "reload"
+
 Examples:
 
 Transcript: "what did i miss this morning?"
@@ -117,7 +180,25 @@ Transcript: "delete everything in downloads"
 {"verb":"delete","object":{"type":"file","query":"~/Downloads/*"},"args":{},"impact":"destructive","confidence":0.72,"alternatives":[{"label":"Move to trash","verb":"update","object":{"type":"file","query":"~/Downloads"},"args":{"action":"trash"},"impact":"write"}]}
 
 Transcript: "uhh hey um"
-{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.15}`;
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.15}
+
+Transcript: "switch to orbital view"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"agents","action":"switch_tab","args":{"tab":"orbital"}}}
+
+Transcript: "open the spawn dialog"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"agents","action":"open_spawn_dialog","args":{}}}
+
+Transcript: "spawn a software engineer with task add OAuth"
+{"verb":"create","object":{"type":"agent","query":"software-engineer"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"agents","action":"spawn_agent","args":{"specialist":"software-engineer","task":"add OAuth"}}}
+
+Transcript: "filter by destructive"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"tools","action":"set_filter","args":{"filter":"destructive"}}}
+
+Transcript: "show last hour"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.92,"room_action":{"room":"logs","action":"set_time_window","args":{"window":"1h"}}}
+
+Transcript: "turn on live tail"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"logs","action":"toggle_live_tail","args":{}}}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.
@@ -154,6 +235,21 @@ function parseObject(raw: unknown): ObjectRef | null {
     type: obj.type as ObjectRefType,
     id: typeof obj.id === 'string' ? obj.id : undefined,
     query: typeof obj.query === 'string' ? obj.query : undefined,
+  };
+}
+
+function parseRoomAction(raw: unknown): RoomAction | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as { room?: unknown; action?: unknown; args?: unknown };
+  if (typeof obj.room !== 'string' || !VALID_ROOMS.has(obj.room as RoomKey)) return undefined;
+  if (typeof obj.action !== 'string' || obj.action.trim().length === 0) return undefined;
+  return {
+    room: obj.room as RoomKey,
+    action: obj.action,
+    args:
+      obj.args && typeof obj.args === 'object'
+        ? (obj.args as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -209,6 +305,7 @@ function parseIntent(raw: string, transcript: string): Intent {
     impact,
     confidence,
     alternatives: parseAlternatives(p.alternatives),
+    room_action: parseRoomAction(p.room_action),
   };
 }
 

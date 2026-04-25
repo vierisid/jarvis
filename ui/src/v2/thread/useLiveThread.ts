@@ -285,6 +285,8 @@ export function useLiveThread() {
     roomNavRequest: ws.roomNavRequest,
     /** Daemon-driven RoomWindow chrome control (voice "close", "expand", "minimize"). */
     windowControlRequest: ws.windowControlRequest,
+    /** Phase 6.3.5 — daemon-driven Room action (voice "switch to orbital view" etc.). */
+    roomActionRequest: ws.roomActionRequest,
     /** Exposed so the v2 shell can pass the same WS to `useVoice`. */
     wsRef: ws.wsRef,
     /** Exposed so the v2 shell can wire TTS callbacks from `useVoice`. */
