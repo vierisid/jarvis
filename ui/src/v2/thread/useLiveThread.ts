@@ -295,6 +295,10 @@ export function useLiveThread() {
     clarifiers: ws.clarifiers,
     /** Pending repeat-back confirmations (raw — drives the notification center bell). */
     repeatBacks: ws.repeatBacks,
+    /** Live task lifecycle events (drives Logs Room live tail). */
+    taskEvents: ws.taskEvents,
+    /** Live agent delegation events (drives Logs Room live tail). */
+    agentActivity: ws.agentActivity,
     /** Phase 5A: palette pushes synthetic cards into the thread via this. */
     injectCard,
     /** Phase 6.1.5: room-window helpers. */
