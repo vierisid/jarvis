@@ -175,6 +175,14 @@ export type UseVoiceReturn = {
   handleTTSStart: (requestId: string) => void;
   handleTTSEnd: () => void;
   handleError: (message?: string) => void;
+  // v2 additions (Phase 4A)
+  /** Mute the mic. While muted, wake-word is paused and `startRecording` is a no-op. */
+  muted: boolean;
+  setMuted: (next: boolean) => void;
+  /** Mic input level 0..1, RMS-derived from the analyser. 0 when not recording. */
+  micLevel: number;
+  /** Live interim STT text shown under the orb during recording. Empty when not listening. */
+  partialTranscript: string;
 };
 
 export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword" }: UseVoiceOptions): UseVoiceReturn {
@@ -184,6 +192,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const [ttsAudioPlaying, setTtsAudioPlaying] = useState(false);
   const [activeWakeEngine, setActiveWakeEngine] = useState<ActiveWakeEngine>("none");
   const [speechWakeFatal, setSpeechWakeFatal] = useState(false);
+  const [muted, setMutedState] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [partialTranscript, setPartialTranscript] = useState("");
+  const mutedRef = useRef(false);
+  const transcriptRecognizerRef = useRef<any>(null);
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -221,6 +234,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   useEffect(() => { isMicAvailableRef.current = isMicAvailable; }, [isMicAvailable]);
   useEffect(() => { configuredWakeEngineRef.current = wakeEngine; }, [wakeEngine]);
   useEffect(() => { speechWakeFatalRef.current = speechWakeFatal; }, [speechWakeFatal]);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
 
   // Reset fatal state when the user changes engine choice or toggles wake word.
   // A config change is a clear signal that the user wants us to retry.
@@ -527,9 +541,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // Engine selection effect. Picks which wake engine should own the mic based
   // on config + SpeechRecognition availability + fatal state via the pure
   // selector. Imperatively drives the OpenWakeWord side here; the speech-wake
-  // recognizer is driven by the reconcile effect below.
+  // recognizer is driven by the reconcile effect below. Muting forces "none"
+  // so both wake paths stop until the user unmutes.
   useEffect(() => {
-    const active = selectActiveWakeEngine({
+    const active = muted ? "none" : selectActiveWakeEngine({
       isMicAvailable,
       wakeWordEnabled,
       wakeEngine,
@@ -539,14 +554,14 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     setActiveWakeEngine(active);
     if (active === "openwakeword") startWakeWordEngine();
     else stopWakeWordEngine();
-  }, [isMicAvailable, wakeWordEnabled, wakeEngine, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
+  }, [muted, isMicAvailable, wakeWordEnabled, wakeEngine, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
 
   // Single reconcile effect for the Web Speech recognizer. Computes desired
   // running state from inputs and nudges the state machine toward it. Has no
   // cleanup function — transitions are idempotent and the dedicated unmount
   // effect tears the recognizer down.
   useEffect(() => {
-    const shouldRun = shouldSpeechWakeBeRunning({
+    const shouldRun = !muted && shouldSpeechWakeBeRunning({
       isMicAvailable,
       wakeWordEnabled,
       voiceState,
@@ -556,7 +571,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     });
     if (shouldRun) startSpeechWakeIfNeeded();
     else stopSpeechWakeIfNeeded();
-  }, [isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechWakeFatal, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
+  }, [muted, isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechWakeFatal, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
 
   // Restart wake word listening when returning to idle (with delay for mic release)
   useEffect(() => {
@@ -829,6 +844,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
 
   // --- Public API ---
   const startRecording = useCallback(() => {
+    if (mutedRef.current) return;
     if (voiceStateRef.current !== "idle" && voiceStateRef.current !== "wake_detected") return;
     // Stop wake word mic before starting our recording
     if (wakeEngineRef.current) {
@@ -841,6 +857,84 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     if (voiceStateRef.current !== "recording") return;
     stopRecordingInternal();
   }, [stopRecordingInternal]);
+
+  // --- Mute toggle (Phase 4A) ---
+  const setMuted = useCallback((next: boolean) => {
+    setMutedState(next);
+    if (next) {
+      // Hard-stop anything in flight when muting.
+      if (voiceStateRef.current === "recording") {
+        stopRecordingInternal();
+      }
+      cancelTTSRef.current();
+      setPartialTranscript("");
+      setMicLevel(0);
+    }
+  }, [stopRecordingInternal]);
+
+  // --- Live partial transcript (Phase 4A) ---
+  // Runs a separate SpeechRecognition during `recording` state purely for
+  // visual feedback under the orb. The daemon-side STT remains authoritative
+  // for what lands in the thread; this is read-only echo.
+  useEffect(() => {
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
+
+    if (voiceState === "recording" && !mutedRef.current) {
+      try {
+        const rec = new SpeechRecognitionCtor();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-US";
+        rec.onresult = (event: any) => {
+          let text = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            text += String(event.results[i]?.[0]?.transcript ?? "");
+          }
+          setPartialTranscript(text.trim());
+        };
+        rec.onerror = () => {/* ignore — display path only */};
+        rec.onend = () => {/* will be re-created on next recording */};
+        transcriptRecognizerRef.current = rec;
+        try { rec.start(); } catch {/* race with another recognizer */}
+      } catch {/* ignore */}
+    }
+
+    return () => {
+      const rec = transcriptRecognizerRef.current;
+      if (rec) {
+        try { rec.stop(); } catch {/* ignore */}
+        transcriptRecognizerRef.current = null;
+      }
+      // Drop the partial when leaving recording — the final transcript will
+      // appear in the thread shortly via the chat broadcast.
+      setPartialTranscript("");
+    };
+  }, [voiceState]);
+
+  // --- Mic level meter (Phase 4A) ---
+  // Reuses the silence-detection analyser when present, otherwise zero.
+  // Sampled at 60ms — fast enough to feel live, light enough not to thrash React.
+  useEffect(() => {
+    if (voiceState !== "recording") {
+      setMicLevel(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const analyser = analyserRef.current;
+      if (!analyser) return;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      // Average magnitude → 0..1 (data is 0..255). Apply mild curve for
+      // visual responsiveness; faint speech still nudges the meter.
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += (data[i] ?? 0);
+      const avg = sum / data.length / 255;
+      setMicLevel(Math.min(1, Math.max(0, Math.pow(avg, 0.7))));
+    }, 60);
+    return () => clearInterval(interval);
+  }, [voiceState]);
 
   // --- Cleanup on unmount ---
   useEffect(() => {
@@ -875,5 +969,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     handleTTSStart,
     handleTTSEnd,
     handleError,
+    muted,
+    setMuted,
+    micLevel,
+    partialTranscript,
   };
 }

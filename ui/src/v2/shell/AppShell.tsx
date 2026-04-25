@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Composer } from "./Composer";
 import { Header, type ConnectionState, type Mode } from "./Header";
 import { Thread } from "../thread/Thread";
@@ -6,20 +6,10 @@ import { MOCK_THREAD } from "../thread/mock";
 import { useLiveThread } from "../thread/useLiveThread";
 import type { ThreadItem } from "../thread/types";
 import { VoiceRail, type VoiceState } from "./VoiceRail";
+import { useVoice } from "../../hooks/useVoice";
+import { mapVoiceState } from "../voice/stateMapper";
+import { useSuggestions } from "../voice/useSuggestions";
 import "./AppShell.css";
-
-const DEMO_SUGGESTIONS_BY_STATE: Record<VoiceState, string[]> = {
-  idle: [
-    "What's on my calendar today?",
-    "Open workflows",
-    "Summarize yesterday's logs",
-  ],
-  listening: ["Stop listening", "Cancel"],
-  thinking: [],
-  speaking: ["Take me back", "Edit the first one"],
-  "awaiting-approval": ["Yes · approve", "Cancel", "Explain the risk"],
-  muted: ["Unmute"],
-};
 
 const VOICE_CYCLE: VoiceState[] = [
   "idle",
@@ -44,56 +34,113 @@ function isMockMode(): boolean {
  *
  * The split matters because `useWebSocket` opens a real WS connection with
  * reconnect logic; we don't want that running when someone is just reviewing
- * the mock fixture.
+ * the mock fixture. The same is true for `useVoice` (mic permissions, wake
+ * word engine) — only the live path instantiates it.
  */
 export function AppShell() {
   const mock = useMemo(isMockMode, []);
   return mock ? <AppShellMock /> : <AppShellLive />;
 }
 
-/* ─────────── Live shell — Phase 3B-1 ─────────── */
+/* ─────────── Live shell — Phase 3B + Phase 4A ─────────── */
 
 function AppShellLive() {
-  const { items, isConnected, send, approve, cancel } = useLiveThread();
-  const connection: ConnectionState = isConnected ? "live" : "offline";
+  const live = useLiveThread();
+  const voice = useVoice({ wsRef: live.wsRef, wakeWordEnabled: true });
+
+  // Bridge TTS audio + lifecycle from useWebSocket → useVoice (matches the
+  // legacy App.tsx pattern). Without this the voice hook never hears about
+  // the daemon's `tts_start` / binary chunks / `tts_end` messages.
+  useEffect(() => {
+    live.voiceCallbacksRef.current = {
+      onTTSBinary: voice.handleTTSBinary,
+      onTTSStart: voice.handleTTSStart,
+      onTTSEnd: voice.handleTTSEnd,
+      onError: voice.handleError,
+    };
+  }, [
+    live.voiceCallbacksRef,
+    voice.handleTTSBinary,
+    voice.handleTTSStart,
+    voice.handleTTSEnd,
+    voice.handleError,
+  ]);
+
+  const awaitingApproval = live.approvals.length > 0;
+  const voiceState = mapVoiceState(voice.voiceState, {
+    muted: voice.muted,
+    awaitingApproval,
+  });
+  const suggestions = useSuggestions(live.items);
 
   const handleApprove = useCallback(
     (id: string) => {
-      approve(id).catch((err) => {
-        console.error("[v2] approve failed", err);
-      });
+      live.approve(id).catch((err) => console.error("[v2] approve failed", err));
     },
-    [approve],
+    [live],
   );
 
   const handleCancel = useCallback(
     (id: string) => {
-      cancel(id).catch((err) => {
-        console.error("[v2] cancel failed", err);
-      });
+      live.cancel(id).catch((err) => console.error("[v2] cancel failed", err));
     },
-    [cancel],
+    [live],
+  );
+
+  // Tap-orb is a manual record/stop toggle (PTT-style). Wake-word listening
+  // continues in the background; both paths produce identical thread items.
+  const handleTapOrb = useCallback(() => {
+    if (voice.muted) return;
+    if (voice.voiceState === "recording") {
+      voice.stopRecording();
+    } else if (voice.voiceState === "idle") {
+      voice.startRecording();
+    } else if (voice.voiceState === "speaking") {
+      // Tapping the orb during TTS interrupts and starts listening.
+      voice.cancelTTS();
+      voice.startRecording();
+    }
+  }, [voice]);
+
+  const handleToggleMute = useCallback(() => {
+    voice.setMuted(!voice.muted);
+  }, [voice]);
+
+  const handleSuggestion = useCallback(
+    (text: string) => {
+      // Per the design rule: voice and text share one pipeline.
+      // A suggestion click sends the same payload as typing it.
+      live.send(text);
+    },
+    [live],
   );
 
   return (
     <ShellLayout
-      connection={connection}
-      items={items}
-      composerDisabled={!isConnected}
+      connection={live.isConnected ? "live" : "offline"}
+      items={live.items}
+      composerDisabled={!live.isConnected}
       composerPlaceholder={
-        isConnected
+        live.isConnected
           ? "Ask Jarvis, or press / to summon a tool…"
           : "Waiting for daemon…"
       }
-      onSubmit={send}
+      onSubmit={live.send}
       onApprove={handleApprove}
       onCancel={handleCancel}
       onFocusCard={() => undefined}
+      voiceState={voiceState}
+      suggestions={suggestions}
+      vu={voice.micLevel}
+      partialTranscript={voice.partialTranscript}
+      onTapOrb={handleTapOrb}
+      onSuggestion={handleSuggestion}
+      onToggleMute={handleToggleMute}
     />
   );
 }
 
-/* ─────────── Mock shell — Phase 3A fixture ─────────── */
+/* ─────────── Mock shell — Phase 3A fixture (no WS, no mic) ─────────── */
 
 type MockVariant<T = ThreadItem> = T extends ThreadItem ? Omit<T, "id" | "t"> : never;
 
@@ -118,8 +165,27 @@ const MOCK_APPEND_VARIANTS: MockVariant[] = [
   },
 ];
 
+const MOCK_SUGGESTIONS_BY_STATE: Record<VoiceState, string[]> = {
+  idle: ["What's on my calendar today?", "Open workflows", "Summarize yesterday's logs"],
+  listening: [],
+  thinking: [],
+  speaking: ["Take me back", "Edit the first one"],
+  "awaiting-approval": [],
+  muted: ["Unmute"],
+};
+
 function AppShellMock() {
   const [items, setItems] = useState<ThreadItem[]>(MOCK_THREAD);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+
+  const cycleOrb = () => {
+    const idx = (VOICE_CYCLE.indexOf(voiceState) + 1) % VOICE_CYCLE.length;
+    setVoiceState(VOICE_CYCLE[idx] ?? "idle");
+  };
+
+  const toggleMute = () => {
+    setVoiceState((s) => (s === "muted" ? "idle" : "muted"));
+  };
 
   const appendMock = useCallback(() => {
     const variant =
@@ -148,6 +214,13 @@ function AppShellMock() {
       onCancel={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
       onFocusCard={() => undefined}
       devAppend={appendMock}
+      voiceState={voiceState}
+      suggestions={MOCK_SUGGESTIONS_BY_STATE[voiceState]}
+      vu={voiceState === "listening" ? 0.55 : voiceState === "speaking" ? 0.75 : 0}
+      partialTranscript={voiceState === "listening" ? "this is a sample partial transcript" : ""}
+      onTapOrb={cycleOrb}
+      onSuggestion={handleSubmit}
+      onToggleMute={toggleMute}
     />
   );
 }
@@ -164,6 +237,14 @@ interface ShellLayoutProps {
   onCancel: (id: string) => void;
   onFocusCard: (id: string) => void;
   devAppend?: () => void;
+  // Voice
+  voiceState: VoiceState;
+  suggestions: string[];
+  vu: number;
+  partialTranscript: string;
+  onTapOrb: () => void;
+  onSuggestion: (text: string) => void;
+  onToggleMute: () => void;
 }
 
 function ShellLayout({
@@ -176,18 +257,15 @@ function ShellLayout({
   onCancel,
   onFocusCard,
   devAppend,
+  voiceState,
+  suggestions,
+  vu,
+  partialTranscript,
+  onTapOrb,
+  onSuggestion,
+  onToggleMute,
 }: ShellLayoutProps) {
   const [mode, setMode] = useState<Mode>("active");
-  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-
-  const cycleOrb = () => {
-    const idx = (VOICE_CYCLE.indexOf(voiceState) + 1) % VOICE_CYCLE.length;
-    setVoiceState(VOICE_CYCLE[idx] ?? "idle");
-  };
-
-  const toggleMute = () => {
-    setVoiceState((s) => (s === "muted" ? "idle" : "muted"));
-  };
 
   return (
     <div className="v2-shell">
@@ -223,12 +301,13 @@ function ShellLayout({
       <div className="v2-shell__rail">
         <VoiceRail
           state={voiceState}
-          suggestions={DEMO_SUGGESTIONS_BY_STATE[voiceState]}
-          vu={voiceState === "listening" ? 0.55 : voiceState === "speaking" ? 0.75 : 0}
+          suggestions={suggestions}
+          vu={vu}
           device="Default microphone"
-          onTapOrb={cycleOrb}
-          onSuggestion={() => undefined}
-          onToggleMute={toggleMute}
+          partialTranscript={partialTranscript}
+          onTapOrb={onTapOrb}
+          onSuggestion={onSuggestion}
+          onToggleMute={onToggleMute}
         />
       </div>
     </div>
