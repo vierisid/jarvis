@@ -181,6 +181,35 @@ export type ProviderErrorFormatted = {
 };
 
 /**
+ * Mirror of `IMPACT_MAP` from `src/roles/authority.ts`. Used only during the
+ * REST rehydration path where the server response doesn't carry impact.
+ * If you change the daemon mapping, change this too.
+ */
+function deriveImpactFromCategory(category: string): ApprovalImpact {
+  switch (category) {
+    case "read_data":
+      return "read";
+    case "write_data":
+    case "send_message":
+    case "spawn_agent":
+    case "control_app":
+      return "write";
+    case "access_browser":
+    case "send_email":
+      return "external";
+    case "execute_command":
+    case "install_software":
+    case "make_payment":
+    case "modify_settings":
+    case "delete_data":
+    case "terminate_agent":
+      return "destructive";
+    default:
+      return "write";
+  }
+}
+
+/**
  * Canonical error codes emitted by the server. Keep in sync with
  * `LLMErrorCode` in src/llm/provider.ts.
  */
@@ -336,6 +365,43 @@ export function useWebSocket() {
         }
       } catch (err) {
         console.warn("[WS] Failed to load history:", err);
+      }
+
+      // Rehydrate any pending approval requests so a daemon restart (or a
+      // dashboard reload mid-approval) doesn't strand the user with no
+      // visible card. Server is authoritative; we replace local state.
+      try {
+        const resp = await fetch("/api/authority/approvals?status=pending");
+        if (resp.ok) {
+          const rows = (await resp.json()) as Array<{
+            id: string;
+            agent_name: string;
+            tool_name: string;
+            action_category: string;
+            urgency: "urgent" | "normal";
+            reason: string;
+            created_at: number;
+          }>;
+          const rehydrated: PendingApproval[] = rows.map((r) => ({
+            id: r.id,
+            shortId: r.id.slice(0, 8),
+            intent: r.reason || r.tool_name,
+            category: r.action_category,
+            // Server doesn't include impact in the REST response yet; derive
+            // a safe default. Categories the daemon classifies as destructive
+            // still show the right impact at runtime via the WS broadcast,
+            // and a daemon shim can fill this later if needed.
+            impact: deriveImpactFromCategory(r.action_category),
+            agentName: r.agent_name,
+            toolName: r.tool_name,
+            urgency: r.urgency,
+            reason: r.reason,
+            timestamp: r.created_at,
+          }));
+          setApprovals(rehydrated);
+        }
+      } catch (err) {
+        console.warn("[WS] Failed to rehydrate approvals:", err);
       }
     };
 
