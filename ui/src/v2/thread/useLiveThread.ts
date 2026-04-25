@@ -3,6 +3,8 @@ import {
   useWebSocket,
   type ChatMessage,
   type PendingApproval,
+  type PendingClarifier,
+  type PendingRepeatBack,
 } from "../../hooks/useWebSocket";
 import type { Impact, ThreadItem } from "./types";
 
@@ -41,13 +43,37 @@ export function useLiveThread() {
       }),
     );
 
+    const clarifierItems: (ThreadItem & { __ts: number })[] = ws.clarifiers.map(
+      (c: PendingClarifier) => ({
+        __ts: c.timestamp,
+        kind: "clarifier",
+        id: c.id,
+        transcript: c.transcript,
+        primary: c.primary,
+        alternatives: c.alternatives,
+        confidence: c.confidence,
+        t: formatTime(c.timestamp),
+      }),
+    );
+
+    const repeatBackItems: (ThreadItem & { __ts: number })[] = ws.repeatBacks.map(
+      (r: PendingRepeatBack) => ({
+        __ts: r.timestamp,
+        kind: "repeat-back",
+        id: r.id,
+        transcript: r.transcript,
+        confidence: r.confidence,
+        t: formatTime(r.timestamp),
+      }),
+    );
+
     // Merge by timestamp; stable sort keeps insertion order on ties.
-    const merged = [...chatItems, ...approvalItems].sort(
+    const merged = [...chatItems, ...approvalItems, ...clarifierItems, ...repeatBackItems].sort(
       (a, b) => a.__ts - b.__ts,
     );
 
     return merged.map(({ __ts: _ts, ...rest }) => rest as ThreadItem);
-  }, [ws.messages, ws.approvals]);
+  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks]);
 
   const approve = useCallback(async (id: string) => {
     const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/approve`, {
@@ -67,6 +93,22 @@ export function useLiveThread() {
     }
   }, []);
 
+  const resolveClarifier = useCallback(async (id: string, decision: "confirm" | "cancel") => {
+    const resp = await fetch(
+      `/api/voice/clarifier/${encodeURIComponent(id)}/${decision}`,
+      { method: "POST" },
+    );
+    if (!resp.ok) throw new Error(`clarifier ${decision} failed: ${resp.status}`);
+  }, []);
+
+  const resolveRepeatBack = useCallback(async (id: string, decision: "confirm" | "cancel") => {
+    const resp = await fetch(
+      `/api/voice/repeat-back/${encodeURIComponent(id)}/${decision}`,
+      { method: "POST" },
+    );
+    if (!resp.ok) throw new Error(`repeat-back ${decision} failed: ${resp.status}`);
+  }, []);
+
   return {
     items,
     isConnected: ws.isConnected,
@@ -75,6 +117,10 @@ export function useLiveThread() {
     dismissNotice: ws.dismissNotice,
     approve,
     cancel,
+    resolveClarifier,
+    resolveRepeatBack,
+    /** Daemon-emitted thinking flag (between STT-final and stream/tts start). */
+    thinking: ws.thinking,
     /** Exposed so the v2 shell can pass the same WS to `useVoice`. */
     wsRef: ws.wsRef,
     /** Exposed so the v2 shell can wire TTS callbacks from `useVoice`. */

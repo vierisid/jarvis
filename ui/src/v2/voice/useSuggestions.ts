@@ -1,13 +1,13 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThreadItem } from "../thread/types";
 
 /**
- * Heuristic suggestion generator (Phase 4A).
+ * Heuristic suggestion generator (Phase 4A — kept as fallback in 4B).
  *
  * Surfaces 3–5 next-move utterances from the last few thread items so the
- * voice rail's "Try saying" panel is context-aware. Phase 4B will replace
- * this with an LLM-generated set, but the heuristic is good enough to make
- * the rail feel alive in the meantime.
+ * voice rail's "Try saying" panel is context-aware. Phase 4B layered on a
+ * server-side LLM generator (`useLLMSuggestions`) and falls back to this
+ * heuristic when the daemon is offline or the LLM call fails.
  *
  * Hard rules per the design handoff (`COMPONENTS.md` + `VOICE_SCHEMA.md`):
  *  - Never include destructive verbs (delete, send, pay, install, terminate,
@@ -102,4 +102,80 @@ export function useSuggestions(items: ThreadItem[]): string[] {
     const candidates = pickSet(items);
     return candidates.filter((s) => !isDestructive(s)).slice(0, 5);
   }, [items]);
+}
+
+/**
+ * LLM-backed suggestions (Phase 4B). Calls `/api/voice/suggestions` with the
+ * last few user/assistant turns; debounced 600ms so rapid streaming updates
+ * don't thrash the endpoint. Falls back to the heuristic on error or when
+ * the API returns an empty list.
+ *
+ * Pass `enabled={false}` (e.g. when WS is offline) to skip the network call
+ * entirely and use the heuristic immediately.
+ */
+export function useLLMSuggestions(items: ThreadItem[], opts: { enabled: boolean }): string[] {
+  const heuristic = useSuggestions(items);
+  const [llm, setLLM] = useState<string[] | null>(null);
+  const lastKeyRef = useRef("");
+
+  useEffect(() => {
+    if (!opts.enabled) {
+      setLLM(null);
+      return;
+    }
+
+    // Build a stable key from the last 5 user/assistant items so we only
+    // re-fetch when the relevant context changes.
+    const turns = itemsToTurns(items);
+    const key = turns.map((t) => `${t.role}:${t.text.slice(0, 80)}`).join("|");
+    if (key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
+
+    if (turns.length === 0) {
+      setLLM(null);
+      return;
+    }
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const resp = await fetch("/api/voice/suggestions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ recentTurns: turns }),
+          signal: ctrl.signal,
+        });
+        if (!resp.ok) return;
+        const data = (await resp.json()) as { suggestions?: unknown };
+        if (Array.isArray(data.suggestions) && data.suggestions.length > 0) {
+          const cleaned = data.suggestions
+            .filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0)
+            .filter((s) => !isDestructive(s))
+            .slice(0, 5);
+          if (cleaned.length > 0) setLLM(cleaned);
+        }
+      } catch {
+        // Swallow — heuristic stays in place
+      }
+    }, 600);
+
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [items, opts.enabled]);
+
+  return llm && llm.length > 0 ? llm : heuristic;
+}
+
+function itemsToTurns(items: ThreadItem[]): Array<{ role: "user" | "assistant"; text: string }> {
+  const out: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (const item of items.slice(-12)) {
+    if (item.kind === "user-text" || item.kind === "user-voice") {
+      out.push({ role: "user", text: item.text });
+    } else if (item.kind === "jarvis-speech") {
+      out.push({ role: "assistant", text: item.text });
+    }
+  }
+  return out.slice(-5);
 }

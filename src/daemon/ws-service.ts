@@ -17,6 +17,9 @@ import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { impactFromCategory } from '../roles/authority.ts';
+import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
+import { routeByConfidence, type Intent } from '../voice/intent.ts';
+import { getMessages } from '../vault/conversations.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
@@ -28,6 +31,22 @@ type VoiceSession = {
   requestId: string;
   chunks: Buffer[];
   startedAt: number;
+};
+
+/**
+ * A voice utterance that's been STT'd but is held pending user confirmation
+ * because the classifier wasn't confident enough to act unilaterally. The
+ * REST resolution endpoint looks up the pending entry by id and either
+ * forwards `transcript` to handleChat (confirm) or drops it (cancel).
+ */
+type PendingVoiceConfirmation = {
+  id: string;
+  intent: Intent;
+  transcript: string;
+  ws: ServerWebSocket<unknown>;
+  channel: string;
+  kind: 'clarifier' | 'repeat_back';
+  createdAt: number;
 };
 
 export class WebSocketService implements Service {
@@ -44,6 +63,7 @@ export class WebSocketService implements Service {
   private ttsProvider: TTSProvider | null = null;
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
+  private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
 
   constructor(port: number, agentService: AgentService) {
@@ -815,7 +835,15 @@ If the user wants to create a new project, tell them to use the Site Builder pag
   }
 
   /**
-   * Process a completed voice session: STT → chat → TTS response.
+   * Process a completed voice session: STT → classify → route by confidence.
+   *
+   * Routing (`routeByConfidence` in src/voice/intent.ts):
+   *   - act         → forward transcript to the chat agent (existing flow)
+   *   - clarify     → broadcast clarifier_request, hold transcript pending
+   *   - repeat-back → broadcast repeat_back_request, hold transcript pending
+   *
+   * Held requests are resolved via REST `/api/voice/(clarifier|repeat-back)/:id/{confirm,cancel}`,
+   * which call back into `resolveVoiceConfirmation`.
    */
   private async handleVoiceSession(session: VoiceSession, ws: ServerWebSocket<unknown>): Promise<void> {
     if (!this.sttProvider) {
@@ -836,7 +864,8 @@ If the user wants to create a new project, tell them to use the Site Builder pag
 
       console.log('[WSService] Voice transcript:', transcript);
 
-      // Echo transcript back so the UI shows it as a user message
+      // Echo transcript back so the UI shows it as a user message immediately,
+      // regardless of which routing path the classifier picks.
       this.wsServer.sendToClient(ws, {
         type: 'chat',
         payload: { text: transcript, source: 'voice_transcript' },
@@ -844,22 +873,179 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         timestamp: Date.now(),
       });
 
-      // Reuse existing chat flow
-      await this.handleChat({
-        type: 'chat',
-        payload: { text: transcript },
-        id: session.requestId,
-        timestamp: Date.now(),
-      }, ws);
+      // Run intent classifier. Failure-tolerant: returns a permissive intent
+      // (verb=ask, confidence=0.85) on any error so we always land on `act`.
+      const llm = this.agentService.getLLMManager();
+      const recentTurns = this.recentTurns('websocket');
+      const intent = await classifyVoiceIntent(transcript, recentTurns, llm);
+      const route = routeByConfidence(intent);
+
+      console.log(
+        `[WSService] Voice intent: verb=${intent.verb} impact=${intent.impact} ` +
+        `confidence=${intent.confidence.toFixed(2)} → ${route}`,
+      );
+
+      // Thinking signal: between STT-final and either chat-stream-start or
+      // a clarifier broadcast. Lets the v2 orb show its thinking state with
+      // accurate timing instead of inferring from the React side.
+      this.broadcastThinkingStart(session.requestId);
+
+      if (route === 'act') {
+        // Normal chat flow — thinking_end will be emitted on first stream chunk.
+        await this.handleChat({
+          type: 'chat',
+          payload: { text: transcript },
+          id: session.requestId,
+          timestamp: Date.now(),
+        }, ws);
+      } else {
+        // Hold the transcript and ask the user to confirm before acting.
+        const pending: PendingVoiceConfirmation = {
+          id: intent.id,
+          intent,
+          transcript,
+          ws,
+          channel: 'websocket',
+          kind: route === 'clarify' ? 'clarifier' : 'repeat_back',
+          createdAt: Date.now(),
+        };
+        this.pendingVoiceConfirmations.set(pending.id, pending);
+        if (route === 'clarify') {
+          this.broadcastClarifierRequest(pending);
+        } else {
+          this.broadcastRepeatBackRequest(pending);
+        }
+        // Thinking ends at the moment we hand control back to the user.
+        this.broadcastThinkingEnd(session.requestId);
+      }
     } catch (err) {
-      console.error('[WSService] STT error:', err);
-      const message = err instanceof Error ? err.message : 'Voice transcription failed';
+      console.error('[WSService] Voice session error:', err);
+      const message = err instanceof Error ? err.message : 'Voice processing failed';
       this.wsServer.sendToClient(ws, {
         type: 'error',
         payload: { message },
         timestamp: Date.now(),
       });
     }
+  }
+
+  /**
+   * Look up the last few user/assistant turns from the active conversation,
+   * for use as classifier context. Bounded at 6 (3 user + 3 assistant)
+   * because anything older rarely informs intent.
+   */
+  private recentTurns(channel: string): RecentTurn[] {
+    try {
+      const conversation = getOrCreateConversation(channel);
+      const messages = getMessages(conversation.id, { limit: 6 });
+      return messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }));
+    } catch (err) {
+      console.warn('[WSService] recentTurns lookup failed:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve a pending voice confirmation. Called by the REST endpoints
+   * `/api/voice/(clarifier|repeat-back)/:id/{confirm,cancel}`.
+   *
+   * On confirm: forwards the held transcript to the chat agent.
+   * On cancel: drops the pending entry; the user-voice ThreadItem stays in
+   * the thread but no assistant reply is generated.
+   *
+   * Either way, broadcasts a `voice_confirmation_resolved` notification so
+   * the dashboard removes the clarifier/repeat-back card from the thread.
+   */
+  async resolveVoiceConfirmation(
+    id: string,
+    decision: 'confirm' | 'cancel',
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const pending = this.pendingVoiceConfirmations.get(id);
+    if (!pending) return { ok: false, reason: 'not-found' };
+
+    this.pendingVoiceConfirmations.delete(id);
+
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'voice_confirmation_resolved',
+        id,
+        decision,
+        kind: pending.kind,
+      },
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+
+    if (decision === 'cancel') {
+      return { ok: true };
+    }
+
+    try {
+      this.broadcastThinkingStart(pending.id);
+      await this.handleChat({
+        type: 'chat',
+        payload: { text: pending.transcript },
+        id: pending.id,
+        timestamp: Date.now(),
+      }, pending.ws);
+      return { ok: true };
+    } catch (err) {
+      console.error('[WSService] resolveVoiceConfirmation chat error:', err);
+      return { ok: false, reason: err instanceof Error ? err.message : 'chat-failed' };
+    }
+  }
+
+  /** Broadcast: classifier wants confirmation between alternative interpretations. */
+  private broadcastClarifierRequest(pending: PendingVoiceConfirmation): void {
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'clarifier_request',
+        id: pending.id,
+        intent: pending.intent,
+        transcript: pending.transcript,
+      },
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  /** Broadcast: classifier didn't understand; ask the user to confirm the verbatim transcript. */
+  private broadcastRepeatBackRequest(pending: PendingVoiceConfirmation): void {
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'repeat_back_request',
+        id: pending.id,
+        transcript: pending.transcript,
+        confidence: pending.intent.confidence,
+      },
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  /** Voice pipeline: STT-final received, agent now reasoning. */
+  broadcastThinkingStart(requestId: string): void {
+    this.wsServer.broadcast({
+      type: 'thinking_start',
+      payload: { requestId },
+      id: requestId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** Voice pipeline: agent emitted first response token (or handed back to user). */
+  broadcastThinkingEnd(requestId: string): void {
+    this.wsServer.broadcast({
+      type: 'thinking_end',
+      payload: { requestId },
+      id: requestId,
+      timestamp: Date.now(),
+    });
   }
 
   /**

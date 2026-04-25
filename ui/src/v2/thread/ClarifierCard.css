@@ -1,0 +1,110 @@
+.v2-clarifier {
+  position: relative;
+  padding: 14px 16px;
+  background: var(--paper);
+  border: 1.5px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  box-shadow: 4px 4px 0 0 rgba(138, 106, 31, 0.08);
+}
+
+.v2-clarifier__attribution {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.v2-clarifier__attribution-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--warn);
+  flex-shrink: 0;
+}
+
+.v2-clarifier__attribution-tag {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.v2-clarifier__transcript {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+
+.v2-clarifier__primary {
+  font-family: var(--font-display);
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--ink);
+  margin: 0;
+  font-weight: 400;
+}
+
+.v2-clarifier__primary em {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.v2-clarifier__alts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  border-top: var(--hair-soft);
+  padding-top: var(--s-3);
+}
+
+.v2-clarifier__alt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+.v2-clarifier__alt-label {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.v2-clarifier__alt-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.v2-clarifier__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.v2-clarifier__hint {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}

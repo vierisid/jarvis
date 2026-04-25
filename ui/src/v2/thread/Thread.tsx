@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { Icon } from "../ui";
 import { ApprovalCard } from "./ApprovalCard";
+import { ClarifierCard } from "./ClarifierCard";
+import { RepeatBackCard } from "./RepeatBackCard";
 import { InlineCard } from "./InlineCard";
 import {
   JarvisSpeechItem,
@@ -20,6 +22,8 @@ export interface ThreadProps {
   onApprove?: (id: string) => void;
   onCancel?: (id: string) => void;
   onFocusCard?: (id: string) => void;
+  onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
+  onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
   /**
    * When true, shows a dev-mode "append mock item" button to exercise
    * scroll behavior during Phase 3A. Phase 3B swaps items for live events
@@ -33,6 +37,8 @@ export function Thread({
   onApprove,
   onCancel,
   onFocusCard,
+  onClarifier,
+  onRepeatBack,
   dev,
 }: ThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -112,6 +118,8 @@ export function Thread({
                 onApprove={onApprove}
                 onCancel={onCancel}
                 onFocusCard={onFocusCard}
+                onClarifier={onClarifier}
+                onRepeatBack={onRepeatBack}
               />
             ))
           )}
@@ -135,11 +143,15 @@ function ItemRenderer({
   onApprove,
   onCancel,
   onFocusCard,
+  onClarifier,
+  onRepeatBack,
 }: {
   item: ThreadItem;
   onApprove?: (id: string) => void;
   onCancel?: (id: string) => void;
   onFocusCard?: (id: string) => void;
+  onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
+  onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
 }) {
   switch (item.kind) {
     case "user-voice":
@@ -172,6 +184,26 @@ function ItemRenderer({
           meta={item.meta}
           status={item.status}
           onFocus={() => onFocusCard?.(item.id)}
+        />
+      );
+    case "clarifier":
+      return (
+        <ClarifierCard
+          transcript={item.transcript}
+          primary={item.primary}
+          alternatives={item.alternatives}
+          confidence={item.confidence}
+          onConfirm={() => onClarifier?.(item.id, "confirm")}
+          onCancel={() => onClarifier?.(item.id, "cancel")}
+        />
+      );
+    case "repeat-back":
+      return (
+        <RepeatBackCard
+          transcript={item.transcript}
+          confidence={item.confidence}
+          onConfirm={() => onRepeatBack?.(item.id, "confirm")}
+          onCancel={() => onRepeatBack?.(item.id, "cancel")}
         />
       );
   }
