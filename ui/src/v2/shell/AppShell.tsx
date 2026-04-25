@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import { Header, type ConnectionState, type Mode } from "./Header";
-import { Thread } from "../thread/Thread";
+import { Thread, type ThreadHandle } from "../thread/Thread";
 import { MOCK_THREAD } from "../thread/mock";
 import { useLiveThread } from "../thread/useLiveThread";
 import type { ObjectType, ThreadItem } from "../thread/types";
@@ -17,6 +17,8 @@ import { closeRoom, openRoom, type RoomKey } from "../router";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
 import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
+import { useNotificationCenter } from "../../hooks/useNotificationCenter";
+import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -318,6 +320,57 @@ function AppShellLive() {
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   usePaletteHotkey(openPalette);
 
+  // ── Notification center (Phase 6.2-A) ──
+  const threadRef = useRef<ThreadHandle | null>(null);
+  const notif = useNotificationCenter({
+    approvals: live.approvals,
+    clarifiers: live.clarifiers,
+    repeatBacks: live.repeatBacks,
+    notices: live.notices,
+  });
+  const [notifOpen, setNotifOpen] = useState(false);
+  const toggleNotif = useCallback(() => setNotifOpen((v) => !v), []);
+  const closeNotif = useCallback(() => setNotifOpen(false), []);
+
+  // ⌥N (Alt+N) toggles the drawer. Skipped while typing in editable fields
+  // so it doesn't hijack keyboard input in the composer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.metaKey || e.ctrlKey) return;
+      if (e.key.toLowerCase() !== "n") return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      e.preventDefault();
+      setNotifOpen((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Picking a notification: mark read, close the drawer, close any open
+  // Room overlay so the thread is visible, then scroll the matching item
+  // into view. Approvals/clarifiers/repeat-backs always have a thread item
+  // with the same id; system notices don't (no scroll target — the row
+  // simply marks read and dismisses).
+  const handleNotifPick = useCallback(
+    (id: string) => {
+      notif.markRead(id);
+      closeNotif();
+      if (window.location.hash.startsWith("#/_room_")) {
+        closeRoom();
+      }
+      // Defer one frame so the Room overlay (if any) has unmounted before
+      // we measure the scroll target.
+      window.requestAnimationFrame(() => {
+        threadRef.current?.scrollToItem(id);
+      });
+    },
+    [notif, closeNotif],
+  );
+
   const handlePickObject = useCallback(
     (result: PaletteResult, openInRoom: boolean) => {
       if (openInRoom) {
@@ -359,6 +412,7 @@ function AppShellLive() {
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
+        threadRef={threadRef}
         composerDisabled={!live.isConnected}
         composerPlaceholder={
           live.isConnected
@@ -396,6 +450,18 @@ function AppShellLive() {
         onSuggestion={handleSuggestion}
         onToggleMute={handleToggleMute}
         onOpenPalette={openPalette}
+        notificationCount={notif.unreadCount}
+        notificationsOpen={notifOpen}
+        onToggleNotifications={toggleNotif}
+        notificationsSlot={
+          <NotificationDrawer
+            open={notifOpen}
+            items={notif.items}
+            onClose={closeNotif}
+            onMarkAllRead={notif.markAllRead}
+            onPick={handleNotifPick}
+          />
+        }
       />
       <FloatingWindowsLayer
         windows={live.roomWindows}
@@ -566,6 +632,7 @@ function AppShellMock() {
 interface ShellLayoutProps {
   connection: ConnectionState;
   items: ThreadItem[];
+  threadRef?: React.MutableRefObject<ThreadHandle | null>;
   composerDisabled?: boolean;
   composerPlaceholder?: string;
   onSubmit: (text: string) => void;
@@ -591,11 +658,17 @@ interface ShellLayoutProps {
   onToggleMute: () => void;
   // Palette (Phase 5A)
   onOpenPalette: () => void;
+  // Phase 6.2-A — Notification center (live shell only; mock omits)
+  notificationCount?: number;
+  notificationsOpen?: boolean;
+  onToggleNotifications?: () => void;
+  notificationsSlot?: React.ReactNode;
 }
 
 function ShellLayout({
   connection,
   items,
+  threadRef,
   composerDisabled,
   composerPlaceholder,
   onSubmit,
@@ -618,6 +691,10 @@ function ShellLayout({
   onSuggestion,
   onToggleMute,
   onOpenPalette,
+  notificationCount,
+  notificationsOpen,
+  onToggleNotifications,
+  notificationsSlot,
 }: ShellLayoutProps) {
   const [mode, setMode] = useState<Mode>("active");
 
@@ -629,11 +706,16 @@ function ShellLayout({
           mode={mode}
           onModeChange={setMode}
           onPalette={onOpenPalette}
+          notificationCount={notificationCount}
+          notificationsOpen={notificationsOpen}
+          onToggleNotifications={onToggleNotifications}
+          notificationsSlot={notificationsSlot}
         />
       </div>
 
       <div className="v2-shell__thread">
         <Thread
+          ref={threadRef}
           items={items}
           onApprove={onApprove}
           onCancel={onCancel}

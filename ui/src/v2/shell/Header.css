@@ -170,6 +170,33 @@
   background: var(--accent);
 }
 
+/* Wraps the bell + drawer so the drawer can anchor to the bell. */
+.v2-header__notif-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Numeric badge on the bell — replaces the dot. */
+.v2-header__notif-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+  font-weight: 600;
+  letter-spacing: 0;
+  box-shadow: 0 0 0 2px var(--paper);
+}
+
 .v2-header__mode {
   display: inline-flex;
   align-items: center;

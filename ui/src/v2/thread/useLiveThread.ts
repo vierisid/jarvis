@@ -291,6 +291,10 @@ export function useLiveThread() {
     voiceCallbacksRef: ws.voiceCallbacksRef,
     /** Pending approvals (kept for components that need raw access). */
     approvals: ws.approvals,
+    /** Pending clarifiers (raw — drives the notification center bell). */
+    clarifiers: ws.clarifiers,
+    /** Pending repeat-back confirmations (raw — drives the notification center bell). */
+    repeatBacks: ws.repeatBacks,
     /** Phase 5A: palette pushes synthetic cards into the thread via this. */
     injectCard,
     /** Phase 6.1.5: room-window helpers. */

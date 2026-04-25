@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { Icon } from "../ui";
 import { ApprovalCard } from "./ApprovalCard";
@@ -39,7 +39,21 @@ export interface ThreadProps {
   dev?: { onAppend: () => void };
 }
 
-export function Thread({
+/**
+ * Imperative handle exposed to parents (e.g. NotificationDrawer's "jump
+ * to in thread" action). The instance methods are intentionally narrow
+ * — anything else should use props.
+ */
+export type ThreadHandle = {
+  /**
+   * Scroll the thread item with this id into view and briefly highlight
+   * it. No-op if the id isn't currently rendered. Returns true if the
+   * item was found and scrolled.
+   */
+  scrollToItem: (id: string) => boolean;
+};
+
+export const Thread = forwardRef<ThreadHandle, ThreadProps>(function Thread({
   items,
   onApprove,
   onCancel,
@@ -52,7 +66,7 @@ export function Thread({
   onRoomExpand,
   onRoomLayoutChange,
   dev,
-}: ThreadProps) {
+}, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(items.length);
@@ -103,6 +117,30 @@ export function Thread({
     setStickToBottom(true);
   }, [scrollToBottom]);
 
+  // Imperative scroll-to-item with brief highlight. Used by the
+  // notification drawer to bring an approval/clarifier card into view.
+  // The highlight is a CSS class with its own animation; removing it
+  // after 1.5s lets the user re-trigger it on subsequent jumps.
+  useImperativeHandle(ref, () => ({
+    scrollToItem(id: string): boolean {
+      const root = scrollRef.current;
+      if (!root) return false;
+      const target = root.querySelector<HTMLElement>(
+        `[data-thread-item-id="${cssEscape(id)}"]`,
+      );
+      if (!target) return false;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.remove("v2-thread__item--flash");
+      // Force reflow so the animation restarts on a re-trigger.
+      void target.offsetWidth;
+      target.classList.add("v2-thread__item--flash");
+      window.setTimeout(() => {
+        target.classList.remove("v2-thread__item--flash");
+      }, 1600);
+      return true;
+    },
+  }), []);
+
   return (
     <div className="v2-thread">
       {dev && (
@@ -124,20 +162,25 @@ export function Thread({
             <EmptyState />
           ) : (
             items.map((item) => (
-              <ItemRenderer
+              <div
                 key={item.id}
-                item={item}
-                onApprove={onApprove}
-                onCancel={onCancel}
-                onFocusCard={onFocusCard}
-                onClarifier={onClarifier}
-                onRepeatBack={onRepeatBack}
-                onRoomClose={onRoomClose}
-                onRoomMinimize={onRoomMinimize}
-                onRoomRestore={onRoomRestore}
-                onRoomExpand={onRoomExpand}
-                onRoomLayoutChange={onRoomLayoutChange}
-              />
+                data-thread-item-id={item.id}
+                className="v2-thread__item"
+              >
+                <ItemRenderer
+                  item={item}
+                  onApprove={onApprove}
+                  onCancel={onCancel}
+                  onFocusCard={onFocusCard}
+                  onClarifier={onClarifier}
+                  onRepeatBack={onRepeatBack}
+                  onRoomClose={onRoomClose}
+                  onRoomMinimize={onRoomMinimize}
+                  onRoomRestore={onRoomRestore}
+                  onRoomExpand={onRoomExpand}
+                  onRoomLayoutChange={onRoomLayoutChange}
+                />
+              </div>
             ))
           )}
           <div ref={endRef} />
@@ -153,6 +196,14 @@ export function Thread({
       )}
     </div>
   );
+});
+
+/** Tiny CSS.escape polyfill — only escapes the chars we'd actually see in
+ *  a thread item id (alphanumerics, dashes, underscores are common; quotes
+ *  and backslashes need escaping if they ever appear). */
+function cssEscape(s: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(s);
+  return s.replace(/["\\]/g, "\\$&");
 }
 
 function ItemRenderer({
