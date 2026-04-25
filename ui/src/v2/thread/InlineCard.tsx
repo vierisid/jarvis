@@ -2,8 +2,12 @@ import React from "react";
 import {
   ArrowUpRight,
   BookMarked,
+  Calendar,
   Eye,
+  Globe,
+  Settings,
   Shield,
+  Target,
   Terminal,
   UserCircle2,
   Workflow,
@@ -20,6 +24,10 @@ const TYPE_ICON: Record<ObjectType, LucideIcon> = {
   agent: UserCircle2,
   authority: Shield,
   log: Eye,
+  calendar: Calendar,
+  goals: Target,
+  sites: Globe,
+  settings: Settings,
 };
 
 const TYPE_LABEL: Record<ObjectType, string> = {
@@ -29,6 +37,10 @@ const TYPE_LABEL: Record<ObjectType, string> = {
   agent: "Agent",
   authority: "Authority",
   log: "Log",
+  calendar: "Calendar",
+  goals: "Goals",
+  sites: "Sites",
+  settings: "Settings",
 };
 
 export interface InlineCardProps {

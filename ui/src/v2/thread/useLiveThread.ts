@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   useWebSocket,
   type ChatMessage,
@@ -6,7 +6,7 @@ import {
   type PendingClarifier,
   type PendingRepeatBack,
 } from "../../hooks/useWebSocket";
-import type { Impact, ThreadItem } from "./types";
+import type { Impact, ObjectType, ThreadItem } from "./types";
 
 /**
  * useLiveThread — Phase 3B adapter.
@@ -23,8 +23,17 @@ import type { Impact, ThreadItem } from "./types";
  * at the right spot in the conversation. `approve()` / `cancel()` POST
  * to `/api/authority/approvals/:id/approve|deny`.
  */
+/**
+ * Synthetic `card` ThreadItem injected by the palette. Lives in component
+ * state because the daemon doesn't yet have a "card_event" broadcast — when
+ * it does (Phase 6), this falls away and cards arrive via WS like everything
+ * else.
+ */
+type InjectedCard = Extract<ThreadItem, { kind: "card" }>;
+
 export function useLiveThread() {
   const ws = useWebSocket();
+  const [injectedCards, setInjectedCards] = useState<InjectedCard[]>([]);
 
   const items = useMemo<ThreadItem[]>(() => {
     const chatItems = ws.messages
@@ -67,13 +76,56 @@ export function useLiveThread() {
       }),
     );
 
+    // Palette-injected synthetic cards (Phase 5A). `__ts` is the moment the
+    // user picked the result, so they sort to the bottom of the thread as
+    // intended ("previews → InlineCard first").
+    const injected: (ThreadItem & { __ts: number })[] = injectedCards.map((c) => ({
+      __ts: tsFromInjectedId(c.id),
+      ...c,
+    }));
+
     // Merge by timestamp; stable sort keeps insertion order on ties.
-    const merged = [...chatItems, ...approvalItems, ...clarifierItems, ...repeatBackItems].sort(
-      (a, b) => a.__ts - b.__ts,
-    );
+    const merged = [
+      ...chatItems,
+      ...approvalItems,
+      ...clarifierItems,
+      ...repeatBackItems,
+      ...injected,
+    ].sort((a, b) => a.__ts - b.__ts);
 
     return merged.map(({ __ts: _ts, ...rest }) => rest as ThreadItem);
-  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks]);
+  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks, injectedCards]);
+
+  /**
+   * Inject a synthetic `card` ThreadItem at the bottom of the thread.
+   * Used by the palette when the user picks a specific object.
+   * Phase 6 will replace this with a daemon-driven `card_event` broadcast.
+   */
+  const injectCard = useCallback(
+    (card: {
+      objectType: ObjectType;
+      ref: string;
+      title: string;
+      summary?: string;
+      meta?: string;
+      status?: { label: string; tone: "ok" | "warn" | "neutral" | "accent" };
+    }) => {
+      const now = Date.now();
+      const item: InjectedCard = {
+        kind: "card",
+        id: `palette-${now}-${Math.random().toString(36).slice(2, 8)}`,
+        objectType: card.objectType,
+        ref: card.ref,
+        title: card.title,
+        summary: card.summary,
+        meta: card.meta,
+        status: card.status,
+        t: formatTime(now),
+      };
+      setInjectedCards((prev) => [...prev, item]);
+    },
+    [],
+  );
 
   const approve = useCallback(async (id: string) => {
     const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/approve`, {
@@ -127,7 +179,16 @@ export function useLiveThread() {
     voiceCallbacksRef: ws.voiceCallbacksRef,
     /** Pending approvals (kept for components that need raw access). */
     approvals: ws.approvals,
+    /** Phase 5A: palette pushes synthetic cards into the thread via this. */
+    injectCard,
   };
+}
+
+/** Recover the timestamp embedded in a palette-injected card id. */
+function tsFromInjectedId(id: string): number {
+  if (!id.startsWith("palette-")) return Date.now();
+  const num = Number(id.split("-")[1]);
+  return Number.isFinite(num) ? num : Date.now();
 }
 
 function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) | null {

@@ -1,0 +1,203 @@
+/* Command palette — modal overlay over the v2 shell.
+   Risograph treatment: bone paper card, hard ink, single accent on the
+   active row. No drop shadow drift; flat with a hard offset. */
+
+.v2-palette__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(26, 26, 26, 0.18);
+  backdrop-filter: blur(2px);
+}
+
+.v2-palette__scrim-catcher {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  z-index: -1;
+  cursor: default;
+}
+
+.v2-palette {
+  position: relative;
+  width: min(640px, 92vw);
+  max-height: 70vh;
+  background: var(--paper);
+  border: 1.5px solid var(--rule);
+  border-radius: var(--r-2);
+  box-shadow: 6px 6px 0 0 rgba(26, 26, 26, 0.12);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Head: search input + Esc hint ── */
+
+.v2-palette__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: var(--hair-soft);
+  color: var(--ink-3);
+}
+
+.v2-palette__input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+  padding: 4px 0;
+}
+
+.v2-palette__input::placeholder {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* ── List ── */
+
+.v2-palette__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-2) 0;
+}
+
+.v2-palette__empty {
+  padding: var(--s-6) var(--s-5);
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.v2-palette__group {
+  padding: var(--s-2) 0;
+}
+
+.v2-palette__group + .v2-palette__group {
+  border-top: var(--hair-soft);
+}
+
+.v2-palette__group-label {
+  padding: var(--s-1) var(--s-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.v2-palette__group-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Row ── */
+
+.v2-palette__row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 8px 18px;
+  cursor: pointer;
+  background: transparent;
+  border-left: 2px solid transparent;
+}
+
+.v2-palette__row--active {
+  background: var(--paper-2);
+  border-left-color: var(--accent);
+}
+
+.v2-palette__row-icon {
+  width: 28px;
+  height: 28px;
+  background: var(--paper-2);
+  border-radius: var(--r-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+}
+
+.v2-palette__row--active .v2-palette__row-icon {
+  background: var(--paper);
+}
+
+.v2-palette__row-body {
+  min-width: 0;
+}
+
+.v2-palette__row-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v2-palette__row-hint {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v2-palette__row-type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-palette__row-enter {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-3);
+  visibility: hidden;
+}
+
+.v2-palette__row--active .v2-palette__row-enter {
+  visibility: visible;
+  color: var(--accent);
+}
+
+/* ── Foot: keyboard hints ── */
+
+.v2-palette__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-4);
+  border-top: var(--hair-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  background: var(--paper-2);
+}
+
+.v2-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  letter-spacing: 0.06em;
+}
+
+.v2-palette__hint--right {
+  margin-left: auto;
+}
