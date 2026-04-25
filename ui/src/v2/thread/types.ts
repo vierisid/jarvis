@@ -96,6 +96,40 @@ export type ThreadItem =
       transcript: string;
       confidence: number;
       t: string;
+    }
+  | {
+      /**
+       * Phase 6.1.5 / 6.1.6 — a Room rendered as a browser-window-style card.
+       * `state`  controls header-only vs full body:
+       *   "inline"     → header + body shown
+       *   "minimized"  → header strip only (body collapsed)
+       * `layout` controls placement on screen (Phase 6.1.6):
+       *   {mode:"inline"}                  → renders in the thread flow
+       *   {mode:"floating", rect:{x,y,w,h}} → renders absolutely positioned
+       *                                       in the floating layer over the
+       *                                       thread (per-room persisted)
+       * Expanding (□ traffic light) opens the fullscreen RoomShell overlay;
+       * closing the overlay returns to this state.
+       */
+      kind: "room-window";
+      id: string;
+      roomKey:
+        | "workflows"
+        | "memory"
+        | "tools"
+        | "agents"
+        | "authority"
+        | "logs"
+        | "calendar"
+        | "goals"
+        | "sites"
+        | "settings";
+      state: "inline" | "minimized";
+      layout: { mode: "inline" } | {
+        mode: "floating";
+        rect: { x: number; y: number; w: number; h: number };
+      };
+      t: string;
     };
 
 /**

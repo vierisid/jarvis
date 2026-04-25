@@ -5,6 +5,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { ClarifierCard } from "./ClarifierCard";
 import { RepeatBackCard } from "./RepeatBackCard";
 import { InlineCard } from "./InlineCard";
+import { RoomWindow } from "../rooms/RoomWindow";
 import {
   JarvisSpeechItem,
   JarvisThoughtItem,
@@ -24,6 +25,12 @@ export interface ThreadProps {
   onFocusCard?: (id: string) => void;
   onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
   onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
+  // Phase 6.1.5 — Room window controls
+  onRoomClose?: (id: string) => void;
+  onRoomMinimize?: (id: string) => void;
+  onRoomRestore?: (id: string) => void;
+  onRoomExpand?: (id: string) => void;
+  onRoomLayoutChange?: (id: string, next: { mode: "inline" } | { mode: "floating"; rect: { x: number; y: number; w: number; h: number } }) => void;
   /**
    * When true, shows a dev-mode "append mock item" button to exercise
    * scroll behavior during Phase 3A. Phase 3B swaps items for live events
@@ -39,6 +46,11 @@ export function Thread({
   onFocusCard,
   onClarifier,
   onRepeatBack,
+  onRoomClose,
+  onRoomMinimize,
+  onRoomRestore,
+  onRoomExpand,
+  onRoomLayoutChange,
   dev,
 }: ThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -120,6 +132,11 @@ export function Thread({
                 onFocusCard={onFocusCard}
                 onClarifier={onClarifier}
                 onRepeatBack={onRepeatBack}
+                onRoomClose={onRoomClose}
+                onRoomMinimize={onRoomMinimize}
+                onRoomRestore={onRoomRestore}
+                onRoomExpand={onRoomExpand}
+                onRoomLayoutChange={onRoomLayoutChange}
               />
             ))
           )}
@@ -145,6 +162,11 @@ function ItemRenderer({
   onFocusCard,
   onClarifier,
   onRepeatBack,
+  onRoomClose,
+  onRoomMinimize,
+  onRoomRestore,
+  onRoomExpand,
+  onRoomLayoutChange,
 }: {
   item: ThreadItem;
   onApprove?: (id: string) => void;
@@ -152,6 +174,11 @@ function ItemRenderer({
   onFocusCard?: (id: string) => void;
   onClarifier?: (id: string, decision: "confirm" | "cancel") => void;
   onRepeatBack?: (id: string, decision: "confirm" | "cancel") => void;
+  onRoomClose?: (id: string) => void;
+  onRoomMinimize?: (id: string) => void;
+  onRoomRestore?: (id: string) => void;
+  onRoomExpand?: (id: string) => void;
+  onRoomLayoutChange?: (id: string, next: { mode: "inline" } | { mode: "floating"; rect: { x: number; y: number; w: number; h: number } }) => void;
 }) {
   switch (item.kind) {
     case "user-voice":
@@ -204,6 +231,22 @@ function ItemRenderer({
           confidence={item.confidence}
           onConfirm={() => onRepeatBack?.(item.id, "confirm")}
           onCancel={() => onRepeatBack?.(item.id, "cancel")}
+        />
+      );
+    case "room-window":
+      // Phase 6.1.6: only render the inline-mode windows here. Floating
+      // windows render in the FloatingWindowsLayer, mounted by AppShellV2.
+      if (item.layout.mode !== "inline") return null;
+      return (
+        <RoomWindow
+          roomKey={item.roomKey}
+          state={item.state}
+          layout={item.layout}
+          onClose={() => onRoomClose?.(item.id)}
+          onMinimize={() => onRoomMinimize?.(item.id)}
+          onRestore={() => onRoomRestore?.(item.id)}
+          onExpand={() => onRoomExpand?.(item.id)}
+          onLayoutChange={(next) => onRoomLayoutChange?.(item.id, next)}
         />
       );
   }

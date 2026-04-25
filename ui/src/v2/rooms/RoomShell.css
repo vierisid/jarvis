@@ -3,8 +3,14 @@
    Single-accent discipline: only the trailing primary action carries --accent. */
 
 .v2-room-overlay {
+  /* Leave the rightmost rail column uncovered so the persistent VoiceRail
+     stays visible and interactive while a Room is open. The scrim + Room
+     cover everything left of `--v2-rail-width`. */
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: var(--v2-rail-width);
+  bottom: 0;
   z-index: var(--z-room);
   background: rgba(26, 26, 26, 0.32);
   display: flex;

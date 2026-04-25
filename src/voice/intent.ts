@@ -36,7 +36,8 @@ export type ObjectRefType =
   | "authority"
   | "log"
   | "file"
-  | "url";
+  | "url"
+  | "thread"; // home / "back to thread" target — closes any open Room
 
 export type ObjectRef = {
   type: ObjectRefType;
@@ -70,4 +71,61 @@ export function routeByConfidence(intent: Intent): "act" | "clarify" | "repeat-b
   if (intent.confidence >= 0.85) return "act";
   if (intent.confidence >= 0.6) return "clarify";
   return "repeat-back";
+}
+
+/**
+ * Map a voice intent's object reference to a dashboard Room key, when the
+ * intent is a `show`/`open` navigation request. Returns null when the
+ * object type doesn't correspond to a Room (e.g. file, url) or when the
+ * intent isn't a navigation verb at all.
+ *
+ * Used by `handleVoiceSession` to intercept "open workflows" / "show me
+ * authority" / etc. before they reach the chat agent — the LLM has no
+ * concept of Rooms, so forwarding such intents would just produce
+ * "I'm not sure what room you mean".
+ */
+export type RoomKey =
+  | "workflows"
+  | "memory"
+  | "tools"
+  | "agents"
+  | "authority"
+  | "logs"
+  | "calendar"
+  | "goals"
+  | "sites"
+  | "settings";
+
+export function intentToRoomKey(intent: Intent): RoomKey | null {
+  if (intent.verb !== "show") return null;
+  const t = intent.object?.type;
+  if (!t) return null;
+  switch (t) {
+    case "workflow":
+      return "workflows";
+    case "memory":
+      return "memory";
+    case "tool":
+      return "tools";
+    case "agent":
+      return "agents";
+    case "authority":
+      return "authority";
+    case "log":
+      return "logs";
+    case "file":
+    case "url":
+    case "thread":
+    default:
+      return null;
+  }
+}
+
+/**
+ * Detects "back to thread" / "close the room" / "return to the home view"
+ * navigation intents. The classifier emits these as `verb: show, object:
+ * { type: "thread" }` per the prompt.
+ */
+export function intentIsBackToThread(intent: Intent): boolean {
+  return intent.verb === "show" && intent.object?.type === "thread";
 }

@@ -18,7 +18,8 @@ import type { ApprovalRequest } from '../authority/approval.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
-import { routeByConfidence, type Intent } from '../voice/intent.ts';
+import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, type RoomKey } from '../voice/intent.ts';
+import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
 import { getMessages } from '../vault/conversations.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
@@ -873,6 +874,23 @@ If the user wants to create a new project, tell them to use the Site Builder pag
         timestamp: Date.now(),
       });
 
+      // Window-control fast-path (Phase 6.1.5 follow-up): regex-match short
+      // imperatives like "close", "expand the tools room", "minimize",
+      // "shut" — these don't need the LLM classifier. Short-circuit on
+      // match and broadcast the control to the dashboard directly.
+      const winCtrl = matchWindowControl(transcript);
+      if (winCtrl) {
+        console.log(
+          `[WSService] Window control: ${winCtrl.action} → ${winCtrl.target}`,
+        );
+        this.broadcastWindowControl(winCtrl, session.requestId);
+        this.broadcastAssistantAck(
+          ackForWindowControl(winCtrl),
+          session.requestId,
+        );
+        return;
+      }
+
       // Run intent classifier. Failure-tolerant: returns a permissive intent
       // (verb=ask, confidence=0.85) on any error so we always land on `act`.
       const llm = this.agentService.getLLMManager();
@@ -889,6 +907,24 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       // a clarifier broadcast. Lets the v2 orb show its thinking state with
       // accurate timing instead of inferring from the React side.
       this.broadcastThinkingStart(session.requestId);
+
+      // Navigation interception: handle "back to thread" first (closes any
+      // open Room) and then Room-opening intents. Both bypass the chat
+      // agent (which has no concept of Rooms or the home view).
+      if (route === 'act' && intentIsBackToThread(intent)) {
+        this.broadcastNavigateHome(session.requestId);
+        this.broadcastAssistantAck("Going back to the thread.", session.requestId);
+        this.broadcastThinkingEnd(session.requestId);
+        return;
+      }
+
+      const roomKey = route === 'act' ? intentToRoomKey(intent) : null;
+      if (roomKey) {
+        this.broadcastRoomNavigation(roomKey, session.requestId);
+        this.broadcastAssistantAck(`Opening the ${roomKey} room.`, session.requestId);
+        this.broadcastThinkingEnd(session.requestId);
+        return;
+      }
 
       if (route === 'act') {
         // Normal chat flow — thinking_end will be emitted on first stream chunk.
@@ -1035,6 +1071,63 @@ If the user wants to create a new project, tell them to use the Site Builder pag
    */
   computeApprovalIntent(request: ApprovalRequest): string {
     return formatApprovalIntent(request);
+  }
+
+  /**
+   * Tell the dashboard to open a Room. Emitted when a voice intent like
+   * "open workflows" classifies cleanly (verb=show, object.type maps to a
+   * RoomKey) — bypasses the chat agent.
+   */
+  broadcastRoomNavigation(key: RoomKey, requestId?: string): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'navigate_room', key, requestId },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Tell the dashboard to close any open Room and return to the home thread
+   * view. Emitted on "back to thread" / "close the room" voice intents.
+   */
+  broadcastNavigateHome(requestId?: string): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'navigate_home', requestId },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Tell the dashboard to operate a RoomWindow's chrome — close / minimize
+   * / expand / restore — without going through the chat agent. Emitted by
+   * the regex window-control matcher in `handleVoiceSession`.
+   */
+  broadcastWindowControl(ctrl: WindowControl, requestId?: string): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: {
+        source: 'window_control',
+        action: ctrl.action,
+        target: ctrl.target,
+        requestId,
+      },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Short assistant-side acknowledgement message broadcast as a chat row.
+   * Used when the daemon handled the user's request itself (e.g. opening
+   * a Room) and the chat agent isn't going to produce its own reply.
+   */
+  broadcastAssistantAck(text: string, requestId?: string): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'assistant_message', text },
+      id: requestId,
+      timestamp: Date.now(),
+    });
   }
 
   /** Voice pipeline: STT-final received, agent now reasoning. */
@@ -1239,4 +1332,24 @@ function formatApprovalIntent(request: ApprovalRequest): string {
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * Short ack message for window-control voice commands. Mirrors the
+ * "Opening the X room." style of the navigation acks.
+ */
+function ackForWindowControl(ctrl: WindowControl): string {
+  const target = ctrl.target === 'most_recent' ? 'the room' : `the ${ctrl.target} room`;
+  switch (ctrl.action) {
+    case 'close':
+      return `Closing ${target}.`;
+    case 'minimize':
+      return `Minimizing ${target}.`;
+    case 'expand':
+      return `Expanding ${target}.`;
+    case 'restore':
+      return `Restoring ${target}.`;
+    case 'reorder':
+      return `Tidying up. Bringing all rooms back inline.`;
+  }
 }
