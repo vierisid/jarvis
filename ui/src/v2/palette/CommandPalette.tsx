@@ -52,9 +52,10 @@ export interface CommandPaletteProps {
   onPickObject: (result: PaletteResult, openInRoom: boolean) => void;
   /**
    * User picked a Room navigation entry → caller should open that Room.
-   * Phase 6 wires real navigation; in 5A this is a stub.
+   * `openInRoom` mirrors the object-pick semantics: when true (Shift+Enter),
+   * skip the preview-card injection and open the fullscreen Room directly.
    */
-  onPickRoom: (entry: PaletteNavEntry) => void;
+  onPickRoom: (entry: PaletteNavEntry, openInRoom: boolean) => void;
 }
 
 /**
@@ -144,7 +145,7 @@ export function CommandPalette({
       const item = flatItems[idx];
       if (!item) return;
       if (item.kind === "nav") {
-        onPickRoom(item.entry);
+        onPickRoom(item.entry, openInRoom);
         onClose();
         return;
       }

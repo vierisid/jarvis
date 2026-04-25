@@ -1,0 +1,170 @@
+/* Phase 6.0 — Room overlay shell.
+   Slides up over the AppShell, full viewport, scrim under, Esc closes.
+   Single-accent discipline: only the trailing primary action carries --accent. */
+
+.v2-room-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-room);
+  background: rgba(26, 26, 26, 0.32);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  animation: v2-room-scrim-in var(--dur-med) var(--ease-out);
+}
+
+.v2-room {
+  flex: 1;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  outline: none;
+  animation: v2-room-slide-in var(--dur-slow) var(--ease-out);
+}
+
+.v2-room__header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-6);
+  border-bottom: var(--hair);
+  background: var(--paper);
+  flex-shrink: 0;
+}
+
+.v2-room__header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.v2-room__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  cursor: pointer;
+  border-radius: var(--r-1);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-room__back:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.v2-room__back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-room__breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding-left: var(--s-3);
+  border-left: var(--hair-soft);
+}
+
+.v2-room__breadcrumb-sep {
+  color: var(--ink-3);
+  opacity: 0.6;
+}
+
+.v2-room__header-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
+}
+
+.v2-room__title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--ink);
+  margin: 0;
+}
+
+.v2-room__subtitle {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+.v2-room__header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.v2-room__close {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--ink-2);
+  border-radius: var(--r-pill);
+  margin-left: var(--s-2);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-room__close:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.v2-room__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-room__body {
+  flex: 1;
+  overflow: auto;
+  background: var(--paper);
+}
+
+@keyframes v2-room-scrim-in {
+  from { background: rgba(26, 26, 26, 0); }
+  to   { background: rgba(26, 26, 26, 0.32); }
+}
+
+@keyframes v2-room-slide-in {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-room-overlay,
+  .v2-room { animation: none; }
+}
