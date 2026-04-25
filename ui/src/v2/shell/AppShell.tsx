@@ -13,6 +13,7 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
+import { openRoom, type RoomKey } from "../router";
 import "./AppShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
@@ -23,6 +24,31 @@ const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
   authority: "authority",
   log: "log",
 };
+
+/** Map an InlineCard objectType to its Room key (most are 1:1, plurals where used). */
+function objectTypeToRoomKey(t: ObjectType): RoomKey {
+  switch (t) {
+    case "workflow":
+      return "workflows";
+    case "agent":
+      return "agents";
+    case "log":
+      return "logs";
+    case "tool":
+      return "tools";
+    case "memory":
+    case "authority":
+    case "calendar":
+    case "goals":
+    case "sites":
+    case "settings":
+      return t;
+  }
+}
+
+function paletteTypeToRoomKey(t: PaletteResultType): RoomKey {
+  return objectTypeToRoomKey(PALETTE_TYPE_TO_OBJECT_TYPE[t]);
+}
 
 const VOICE_CYCLE: VoiceState[] = [
   "idle",
@@ -156,8 +182,10 @@ function AppShellLive() {
   const handlePickObject = useCallback(
     (result: PaletteResult, openInRoom: boolean) => {
       if (openInRoom) {
-        // Phase 6 stub — Room takeover lands then. For now log to console.
-        console.log("[palette] Shift+Enter open-in-Room not implemented yet:", result);
+        // Phase 6.0: Shift+Enter opens the matching Room directly,
+        // bypassing the inline preview. The Room body itself lands per
+        // sub-phase 6.1+; until then it shows a placeholder.
+        openRoom(paletteTypeToRoomKey(result.type));
         return;
       }
       live.injectCard({
@@ -173,10 +201,15 @@ function AppShellLive() {
   );
 
   // Per the handoff "previews → InlineCard first" rule, picking a Room from
-  // the palette injects a Room-preview card into the thread. The card's
-  // Focus button is what actually opens the fullscreen Room (Phase 6 stub).
+  // the palette injects a Room-preview card into the thread by default. The
+  // card's Focus button opens the fullscreen Room. Shift+Enter (openInRoom)
+  // skips the preview and opens the Room directly.
   const handlePickRoom = useCallback(
-    (entry: PaletteNavEntry) => {
+    (entry: PaletteNavEntry, openInRoom: boolean) => {
+      if (openInRoom) {
+        openRoom(entry.key as RoomKey);
+        return;
+      }
       live.injectCard({
         objectType: navKeyToObjectType(entry.key) as ObjectType,
         ref: `room:${entry.key}`,
@@ -205,9 +238,9 @@ function AppShellLive() {
         onFocusCard={(id) => {
           const item = live.items.find((i) => i.id === id);
           if (item && item.kind === "card") {
-            // Phase 6 wires the real Room takeover. For now emit a hash trail
-            // so the user gets some feedback that Focus did something.
-            window.location.hash = `#/_room_${item.objectType}`;
+            // Phase 6.0: Focus on an InlineCard opens the matching Room.
+            // Each Room body lands per sub-phase 6.1+.
+            openRoom(objectTypeToRoomKey(item.objectType));
           }
         }}
         onClarifier={handleClarifier}
@@ -345,7 +378,11 @@ function AppShellMock() {
         enabled={false}
         onClose={closePalette}
         onPickObject={handlePickObject}
-        onPickRoom={(entry) => {
+        onPickRoom={(entry, openInRoom) => {
+          if (openInRoom) {
+            openRoom(entry.key as RoomKey);
+            return;
+          }
           // Mock parity with Live: inject a Room-preview card.
           const now = new Date();
           const t = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;

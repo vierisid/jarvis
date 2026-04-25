@@ -12,7 +12,7 @@ export function PrimitivesPage() {
           <span className="v2-primitives__brand-dot" aria-hidden="true" />
           <h1 className="v2-primitives__title">Primitives</h1>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => navigateV2("home")}>
+        <Button variant="ghost" size="sm" onClick={() => navigateV2({ kind: "home" })}>
           ← Back to shell
         </Button>
       </header>
