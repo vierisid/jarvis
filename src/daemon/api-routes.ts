@@ -27,6 +27,7 @@ import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCommitmentStatus, reorderCommitments } from '../vault/commitments.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
+import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
 import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import {
@@ -682,6 +683,26 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             taskManager,
           };
           return json(terminatePersistentAgent(deps, req.params.id));
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    // Phase 6.3 — per-agent activity history. Persisted snapshot of
+    // sub-agent events so the Agents Room shows a meaningful timeline on
+    // dashboard load (not just whatever streamed since the WS opened).
+    '/api/agents/:id/activity': {
+      GET: (req: Request & { params: { id: string } }) => {
+        try {
+          const url = new URL(req.url);
+          const limitParam = parseInt(url.searchParams.get('limit') ?? '', 10);
+          const offsetParam = parseInt(url.searchParams.get('offset') ?? '', 10);
+          const limit = Number.isFinite(limitParam) ? limitParam : 50;
+          const offset = Number.isFinite(offsetParam) ? offsetParam : 0;
+          const events = listAgentActivity(req.params.id, { limit, offset });
+          const total = countAgentActivity(req.params.id);
+          return json({ events, total });
         } catch (err) {
           return errorFromException(err);
         }

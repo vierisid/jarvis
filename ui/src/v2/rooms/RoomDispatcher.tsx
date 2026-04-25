@@ -10,6 +10,10 @@ const LogsRoom = React.lazy(() =>
   import("./logs/LogsRoom").then((m) => ({ default: m.LogsRoom })),
 );
 
+const AgentsRoom = React.lazy(() =>
+  import("./agents/AgentsRoom").then((m) => ({ default: m.AgentsRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -39,6 +43,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading event stream…"
       />}>
         <LogsRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "agents") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="agents"
+        title="Agents"
+        phaseTag="Loading…"
+        description="Loading roster…"
+      />}>
+        <AgentsRoom />
       </Suspense>
     );
   }

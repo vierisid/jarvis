@@ -22,6 +22,7 @@ import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, 
 import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
 import { getMessages } from '../vault/conversations.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
+import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -308,6 +309,22 @@ export class WebSocketService implements Service {
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
+
+    // Persist for the Agents Room activity timeline (Phase 6.3). Same tick
+    // as the broadcast so a fresh dashboard reload + a live tab can never
+    // see different views of the same event. Failures are logged but never
+    // bubble — broadcasting is the load-bearing path.
+    try {
+      recordAgentActivity({
+        agent_id: event.agentId,
+        agent_name: event.agentName,
+        event_type: event.type,
+        data: event.data,
+        timestamp: message.timestamp,
+      });
+    } catch (err) {
+      console.warn('[WSService] Failed to persist agent activity:', err);
+    }
   }
 
   /**

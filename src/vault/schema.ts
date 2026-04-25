@@ -714,4 +714,26 @@ function createTables(db: Database): void {
     )
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_recent_objects_picked ON recent_objects(picked_at DESC)`);
+
+  // Agent activity history (Phase 6.3 — Agents Room).
+  // Persisted snapshot of `subAgentEvents` so the dashboard can show a
+  // per-agent activity timeline that survives reload. Today these events
+  // only stream over WS — empty state on first paint after a refresh
+  // wasn't acceptable for a "what's this agent doing" Room.
+  // Bounded growth: trimmed externally on insert (most recent 1000 per
+  // agent kept). `data` is JSON-stringified payload.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS agent_activity (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('text', 'tool_call', 'done')),
+      data TEXT,
+      task_id TEXT,
+      timestamp INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_agent_id ON agent_activity(agent_id, timestamp DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_timestamp ON agent_activity(timestamp DESC)`);
 }
