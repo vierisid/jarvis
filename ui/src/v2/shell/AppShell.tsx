@@ -4,12 +4,25 @@ import { Header, type ConnectionState, type Mode } from "./Header";
 import { Thread } from "../thread/Thread";
 import { MOCK_THREAD } from "../thread/mock";
 import { useLiveThread } from "../thread/useLiveThread";
-import type { ThreadItem } from "../thread/types";
+import type { ObjectType, ThreadItem } from "../thread/types";
 import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
 import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
+import { CommandPalette } from "../palette/CommandPalette";
+import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
+import { navKeyToObjectType } from "../palette/types";
+import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import "./AppShell.css";
+
+const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
+  workflow: "workflow",
+  memory: "memory",
+  tool: "tool",
+  agent: "agent",
+  authority: "authority",
+  log: "log",
+};
 
 const VOICE_CYCLE: VoiceState[] = [
   "idle",
@@ -134,30 +147,88 @@ function AppShellLive() {
     [live],
   );
 
-  return (
-    <ShellLayout
-      connection={live.isConnected ? "live" : "offline"}
-      items={live.items}
-      composerDisabled={!live.isConnected}
-      composerPlaceholder={
-        live.isConnected
-          ? "Ask Jarvis, or press / to summon a tool…"
-          : "Waiting for daemon…"
+  // ── Palette wiring (Phase 5A) ──
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  usePaletteHotkey(openPalette);
+
+  const handlePickObject = useCallback(
+    (result: PaletteResult, openInRoom: boolean) => {
+      if (openInRoom) {
+        // Phase 6 stub — Room takeover lands then. For now log to console.
+        console.log("[palette] Shift+Enter open-in-Room not implemented yet:", result);
+        return;
       }
-      onSubmit={live.send}
-      onApprove={handleApprove}
-      onCancel={handleCancel}
-      onFocusCard={() => undefined}
-      onClarifier={handleClarifier}
-      onRepeatBack={handleRepeatBack}
-      voiceState={voiceState}
-      suggestions={suggestions}
-      vu={voice.micLevel}
-      partialTranscript={voice.partialTranscript}
-      onTapOrb={handleTapOrb}
-      onSuggestion={handleSuggestion}
-      onToggleMute={handleToggleMute}
-    />
+      live.injectCard({
+        objectType: PALETTE_TYPE_TO_OBJECT_TYPE[result.type],
+        ref: result.ref,
+        title: result.title,
+        summary: result.summary,
+        meta: result.meta,
+        status: result.status,
+      });
+    },
+    [live],
+  );
+
+  // Per the handoff "previews → InlineCard first" rule, picking a Room from
+  // the palette injects a Room-preview card into the thread. The card's
+  // Focus button is what actually opens the fullscreen Room (Phase 6 stub).
+  const handlePickRoom = useCallback(
+    (entry: PaletteNavEntry) => {
+      live.injectCard({
+        objectType: navKeyToObjectType(entry.key) as ObjectType,
+        ref: `room:${entry.key}`,
+        title: entry.label,
+        summary: entry.hint,
+        meta: "Room",
+      });
+    },
+    [live],
+  );
+
+  return (
+    <>
+      <ShellLayout
+        connection={live.isConnected ? "live" : "offline"}
+        items={live.items}
+        composerDisabled={!live.isConnected}
+        composerPlaceholder={
+          live.isConnected
+            ? "Ask Jarvis, or press / to summon a tool…"
+            : "Waiting for daemon…"
+        }
+        onSubmit={live.send}
+        onApprove={handleApprove}
+        onCancel={handleCancel}
+        onFocusCard={(id) => {
+          const item = live.items.find((i) => i.id === id);
+          if (item && item.kind === "card") {
+            // Phase 6 wires the real Room takeover. For now emit a hash trail
+            // so the user gets some feedback that Focus did something.
+            window.location.hash = `#/_room_${item.objectType}`;
+          }
+        }}
+        onClarifier={handleClarifier}
+        onRepeatBack={handleRepeatBack}
+        voiceState={voiceState}
+        suggestions={suggestions}
+        vu={voice.micLevel}
+        partialTranscript={voice.partialTranscript}
+        onTapOrb={handleTapOrb}
+        onSuggestion={handleSuggestion}
+        onToggleMute={handleToggleMute}
+        onOpenPalette={openPalette}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        enabled={live.isConnected}
+        onClose={closePalette}
+        onPickObject={handlePickObject}
+        onPickRoom={handlePickRoom}
+      />
+    </>
   );
 }
 
@@ -198,6 +269,10 @@ const MOCK_SUGGESTIONS_BY_STATE: Record<VoiceState, string[]> = {
 function AppShellMock() {
   const [items, setItems] = useState<ThreadItem[]>(MOCK_THREAD);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  usePaletteHotkey(openPalette);
 
   const cycleOrb = () => {
     const idx = (VOICE_CYCLE.indexOf(voiceState) + 1) % VOICE_CYCLE.length;
@@ -226,23 +301,70 @@ function AppShellMock() {
     ]);
   }, []);
 
+  // Mock palette: hand-rolled fixture so visual QA works without a daemon
+  const handlePickObject = useCallback((result: PaletteResult) => {
+    const now = new Date();
+    const t = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    setItems((prev) => [
+      ...prev,
+      {
+        kind: "card",
+        id: `palette-mock-${now.getTime()}`,
+        objectType: PALETTE_TYPE_TO_OBJECT_TYPE[result.type],
+        ref: result.ref,
+        title: result.title,
+        summary: result.summary,
+        meta: result.meta,
+        status: result.status,
+        t,
+      } as ThreadItem,
+    ]);
+  }, []);
+
   return (
-    <ShellLayout
-      connection="live"
-      items={items}
-      onSubmit={handleSubmit}
-      onApprove={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
-      onCancel={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
-      onFocusCard={() => undefined}
-      devAppend={appendMock}
-      voiceState={voiceState}
-      suggestions={MOCK_SUGGESTIONS_BY_STATE[voiceState]}
-      vu={voiceState === "listening" ? 0.55 : voiceState === "speaking" ? 0.75 : 0}
-      partialTranscript={voiceState === "listening" ? "this is a sample partial transcript" : ""}
-      onTapOrb={cycleOrb}
-      onSuggestion={handleSubmit}
-      onToggleMute={toggleMute}
-    />
+    <>
+      <ShellLayout
+        connection="live"
+        items={items}
+        onSubmit={handleSubmit}
+        onApprove={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
+        onCancel={(id) => setItems((prev) => prev.filter((i) => i.id !== id))}
+        onFocusCard={() => undefined}
+        devAppend={appendMock}
+        voiceState={voiceState}
+        suggestions={MOCK_SUGGESTIONS_BY_STATE[voiceState]}
+        vu={voiceState === "listening" ? 0.55 : voiceState === "speaking" ? 0.75 : 0}
+        partialTranscript={voiceState === "listening" ? "this is a sample partial transcript" : ""}
+        onTapOrb={cycleOrb}
+        onSuggestion={handleSubmit}
+        onToggleMute={toggleMute}
+        onOpenPalette={openPalette}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        enabled={false}
+        onClose={closePalette}
+        onPickObject={handlePickObject}
+        onPickRoom={(entry) => {
+          // Mock parity with Live: inject a Room-preview card.
+          const now = new Date();
+          const t = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+          setItems((prev) => [
+            ...prev,
+            {
+              kind: "card",
+              id: `palette-room-${now.getTime()}`,
+              objectType: navKeyToObjectType(entry.key) as ObjectType,
+              ref: `room:${entry.key}`,
+              title: entry.label,
+              summary: entry.hint,
+              meta: "Room",
+              t,
+            } as ThreadItem,
+          ]);
+        }}
+      />
+    </>
   );
 }
 
@@ -268,6 +390,8 @@ interface ShellLayoutProps {
   onTapOrb: () => void;
   onSuggestion: (text: string) => void;
   onToggleMute: () => void;
+  // Palette (Phase 5A)
+  onOpenPalette: () => void;
 }
 
 function ShellLayout({
@@ -289,6 +413,7 @@ function ShellLayout({
   onTapOrb,
   onSuggestion,
   onToggleMute,
+  onOpenPalette,
 }: ShellLayoutProps) {
   const [mode, setMode] = useState<Mode>("active");
 
@@ -299,9 +424,7 @@ function ShellLayout({
           connection={connection}
           mode={mode}
           onModeChange={setMode}
-          onPalette={() => {
-            // Phase 5 wires the real palette
-          }}
+          onPalette={onOpenPalette}
         />
       </div>
 
@@ -320,6 +443,7 @@ function ShellLayout({
       <div className="v2-shell__composer">
         <Composer
           onSubmit={onSubmit}
+          onSlash={onOpenPalette}
           disabled={composerDisabled}
           placeholder={composerPlaceholder}
         />

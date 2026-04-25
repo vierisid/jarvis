@@ -12,7 +12,11 @@ export type ObjectType =
   | "tool"
   | "agent"
   | "authority"
-  | "log";
+  | "log"
+  | "calendar"
+  | "goals"
+  | "sites"
+  | "settings";
 
 export type JarvisSpeechStatus = "speaking" | "done";
 

@@ -1547,6 +1547,230 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     /**
+     * Tool registry exposure for the ⌘K palette and the Phase 6 Tools Room.
+     * Returns every registered tool with its category and high-level metadata.
+     */
+    '/api/tools': {
+      GET: () => {
+        const orchestrator = ctx.agentService.getOrchestrator();
+        const registry = orchestrator.getToolRegistry();
+        if (!registry) return json([]);
+        const tools = registry.list().map((t) => ({
+          name: t.name,
+          category: t.category,
+          description: t.description,
+          parameters: Object.entries(t.parameters).map(([k, v]) => ({
+            name: k,
+            type: v.type,
+            description: v.description,
+            required: v.required,
+          })),
+        }));
+        return json(tools);
+      },
+    },
+
+    /**
+     * Unified palette search aggregator. Merges all six object types into a
+     * single `PaletteResult[]` shape that maps directly to `<InlineCard>`
+     * props on the UI side. Each type is bounded so a single overflowing
+     * type can't crowd out the others.
+     *
+     * Empty `q` returns a small "recent / popular" slice per type so the
+     * palette has something useful to show on first open.
+     *
+     * Substring matching is case-insensitive. Client-side fuzzy ranking
+     * (`fuse.js`) refines order on top of these results.
+     */
+    '/api/palette/search': {
+      GET: (req: Request) => {
+        const params = getSearchParams(req);
+        const q = (params.get('q') ?? '').trim();
+        const perType = Math.min(parseInt(params.get('per_type') ?? '6') || 6, 20);
+        const ql = q.toLowerCase();
+        const matches = (s: string | undefined | null): boolean =>
+          !ql || (typeof s === 'string' && s.toLowerCase().includes(ql));
+
+        type PaletteResult = {
+          type: 'workflow' | 'memory' | 'tool' | 'agent' | 'authority' | 'log';
+          id: string;
+          ref: string;
+          title: string;
+          summary?: string;
+          meta?: string;
+          status?: { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' };
+        };
+
+        const results: PaletteResult[] = [];
+
+        // 1. Workflows
+        try {
+          const { findWorkflows } = require('../vault/workflows.ts');
+          const wfs = findWorkflows({ limit: 100 }) as Array<{
+            id: string;
+            name: string;
+            description?: string;
+            enabled?: boolean;
+            tags?: string[];
+          }>;
+          let added = 0;
+          for (const w of wfs) {
+            if (added >= perType) break;
+            if (!matches(w.name) && !matches(w.description)) continue;
+            results.push({
+              type: 'workflow',
+              id: w.id,
+              ref: w.id,
+              title: w.name,
+              summary: w.description,
+              meta: w.tags && w.tags.length > 0 ? w.tags.join(' · ') : undefined,
+              status: w.enabled
+                ? { label: 'Enabled', tone: 'ok' }
+                : { label: 'Disabled', tone: 'neutral' },
+            });
+            added++;
+          }
+        } catch (err) {
+          console.warn('[palette] workflow search failed:', err);
+        }
+
+        // 2. Memory entities (vault)
+        try {
+          const entityResults = ql
+            ? searchEntitiesByName(q).slice(0, perType * 2)
+            : findEntities({}).slice(0, perType);
+          let added = 0;
+          for (const e of entityResults) {
+            if (added >= perType) break;
+            const props = (e.properties ?? {}) as Record<string, unknown>;
+            const desc = typeof props.description === 'string' ? props.description : undefined;
+            results.push({
+              type: 'memory',
+              id: e.id,
+              ref: e.id,
+              title: e.name,
+              summary: desc,
+              meta: e.type,
+            });
+            added++;
+          }
+        } catch (err) {
+          console.warn('[palette] memory search failed:', err);
+        }
+
+        // 3. Tools (from the orchestrator registry)
+        try {
+          const orchestrator = ctx.agentService.getOrchestrator();
+          const registry = orchestrator.getToolRegistry();
+          if (registry) {
+            let added = 0;
+            for (const t of registry.list()) {
+              if (added >= perType) break;
+              if (!matches(t.name) && !matches(t.description)) continue;
+              results.push({
+                type: 'tool',
+                id: t.name,
+                ref: t.name,
+                title: t.name,
+                summary: t.description,
+                meta: t.category,
+              });
+              added++;
+            }
+          }
+        } catch (err) {
+          console.warn('[palette] tool search failed:', err);
+        }
+
+        // 4. Agents
+        try {
+          const agents = buildAgentSnapshots(ctx).agents as Array<{
+            id: string;
+            role?: { name?: string; description?: string };
+            status?: string;
+            isBusy?: boolean;
+          }>;
+          let added = 0;
+          for (const a of agents) {
+            if (added >= perType) break;
+            const name = a.role?.name ?? a.id;
+            const desc = a.role?.description;
+            if (!matches(name) && !matches(desc)) continue;
+            results.push({
+              type: 'agent',
+              id: a.id,
+              ref: a.id,
+              title: name,
+              summary: desc,
+              meta: a.status,
+              status: a.isBusy
+                ? { label: 'Busy', tone: 'warn' }
+                : { label: 'Idle', tone: 'neutral' },
+            });
+            added++;
+          }
+        } catch (err) {
+          console.warn('[palette] agent search failed:', err);
+        }
+
+        // 5. Authority — pending approvals
+        try {
+          const mgr = ctx.approvalManager;
+          if (mgr) {
+            const pending = mgr.getPending();
+            let added = 0;
+            for (const a of pending) {
+              if (added >= perType) break;
+              if (!matches(a.reason) && !matches(a.tool_name) && !matches(a.action_category)) continue;
+              results.push({
+                type: 'authority',
+                id: a.id,
+                ref: a.id,
+                title: a.reason || a.tool_name,
+                summary: `${a.tool_name} · ${a.action_category}`,
+                meta: a.urgency,
+                status: { label: 'Pending', tone: 'warn' },
+              });
+              added++;
+            }
+          }
+        } catch (err) {
+          console.warn('[palette] authority search failed:', err);
+        }
+
+        // 6. Logs (recent observations)
+        try {
+          const obs = getRecentObservations(undefined, perType * 4);
+          let added = 0;
+          for (const o of obs) {
+            if (added >= perType) break;
+            const title = `${o.type}`;
+            const data = (o.data ?? {}) as Record<string, unknown>;
+            const summary =
+              (typeof data.summary === 'string' && data.summary)
+              || (typeof data.description === 'string' && data.description)
+              || (typeof data.text === 'string' && data.text)
+              || '';
+            if (!matches(title) && !matches(summary)) continue;
+            results.push({
+              type: 'log',
+              id: o.id,
+              ref: o.id,
+              title,
+              summary: summary.slice(0, 140) || undefined,
+              meta: new Date(o.created_at).toLocaleTimeString(),
+            });
+            added++;
+          }
+        } catch (err) {
+          console.warn('[palette] log search failed:', err);
+        }
+
+        return json({ q, results });
+      },
+    },
+
+    /**
      * Voice clarifier / repeat-back resolution.
      * The daemon holds a pending utterance when the classifier confidence is
      * <0.85; the dashboard renders a clarifier or repeat-back card; this
