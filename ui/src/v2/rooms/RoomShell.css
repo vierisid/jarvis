@@ -94,6 +94,17 @@
   opacity: 0.6;
 }
 
+/* Phase 6.8 — visual hierarchy for the entry-source breadcrumb.
+   Source segment ("Palette" / "Thread" / "Voice") reads slightly muted
+   to feel like a label; the room name (last segment) gets full weight. */
+.v2-room__breadcrumb-item[data-segment="source"] { opacity: 0.7; }
+.v2-room__breadcrumb-item[data-segment="context"] {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+.v2-room__breadcrumb-item[data-segment="room"] { color: var(--ink-2); }
+
 .v2-room__header-center {
   display: flex;
   flex-direction: column;

@@ -1,8 +1,32 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { ArrowLeft, X } from "lucide-react";
 import { Button, Icon } from "../ui";
-import { closeRoom } from "../router";
+import { closeRoom, type RoomKey } from "../router";
+import { composeBreadcrumb, useRoomEntry } from "./roomEntryStore";
 import "./RoomShell.css";
+
+const ROOM_KEYS = new Set<RoomKey>([
+  "workflows",
+  "memory",
+  "tools",
+  "agents",
+  "authority",
+  "logs",
+  "calendar",
+  "goals",
+  "tasks",
+  "content",
+  "workspaces",
+  "settings",
+]);
+
+function readRoomKeyFromHash(): RoomKey | null {
+  if (typeof window === "undefined") return null;
+  const hash = window.location.hash.replace(/^#\/?/, "");
+  if (!hash.startsWith("_room_")) return null;
+  const key = hash.slice("_room_".length);
+  return ROOM_KEYS.has(key as RoomKey) ? (key as RoomKey) : null;
+}
 
 export interface RoomShellAction {
   label: string;
@@ -42,6 +66,30 @@ export function RoomShell({
 }: RoomShellProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const handleClose = onClose ?? closeRoom;
+
+  // Phase 6.8 — derive a contextual breadcrumb prefix from the entry
+  // store so the user can see how they got here (Palette · Tasks vs
+  // Thread · Q3 launch · Tasks vs Voice · Tasks). Falls back to the
+  // explicit `breadcrumb` prop if no entry record is found, so legacy
+  // direct-mount callers (and the primitives showcase) still work.
+  const roomKey = useMemo(readRoomKeyFromHash, []);
+  const entry = useRoomEntry(roomKey ?? ("tools" as RoomKey));
+  const effectiveBreadcrumb = useMemo(() => {
+    // If the caller passed an explicit breadcrumb, treat the LAST item
+    // as the room's display name (e.g. ["Workflows"] → "Workflows") and
+    // compose the entry prefix in front of it. If they passed multi-
+    // segment crumbs, preserve those after the prefix.
+    if (!roomKey) return breadcrumb ?? [];
+    const tail = breadcrumb && breadcrumb.length > 0 ? breadcrumb : [title];
+    if (!entry || entry.source === "direct") return tail;
+    const composed = composeBreadcrumb(entry, tail[tail.length - 1]!);
+    // composed already includes the room name; preserve any extra
+    // tail segments the caller passed (rare, but possible).
+    if (tail.length > 1) {
+      return [...composed.slice(0, -1), ...tail];
+    }
+    return composed;
+  }, [breadcrumb, entry, roomKey, title]);
 
   // Esc closes the Room. Stop propagation so the underlying shell's
   // listeners don't double-fire.
@@ -92,12 +140,17 @@ export function RoomShell({
               <Icon icon={ArrowLeft} size="sm" />
               <span>Back to thread</span>
             </button>
-            {breadcrumb && breadcrumb.length > 0 && (
+            {effectiveBreadcrumb.length > 0 && (
               <nav className="v2-room__breadcrumb" aria-label="Breadcrumb">
-                {breadcrumb.map((b, i) => (
+                {effectiveBreadcrumb.map((b, i) => (
                   <React.Fragment key={i}>
-                    <span className="v2-room__breadcrumb-item">{b}</span>
-                    {i < breadcrumb.length - 1 && <span className="v2-room__breadcrumb-sep">·</span>}
+                    <span
+                      className="v2-room__breadcrumb-item"
+                      data-segment={i === 0 ? "source" : i === effectiveBreadcrumb.length - 1 ? "room" : "context"}
+                    >
+                      {b}
+                    </span>
+                    {i < effectiveBreadcrumb.length - 1 && <span className="v2-room__breadcrumb-sep">·</span>}
                   </React.Fragment>
                 ))}
               </nav>
