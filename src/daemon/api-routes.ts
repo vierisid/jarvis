@@ -860,12 +860,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const { loadConfig } = await import('../config/loader.ts');
           const cfg = await loadConfig();
           const o = cfg.onboarding;
-          // `getUserProfile` already imported up top via the user-profile
-          // route block — reuse to expose `profile_completed`.
+          // `getUserProfile` and `hasUserProfile` are already imported
+          // at the top of the file. Use `hasUserProfile()` so the
+          // check counts wizard answers AND Phase B interview facts —
+          // otherwise a user who completed the conversational
+          // interview (but never used the wizard) gets reported as
+          // "not yet onboarded" and the gate loops them back into
+          // the interview.
           const profile = getUserProfile();
           const profileCompleted =
-            !!o?.setup_skipped_profile ||
-            (profile != null && Object.keys(profile.answers ?? {}).length > 0);
+            !!o?.setup_skipped_profile || hasUserProfile(profile);
           return json({
             setup_completed: o?.setup_completed_at != null,
             setup_completed_at: o?.setup_completed_at ?? null,
