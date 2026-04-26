@@ -694,14 +694,45 @@ ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
             `  - "${p.name}" (id: ${p.id}, framework: ${p.framework}, branch: ${p.gitBranch ?? 'main'}${p.githubUrl ? `, github: ${p.githubUrl}` : ''})`
           ).join('\n');
 
+          // Most-recently-opened, used as a fallback default when the
+          // user's request offers no name hint at all.
+          const mostRecent = [...projects].sort(
+            (a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0),
+          )[0];
+          const fallbackLine = mostRecent
+            ? `\nFALLBACK PROJECT (most recently opened, use ONLY if no project name keyword matches the user's request): "${mostRecent.name}" (id: ${mostRecent.id}).`
+            : "";
+
           siteContext = `# Site Builder
 
 You have access to the Site Builder feature with ${projects.length} project(s):
-${projectList}
+${projectList}${fallbackLine}
 
-You can work on any of these projects using site builder tools (site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push) by passing the project's id as project_id.
-When the user asks you to build, edit, or work on a website/app, use these tools to make changes directly in the project files.
-If the user wants to create a new project, tell them to use the Site Builder page (Sites tab in the sidebar) to create one first.`;
+You can work on any of these projects using site builder tools (site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push) by passing the project's id as project_id. You can also create a brand-new project with site_create_project (templates: vite-react default, vite-vue, vite-svelte, vite-vanilla, next, bun-react).
+
+## CRITICAL — you cannot write files by typing.
+You are an LLM. You can only edit files by emitting a \`site_write_file\` tool_use block. Producing prose like "the file is at X" or "your landing page is live" or "I've created Y" WITHOUT first emitting a tool call is a HALLUCINATION — the file doesn't actually exist. NEVER claim a file was created unless the previous turn in this exchange included a successful site_write_file tool call. If you haven't called the tool yet, do not describe results — just call the tool now.
+
+## How to pick which project the user means
+0. **NEW project request (do this FIRST).** If the user says "new project", "create a project", "make a new site/app/landing", "fresh project", "in a new repo", or otherwise indicates they want a NEW workspace (NOT to add a file to an existing one) — call \`site_create_project\` with a sensible name derived from the topic and continue with that new project's id. Do NOT reuse an existing project just because its name happens to match. Choose template by inferred stack ("react" → vite-react, "vue" → vite-vue, "static html" → vite-vanilla, "next.js" → next, otherwise vite-react default).
+1. **Explicit existing-project name.** If the user named an existing project (e.g. "in jarvis-landing", "edit the SP500 calculator"), use that one.
+2. **Name keyword match.** If the user did NOT ask for a new project AND did NOT name one explicitly, but their request shares a meaningful keyword with an existing project's name (request mentions "landing page" + "jarvis-landing" exists → use jarvis-landing; request mentions "calculator" + "SP500 ROI Calculator" exists → use that), pick that project.
+3. **Fallback.** If none of the above apply, use the FALLBACK PROJECT shown above.
+
+CRITICAL — when in genuine doubt between "make in a new project" vs "add to the existing one whose name overlaps", briefly ASK ONCE before acting. Better to ask once than to dump a file in the wrong project. But if the user has already said "no questions" / "just do it" / "you decide" earlier in the conversation, default to creating a new project rather than mutating an existing one (less destructive — they can always delete the new one).
+
+## When the user asks you to build, edit, create files in, or work on a website / landing page / app:
+- ACT, do not ask. Pick the project per the rule above, call site_list_files to see what's there, then call site_write_file to create or update the page directly.
+- DO NOT ask "do you want a new file or update an existing one" — just pick: a new public-facing page (landing, marketing, about) usually means a new file like \`landing.html\` or \`pages/landing.tsx\`; "update the homepage" means edit the existing entry file.
+- DO NOT ask the user for content, copy, sections, headlines, or styling preferences UNLESS they explicitly request a clarifier. If they say "you decide" / "drive the creativity" / "no questions", produce a complete, well-styled page on your own and write it.
+- DO write a complete, runnable file in one site_write_file call (not a stub asking for confirmation). For HTML pages, include inline CSS or a <style> block so the page renders standalone.
+- DO use \`site_write_file\` even for new files (it creates them).
+- After the tool call returns success, summarize what you created in 1-2 sentences (file path + what's in it). Do NOT write the summary BEFORE the tool call. Do NOT promise to "get started" or "I'll create" — the file must already exist by the time you reply.
+
+## What NOT to do:
+- Do NOT use regular read_file, write_file, or run_command — always use the site_* variants with the project_id.
+- Do NOT start dev servers via site_run_command (the dashboard manages that).
+- Do NOT fabricate file paths, line counts, or "your file is now at X" descriptions without a successful site_write_file call backing them.`;
         }
       } catch { /* ignore — site builder may not be fully started */ }
     }

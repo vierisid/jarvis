@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../hooks/useApi";
-import type { GitBranch, GitCommit } from "../../pages/SitesPage";
+import type { GitBranch, GitCommit } from "./types";
 import { SiteGitHubModal } from "./SiteGitHubModal";
 
 type GitRemoteStatus = {

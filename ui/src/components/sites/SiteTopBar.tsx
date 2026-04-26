@@ -1,5 +1,5 @@
 import React from "react";
-import type { Project } from "../../pages/SitesPage";
+import type { Project } from "./types";
 import { SiteGitPanel } from "./SiteGitPanel";
 
 type Props = {

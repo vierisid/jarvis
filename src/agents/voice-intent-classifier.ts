@@ -247,6 +247,12 @@ content room ("room": "content"):
    matches "create a blog post draft titled q3 launch",
    "new youtube video script about ai workflows",
    "draft a newsletter about agent tools"
+   IMPORTANT — do NOT extract "create_content" for utterances that mention
+   "site", "website", "landing page", "web app", "homepage", "page", "build
+   a page", "site builder", "use the site builder", "edit the site". Those
+   are SITE BUILDER requests (the user wants Jarvis to write code into a
+   project), not content-pipeline drafts. Leave "room_action" null and let
+   the chat agent handle them — its "site_*" tools will write the files.
 - "advance" — args: { "name"?: string }
    matches "advance the q3 launch", "move this to the next stage"
 - "regress" — args: { "name"?: string }

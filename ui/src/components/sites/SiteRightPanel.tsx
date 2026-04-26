@@ -1,7 +1,7 @@
 import React from "react";
 import { SitePreview } from "./SitePreview";
 import { SiteEditor } from "./SiteEditor";
-import type { Project } from "../../pages/SitesPage";
+import type { Project } from "./types";
 
 type Props = {
   rightTab: "preview" | "editor";

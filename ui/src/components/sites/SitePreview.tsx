@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import type { Project } from "../../pages/SitesPage";
+import type { Project } from "./types";
 
 type Props = {
   project: Project | null;
