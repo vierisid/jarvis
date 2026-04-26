@@ -117,6 +117,45 @@ export function RoomShell({
     rootRef.current?.focus();
   }, []);
 
+  // Phase 6.8 — focus trap. Without this, Tab inside an open Room
+  // overlay can land on elements in the rail/header behind the
+  // overlay (since the overlay doesn't `inert` the underlying tree).
+  // Trap cycles forward at the last focusable, backward at the first.
+  // Only the Room's own focusable elements are in scope.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      // Standard CSS selector for "things that can accept focus" — same
+      // shape as react-focus-lock's matcher; good enough for our shell.
+      const focusables = root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+          ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])',
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      // If focus is currently outside the Room (e.g. it bled into the
+      // rail behind), pull it back to the appropriate edge.
+      if (!active || !root.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    root.addEventListener("keydown", onKeyDown);
+    return () => root.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   // The "primary" action is the LAST entry in actions[]; everything else
   // is ghost. Mirrors the prototype behavior in `hearth3-rooms.jsx`.
   const trailingPrimary = actions.length > 0 ? actions[actions.length - 1] : undefined;
