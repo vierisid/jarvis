@@ -1,16 +1,17 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { SetupRoom } from "./SetupRoom";
+import { ProfileInterviewRoom } from "./ProfileInterviewRoom";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 
 /**
- * Phase A — onboarding gate. Sits between AppShellV2's render and the
- * AppShell + RoomDispatcher pair. While `setup_completed === false`,
- * renders the fullscreen setup screens. Once setup completes, refetches
- * the status and falls through to the children (regular shell).
+ * Phase A + B onboarding gate. Sits between AppShellV2's render and
+ * the AppShell + RoomDispatcher pair. Render order:
  *
- * Phase B and C will plug in additional renders here:
- *   - profile_completed === false → <ProfileInterviewRoom />
- *   - tutorial_completed === false → AppShell + <TutorialRoom /> overlay
+ *   1. setup_completed === false        → <SetupRoom />
+ *   2. profile_completed === false AND
+ *      setup_skipped_profile === false  → <ProfileInterviewRoom />
+ *   3. tutorial_completed === false     → (Phase C, future)
+ *   4. otherwise                        → children (live shell)
  *
  * Loading state: render nothing for the brief status fetch (~50ms on
  * localhost) instead of a flash of skeleton — the bone background of
@@ -18,10 +19,24 @@ import { useOnboardingStatus } from "./useOnboardingStatus";
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
+  const [ttsDisabled, setTtsDisabled] = useState(false);
+
+  // Look up TTS state once we're past setup so Phase B can decide
+  // whether to render in voice or text-only mode. Cheap one-shot
+  // fetch — TTS choice can change later via Settings but we capture
+  // it at interview start.
+  useEffect(() => {
+    if (!status?.setup_completed) return;
+    if (status.profile_completed || status.setup_skipped_profile) return;
+    fetch("/api/config/tts")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.enabled === "boolean") setTtsDisabled(!d.enabled);
+      })
+      .catch(() => setTtsDisabled(false));
+  }, [status?.setup_completed, status?.profile_completed, status?.setup_skipped_profile]);
 
   if (loading || !status) {
-    // Empty bone canvas during the initial fetch. Better than a
-    // skeleton that flashes for 50ms.
     return null;
   }
 
@@ -29,17 +44,23 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     return (
       <SetupRoom
         onComplete={() => {
-          // The setup endpoint already wrote `setup_completed_at`.
-          // Refetch the status so the gate flips to children on the
-          // next render. No hard reload needed — daemon hot-reloaded
-          // the LLM + TTS providers in-process.
           refresh();
         }}
       />
     );
   }
 
-  // TODO Phase B: profile interview gate
+  if (!status.profile_completed && !status.setup_skipped_profile) {
+    return (
+      <ProfileInterviewRoom
+        ttsDisabled={ttsDisabled}
+        onComplete={() => {
+          refresh();
+        }}
+      />
+    );
+  }
+
   // TODO Phase C: tutorial gate (overlay on top of children)
   return <>{children}</>;
 }

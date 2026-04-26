@@ -24,9 +24,29 @@ export type UserProfileQuestion = {
   multiline?: boolean;
 };
 
+/**
+ * One structured fact captured by the conversational onboarding
+ * interviewer (Phase B). Themes match the 9 topics the interviewer
+ * agent is told to cover (identity / work / projects / goals /
+ * ambitions / communication / rhythm / tools / what-jarvis-does).
+ *
+ * Stored separately from the wizard `answers` map so the two surfaces
+ * coexist cleanly: the wizard is the structured-edit surface, the
+ * interview is the conversational capture path. Both feed the same
+ * "About the user" markdown block injected into Jarvis's system prompt.
+ */
+export type UserProfileFact = {
+  theme: string;
+  summary: string;
+  raw_quote?: string;
+  recorded_at: number;
+};
+
 export type UserProfileRecord = {
   version: 1;
   answers: Partial<Record<UserProfileQuestionId, string>>;
+  /** Structured facts from the Phase B conversational interview. */
+  interview_facts?: UserProfileFact[];
   created_at: number;
   updated_at: number;
   completed_at: number | null;
@@ -197,13 +217,28 @@ export function countAnsweredUserProfileQuestions(profile: UserProfileRecord | n
 }
 
 export function hasUserProfile(profile: UserProfileRecord | null): boolean {
-  return countAnsweredUserProfileQuestions(profile) > 0;
+  return (
+    countAnsweredUserProfileQuestions(profile) > 0 ||
+    (profile?.interview_facts?.length ?? 0) > 0
+  );
 }
 
+/**
+ * Render the user profile (wizard answers + Phase B interview facts) as
+ * a prompt block. Wizard answers come first as a YAML-ish list (existing
+ * format kept verbatim for backwards compatibility); interview facts
+ * follow as a per-theme markdown section. Returns undefined when neither
+ * source has any data so the caller can omit the block entirely.
+ *
+ * Called by the chat agent's `buildPromptContext` AND by the voice
+ * intent classifier — both paths get the same context so Jarvis is
+ * consistent across modalities.
+ */
 export function formatUserProfileForPrompt(profile: UserProfileRecord | null): string | undefined {
   if (!profile) return undefined;
 
   const lines: string[] = [];
+
   for (const question of USER_PROFILE_QUESTIONS) {
     const answer = profile.answers[question.id]?.trim();
     if (!answer) continue;
@@ -211,8 +246,36 @@ export function formatUserProfileForPrompt(profile: UserProfileRecord | null): s
     lines.push(indentPromptValue(answer));
   }
 
+  // Interview facts grouped by theme. Sorted alphabetically by theme so
+  // the output is stable across saves (helps with prompt caching and
+  // makes diffs reviewable).
+  const facts = profile.interview_facts ?? [];
+  if (facts.length > 0) {
+    const byTheme = new Map<string, UserProfileFact[]>();
+    for (const f of facts) {
+      const arr = byTheme.get(f.theme) ?? [];
+      arr.push(f);
+      byTheme.set(f.theme, arr);
+    }
+    const themes = [...byTheme.keys()].sort();
+
+    if (lines.length > 0) lines.push('');
+    lines.push('## From the onboarding interview');
+    for (const theme of themes) {
+      lines.push('');
+      lines.push(`### ${capitalize(theme)}`);
+      for (const f of byTheme.get(theme)!) {
+        lines.push(`- ${f.summary}`);
+      }
+    }
+  }
+
   if (lines.length === 0) return undefined;
   return lines.join('\n');
+}
+
+function capitalize(s: string): string {
+  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
 }
 
 function indentPromptValue(value: string): string {

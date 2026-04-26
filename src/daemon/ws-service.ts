@@ -19,9 +19,16 @@ import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
+import { getUserProfile } from '../vault/user-profile.ts';
+import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, type RoomKey } from '../voice/intent.ts';
 import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
 import { containsWakePhrase } from '../voice/wake-phrase.ts';
+import {
+  createInterviewSession,
+  runInterviewTurn,
+  type InterviewSession,
+} from './onboarding-interviewer.ts';
 import { getMessages } from '../vault/conversations.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { recordAgentActivity } from '../vault/agent-activity.ts';
@@ -70,6 +77,13 @@ export class WebSocketService implements Service {
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
   private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
+  /**
+   * Phase B — per-WS onboarding interview sessions. Created on
+   * `interview_start`, torn down on disconnect or after the agent
+   * calls `wrap_interview`. In-memory only — the captured facts are
+   * persisted via `appendUserProfileFact` inside the agent loop.
+   */
+  private interviewSessions = new Map<ServerWebSocket<unknown>, InterviewSession>();
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
   // Phase 6.3.5b — voice approve/cancel for pending approvals.
   private approvalManager: ApprovalManager | null = null;
@@ -619,6 +633,21 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'interview_start':
+      case 'interview_user_message': {
+        // Phase B — onboarding profile interview. Drives a separate
+        // agent loop (see `onboarding-interviewer.ts`); doesn't touch
+        // the primary chat agent or persist messages to vault
+        // conversations.
+        const payload = msg.payload as { text?: string; speakReply?: boolean };
+        const userText = msg.type === 'interview_start' ? null : (payload?.text ?? '').trim();
+        const speakReply = payload?.speakReply !== false; // default true
+        this.handleInterviewMessage(ws, userText, speakReply).catch(err =>
+          console.error('[WSService] interview pipeline error:', err)
+        );
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -1018,6 +1047,110 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * Held requests are resolved via REST `/api/voice/(clarifier|repeat-back)/:id/{confirm,cancel}`,
    * which call back into `resolveVoiceConfirmation`.
    */
+  /**
+   * Phase B — onboarding interview message handler. Drives the
+   * `onboarding-interviewer` module's agent loop, streams the
+   * assistant text back to the UI as an `interview_assistant`
+   * message, and (optionally) speaks it via TTS so the orb can
+   * play the question aloud.
+   *
+   * `userText === null` means "start the interview" (first turn);
+   * the agent opens with its scripted intro + first question.
+   * On wrap, sends an `interview_done` message so the UI flips back
+   * to the regular dashboard.
+   */
+  private async handleInterviewMessage(
+    ws: ServerWebSocket<unknown>,
+    userText: string | null,
+    speakReply: boolean,
+  ): Promise<void> {
+    let session = this.interviewSessions.get(ws);
+    if (!session) {
+      session = createInterviewSession();
+      this.interviewSessions.set(ws, session);
+    }
+
+    const llm = this.agentService.getLLMManager();
+    if (!llm.getProvider(this.agentService.getConfig().llm.primary)) {
+      this.wsServer.sendToClient(ws, {
+        type: 'interview_error',
+        payload: { message: 'No LLM configured. Finish setup first.' },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    let result;
+    try {
+      result = await runInterviewTurn(session, llm, userText);
+    } catch (err) {
+      console.error('[WSService] Interview turn failed:', err);
+      this.wsServer.sendToClient(ws, {
+        type: 'interview_error',
+        payload: { message: err instanceof Error ? err.message : String(err) },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const text = result.assistantText.trim();
+
+    // Send the text reply for the UI to render in the chat-bubble
+    // layout (always — the bubble is the visual record even when TTS
+    // is on).
+    this.wsServer.sendToClient(ws, {
+      type: 'interview_assistant',
+      payload: {
+        text,
+        facts_recorded: result.factsRecorded,
+        done: result.done,
+      },
+      timestamp: Date.now(),
+    });
+
+    // If TTS is on AND the user wants the reply spoken AND we have a
+    // provider loaded, stream the audio. Reuse the existing
+    // `tts_start` + binary chunks pipeline so the UI's MicOrb plays
+    // it through the normal "speaking" state machine.
+    if (speakReply && this.ttsProvider && text) {
+      const requestId = `interview-${Date.now()}`;
+      try {
+        this.wsServer.sendToClient(ws, {
+          type: 'tts_start',
+          // containsWake=true conservatively suppresses the wake
+          // recognizer for the entire interview reply — interviews
+          // are short and we don't need "Jarvis" interrupts here.
+          payload: { requestId, containsWake: true },
+          id: requestId,
+          timestamp: Date.now(),
+        });
+        for await (const chunk of this.ttsProvider.synthesizeStream(text)) {
+          this.wsServer.sendBinary(ws, chunk);
+        }
+        this.wsServer.sendToClient(ws, {
+          type: 'tts_end',
+          payload: { requestId },
+          id: requestId,
+          timestamp: Date.now(),
+        });
+      } catch (err) {
+        console.warn('[WSService] Interview TTS failed:', err);
+      }
+    }
+
+    if (result.done) {
+      this.wsServer.sendToClient(ws, {
+        type: 'interview_done',
+        payload: {
+          farewell: result.farewell,
+          facts_recorded: result.factsRecorded,
+        },
+        timestamp: Date.now(),
+      });
+      this.interviewSessions.delete(ws);
+    }
+  }
+
   private async handleVoiceSession(session: VoiceSession, ws: ServerWebSocket<unknown>): Promise<void> {
     if (!this.sttProvider) {
       this.wsServer.sendToClient(ws, {
@@ -1096,7 +1229,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // Classify. Failure is tolerable — fall through to the chat agent.
     const llm = this.agentService.getLLMManager();
     const recentTurns = this.recentTurns('websocket');
-    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom);
+    const userProfilePrompt = formatUserProfileForPrompt(getUserProfile());
+    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
     const route = routeByConfidence(intent);
 
     console.log(
@@ -1201,7 +1335,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // (verb=ask, confidence=0.85) on any error so we always land on `act`.
     const llm = this.agentService.getLLMManager();
     const recentTurns = this.recentTurns('websocket');
-    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom);
+    const userProfilePrompt = formatUserProfileForPrompt(getUserProfile());
+    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
 
     // Safety net: the classifier sometimes flags coherent multi-word
     // English as verb=unknown / low-confidence (especially conversational
