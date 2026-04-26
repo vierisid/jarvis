@@ -1,5 +1,9 @@
 import React, { useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import {
+  resetOnboarding,
+  type OnboardingResetScope,
+} from "../../../onboarding/resetClient";
 
 const HEARTBEAT_LEVELS = ["passive", "moderate", "aggressive"] as const;
 
@@ -275,6 +279,8 @@ export function GeneralTab({
           <div className="v2-set__empty">Role data unavailable.</div>
         )}
       </section>
+
+      <OnboardingDebugSection onToast={onToast} />
     </div>
   );
 }
@@ -293,5 +299,93 @@ function PrefBar({ label, value, max = 10 }: { label: string; value: number; max
         <div className="v2-set__pers-bar-fill" style={{ width: `${pct}%` }} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Onboarding reset section (Phase A — reset gate). Lets the user (or a
+ * developer rehearsing a fresh-install run) replay any phase of the
+ * onboarding flow without nuking `~/.jarvis/`. The same reset is also
+ * reachable via voice ("replay onboarding") and via the URL trigger
+ * `?onboarding=reset[&scope=...]` — see `resetClient.ts`.
+ */
+function OnboardingDebugSection({
+  onToast,
+}: {
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+}) {
+  const [scope, setScope] = useState<OnboardingResetScope | "">("");
+  const [busy, setBusy] = useState(false);
+
+  const handleReset = async () => {
+    if (!scope) return;
+    const label =
+      scope === "all"
+        ? "all onboarding phases"
+        : scope === "setup"
+          ? "the LLM/TTS setup screens"
+          : scope === "profile"
+            ? "the profile interview (your saved profile will be cleared)"
+            : "the dashboard tutorial";
+    if (!confirm(`Replay ${label}? The page will reload.`)) return;
+    setBusy(true);
+    try {
+      // resetOnboarding triggers a full page reload on success, so the
+      // toast below only fires if reload is somehow skipped (e.g. test
+      // harness).
+      await resetOnboarding(scope);
+      onToast(`Reset queued — reloading…`, "ok");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : String(err), "warn");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="v2-set__section">
+      <div className="v2-set__section-head">
+        <div>
+          <h3 className="v2-set__section-title">Onboarding</h3>
+          <div className="v2-set__section-sub">
+            Replay any phase of first-run onboarding. Useful after Jarvis
+            updates or for testing. Page reloads after the reset fires.
+          </div>
+        </div>
+      </div>
+
+      <div className="v2-set__field">
+        <label className="v2-set__field-label" htmlFor="onboarding-scope">
+          Replay scope
+        </label>
+        <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+          <select
+            id="onboarding-scope"
+            className="v2-set__select"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as OnboardingResetScope | "")}
+            style={{ flex: 1 }}
+          >
+            <option value="">Pick a phase…</option>
+            <option value="all">All phases (full reset)</option>
+            <option value="setup">Setup only (LLM + TTS picker)</option>
+            <option value="profile">Profile interview (clears your saved profile)</option>
+            <option value="tutorial">Dashboard tutorial</option>
+          </select>
+          <button
+            type="button"
+            className="v2-set__btn v2-set__btn--danger"
+            onClick={handleReset}
+            disabled={!scope || busy}
+          >
+            {busy ? "Resetting…" : "Replay"}
+          </button>
+        </div>
+        <p className="v2-set__hint">
+          You can also visit{" "}
+          <code className="v2-set__code">?onboarding=reset</code> on the
+          dashboard URL, or say <strong>"replay onboarding"</strong> by voice.
+        </p>
+      </div>
+    </section>
   );
 }

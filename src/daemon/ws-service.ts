@@ -1905,6 +1905,18 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.level ? `Setting heartbeat to ${String(a.level)}.` : `Updating heartbeat.`;
     case 'restart_daemon':
       return `Restarting Jarvis. The dashboard will reconnect in a few seconds.`;
+    case 'replay_onboarding': {
+      const sc = a.scope ? String(a.scope) : 'all';
+      const label =
+        sc === 'setup'
+          ? 'the setup screens'
+          : sc === 'profile'
+            ? 'the profile interview'
+            : sc === 'tutorial'
+              ? 'the tutorial'
+              : 'onboarding';
+      return `Replaying ${label}. The dashboard will reload in a moment.`;
+    }
     default:
       return `Done.`;
   }

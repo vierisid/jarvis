@@ -848,6 +848,105 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // ── Onboarding ──────────────────────────────────────────────────
+    // Status + reset endpoints powering the v2 onboarding gate. See
+    // `docs/ONBOARDING_PLAN.md`. Reset is intentionally available on
+    // demand (not behind a build flag) so users can replay the tour
+    // after a Jarvis update or when swapping LLM providers.
+
+    '/api/onboarding/status': {
+      GET: async () => {
+        try {
+          const { loadConfig } = await import('../config/loader.ts');
+          const cfg = await loadConfig();
+          const o = cfg.onboarding;
+          // `getUserProfile` already imported up top via the user-profile
+          // route block — reuse to expose `profile_completed`.
+          const profile = getUserProfile();
+          const profileCompleted =
+            !!o?.setup_skipped_profile ||
+            (profile != null && Object.keys(profile.answers ?? {}).length > 0);
+          return json({
+            setup_completed: o?.setup_completed_at != null,
+            setup_completed_at: o?.setup_completed_at ?? null,
+            setup_skipped_profile: !!o?.setup_skipped_profile,
+            profile_completed: profileCompleted,
+            tutorial_completed: o?.tutorial_completed_at != null,
+            tutorial_completed_at: o?.tutorial_completed_at ?? null,
+            tutorial_dismissed: o?.tutorial_dismissed_at != null,
+            tutorial_progress_step: o?.tutorial_progress_step ?? null,
+            last_reset_at: o?.last_reset_at ?? null,
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    '/api/onboarding/reset': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as {
+            scope?: 'all' | 'setup' | 'profile' | 'tutorial';
+          };
+          const scope = body?.scope ?? 'all';
+          if (!['all', 'setup', 'profile', 'tutorial'].includes(scope)) {
+            return error(`Invalid scope "${scope}".`, 400);
+          }
+
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const o = fresh.onboarding ?? {
+            setup_completed_at: null,
+            tutorial_completed_at: null,
+          };
+
+          const cleared: string[] = [];
+          if (scope === 'all' || scope === 'setup') {
+            o.setup_completed_at = null;
+            cleared.push('setup');
+          }
+          if (scope === 'all' || scope === 'profile') {
+            o.setup_skipped_profile = false;
+            clearUserProfile();
+            cleared.push('profile');
+          }
+          if (scope === 'all' || scope === 'tutorial') {
+            o.tutorial_completed_at = null;
+            o.tutorial_dismissed_at = null;
+            o.tutorial_progress_step = undefined;
+            cleared.push('tutorial');
+          }
+          o.last_reset_at = Date.now();
+          fresh.onboarding = o;
+          await saveConfig(fresh);
+
+          // Mirror to in-memory config so the next /status read is
+          // immediately consistent (don't wait for daemon restart).
+          ctx.config.onboarding = o;
+
+          // localStorage keys the client should also clear after this
+          // call. Returned in the response so the UI handler doesn't
+          // have to know about cache layers it didn't write.
+          const clientCacheKeys = ['jarvis:notif-read', 'jarvis:palette-recent'];
+          if (scope === 'all') {
+            clientCacheKeys.push('jarvis:v2:workspaces-ui');
+            clientCacheKeys.push('jarvis:room-layout');
+          }
+
+          return json({
+            ok: true,
+            scope,
+            cleared,
+            client_cache_keys: clientCacheKeys,
+            message: `Onboarding reset (${cleared.join(', ')}).`,
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
     // --- Config (sanitized — no API keys) ---
     '/api/config': {
       GET: () => {
