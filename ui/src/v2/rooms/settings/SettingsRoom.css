@@ -144,6 +144,11 @@
 
 .v2-set__tab:hover { color: var(--ink); }
 
+.v2-set__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .v2-set__tab[data-active="true"] {
   color: var(--ink);
   border-bottom-color: var(--ink);
@@ -302,6 +307,11 @@
 }
 
 .v2-set__btn:hover { background: var(--paper-3); color: var(--ink); }
+
+.v2-set__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .v2-set__btn--primary {
   background: var(--ink);

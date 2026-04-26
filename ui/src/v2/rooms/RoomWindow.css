@@ -21,6 +21,13 @@
   50%      { box-shadow: 0 0 0 3px rgba(194, 58, 42, 0.18), 4px 4px 0 0 rgba(26, 26, 26, 0.04); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .v2-roomwin--focus-pulse {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent), 4px 4px 0 0 rgba(26, 26, 26, 0.04);
+  }
+}
+
 /* ── Chrome (header bar) ── */
 
 .v2-roomwin__chrome {

@@ -32,6 +32,16 @@
   cursor: not-allowed;
 }
 
+/* Phase 7 Pass A — focus rings for interactive primitives that don't
+   have one yet. Chips and KBDs are normally non-interactive but may be
+   focusable when used as filter pills (Chip with onClick, KBD wrapped
+   in <button>). Defensive ring keeps a11y consistent across surfaces. */
+.v2-chip:focus-visible,
+.v2-kbd:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Sizes — deliberately tight to match prototype */
 .v2-btn--sm {
   font-size: var(--text-xs);
