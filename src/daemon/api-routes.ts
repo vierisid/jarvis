@@ -947,6 +947,94 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Atomic Phase A setup endpoint. Saves LLM + TTS config + flips
+     * the `onboarding.setup_completed_at` flag in one shot, then hot-
+     * reloads the LLM providers and TTS provider so the next chat
+     * message goes through real services without a daemon restart.
+     *
+     * Body shape:
+     *   {
+     *     llm: {
+     *       primary: "anthropic" | "openai" | ... ,
+     *       <provider>: { api_key?: string, model?: string, base_url?: string }
+     *     },
+     *     tts: {
+     *       enabled: boolean,
+     *       provider?: "edge" | "elevenlabs" | "sarvam",
+     *       voice?: string,
+     *       rate?: string,
+     *       elevenlabs?: { api_key?: string, voice_id?: string, model?: string },
+     *     }
+     *   }
+     *
+     * Either field is optional; missing means "use current/default".
+     * The TTS block is required to be present (even if just `{enabled:false}`)
+     * so the user explicitly chose during the setup screen.
+     */
+    '/api/onboarding/setup': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json()) as {
+            llm?: Record<string, unknown>;
+            tts?: Record<string, unknown>;
+          };
+
+          // 1. LLM settings — same path as /api/config/llm POST.
+          if (body.llm && Object.keys(body.llm).length > 0) {
+            const { saveLLMSettings, hotReloadLLMProviders } = await import('./llm-settings.ts');
+            saveLLMSettings(ctx.config, body.llm as any);
+            hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
+          }
+
+          // 2. TTS settings — same path as /api/config/tts POST. Inline
+          //    the relevant write since the TTS endpoint is large; we
+          //    don't need provider hot-swap UI feedback here.
+          if (body.tts) {
+            const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
+            const fresh = await lc();
+            fresh.tts = { ...fresh.tts, ...(body.tts as any) };
+            await sc(fresh);
+            ctx.config.tts = fresh.tts;
+            // Hot-reload TTS provider when possible so the post-setup
+            // "Welcome to Jarvis" reply is spoken immediately.
+            try {
+              if (ctx.config.tts && ctx.wsService) {
+                const { createTTSProvider } = await import('../comms/voice.ts');
+                const provider = await createTTSProvider(ctx.config.tts);
+                if (provider) ctx.wsService.setTTSProvider(provider);
+              }
+            } catch (err) {
+              console.warn('[Onboarding] TTS hot-reload skipped:', err);
+            }
+          }
+
+          // 3. Flip the setup-completed flag.
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const now = Date.now();
+          fresh.onboarding = {
+            setup_completed_at: now,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            setup_skipped_profile: fresh.onboarding?.setup_skipped_profile,
+            tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at,
+            tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
+            last_reset_at: fresh.onboarding?.last_reset_at,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+
+          return json({
+            ok: true,
+            setup_completed_at: now,
+            message: 'Setup complete. Jarvis is ready.',
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
     // --- Config (sanitized — no API keys) ---
     '/api/config': {
       GET: () => {
