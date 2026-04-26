@@ -34,6 +34,10 @@ const GoalsRoom = React.lazy(() =>
   import("./goals/GoalsRoom").then((m) => ({ default: m.GoalsRoom })),
 );
 
+const TasksRoom = React.lazy(() =>
+  import("./tasks/TasksRoom").then((m) => ({ default: m.TasksRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -138,6 +142,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
       </Suspense>
     );
   }
+  if (roomKey === "tasks") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="tasks"
+        title="Tasks"
+        phaseTag="Loading…"
+        description="Loading your tasks…"
+      />}>
+        <TasksRoom />
+      </Suspense>
+    );
+  }
   const meta = ROOM_META[roomKey];
   return (
     <RoomPlaceholder
@@ -212,6 +228,13 @@ const ROOM_META: Record<RoomKey, RoomMeta> = {
     phaseTag: "Phase 6.7 — Goals Room",
     description:
       "Long-horizon goals with KR scoring, check-in cadence, and progress views.",
+  },
+  tasks: {
+    title: "Tasks",
+    subtitle: "kanban · due dates · priority",
+    phaseTag: "Phase 6.7 — Tasks Room",
+    description:
+      "Your active commitments. Create, complete, reassign, and prioritize tasks.",
   },
   sites: {
     title: "Sites",

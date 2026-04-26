@@ -34,6 +34,8 @@ type VoiceSession = {
   requestId: string;
   chunks: Buffer[];
   startedAt: number;
+  /** Phase 6.7.C — current Room key (or "home") at utterance start. */
+  currentRoom?: string;
 };
 
 /**
@@ -555,8 +557,13 @@ export class WebSocketService implements Service {
         return this.handleStatus();
 
       case 'voice_start': {
-        const { requestId } = msg.payload as { requestId: string };
-        this.voiceSessions.set(ws, { requestId, chunks: [], startedAt: Date.now() });
+        const { requestId, currentRoom } = msg.payload as { requestId: string; currentRoom?: string };
+        this.voiceSessions.set(ws, {
+          requestId,
+          chunks: [],
+          startedAt: Date.now(),
+          currentRoom,
+        });
         return undefined;
       }
 
@@ -575,14 +582,15 @@ export class WebSocketService implements Service {
         // Browser-side STT path: the dashboard already has a final transcript
         // (via the Web Speech API) and prefers it over daemon Whisper. Skip
         // STT entirely and run the same downstream pipeline.
-        const payload = msg.payload as { requestId?: string; text?: string };
+        const payload = msg.payload as { requestId?: string; text?: string; currentRoom?: string };
         const requestId = payload?.requestId ?? msg.id ?? crypto.randomUUID();
         const text = (payload?.text ?? '').trim();
+        const currentRoom = payload?.currentRoom;
         // If we have an in-flight audio session (parallel paths), drop it so
         // we don't double-process the same utterance.
         this.voiceSessions.delete(ws);
         if (!text) return undefined;
-        this.processVoiceTranscript(text, requestId, ws).catch(err =>
+        this.processVoiceTranscript(text, requestId, ws, currentRoom).catch(err =>
           console.error('[WSService] voice_text pipeline error:', err)
         );
         return undefined;
@@ -910,7 +918,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     try {
       const transcript = await this.sttProvider.transcribe(audioBuffer);
       if (!transcript.trim()) return;
-      await this.processVoiceTranscript(transcript, session.requestId, ws);
+      await this.processVoiceTranscript(transcript, session.requestId, ws, session.currentRoom);
     } catch (err) {
       console.error('[WSService] Voice session error:', err);
       const message = err instanceof Error ? err.message : 'Voice processing failed';
@@ -933,6 +941,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     transcript: string,
     requestId: string,
     ws: ServerWebSocket<unknown>,
+    currentRoom?: string,
   ): Promise<void> {
     const trimmed = transcript.trim();
     if (!trimmed) return;
@@ -969,7 +978,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     // (verb=ask, confidence=0.85) on any error so we always land on `act`.
     const llm = this.agentService.getLLMManager();
     const recentTurns = this.recentTurns('websocket');
-    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm);
+    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom);
     const route = routeByConfidence(intent);
 
     console.log(
@@ -992,23 +1001,24 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       return;
     }
 
-    const roomKey = route === 'act' ? intentToRoomKey(intent) : null;
-    if (roomKey) {
-      this.broadcastRoomNavigation(roomKey, requestId);
-      this.broadcastAssistantAck(`Opening the ${roomKey} room.`, requestId);
-      this.broadcastThinkingEnd(requestId);
-      return;
-    }
-
-    // Phase 6.3.5 — Room action interception. When the classifier emits a
-    // structured `room_action`, drive the Room's UI directly via the
-    // dashboard's action bus. Bypasses chat (the LLM has no concept of
-    // tabs/dialogs/filters). Same confidence gating as chat — low-confidence
-    // room actions still go through the clarifier.
+    // Phase 6.3.5 — Room action interception MUST run before room
+    // navigation. Room actions are always more specific (e.g. "show
+    // pending tasks" → set_filter status=pending) — if we navigate
+    // first, the qualifier ("pending") gets dropped and the user sees
+    // an unfiltered Room. Classifier emits room_action only when it's
+    // confident the user wants in-room behavior, so trust it.
     if (route === 'act' && intent.room_action) {
       const ra = intent.room_action;
       this.broadcastRoomAction(ra, requestId);
       this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
+    const roomKey = route === 'act' ? intentToRoomKey(intent) : null;
+    if (roomKey) {
+      this.broadcastRoomNavigation(roomKey, requestId);
+      this.broadcastAssistantAck(`Opening the ${roomKey} room.`, requestId);
       this.broadcastThinkingEnd(requestId);
       return;
     }
@@ -1621,6 +1631,21 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       const level = a.level ? ` (${String(a.level).replace(/_/g, ' ')})` : '';
       return `Creating goal "${title}"${level}.`;
     }
+    case 'create_task': {
+      const title = a.title ? String(a.title) : 'task';
+      const when = a.when ? ` for ${String(a.when)}` : '';
+      return `Creating task "${title}"${when}.`;
+    }
+    case 'complete_task':
+      return a.name ? `Marking "${String(a.name)}" complete.` : `Marking task complete.`;
+    case 'update_priority':
+      return a.name && a.level
+        ? `Setting "${String(a.name)}" to ${String(a.level)} priority.`
+        : `Updating priority.`;
+    case 'reassign':
+      return a.name && a.agent
+        ? `Reassigning "${String(a.name)}" to ${String(a.agent)}.`
+        : `Reassigning task.`;
     default:
       return `Done.`;
   }

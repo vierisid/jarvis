@@ -66,6 +66,7 @@ const ROOM_KEYS_SET: ReadonlySet<RoomKey> = new Set([
   "logs",
   "calendar",
   "goals",
+  "tasks",
   "sites",
   "settings",
 ]);
@@ -109,7 +110,20 @@ export function AppShell() {
 
 function AppShellLive() {
   const live = useLiveThread();
-  const voice = useVoice({ wsRef: live.wsRef, wakeWordEnabled: true });
+  // Phase 6.7.C — feed the voice hook a getter that reads the current
+  // Room from the URL hash on each utterance. Stable identity (no
+  // closure on rendered state) so useVoice's `sendAudioToServer`
+  // useCallback doesn't churn. Falls through to "home" for the thread.
+  const getCurrentRoom = useCallback((): string => {
+    if (typeof window === "undefined") return "home";
+    const m = window.location.hash.match(/^#\/?_room_([a-z]+)/);
+    return m ? m[1]! : "home";
+  }, []);
+  const voice = useVoice({
+    wsRef: live.wsRef,
+    wakeWordEnabled: true,
+    getCurrentRoom,
+  });
 
   // Bridge TTS audio + lifecycle from useWebSocket → useVoice (matches the
   // legacy App.tsx pattern). Without this the voice hook never hears about

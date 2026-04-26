@@ -60,6 +60,7 @@ const VALID_OBJECT_TYPES: ReadonlySet<ObjectRefType> = new Set([
   'log',
   'goal',
   'calendar',
+  'task',
   'site',
   'settings',
   'file',
@@ -74,7 +75,7 @@ Given a user's voice transcript and the recent conversation context, return a si
 Schema:
 {
   "verb": "ask" | "show" | "run" | "create" | "update" | "delete" | "grant" | "revoke" | "pause" | "resume" | "unknown",
-  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"site"|"settings"|"file"|"url"|"thread", "query": string } | null,
+  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"task"|"site"|"settings"|"file"|"url"|"thread", "query": string } | null,
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
@@ -141,6 +142,25 @@ on the room_action's clarity (>=0.85 to act). The dashboard's action bus
 dispatches it to the matching Room. If no Room action matches, return
 "room_action": null.
 
+**Filter-while-naming-the-room rule:** When the user says something like
+"show me the pending tasks", "show me my critical goals", "open the
+overdue tasks", they are NOT asking to navigate to the room — they are
+asking to filter inside it. Emit a "room_action" with the appropriate
+filter; do NOT also set object.type to the room name (or you'll
+double-fire navigation + filter and the qualifier gets dropped). The
+daemon already knows which Room each action belongs to.
+
+Examples of this rule:
+  "show me the pending tasks"   → room_action: tasks/set_filter status=pending; object: null
+  "show critical goals"          → room_action: goals/set_filter health=critical; object: null
+  "show me the overdue tasks"    → room_action: tasks/search query="overdue"; object: null
+                                   (or set_filter if a status maps better)
+  "show me write tools"          → room_action: tools/set_filter filter=write; object: null
+
+Plain navigation utterances WITHOUT qualifiers still use object:
+  "open tasks"                   → object: { type: "task" }; no room_action
+  "show me the calendar"         → object: { type: "calendar" }; no room_action
+
 Available Room actions:
 
 agents room ("room": "agents"):
@@ -196,6 +216,32 @@ workflows room ("room": "workflows"):
        → prompt: "checks AI news every morning"
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
+
+tasks room ("room": "tasks"):
+- "switch_view" — args: { "view": "kanban" | "list" }
+   matches "switch to list view", "show kanban", "go to list"
+- "search" — args: { "query": string }
+   matches "search tasks for OAuth", "find email tasks"
+- "set_filter" — args: { "field": "status" | "priority" | "assigned_to", "value": string }
+   value (status): "all" | "pending" | "active" | "completed" | "failed" | "escalated"
+   value (priority): "all" | "low" | "normal" | "high" | "critical"
+   value (assigned_to): assignee name verbatim, or "all" or "unassigned"
+   matches "show only active tasks", "filter by critical priority", "show jarvis's tasks"
+- "select" — args: { "name": string }
+   matches "find the OAuth task", "select the standup"
+- "create_task" — args: { "title": string, "when"?: string, "priority"?: "low"|"normal"|"high"|"critical", "assigned_to"?: string }
+   matches "create a task to ship OAuth tomorrow",
+   "add a high priority task to email Alice by friday at 3pm",
+   "remind me to review the PR"
+   The "when" field is parsed by the daemon's parseRelativeDate
+   (same format as Calendar's schedule_event: today/tomorrow/weekday
+   names/in N units/HH:MM). Optional — undated tasks are valid.
+- "complete_task" — args: { "name": string }
+   matches "mark the OAuth task done", "complete the standup"
+- "update_priority" — args: { "name": string, "level": "low"|"normal"|"high"|"critical" }
+   matches "bump the OAuth task to high priority", "make this critical"
+- "reassign" — args: { "name": string, "agent": string }
+   matches "reassign the OAuth task to alice", "give this to jarvis"
 
 goals room ("room": "goals"):
 - "switch_tab" — args: { "tab": "constellation" | "timeline" | "metrics" }
@@ -300,6 +346,30 @@ Transcript: "open settings"
 
 Transcript: "open sites"
 {"verb":"show","object":{"type":"site"},"args":{},"impact":"read","confidence":0.97}
+
+Transcript: "open tasks"
+{"verb":"show","object":{"type":"task"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "show me my to-do list"
+{"verb":"show","object":{"type":"task"},"args":{},"impact":"read","confidence":0.95}
+
+Transcript: "create a task to ship oauth tomorrow"
+{"verb":"create","object":{"type":"task"},"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"tasks","action":"create_task","args":{"title":"ship oauth","when":"tomorrow"}}}
+
+Transcript: "mark the standup task done"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"tasks","action":"complete_task","args":{"name":"standup"}}}
+
+Transcript: "bump the oauth task to high priority"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"tasks","action":"update_priority","args":{"name":"oauth","level":"high"}}}
+
+Transcript: "show only critical tasks"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"tasks","action":"set_filter","args":{"field":"priority","value":"critical"}}}
+
+Transcript: "show me the pending tasks"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"tasks","action":"set_filter","args":{"field":"status","value":"pending"}}}
+
+Transcript: "show me my active tasks"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"tasks","action":"set_filter","args":{"field":"status","value":"active"}}}
 
 Transcript: "go back to the thread"
 {"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.98}
@@ -522,6 +592,7 @@ export async function classifyVoiceIntent(
   transcript: string,
   recentTurns: RecentTurn[],
   llm: LLMManager,
+  currentRoom?: string,
 ): Promise<Intent> {
   const text = transcript.trim();
   if (!text) {
@@ -533,9 +604,18 @@ export async function classifyVoiceIntent(
     .map((t) => `${t.role === 'user' ? 'USER' : 'JARVIS'}: ${t.text.replace(/\s+/g, ' ').slice(0, 240)}`)
     .join('\n');
 
+  // Phase 6.7.C — surface where the user is right now so the classifier
+  // can disambiguate utterances that read both as chat questions and as
+  // room actions ("show me active tasks" — when in tasks room, that's a
+  // filter; on the home thread, it's a chat answer).
+  const roomContext =
+    currentRoom && currentRoom !== 'home'
+      ? `User is currently inside the "${currentRoom}" room. STRONGLY PREFER room_action over a chat answer for utterances that map to a known action of this room. Only fall back to a chat answer if no action of this room could plausibly satisfy the request.`
+      : `User is on the home thread (no Room open). Navigation utterances ("open tasks", "show me my goals") should set object.type. Filter-style utterances ("show me active tasks") still emit a room_action so the room opens already filtered.`;
+
   const userPrompt = contextLines
-    ? `Recent conversation (oldest first):\n${contextLines}\n\nNew user transcript: "${text}"\n\nReturn the JSON intent.`
-    : `New user transcript: "${text}"\n\nReturn the JSON intent.`;
+    ? `${roomContext}\n\nRecent conversation (oldest first):\n${contextLines}\n\nNew user transcript: "${text}"\n\nReturn the JSON intent.`
+    : `${roomContext}\n\nNew user transcript: "${text}"\n\nReturn the JSON intent.`;
 
   const messages: LLMMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },

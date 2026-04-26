@@ -122,6 +122,7 @@ export type ThreadItem =
         | "logs"
         | "calendar"
         | "goals"
+        | "tasks"
         | "sites"
         | "settings";
       state: "inline" | "minimized";
