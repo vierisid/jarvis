@@ -409,6 +409,24 @@ function AppShellLive() {
     [live],
   );
 
+  // Phase 6.5.5 — derive the latest assistant reply from the live thread
+  // items so the rail's RailReplyPreview can show it without leaving the
+  // Room. We walk from the end since it's the most-recent — `useLiveThread`
+  // already sorts items chronologically.
+  const latestAssistantReply = useMemo(() => {
+    for (let i = live.items.length - 1; i >= 0; i--) {
+      const item = live.items[i]!;
+      if (item.kind === "jarvis-speech" && item.text) {
+        return {
+          text: item.text,
+          isStreaming: item.status === "speaking",
+          ts: Date.now(), // updated on each render-with-new-text → fade-in animation key
+        };
+      }
+    }
+    return null;
+  }, [live.items]);
+
   return (
     <LiveDataProvider
       value={{
@@ -418,6 +436,7 @@ function AppShellLive() {
         notices: live.notices,
         taskEvents: live.taskEvents,
         agentActivity: live.agentActivity,
+        latestAssistantReply,
       }}
     >
       <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} />

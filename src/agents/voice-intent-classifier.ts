@@ -193,6 +193,25 @@ workflows room ("room": "workflows"):
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
 
+memory room ("room": "memory"):
+- "switch_tab" — args: { "tab": "constellation" | "explorer" | "browser" }
+   matches "show the constellation", "switch to explorer", "open the browser"
+- "search" — args: { "query": string }
+   matches "search memory for alice", "find facts about q3"
+- "set_filter" — args: { "type": "all" | "person" | "project" | "tool" | "place" | "concept" | "event" }
+   matches "show only people", "filter to projects", "show all entities"
+- "select" — args: { "name": string }
+   matches "select alice", "open the q3 launch entity"
+- "remember_that" — args: { "subject": string, "predicate": string, "object": string }
+   matches "remember that alice's birthday is march 15",
+   "remember that the bone paper project ships in june",
+   "remember that q3 launch happens on may 5"
+   Extract: subject is the entity name (will be created if missing as a
+   "concept"); predicate is the relation in lowercase ("birthday is" →
+   "birthday", "ships in" → "ships", "happens on" → "happens"); object
+   is the value verbatim. Verb=create, impact=write, confidence ≥0.85
+   when the utterance is unambiguous.
+
 logs room ("room": "logs"):
 - "toggle_source" — args: { "source": "awareness" | "authority" | "agents" | "tasks" | "sidecar" }
    matches "toggle awareness", "hide tasks", "show only authority logs"
@@ -272,7 +291,16 @@ Transcript: "cancel"
 {"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.96,"confirmation_response":"cancel"}
 
 Transcript: "never mind"
-{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.92,"confirmation_response":"cancel"}`;
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.92,"confirmation_response":"cancel"}
+
+Transcript: "remember that alice's birthday is march 15"
+{"verb":"create","object":{"type":"memory","query":"alice"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"memory","action":"remember_that","args":{"subject":"alice","predicate":"birthday","object":"march 15"}}}
+
+Transcript: "show only people"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"memory","action":"set_filter","args":{"type":"person"}}}
+
+Transcript: "switch to constellation"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"memory","action":"switch_tab","args":{"tab":"constellation"}}}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.

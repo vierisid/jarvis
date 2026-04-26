@@ -1,0 +1,123 @@
+/* Phase 6.5.5 — RailReplyPreview shows the last sentence of Jarvis's
+   most recent reply when the user is inside a Room. Intentionally
+   compact — full reply lives in the thread. */
+
+.v2-rail-reply {
+  padding: var(--s-3) var(--s-4);
+  border-top: var(--hair-soft);
+  border-bottom: var(--hair-soft);
+  background: var(--paper-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  animation: v2-rail-reply-in var(--dur-med) var(--ease-out);
+}
+
+@keyframes v2-rail-reply-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-rail-reply { animation: none; }
+}
+
+.v2-rail-reply__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.v2-rail-reply__attrib {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.v2-rail-reply__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+.v2-rail-reply__streaming {
+  font-size: 10px;
+  color: var(--accent);
+  animation: v2-rail-reply-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes v2-rail-reply-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-rail-reply__streaming { animation: none; opacity: 0.6; }
+}
+
+.v2-rail-reply__text {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink);
+  /* Cap at 6 lines just in case extractLastSentence didn't tighten it
+     enough (very long single sentence with no terminator). */
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.v2-rail-reply__caret {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  animation: v2-rail-reply-blink 1s step-end infinite;
+}
+
+@keyframes v2-rail-reply-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-rail-reply__caret { animation: none; opacity: 0.6; }
+}
+
+.v2-rail-reply__link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.v2-rail-reply__link:hover {
+  color: var(--ink);
+}
+
+.v2-rail-reply__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}

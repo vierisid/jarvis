@@ -20,9 +20,11 @@ import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 
-import { findEntities, getEntity, searchEntitiesByName } from '../vault/entities.ts';
-import { findFacts } from '../vault/facts.ts';
-import { findRelationships, getEntityRelationships } from '../vault/relationships.ts';
+import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
+import { findFacts, createFact } from '../vault/facts.ts';
+import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
+
+const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCommitmentStatus, reorderCommitments } from '../vault/commitments.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
@@ -243,6 +245,26 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (q) query.nameContains = q;
         return json(findEntities(query));
       },
+      // Phase 6.5 — write surface for the Memory Room. Routes through
+      // createEntity directly; the LLM-driven extractor pipeline keeps
+      // its own internal call site for auto-extraction, this is for
+      // explicit user-driven adds (UI button or voice "remember that").
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as {
+            name?: string;
+            type?: EntityType;
+            properties?: Record<string, unknown>;
+            source?: string;
+          };
+          if (!body.name || typeof body.name !== 'string') return error('name is required', 400);
+          if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
+            return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
+          }
+          const entity = createEntity(body.type, body.name, body.properties, body.source ?? 'dashboard');
+          return json(entity);
+        } catch (err) { return errorFromException(err); }
+      },
     },
 
     '/api/vault/entities/:id': {
@@ -278,6 +300,27 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (object) query.object = object;
         return json(findFacts(query));
       },
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as {
+            subject_id?: string;
+            predicate?: string;
+            object?: string;
+            confidence?: number;
+            source?: string;
+          };
+          if (!body.subject_id || !body.predicate || !body.object) {
+            return error('subject_id, predicate, and object are required', 400);
+          }
+          const subject = getEntity(body.subject_id);
+          if (!subject) return error(`Unknown subject_id: ${body.subject_id}`, 404);
+          const fact = createFact(body.subject_id, body.predicate, body.object, {
+            confidence: body.confidence,
+            source: body.source ?? 'dashboard',
+          });
+          return json(fact);
+        } catch (err) { return errorFromException(err); }
+      },
     },
 
     // --- Vault: Relationships ---
@@ -292,6 +335,25 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (toId) query.to_id = toId;
         if (type) query.type = type;
         return json(findRelationships(query));
+      },
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as {
+            from_id?: string;
+            to_id?: string;
+            type?: string;
+            properties?: Record<string, unknown>;
+          };
+          if (!body.from_id || !body.to_id || !body.type) {
+            return error('from_id, to_id, and type are required', 400);
+          }
+          const from = getEntity(body.from_id);
+          const to = getEntity(body.to_id);
+          if (!from) return error(`Unknown from_id: ${body.from_id}`, 404);
+          if (!to) return error(`Unknown to_id: ${body.to_id}`, 404);
+          const rel = createRelationship(body.from_id, body.to_id, body.type, body.properties);
+          return json(rel);
+        } catch (err) { return errorFromException(err); }
       },
     },
 

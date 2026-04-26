@@ -1595,6 +1595,10 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.prompt
         ? `Creating a workflow that ${String(a.prompt)}.`
         : `Creating a new workflow.`;
+    case 'remember_that':
+      return a.subject && a.predicate && a.object
+        ? `Remembered that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
+        : `Remembering that.`;
     default:
       return `Done.`;
   }

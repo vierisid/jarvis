@@ -4,6 +4,7 @@ import { ToolsRoomBody } from "./tools/ToolsRoom";
 import { LogsRoomBody } from "./logs/LogsRoom";
 import { AgentsRoomBody } from "./agents/AgentsRoom";
 import { WorkflowsRoomBody } from "./workflows/WorkflowsRoom";
+import { MemoryRoomBody } from "./memory/MemoryRoom";
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -22,7 +23,7 @@ const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   logs: LogsRoomBody,
   agents: AgentsRoomBody,
   workflows: WorkflowsRoomBody,
-  // 6.5 — memory
+  memory: MemoryRoomBody,
   // 6.6 — authority
   // 6.7 — calendar / goals / sites / settings
 };

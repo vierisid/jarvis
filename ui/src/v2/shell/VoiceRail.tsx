@@ -2,6 +2,7 @@ import React from "react";
 import { MicOrb, type OrbState } from "./MicOrb";
 import { TranscriptBubble } from "../voice/TranscriptBubble";
 import { RailConfirmationStack } from "../voice/RailConfirmationStack";
+import { RailReplyPreview } from "../voice/RailReplyPreview";
 import "./VoiceRail.css";
 
 export type VoiceState =
@@ -89,6 +90,12 @@ export function VoiceRail({
         <div className="v2-rail__hint-text">{HINT[state]}</div>
         <div className="v2-rail__hint-meta">Replies appear in the thread →</div>
       </div>
+
+      {/* Phase 6.5.5 — last sentence of Jarvis's most recent reply,
+          only visible inside a Room (component gates itself). Sits above
+          the confirmation stack: replies are conversational flow,
+          confirmations are actions, both are highest-salience. */}
+      <RailReplyPreview />
 
       {/* Phase 6.3.5b — pending confirmations rendered inline so the
           user can resolve them without leaving any Room. Replaces the
