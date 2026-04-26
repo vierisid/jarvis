@@ -47,7 +47,8 @@ function objectTypeToRoomKey(t: ObjectType): RoomKey {
     case "authority":
     case "calendar":
     case "goals":
-    case "sites":
+    case "tasks":
+    case "content":
     case "settings":
       return t;
   }
@@ -67,7 +68,7 @@ const ROOM_KEYS_SET: ReadonlySet<RoomKey> = new Set([
   "calendar",
   "goals",
   "tasks",
-  "sites",
+  "content",
   "settings",
 ]);
 
@@ -449,6 +450,7 @@ function AppShellLive() {
         repeatBacks: live.repeatBacks,
         notices: live.notices,
         taskEvents: live.taskEvents,
+        contentEvents: live.contentEvents,
         agentActivity: live.agentActivity,
         latestAssistantReply,
       }}

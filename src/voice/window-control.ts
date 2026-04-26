@@ -51,8 +51,8 @@ const ROOM_ALIASES: Record<string, RoomKey> = {
   calendar: "calendar",
   goal: "goals",
   goals: "goals",
-  site: "sites",
-  sites: "sites",
+  content: "content",
+  contents: "content",
   setting: "settings",
   settings: "settings",
 };

@@ -1646,6 +1646,19 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name && a.agent
         ? `Reassigning "${String(a.name)}" to ${String(a.agent)}.`
         : `Reassigning task.`;
+    case 'create_content': {
+      const title = a.title ? String(a.title) : 'content';
+      const type = a.type ? ` (${String(a.type)})` : '';
+      return `Creating ${title}${type}.`;
+    }
+    case 'advance':
+      return a.name ? `Advancing "${String(a.name)}".` : `Advancing.`;
+    case 'regress':
+      return a.name ? `Moving "${String(a.name)}" back.` : `Moving back.`;
+    case 'schedule':
+      return a.name && a.when
+        ? `Scheduling "${String(a.name)}" for ${String(a.when)}.`
+        : `Scheduling.`;
     default:
       return `Done.`;
   }

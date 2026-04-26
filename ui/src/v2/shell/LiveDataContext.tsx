@@ -1,6 +1,7 @@
 import React, { createContext, useContext } from "react";
 import type {
   AgentActivityEvent,
+  ContentEvent,
   PendingApproval,
   PendingClarifier,
   PendingRepeatBack,
@@ -23,6 +24,7 @@ export interface LiveData {
   repeatBacks: PendingRepeatBack[];
   notices: SystemNotice[];
   taskEvents: TaskEvent[];
+  contentEvents: ContentEvent[];
   agentActivity: AgentActivityEvent[];
   /**
    * Phase 6.5.5 — most-recent assistant reply, used by the RailReplyPreview
@@ -62,6 +64,7 @@ const EMPTY: LiveData = {
   repeatBacks: [],
   notices: [],
   taskEvents: [],
+  contentEvents: [],
   agentActivity: [],
   latestAssistantReply: null,
 };

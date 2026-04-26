@@ -14,7 +14,7 @@ const ROOM_TITLE: Record<RoomKey, string> = {
   calendar: "Calendar",
   goals: "Goals",
   tasks: "Tasks",
-  sites: "Sites",
+  content: "Content",
   settings: "Settings",
 };
 

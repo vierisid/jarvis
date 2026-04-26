@@ -299,6 +299,8 @@ export function useLiveThread() {
     repeatBacks: ws.repeatBacks,
     /** Live task lifecycle events (drives Logs Room live tail). */
     taskEvents: ws.taskEvents,
+    /** Live content pipeline events (drives Content Room live tail). */
+    contentEvents: ws.contentEvents,
     /** Live agent delegation events (drives Logs Room live tail). */
     agentActivity: ws.agentActivity,
     /** Phase 5A: palette pushes synthetic cards into the thread via this. */

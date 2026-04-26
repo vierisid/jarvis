@@ -31,7 +31,8 @@ const VALID_ROOMS: ReadonlySet<RoomKey> = new Set([
   'logs',
   'calendar',
   'goals',
-  'sites',
+  'tasks',
+  'content',
   'settings',
 ]);
 
@@ -61,7 +62,7 @@ const VALID_OBJECT_TYPES: ReadonlySet<ObjectRefType> = new Set([
   'goal',
   'calendar',
   'task',
-  'site',
+  'content',
   'settings',
   'file',
   'url',
@@ -75,7 +76,7 @@ Given a user's voice transcript and the recent conversation context, return a si
 Schema:
 {
   "verb": "ask" | "show" | "run" | "create" | "update" | "delete" | "grant" | "revoke" | "pause" | "resume" | "unknown",
-  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"task"|"site"|"settings"|"file"|"url"|"thread", "query": string } | null,
+  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"task"|"content"|"settings"|"file"|"url"|"thread", "query": string } | null,
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
@@ -217,6 +218,30 @@ workflows room ("room": "workflows"):
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
 
+content room ("room": "content"):
+- "switch_view" — args: { "view": "kanban" | "list" }
+   matches "switch to list view", "show kanban"
+- "search" — args: { "query": string }
+   matches "search content for q3", "find launch posts"
+- "set_filter" — args: { "field": "stage" | "type", "value": string }
+   value (stage): "all" | "idea" | "research" | "outline" | "draft" | "assets" | "review" | "scheduled" | "published"
+   value (type): "all" | "youtube" | "blog" | "twitter" | "instagram" | "tiktok" | "linkedin" | "podcast" | "newsletter" | "short_form" | "other"
+   matches "show only drafts", "show scheduled posts", "filter to youtube"
+- "select" — args: { "name": string }
+   matches "open the q3 launch post", "select my morning newsletter"
+- "create_content" — args: { "title": string, "type"?: ContentType }
+   matches "create a blog post draft titled q3 launch",
+   "new youtube video script about ai workflows",
+   "draft a newsletter about agent tools"
+- "advance" — args: { "name"?: string }
+   matches "advance the q3 launch", "move this to the next stage"
+- "regress" — args: { "name"?: string }
+   matches "move the q3 launch back", "regress this one stage"
+- "schedule" — args: { "name"?: string, "when": string }
+   matches "schedule the launch post for next monday at 9am",
+   "schedule this for tomorrow at noon"
+   The "when" field uses the same parseRelativeDate format as Calendar.
+
 tasks room ("room": "tasks"):
 - "switch_view" — args: { "view": "kanban" | "list" }
    matches "switch to list view", "show kanban", "go to list"
@@ -344,8 +369,20 @@ Transcript: "show me my calendar"
 Transcript: "open settings"
 {"verb":"show","object":{"type":"settings"},"args":{},"impact":"read","confidence":0.98}
 
-Transcript: "open sites"
-{"verb":"show","object":{"type":"site"},"args":{},"impact":"read","confidence":0.97}
+Transcript: "open content"
+{"verb":"show","object":{"type":"content"},"args":{},"impact":"read","confidence":0.97}
+
+Transcript: "show me my drafts"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"content","action":"set_filter","args":{"field":"stage","value":"draft"}}}
+
+Transcript: "create a blog post draft about q3 launch"
+{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"content","action":"create_content","args":{"title":"q3 launch","type":"blog"}}}
+
+Transcript: "advance the q3 launch to the next stage"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"content","action":"advance","args":{"name":"q3 launch"}}}
+
+Transcript: "schedule the launch post for next monday at 9am"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"content","action":"schedule","args":{"name":"launch post","when":"next monday at 9am"}}}
 
 Transcript: "open tasks"
 {"verb":"show","object":{"type":"task"},"args":{},"impact":"read","confidence":0.98}
