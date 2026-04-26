@@ -613,7 +613,17 @@ export class WebSocketService implements Service {
    * Auto-creates a task for non-trivial messages so the task board tracks agent work.
    */
   private async handleChat(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
-    const payload = msg.payload as { text?: string; channel?: string; projectId?: string };
+    const payload = msg.payload as {
+      text?: string;
+      channel?: string;
+      projectId?: string;
+      currentRoom?: string;
+      /** Set by `processVoiceTranscript` when it falls through to chat —
+       *  the classifier already ran for that text, so we shouldn't re-run
+       *  it here (avoids both duplicate latency and double-fire of any
+       *  navigation/room_action interception). */
+      skipIntercept?: boolean;
+    };
     const text = payload?.text;
     const projectId = payload?.projectId ?? null;
 
@@ -628,6 +638,24 @@ export class WebSocketService implements Service {
 
     const channel = payload.channel ?? 'websocket';
     const requestId = msg.id ?? crypto.randomUUID();
+
+    // Text-driven Room navigation + room actions. Run the same intent
+    // classifier the voice path uses on the typed text. If it parses
+    // as a command (window control, navigation, room_action, "back to
+    // thread"), handle it directly and skip the chat agent — so typing
+    // "go to settings and disable TTS" works the same as saying it.
+    // Voice's processVoiceTranscript sets skipIntercept when it falls
+    // through to chat for plain conversational text, preventing a
+    // double-classify.
+    if (!payload.skipIntercept && !projectId) {
+      const handled = await this.tryInterceptAsCommand(
+        text,
+        requestId,
+        ws,
+        payload.currentRoom,
+      );
+      if (handled) return undefined;
+    }
 
     // Build site builder system prompt context (injected into system prompt, not user message)
     let siteContext: string | undefined;
@@ -957,6 +985,94 @@ If the user wants to create a new project, tell them to use the Site Builder pag
    * window-control fast-path, then the intent classifier, and finally
    * routes by confidence (act / clarify / repeat-back).
    */
+
+  /**
+   * Text-driven Room navigation + room actions (Phase 6.8).
+   *
+   * Run the same intent classifier the voice path uses on the typed
+   * text. If it parses as a command (window control, navigation,
+   * room_action, "back to thread"), broadcast it directly and return
+   * true; the caller skips the chat agent. Otherwise return false and
+   * let the chat agent answer normally.
+   *
+   * Differences from voice's processVoiceTranscript:
+   *   - No transcript echo (the UI optimistically adds the user's text
+   *     to the thread on send).
+   *   - No clarifier / repeat-back path — text users get an immediate
+   *     answer instead of a confirmation prompt. Low-confidence
+   *     commands fall through to the chat agent.
+   *   - No thinking_start broadcast for handled-as-command (the
+   *     interception is fast enough that the spinner just adds noise).
+   */
+  private async tryInterceptAsCommand(
+    text: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown> | undefined,
+    currentRoom?: string,
+  ): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // Window-control fast path — same as voice. Catches "close",
+    // "minimize tools", "reorder layout" etc. without an LLM call.
+    const winCtrl = matchWindowControl(trimmed);
+    if (winCtrl) {
+      console.log(
+        `[WSService] (text) Window control: ${winCtrl.action} → ${winCtrl.target}`,
+      );
+      this.broadcastWindowControl(winCtrl, requestId);
+      this.broadcastAssistantAck(ackForWindowControl(winCtrl), requestId);
+      return true;
+    }
+
+    // Classify. Failure is tolerable — fall through to the chat agent.
+    const llm = this.agentService.getLLMManager();
+    const recentTurns = this.recentTurns('websocket');
+    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom);
+    const route = routeByConfidence(intent);
+
+    console.log(
+      `[WSService] Text intent: verb=${intent.verb} impact=${intent.impact} ` +
+      `confidence=${intent.confidence.toFixed(2)} → ${route}`,
+    );
+
+    // Only intercept when the classifier is confident enough to act
+    // AND the intent is a command. Anything else falls through to the
+    // chat agent — voice would prompt for confirmation here, but text
+    // users want an answer, not a clarifier.
+    if (route !== 'act') return false;
+
+    if (intentIsBackToThread(intent)) {
+      this.broadcastNavigateHome(requestId);
+      this.broadcastAssistantAck("Going back to the thread.", requestId);
+      return true;
+    }
+
+    if (intent.room_action) {
+      const ra = intent.room_action;
+      // Auto-open the target room first so the body's `useRoomActions`
+      // handler is registered by the time the action dispatches. The
+      // UI bus also queues actions when no handler is mounted yet, so
+      // even without this navigation the action would fire on register
+      // — but firing nav explicitly gives the user immediate visual
+      // feedback that the room is opening.
+      const targetRoom = ra.room as RoomKey;
+      this.broadcastRoomNavigation(targetRoom, requestId);
+      this.broadcastRoomAction(ra, requestId);
+      this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
+      return true;
+    }
+
+    const roomKey = intentToRoomKey(intent);
+    if (roomKey) {
+      this.broadcastRoomNavigation(roomKey, requestId);
+      this.broadcastAssistantAck(`Opening the ${roomKey} room.`, requestId);
+      return true;
+    }
+
+    return false;
+  }
+
   private async processVoiceTranscript(
     transcript: string,
     requestId: string,
@@ -1051,6 +1167,11 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     // confident the user wants in-room behavior, so trust it.
     if (route === 'act' && intent.room_action) {
       const ra = intent.room_action;
+      // Auto-open the room (no-op if already open) so a "go to settings
+      // and disable TTS"-style compound voice command also works when
+      // the user is on the home thread. The UI bus queues the action
+      // until the body mounts.
+      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
       this.broadcastRoomAction(ra, requestId);
       this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
       this.broadcastThinkingEnd(requestId);
@@ -1087,9 +1208,10 @@ If the user wants to create a new project, tell them to use the Site Builder pag
 
     if (route === 'act') {
       // Normal chat flow — thinking_end will be emitted on first stream chunk.
+      // skipIntercept: classifier already ran above; don't double-classify.
       await this.handleChat({
         type: 'chat',
-        payload: { text: trimmed },
+        payload: { text: trimmed, skipIntercept: true },
         id: requestId,
         timestamp: Date.now(),
       }, ws);
@@ -1242,7 +1364,7 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       this.broadcastThinkingStart(pending.id);
       await this.handleChat({
         type: 'chat',
-        payload: { text: pending.transcript },
+        payload: { text: pending.transcript, skipIntercept: true },
         id: pending.id,
         timestamp: Date.now(),
       }, pending.ws);

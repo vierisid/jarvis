@@ -156,6 +156,15 @@ filter; do NOT also set object.type to the room name (or you'll
 double-fire navigation + filter and the qualifier gets dropped). The
 daemon already knows which Room each action belongs to.
 
+**Compound "go to X and Y" rule:** When the user says "go to settings
+and disable TTS", "open the LLM tab and switch to anthropic", "go to
+tasks and complete the OAuth one" — emit ONLY the "room_action" for the
+follow-up verb (the disable / switch / complete). The daemon
+auto-opens the target room before dispatching the action, so a separate
+navigation intent would just race the action and add ack noise. Same
+goes for "in the X room, do Y" phrasings. Always pick the most
+specific room_action; the room is implied.
+
 Examples of this rule:
   "show me the pending tasks"   → room_action: tasks/set_filter status=pending; object: null
   "show critical goals"          → room_action: goals/set_filter health=critical; object: null
@@ -484,6 +493,18 @@ Transcript: "use elevenlabs for tts"
 
 Transcript: "restart jarvis"
 {"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"restart_daemon","args":{}}}
+
+Transcript: "go to settings and disable TTS"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"disable_tts","args":{}}}
+
+Transcript: "open the LLM tab and switch to anthropic"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"settings","action":"set_primary_llm","args":{"provider":"anthropic"}}}
+
+Transcript: "in the tasks room, complete the oauth task"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"tasks","action":"complete_task","args":{"name":"oauth"}}}
+
+Transcript: "go to workspaces and open the dashboard project"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workspaces","action":"select_project","args":{"name":"dashboard"}}}
 
 Transcript: "create a blog post draft about q3 launch"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"content","action":"create_content","args":{"title":"q3 launch","type":"blog"}}}

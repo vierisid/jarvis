@@ -57,19 +57,67 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
   // (top of stack) handles incoming actions. Unmount pops by identity.
   const handlersRef = useRef<Partial<Record<RoomKey, RoomActionHandler[]>>>({});
 
-  const register = useCallback((room: RoomKey, handler: RoomActionHandler) => {
-    const stack = handlersRef.current[room] ?? [];
-    handlersRef.current[room] = [...stack, handler];
-    return () => {
-      const cur = handlersRef.current[room] ?? [];
-      handlersRef.current[room] = cur.filter((h) => h !== handler);
-    };
+  // Pending queue per room — actions that arrived before any body for
+  // that room registered a handler. Drained when the next handler
+  // registers (within QUEUE_TTL_MS so stale queues don't replay later).
+  // Use case: text-driven "go to settings and disable TTS" — the daemon
+  // broadcasts the room_action and the navigation request in the same
+  // frame, but the SettingsRoom body needs a tick or two to mount + run
+  // its `useRoomActions` effect. Without queueing, the action lands in
+  // the void and the user sees the room open but TTS not toggle.
+  const QUEUE_TTL_MS = 5000;
+  const queueRef = useRef<
+    Partial<Record<RoomKey, Array<{ req: RoomActionRequest; queuedAt: number }>>>
+  >({});
+
+  const drainQueue = useCallback((room: RoomKey, handler: RoomActionHandler) => {
+    const queue = queueRef.current[room];
+    if (!queue || queue.length === 0) return;
+    const now = Date.now();
+    const fresh = queue.filter((q) => now - q.queuedAt < QUEUE_TTL_MS);
+    queueRef.current[room] = [];
+    for (const { req } of fresh) {
+      console.log(
+        `[RoomActionBus] Draining queued action "${req.action}" for room "${req.room}"`,
+      );
+      const result = handler(req.action, req.args);
+      if (result === false) {
+        console.warn(
+          `[RoomActionBus] Queued action "${req.action}" rejected by "${req.room}"`,
+        );
+      }
+    }
   }, []);
+
+  const register = useCallback(
+    (room: RoomKey, handler: RoomActionHandler) => {
+      const stack = handlersRef.current[room] ?? [];
+      handlersRef.current[room] = [...stack, handler];
+      // Defer the drain so it runs after this register's caller finishes
+      // its own mount effect — otherwise the handler may not yet be ready
+      // for synchronous dispatch.
+      queueMicrotask(() => drainQueue(room, handler));
+      return () => {
+        const cur = handlersRef.current[room] ?? [];
+        handlersRef.current[room] = cur.filter((h) => h !== handler);
+      };
+    },
+    [drainQueue],
+  );
 
   const dispatch = useCallback((req: RoomActionRequest) => {
     const stack = handlersRef.current[req.room as RoomKey];
     if (!stack || stack.length === 0) {
-      console.warn(`[RoomActionBus] No handler for room "${req.room}"`);
+      // No handler yet — queue and wait for one to register. Common
+      // when the daemon broadcasts a navigation + room_action pair and
+      // the target room's body hasn't finished mounting yet (lazy chunk
+      // load + Suspense + effect timing).
+      const list = queueRef.current[req.room as RoomKey] ?? [];
+      list.push({ req, queuedAt: Date.now() });
+      queueRef.current[req.room as RoomKey] = list;
+      console.log(
+        `[RoomActionBus] Queued action "${req.action}" for room "${req.room}" (no handler yet)`,
+      );
       return;
     }
     const top = stack[stack.length - 1]!;

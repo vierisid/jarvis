@@ -470,7 +470,9 @@ function AppShellLive() {
             ? "Ask Jarvis, or press / to summon a tool…"
             : "Waiting for daemon…"
         }
-        onSubmit={live.send}
+        onSubmit={(text) =>
+          live.send(text, { currentRoom: getCurrentRoom() })
+        }
         onApprove={handleApprove}
         onCancel={handleCancel}
         onFocusCard={(id) => {
