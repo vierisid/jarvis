@@ -3,6 +3,7 @@ import type { RoomKey } from "../router";
 import { ToolsRoomBody } from "./tools/ToolsRoom";
 import { LogsRoomBody } from "./logs/LogsRoom";
 import { AgentsRoomBody } from "./agents/AgentsRoom";
+import { WorkflowsRoomBody } from "./workflows/WorkflowsRoom";
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -20,7 +21,7 @@ const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   tools: ToolsRoomBody,
   logs: LogsRoomBody,
   agents: AgentsRoomBody,
-  // 6.4 — workflows
+  workflows: WorkflowsRoomBody,
   // 6.5 — memory
   // 6.6 — authority
   // 6.7 — calendar / goals / sites / settings

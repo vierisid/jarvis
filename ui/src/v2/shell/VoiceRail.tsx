@@ -1,6 +1,7 @@
 import React from "react";
 import { MicOrb, type OrbState } from "./MicOrb";
 import { TranscriptBubble } from "../voice/TranscriptBubble";
+import { RailConfirmationStack } from "../voice/RailConfirmationStack";
 import "./VoiceRail.css";
 
 export type VoiceState =
@@ -89,15 +90,11 @@ export function VoiceRail({
         <div className="v2-rail__hint-meta">Replies appear in the thread →</div>
       </div>
 
-      {state === "awaiting-approval" && (
-        <div className="v2-rail__awaiting" role="status">
-          <span className="v2-rail__awaiting-dot" aria-hidden="true" />
-          <div>
-            <div className="v2-rail__awaiting-title">Awaiting confirmation</div>
-            <div className="v2-rail__awaiting-body">Answer in the thread →</div>
-          </div>
-        </div>
-      )}
+      {/* Phase 6.3.5b — pending confirmations rendered inline so the
+          user can resolve them without leaving any Room. Replaces the
+          old "awaiting in the thread →" placeholder; renders nothing
+          when no confirmations are pending. */}
+      <RailConfirmationStack />
 
       <div className="v2-rail__spacer" />
 

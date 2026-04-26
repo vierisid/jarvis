@@ -3,11 +3,12 @@
    Single-accent discipline: only the trailing primary action carries --accent. */
 
 .v2-room-overlay {
-  /* Leave the rightmost rail column uncovered so the persistent VoiceRail
-     stays visible and interactive while a Room is open. The scrim + Room
-     cover everything left of `--v2-rail-width`. */
+  /* Leave the rail uncovered (right) AND the header uncovered (top) so
+     the persistent VoiceRail + the notification bell / palette / mode
+     toggle stay visible and interactive while a Room is open. Same
+     "always-available" principle for both. */
   position: fixed;
-  top: 0;
+  top: var(--v2-header-height);
   left: 0;
   right: var(--v2-rail-width);
   bottom: 0;

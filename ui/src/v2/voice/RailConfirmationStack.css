@@ -1,0 +1,195 @@
+/* Phase 6.3.5b — pending confirmations rendered in the VoiceRail.
+   Stack of compact cards; each card has Approve/Cancel buttons that
+   hit REST. The entire surface is also voice-resolvable via
+   "approve" / "cancel" — see daemon's resolveLatestPendingByVoice. */
+
+.v2-rail-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-top: var(--hair-soft);
+  border-bottom: var(--hair-soft);
+  background: color-mix(in srgb, var(--accent) 4%, var(--paper));
+}
+
+.v2-rail-confirm__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.v2-rail-confirm__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.v2-rail-confirm__count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.v2-rail-confirm__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.v2-rail-confirm__card {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: var(--s-2) var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.v2-rail-confirm__card[data-tone="accent"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent) inset;
+}
+
+.v2-rail-confirm__card[data-tone="warn"] {
+  border-color: var(--warn);
+}
+
+.v2-rail-confirm__card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-rail-confirm__card-kind {
+  color: var(--ink-2);
+}
+
+.v2-rail-confirm__card-impact {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--paper-3);
+  color: var(--ink-2);
+}
+
+.v2-rail-confirm__card-impact[data-impact="destructive"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.v2-rail-confirm__card-impact[data-impact="external"] {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.v2-rail-confirm__card-title {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.v2-rail-confirm__card-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.v2-rail-confirm__card-quote {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.v2-rail-confirm__card-error {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.v2-rail-confirm__card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.v2-rail-confirm__btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 8px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  border: 1px solid var(--rule);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.v2-rail-confirm__btn:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+.v2-rail-confirm__btn--approve {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.v2-rail-confirm__btn--approve:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+  filter: brightness(0.92);
+}
+
+.v2-rail-confirm__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-rail-confirm__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.v2-rail-confirm__voice-hint {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--ink-3);
+  text-align: center;
+  margin-top: 2px;
+}
+
+.v2-rail-confirm__voice-hint em {
+  font-style: italic;
+  color: var(--accent);
+}

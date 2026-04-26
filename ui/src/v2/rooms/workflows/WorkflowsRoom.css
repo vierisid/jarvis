@@ -1,0 +1,897 @@
+/* Workflows Room — three-tab surface (List / Editor / Agent Builder).
+   Stats bar + tabs + toolbar match the established Tools/Agents/Logs
+   conventions. The Editor and Builder tabs host legacy canvases inside
+   v2 chrome — the embedded canvases keep their own legacy CSS scoped via
+   their own class names. */
+
+.v2-wf {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Stats ── */
+
+.v2-wf__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-6) var(--s-3);
+}
+
+@media (max-width: 720px) {
+  .v2-wf__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.v2-wf__stat {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.v2-wf__stat-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-wf__stat-value {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--ink);
+  line-height: 1.1;
+}
+
+.v2-wf__stat-sub {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Tabs ── */
+
+.v2-wf__tabs {
+  display: flex;
+  gap: var(--s-1);
+  padding: 0 var(--s-6);
+  border-bottom: var(--hair-soft);
+}
+
+.v2-wf__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-3);
+  border: 0;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.v2-wf__tab:hover { color: var(--ink); }
+
+.v2-wf__tab[data-active="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.v2-wf__tab[data-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.v2-wf__tab[data-disabled="true"]:hover { color: var(--ink-3); }
+
+.v2-wf__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+.v2-wf__tab-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--paper-3);
+  color: var(--ink-3);
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.v2-wf__tab[data-active="true"] .v2-wf__tab-badge {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+/* ── Toolbar (list tab) ── */
+
+.v2-wf__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  flex-wrap: wrap;
+}
+
+.v2-wf__search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  color: var(--ink-3);
+  max-width: 360px;
+  min-width: 160px;
+}
+
+.v2-wf__search:focus-within {
+  border-color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+.v2-wf__search-input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.v2-wf__search-input::placeholder { color: var(--ink-3); }
+
+.v2-wf__filter-row {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.v2-wf__filter-btn {
+  padding: 4px 12px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-wf__filter-btn:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+.v2-wf__filter-btn[data-active="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.v2-wf__refresh,
+.v2-wf__new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: 28px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.v2-wf__refresh {
+  width: 28px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink-2);
+}
+
+.v2-wf__refresh:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+.v2-wf__new-btn {
+  padding: 0 12px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 0;
+}
+
+.v2-wf__new-btn:hover { background: var(--ink-2); }
+
+.v2-wf__new-btn:disabled { opacity: 0.5; cursor: default; }
+
+.v2-wf__new-btn:focus-visible,
+.v2-wf__refresh:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── List ── */
+
+.v2-wf__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.v2-wf__row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: var(--s-3);
+  align-items: center;
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.v2-wf__row:hover { background: var(--paper-2); }
+
+.v2-wf__row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.v2-wf__row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+.v2-wf__row-name {
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v2-wf__row-desc {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.v2-wf__row-meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v2-wf__row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-wf__row-action:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+.v2-wf__row-action--primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.v2-wf__row-action--primary:hover { background: var(--ink-2); }
+
+.v2-wf__row-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Editor (embedded WorkflowCanvas) ── */
+
+.v2-wf__editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.v2-wf__editor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  background: var(--paper-2);
+}
+
+.v2-wf__editor-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  color: var(--ink);
+}
+
+.v2-wf__editor-version,
+.v2-wf__editor-runs {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.v2-wf__editor-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* The legacy WorkflowCanvas uses absolute fills inside .wf-canvas-layout.
+   Force it to take the full editor area. */
+.v2-wf__editor-canvas .wf-canvas-layout {
+  position: absolute;
+  inset: 0;
+}
+
+.v2-wf__editor-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  padding: var(--s-8);
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.v2-wf__editor-empty h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--ink);
+}
+
+.v2-wf__editor-empty p {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  max-width: 360px;
+}
+
+/* ── Builder (embedded AgentBuilderView) ── */
+
+.v2-wf__builder {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* AgentBuilderView uses .ab-* classes; force its root to fill the area. */
+.v2-wf__builder > * {
+  position: absolute !important;
+  inset: 0;
+}
+
+/* ── Empty / error / toast ── */
+
+.v2-wf__empty {
+  padding: var(--s-8) var(--s-4);
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.v2-wf__error {
+  padding: var(--s-3) var(--s-6);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  border-bottom: var(--hair-soft);
+}
+
+.v2-wf__toast {
+  position: absolute;
+  right: var(--s-4);
+  bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  border-radius: var(--r-2);
+  box-shadow: 0 6px 20px -10px rgba(26, 26, 26, 0.4);
+  max-width: 360px;
+  z-index: 5;
+}
+
+.v2-wf__toast[data-tone="warn"] { background: var(--accent); }
+
+/* ── Inline mode adjustments ── */
+
+.v2-wf--inline .v2-wf__stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: var(--s-3) var(--s-4) var(--s-2);
+}
+
+.v2-wf--inline .v2-wf__toolbar {
+  padding: var(--s-2) var(--s-4);
+}
+
+.v2-wf--inline .v2-wf__row {
+  padding: var(--s-3) var(--s-4);
+  grid-template-columns: 1fr auto;
+}
+
+.v2-wf--inline .v2-wf__row-action {
+  display: none;
+}
+
+/* ── Embedded legacy retheming ─────────────────────────────────────
+   The legacy WorkflowCanvas (xyflow) and AgentBuilderView use a dark-
+   theme design system scoped under `.wf-page` / `.ag-builder-shell`.
+   In v2 we mount them outside those scopes, so their `--surface-X` /
+   `--text-X` / `--border-X` tokens are unset — components render
+   transparent or against the bone-paper background, looking greyed-out.
+   These overrides remap the legacy token namespace to v2 riso tokens
+   so the embedded canvases match the rest of the app.
+   ────────────────────────────────────────────────────────────────── */
+
+.v2-wf__editor-canvas,
+.v2-wf__builder {
+  --surface-1: var(--paper);
+  --surface-2: var(--paper-2);
+  --surface-3: var(--paper-3);
+  --surface-4: var(--paper-3);
+
+  --border-1: var(--rule-soft);
+  --border-2: var(--rule);
+  --border-3: var(--rule);
+
+  --text-1: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+
+  /* Riso has one accent — vermilion. Keep the legacy named colors so
+     status pips render, but bias them toward the riso palette. */
+  --violet: var(--accent);
+  --violet-bright: var(--accent);
+  --violet-dim: color-mix(in srgb, var(--accent) 12%, transparent);
+
+  --emerald: var(--ok);
+  --emerald-dim: color-mix(in srgb, var(--ok) 12%, transparent);
+
+  --blue: var(--ink-2);
+  --blue-dim: color-mix(in srgb, var(--ink-2) 12%, transparent);
+
+  --amber: var(--warn);
+  --amber-dim: color-mix(in srgb, var(--warn) 12%, transparent);
+
+  --rose: var(--accent);
+  --rose-dim: color-mix(in srgb, var(--accent) 12%, transparent);
+
+  --cyan: var(--ink-2);
+  --cyan-dim: color-mix(in srgb, var(--ink-2) 10%, transparent);
+
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* xyflow canvas — readable backgrounds + visible edges/handles. */
+.v2-wf__editor-canvas .react-flow,
+.v2-wf__editor-canvas .react-flow__background,
+.v2-wf__editor-canvas .react-flow__pane {
+  background: var(--paper);
+}
+
+/* Dot grid against bone paper — was rgba-white, invisible. */
+.v2-wf__editor-canvas .react-flow__background-pattern {
+  color: var(--rule);
+}
+
+.v2-wf__editor-canvas .react-flow__controls,
+.v2-wf__editor-canvas .react-flow__minimap {
+  background: var(--paper-2) !important;
+  border: 1px solid var(--rule) !important;
+  box-shadow: 0 4px 16px -10px rgba(26, 26, 26, 0.18) !important;
+}
+
+.v2-wf__editor-canvas .react-flow__controls-button {
+  background: var(--paper-2) !important;
+  border-color: var(--rule) !important;
+  fill: var(--ink-2) !important;
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__editor-canvas .react-flow__controls-button:hover {
+  background: var(--paper-3) !important;
+  fill: var(--ink) !important;
+  color: var(--ink) !important;
+}
+
+/* WorkflowNode — paper card with riso border/typography. */
+.v2-wf__editor-canvas .wf-node {
+  background: var(--paper) !important;
+  border: 1px solid var(--rule) !important;
+  color: var(--ink) !important;
+  box-shadow: 0 4px 14px -10px rgba(26, 26, 26, 0.14) !important;
+  border-radius: var(--r-2) !important;
+}
+
+.v2-wf__editor-canvas .wf-node.selected {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent), 0 4px 14px -10px rgba(26, 26, 26, 0.18) !important;
+}
+
+.v2-wf__editor-canvas .wf-node-header {
+  border-bottom: 1px solid var(--rule-soft) !important;
+}
+
+.v2-wf__editor-canvas .wf-node-header-label {
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-node-body,
+.v2-wf__editor-canvas .wf-node-field,
+.v2-wf__editor-canvas .wf-node-field-key,
+.v2-wf__editor-canvas .wf-node-field-overflow {
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__editor-canvas .wf-node-field-key {
+  color: var(--ink-3) !important;
+}
+
+/* Edges — JS sets stroke inline (`rgba(255,255,255,0.15)`), so we
+   need !important on the path itself, not just the wrapper. */
+.v2-wf__editor-canvas .react-flow__edge-path,
+.v2-wf__editor-canvas .react-flow__edge .react-flow__edge-path {
+  stroke: var(--ink-3) !important;
+  stroke-width: 1.5 !important;
+}
+
+.v2-wf__editor-canvas .react-flow__edge.animated .react-flow__edge-path,
+.v2-wf__editor-canvas .react-flow__edge[data-animated="true"] .react-flow__edge-path {
+  stroke: var(--accent) !important;
+  stroke-width: 2 !important;
+}
+
+.v2-wf__editor-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--ink) !important;
+  stroke-width: 2 !important;
+}
+
+/* Connection-in-progress drag line. */
+.v2-wf__editor-canvas .react-flow__connection-path {
+  stroke: var(--accent) !important;
+  stroke-width: 2 !important;
+}
+
+/* Handles — JS sets `background: rgba(255,255,255,0.08)` and a dark
+   `border: 2px solid var(--surface-2, #0D0D14)` inline. !important
+   wins. Inputs are subtle ink dots; outputs match the node accent
+   color but stay visible against paper. */
+.v2-wf__editor-canvas .react-flow__handle {
+  background: var(--ink-2) !important;
+  border: 2px solid var(--paper) !important;
+  width: 10px !important;
+  height: 10px !important;
+}
+
+.v2-wf__editor-canvas .react-flow__handle-connecting {
+  background: var(--accent) !important;
+}
+
+.v2-wf__editor-canvas .react-flow__handle-valid {
+  background: var(--ok) !important;
+}
+
+/* Palette — hardcoded white-on-dark hover and disabled badge. */
+.v2-wf__editor-canvas .wf-palette {
+  background: var(--paper-2) !important;
+  border-right-color: var(--rule) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-header,
+.v2-wf__editor-canvas .wf-palette-search {
+  border-color: var(--rule-soft) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-search {
+  background: var(--paper) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-search::placeholder {
+  color: var(--ink-3) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-label,
+.v2-wf__editor-canvas .wf-palette-category {
+  color: var(--ink-3) !important;
+  font-family: var(--font-mono) !important;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.v2-wf__editor-canvas .wf-palette-node {
+  border-color: transparent !important;
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-node:hover {
+  background: var(--paper-3) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-node-name {
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-node-icon {
+  /* The legacy palette tints icons with the node's own color. Force
+     a neutral chip so the riso accent stays the only saturated color. */
+  background: var(--paper-3) !important;
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__editor-canvas .wf-palette-empty {
+  color: var(--ink-3) !important;
+}
+
+/* Right panel + tabs */
+.v2-wf__editor-canvas .wf-right-panel {
+  background: var(--paper-2) !important;
+  border-left-color: var(--rule) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__editor-canvas .wf-panel-tabs {
+  border-bottom-color: var(--rule-soft) !important;
+}
+
+.v2-wf__editor-canvas .wf-panel-tab {
+  color: var(--ink-3) !important;
+  background: transparent !important;
+}
+
+.v2-wf__editor-canvas .wf-panel-tab:hover {
+  color: var(--ink) !important;
+  background: var(--paper-3) !important;
+}
+
+.v2-wf__editor-canvas .wf-panel-tab.active {
+  color: var(--ink) !important;
+  border-bottom: 2px solid var(--accent) !important;
+}
+
+.v2-wf__editor-canvas .wf-panel-placeholder {
+  color: var(--ink-3) !important;
+}
+
+/* Disabled badge in canvas header (if rendered) */
+.v2-wf__editor-canvas .wf-canvas-badge.disabled {
+  background: var(--paper-3) !important;
+  color: var(--ink-3) !important;
+}
+
+/* Hover row highlight in execution monitor */
+.v2-wf__editor-canvas .wf-exec-header:hover {
+  background: var(--paper-3) !important;
+}
+
+/* ── Agent Builder ── */
+
+.v2-wf__builder .ag-builder-shell {
+  height: 100%;
+  background: var(--paper) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-sidebar,
+.v2-wf__builder .ag-builder-inspector {
+  background: var(--paper-2) !important;
+  border-color: var(--rule) !important;
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-title {
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-eyebrow {
+  color: var(--ink-3) !important;
+}
+
+.v2-wf__builder .ag-builder-copy {
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__builder .ag-builder-stat {
+  background: var(--paper) !important;
+  border-color: var(--rule-soft) !important;
+}
+
+.v2-wf__builder .ag-builder-stat span {
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-stat strong {
+  color: var(--ink-3) !important;
+}
+
+/* Palette items — hardcoded violet rgba hover, override to accent. */
+.v2-wf__builder .ag-builder-palette-item {
+  background: var(--paper) !important;
+  border-color: var(--rule) !important;
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__builder .ag-builder-palette-item:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--paper)) !important;
+  border-color: var(--accent) !important;
+}
+
+.v2-wf__builder .ag-builder-palette-item strong {
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-palette-item small {
+  color: var(--ink-3) !important;
+}
+
+/* Action buttons (primary/secondary) */
+.v2-wf__builder .ag-builder-action {
+  border-radius: var(--r-pill) !important;
+  font-family: var(--font-sans) !important;
+}
+
+.v2-wf__builder .ag-builder-primary {
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+  border-color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-secondary {
+  background: var(--paper-2) !important;
+  color: var(--ink-2) !important;
+  border-color: var(--rule) !important;
+}
+
+/* Canvas + nodes — the main visual offenders. */
+.v2-wf__builder .ag-builder-canvas {
+  background: var(--paper-2) !important;
+}
+
+.v2-wf__builder .ag-builder-canvas-stage {
+  background: var(--paper) !important;
+}
+
+.v2-wf__builder .ag-builder-node {
+  background: var(--paper) !important;
+  border: 1px solid var(--rule) !important;
+  box-shadow: 0 4px 14px -10px rgba(26, 26, 26, 0.16) !important;
+  color: var(--ink) !important;
+  border-radius: var(--r-2) !important;
+}
+
+.v2-wf__builder .ag-builder-node:hover,
+.v2-wf__builder .ag-builder-node.selected {
+  border-color: var(--accent) !important;
+  box-shadow: 0 4px 16px -10px rgba(26, 26, 26, 0.2),
+              0 0 0 1px var(--accent) inset !important;
+}
+
+.v2-wf__builder .ag-builder-node.connecting {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent) inset !important;
+}
+
+.v2-wf__builder .ag-builder-node-eyebrow {
+  color: var(--accent) !important;
+  font-family: var(--font-mono) !important;
+}
+
+.v2-wf__builder .ag-builder-node-title {
+  color: var(--ink) !important;
+}
+
+.v2-wf__builder .ag-builder-node-subtitle {
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__builder .ag-builder-node-chip {
+  background: var(--paper-3) !important;
+  color: var(--ink-2) !important;
+}
+
+/* SVG edges — hardcoded rgba violet/cyan, override to riso. */
+.v2-wf__builder .ag-builder-line {
+  stroke: var(--ink-3) !important;
+  stroke-dasharray: 5 5 !important;
+}
+
+.v2-wf__builder .ag-builder-line.selected {
+  stroke: var(--accent) !important;
+  stroke-dasharray: none !important;
+}
+
+.v2-wf__builder .ag-builder-line-label {
+  fill: var(--ink-3) !important;
+}
+
+/* Empty canvas hint */
+.v2-wf__builder .ag-builder-empty-canvas,
+.v2-wf__builder .ag-builder-empty-title,
+.v2-wf__builder .ag-builder-empty-copy {
+  color: var(--ink-2) !important;
+}
+
+.v2-wf__builder .ag-builder-empty-title {
+  color: var(--ink) !important;
+  font-family: var(--font-display) !important;
+}

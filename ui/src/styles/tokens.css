@@ -78,4 +78,10 @@
      and the RoomShell overlay so opening a Room leaves the rail visible
      and interactive (per the handoff "voice is always available" rule). */
   --v2-rail-width: 260px;
+
+  /* Height of the persistent Header. Shared by AppShell's grid and the
+     RoomShell overlay so opening a Room leaves the header (notification
+     bell, palette, mode toggle) visible — same "always-available"
+     principle as the rail. Matches `.v2-header` min-height. */
+  --v2-header-height: 52px;
 }
