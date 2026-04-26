@@ -150,8 +150,33 @@ export type UserConfig = {
   name?: string;
 };
 
+/**
+ * Onboarding completion state — persists in `~/.jarvis/config.yaml` so
+ * the dashboard knows which phase (setup / profile interview / tutorial)
+ * to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
+ * `null` means not yet done. Reset endpoint clears subsets per scope.
+ *
+ * See `docs/ONBOARDING_PLAN.md` for the gate logic and reset semantics.
+ */
+export type OnboardingConfig = {
+  /** Phase A — LLM provider + key + model + TTS choice all saved. */
+  setup_completed_at: number | null;
+  /** Phase B opt-out — user clicked Skip on the profile interview. */
+  setup_skipped_profile?: boolean;
+  /** Phase C completion stamp. */
+  tutorial_completed_at: number | null;
+  /** Phase C dismissal stamp (one-shot snooze; user can replay). */
+  tutorial_dismissed_at?: number | null;
+  /** Resume key for an in-progress tutorial. */
+  tutorial_progress_step?: string;
+  /** Set by the reset endpoint — useful for debugging "did the reset
+   *  actually fire" or rate-limiting accidental resets later. */
+  last_reset_at?: number;
+};
+
 export type JarvisConfig = {
   user?: UserConfig;
+  onboarding?: OnboardingConfig;
   daemon: {
     port: number;
     data_dir: string;

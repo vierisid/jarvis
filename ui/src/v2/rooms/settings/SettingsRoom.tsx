@@ -14,6 +14,10 @@ import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import { useSettingsData, type LLMProvider, LLM_PROVIDERS } from "./useSettingsData";
+import {
+  resetOnboarding,
+  type OnboardingResetScope,
+} from "../../onboarding/resetClient";
 import { GeneralTab } from "./tabs/GeneralTab";
 import { ProfileTab } from "./tabs/ProfileTab";
 import { LLMTab } from "./tabs/LLMTab";
@@ -252,6 +256,34 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         (async () => {
           const r = await data.restartDaemon();
           showToast(r.message, r.ok ? "ok" : "warn");
+        })();
+        return true;
+      }
+
+      case "replay_onboarding": {
+        // Voice path mirrors the General-tab debug button + the
+        // ?onboarding=reset URL trigger — all three funnel through
+        // resetOnboarding(), which clears the right localStorage keys
+        // and reloads the page so the OnboardingGate (when it ships)
+        // re-evaluates its initial state cleanly.
+        const rawScope = String(args.scope ?? "all");
+        const scope: OnboardingResetScope =
+          rawScope === "setup" ||
+          rawScope === "profile" ||
+          rawScope === "tutorial" ||
+          rawScope === "all"
+            ? rawScope
+            : "all";
+        showToast("Replaying onboarding — reloading…", "ok");
+        (async () => {
+          try {
+            await resetOnboarding(scope);
+          } catch (err) {
+            showToast(
+              err instanceof Error ? err.message : "Reset failed",
+              "warn",
+            );
+          }
         })();
         return true;
       }

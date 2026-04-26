@@ -300,6 +300,14 @@ settings room ("room": "settings"):
    Confirmation required — disconnects the WebSocket briefly. Voice should
    only fire this when the user is explicit; do NOT infer it from indirect
    utterances ("apply settings" is fine; "save settings" is not).
+- "replay_onboarding" — args: { "scope"?: "all" | "setup" | "profile" | "tutorial" }
+   matches "replay onboarding", "reset onboarding", "redo the onboarding",
+   "show the onboarding again", "redo the tutorial" (scope=tutorial),
+   "redo the profile interview" (scope=profile), "rerun setup" (scope=setup).
+   When the user doesn't specify which part, default scope=all. Triggers a
+   page reload after the reset fires — confirmation NOT required (it's
+   non-destructive aside from clearing the user's saved profile when
+   scope is "all" or "profile"; the user knows what they asked for).
 - IMPORTANT: do NOT extract API key entry as a room_action — keys must be
    typed via keyboard for security (voice transcripts persist). If the user
    says "set my anthropic api key to ...", route through normal chat with a
@@ -499,6 +507,12 @@ Transcript: "use elevenlabs for tts"
 
 Transcript: "restart jarvis"
 {"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"restart_daemon","args":{}}}
+
+Transcript: "replay onboarding"
+{"verb":"run","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"replay_onboarding","args":{"scope":"all"}}}
+
+Transcript: "redo the tutorial"
+{"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"replay_onboarding","args":{"scope":"tutorial"}}}
 
 Transcript: "go to settings and disable TTS"
 {"verb":"update","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"disable_tts","args":{}}}
