@@ -115,6 +115,10 @@
   50%      { opacity: 0.35; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .v2-rail__awaiting-dot { animation: none; opacity: 1; }
+}
+
 .v2-rail__awaiting-title {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

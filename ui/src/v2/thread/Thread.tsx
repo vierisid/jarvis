@@ -156,7 +156,19 @@ export const Thread = forwardRef<ThreadHandle, ThreadProps>(function Thread({
         </div>
       )}
 
-      <div className="v2-thread__scroll" ref={scrollRef} onScroll={onScroll}>
+      {/* Phase 7 Pass A — `role="log"` + `aria-live="polite"` so screen
+          readers announce new thread items (replies, approvals, clarifiers)
+          as they arrive, without interrupting the user. `aria-relevant`
+          scoped to additions because items rarely change in place. */}
+      <div
+        className="v2-thread__scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label="Conversation"
+      >
         <div className="v2-thread__inner">
           {items.length === 0 ? (
             <EmptyState />

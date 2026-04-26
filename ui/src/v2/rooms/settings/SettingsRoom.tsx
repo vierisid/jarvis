@@ -327,7 +327,10 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             key={t.key}
             type="button"
             role="tab"
+            id={`v2-set-tab-${t.key}`}
             aria-selected={tab === t.key}
+            aria-controls={`v2-set-tabpanel-${t.key}`}
+            tabIndex={tab === t.key ? 0 : -1}
             data-active={tab === t.key}
             className="v2-set__tab"
             onClick={() => setTab(t.key)}
@@ -339,7 +342,12 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       </nav>
 
       {/* Tab body */}
-      <div className="v2-set__body">
+      <div
+        className="v2-set__body"
+        role="tabpanel"
+        id={`v2-set-tabpanel-${tab}`}
+        aria-labelledby={`v2-set-tab-${tab}`}
+      >
         {data.loading && !data.llm ? (
           <div className="v2-set__empty">Loading settings…</div>
         ) : (
