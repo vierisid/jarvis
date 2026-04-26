@@ -1607,6 +1607,15 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.action
         ? `Revoking ${String(a.action).replace(/_/g, ' ')}.`
         : `Revoking access.`;
+    case 'switch_view':
+      return `Switching to ${String(a.view ?? 'view')} view.`;
+    case 'select_event':
+      return a.title ? `Opening ${String(a.title)}.` : `Opening that event.`;
+    case 'schedule_event': {
+      const title = a.title ? String(a.title) : 'event';
+      const when = a.when ? ` for ${String(a.when)}` : '';
+      return `Scheduling ${title}${when}.`;
+    }
     default:
       return `Done.`;
   }

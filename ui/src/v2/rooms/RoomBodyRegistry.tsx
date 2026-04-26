@@ -6,6 +6,7 @@ import { AgentsRoomBody } from "./agents/AgentsRoom";
 import { WorkflowsRoomBody } from "./workflows/WorkflowsRoom";
 import { MemoryRoomBody } from "./memory/MemoryRoom";
 import { AuthorityRoomBody } from "./authority/AuthorityRoom";
+import { CalendarRoomBody } from "./calendar/CalendarRoom";
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -26,7 +27,8 @@ const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   workflows: WorkflowsRoomBody,
   memory: MemoryRoomBody,
   authority: AuthorityRoomBody,
-  // 6.7 — calendar / goals / sites / settings
+  calendar: CalendarRoomBody,
+  // 6.7 — goals / sites / settings
 };
 
 /**

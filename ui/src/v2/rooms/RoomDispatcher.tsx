@@ -26,6 +26,10 @@ const AuthorityRoom = React.lazy(() =>
   import("./authority/AuthorityRoom").then((m) => ({ default: m.AuthorityRoom })),
 );
 
+const CalendarRoom = React.lazy(() =>
+  import("./calendar/CalendarRoom").then((m) => ({ default: m.CalendarRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -103,6 +107,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading approvals…"
       />}>
         <AuthorityRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "calendar") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="calendar"
+        title="Calendar"
+        phaseTag="Loading…"
+        description="Loading this week…"
+      />}>
+        <CalendarRoom />
       </Suspense>
     );
   }
