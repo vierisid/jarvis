@@ -30,6 +30,10 @@ const CalendarRoom = React.lazy(() =>
   import("./calendar/CalendarRoom").then((m) => ({ default: m.CalendarRoom })),
 );
 
+const GoalsRoom = React.lazy(() =>
+  import("./goals/GoalsRoom").then((m) => ({ default: m.GoalsRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -119,6 +123,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading this week…"
       />}>
         <CalendarRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "goals") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="goals"
+        title="Goals"
+        phaseTag="Loading…"
+        description="Loading your goals…"
+      />}>
+        <GoalsRoom />
       </Suspense>
     );
   }

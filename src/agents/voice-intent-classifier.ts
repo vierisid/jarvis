@@ -58,6 +58,10 @@ const VALID_OBJECT_TYPES: ReadonlySet<ObjectRefType> = new Set([
   'agent',
   'authority',
   'log',
+  'goal',
+  'calendar',
+  'site',
+  'settings',
   'file',
   'url',
   'thread',
@@ -70,7 +74,7 @@ Given a user's voice transcript and the recent conversation context, return a si
 Schema:
 {
   "verb": "ask" | "show" | "run" | "create" | "update" | "delete" | "grant" | "revoke" | "pause" | "resume" | "unknown",
-  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"file"|"url"|"thread", "query": string } | null,
+  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"site"|"settings"|"file"|"url"|"thread", "query": string } | null,
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
@@ -193,6 +197,22 @@ workflows room ("room": "workflows"):
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
 
+goals room ("room": "goals"):
+- "switch_tab" — args: { "tab": "constellation" | "timeline" | "metrics" }
+   matches "show me the constellation", "switch to timeline", "open the metrics"
+- "search" — args: { "query": string }
+   matches "search goals for q3", "find the launch goal"
+- "set_filter" — args: { "field": "status" | "health", "value": string }
+   value (status): "all" | "draft" | "active" | "paused" | "completed" | "failed" | "killed"
+   value (health): "all" | "on_track" | "at_risk" | "behind" | "critical"
+   matches "show only active goals", "filter by health critical", "show all"
+- "select" — args: { "name": string }
+   matches "open the q3 launch goal", "select the marketing objective"
+- "create_goal" — args: { "title": string, "level"?: "objective"|"key_result"|"milestone"|"task"|"daily_action" }
+   matches "create a new goal to ship the OAuth feature",
+   "add a key result for q3 — get to 100 active users"
+   Defaults to level=task when not specified.
+
 calendar room ("room": "calendar"):
 - "switch_view" — args: { "view": "week" | "day" }
    matches "switch to day view", "show me the week", "go to week view"
@@ -268,6 +288,18 @@ Transcript: "what did i miss this morning?"
 
 Transcript: "open workflows"
 {"verb":"show","object":{"type":"workflow"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "open goals"
+{"verb":"show","object":{"type":"goal"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "show me my calendar"
+{"verb":"show","object":{"type":"calendar"},"args":{},"impact":"read","confidence":0.97}
+
+Transcript: "open settings"
+{"verb":"show","object":{"type":"settings"},"args":{},"impact":"read","confidence":0.98}
+
+Transcript: "open sites"
+{"verb":"show","object":{"type":"site"},"args":{},"impact":"read","confidence":0.97}
 
 Transcript: "go back to the thread"
 {"verb":"show","object":{"type":"thread"},"args":{},"impact":"read","confidence":0.98}
@@ -357,7 +389,13 @@ Transcript: "remind me to call mom tomorrow at 2"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"call mom","when":"tomorrow at 2pm"}}}
 
 Transcript: "switch to day view"
-{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"calendar","action":"switch_view","args":{"view":"day"}}}`;
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"calendar","action":"switch_view","args":{"view":"day"}}}
+
+Transcript: "create a new goal to ship oauth"
+{"verb":"create","object":{"type":"goals","query":"ship oauth"},"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"goals","action":"create_goal","args":{"title":"ship oauth","level":"task"}}}
+
+Transcript: "show only critical goals"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"goals","action":"set_filter","args":{"field":"health","value":"critical"}}}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.
