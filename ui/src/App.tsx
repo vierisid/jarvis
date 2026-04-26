@@ -120,10 +120,11 @@ export function App() {
     ws.voiceCallbacksRef.current = {
       onTTSBinary: voice.handleTTSBinary,
       onTTSStart: voice.handleTTSStart,
+      onTTSContainsWake: voice.handleTTSContainsWake,
       onTTSEnd: voice.handleTTSEnd,
       onError: voice.handleError,
     };
-  }, [voice.handleTTSBinary, voice.handleTTSStart, voice.handleTTSEnd, voice.handleError]);
+  }, [voice.handleTTSBinary, voice.handleTTSStart, voice.handleTTSContainsWake, voice.handleTTSEnd, voice.handleError]);
 
   useEffect(() => {
     const onHashChange = () => {

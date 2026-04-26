@@ -135,6 +135,7 @@ function AppShellLive() {
     live.voiceCallbacksRef.current = {
       onTTSBinary: voice.handleTTSBinary,
       onTTSStart: voice.handleTTSStart,
+      onTTSContainsWake: voice.handleTTSContainsWake,
       onTTSEnd: voice.handleTTSEnd,
       onError: voice.handleError,
     };
@@ -142,6 +143,7 @@ function AppShellLive() {
     live.voiceCallbacksRef,
     voice.handleTTSBinary,
     voice.handleTTSStart,
+    voice.handleTTSContainsWake,
     voice.handleTTSEnd,
     voice.handleError,
   ]);

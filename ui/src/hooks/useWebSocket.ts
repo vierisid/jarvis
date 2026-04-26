@@ -85,7 +85,12 @@ export type AgentActivityEvent = {
 
 export type VoiceCallbacks = {
   onTTSBinary: (data: ArrayBuffer) => void;
-  onTTSStart: (requestId: string) => void;
+  /** `containsWake` — true if the TTS sentence about to play contains
+   *  "Jarvis". UI uses it to suppress the wake-word recognizer for the
+   *  duration of the playback so TTS doesn't self-trigger via mic echo. */
+  onTTSStart: (requestId: string, containsWake: boolean) => void;
+  /** Mid-turn flip: a later sentence in the same turn contains "Jarvis". */
+  onTTSContainsWake?: () => void;
   onTTSEnd: () => void;
   onError: (message?: string) => void;
 };
@@ -464,8 +469,20 @@ export function useWebSocket() {
 
         // Voice signal messages → route to voice hook
         if (msg.type === "tts_start") {
-          voiceCallbacksRef.current?.onTTSStart(msg.payload?.requestId);
+          voiceCallbacksRef.current?.onTTSStart(
+            msg.payload?.requestId,
+            Boolean(msg.payload?.containsWake),
+          );
           setThinking(false); // speaking supersedes thinking
+          return;
+        }
+        if (msg.type === "tts_text") {
+          // Mid-turn signal that an upcoming sentence contains "Jarvis" —
+          // UI must suppress the wake recognizer so TTS playback doesn't
+          // self-trigger.
+          if (msg.payload?.containsWake) {
+            voiceCallbacksRef.current?.onTTSContainsWake?.();
+          }
           return;
         }
         if (msg.type === "tts_end") {
