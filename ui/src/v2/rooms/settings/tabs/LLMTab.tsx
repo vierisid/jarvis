@@ -174,9 +174,12 @@ function ProviderRow({
   onToggleExpanded: () => void;
 }) {
   const pCfg = data.llm ? (data.llm as any)[provider] : null;
-  const hasKey = provider === "ollama" ? !!pCfg : !!pCfg?.has_api_key;
+  // For Ollama "configured" means the user actually set a base_url. The
+  // default config now ships with an empty base_url (see PR 179) so a fresh
+  // install no longer reports Ollama as ready when it isn't.
+  const hasKey = provider === "ollama" ? !!pCfg?.base_url : !!pCfg?.has_api_key;
   const currentModel: string = pCfg?.model ?? "";
-  const currentBaseUrl: string = pCfg?.base_url ?? "http://localhost:11434";
+  const currentBaseUrl: string = pCfg?.base_url ?? "";
 
   const knownModels = MODELS[provider];
   const isCustomModel = currentModel && !knownModels.includes(currentModel);
@@ -218,7 +221,7 @@ function ProviderRow({
 
   const handleSaveBaseUrl = async () => {
     setSaving(true);
-    const r = await data.setOllamaBaseUrl(baseUrl);
+    const r = await data.setOllamaBaseUrl(baseUrl.trim());
     onToast(r.message, r.ok ? "ok" : "warn");
     setSaving(false);
   };
@@ -264,6 +267,15 @@ function ProviderRow({
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="http://localhost:11434"
                 />
+                <button
+                  type="button"
+                  className="v2-set__btn"
+                  onClick={() => setBaseUrl("http://localhost:11434")}
+                  disabled={saving}
+                  title="Fill in the default localhost URL"
+                >
+                  Default
+                </button>
                 <button
                   type="button"
                   className="v2-set__btn"

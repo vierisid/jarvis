@@ -38,6 +38,36 @@ export function createSiteBuilderTools(
 ): ToolDefinition[] {
   return [
     {
+      name: 'site_create_project',
+      description:
+        'Create a new site builder project from a template. Returns the new project id, name, framework, and path on success. Use this whenever the user asks for a NEW project (vs editing an existing one). Available templates: vite-react (default, React + TS + Vite), vite-vue, vite-svelte, vite-vanilla (vanilla HTML/JS), next (Next.js app), bun-react (Bun + React with HTML imports). Project ids are derived from the name (lowercased, dashes); avoid duplicating an existing name.',
+      category: 'site-builder',
+      parameters: {
+        name: {
+          type: 'string',
+          description: 'Display name for the new project (e.g., "marketing-landing"). Used to derive the project id.',
+          required: true,
+        },
+        template: {
+          type: 'string',
+          description:
+            'Template id. One of: "vite-react", "vite-vue", "vite-svelte", "vite-vanilla", "next", "bun-react". Defaults to "vite-react" when omitted.',
+          required: false,
+        },
+      },
+      execute: async (params) => {
+        try {
+          const name = String(params.name ?? '').trim();
+          if (!name) return 'Error: name is required';
+          const template = (params.template ? String(params.template) : 'vite-react');
+          const project = await projectManager.createProject(name, template);
+          return `Created project "${project.name}" (id: ${project.id}, framework: ${project.framework}) at ${project.path}. Use this id as project_id in subsequent site_* calls.`;
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    {
       name: 'site_read_file',
       description: 'Read a file from the current site builder project. Returns the file content as text.',
       category: 'site-builder',

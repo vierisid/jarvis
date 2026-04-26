@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../hooks/useApi";
-import type { Project } from "../../pages/SitesPage";
+import type { Project } from "./types";
 
 type Template = {
   id: string;

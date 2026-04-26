@@ -1,7 +1,6 @@
 import React from "react";
-import { Bell, ChevronDown, Search } from "lucide-react";
+import { Bell, Search } from "lucide-react";
 import { Button, Icon, KBD } from "../ui";
-import { disableV2 } from "../flag";
 import "./Header.css";
 
 export type ConnectionState = "live" | "degraded" | "offline";
@@ -40,7 +39,6 @@ export interface HeaderProps {
    * without the AppShell needing to know the bell's coordinates.
    */
   notificationsSlot?: React.ReactNode;
-  identity?: string;
 }
 
 export function Header({
@@ -50,7 +48,6 @@ export function Header({
   notificationsOpen = false,
   onToggleNotifications,
   notificationsSlot,
-  identity = "Today · morning",
 }: HeaderProps) {
   const hasUnread = notificationCount > 0;
   const badgeText = notificationCount > 9 ? "9+" : String(notificationCount);
@@ -60,11 +57,6 @@ export function Header({
   return (
     <header className="v2-header" role="banner">
       <div className="v2-header__left">
-        <div className="v2-header__j" aria-label="Jarvis">J</div>
-        <button type="button" className="v2-header__identity">
-          {identity}
-          <Icon icon={ChevronDown} size="sm" />
-        </button>
         <span className="v2-header__connection" aria-label={`Connection ${CONNECTION_LABEL[connection]}`}>
           <span className={`v2-header__conn-dot v2-header__conn-dot--${connection}`} aria-hidden="true" />
           {CONNECTION_LABEL[connection]}
@@ -106,11 +98,6 @@ export function Header({
           {notificationsSlot}
         </span>
 
-        <span className="v2-header__legacy">
-          <Button variant="ghost" size="sm" onClick={disableV2}>
-            ← Legacy UI
-          </Button>
-        </span>
       </div>
     </header>
   );

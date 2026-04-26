@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../hooks/useApi";
-import type { FileEntry } from "../../pages/SitesPage";
+import type { FileEntry } from "./types";
 
 type Props = {
   projectId: string | null;
