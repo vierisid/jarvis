@@ -2,10 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowRight,
   BookMarked,
+  Calendar,
+  CheckSquare,
+  Code2,
+  Cog,
   CornerDownLeft,
   Eye,
+  FileText,
   Search,
   Shield,
+  Target,
   Terminal,
   UserCircle2,
   Workflow,
@@ -29,6 +35,27 @@ const TYPE_ICON: Record<PaletteResultType, LucideIcon> = {
   agent: UserCircle2,
   authority: Shield,
   log: Eye,
+};
+
+// Per-Room icon for the palette's "Rooms" group. The 6 search-result
+// types above only cover the original Phase 6.1–6.6 rooms — palette nav
+// entries also include the Phase 6.7 rooms (calendar / goals / tasks /
+// content / workspaces / settings), so we map each nav key directly to
+// its own Lucide glyph rather than collapsing them through a 6-type
+// switch (which used to fall back to Terminal for all of them).
+const NAV_ICON: Record<PaletteNavEntry["key"], LucideIcon> = {
+  workflows: Workflow,
+  memory: BookMarked,
+  tools: Terminal,
+  agents: UserCircle2,
+  authority: Shield,
+  logs: Eye,
+  calendar: Calendar,
+  goals: Target,
+  tasks: CheckSquare,
+  content: FileText,
+  workspaces: Code2,
+  settings: Cog,
 };
 
 const TYPE_LABEL: Record<PaletteResultType, string> = {
@@ -219,7 +246,7 @@ export function CommandPalette({
                     active={activeIdx === idx}
                     onMouseEnter={() => setActiveIdx(idx)}
                     onClick={(e) => pick(idx, e.shiftKey)}
-                    icon={TYPE_ICON[mapNavToType(entry.key)] ?? Workflow}
+                    icon={NAV_ICON[entry.key]}
                     title={entry.label}
                     hint={entry.hint}
                     typeLabel="Open Room"

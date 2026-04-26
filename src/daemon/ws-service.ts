@@ -979,6 +979,28 @@ If the user wants to create a new project, tell them to use the Site Builder pag
     const llm = this.agentService.getLLMManager();
     const recentTurns = this.recentTurns('websocket');
     const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom);
+
+    // Safety net: the classifier sometimes flags coherent multi-word
+    // English as verb=unknown / low-confidence (especially conversational
+    // openers like "I'm back at the PC, how are you?"). Repeat-back loops
+    // on chitchat are a worse failure mode than just answering, so when
+    // the transcript is plainly parseable English we upgrade to `ask` and
+    // let the chat agent reply naturally.
+    if (intent.verb === 'unknown' && intent.confidence < 0.6) {
+      const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+      const hasChattySignal =
+        /\b(i|i'm|im|you|how|what|when|where|why|can|could|would|should|hi|hey|hello|thanks|good|morning|evening|night)\b/i
+          .test(trimmed);
+      if (wordCount >= 4 && hasChattySignal) {
+        console.log(
+          `[WSService] Upgrading verb=unknown to verb=ask (coherent chat: ${wordCount} words).`,
+        );
+        intent.verb = 'ask';
+        intent.impact = 'read';
+        intent.confidence = 0.85;
+      }
+    }
+
     const route = routeByConfidence(intent);
 
     console.log(
@@ -1672,6 +1694,44 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name ? `Starting "${String(a.name)}".` : `Starting the dev server.`;
     case 'stop_server':
       return a.name ? `Stopping "${String(a.name)}".` : `Stopping the dev server.`;
+    case 'read_status':
+      return `Reading current settings.`;
+    case 'set_primary_llm':
+      return a.provider ? `Setting primary LLM to ${String(a.provider)}.` : `Setting primary LLM.`;
+    case 'set_fallback_llm':
+      return `Updating fallback chain.`;
+    case 'set_model':
+      return a.provider && a.model
+        ? `Setting ${String(a.provider)} model to ${String(a.model)}.`
+        : `Updating model.`;
+    case 'test_provider':
+      return a.provider ? `Testing ${String(a.provider)}.` : `Testing provider.`;
+    case 'enable_telegram':
+      return `Enabling Telegram. Restart Jarvis to apply.`;
+    case 'disable_telegram':
+      return `Disabling Telegram. Restart Jarvis to apply.`;
+    case 'enable_discord':
+      return `Enabling Discord. Restart Jarvis to apply.`;
+    case 'disable_discord':
+      return `Disabling Discord. Restart Jarvis to apply.`;
+    case 'set_stt_provider':
+      return a.provider
+        ? `Setting STT to ${String(a.provider)}. Restart Jarvis to apply.`
+        : `Updating STT provider.`;
+    case 'enable_tts':
+      return `Turning on text to speech.`;
+    case 'disable_tts':
+      return `Turning off text to speech.`;
+    case 'set_tts_provider':
+      return a.provider ? `Switching TTS to ${String(a.provider)}.` : `Updating TTS provider.`;
+    case 'set_tts_voice':
+      return a.voice ? `Setting voice to ${String(a.voice)}.` : `Updating voice.`;
+    case 'set_heartbeat_interval':
+      return a.minutes ? `Setting heartbeat to ${String(a.minutes)} minutes.` : `Updating heartbeat.`;
+    case 'set_heartbeat_aggressiveness':
+      return a.level ? `Setting heartbeat to ${String(a.level)}.` : `Updating heartbeat.`;
+    case 'restart_daemon':
+      return `Restarting Jarvis. The dashboard will reconnect in a few seconds.`;
     default:
       return `Done.`;
   }

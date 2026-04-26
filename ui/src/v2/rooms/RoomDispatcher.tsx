@@ -46,6 +46,10 @@ const WorkspacesRoom = React.lazy(() =>
   import("./workspaces/WorkspacesRoom").then((m) => ({ default: m.WorkspacesRoom })),
 );
 
+const SettingsRoom = React.lazy(() =>
+  import("./settings/SettingsRoom").then((m) => ({ default: m.SettingsRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -186,10 +190,26 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
       </Suspense>
     );
   }
-  const meta = ROOM_META[roomKey];
+  if (roomKey === "settings") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="settings"
+        title="Settings"
+        phaseTag="Loading…"
+        description="Loading configuration…"
+      />}>
+        <SettingsRoom />
+      </Suspense>
+    );
+  }
+  // Every RoomKey is handled above. This fall-through exists only as a
+  // defensive placeholder for any future RoomKey that hasn't been wired
+  // to a real Room component yet.
+  const fallbackKey = roomKey as RoomKey;
+  const meta = ROOM_META[fallbackKey];
   return (
     <RoomPlaceholder
-      roomKey={roomKey}
+      roomKey={fallbackKey}
       title={meta.title}
       subtitle={meta.subtitle}
       phaseTag={meta.phaseTag}
