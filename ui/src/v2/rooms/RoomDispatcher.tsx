@@ -1,6 +1,7 @@
 import React, { Suspense } from "react";
 import type { RoomKey } from "../router";
 import { RoomPlaceholder } from "./RoomPlaceholder";
+import { RoomLoadErrorBoundary } from "./RoomLoadErrorBoundary";
 
 const ToolsRoom = React.lazy(() =>
   import("./tools/ToolsRoom").then((m) => ({ default: m.ToolsRoom })),
@@ -50,166 +51,69 @@ const SettingsRoom = React.lazy(() =>
   import("./settings/SettingsRoom").then((m) => ({ default: m.SettingsRoom })),
 );
 
+type LazyRoomEntry = {
+  Component: React.ComponentType;
+  title: string;
+  loadingDesc: string;
+};
+
 /**
- * Mounts the right Room component for the active route key.
- *
- * Phase 6.0 shipped placeholder bodies for every key. Each Phase 6.x
- * sub-phase swaps in a lazy-loaded real Room. Suspense fallback keeps
- * the slide-up animation from waiting on the chunk download.
+ * Lazy-loaded Room registry. Add a new room here and `RoomDispatcher`
+ * picks it up automatically with the load-error boundary already wired.
+ * Phase 6.8 — collapsed 12 near-identical Suspense blocks into one
+ * registry + one render path, and added the load error boundary at
+ * the same level so failed lazy imports show a Retry overlay instead
+ * of hanging the placeholder forever.
+ */
+const LAZY_ROOMS: Partial<Record<RoomKey, LazyRoomEntry>> = {
+  tools: { Component: ToolsRoom, title: "Tools", loadingDesc: "Fetching tool catalog…" },
+  logs: { Component: LogsRoom, title: "Logs", loadingDesc: "Loading event stream…" },
+  agents: { Component: AgentsRoom, title: "Agents", loadingDesc: "Loading roster…" },
+  workflows: { Component: WorkflowsRoom, title: "Workflows", loadingDesc: "Loading workflow editor…" },
+  memory: { Component: MemoryRoom, title: "Memory", loadingDesc: "Loading entities…" },
+  authority: { Component: AuthorityRoom, title: "Authority", loadingDesc: "Loading approvals…" },
+  calendar: { Component: CalendarRoom, title: "Calendar", loadingDesc: "Loading this week…" },
+  goals: { Component: GoalsRoom, title: "Goals", loadingDesc: "Loading your goals…" },
+  tasks: { Component: TasksRoom, title: "Tasks", loadingDesc: "Loading your tasks…" },
+  content: { Component: ContentRoom, title: "Content", loadingDesc: "Loading the pipeline…" },
+  workspaces: { Component: WorkspacesRoom, title: "Workspaces", loadingDesc: "Loading projects…" },
+  settings: { Component: SettingsRoom, title: "Settings", loadingDesc: "Loading configuration…" },
+};
+
+/**
+ * Mounts the right Room component for the active route key. Wraps the
+ * lazy import in a Suspense fallback (slide-up animation doesn't wait
+ * on the chunk) and a `RoomLoadErrorBoundary` (failed lazy imports
+ * surface a Retry button + Esc-to-close instead of hanging the
+ * placeholder forever).
  */
 export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
-  if (roomKey === "tools") {
+  const lazyEntry = LAZY_ROOMS[roomKey];
+  if (lazyEntry) {
+    const { Component, title, loadingDesc } = lazyEntry;
     return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="tools"
-        title="Tools"
-        phaseTag="Loading…"
-        description="Fetching tool catalog…"
-      />}>
-        <ToolsRoom />
-      </Suspense>
+      <RoomLoadErrorBoundary roomKey={roomKey} title={title}>
+        <Suspense
+          fallback={
+            <RoomPlaceholder
+              roomKey={roomKey}
+              title={title}
+              phaseTag="Loading…"
+              description={loadingDesc}
+            />
+          }
+        >
+          <Component />
+        </Suspense>
+      </RoomLoadErrorBoundary>
     );
   }
-  if (roomKey === "logs") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="logs"
-        title="Logs"
-        phaseTag="Loading…"
-        description="Loading event stream…"
-      />}>
-        <LogsRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "agents") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="agents"
-        title="Agents"
-        phaseTag="Loading…"
-        description="Loading roster…"
-      />}>
-        <AgentsRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "workflows") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="workflows"
-        title="Workflows"
-        phaseTag="Loading…"
-        description="Loading workflow editor…"
-      />}>
-        <WorkflowsRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "memory") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="memory"
-        title="Memory"
-        phaseTag="Loading…"
-        description="Loading entities…"
-      />}>
-        <MemoryRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "authority") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="authority"
-        title="Authority"
-        phaseTag="Loading…"
-        description="Loading approvals…"
-      />}>
-        <AuthorityRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "calendar") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="calendar"
-        title="Calendar"
-        phaseTag="Loading…"
-        description="Loading this week…"
-      />}>
-        <CalendarRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "goals") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="goals"
-        title="Goals"
-        phaseTag="Loading…"
-        description="Loading your goals…"
-      />}>
-        <GoalsRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "tasks") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="tasks"
-        title="Tasks"
-        phaseTag="Loading…"
-        description="Loading your tasks…"
-      />}>
-        <TasksRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "content") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="content"
-        title="Content"
-        phaseTag="Loading…"
-        description="Loading the pipeline…"
-      />}>
-        <ContentRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "workspaces") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="workspaces"
-        title="Workspaces"
-        phaseTag="Loading…"
-        description="Loading projects…"
-      />}>
-        <WorkspacesRoom />
-      </Suspense>
-    );
-  }
-  if (roomKey === "settings") {
-    return (
-      <Suspense fallback={<RoomPlaceholder
-        roomKey="settings"
-        title="Settings"
-        phaseTag="Loading…"
-        description="Loading configuration…"
-      />}>
-        <SettingsRoom />
-      </Suspense>
-    );
-  }
-  // Every RoomKey is handled above. This fall-through exists only as a
-  // defensive placeholder for any future RoomKey that hasn't been wired
-  // to a real Room component yet.
-  const fallbackKey = roomKey as RoomKey;
-  const meta = ROOM_META[fallbackKey];
+
+  // Fall-through for any future RoomKey not yet wired into the registry.
+  const meta = ROOM_META[roomKey];
   return (
     <RoomPlaceholder
-      roomKey={fallbackKey}
+      roomKey={roomKey}
       title={meta.title}
       subtitle={meta.subtitle}
       phaseTag={meta.phaseTag}
