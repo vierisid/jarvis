@@ -42,6 +42,10 @@ const ContentRoom = React.lazy(() =>
   import("./content/ContentRoom").then((m) => ({ default: m.ContentRoom })),
 );
 
+const WorkspacesRoom = React.lazy(() =>
+  import("./workspaces/WorkspacesRoom").then((m) => ({ default: m.WorkspacesRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -170,6 +174,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
       </Suspense>
     );
   }
+  if (roomKey === "workspaces") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="workspaces"
+        title="Workspaces"
+        phaseTag="Loading…"
+        description="Loading projects…"
+      />}>
+        <WorkspacesRoom />
+      </Suspense>
+    );
+  }
   const meta = ROOM_META[roomKey];
   return (
     <RoomPlaceholder
@@ -258,6 +274,13 @@ const ROOM_META: Record<RoomKey, RoomMeta> = {
     phaseTag: "Phase 6.7 — Content Pipeline Room",
     description:
       "8-stage pipeline (idea → research → outline → draft → assets → review → scheduled → published) for posts, blogs, videos, podcasts, and newsletters.",
+  },
+  workspaces: {
+    title: "Workspaces",
+    subtitle: "dev projects · git · dev servers",
+    phaseTag: "Phase 6.7 — Workspaces Room",
+    description:
+      "Web app dev environments. Run dev servers, edit files, commit and push to GitHub.",
   },
   settings: {
     title: "Settings",

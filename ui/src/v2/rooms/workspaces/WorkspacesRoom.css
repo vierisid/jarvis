@@ -1,0 +1,531 @@
+/* Workspaces Room — list of dev projects (v2 native cards) + detail view
+   that embeds the legacy IDE (SiteTopBar / SiteLeftPanel / SiteRightPanel).
+   Same tokens and conventions as Content/Tasks/Goals rooms. */
+
+.v2-ws {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Stats ── */
+
+.v2-ws__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-6) var(--s-3);
+}
+
+@media (max-width: 720px) {
+  .v2-ws__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.v2-ws__stat {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.v2-ws__stat[data-tone="ok"] { border-color: color-mix(in srgb, var(--ok) 40%, var(--rule-soft)); }
+.v2-ws__stat[data-tone="warn"] { border-color: var(--warn); }
+.v2-ws__stat[data-tone="accent"] { border-color: var(--accent); }
+
+.v2-ws__stat-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.v2-ws__stat-value {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--ink);
+  line-height: 1.1;
+}
+
+.v2-ws__stat[data-tone="warn"] .v2-ws__stat-value { color: var(--warn); }
+.v2-ws__stat[data-tone="ok"] .v2-ws__stat-value { color: var(--ok); }
+.v2-ws__stat[data-tone="accent"] .v2-ws__stat-value { color: var(--accent); }
+
+.v2-ws__stat-sub {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Toolbar ── */
+
+.v2-ws__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  flex-wrap: wrap;
+}
+
+.v2-ws__search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px 10px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  color: var(--ink-3);
+  flex: 1;
+  min-width: 180px;
+  max-width: 360px;
+}
+
+.v2-ws__search:focus-within {
+  border-color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+.v2-ws__search-input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.v2-ws__search-input::placeholder { color: var(--ink-3); }
+
+.v2-ws__refresh,
+.v2-ws__new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: 28px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.v2-ws__refresh {
+  width: 28px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink-2);
+}
+
+.v2-ws__refresh:hover { background: var(--paper-3); color: var(--ink); }
+
+.v2-ws__new-btn {
+  padding: 0 12px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 0;
+}
+
+.v2-ws__new-btn:hover { background: var(--ink-2); }
+
+/* ── Project grid ── */
+
+.v2-ws__grid {
+  list-style: none;
+  margin: 0;
+  padding: var(--s-4) var(--s-6) var(--s-6);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--s-3);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .v2-ws__grid { grid-template-columns: 1fr; padding: var(--s-3) var(--s-4); }
+}
+
+/* ── Project card ── */
+
+.v2-ws__card {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.v2-ws__card:hover {
+  background: var(--paper);
+  border-color: var(--ink-3);
+}
+
+.v2-ws__card[data-status="running"] {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--rule));
+}
+
+.v2-ws__card[data-status="error"] {
+  border-color: var(--accent);
+}
+
+.v2-ws__card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.v2-ws__card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-2);
+  background: var(--paper-3);
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.v2-ws__card-id {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.v2-ws__card-name {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+  cursor: pointer;
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.v2-ws__card-name:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 3px;
+}
+
+.v2-ws__card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.v2-ws__framework {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  letter-spacing: 0.05em;
+}
+
+.v2-ws__card-info {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.v2-ws__card-branch,
+.v2-ws__card-port {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-2);
+}
+
+.v2-ws__card-port { color: var(--ok); }
+
+.v2-ws__dirty {
+  color: var(--warn);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.v2-ws__card-github {
+  color: var(--ink-3);
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.v2-ws__card-github:hover { color: var(--ink); }
+
+.v2-ws__card-time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.v2-ws__card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: var(--hair-soft);
+}
+
+.v2-ws__card-actions-spacer { flex: 1; }
+
+/* ── Buttons (shared) ── */
+
+.v2-ws__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.v2-ws__btn--secondary:hover { background: var(--paper-3); color: var(--ink); }
+
+.v2-ws__btn--primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.v2-ws__btn--primary:hover { background: var(--ink-2); }
+
+.v2-ws__btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  color: var(--ink-3);
+}
+
+.v2-ws__btn--icon:hover { background: var(--paper-3); color: var(--accent); border-color: var(--accent); }
+
+/* ── Detail view (open project) ── */
+
+.v2-ws--detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.v2-ws__detail-chrome {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  background: var(--paper-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.v2-ws__back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 6px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-ws__back-btn:hover { background: var(--paper-3); color: var(--ink); }
+
+.v2-ws__detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.v2-ws__project-name {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.v2-ws__branch,
+.v2-ws__port {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.v2-ws__port { color: var(--ok); }
+
+/* The legacy IDE renders inside this wrapper — give it the rest of the
+   room and let it manage its own internal layout. */
+.v2-ws__detail-ide {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+
+  /* ── Retheme the embedded legacy IDE ──
+     SiteTopBar / SiteLeftPanel / SiteRightPanel / SitePreview / SiteEditor
+     / SiteFileTree / SiteGitPanel / SiteNewProjectModal all use --j-*
+     dark-theme tokens with hardcoded inline styles. Remapping the
+     variables in this scope re-skins them onto the v2 bone palette
+     without editing a single legacy component. */
+  --j-bg: var(--paper);
+  --j-surface: var(--paper-2);
+  --j-border: var(--rule);
+  --j-text: var(--ink);
+  --j-text-dim: var(--ink-2);
+  --j-text-muted: var(--ink-3);
+  --j-accent: var(--ink);
+  --j-success: var(--ok);
+  --j-warning: var(--warn);
+  --j-error: var(--accent);
+}
+
+/* Inline-style cleanups for legacy elements that don't use --j-* tokens
+   (hardcoded #fff, rgba accents, neon-on-dark CodeMirror). Scoped tightly
+   so we don't bleed into anything outside the embedded IDE. */
+.v2-ws__detail-ide iframe {
+  background: var(--paper);
+}
+
+/* CodeMirror editor — its own theme variables override --j-*. Soften the
+   gutter + selection so it reads on bone. */
+.v2-ws__detail-ide .cm-editor {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.v2-ws__detail-ide .cm-editor .cm-gutters {
+  background: var(--paper-2);
+  color: var(--ink-3);
+  border-right: 1px solid var(--rule-soft);
+}
+
+.v2-ws__detail-ide .cm-editor .cm-activeLineGutter,
+.v2-ws__detail-ide .cm-editor .cm-activeLine {
+  background: var(--paper-3);
+}
+
+.v2-ws__detail-ide .cm-editor .cm-cursor {
+  border-left-color: var(--ink);
+}
+
+.v2-ws__detail-ide .cm-editor .cm-selectionBackground,
+.v2-ws__detail-ide .cm-editor ::selection {
+  background: color-mix(in srgb, var(--accent) 18%, transparent) !important;
+}
+
+.v2-ws__detail-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .v2-ws__detail-split { grid-template-columns: 220px 1fr; }
+}
+
+@media (max-width: 720px) {
+  .v2-ws__detail-split { grid-template-columns: 1fr; }
+}
+
+/* ── Empty / error / toast ── */
+
+.v2-ws__empty {
+  padding: var(--s-8) var(--s-4);
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.v2-ws__error {
+  padding: var(--s-3) var(--s-6);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  border-bottom: var(--hair-soft);
+}
+
+.v2-ws__toast {
+  position: absolute;
+  right: var(--s-4);
+  bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  border-radius: var(--r-2);
+  box-shadow: 0 6px 20px -10px rgba(26, 26, 26, 0.4);
+  max-width: 360px;
+  z-index: 6;
+}
+
+.v2-ws__toast[data-tone="warn"] { background: var(--accent); }
+
+/* ── Inline mode (RoomWindow) ── */
+
+.v2-ws--inline .v2-ws__stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: var(--s-3) var(--s-4) var(--s-2);
+}
+
+.v2-ws--inline .v2-ws__toolbar { padding: var(--s-2) var(--s-4); }
+
+.v2-ws--inline .v2-ws__grid {
+  grid-template-columns: 1fr;
+  padding: var(--s-3) var(--s-4);
+  gap: var(--s-2);
+}
+
+.v2-ws--inline .v2-ws__card { padding: var(--s-2) var(--s-3); }

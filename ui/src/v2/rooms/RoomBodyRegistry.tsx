@@ -10,6 +10,7 @@ import { CalendarRoomBody } from "./calendar/CalendarRoom";
 import { GoalsRoomBody } from "./goals/GoalsRoom";
 import { TasksRoomBody } from "./tasks/TasksRoom";
 import { ContentRoomBody } from "./content/ContentRoom";
+import { WorkspacesRoomBody } from "./workspaces/WorkspacesRoom";
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -34,7 +35,8 @@ const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   goals: GoalsRoomBody,
   tasks: TasksRoomBody,
   content: ContentRoomBody,
-  // 6.7 — workspaces / settings
+  workspaces: WorkspacesRoomBody,
+  // 6.7 — settings
 };
 
 /**
