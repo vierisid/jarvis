@@ -12,6 +12,7 @@ function safeCompare(a: string, b: string): boolean {
 export type WSMessage = {
   type: 'chat' | 'command' | 'status' | 'stream' | 'error' | 'notification'
       | 'tts_start' | 'tts_text' | 'tts_end' | 'voice_start' | 'voice_end' | 'voice_text'
+      | 'interview_start' | 'interview_user_message' | 'interview_assistant' | 'interview_done' | 'interview_error'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'

@@ -8,6 +8,7 @@ import {
   createEmptyUserProfile,
   countAnsweredUserProfileQuestions,
   normalizeUserProfileAnswers,
+  type UserProfileFact,
   type UserProfileRecord,
 } from '../user/profile.ts';
 
@@ -24,6 +25,9 @@ export function getUserProfile(): UserProfileRecord | null {
     return {
       version: 1,
       answers: normalizeUserProfileAnswers((parsed.answers ?? {}) as Record<string, unknown>),
+      interview_facts: Array.isArray(parsed.interview_facts)
+        ? (parsed.interview_facts as UserProfileFact[])
+        : undefined,
       created_at: typeof parsed.created_at === 'number' ? parsed.created_at : base.created_at,
       updated_at: typeof parsed.updated_at === 'number' ? parsed.updated_at : base.updated_at,
       completed_at: typeof parsed.completed_at === 'number' ? parsed.completed_at : null,
@@ -40,6 +44,9 @@ export function saveUserProfile(input: Record<string, unknown>): UserProfileReco
   const profile: UserProfileRecord = {
     version: 1,
     answers,
+    // Preserve interview facts on wizard saves — the two surfaces are
+    // independent capture paths feeding the same record.
+    interview_facts: existing?.interview_facts,
     created_at: existing?.created_at ?? now,
     updated_at: now,
     completed_at: countAnsweredUserProfileQuestions({
@@ -53,6 +60,58 @@ export function saveUserProfile(input: Record<string, unknown>): UserProfileReco
 
   setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
   syncUserProfileKnowledge(profile);
+  return profile;
+}
+
+/**
+ * Append a single structured fact captured by the Phase B onboarding
+ * interviewer. Idempotent on (theme, summary) — re-recording the same
+ * (theme, summary) pair updates the existing entry's `recorded_at`
+ * rather than duplicating it. Used by the `record_profile_facts` tool
+ * the interviewer agent calls during the conversation.
+ */
+export function appendUserProfileFact(fact: Omit<UserProfileFact, 'recorded_at'>): UserProfileRecord {
+  const existing = getUserProfile() ?? createEmptyUserProfile();
+  const now = Date.now();
+  const facts = [...(existing.interview_facts ?? [])];
+
+  const dupeIdx = facts.findIndex(
+    (f) =>
+      f.theme.toLowerCase() === fact.theme.toLowerCase() &&
+      f.summary.toLowerCase() === fact.summary.toLowerCase(),
+  );
+  if (dupeIdx >= 0) {
+    facts[dupeIdx] = { ...facts[dupeIdx]!, recorded_at: now };
+  } else {
+    facts.push({ ...fact, recorded_at: now });
+  }
+
+  const profile: UserProfileRecord = {
+    ...existing,
+    interview_facts: facts,
+    updated_at: now,
+    completed_at: existing.completed_at ?? now,
+  };
+  setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
+  // Don't re-sync to vault entities — interview facts are summary-level,
+  // not per-question; the wizard sync covers the structured side.
+  return profile;
+}
+
+/**
+ * Mark the Phase B interview as complete (or as skipped). Idempotent —
+ * calling twice doesn't bump `completed_at`. Used by both the
+ * `wrap_interview` tool and the user-side "Skip" button.
+ */
+export function markInterviewWrapped(): UserProfileRecord {
+  const existing = getUserProfile() ?? createEmptyUserProfile();
+  const now = Date.now();
+  const profile: UserProfileRecord = {
+    ...existing,
+    completed_at: existing.completed_at ?? now,
+    updated_at: now,
+  };
+  setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
   return profile;
 }
 

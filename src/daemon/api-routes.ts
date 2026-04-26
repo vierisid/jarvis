@@ -948,6 +948,32 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     /**
+     * Phase B — user skipped the conversational profile interview.
+     * Sets `setup_skipped_profile: true` so the gate stops re-rendering
+     * Phase B. Profile remains empty; user can fill it later via the
+     * Settings → Profile wizard or by saying "redo the profile interview".
+     */
+    '/api/onboarding/profile/skip': {
+      POST: async () => {
+        try {
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          fresh.onboarding = {
+            setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            ...fresh.onboarding,
+            setup_skipped_profile: true,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+          return json({ ok: true, setup_skipped_profile: true });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
      * Atomic Phase A setup endpoint. Saves LLM + TTS config + flips
      * the `onboarding.setup_completed_at` flag in one shot, then hot-
      * reloads the LLM providers and TTS provider so the next chat

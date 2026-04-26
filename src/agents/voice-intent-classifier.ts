@@ -793,12 +793,20 @@ export type RecentTurn = { role: 'user' | 'assistant'; text: string };
 /**
  * Classify a voice transcript into an Intent. Never throws — returns a
  * permissive default on any error so the voice flow stays unblocked.
+ *
+ * `userProfilePrompt` (Phase B): rendered "About the user" markdown
+ * block from `formatUserProfileForPrompt(getUserProfile())`. When
+ * present, prepended to the system prompt so the classifier resolves
+ * deictic phrases ("open my project", "remind me of my standup")
+ * against the user's actual context. Daemon callers pass it through;
+ * undefined is fine.
  */
 export async function classifyVoiceIntent(
   transcript: string,
   recentTurns: RecentTurn[],
   llm: LLMManager,
   currentRoom?: string,
+  userProfilePrompt?: string,
 ): Promise<Intent> {
   const text = transcript.trim();
   if (!text) {
@@ -823,8 +831,14 @@ export async function classifyVoiceIntent(
     ? `${roomContext}\n\nRecent conversation (oldest first):\n${contextLines}\n\nNew user transcript: "${text}"\n\nReturn the JSON intent.`
     : `${roomContext}\n\nNew user transcript: "${text}"\n\nReturn the JSON intent.`;
 
+  // Phase B — prepend the user-profile block to the system prompt
+  // when available so the classifier knows who it's serving.
+  const systemContent = userProfilePrompt
+    ? `# About the user\n${userProfilePrompt}\n\n---\n\n${SYSTEM_PROMPT}`
+    : SYSTEM_PROMPT;
+
   const messages: LLMMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemContent },
     { role: 'user', content: userPrompt },
   ];
 
