@@ -91,7 +91,7 @@ Object type "thread" is special: it represents the home conversation view
 (no Room open). Use it for "back" / "close" / "return" navigation intents.
 
 Verb meanings:
-- ask: read-only Q&A ("what's on my calendar?")
+- ask: read-only Q&A AND conversational chat ("what's on my calendar?", "how are you?", "I'm back at my desk", "good morning", "thanks", "what do you think about X")
 - show: navigate / open ("open workflows")
 - run: execute a workflow or tool ("run morning triage")
 - create: new object ("draft a reply")
@@ -99,7 +99,10 @@ Verb meanings:
 - delete: destructive remove
 - grant / revoke: authority changes
 - pause / resume: daemon control
-- unknown: cannot tell
+- unknown: ONLY for garbled audio (noise, single syllables, broken words, partial phrases that don't form a coherent sentence). Multi-word coherent English is NEVER "unknown" — at minimum it's "ask" since the user can be replied to conversationally.
+
+CRITICAL — conversational chat rule:
+If the utterance is a coherent multi-word sentence and you cannot map it to a specific verb/object/room_action above, default to verb="ask", impact="read", confidence>=0.85. Greetings, small talk, status updates ("I'm back at the PC", "I'm ready to start working", "headed to a meeting"), open-ended questions ("how are you", "what do you think"), and any other chitchat ALL go through "ask" so the LLM can reply naturally. Reserve "unknown" with low confidence STRICTLY for transcripts that are not parseable English.
 
 Impact bands (the SAFETY classification, distinct from verb):
 - read: no side effects, no off-device access
@@ -243,6 +246,49 @@ content room ("room": "content"):
    matches "schedule the launch post for next monday at 9am",
    "schedule this for tomorrow at noon"
    The "when" field uses the same parseRelativeDate format as Calendar.
+
+settings room ("room": "settings"):
+- "switch_tab" — args: { "tab": "general" | "profile" | "llm" | "channels" | "integrations" | "sidecar" }
+   matches "open the LLM tab", "switch to channels", "go to general settings"
+- "read_status" — args: {}
+   matches "read the current status", "what's the LLM config", "what's connected"
+- "set_primary_llm" — args: { "provider": "anthropic"|"openai"|"groq"|"gemini"|"ollama"|"openrouter"|"nvidia" }
+   matches "set primary to anthropic", "make openai the default", "switch to ollama"
+- "set_fallback_llm" — args: { "fallback": string[] | string }
+   matches "set the fallback chain to openai and ollama", "use openai as fallback"
+   The "fallback" can be an array of provider names or a comma-separated string.
+- "set_model" — args: { "provider": LLMProvider, "model": string }
+   matches "set the anthropic model to claude-opus-4-7",
+   "use gpt-5.4 for openai", "switch ollama to llama3.1"
+- "test_provider" — args: { "provider": LLMProvider }
+   matches "test the anthropic connection", "test ollama"
+- "enable_telegram" — args: {}    matches "enable telegram", "turn on the telegram bot"
+- "disable_telegram" — args: {}   matches "disable telegram", "turn off telegram"
+- "enable_discord" — args: {}     matches "enable discord", "turn on discord"
+- "disable_discord" — args: {}    matches "disable discord", "turn off discord"
+- "set_stt_provider" — args: { "provider": "openai"|"groq"|"sarvam"|"local" }
+   matches "use groq for transcription", "set stt to local whisper"
+- "enable_tts" — args: {}    matches "turn on TTS", "enable text to speech"
+- "disable_tts" — args: {}   matches "turn off TTS", "disable text to speech"
+- "set_tts_provider" — args: { "provider": "edge"|"elevenlabs"|"sarvam" }
+   matches "use elevenlabs for tts", "switch tts to edge"
+- "set_tts_voice" — args: { "voice": string }
+   matches "change the voice to aria", "set the tts voice to Guy"
+   The "voice" is the voice ID — for edge it looks like "en-US-AriaNeural";
+   for elevenlabs it's the elevenlabs voice_id; for sarvam it's the speaker name.
+- "set_heartbeat_interval" — args: { "minutes": number }
+   matches "set heartbeat to 30 minutes", "check in every hour"
+- "set_heartbeat_aggressiveness" — args: { "level": "passive"|"moderate"|"aggressive" }
+   matches "make jarvis more aggressive", "set heartbeat to passive"
+- "restart_daemon" — args: {}
+   matches "restart jarvis", "restart the daemon", "apply the changes"
+   Confirmation required — disconnects the WebSocket briefly. Voice should
+   only fire this when the user is explicit; do NOT infer it from indirect
+   utterances ("apply settings" is fine; "save settings" is not).
+- IMPORTANT: do NOT extract API key entry as a room_action — keys must be
+   typed via keyboard for security (voice transcripts persist). If the user
+   says "set my anthropic api key to ...", route through normal chat with a
+   warning rather than emitting a room_action.
 
 workspaces room ("room": "workspaces"):
 - "switch_view" — args: { "view": "list" | "detail" }
@@ -418,6 +464,27 @@ Transcript: "stop the dashboard dev server"
 Transcript: "back to projects"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workspaces","action":"back_to_list","args":{}}}
 
+Transcript: "open the LLM tab"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"settings","action":"switch_tab","args":{"tab":"llm"}}}
+
+Transcript: "set the primary LLM to anthropic"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"settings","action":"set_primary_llm","args":{"provider":"anthropic"}}}
+
+Transcript: "use gpt-5.4 for openai"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"set_model","args":{"provider":"openai","model":"gpt-5.4"}}}
+
+Transcript: "enable telegram"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"enable_telegram","args":{}}}
+
+Transcript: "turn off TTS"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"disable_tts","args":{}}}
+
+Transcript: "use elevenlabs for tts"
+{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"settings","action":"set_tts_provider","args":{"provider":"elevenlabs"}}}
+
+Transcript: "restart jarvis"
+{"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"restart_daemon","args":{}}}
+
 Transcript: "create a blog post draft about q3 launch"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"content","action":"create_content","args":{"title":"q3 launch","type":"blog"}}}
 
@@ -471,6 +538,24 @@ Transcript: "delete everything in downloads"
 
 Transcript: "uhh hey um"
 {"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.15}
+
+Transcript: "I'm back at the PC after lunch how are you"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.92}
+
+Transcript: "I'm ready to go back to work how are you"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.92}
+
+Transcript: "good morning jarvis"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.95}
+
+Transcript: "thanks that's all I needed"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.93}
+
+Transcript: "what do you think about the design we landed yesterday"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.95}
+
+Transcript: "headed to a meeting in five"
+{"verb":"ask","object":null,"args":{},"impact":"read","confidence":0.9}
 
 Transcript: "switch to orbital view"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"agents","action":"switch_tab","args":{"tab":"orbital"}}}

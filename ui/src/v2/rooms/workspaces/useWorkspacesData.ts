@@ -77,9 +77,47 @@ export function useWorkspacesData() {
     (name: string): Project | null => {
       const q = name.trim().toLowerCase();
       if (!q) return null;
-      const exact = projects.find((p) => p.name.toLowerCase() === q);
+
+      // Normalize both sides: lowercase, replace any non-alphanumeric run
+      // (dash, underscore, apostrophe, space, period) with a single space,
+      // collapse, trim. Lets "jarvis landing" find "jarvis-landing" and
+      // "jarv's landing" find the same.
+      const norm = (s: string) =>
+        s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const qNorm = norm(q);
+      if (!qNorm) return null;
+      const qTokens = qNorm.split(" ").filter(Boolean);
+
+      // 1. exact normalized match
+      const exact = projects.find((p) => norm(p.name) === qNorm);
       if (exact) return exact;
-      return projects.find((p) => p.name.toLowerCase().includes(q)) ?? null;
+
+      // 2. substring either direction (handles partials like "landing"
+      //    matching "jarvis-landing" and full query matching a longer name)
+      const sub = projects.find((p) => {
+        const n = norm(p.name);
+        return n.includes(qNorm) || qNorm.includes(n);
+      });
+      if (sub) return sub;
+
+      // 3. token overlap — pick the project whose tokens cover the most
+      //    query tokens (each query token must appear as a prefix of some
+      //    project token). Threshold: at least one token matches AND at
+      //    least half the query tokens match.
+      let best: { project: Project; score: number } | null = null;
+      for (const p of projects) {
+        const nTokens = norm(p.name).split(" ").filter(Boolean);
+        let hits = 0;
+        for (const qt of qTokens) {
+          if (nTokens.some((nt) => nt.startsWith(qt) || qt.startsWith(nt))) {
+            hits++;
+          }
+        }
+        if (hits > 0 && hits / qTokens.length >= 0.5) {
+          if (!best || hits > best.score) best = { project: p, score: hits };
+        }
+      }
+      return best?.project ?? null;
     },
     [projects],
   );

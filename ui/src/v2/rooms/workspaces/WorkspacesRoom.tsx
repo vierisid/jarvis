@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { Chip, Icon } from "../../ui";
+import { openRoom } from "../../router";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import {
@@ -20,6 +21,10 @@ import {
   type Project,
   type ProjectStatus,
 } from "./useWorkspacesData";
+import {
+  setWorkspacesUIState,
+  useWorkspacesUIState,
+} from "./workspacesUIStore";
 // Legacy embeds — see Workflows Room precedent (embeds WorkflowCanvas).
 // Heavy IDE components (CodeMirror editor, iframe preview, git panel,
 // file tree) are battle-tested in legacy; rebuilding in v2 is a 3-day
@@ -48,14 +53,36 @@ export type RoomBodyMode = "inline" | "expanded";
 
 export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useWorkspacesData();
+  // Shared store: IDE selection has to survive across the inline body
+  // and the fullscreen body (both can be mounted at the same time).
+  const ui = useWorkspacesUIState();
+  const { openTabIds, activeProjectId, leftTab, rightTab, openFilePath } = ui;
   const [search, setSearch] = useState("");
-  const [openTabs, setOpenTabs] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-  const [leftTab, setLeftTab] = useState<"chat" | "files">("files");
-  const [rightTab, setRightTab] = useState<"preview" | "editor">("preview");
-  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
+
+  // Resolve open Project objects from the live data. If a tab references
+  // a project that's no longer in the list (deleted), it gets dropped.
+  const openTabs = useMemo<Project[]>(
+    () =>
+      openTabIds
+        .map((id) => data.projects.find((p) => p.id === id))
+        .filter((p): p is Project => Boolean(p)),
+    [openTabIds, data.projects],
+  );
+
+  const setLeftTab = useCallback((next: "chat" | "files") => {
+    setWorkspacesUIState((prev) => ({ ...prev, leftTab: next }));
+  }, []);
+  const setRightTab = useCallback((next: "preview" | "editor") => {
+    setWorkspacesUIState((prev) => ({ ...prev, rightTab: next }));
+  }, []);
+  const setOpenFilePath = useCallback((next: string | null) => {
+    setWorkspacesUIState((prev) => ({ ...prev, openFilePath: next }));
+  }, []);
+  const setActiveProjectId = useCallback((next: string | null) => {
+    setWorkspacesUIState((prev) => ({ ...prev, activeProjectId: next }));
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -77,10 +104,17 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   const openProject = useCallback(
     async (project: Project) => {
-      setOpenTabs((prev) =>
-        prev.some((p) => p.id === project.id) ? prev : [...prev, project],
-      );
-      setActiveProjectId(project.id);
+      setWorkspacesUIState((prev) => ({
+        ...prev,
+        openTabIds: prev.openTabIds.includes(project.id)
+          ? prev.openTabIds
+          : [...prev.openTabIds, project.id],
+        activeProjectId: project.id,
+      }));
+      // Inline RoomWindow can't render the embedded IDE — escalate so
+      // the click on Open actually shows the editor instead of leaving
+      // the list view untouched.
+      if (mode === "inline") openRoom("workspaces");
       // Auto-start dev server if stopped — same UX as legacy SitesPage.
       if (project.status === "stopped") {
         const r = await data.startServer(project.id);
@@ -90,7 +124,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         }
       }
     },
-    [data],
+    [data, mode],
   );
 
   const closeTab = useCallback(
@@ -98,28 +132,27 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
       try {
         await data.stopServer(projectId);
       } catch { /* ignore */ }
-      setOpenTabs((prev) => prev.filter((p) => p.id !== projectId));
-      if (activeProjectId === projectId) {
-        const remaining = openTabs.filter((p) => p.id !== projectId);
-        setActiveProjectId(remaining.length > 0 ? remaining[remaining.length - 1]!.id : null);
-      }
+      setWorkspacesUIState((prev) => {
+        const remaining = prev.openTabIds.filter((id) => id !== projectId);
+        return {
+          ...prev,
+          openTabIds: remaining,
+          activeProjectId:
+            prev.activeProjectId === projectId
+              ? (remaining[remaining.length - 1] ?? null)
+              : prev.activeProjectId,
+        };
+      });
     },
-    [activeProjectId, openTabs, data],
+    [data],
   );
 
   const backToList = useCallback(() => {
     setActiveProjectId(null);
-  }, []);
+  }, [setActiveProjectId]);
 
-  // Sync openTabs with the latest project state from the polling hook.
-  useEffect(() => {
-    setOpenTabs((prev) =>
-      prev.map((tab) => {
-        const fresh = data.projects.find((p) => p.id === tab.id);
-        return fresh ?? tab;
-      }),
-    );
-  }, [data.projects]);
+  // (openTabs are now resolved from data.projects via the memo above —
+  // no manual sync needed.)
 
   // Voice room actions.
   useRoomActions("workspaces", (action, args) => {
@@ -131,9 +164,9 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
           return true;
         }
         if (v === "detail") {
-          // Pick the most-recent open tab if any.
           if (openTabs.length > 0) {
             setActiveProjectId(openTabs[openTabs.length - 1]!.id);
+            if (mode === "inline") openRoom("workspaces");
             return true;
           }
           return false;
@@ -149,6 +182,12 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         const p = data.findByName(name);
         if (!p) return false;
         openProject(p);
+        // The IDE only renders when the room is expanded (the inline
+        // RoomWindow always passes mode="inline"). Without this escalation
+        // the ack fires but the user sees the list view forever — looks
+        // like nothing happened. Mirror what a click on a project card
+        // would do if it could only render fullscreen.
+        if (mode === "inline") openRoom("workspaces");
         return true;
       }
       case "back_to_list":
