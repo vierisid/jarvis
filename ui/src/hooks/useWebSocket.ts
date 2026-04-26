@@ -902,7 +902,7 @@ export function useWebSocket() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, options?: { projectId?: string }) => {
+    (text: string, options?: { projectId?: string; currentRoom?: string }) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       const id = crypto.randomUUID();
@@ -923,12 +923,15 @@ export function useWebSocket() {
       // with the chat request that provoked it.
       pendingChatIdsRef.current.add(id);
 
-      // Send to server
+      // Send to server. `currentRoom` lets the daemon's intent classifier
+      // (run on text submissions for nav/room_action interception) bias
+      // toward in-room actions when the user is already inside a Room.
       const msg: WSMessage = {
         type: "chat",
         payload: {
           text,
           ...(options?.projectId ? { projectId: options.projectId } : {}),
+          ...(options?.currentRoom ? { currentRoom: options.currentRoom } : {}),
         },
         id,
         timestamp: Date.now(),
