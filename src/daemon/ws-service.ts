@@ -157,6 +157,26 @@ export class WebSocketService implements Service {
   }
 
   /**
+   * Phase A — true while first-run setup is incomplete (no LLM
+   * provider/key/model saved yet). Read fresh from disk on every
+   * call rather than caching: the user clears this flag by writing
+   * config via `/api/onboarding/setup`, and we want the very next
+   * chat/voice message to flip out of setup mode without a daemon
+   * restart. The cost is one yaml read per chat send — negligible
+   * vs the LLM round-trip that follows.
+   */
+  private isSetupMode(): boolean {
+    try {
+      const cfg = this.agentService.getConfig();
+      return !cfg.onboarding?.setup_completed_at;
+    } catch {
+      // Fall back to "not setup mode" on any read failure so a config
+      // glitch doesn't lock the user out of chat.
+      return false;
+    }
+  }
+
+  /**
    * Set directory for serving pre-built dashboard files.
    * Must be called before start().
    */
@@ -631,6 +651,23 @@ export class WebSocketService implements Service {
       return {
         type: 'error',
         payload: { message: 'Missing text in chat payload' },
+        id: msg.id,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Phase A — onboarding setup-mode guard. Until the user has
+    // completed first-run setup (LLM provider + API key + model
+    // saved), the chat agent has no LLM to call. Short-circuit with
+    // a friendly error so the dashboard's OnboardingGate stays in
+    // control instead of the user typing into a half-broken thread.
+    if (this.isSetupMode()) {
+      return {
+        type: 'error',
+        payload: {
+          code: 'setup_required',
+          message: 'Finish first-run setup before chatting with Jarvis.',
+        },
         id: msg.id,
         timestamp: Date.now(),
       };
@@ -1123,6 +1160,25 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       id: requestId,
       timestamp: Date.now(),
     });
+
+    // Phase A — onboarding setup-mode guard. The voice classifier
+    // and the chat fall-through both need an LLM. Refuse politely
+    // until first-run setup is done; window-control still works
+    // (it's regex-only) so the user can navigate away if they
+    // somehow opened a Room before the gate kicked in.
+    if (this.isSetupMode()) {
+      const winCtrlPre = matchWindowControl(trimmed);
+      if (winCtrlPre) {
+        this.broadcastWindowControl(winCtrlPre, requestId);
+        this.broadcastAssistantAck(ackForWindowControl(winCtrlPre), requestId);
+        return;
+      }
+      this.broadcastAssistantAck(
+        "Finish first-run setup before talking to me.",
+        requestId,
+      );
+      return;
+    }
 
     // Window-control fast-path (Phase 6.1.5 follow-up): regex-match short
     // imperatives like "close", "expand the tools room", "minimize",

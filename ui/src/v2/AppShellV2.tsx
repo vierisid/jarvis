@@ -5,6 +5,7 @@ import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider } from "./rooms/useRoomActionBus";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
+import { OnboardingGate } from "./onboarding/OnboardingGate";
 import "./v2.css";
 import "./ui/primitives.css";
 
@@ -39,10 +40,12 @@ export function AppShellV2() {
       {route.kind === "primitives" ? (
         <PrimitivesPage />
       ) : (
-        <RoomActionBusProvider>
-          <AppShell />
-          {route.kind === "room" && <RoomDispatcher roomKey={route.key} />}
-        </RoomActionBusProvider>
+        <OnboardingGate>
+          <RoomActionBusProvider>
+            <AppShell />
+            {route.kind === "room" && <RoomDispatcher roomKey={route.key} />}
+          </RoomActionBusProvider>
+        </OnboardingGate>
       )}
     </div>
   );

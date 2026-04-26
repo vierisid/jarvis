@@ -119,6 +119,16 @@ export class AgentService implements Service, IAgentService {
     return this.llmManager;
   }
 
+  /**
+   * Public accessor for the daemon config snapshot. Used by WSService's
+   * onboarding setup-mode guard to read `onboarding.setup_completed_at`
+   * without poking at private state. Returns the same reference the
+   * daemon holds so config writes are visible immediately.
+   */
+  getConfig(): JarvisConfig {
+    return this.config;
+  }
+
   getTaskManager(): AgentTaskManager | null {
     return this.taskManager;
   }
