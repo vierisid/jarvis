@@ -14,6 +14,7 @@ import {
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { useRovingTabs } from "../useRovingTabs";
 import {
   GOAL_HEALTHS,
   GOAL_LEVELS,
@@ -63,6 +64,8 @@ export type RoomBodyMode = "inline" | "expanded";
 export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useGoalsData();
   const [activeTab, setActiveTab] = useState<TabId>("constellation");
+  const TAB_KEYS = useMemo(() => Object.keys(TAB_LABEL) as TabId[], []);
+  const tabsApi = useRovingTabs<TabId>(TAB_KEYS, activeTab, setActiveTab, "v2-goals");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<GoalStatus | "all">("all");
   const [healthFilter, setHealthFilter] = useState<GoalHealth | "all">("all");
@@ -195,16 +198,19 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
 
       {/* Tabs */}
       {mode === "expanded" && (
-        <div className="v2-goals__tabs" role="tablist" aria-label="Goals view">
-          {(Object.keys(TAB_LABEL) as TabId[]).map((t) => (
+        <div
+          className="v2-goals__tabs"
+          role="tablist"
+          aria-label="Goals view"
+          ref={tabsApi.tablistRef}
+        >
+          {TAB_KEYS.map((t) => (
             <button
               key={t}
               type="button"
               className="v2-goals__tab"
               data-active={activeTab === t}
-              onClick={() => setActiveTab(t)}
-              role="tab"
-              aria-selected={activeTab === t}
+              {...tabsApi.getTabProps(t)}
             >
               <Icon icon={TAB_ICON[t]} size="sm" />
               <span>{TAB_LABEL[t]}</span>

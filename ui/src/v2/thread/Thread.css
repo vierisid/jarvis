@@ -33,6 +33,14 @@
   transition: box-shadow var(--dur-med) var(--ease-out);
 }
 
+/* Phase 7 Pass B — keyboard navigation focus ring on thread item rows.
+   Inset offset so the ring sits just inside the row's padding instead
+   of bleeding into the row above/below. */
+.v2-thread__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .v2-thread__item--flash {
   animation: v2-thread-flash 1.6s var(--ease-out);
 }

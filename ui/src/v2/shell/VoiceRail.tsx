@@ -31,6 +31,19 @@ const STATUS_LABEL: Record<VoiceState, string> = {
   muted: "Muted",
 };
 
+// Phase 7 Pass B — descriptive sentences fed to a screen-reader-only
+// `aria-live` region so assistive tech announces every voice-state
+// change. Mirrors STATUS_LABEL but as a sentence ending in a period so
+// the cadence reads naturally for a TTS narrator like VoiceOver/NVDA.
+const STATUS_ANNOUNCEMENT: Record<VoiceState, string> = {
+  idle: "Microphone idle.",
+  listening: "Listening for your voice.",
+  thinking: "Jarvis is thinking.",
+  speaking: "Jarvis is speaking.",
+  "awaiting-approval": "Awaiting your confirmation.",
+  muted: "Microphone muted.",
+};
+
 export interface VoiceRailProps {
   state?: VoiceState;
   suggestions?: string[];
@@ -56,7 +69,14 @@ export function VoiceRail({
   const isLive = state === "listening" || state === "speaking";
 
   return (
-    <aside className="v2-rail" role="status" aria-label="Voice controls">
+    <aside className="v2-rail" role="region" aria-label="Voice controls">
+      {/* Phase 7 Pass B — sr-only live region announces voice state
+          changes. Separate from the visual rail (which uses role="region"
+          now instead of role="status" so VO doesn't double-announce
+          every internal mutation). */}
+      <span className="v2-sr-only" role="status" aria-live="polite">
+        {STATUS_ANNOUNCEMENT[state]}
+      </span>
       <div className="v2-rail__head">
         <span className="v2-rail__label">Voice</span>
         <div className="v2-rail__orb-wrap">

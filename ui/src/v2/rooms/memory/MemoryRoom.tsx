@@ -15,6 +15,7 @@ import {
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { useRovingTabs } from "../useRovingTabs";
 import {
   useMemoryData,
   type Entity,
@@ -65,6 +66,8 @@ export type RoomBodyMode = "inline" | "expanded";
 export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useMemoryData();
   const [activeTab, setActiveTab] = useState<TabId>("constellation");
+  const TAB_KEYS = useMemo(() => Object.keys(TAB_LABEL) as TabId[], []);
+  const tabsApi = useRovingTabs<TabId>(TAB_KEYS, activeTab, setActiveTab, "v2-mem");
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<EntityType | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -175,16 +178,19 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
 
       {/* Tabs */}
       {mode === "expanded" && (
-        <div className="v2-mem__tabs" role="tablist" aria-label="Memory view">
-          {(Object.keys(TAB_LABEL) as TabId[]).map((t) => (
+        <div
+          className="v2-mem__tabs"
+          role="tablist"
+          aria-label="Memory view"
+          ref={tabsApi.tablistRef}
+        >
+          {TAB_KEYS.map((t) => (
             <button
               key={t}
               type="button"
               className="v2-mem__tab"
               data-active={activeTab === t}
-              onClick={() => setActiveTab(t)}
-              role="tab"
-              aria-selected={activeTab === t}
+              {...tabsApi.getTabProps(t)}
             >
               <span>{TAB_LABEL[t]}</span>
               {t === "constellation" && (

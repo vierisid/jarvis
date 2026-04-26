@@ -22,6 +22,7 @@ import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
+import { useRovingTabs } from "../useRovingTabs";
 import {
   useAgentsData,
   type AgentRosterEntry,
@@ -46,6 +47,7 @@ const ROLE_ICON: Record<string, LucideIcon> = {
 };
 
 type TabId = "command" | "orbital" | "builder";
+const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ["command", "orbital", "builder"];
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -57,6 +59,12 @@ export type RoomBodyMode = "inline" | "expanded";
 export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useAgentsData();
   const [activeTab, setActiveTab] = useState<TabId>("command");
+  const tabsApi = useRovingTabs<TabId>(
+    AGENTS_TAB_KEYS,
+    activeTab,
+    setActiveTab,
+    "v2-agents",
+  );
   const [search, setSearch] = useState("");
   const [spawnOpen, setSpawnOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
@@ -136,28 +144,21 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
 
       {/* Tab bar — expanded only. Inline goes straight to roster. */}
       {mode === "expanded" && (
-        <div className="v2-agents__tabs" role="tablist" aria-label="Agents view">
-          <TabButton
-            id="command"
-            active={activeTab === "command"}
-            onClick={() => setActiveTab("command")}
-          >
+        <div
+          className="v2-agents__tabs"
+          role="tablist"
+          aria-label="Agents view"
+          ref={tabsApi.tablistRef}
+        >
+          <TabButton tabProps={tabsApi.getTabProps("command")} active={activeTab === "command"}>
             Command Center
             <span className="v2-agents__tab-badge">{data.stats.total}</span>
           </TabButton>
-          <TabButton
-            id="orbital"
-            active={activeTab === "orbital"}
-            onClick={() => setActiveTab("orbital")}
-          >
+          <TabButton tabProps={tabsApi.getTabProps("orbital")} active={activeTab === "orbital"}>
             Orbital View
             <span className="v2-agents__tab-badge">{data.stats.active} active</span>
           </TabButton>
-          <TabButton
-            id="builder"
-            active={activeTab === "builder"}
-            onClick={() => setActiveTab("builder")}
-          >
+          <TabButton tabProps={tabsApi.getTabProps("builder")} active={activeTab === "builder"}>
             Agent Builder
             <span className="v2-agents__tab-badge">→ Workflows</span>
           </TabButton>
@@ -271,14 +272,15 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub: st
 }
 
 function TabButton({
-  id,
+  tabProps,
   active,
-  onClick,
   children,
 }: {
-  id: TabId;
+  /** Result of `useRovingTabs.getTabProps(key)` — supplies all the
+   *  WAI-ARIA attributes (role, id, aria-selected, aria-controls,
+   *  tabIndex) plus the click handler and roving-tab data attribute. */
+  tabProps: Record<string, unknown>;
   active: boolean;
-  onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
@@ -286,10 +288,7 @@ function TabButton({
       type="button"
       className="v2-agents__tab"
       data-active={active}
-      onClick={onClick}
-      role="tab"
-      aria-selected={active}
-      data-tab-id={id}
+      {...tabProps}
     >
       {children}
     </button>
