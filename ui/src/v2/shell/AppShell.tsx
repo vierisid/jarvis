@@ -14,6 +14,7 @@ import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palet
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import { closeRoom, openRoom, type RoomKey } from "../router";
+import { setRoomEntry } from "../rooms/roomEntryStore";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
 import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
@@ -167,7 +168,20 @@ function AppShellLive() {
         live.closeMostRecentRoomWindow();
       }
     } else if (isRoomKey(navKey)) {
-      live.openRoomWindow(navKey);
+      // Room → Room (Phase 6.8): if a fullscreen Room overlay is currently
+      // open, swap the URL hash to the new room so the overlay swaps in
+      // place — otherwise the new room would mount as an inline window
+      // *underneath* the existing overlay and the user would see nothing
+      // change. Also keeps the queued room_action behavior intact: when
+      // the new room's body mounts via the swap, its `useRoomActions`
+      // registers and the bus drains any queued action targeting it.
+      // From the home thread, behaviour is unchanged: open inline.
+      setRoomEntry(navKey, "voice");
+      if (window.location.hash.startsWith("#/_room_")) {
+        openRoom(navKey);
+      } else {
+        live.openRoomWindow(navKey);
+      }
     } else {
       console.warn("[v2] navigate request with unknown key:", navKey);
       return;
@@ -208,6 +222,7 @@ function AppShellLive() {
       // overlay directly (graceful degradation: user said "expand tools"
       // but no inline tools window exists → just open the overlay).
       if (wcAction === "expand" && wcTarget !== "most_recent" && isRoomKey(wcTarget)) {
+        setRoomEntry(wcTarget, "voice");
         openRoom(wcTarget);
       }
       voice.forceIdle();
@@ -225,6 +240,7 @@ function AppShellLive() {
         live.setRoomWindowStateById(target.id, "inline");
         break;
       case "expand":
+        setRoomEntry(target.roomKey as RoomKey, "voice");
         openRoom(target.roomKey as RoomKey);
         break;
       case "reorder":
@@ -399,7 +415,9 @@ function AppShellLive() {
         // fullscreen overlay (skipping the inline window). For object
         // results this means jumping straight into the Room where the
         // object lives.
-        openRoom(paletteTypeToRoomKey(result.type));
+        const targetRoom = paletteTypeToRoomKey(result.type);
+        setRoomEntry(targetRoom, "palette", result.title);
+        openRoom(targetRoom);
         return;
       }
       live.injectCard({
@@ -420,6 +438,15 @@ function AppShellLive() {
   const handlePickRoom = useCallback(
     (entry: PaletteNavEntry, openInRoom: boolean) => {
       if (openInRoom) {
+        setRoomEntry(entry.key as RoomKey, "palette");
+        openRoom(entry.key as RoomKey);
+        return;
+      }
+      // From inside a fullscreen Room, picking another Room from the
+      // palette should swap the overlay rather than opening a hidden
+      // inline window underneath. Phase 6.8 Room → Room polish.
+      if (window.location.hash.startsWith("#/_room_")) {
+        setRoomEntry(entry.key as RoomKey, "palette");
         openRoom(entry.key as RoomKey);
         return;
       }
@@ -489,6 +516,12 @@ function AppShellLive() {
         onRoomExpand={(id) => {
           const item = live.items.find((i) => i.id === id);
           if (item && item.kind === "room-window") {
+            // Inline windows in the thread were spawned by some prior
+            // action (palette pick, voice "open X", or InlineCard
+            // Focus). We don't track that origin per-window today, so
+            // mark the expand as "thread" — the user is escalating an
+            // existing thread element to fullscreen.
+            setRoomEntry(item.roomKey as RoomKey, "thread");
             openRoom(item.roomKey as RoomKey);
           }
         }}
@@ -524,6 +557,9 @@ function AppShellLive() {
         onExpand={(id) => {
           const item = live.items.find((i) => i.id === id);
           if (item && item.kind === "room-window") {
+            // Floating-window expand → fullscreen room. Same source
+            // attribution as the inline expand above.
+            setRoomEntry(item.roomKey as RoomKey, "thread");
             openRoom(item.roomKey as RoomKey);
           }
         }}
