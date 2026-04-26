@@ -2537,6 +2537,51 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Phase 6.4 — single-shot "create a workflow from this NL prompt".
+     * Used by the Workflows Room voice action create_from_nl. Differs
+     * from /nl-chat (which is conversational, chat-tab inside the editor)
+     * by going through `parseDescription()` — purpose-built for "build a
+     * full definition from this prompt", which writes nodes + edges in
+     * one round-trip instead of biasing the LLM toward Q&A.
+     *
+     * Body: { name: string, description?: string, prompt: string }
+     * Returns: { workflow: Workflow, version: WorkflowVersion }
+     */
+    '/api/workflows/nl-create': {
+      POST: async (req: Request) => {
+        if (!ctx.nlBuilder) return error('NL builder not available', 503);
+        try {
+          const body = await req.json() as {
+            name?: string;
+            description?: string;
+            prompt?: string;
+          };
+          const prompt = (body.prompt ?? '').trim();
+          if (!prompt) return error('prompt is required', 400);
+          const name = (body.name ?? '').trim() || 'New workflow';
+
+          // 1. Parse the NL into a full definition.
+          const definition = await ctx.nlBuilder.parseDescription(prompt);
+
+          // 2. Create the workflow shell + persist the definition as v1.
+          const wfModule = await import('../vault/workflows.ts');
+          const workflow = wfModule.createWorkflow(name, {
+            description: body.description ?? prompt,
+          });
+          const version = wfModule.createVersion(
+            workflow.id,
+            definition,
+            'Created from NL prompt',
+          );
+
+          return json({ workflow, version });
+        } catch (err) {
+          return error(`NL create failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    },
+
     '/api/workflows/suggest': {
       GET: async () => {
         if (!ctx.autoSuggest) return error('Auto-suggest not available', 503);

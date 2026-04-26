@@ -71,6 +71,16 @@ export type Intent = {
    * daemon doesn't gate this through the soft-approval pipeline.
    */
   room_action?: RoomAction;
+
+  /**
+   * Phase 6.3.5b — voice approve/cancel for pending confirmations.
+   * Set when the utterance is a short affirmative ("approve", "yes", "do
+   * it", "go ahead") or negative ("cancel", "no", "deny", "never mind").
+   * The daemon decides whether to act based on whether a pending approval
+   * / clarifier / repeat-back exists; if not, the intent falls through to
+   * the normal chat path (so "yes" still works as a conversational reply).
+   */
+  confirmation_response?: 'approve' | 'cancel';
 };
 
 export type RoomAction = {

@@ -14,6 +14,10 @@ const AgentsRoom = React.lazy(() =>
   import("./agents/AgentsRoom").then((m) => ({ default: m.AgentsRoom })),
 );
 
+const WorkflowsRoom = React.lazy(() =>
+  import("./workflows/WorkflowsRoom").then((m) => ({ default: m.WorkflowsRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -55,6 +59,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading roster…"
       />}>
         <AgentsRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "workflows") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="workflows"
+        title="Workflows"
+        phaseTag="Loading…"
+        description="Loading workflow editor…"
+      />}>
+        <WorkflowsRoom />
       </Suspense>
     );
   }

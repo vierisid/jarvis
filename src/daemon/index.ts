@@ -393,6 +393,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const approvalDelivery = new ApprovalDelivery();
     const deferredExecutor = new DeferredExecutor(approvalManager, auditTrail);
     deferredExecutor.setLearner(learner);
+    // Phase 6.3.5b — let WS service resolve approvals from voice intents.
+    wsService.setApprovalManager(approvalManager);
+    wsService.setDeferredExecutor(deferredExecutor);
 
     // Restore emergency state from config
     const savedEmergencyState = authorityConfig.emergency_state ?? 'normal';

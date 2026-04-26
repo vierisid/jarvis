@@ -14,7 +14,8 @@ import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { setDefaultCwd } from '../actions/tools/builtin.ts';
-import type { ApprovalRequest } from '../authority/approval.ts';
+import type { ApprovalRequest, ApprovalManager } from '../authority/approval.ts';
+import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
@@ -67,6 +68,9 @@ export class WebSocketService implements Service {
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
   private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
+  // Phase 6.3.5b — voice approve/cancel for pending approvals.
+  private approvalManager: ApprovalManager | null = null;
+  private deferredExecutor: DeferredExecutor | null = null;
 
   constructor(port: number, agentService: AgentService) {
     this.port = port;
@@ -92,6 +96,16 @@ export class WebSocketService implements Service {
    */
   setSiteBuilderService(svc: import('../sites/service.ts').SiteBuilderService): void {
     this.siteBuilderService = svc;
+  }
+
+  /** Phase 6.3.5b — wire approval pipeline so voice approve/cancel can
+   *  resolve pending approvals server-side without round-tripping REST. */
+  setApprovalManager(mgr: ApprovalManager): void {
+    this.approvalManager = mgr;
+  }
+
+  setDeferredExecutor(exec: DeferredExecutor): void {
+    this.deferredExecutor = exec;
   }
 
   /**
@@ -999,6 +1013,26 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       return;
     }
 
+    // Phase 6.3.5b — voice approve/cancel for pending confirmations.
+    // Resolve the most-recent pending action (approval > clarifier >
+    // repeat-back). When nothing is pending, fall through to chat so
+    // "yes" / "no" still work as conversational replies.
+    if (route === 'act' && intent.confirmation_response) {
+      const decision = intent.confirmation_response;
+      try {
+        const resolved = await this.resolveLatestPendingByVoice(decision);
+        if (resolved) {
+          const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
+          this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
+          this.broadcastThinkingEnd(requestId);
+          return;
+        }
+        // Nothing pending → fall through to chat below.
+      } catch (err) {
+        console.warn('[WSService] voice confirmation resolution failed:', err);
+      }
+    }
+
     if (route === 'act') {
       // Normal chat flow — thinking_end will be emitted on first stream chunk.
       await this.handleChat({
@@ -1045,6 +1079,75 @@ If the user wants to create a new project, tell them to use the Site Builder pag
       console.warn('[WSService] recentTurns lookup failed:', err);
       return [];
     }
+  }
+
+  /**
+   * Phase 6.3.5b — voice approve/cancel for the most-recent pending action.
+   *
+   * Priority order: pending approval (authority pipeline) > pending
+   * clarifier/repeat-back (voice confirmation map). This matches the user's
+   * mental model — destructive approvals are always more urgent than
+   * voice transcript clarifications.
+   *
+   * Returns null when nothing is pending so the caller can fall through to
+   * the chat agent (so "yes" still means "yes, I agree" in conversation).
+   */
+  async resolveLatestPendingByVoice(
+    decision: 'approve' | 'cancel',
+  ): Promise<{ kind: 'approval' | 'clarifier' | 'repeat_back'; label: string } | null> {
+    // 1. Pending approvals — newest first.
+    if (this.approvalManager) {
+      const pending = this.approvalManager.getPending();
+      if (pending.length > 0) {
+        const latest = pending.reduce((a, b) => (a.created_at > b.created_at ? a : b));
+        const label = (latest.reason && latest.reason.trim()) || latest.tool_name;
+        if (decision === 'approve') {
+          const approved = this.approvalManager.approve(latest.id, 'voice');
+          if (!approved) return null;
+          // Same skip-on-intent-only path as the REST endpoint.
+          if (this.deferredExecutor && approved.tool_name !== 'request_approval') {
+            try {
+              await this.deferredExecutor.executeApproved(latest.id);
+            } catch (err) {
+              console.warn('[WSService] voice-approved execution failed:', err);
+            }
+          }
+          const updated = this.approvalManager.getRequest(latest.id);
+          if (updated) this.broadcastApprovalUpdate(updated);
+          return { kind: 'approval', label };
+        }
+        // cancel
+        const denied = this.approvalManager.deny(latest.id, 'voice');
+        if (!denied) return null;
+        if (this.deferredExecutor) {
+          this.deferredExecutor.recordDenial(denied);
+        }
+        const updated = this.approvalManager.getRequest(latest.id);
+        if (updated) this.broadcastApprovalUpdate(updated);
+        return { kind: 'approval', label };
+      }
+    }
+
+    // 2. Pending clarifier / repeat-back — newest first within the map.
+    if (this.pendingVoiceConfirmations.size > 0) {
+      const latest = Array.from(this.pendingVoiceConfirmations.values()).reduce((a, b) =>
+        a.createdAt > b.createdAt ? a : b,
+      );
+      const result = await this.resolveVoiceConfirmation(
+        latest.id,
+        decision === 'approve' ? 'confirm' : 'cancel',
+      );
+      if (!result.ok) return null;
+      const label = latest.transcript.length > 60
+        ? latest.transcript.slice(0, 60) + '…'
+        : latest.transcript;
+      return {
+        kind: latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
+        label,
+      };
+    }
+
+    return null;
   }
 
   /**
@@ -1482,6 +1585,16 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return `Toggling live tail.`;
     case 'refresh':
       return `Refreshing.`;
+    case 'run':
+      return a.name ? `Running ${String(a.name)}.` : `Running the selected workflow.`;
+    case 'pause':
+      return a.name ? `Pausing ${String(a.name)}.` : `Pausing the selected workflow.`;
+    case 'enable':
+      return a.name ? `Enabling ${String(a.name)}.` : `Enabling the selected workflow.`;
+    case 'create_from_nl':
+      return a.prompt
+        ? `Creating a workflow that ${String(a.prompt)}.`
+        : `Creating a new workflow.`;
     default:
       return `Done.`;
   }

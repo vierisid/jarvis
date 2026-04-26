@@ -16,8 +16,11 @@
   box-shadow: 0 12px 32px -16px rgba(26, 26, 26, 0.18);
   display: flex;
   flex-direction: column;
-  /* Above the rail (z 10) but below palette (z 50) and Room (z 60). */
-  z-index: 40;
+  /* Above the Room overlay (z 60) so the user can review pending
+     approvals/clarifiers from inside any Room — the bell is always
+     visible in the header, and clicking it must surface the drawer
+     on top of whatever Room is open. Below palette/toast. */
+  z-index: 65;
   overflow: hidden;
   animation: v2-notif-drawer-in var(--dur-fast) var(--ease-out);
 }

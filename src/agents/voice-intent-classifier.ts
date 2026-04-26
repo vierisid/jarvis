@@ -75,7 +75,8 @@ Schema:
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
   "alternatives": [ { "label": string, "verb": ..., "object": ..., "args": ..., "impact": ... } ]  (0-2 items, only when ambiguous),
-  "room_action": { "room": RoomKey, "action": string, "args": { ... } } | null
+  "room_action": { "room": RoomKey, "action": string, "args": { ... } } | null,
+  "confirmation_response": "approve" | "cancel" | null
 }
 
 Object type "thread" is special: it represents the home conversation view
@@ -105,6 +106,26 @@ Confidence guidance:
 - <0.6: garbled, partial, or genuinely unclear; ask the user to repeat
 - For garbled audio (just noise, single syllables, broken words), set verb="unknown" and confidence below 0.4
 - ALWAYS lower confidence for destructive/external impact unless the utterance is precise
+
+Confirmation responses:
+
+When the utterance is a short affirmative or negative reply — without
+naming a Room or a verb-object pair — set "confirmation_response" to
+"approve" or "cancel". The daemon will resolve the most-recent pending
+approval / clarifier / repeat-back if one exists; if not, it falls back
+to the chat agent (so "yes" still works as a conversational reply).
+
+Approve vocabulary: "approve", "approve it", "yes", "yes do it",
+"confirm", "confirm it", "go ahead", "do it", "sure", "ok do it",
+"sounds good", "looks right", "proceed".
+
+Cancel vocabulary: "cancel", "cancel it", "no", "deny", "deny it",
+"don't do it", "stop", "never mind", "nope", "skip", "abort",
+"hold off".
+
+Confidence: ≥0.9 for these short, unambiguous phrases. Lower (≤0.7) for
+longer utterances that contain "yes" or "no" but mean something else
+("yes I was thinking maybe…" → leave confirmation_response null).
 
 Room actions:
 
@@ -142,6 +163,35 @@ tools room ("room": "tools"):
    matches "search for browser", "find git tools"
 - "select" — args: { "name": string }
    matches "select web_search", "show the git_commit tool"
+
+workflows room ("room": "workflows"):
+- "switch_tab" — args: { "tab": "list" | "editor" | "builder" }
+   matches "show the list", "open the editor", "switch to agent builder"
+- "search" — args: { "query": string }
+   matches "search for morning brief", "filter workflows by triage"
+- "set_filter" — args: { "filter": "all" | "active" | "paused" }
+   matches "show paused workflows", "show all workflows", "show only active"
+- "select" — args: { "name": string }
+   matches "open the morning brief workflow", "select daily-summary"
+- "run" — args: { "name"?: string }
+   matches "run morning brief", "run this workflow", "run the selected one"
+- "pause" — args: { "name"?: string }
+   matches "pause the daily-summary workflow", "pause this one"
+- "enable" — args: { "name"?: string }
+   matches "enable morning brief", "turn on this workflow"
+- "create_from_nl" — args: { "prompt": string }
+   matches "create a workflow that runs every morning at 8 and sends me my calendar",
+   "make a new workflow that checks AI news every morning",
+   "build a workflow to scrape hacker news daily at 9am",
+   "just create a new empty workflow" (prompt: "" or omitted for blank)
+   The "prompt" should be the imperative content of what the workflow
+   should do, with leading "create / make / build / a / new / workflow /
+   that / which / to" stripped. Keep the action + schedule + targets.
+   Examples:
+     "make a new workflow that checks AI news every morning"
+       → prompt: "checks AI news every morning"
+     "build a workflow to scrape hacker news daily at 9am"
+       → prompt: "scrapes hacker news daily at 9am"
 
 logs room ("room": "logs"):
 - "toggle_source" — args: { "source": "awareness" | "authority" | "agents" | "tasks" | "sidecar" }
@@ -198,7 +248,31 @@ Transcript: "show last hour"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.92,"room_action":{"room":"logs","action":"set_time_window","args":{"window":"1h"}}}
 
 Transcript: "turn on live tail"
-{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"logs","action":"toggle_live_tail","args":{}}}`;
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"logs","action":"toggle_live_tail","args":{}}}
+
+Transcript: "run morning brief"
+{"verb":"run","object":{"type":"workflow","query":"morning brief"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"workflows","action":"run","args":{"name":"morning brief"}}}
+
+Transcript: "show paused workflows"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workflows","action":"set_filter","args":{"filter":"paused"}}}
+
+Transcript: "make a new workflow that checks AI news every morning"
+{"verb":"create","object":{"type":"workflow"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"workflows","action":"create_from_nl","args":{"prompt":"checks AI news every morning"}}}
+
+Transcript: "just create a new empty workflow"
+{"verb":"create","object":{"type":"workflow"},"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"workflows","action":"create_from_nl","args":{"prompt":""}}}
+
+Transcript: "approve"
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.96,"confirmation_response":"approve"}
+
+Transcript: "yes do it"
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.95,"confirmation_response":"approve"}
+
+Transcript: "cancel"
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.96,"confirmation_response":"cancel"}
+
+Transcript: "never mind"
+{"verb":"unknown","object":null,"args":{},"impact":"read","confidence":0.92,"confirmation_response":"cancel"}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.
@@ -296,6 +370,11 @@ function parseIntent(raw: string, transcript: string): Intent {
   const confidenceRaw = typeof p.confidence === 'number' ? p.confidence : 0.5;
   const confidence = Math.max(0, Math.min(1, confidenceRaw));
 
+  const confirmation =
+    p.confirmation_response === 'approve' || p.confirmation_response === 'cancel'
+      ? p.confirmation_response
+      : undefined;
+
   return {
     id: generateId(),
     utterance: transcript,
@@ -306,6 +385,7 @@ function parseIntent(raw: string, transcript: string): Intent {
     confidence,
     alternatives: parseAlternatives(p.alternatives),
     room_action: parseRoomAction(p.room_action),
+    confirmation_response: confirmation,
   };
 }
 

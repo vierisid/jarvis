@@ -228,6 +228,18 @@ export default function WorkflowCanvas({
     scheduleSave();
   }, [scheduleSave]);
 
+  // Cleanup the auto-save timer on unmount. Without this, navigating away
+  // mid-debounce leaves a 2s timer holding stale `nodes`/`edges` closures
+  // and firing a save against a stale workflowId.
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   // Animate running nodes based on WS events
   useEffect(() => {
     const runningNodes = new Set<string>();
