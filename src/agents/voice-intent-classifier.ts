@@ -193,6 +193,25 @@ workflows room ("room": "workflows"):
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
 
+calendar room ("room": "calendar"):
+- "switch_view" — args: { "view": "week" | "day" }
+   matches "switch to day view", "show me the week", "go to week view"
+- "search" — args: { "query": string }
+   matches "search calendar for meeting", "find events about q3"
+- "select_event" — args: { "title": string }
+   matches "open the morning standup", "select the launch event"
+- "schedule_event" — args: { "title": string, "when": string, "duration"?: string, "with"?: string, "priority"?: "low"|"normal"|"high"|"critical" }
+   matches "schedule a meeting Tuesday at 3 with Alice for an hour",
+   "block off tomorrow morning to write the spec",
+   "add a task to email the team next monday at 9am",
+   "remind me to call mom Thursday at 2pm"
+   Extract:
+     "title" — the imperative content ("call mom", "email the team", "meeting with Alice")
+     "when" — the natural-language time spec verbatim ("Tuesday at 3", "tomorrow morning", "next monday at 9am"). The daemon parses this with parseRelativeDate; supported formats include "today / tomorrow / yesterday + at HH(am|pm)?", weekday names ("monday / tuesday / next friday"), "in N days/hours/minutes", absolute "YYYY-MM-DD HH:MM".
+     "duration" — only if the user said one ("for an hour", "30 minutes")
+     "with" — only if the user named a person
+     "priority" — only if the user said "urgent"/"high priority" etc.
+
 authority room ("room": "authority"):
 - "switch_tab" — args: { "tab": "approvals" | "audit" | "grants" | "learning" }
    matches "show approvals", "open the audit", "switch to grants", "go to learning"
@@ -329,7 +348,16 @@ Transcript: "show only denied audit entries"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"authority","action":"set_filter","args":{"decision":"denied"}}}
 
 Transcript: "revoke browser access"
-{"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":{"room":"authority","action":"revoke_access","args":{"action":"access_browser"}}}`;
+{"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":{"room":"authority","action":"revoke_access","args":{"action":"access_browser"}}}
+
+Transcript: "schedule a meeting tuesday at 3 with alice for an hour"
+{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"meeting with alice","when":"tuesday at 3pm","duration":"1 hour","with":"alice"}}}
+
+Transcript: "remind me to call mom tomorrow at 2"
+{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"call mom","when":"tomorrow at 2pm"}}}
+
+Transcript: "switch to day view"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"calendar","action":"switch_view","args":{"view":"day"}}}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.
