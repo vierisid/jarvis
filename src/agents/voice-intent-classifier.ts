@@ -193,6 +193,26 @@ workflows room ("room": "workflows"):
      "build a workflow to scrape hacker news daily at 9am"
        → prompt: "scrapes hacker news daily at 9am"
 
+authority room ("room": "authority"):
+- "switch_tab" — args: { "tab": "approvals" | "audit" | "grants" | "learning" }
+   matches "show approvals", "open the audit", "switch to grants", "go to learning"
+- "set_filter" — args: { "decision": "all" | "allowed" | "denied" | "approval_required" }
+   matches "show only denied", "filter audit by approval required", "show all decisions"
+- "grant_access" — args: { "action": ActionCategory }
+   matches "grant Jarvis email access", "allow send_email globally",
+   "grant access to send messages", "let agents access the browser"
+   The "action" must be one of: read_data, write_data, delete_data,
+   send_message, send_email, execute_command, install_software,
+   make_payment, modify_settings, spawn_agent, terminate_agent,
+   access_browser, control_app.
+- "revoke_access" — args: { "action": ActionCategory }
+   matches "revoke email access", "remove send_email permission",
+   "deny browser access for everyone"
+- IMPORTANT: do NOT extract emergency commands (pause, kill, resume,
+   reset) as room_actions — they are deliberately UI-button-only for
+   safety. If the user says "pause everything" or "kill all agents",
+   route through normal chat; never emit a room_action for them.
+
 memory room ("room": "memory"):
 - "switch_tab" — args: { "tab": "constellation" | "explorer" | "browser" }
    matches "show the constellation", "switch to explorer", "open the browser"
@@ -300,7 +320,16 @@ Transcript: "show only people"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"memory","action":"set_filter","args":{"type":"person"}}}
 
 Transcript: "switch to constellation"
-{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"memory","action":"switch_tab","args":{"tab":"constellation"}}}`;
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"memory","action":"switch_tab","args":{"tab":"constellation"}}}
+
+Transcript: "grant Jarvis email access"
+{"verb":"grant","object":{"type":"authority","query":"send_email"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"authority","action":"grant_access","args":{"action":"send_email"}}}
+
+Transcript: "show only denied audit entries"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"authority","action":"set_filter","args":{"decision":"denied"}}}
+
+Transcript: "revoke browser access"
+{"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":{"room":"authority","action":"revoke_access","args":{"action":"access_browser"}}}`;
 
 /**
  * Permissive default — used when the LLM is unavailable or returns garbage.

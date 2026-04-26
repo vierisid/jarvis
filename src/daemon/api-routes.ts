@@ -2121,6 +2121,76 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Phase 6.6 — voice-friendly grant/revoke. Adds (or updates) a single
+     * per-action override to the authority config without exposing the
+     * full schema. Used by the Authority Room voice actions
+     * "grant_access" and "revoke_access" so the user can say
+     * "grant Jarvis email access" and have it persist.
+     *
+     * Body: { action: ActionCategory, allow: boolean, role_id?: string }
+     * Returns: { ok: true, config: AuthorityConfig }
+     *
+     * Idempotent: if a global override for the action already exists,
+     * its `allowed` flag is updated. Otherwise a new entry is appended.
+     * Role-scoped overrides (when `role_id` is provided) are matched by
+     * (action, role_id) tuple.
+     */
+    '/api/authority/config/quick-override': {
+      POST: async (req: Request) => {
+        if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
+        try {
+          const body = await req.json() as { action?: ActionCategory; allow?: boolean; role_id?: string };
+          if (!body.action) return error('Missing "action" field', 400);
+          if (typeof body.allow !== 'boolean') return error('Missing "allow" boolean', 400);
+
+          const validActions: ReadonlyArray<ActionCategory> = [
+            'read_data', 'write_data', 'delete_data',
+            'send_message', 'send_email',
+            'execute_command', 'install_software',
+            'make_payment', 'modify_settings',
+            'spawn_agent', 'terminate_agent',
+            'access_browser', 'control_app',
+          ];
+          if (!validActions.includes(body.action)) {
+            return error(`Invalid action: ${body.action}`, 400);
+          }
+
+          const currentConfig = ctx.authorityEngine.getConfig();
+          const overrides = [...(currentConfig.overrides ?? [])];
+          const idx = overrides.findIndex(
+            (o: any) =>
+              o.action === body.action &&
+              (o.role_id ?? undefined) === (body.role_id ?? undefined),
+          );
+          const next = {
+            action: body.action,
+            ...(body.role_id ? { role_id: body.role_id } : {}),
+            allowed: body.allow,
+            requires_approval: false,
+          };
+          if (idx >= 0) overrides[idx] = next;
+          else overrides.push(next);
+
+          currentConfig.overrides = overrides;
+          ctx.authorityEngine.updateConfig(currentConfig);
+
+          // Persist to config.yaml — same path as the full POST.
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const freshConfig = await loadConfig();
+          freshConfig.authority = {
+            ...freshConfig.authority,
+            overrides: currentConfig.overrides,
+          };
+          await saveConfig(freshConfig);
+
+          return json({ ok: true, config: currentConfig });
+        } catch (err) {
+          return error(`quick-override failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    },
+
     '/api/authority/learning/suggestions': {
       GET: () => {
         if (!ctx.learner) return json([]);

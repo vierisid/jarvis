@@ -197,56 +197,6 @@
   box-shadow: 0 0 0 2px var(--paper);
 }
 
-.v2-header__mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  border: 1px solid var(--rule);
-  border-radius: var(--r-pill);
-  overflow: hidden;
-  background: var(--paper);
-}
-
-.v2-header__mode-btn {
-  padding: 5px 10px;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out),
-              color var(--dur-fast) var(--ease-out);
-}
-
-.v2-header__mode-btn:hover {
-  background: var(--paper-3);
-  color: var(--ink);
-}
-
-.v2-header__mode-btn[data-active="true"] {
-  background: var(--ink);
-  color: var(--paper);
-}
-
-.v2-header__avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-pill);
-  background: var(--paper-3);
-  border: 1px solid var(--rule);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink);
-  margin-left: var(--s-2);
-  cursor: pointer;
-}
-
 .v2-header__legacy {
   margin-left: var(--s-3);
   padding-left: var(--s-3);
