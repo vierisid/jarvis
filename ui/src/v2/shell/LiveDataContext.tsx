@@ -24,6 +24,13 @@ export interface LiveData {
   notices: SystemNotice[];
   taskEvents: TaskEvent[];
   agentActivity: AgentActivityEvent[];
+  /**
+   * Phase 6.5.5 — most-recent assistant reply, used by the RailReplyPreview
+   * so users in a Room can see Jarvis's response without leaving. Null when
+   * no assistant message exists yet. `isStreaming` lets the rail show a
+   * caret/spinner while the reply is in-progress.
+   */
+  latestAssistantReply: { text: string; isStreaming: boolean; ts: number } | null;
 }
 
 const LiveDataContext = createContext<LiveData | null>(null);
@@ -56,4 +63,5 @@ const EMPTY: LiveData = {
   notices: [],
   taskEvents: [],
   agentActivity: [],
+  latestAssistantReply: null,
 };

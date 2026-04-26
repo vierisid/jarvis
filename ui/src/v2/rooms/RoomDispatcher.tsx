@@ -18,6 +18,10 @@ const WorkflowsRoom = React.lazy(() =>
   import("./workflows/WorkflowsRoom").then((m) => ({ default: m.WorkflowsRoom })),
 );
 
+const MemoryRoom = React.lazy(() =>
+  import("./memory/MemoryRoom").then((m) => ({ default: m.MemoryRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -71,6 +75,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading workflow editor…"
       />}>
         <WorkflowsRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "memory") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="memory"
+        title="Memory"
+        phaseTag="Loading…"
+        description="Loading entities…"
+      />}>
+        <MemoryRoom />
       </Suspense>
     );
   }
