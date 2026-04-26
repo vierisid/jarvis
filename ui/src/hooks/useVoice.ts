@@ -183,7 +183,9 @@ export type UseVoiceReturn = {
   activeWakeEngine: ActiveWakeEngine;
   // Called by useWebSocket for TTS events
   handleTTSBinary: (data: ArrayBuffer) => void;
-  handleTTSStart: (requestId: string) => void;
+  handleTTSStart: (requestId: string, containsWake?: boolean) => void;
+  /** Mid-turn flip: a later sentence in the same TTS turn contains "Jarvis". */
+  handleTTSContainsWake: () => void;
   handleTTSEnd: () => void;
   handleError: (message?: string) => void;
   // v2 additions (Phase 4A)
@@ -241,6 +243,19 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const lastWakeAtRef = useRef(0);
   const isMicAvailableRef = useRef(false);
   const configuredWakeEngineRef = useRef<WakeEngineChoice>(wakeEngine);
+  // Timestamp of the most recent transition OUT of the "speaking" state.
+  // Used to apply a short cooldown before re-arming the speech wake
+  // recognizer so trailing TTS audio (and any speaker reverb) doesn't
+  // immediately self-trigger a wake the moment we go idle.
+  const speakingExitedAtRef = useRef<number>(0);
+  const SPEAKING_TAIL_COOLDOWN_MS = 700;
+  // True if the in-flight TTS turn contains "Jarvis" anywhere. The
+  // daemon sets this in tts_start, and may flip false→true mid-turn via
+  // tts_text when a later sentence introduces the wake word. Reset on
+  // tts_end / state→idle. When true, the wake recognizer is suppressed
+  // for the duration of the speaking state. When false, the recognizer
+  // stays running so a real human "Jarvis" can interrupt the reply.
+  const ttsContainsWakeRef = useRef(false);
   const startRecordingRef = useRef<(autoStop?: boolean) => void>(() => {});
   const autoStopRef = useRef(false);
   const cancelTTSRef = useRef<() => void>(() => {});
@@ -404,6 +419,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   }, []);
 
   const shouldSpeechWakeRun = useCallback((): boolean => {
+    // Suppress when a containsWake speaking turn is active — TTS would
+    // self-trigger via mic echo. Suppress during the trailing cooldown
+    // for the same reason. Both are checked here so the onend-driven
+    // restart and the reconcile path agree.
+    if (voiceStateRef.current === "speaking" && ttsContainsWakeRef.current) return false;
+    if (Date.now() - speakingExitedAtRef.current < SPEAKING_TAIL_COOLDOWN_MS) return false;
     return shouldSpeechWakeBeRunning({
       isMicAvailable: isMicAvailableRef.current,
       wakeWordEnabled: wakeWordEnabledRef.current,
@@ -441,7 +462,15 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
         // (recording owns the transcript recognizer). All other states
         // — including processing and wake_detected — accept wake events
         // so "Jarvis" can interrupt mid-thought.
-        if (voiceStateRef.current === "recording") return;
+        const sNow = voiceStateRef.current;
+        if (sNow === "recording") return;
+        // During speaking with "Jarvis" in the TTS text: ignore wake
+        // matches; the recognizer is hearing its own voice through the
+        // speakers. The daemon flips this flag; UI honors it.
+        if (sNow === "speaking" && ttsContainsWakeRef.current) return;
+        // Trailing-tail guard: a short window after exiting a containsWake
+        // speaking turn so trailing TTS audio can't false-trigger.
+        if (Date.now() - speakingExitedAtRef.current < SPEAKING_TAIL_COOLDOWN_MS) return;
 
         // Strict matcher during speaking to keep TTS echo from self-triggering;
         // loose prefix matcher when idle so "hey jarvis <command>" wakes in one breath.
@@ -526,18 +555,28 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
         }
         if (wasStopping) return;
         // Chrome ends continuous sessions ~every 30s; retry if we still need
-        // to run. The selector now permits processing/wake_detected/speaking,
-        // so "Jarvis" can interrupt anywhere except active recording.
+        // to run. shouldSpeechWakeRun() now also checks the containsWake +
+        // tail-cooldown guards added by Phase 6.8.9.
         if (!shouldSpeechWakeRun()) return;
+        // After a containsWake speaking turn exits, wait out the tail
+        // cooldown so trailing speaker audio can't false-trigger.
+        const sinceExit = Date.now() - speakingExitedAtRef.current;
+        const tailDelay = sinceExit < SPEAKING_TAIL_COOLDOWN_MS
+          ? SPEAKING_TAIL_COOLDOWN_MS - sinceExit
+          : 0;
         speechWakeRestartTimerRef.current = setTimeout(() => {
           speechWakeRestartTimerRef.current = null;
+          if (!shouldSpeechWakeRun()) return;
           startSpeechWakeIfNeeded();
-        }, 300);
+        }, Math.max(300, tailDelay));
       };
 
       speechWakeRef.current = recognition;
     }
 
+    // shouldSpeechWakeRun() in the reconcile effect already gates the
+    // containsWake / tail-cooldown / recording cases before we get here,
+    // so this is just the start-of-recognizer plumbing.
     try {
       speechWakeRef.current.start();
       speechWakeStateRef.current = "starting";
@@ -571,10 +610,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // Engine selection effect. Picks which wake engine should own the mic based
   // on config + SpeechRecognition availability + fatal state via the pure
   // selector. Imperatively drives the OpenWakeWord side here; the speech-wake
-  // recognizer is driven by the reconcile effect below. Muting forces "none"
-  // so both wake paths stop until the user unmutes.
+  // recognizer is driven by the reconcile effect below. Muting forces "none";
+  // a containsWake speaking turn also forces "none" because TTS playing
+  // "Jarvis" through speakers would self-trigger via the mic.
   useEffect(() => {
-    const active = muted ? "none" : selectActiveWakeEngine({
+    const blockedBySpeaking = voiceState === "speaking" && ttsContainsWakeRef.current;
+    const active = (muted || blockedBySpeaking) ? "none" : selectActiveWakeEngine({
       isMicAvailable,
       wakeWordEnabled,
       wakeEngine,
@@ -584,14 +625,16 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     setActiveWakeEngine(active);
     if (active === "openwakeword") startWakeWordEngine();
     else stopWakeWordEngine();
-  }, [muted, isMicAvailable, wakeWordEnabled, wakeEngine, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
+  }, [muted, isMicAvailable, wakeWordEnabled, wakeEngine, voiceState, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
 
   // Single reconcile effect for the Web Speech recognizer. Computes desired
   // running state from inputs and nudges the state machine toward it. Has no
   // cleanup function — transitions are idempotent and the dedicated unmount
-  // effect tears the recognizer down.
+  // effect tears the recognizer down. Gated on `blockedBySpeaking` so a
+  // containsWake speaking turn doesn't echo-trigger.
   useEffect(() => {
-    const shouldRun = !muted && shouldSpeechWakeBeRunning({
+    const blockedBySpeaking = voiceState === "speaking" && ttsContainsWakeRef.current;
+    const shouldRun = !muted && !blockedBySpeaking && shouldSpeechWakeBeRunning({
       isMicAvailable,
       wakeWordEnabled,
       voiceState,
@@ -625,6 +668,19 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       return () => clearTimeout(timer);
     }
   }, [voiceState]);
+
+  // Stamp the tail cooldown on exit from a containsWake speaking turn so
+  // the reconcile path can hold off re-arming during trailing TTS audio.
+  // We use a separate effect rather than wiring this into the reconcile
+  // effect so the bookkeeping is contained.
+  useEffect(() => {
+    if (voiceState === "speaking" && ttsContainsWakeRef.current) {
+      return () => {
+        speakingExitedAtRef.current = Date.now();
+      };
+    }
+  }, [voiceState]);
+
 
   // --- TTS Playback ---
   const playNextTTSChunk = useCallback(() => {
@@ -662,14 +718,15 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     }
   }, [playNextTTSChunk]);
 
-  const handleTTSStart = useCallback((requestId: string) => {
-    console.log("[Voice] TTS start:", requestId);
+  const handleTTSStart = useCallback((requestId: string, containsWake = false) => {
+    console.log("[Voice] TTS start:", requestId, containsWake ? "(contains wake)" : "");
     // Stop any lingering playback from a previous TTS session
     if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
       audioContextRef.current?.close();
       audioContextRef.current = null;
     }
     ttsRequestIdRef.current = requestId;
+    ttsContainsWakeRef.current = containsWake;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     setVoiceState("speaking");
@@ -678,8 +735,24 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     getAudioContext();
   }, [getAudioContext]);
 
+  const handleTTSContainsWake = useCallback(() => {
+    // Only flip false→true; never relax mid-turn because earlier audio
+    // with the wake word may still be in the speaker buffer. Mid-turn
+    // flips don't change voiceState so the reconcile effect won't fire —
+    // we have to stop both wake paths imperatively here.
+    if (!ttsContainsWakeRef.current) {
+      console.log("[Voice] TTS turn now contains wake — suppressing recognizer");
+      ttsContainsWakeRef.current = true;
+      stopSpeechWakeIfNeeded();
+      if (wakeEngineRef.current) {
+        wakeEngineRef.current.stop().catch(() => {});
+      }
+    }
+  }, [stopSpeechWakeIfNeeded]);
+
   const handleTTSEnd = useCallback(() => {
     ttsRequestIdRef.current = null;
+    ttsContainsWakeRef.current = false;
     // If nothing is playing and queue is empty, transition now
     if (!ttsPlayingRef.current && ttsQueueRef.current.length === 0) {
       setVoiceState("idle");
@@ -692,6 +765,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
+    ttsContainsWakeRef.current = false;
     // Close and recreate AudioContext to stop current playback
     audioContextRef.current?.close();
     audioContextRef.current = null;
@@ -1072,6 +1146,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     activeWakeEngine,
     handleTTSBinary,
     handleTTSStart,
+    handleTTSContainsWake,
     handleTTSEnd,
     handleError,
     muted,

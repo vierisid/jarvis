@@ -21,6 +21,7 @@ import { impactFromCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
 import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, type RoomKey } from '../voice/intent.ts';
 import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
+import { containsWakePhrase } from '../voice/wake-phrase.ts';
 import { getMessages } from '../vault/conversations.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { recordAgentActivity } from '../vault/agent-activity.ts';
@@ -446,10 +447,12 @@ export class WebSocketService implements Service {
     try {
       const requestId = `proactive-${Date.now()}`;
 
-      // Signal TTS start to all clients
+      // Signal TTS start to all clients (with wake-phrase guard flag —
+      // proactive TTS knows the full text up front so we can compute
+      // it once).
       const startMsg: WSMessage = {
         type: 'tts_start',
-        payload: { requestId },
+        payload: { requestId, containsWake: containsWakePhrase(text) },
         timestamp: Date.now(),
       };
       this.wsServer.broadcast(startMsg);
@@ -742,12 +745,29 @@ If the user wants to create a new project, tell them to use the Site Builder pag
           return;
         }
 
+        // Wake-phrase self-trigger guard: tell the UI whether this
+        // sentence contains "Jarvis" so it can suppress the wake
+        // recognizer for the duration of the audio (otherwise TTS
+        // playback echoes through the mic and self-triggers).
+        const sentenceHasWake = containsWakePhrase(sentence);
+
         // Send tts_start exactly once before the first audio chunk
         if (!ttsStartSent) {
           ttsStartSent = true;
           this.wsServer.sendToClient(ws, {
             type: 'tts_start',
-            payload: { requestId },
+            payload: { requestId, containsWake: sentenceHasWake },
+            id: requestId,
+            timestamp: Date.now(),
+          });
+        } else if (sentenceHasWake) {
+          // Subsequent sentence in the same turn that contains "Jarvis" —
+          // notify so the UI can flip suppression on mid-turn. (We never
+          // un-suppress mid-turn because earlier audio with "Jarvis" may
+          // still be in the speaker buffer.)
+          this.wsServer.sendToClient(ws, {
+            type: 'tts_text',
+            payload: { requestId, containsWake: true },
             id: requestId,
             timestamp: Date.now(),
           });
