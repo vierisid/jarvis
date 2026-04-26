@@ -1616,6 +1616,11 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       const when = a.when ? ` for ${String(a.when)}` : '';
       return `Scheduling ${title}${when}.`;
     }
+    case 'create_goal': {
+      const title = a.title ? String(a.title) : 'goal';
+      const level = a.level ? ` (${String(a.level).replace(/_/g, ' ')})` : '';
+      return `Creating goal "${title}"${level}.`;
+    }
     default:
       return `Done.`;
   }

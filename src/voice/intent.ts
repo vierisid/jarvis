@@ -35,6 +35,10 @@ export type ObjectRefType =
   | "agent"
   | "authority"
   | "log"
+  | "goal"      // Phase 6.7.B — Goals Room
+  | "calendar"  // Phase 6.7.A — Calendar Room
+  | "site"      // Phase 6.7.C — Sites Room
+  | "settings"  // Phase 6.7.D — Settings Room
   | "file"
   | "url"
   | "thread"; // home / "back to thread" target — closes any open Room
@@ -144,6 +148,14 @@ export function intentToRoomKey(intent: Intent): RoomKey | null {
       return "authority";
     case "log":
       return "logs";
+    case "goal":
+      return "goals";
+    case "calendar":
+      return "calendar";
+    case "site":
+      return "sites";
+    case "settings":
+      return "settings";
     case "file":
     case "url":
     case "thread":
