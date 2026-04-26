@@ -37,8 +37,9 @@ export type ObjectRefType =
   | "log"
   | "goal"      // Phase 6.7.B — Goals Room
   | "calendar"  // Phase 6.7.A — Calendar Room
-  | "site"      // Phase 6.7.C — Sites Room
-  | "settings"  // Phase 6.7.D — Settings Room
+  | "task"      // Phase 6.7.C — Tasks Room
+  | "site"      // Phase 6.7.D — Content Pipeline Room (was "Sites")
+  | "settings"  // Phase 6.7.F — Settings Room
   | "file"
   | "url"
   | "thread"; // home / "back to thread" target — closes any open Room
@@ -128,6 +129,7 @@ export type RoomKey =
   | "logs"
   | "calendar"
   | "goals"
+  | "tasks"
   | "sites"
   | "settings";
 
@@ -152,6 +154,8 @@ export function intentToRoomKey(intent: Intent): RoomKey | null {
       return "goals";
     case "calendar":
       return "calendar";
+    case "task":
+      return "tasks";
     case "site":
       return "sites";
     case "settings":

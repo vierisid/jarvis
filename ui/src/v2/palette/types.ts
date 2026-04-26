@@ -37,6 +37,7 @@ export type PaletteNavEntry = {
     | "authority"
     | "calendar"
     | "goals"
+    | "tasks"
     | "sites"
     | "settings";
   label: string;
@@ -52,6 +53,7 @@ export const ROOM_NAV_ENTRIES: PaletteNavEntry[] = [
   { key: "logs", label: "Logs", hint: "Filterable event stream" },
   { key: "calendar", label: "Calendar", hint: "This week + commitments" },
   { key: "goals", label: "Goals", hint: "OKR hierarchy + scoring" },
+  { key: "tasks", label: "Tasks", hint: "Kanban + due dates + priority" },
   { key: "sites", label: "Sites", hint: "Public site & landing pages" },
   { key: "settings", label: "Settings", hint: "Providers, voice, shortcuts" },
 ];
@@ -71,6 +73,7 @@ export function navKeyToObjectType(
   | "log"
   | "calendar"
   | "goals"
+  | "tasks"
   | "sites"
   | "settings" {
   switch (key) {

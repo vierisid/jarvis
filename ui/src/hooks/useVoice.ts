@@ -162,6 +162,14 @@ export type UseVoiceOptions = {
   wakeWordEnabled?: boolean;
   /** Default "openwakeword" (local). "webspeech" uses Chromium's cloud STT. */
   wakeEngine?: WakeEngineChoice;
+  /**
+   * Phase 6.7.C — Optional getter for the current Room key (or null when
+   * on the home thread). Included in every voice_start/voice_text payload
+   * so the daemon's classifier can disambiguate utterances like "show me
+   * active tasks" — chat answer when on home, room_action filter when in
+   * the tasks Room. Returns the literal string "home" for the thread view.
+   */
+  getCurrentRoom?: () => string | null;
 };
 
 export type UseVoiceReturn = {
@@ -190,7 +198,7 @@ export type UseVoiceReturn = {
   forceIdle: () => void;
 };
 
-export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword" }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword", getCurrentRoom }: UseVoiceOptions): UseVoiceReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
@@ -749,11 +757,16 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     const browserText = finalBrowserTranscriptRef.current.trim();
     finalBrowserTranscriptRef.current = "";
 
+    // Phase 6.7.C — include the user's current Room (or "home") so the
+    // daemon's classifier can disambiguate utterances that read both as
+    // chat questions and as room actions ("show me active tasks").
+    const currentRoom = getCurrentRoom?.() ?? "home";
+
     if (browserText) {
       const requestId = crypto.randomUUID();
       ws.send(JSON.stringify({
         type: "voice_text",
-        payload: { requestId, text: browserText },
+        payload: { requestId, text: browserText, currentRoom },
         timestamp: Date.now(),
       }));
       pcmChunksRef.current = [];
@@ -773,7 +786,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     // Signal start
     ws.send(JSON.stringify({
       type: "voice_start",
-      payload: { requestId },
+      payload: { requestId, currentRoom },
       timestamp: Date.now(),
     }));
 
@@ -786,7 +799,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
 
     pcmChunksRef.current = [];
     setVoiceState("processing");
-  }, [encodeWav, wsRef]);
+  }, [encodeWav, wsRef, getCurrentRoom]);
 
   // --- Stop recording ---
   const stopRecordingInternal = useCallback(() => {

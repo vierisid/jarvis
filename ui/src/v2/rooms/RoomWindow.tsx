@@ -13,6 +13,7 @@ const ROOM_TITLE: Record<RoomKey, string> = {
   logs: "Logs",
   calendar: "Calendar",
   goals: "Goals",
+  tasks: "Tasks",
   sites: "Sites",
   settings: "Settings",
 };
