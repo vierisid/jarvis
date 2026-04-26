@@ -1599,6 +1599,14 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.subject && a.predicate && a.object
         ? `Remembered that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
         : `Remembering that.`;
+    case 'grant_access':
+      return a.action
+        ? `Granting ${String(a.action).replace(/_/g, ' ')}.`
+        : `Granting access.`;
+    case 'revoke_access':
+      return a.action
+        ? `Revoking ${String(a.action).replace(/_/g, ' ')}.`
+        : `Revoking access.`;
     default:
       return `Done.`;
   }

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./Composer";
-import { Header, type ConnectionState, type Mode } from "./Header";
+import { Header, type ConnectionState } from "./Header";
 import { Thread, type ThreadHandle } from "../thread/Thread";
 import { MOCK_THREAD } from "../thread/mock";
 import { useLiveThread } from "../thread/useLiveThread";
@@ -751,15 +751,11 @@ function ShellLayout({
   onToggleNotifications,
   notificationsSlot,
 }: ShellLayoutProps) {
-  const [mode, setMode] = useState<Mode>("active");
-
   return (
     <div className="v2-shell">
       <div className="v2-shell__header">
         <Header
           connection={connection}
-          mode={mode}
-          onModeChange={setMode}
           onPalette={onOpenPalette}
           notificationCount={notificationCount}
           notificationsOpen={notificationsOpen}

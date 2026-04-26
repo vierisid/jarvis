@@ -5,6 +5,11 @@ import { disableV2 } from "../flag";
 import "./Header.css";
 
 export type ConnectionState = "live" | "degraded" | "offline";
+/**
+ * Mode kept as a type for prop compatibility with existing callers (mock
+ * shell still threads it), but the visible toggle was removed in 6.6
+ * follow-up — it never actually drove any daemon state.
+ */
 export type Mode = "active" | "passive" | "off";
 
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
@@ -13,11 +18,11 @@ const CONNECTION_LABEL: Record<ConnectionState, string> = {
   offline: "Offline",
 };
 
-const MODES: Mode[] = ["active", "passive", "off"];
-
 export interface HeaderProps {
   connection?: ConnectionState;
+  /** @deprecated kept for prop compatibility — no longer rendered. */
   mode?: Mode;
+  /** @deprecated kept for prop compatibility — no longer rendered. */
   onModeChange?: (next: Mode) => void;
   onPalette?: () => void;
   /**
@@ -40,8 +45,6 @@ export interface HeaderProps {
 
 export function Header({
   connection = "live",
-  mode = "active",
-  onModeChange,
   onPalette,
   notificationCount = 0,
   notificationsOpen = false,
@@ -102,23 +105,6 @@ export function Header({
           </button>
           {notificationsSlot}
         </span>
-
-        <div className="v2-header__mode" role="group" aria-label="Daemon mode">
-          {MODES.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className="v2-header__mode-btn"
-              data-active={mode === m}
-              onClick={() => onModeChange?.(m)}
-              aria-pressed={mode === m}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-
-        <button type="button" className="v2-header__avatar" aria-label="Profile">M</button>
 
         <span className="v2-header__legacy">
           <Button variant="ghost" size="sm" onClick={disableV2}>

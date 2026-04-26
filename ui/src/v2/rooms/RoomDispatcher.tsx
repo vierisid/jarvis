@@ -22,6 +22,10 @@ const MemoryRoom = React.lazy(() =>
   import("./memory/MemoryRoom").then((m) => ({ default: m.MemoryRoom })),
 );
 
+const AuthorityRoom = React.lazy(() =>
+  import("./authority/AuthorityRoom").then((m) => ({ default: m.AuthorityRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -87,6 +91,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
         description="Loading entities…"
       />}>
         <MemoryRoom />
+      </Suspense>
+    );
+  }
+  if (roomKey === "authority") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="authority"
+        title="Authority"
+        phaseTag="Loading…"
+        description="Loading approvals…"
+      />}>
+        <AuthorityRoom />
       </Suspense>
     );
   }
