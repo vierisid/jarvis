@@ -1659,6 +1659,19 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name && a.when
         ? `Scheduling "${String(a.name)}" for ${String(a.when)}.`
         : `Scheduling.`;
+    case 'select_project':
+      return a.name ? `Opening "${String(a.name)}".` : `Opening that project.`;
+    case 'back_to_list':
+      return `Back to projects.`;
+    case 'create_project': {
+      const name = a.name ? String(a.name) : 'project';
+      const tpl = a.template ? ` (${String(a.template)})` : '';
+      return `Creating project "${name}"${tpl}.`;
+    }
+    case 'start_server':
+      return a.name ? `Starting "${String(a.name)}".` : `Starting the dev server.`;
+    case 'stop_server':
+      return a.name ? `Stopping "${String(a.name)}".` : `Stopping the dev server.`;
     default:
       return `Done.`;
   }

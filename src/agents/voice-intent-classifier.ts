@@ -33,6 +33,7 @@ const VALID_ROOMS: ReadonlySet<RoomKey> = new Set([
   'goals',
   'tasks',
   'content',
+  'workspaces',
   'settings',
 ]);
 
@@ -63,6 +64,7 @@ const VALID_OBJECT_TYPES: ReadonlySet<ObjectRefType> = new Set([
   'calendar',
   'task',
   'content',
+  'workspace',
   'settings',
   'file',
   'url',
@@ -76,7 +78,7 @@ Given a user's voice transcript and the recent conversation context, return a si
 Schema:
 {
   "verb": "ask" | "show" | "run" | "create" | "update" | "delete" | "grant" | "revoke" | "pause" | "resume" | "unknown",
-  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"task"|"content"|"settings"|"file"|"url"|"thread", "query": string } | null,
+  "object": { "type": "workflow"|"memory"|"tool"|"agent"|"authority"|"log"|"goal"|"calendar"|"task"|"content"|"workspace"|"settings"|"file"|"url"|"thread", "query": string } | null,
   "args": { ... } (free-form key/value extracted from the utterance, e.g. {"to":"alice@example.com"}),
   "impact": "read" | "write" | "destructive" | "external",
   "confidence": number between 0 and 1,
@@ -242,6 +244,29 @@ content room ("room": "content"):
    "schedule this for tomorrow at noon"
    The "when" field uses the same parseRelativeDate format as Calendar.
 
+workspaces room ("room": "workspaces"):
+- "switch_view" — args: { "view": "list" | "detail" }
+   matches "back to the list", "show all projects", "show the detail view"
+- "search" — args: { "query": string }
+   matches "search projects for dashboard", "filter to react projects"
+- "select_project" — args: { "name": string }
+   matches "open the dashboard project", "select my-app", "open jarvis-ui"
+- "back_to_list" — args: {}
+   matches "go back", "back to projects", "close this project"
+- "create_project" — args: { "name": string, "template"?: string }
+   matches "create a new project called dashboard",
+   "new vite-react project named landing",
+   "make a project called blog with the next.js template"
+   The "template" must be one of: "vite-react", "next-app", "vanilla-html",
+   "react-vite-tailwind", "vue-vite". Defaults to "vite-react" when omitted.
+- "start_server" — args: { "name"?: string }
+   matches "start the dev server", "run the dashboard project",
+   "start dashboard"
+   When "name" is omitted, the currently-open project is targeted.
+- "stop_server" — args: { "name"?: string }
+   matches "stop the dev server", "kill the dashboard server",
+   "stop dashboard"
+
 tasks room ("room": "tasks"):
 - "switch_view" — args: { "view": "kanban" | "list" }
    matches "switch to list view", "show kanban", "go to list"
@@ -374,6 +399,24 @@ Transcript: "open content"
 
 Transcript: "show me my drafts"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"content","action":"set_filter","args":{"field":"stage","value":"draft"}}}
+
+Transcript: "open workspaces"
+{"verb":"show","object":{"type":"workspace"},"args":{},"impact":"read","confidence":0.97}
+
+Transcript: "open the dashboard project"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workspaces","action":"select_project","args":{"name":"dashboard"}}}
+
+Transcript: "create a new project called landing-page with vite-react"
+{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"workspaces","action":"create_project","args":{"name":"landing-page","template":"vite-react"}}}
+
+Transcript: "start the dev server"
+{"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"workspaces","action":"start_server","args":{}}}
+
+Transcript: "stop the dashboard dev server"
+{"verb":"run","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"workspaces","action":"stop_server","args":{"name":"dashboard"}}}
+
+Transcript: "back to projects"
+{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workspaces","action":"back_to_list","args":{}}}
 
 Transcript: "create a blog post draft about q3 launch"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"content","action":"create_content","args":{"title":"q3 launch","type":"blog"}}}

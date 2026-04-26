@@ -15,6 +15,7 @@ const ROOM_TITLE: Record<RoomKey, string> = {
   goals: "Goals",
   tasks: "Tasks",
   content: "Content",
+  workspaces: "Workspaces",
   settings: "Settings",
 };
 

@@ -39,6 +39,7 @@ export type PaletteNavEntry = {
     | "goals"
     | "tasks"
     | "content"
+    | "workspaces"
     | "settings";
   label: string;
   hint: string;
@@ -55,6 +56,7 @@ export const ROOM_NAV_ENTRIES: PaletteNavEntry[] = [
   { key: "goals", label: "Goals", hint: "OKR hierarchy + scoring" },
   { key: "tasks", label: "Tasks", hint: "Kanban + due dates + priority" },
   { key: "content", label: "Content", hint: "Drafts, scheduled, published" },
+  { key: "workspaces", label: "Workspaces", hint: "Dev projects, git, dev servers" },
   { key: "settings", label: "Settings", hint: "Providers, voice, shortcuts" },
 ];
 
@@ -75,6 +77,7 @@ export function navKeyToObjectType(
   | "goals"
   | "tasks"
   | "content"
+  | "workspaces"
   | "settings" {
   switch (key) {
     case "workflows":

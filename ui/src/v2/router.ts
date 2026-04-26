@@ -21,6 +21,7 @@ export type RoomKey =
   | "goals"
   | "tasks"
   | "content"
+  | "workspaces"
   | "settings";
 
 export type V2Route =
@@ -39,6 +40,7 @@ const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "goals",
   "tasks",
   "content",
+  "workspaces",
   "settings",
 ]);
 

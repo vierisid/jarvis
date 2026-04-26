@@ -4,6 +4,7 @@ import {
   BookMarked,
   Calendar,
   CheckSquare,
+  Code2,
   Eye,
   FileText,
   Settings,
@@ -29,6 +30,7 @@ const TYPE_ICON: Record<ObjectType, LucideIcon> = {
   goals: Target,
   tasks: CheckSquare,
   content: FileText,
+  workspaces: Code2,
   settings: Settings,
 };
 
@@ -43,6 +45,7 @@ const TYPE_LABEL: Record<ObjectType, string> = {
   goals: "Goals",
   tasks: "Tasks",
   content: "Content",
+  workspaces: "Workspaces",
   settings: "Settings",
 };
 

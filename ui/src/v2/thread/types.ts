@@ -17,6 +17,7 @@ export type ObjectType =
   | "goals"
   | "tasks"
   | "content"
+  | "workspaces"
   | "settings";
 
 export type JarvisSpeechStatus = "speaking" | "done";
@@ -125,6 +126,7 @@ export type ThreadItem =
         | "goals"
         | "tasks"
         | "content"
+        | "workspaces"
         | "settings";
       state: "inline" | "minimized";
       layout: { mode: "inline" } | {
