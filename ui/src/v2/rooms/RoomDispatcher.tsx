@@ -38,6 +38,10 @@ const TasksRoom = React.lazy(() =>
   import("./tasks/TasksRoom").then((m) => ({ default: m.TasksRoom })),
 );
 
+const ContentRoom = React.lazy(() =>
+  import("./content/ContentRoom").then((m) => ({ default: m.ContentRoom })),
+);
+
 /**
  * Mounts the right Room component for the active route key.
  *
@@ -154,6 +158,18 @@ export function RoomDispatcher({ roomKey }: { roomKey: RoomKey }) {
       </Suspense>
     );
   }
+  if (roomKey === "content") {
+    return (
+      <Suspense fallback={<RoomPlaceholder
+        roomKey="content"
+        title="Content"
+        phaseTag="Loading…"
+        description="Loading the pipeline…"
+      />}>
+        <ContentRoom />
+      </Suspense>
+    );
+  }
   const meta = ROOM_META[roomKey];
   return (
     <RoomPlaceholder
@@ -236,12 +252,12 @@ const ROOM_META: Record<RoomKey, RoomMeta> = {
     description:
       "Your active commitments. Create, complete, reassign, and prioritize tasks.",
   },
-  sites: {
-    title: "Sites",
-    subtitle: "projects · pipeline",
-    phaseTag: "Phase 6.7 — Sites Room",
+  content: {
+    title: "Content",
+    subtitle: "drafts · scheduled · published",
+    phaseTag: "Phase 6.7 — Content Pipeline Room",
     description:
-      "Public sites and landing pages. Stage, draft, schedule, and publish.",
+      "8-stage pipeline (idea → research → outline → draft → assets → review → scheduled → published) for posts, blogs, videos, podcasts, and newsletters.",
   },
   settings: {
     title: "Settings",

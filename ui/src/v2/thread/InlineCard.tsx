@@ -3,8 +3,9 @@ import {
   ArrowUpRight,
   BookMarked,
   Calendar,
+  CheckSquare,
   Eye,
-  Globe,
+  FileText,
   Settings,
   Shield,
   Target,
@@ -26,7 +27,8 @@ const TYPE_ICON: Record<ObjectType, LucideIcon> = {
   log: Eye,
   calendar: Calendar,
   goals: Target,
-  sites: Globe,
+  tasks: CheckSquare,
+  content: FileText,
   settings: Settings,
 };
 
@@ -39,7 +41,8 @@ const TYPE_LABEL: Record<ObjectType, string> = {
   log: "Log",
   calendar: "Calendar",
   goals: "Goals",
-  sites: "Sites",
+  tasks: "Tasks",
+  content: "Content",
   settings: "Settings",
 };
 

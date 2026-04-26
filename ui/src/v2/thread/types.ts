@@ -15,7 +15,8 @@ export type ObjectType =
   | "log"
   | "calendar"
   | "goals"
-  | "sites"
+  | "tasks"
+  | "content"
   | "settings";
 
 export type JarvisSpeechStatus = "speaking" | "done";
@@ -123,7 +124,7 @@ export type ThreadItem =
         | "calendar"
         | "goals"
         | "tasks"
-        | "sites"
+        | "content"
         | "settings";
       state: "inline" | "minimized";
       layout: { mode: "inline" } | {
