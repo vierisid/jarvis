@@ -14,13 +14,15 @@
   --rule:         #CBC3B2;   /* default hairlines & borders (paper-tinted beige) */
   --rule-soft:    #DFD9CC;   /* interior dividers inside the rail, subtle separators */
   --rule-bold:    #1A1A1A;   /* hard black — rare structural emphasis only */
-  --ink:          #1A1A1A;   /* primary text */
-  --ink-2:        #4A4A46;   /* secondary text */
-  --ink-3:        #7A766D;   /* tertiary / meta */
-  --accent:       #C23A2A;   /* vermilion — ONE accent, use sparingly */
+  --ink:          #1A1A1A;   /* primary text — contrast vs --paper ≈ 13:1 (AAA) */
+  --ink-2:        #4A4A46;   /* secondary text — ≈ 8:1 (AAA) */
+  --ink-3:        #6A6760;   /* tertiary / meta — ≈ 5.07:1 (AA body)
+                                Phase 7 Pass B: darkened from #7A766D
+                                (4.06:1) which failed WCAG AA body. */
+  --accent:       #C23A2A;   /* vermilion — ONE accent, use sparingly. ≈ 4.76:1 (AA body) */
   --accent-ink:   #FFFFFF;   /* text on accent */
-  --ok:           #2E5E3A;   /* muted forest, confirmations only */
-  --warn:         #8A6A1F;   /* muted ochre, awaiting-approval only */
+  --ok:           #2E5E3A;   /* muted forest, confirmations only — ≈ 6.74:1 (AA body) */
+  --warn:         #8A6A1F;   /* muted ochre, awaiting-approval only — ≈ 4.51:1 (AA body, borderline) */
 
   /* ── Type ───────────────────────────────── */
   --font-sans:    "Inter Tight", "Helvetica Neue", system-ui, sans-serif;

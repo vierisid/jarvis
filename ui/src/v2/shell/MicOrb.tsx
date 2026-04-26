@@ -69,6 +69,11 @@ export function MicOrb({
       className="v2-orb"
       onClick={onClick}
       aria-label={ariaLabel ?? `Mic: ${state}`}
+      // Phase 7 Pass B — aria-pressed reports the muted toggle state to
+      // screen readers; aria-busy reports work-in-progress states so
+      // they don't announce as "available action" repeatedly.
+      aria-pressed={state === "muted"}
+      aria-busy={state === "thinking" || state === "speaking"}
       data-state={state}
     >
       <svg

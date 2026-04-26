@@ -73,6 +73,63 @@ export const Thread = forwardRef<ThreadHandle, ThreadProps>(function Thread({
 
   const [stickToBottom, setStickToBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
+  // Phase 7 Pass B — roving tabindex anchor for keyboard navigation.
+  // Null = use the most-recent item as the entry point.
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+
+  const focusItemById = useCallback((id: string) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const target = root.querySelector<HTMLElement>(
+      `[data-thread-item-id="${cssEscape(id)}"]`,
+    );
+    target?.focus();
+  }, []);
+
+  const handleItemKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, idx: number) => {
+      // Don't hijack typing inside any focusable child (input, textarea,
+      // editable card actions). Only act when the wrapper itself is the
+      // event target — i.e. arrow keys at the row level.
+      if (e.target !== e.currentTarget) return;
+
+      if (e.key === "ArrowDown" && idx < items.length - 1) {
+        e.preventDefault();
+        const next = items[idx + 1]!;
+        setActiveItemId(next.id);
+        requestAnimationFrame(() => focusItemById(next.id));
+      } else if (e.key === "ArrowUp" && idx > 0) {
+        e.preventDefault();
+        const prev = items[idx - 1]!;
+        setActiveItemId(prev.id);
+        requestAnimationFrame(() => focusItemById(prev.id));
+      } else if (e.key === "Home" && items.length > 0) {
+        e.preventDefault();
+        const first = items[0]!;
+        setActiveItemId(first.id);
+        requestAnimationFrame(() => focusItemById(first.id));
+      } else if (e.key === "End" && items.length > 0) {
+        e.preventDefault();
+        const last = items[items.length - 1]!;
+        setActiveItemId(last.id);
+        requestAnimationFrame(() => focusItemById(last.id));
+      } else if (e.key === "Enter" || e.key === " ") {
+        // Activate the row's primary action — for object cards this
+        // opens the InlineCard's "Focus" target (room window); for
+        // room-windows themselves, expand to the fullscreen overlay.
+        const item = items[idx];
+        if (!item) return;
+        if (item.kind === "card") {
+          e.preventDefault();
+          onFocusCard?.(item.id);
+        } else if (item.kind === "room-window") {
+          e.preventDefault();
+          onRoomExpand?.(item.id);
+        }
+      }
+    },
+    [items, focusItemById, onFocusCard, onRoomExpand],
+  );
 
   const scrollToBottom = useCallback((smooth = true) => {
     const el = scrollRef.current;
@@ -173,11 +230,19 @@ export const Thread = forwardRef<ThreadHandle, ThreadProps>(function Thread({
           {items.length === 0 ? (
             <EmptyState />
           ) : (
-            items.map((item) => (
+            items.map((item, idx) => (
               <div
                 key={item.id}
                 data-thread-item-id={item.id}
                 className="v2-thread__item"
+                // Phase 7 Pass B — roving tabindex for arrow-key
+                // navigation through thread items. Most-recent item
+                // gets tabIndex=0 (entry point from a Tab from above);
+                // others are tabIndex=-1 until the user navigates to
+                // them via ↑/↓.
+                tabIndex={item.id === activeItemId || (activeItemId === null && idx === items.length - 1) ? 0 : -1}
+                onFocus={() => setActiveItemId(item.id)}
+                onKeyDown={(e) => handleItemKeyDown(e, idx)}
               >
                 <ItemRenderer
                   item={item}

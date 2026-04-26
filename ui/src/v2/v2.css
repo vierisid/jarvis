@@ -22,6 +22,22 @@
   box-sizing: border-box;
 }
 
+/* Phase 7 Pass B — visually-hidden utility for screen-reader-only
+   announcements (voice state changes, room transitions). Standard
+   recipe: takes itself out of the visual tree without `display: none`
+   so assistive tech still picks it up. */
+.v2-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .jarvis-v2-root h1,
 .jarvis-v2-root h2,
 .jarvis-v2-root h3 {

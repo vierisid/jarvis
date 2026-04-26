@@ -12,6 +12,7 @@ import {
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { useRovingTabs } from "../useRovingTabs";
 import { useSettingsData, type LLMProvider, LLM_PROVIDERS } from "./useSettingsData";
 import { GeneralTab } from "./tabs/GeneralTab";
 import { ProfileTab } from "./tabs/ProfileTab";
@@ -42,9 +43,12 @@ const VALID_TABS = new Set<SettingsTab>(TABS.map((t) => t.key));
 
 export type RoomBodyMode = "inline" | "expanded";
 
+const TAB_KEYS = TABS.map((t) => t.key) as ReadonlyArray<SettingsTab>;
+
 export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useSettingsData();
   const [tab, setTab] = useState<SettingsTab>("general");
+  const tabsApi = useRovingTabs<SettingsTab>(TAB_KEYS, tab, setTab, "v2-set");
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
 
   const showToast = useCallback((text: string, tone: "ok" | "warn" = "ok") => {
@@ -321,19 +325,19 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       )}
 
       {/* Tab bar */}
-      <nav className="v2-set__tabs" role="tablist" aria-label="Settings sections">
+      <nav
+        className="v2-set__tabs"
+        role="tablist"
+        aria-label="Settings sections"
+        ref={tabsApi.tablistRef}
+      >
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
-            role="tab"
-            id={`v2-set-tab-${t.key}`}
-            aria-selected={tab === t.key}
-            aria-controls={`v2-set-tabpanel-${t.key}`}
-            tabIndex={tab === t.key ? 0 : -1}
             data-active={tab === t.key}
             className="v2-set__tab"
-            onClick={() => setTab(t.key)}
+            {...tabsApi.getTabProps(t.key)}
           >
             <Icon icon={t.icon} size="sm" />
             <span>{t.label}</span>
@@ -342,12 +346,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       </nav>
 
       {/* Tab body */}
-      <div
-        className="v2-set__body"
-        role="tabpanel"
-        id={`v2-set-tabpanel-${tab}`}
-        aria-labelledby={`v2-set-tab-${tab}`}
-      >
+      <div className="v2-set__body" {...tabsApi.getPanelProps()}>
         {data.loading && !data.llm ? (
           <div className="v2-set__empty">Loading settings…</div>
         ) : (
