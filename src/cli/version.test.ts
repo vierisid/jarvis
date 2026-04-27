@@ -104,6 +104,29 @@ exit 1
     expect(selectInstalledVersion('0.0.0', '1.0.0', null)).toBe('1.0.0');
   });
 
+  test('does not run --always when --exact-match resolves a tag', async () => {
+    // The fake git exits 99 if --always is invoked; the resolver must
+    // never reach it on a tagged commit. If the short-circuit regresses
+    // this test fails because runGit returns null for non-zero exits and
+    // any other failure mode would surface as an unexpected version.
+    await withFakeGit(
+      'short-circuit',
+      `#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+  printf 'v0.5.0\\n'
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+  exit 99
+fi
+exit 1
+`,
+      async (dir) => {
+        expect(getInstalledVersion(dir)).toBe('0.5.0');
+      },
+    );
+  });
+
   test('rejects bare-SHA describe output and falls back to package.json', async () => {
     await withFakeGit(
       'tagless-repo',

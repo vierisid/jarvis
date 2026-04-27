@@ -61,7 +61,11 @@ export function getInstalledVersion(packageRoot: string): string {
   }
 
   const exactTag = runGit(['describe', '--tags', '--exact-match'], packageRoot);
+  if (exactTag) {
+    return selectInstalledVersion(pkgVersion, exactTag, null);
+  }
+
   const describedRaw = runGit(['describe', '--tags', '--always'], packageRoot);
   const described = describedRaw && looksLikeVersion(describedRaw) ? describedRaw : null;
-  return selectInstalledVersion(pkgVersion, exactTag, described);
+  return selectInstalledVersion(pkgVersion, null, described);
 }
