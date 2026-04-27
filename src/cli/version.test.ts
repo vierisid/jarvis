@@ -173,3 +173,54 @@ fi`,
     expect(selectInstalledVersion('1.0.0', null, '0.0.0')).toBe('1.0.0');
   });
 });
+
+// ── End-to-end CLI smoke tests ──────────────────────────────────────
+// Run the real `bin/jarvis.ts --version` / `version` paths so the banner
+// `v`-prefixing contract is locked. The matcher unit tests above verify
+// the resolver's shape; these prove the call sites add `v` consistently.
+
+describe('CLI --version output', () => {
+  const REPO_ROOT = resolve(import.meta.dir, '..', '..');
+  const JARVIS_BIN = join(REPO_ROOT, 'bin', 'jarvis.ts');
+
+  async function runCli(args: string[]): Promise<{ exitCode: number; stdout: string }> {
+    const proc = Bun.spawn(['bun', JARVIS_BIN, ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      cwd: REPO_ROOT,
+    });
+    const exitCode = await proc.exited;
+    const stdout = (await new Response(proc.stdout).text()).trim();
+    return { exitCode, stdout };
+  }
+
+  test('`jarvis --version` prints v-prefixed version with no doubling', async () => {
+    const { exitCode, stdout } = await runCli(['--version']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/^v\d+\.\d+/);
+    expect(stdout.startsWith('vv')).toBe(false);
+  }, { timeout: 15000 });
+
+  test('`jarvis version` matches `--version` output', async () => {
+    const a = await runCli(['version']);
+    const b = await runCli(['--version']);
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(a.stdout).toBe(b.stdout);
+  }, { timeout: 15000 });
+
+  test('`jarvis -v` matches `--version` output', async () => {
+    const a = await runCli(['-v']);
+    const b = await runCli(['--version']);
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(a.stdout).toBe(b.stdout);
+  }, { timeout: 15000 });
+
+  test('`jarvis help` banner contains exactly one v-prefixed version (no vv)', async () => {
+    const { exitCode, stdout } = await runCli(['help']);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toMatch(/vv\d+\.\d+/);
+    expect(stdout).toMatch(/v\d+\.\d+/);
+  }, { timeout: 15000 });
+});
