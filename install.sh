@@ -96,6 +96,52 @@ pkg_install() {
   fi
 }
 
+# ── Ensure libc development headers (needed by Bun cc() at runtime) ──
+
+ensure_libc_headers() {
+  # Bun's embedded TinyCC compiles src/daemon/flock.c at runtime and needs
+  # system headers like <sys/file.h> and <errno.h>. Fresh server images
+  # often ship without them.
+
+  # Quick probe: if sys/file.h already resolves, we're done.
+  if [ -f /usr/include/sys/file.h ] || [ -f /usr/include/x86_64-linux-gnu/sys/file.h ] || [ -f /usr/include/aarch64-linux-gnu/sys/file.h ]; then
+    return 0
+  fi
+
+  local pkg=""
+  local pkg_label=""
+  if command -v apt-get &> /dev/null; then
+    pkg="libc6-dev"
+    pkg_label="libc6-dev"
+  elif command -v dnf &> /dev/null; then
+    pkg="glibc-headers"
+    pkg_label="glibc-headers"
+  elif command -v yum &> /dev/null; then
+    pkg="glibc-headers"
+    pkg_label="glibc-headers"
+  elif command -v apk &> /dev/null; then
+    pkg="musl-dev"
+    pkg_label="musl-dev"
+  elif command -v pacman &> /dev/null; then
+    # Arch ships headers with glibc by default; nothing to do.
+    return 0
+  else
+    warn "Unknown package manager - cannot auto-install libc headers."
+    warn "If 'jarvis' fails with \"sys/file.h not found\", install your distro's libc dev headers."
+    return 0
+  fi
+
+  info "Installing libc dev headers (${pkg_label})..."
+  if pkg_install "$pkg"; then
+    ok "${pkg_label} installed"
+  else
+    err "Failed to install ${pkg_label} automatically."
+    err "Please install it manually and re-run the installer:"
+    err "  e.g. sudo apt-get install ${pkg_label}"
+    exit 1
+  fi
+}
+
 # ── Ensure PATH includes bun global bin ──────────────────────────────
 
 ensure_bun_path() {
@@ -104,6 +150,8 @@ ensure_bun_path() {
     export PATH="$bun_bin:$PATH"
   fi
 }
+
+PATH_ADDED_PROFILE=""
 
 add_path_to_shell() {
   local bun_bin="$HOME/.bun/bin"
@@ -132,6 +180,7 @@ add_path_to_shell() {
       echo "export PATH=\"\$HOME/.bun/bin:\$PATH\"" >> "$profile"
     fi
     info "Added bun bin to ${profile}"
+    PATH_ADDED_PROFILE="$profile"
   fi
 }
 
@@ -167,6 +216,12 @@ main() {
       err "Please install curl manually and re-run the installer."
       exit 1
     fi
+  fi
+
+  # ── Step 0.5: Ensure libc dev headers on Linux/WSL ──────────────
+
+  if [ "$OS" = "linux" ] || [ "$OS" = "wsl" ]; then
+    ensure_libc_headers
   fi
 
   # ── Step 1: Check / Install Bun ──────────────────────────────────
@@ -299,6 +354,13 @@ main() {
   echo ""
   echo -e "${GREEN}${BOLD}✓ J.A.R.V.I.S. installed successfully!${RESET}"
   echo ""
+
+  if [ -n "$PATH_ADDED_PROFILE" ]; then
+    echo -e "  ${YELLOW}!${RESET} ${BOLD}Your PATH was updated.${RESET} Reload your shell first:"
+    echo -e "    ${CYAN}source ${PATH_ADDED_PROFILE}${RESET}   ${DIM}# or restart your terminal${RESET}"
+    echo ""
+  fi
+
   echo -e "  Run the setup wizard to configure your assistant:"
   echo -e "    ${CYAN}jarvis onboard${RESET}"
   echo ""
