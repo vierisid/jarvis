@@ -104,6 +104,27 @@ exit 1
     expect(selectInstalledVersion('0.0.0', '1.0.0', null)).toBe('1.0.0');
   });
 
+  test('rejects bare-SHA describe output and falls back to package.json', async () => {
+    await withFakeGit(
+      'tagless-repo',
+      `#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+  exit 1
+fi
+if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+  printf 'abc1234\\n'
+  exit 0
+fi
+exit 1
+`,
+      async (dir) => {
+        // Package.json was seeded with 0.4.0 by the harness; the bare SHA
+        // must be rejected as not-a-version.
+        expect(getInstalledVersion(dir)).toBe('0.4.0');
+      },
+    );
+  });
+
   test('falls back to package.json version when git metadata is unavailable', async () => {
     const dir = makeTempDir('package-only');
     await writePackageJson(dir, '3.2.1');

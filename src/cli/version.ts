@@ -30,6 +30,13 @@ function stripLeadingV(s: string): string {
   return s.startsWith('v') ? s.slice(1) : s;
 }
 
+// `git describe --tags --always` falls back to a bare commit SHA in repos
+// with no tags reachable from HEAD. Reject anything that doesn't look like
+// a version so the package.json fallback wins instead of printing `abc1234`.
+function looksLikeVersion(s: string): boolean {
+  return /^v?\d+\.\d+/.test(s);
+}
+
 export function selectInstalledVersion(
   packageVersion: string,
   exactTag: string | null,
@@ -54,6 +61,7 @@ export function getInstalledVersion(packageRoot: string): string {
   }
 
   const exactTag = runGit(['describe', '--tags', '--exact-match'], packageRoot);
-  const described = runGit(['describe', '--tags', '--always'], packageRoot);
+  const describedRaw = runGit(['describe', '--tags', '--always'], packageRoot);
+  const described = describedRaw && looksLikeVersion(describedRaw) ? describedRaw : null;
   return selectInstalledVersion(pkgVersion, exactTag, described);
 }
