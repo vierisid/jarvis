@@ -29,11 +29,29 @@ async function writeFakeGit(dir: string, script: string): Promise<void> {
   chmodSync(gitPath, 0o755);
 }
 
-async function withFakeGit<T>(name: string, script: string, run: (packageRoot: string) => Promise<T>): Promise<T> {
+// Builds a fake-git script that always succeeds for `rev-parse --git-dir`
+// (so isGitCheckout returns true) and lets the caller specify how the
+// `describe` invocations should behave. Note: $1=-C, $2=cwd, $3=subcommand,
+// $4..=flags.
+function fakeGitScript(describeBranch: string): string {
+  return `#!/usr/bin/env bash
+if [ "$3" = "rev-parse" ] && [ "$4" = "--git-dir" ]; then
+  printf '.git\\n'
+  exit 0
+fi
+${describeBranch}
+exit 1
+`;
+}
+
+async function withFakeGit<T>(
+  name: string,
+  describeBranch: string,
+  run: (packageRoot: string) => Promise<T>,
+): Promise<T> {
   const dir = makeTempDir(name);
   await writePackageJson(dir, '0.4.0');
-  mkdirSync(join(dir, '.git'));
-  await writeFakeGit(dir, script);
+  await writeFakeGit(dir, fakeGitScript(describeBranch));
 
   const previousGitBin = process.env.JARVIS_GIT_BIN;
   process.env.JARVIS_GIT_BIN = join(dir, 'bin', 'git');
@@ -60,13 +78,10 @@ describe('CLI version resolver', () => {
   test('reads an exact release tag and strips the leading v', async () => {
     await withFakeGit(
       'exact-tag',
-      `#!/usr/bin/env bash
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+      `if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
   printf 'v9.9.9\\n'
   exit 0
-fi
-exit 1
-`,
+fi`,
       async (dir) => {
         expect(getInstalledVersion(dir)).toBe('9.9.9');
       },
@@ -76,51 +91,31 @@ exit 1
   test('falls back to git describe when HEAD is ahead of the last tag', async () => {
     await withFakeGit(
       'described-version',
-      `#!/usr/bin/env bash
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+      `if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
   exit 1
 fi
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
   printf 'v1.2.3-1-gabc123\\n'
   exit 0
-fi
-exit 1
-`,
+fi`,
       async (dir) => {
         expect(getInstalledVersion(dir)).toBe('1.2.3-1-gabc123');
       },
     );
   });
 
-  test('prefers the exact release tag over other version sources (v stripped)', () => {
-    expect(selectInstalledVersion('0.4.0', 'v9.9.9', 'v9.9.9-1-gabc123')).toBe('9.9.9');
-  });
-
-  test('uses git describe output when ahead of the last release tag (v stripped)', () => {
-    expect(selectInstalledVersion('0.4.0', null, 'v1.2.3-1-gabc123')).toBe('1.2.3-1-gabc123');
-  });
-
-  test('leaves tags without a v prefix unchanged', () => {
-    expect(selectInstalledVersion('0.0.0', '1.0.0', null)).toBe('1.0.0');
-  });
-
   test('does not run --always when --exact-match resolves a tag', async () => {
     // The fake git exits 99 if --always is invoked; the resolver must
-    // never reach it on a tagged commit. If the short-circuit regresses
-    // this test fails because runGit returns null for non-zero exits and
-    // any other failure mode would surface as an unexpected version.
+    // never reach it on a tagged commit.
     await withFakeGit(
       'short-circuit',
-      `#!/usr/bin/env bash
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+      `if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
   printf 'v0.5.0\\n'
   exit 0
 fi
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
   exit 99
-fi
-exit 1
-`,
+fi`,
       async (dir) => {
         expect(getInstalledVersion(dir)).toBe('0.5.0');
       },
@@ -130,16 +125,13 @@ exit 1
   test('rejects bare-SHA describe output and falls back to package.json', async () => {
     await withFakeGit(
       'tagless-repo',
-      `#!/usr/bin/env bash
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+      `if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
   exit 1
 fi
-if [ "$1" = "-C" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
   printf 'abc1234\\n'
   exit 0
-fi
-exit 1
-`,
+fi`,
       async (dir) => {
         // Package.json was seeded with 0.4.0 by the harness; the bare SHA
         // must be rejected as not-a-version.
@@ -148,10 +140,36 @@ exit 1
     );
   });
 
-  test('falls back to package.json version when git metadata is unavailable', async () => {
-    const dir = makeTempDir('package-only');
+  test('falls back to package.json when not a git checkout', async () => {
+    const dir = makeTempDir('non-git');
     await writePackageJson(dir, '3.2.1');
-    expect(selectInstalledVersion('3.2.1', null, null)).toBe('3.2.1');
-    expect(getInstalledVersion(dir)).toBe('3.2.1');
+    // Point JARVIS_GIT_BIN at a non-existent file so rev-parse fails →
+    // isGitCheckout returns false and we never call describe.
+    const previousGitBin = process.env.JARVIS_GIT_BIN;
+    process.env.JARVIS_GIT_BIN = join(dir, 'no-such-git-binary');
+    try {
+      expect(getInstalledVersion(dir)).toBe('3.2.1');
+    } finally {
+      if (previousGitBin === undefined) delete process.env.JARVIS_GIT_BIN;
+      else process.env.JARVIS_GIT_BIN = previousGitBin;
+    }
+  });
+
+  // ── pure selector ─────────────────────────────────────────────────
+
+  test('selectInstalledVersion: exact tag wins (v stripped)', () => {
+    expect(selectInstalledVersion('v9.9.9', 'v9.9.9-1-gabc123', '0.4.0')).toBe('9.9.9');
+  });
+
+  test('selectInstalledVersion: described wins when no exact tag (v stripped)', () => {
+    expect(selectInstalledVersion(null, 'v1.2.3-1-gabc123', '0.4.0')).toBe('1.2.3-1-gabc123');
+  });
+
+  test('selectInstalledVersion: package.json wins when neither git source resolves', () => {
+    expect(selectInstalledVersion(null, null, '3.2.1')).toBe('3.2.1');
+  });
+
+  test('selectInstalledVersion: leaves tags without a v prefix unchanged', () => {
+    expect(selectInstalledVersion('1.0.0', null, '0.0.0')).toBe('1.0.0');
   });
 });
