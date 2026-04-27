@@ -6,9 +6,8 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
