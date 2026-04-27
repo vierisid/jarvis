@@ -14,7 +14,7 @@
  */
 
 import { join } from 'node:path';
-import { openSync } from 'node:fs';
+import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
