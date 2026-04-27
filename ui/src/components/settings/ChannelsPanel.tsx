@@ -652,9 +652,9 @@ export function ChannelsPanel() {
                 value={sarvQuality}
                 onChange={e => setSarvQuality(Number(e.target.value))}
               >
+                <option value={16000}>Low (16kHz)</option>
                 <option value={24000}>Standard (24kHz)</option>
                 <option value={48000}>High Fidelity (48kHz)</option>
-                <option value={16000}>Low (16kHz)</option>
               </select>
             </div>
           </>

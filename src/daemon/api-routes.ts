@@ -1686,7 +1686,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.action) return error('Missing "action" field');
           ctx.learner.resetPattern(body.action, body.tool_name ?? '');
           return json({ ok: true });
-        } catch (err) { return error('Invalid request body'); }
+        } catch (err) {
+          return error('Invalid request body');
+        }
       },
     },
 
