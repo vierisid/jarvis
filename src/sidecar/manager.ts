@@ -30,6 +30,51 @@ const KEY_DIR_NAME = 'sidecar-keys';
 const PRIVATE_KEY_FILE = 'private.pem';
 const PUBLIC_KEY_FILE = 'public.pem';
 
+// Localhost host check anchored: matches `localhost`, `localhost:PORT`, but
+// not e.g. `notlocalhost.example.com`. Used both for enrollment URL scheme
+// inference and for startup warnings.
+const LOCALHOST_HOST_RE = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/;
+
+export function isLocalhostBrainUrl(brainBase: string): boolean {
+  const normalized = brainBase.trim();
+  if (/^(https?|wss?):\/\//.test(normalized)) {
+    try {
+      return LOCALHOST_HOST_RE.test(new URL(normalized).host);
+    } catch {
+      return false;
+    }
+  }
+  return LOCALHOST_HOST_RE.test(normalized);
+}
+
+// Build the JWT-bound enrollment URLs from a single canonical brain base —
+// either a full URL (`https://brain.example.com`, `wss://...`) or a bare
+// host[:port] (`brain.example.com`, `10.0.0.5:3142`). Pure function: no
+// request input, no env, no class state. The single source of truth is
+// whatever the brain operator configured at startup.
+export function buildEnrollmentUrls(brainBase: string): { brainWs: string; jwksUrl: string } {
+  const normalized = brainBase.trim();
+
+  if (/^(https?|wss?):\/\//.test(normalized)) {
+    const parsed = new URL(normalized);
+    const isSecure = parsed.protocol === 'https:' || parsed.protocol === 'wss:';
+    return {
+      brainWs: `${isSecure ? 'wss' : 'ws'}://${parsed.host}/sidecar/connect`,
+      jwksUrl: `${isSecure ? 'https' : 'http'}://${parsed.host}/api/sidecars/.well-known/jwks.json`,
+    };
+  }
+
+  // Bare host: assume insecure only for explicit local hosts. A remote
+  // host with an explicit port (`brain.example.com:443`) used to be
+  // misclassified as insecure by a `:\d+$` heuristic; require a known
+  // local host instead so production deployments default to wss/https.
+  const isSecure = !LOCALHOST_HOST_RE.test(normalized);
+  return {
+    brainWs: `${isSecure ? 'wss' : 'ws'}://${normalized}/sidecar/connect`,
+    jwksUrl: `${isSecure ? 'https' : 'http'}://${normalized}/api/sidecars/.well-known/jwks.json`,
+  };
+}
+
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
 
@@ -227,7 +272,7 @@ export class SidecarManager implements Service {
   /**
    * Enroll a new sidecar. Returns the signed JWT enrollment token.
    */
-  async enrollSidecar(name: string, enrollmentOrigin?: string): Promise<{ token: string; sidecar: SidecarRecord }> {
+  async enrollSidecar(name: string): Promise<{ token: string; sidecar: SidecarRecord }> {
     if (!this.privateKey) throw new Error('SidecarManager not started');
     if (!this.brainUrl) throw new Error('Brain URL not configured — call setBrainUrl() first');
 
@@ -250,7 +295,7 @@ export class SidecarManager implements Service {
     const id = generateId();
     const tokenId = generateId();
 
-    const { brainWs, jwksUrl } = this.buildEnrollmentUrls(enrollmentOrigin || this.brainUrl);
+    const { brainWs, jwksUrl } = buildEnrollmentUrls(this.brainUrl);
 
     // Sign JWT
     const token = await new SignJWT({
@@ -275,29 +320,6 @@ export class SidecarManager implements Service {
     console.log(`[SidecarManager] Enrolled sidecar "${trimmed}" (${id})`);
 
     return { token, sidecar };
-  }
-
-  private buildEnrollmentUrls(brainBase: string): { brainWs: string; jwksUrl: string } {
-    const normalized = brainBase.trim();
-
-    if (/^https?:\/\//.test(normalized) || /^wss?:\/\//.test(normalized)) {
-      const parsed = new URL(normalized);
-      const host = parsed.host;
-      const wsProtocol = parsed.protocol === 'https:' || parsed.protocol === 'wss:' ? 'wss' : 'ws';
-      const httpProtocol = parsed.protocol === 'wss:' ? 'https' : parsed.protocol === 'ws:' ? 'http' : parsed.protocol.replace(':', '');
-      return {
-        brainWs: `${wsProtocol}://${host}/sidecar/connect`,
-        jwksUrl: `${httpProtocol}://${host}/api/sidecars/.well-known/jwks.json`,
-      };
-    }
-
-    const isSecure = !normalized.includes('localhost') && !normalized.match(/:\d+$/);
-    const wsProtocol = isSecure ? 'wss' : 'ws';
-    const httpProtocol = isSecure ? 'https' : 'http';
-    return {
-      brainWs: `${wsProtocol}://${normalized}/sidecar/connect`,
-      jwksUrl: `${httpProtocol}://${normalized}/api/sidecars/.well-known/jwks.json`,
-    };
   }
 
   // --------------- Registry (DB queries) ---------------
