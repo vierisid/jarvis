@@ -6,11 +6,13 @@
  *   jarvis start [--port N] [-d|--detach]   Start the daemon
  *   jarvis stop [--port N]                  Stop the running daemon
  *   jarvis status                           Show daemon status
- *   jarvis onboard                          Interactive setup wizard
  *   jarvis uninstall                        Remove JARVIS (detects install method)
  *   jarvis doctor                           Check environment & connectivity
  *   jarvis version                          Print version
  *   jarvis help                             Show this help
+ *
+ * First-time setup happens in the dashboard at http://localhost:3142
+ * after `jarvis start` — there is no longer a CLI wizard.
  */
 
 import { join } from 'node:path';
@@ -42,7 +44,6 @@ ${c.bold('Commands:')}
   ${c.cyan('status')}    Show daemon status
   ${c.cyan('logs')}      Tail the daemon log file
   ${c.cyan('update')}    Update JARVIS (dispatches based on install method)
-  ${c.cyan('onboard')}   Interactive first-time setup wizard
   ${c.cyan('uninstall')} Remove JARVIS (dispatches based on install method)
   ${c.cyan('doctor')}    Check environment and connectivity
   ${c.cyan('version')}   Print version number
@@ -66,7 +67,6 @@ ${c.bold('Examples:')}
   jarvis restart                Restart with same settings
   jarvis logs -f                Follow live log output
   jarvis update                 Update to latest version
-  jarvis onboard                Run the setup wizard
   jarvis uninstall              Remove JARVIS from this machine
   jarvis doctor                 Check if everything is working
 `);
@@ -101,6 +101,19 @@ async function cmdStart(args: string[]): Promise<void> {
   const dataDirIdx = args.indexOf('--data-dir');
   if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
     dataDir = args[dataDirIdx + 1]!;
+  }
+
+  // Friendly first-run hint — when no config exists yet, the daemon
+  // boots in "setup mode" and the dashboard's onboarding gate handles
+  // LLM/TTS/profile/tutorial. Print a one-liner so the user knows where
+  // to go (the browser auto-opens too unless --no-open is set).
+  const { existsSync: _exists } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const cfgPath = join(homedir(), '.jarvis', 'config.yaml');
+  if (!_exists(cfgPath)) {
+    console.log(c.cyan('First-run detected — finish setup in your browser:'));
+    console.log(c.dim(`  → http://localhost:${port ?? 3142}`));
+    console.log('');
   }
 
   if (!detach) {
@@ -261,15 +274,6 @@ function cmdStatus(): void {
   }
 }
 
-async function cmdOnboard(): Promise<void> {
-  const { runOnboard } = await import('../src/cli/onboard.ts');
-  const { runDoctor } = await import('../src/cli/doctor.ts');
-  await runOnboard();
-  console.log('');
-  console.log(c.cyan('Running JARVIS doctor...'));
-  await runDoctor();
-}
-
 async function cmdDoctor(): Promise<void> {
   const { runDoctor } = await import('../src/cli/doctor.ts');
   await runDoctor();
@@ -389,7 +393,11 @@ switch (command) {
     await cmdUpdate();
     break;
   case 'onboard':
-    await cmdOnboard();
+    console.log(c.yellow('The CLI onboarding wizard has been retired.'));
+    console.log(c.dim('  First-time setup now happens in the dashboard:'));
+    console.log(c.dim('    1. Run: jarvis start'));
+    console.log(c.dim('    2. Open: http://localhost:3142'));
+    console.log(c.dim('  The dashboard guides you through LLM, voice, and profile setup.'));
     break;
   case 'doctor':
     await cmdDoctor();

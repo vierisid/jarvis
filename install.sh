@@ -372,10 +372,9 @@ main() {
     echo ""
   fi
 
-  echo -e "  Run the setup wizard to configure your assistant:"
-  echo -e "    ${CYAN}jarvis onboard${RESET}"
-  echo ""
-  echo -e "  ${DIM}Or start directly with: jarvis start${RESET}"
+  echo -e "  Start the daemon and finish setup in your browser:"
+  echo -e "    ${CYAN}jarvis start${RESET}"
+  echo -e "    ${DIM}→ http://localhost:3142 (dashboard guides you through LLM, voice, and profile)${RESET}"
 }
 
 main "$@"
