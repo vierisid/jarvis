@@ -347,6 +347,14 @@ export class GroqProvider implements LLMProvider {
       )
       : 0;
     const budget = Math.max(6_000, promptBudget - toolOverhead);
+
+    // Fast path: if the conversation already fits under budget at full size,
+    // return it untouched. This avoids unconditionally truncating individual
+    // messages with the visible "...[truncated for Groq]..." marker on every
+    // request — the per-role caps only apply when we actually have to shrink.
+    const rawTotal = messages.reduce((sum, m) => sum + this.measureMessage(m), 0);
+    if (rawTotal <= budget) return messages;
+
     const normalized = messages.map((message) => this.normalizeMessage(message));
     const systemMessages = normalized.filter((message) => message.role === 'system');
     const nonSystemMessages = normalized.filter((message) => message.role !== 'system');
