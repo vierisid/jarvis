@@ -76,11 +76,10 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
 
 ```bash
 bun install -g @usejarvis/brain   # Install the daemon
-jarvis onboard                    # Interactive setup wizard
 jarvis start -d                   # Start as background daemon
 ```
 
-Open `http://localhost:3142` — your dashboard is ready.
+Open `http://localhost:3142` — the dashboard walks you through LLM provider, voice, and a quick conversational profile interview the first time you visit.
 
 ---
 
@@ -131,8 +130,10 @@ Visit [opencove.host](https://opencove.host) to get started.
 
 ```bash
 bun install -g @usejarvis/brain
-jarvis onboard
+jarvis start
 ```
+
+The first time you run `jarvis start`, the daemon boots in setup mode and the dashboard at `http://localhost:3142` guides you through LLM provider, voice (TTS) choice, a conversational profile interview, and a 10-minute spotlight tour.
 
 > **Note:** Native Windows installs are blocked for the JARVIS daemon. On Windows, use WSL2 for the Bun install above, or use the Docker install instead.
 
@@ -156,10 +157,10 @@ The image is available on [GHCR](https://ghcr.io/vierisid/jarvis). Configuration
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
-jarvis onboard
+jarvis start
 ```
 
-The install script sets up Bun, clones the repo, and links the `jarvis` CLI. Then run `jarvis onboard` to configure your assistant interactively.
+The install script sets up Bun, clones the repo, and links the `jarvis` CLI. Then run `jarvis start` and finish setup in your browser at `http://localhost:3142`.
 
 > **Note:** The one-liner only supports macOS, Linux, and WSL. Native Windows shells such as PowerShell, Git Bash, and CMD should use WSL2 or the Docker install instead.
 
@@ -170,8 +171,10 @@ git clone https://github.com/vierisid/jarvis.git ~/.jarvis/daemon
 cd ~/.jarvis/daemon
 bun install
 bun run build:ui
-jarvis onboard
+jarvis start
 ```
+
+Then open `http://localhost:3142` to finish setup in the dashboard.
 
 ---
 
@@ -308,7 +311,7 @@ Built with React 19 and Tailwind CSS 4. Served by the daemon at `http://localhos
 
 ## ⚙️ Configuration
 
-JARVIS stores its configuration at `~/.jarvis/config.yaml`. Run `jarvis onboard` for interactive setup — it walks through LLM provider, voice, channels, personality, and authority settings.
+JARVIS stores its configuration at `~/.jarvis/config.yaml`. Open the dashboard at `http://localhost:3142` after `jarvis start` for guided setup — it walks through LLM provider, voice, and a profile interview the first time. The Settings room lets you tweak channels, personality, and authority later.
 
 ```yaml
 daemon:

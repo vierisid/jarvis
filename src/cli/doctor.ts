@@ -53,7 +53,7 @@ export async function runDoctor(): Promise<void> {
   if (existsSync(JARVIS_DIR)) {
     results.push({ name: 'Data Directory', status: 'ok', message: JARVIS_DIR });
   } else {
-    results.push({ name: 'Data Directory', status: 'warn', message: `${JARVIS_DIR} not found. Run: jarvis onboard` });
+    results.push({ name: 'Data Directory', status: 'warn', message: `${JARVIS_DIR} not found. Run: jarvis start (then finish setup at http://localhost:3142)` });
   }
 
   // ── Check 3: Config File ──────────────────────────────────────────
@@ -69,7 +69,7 @@ export async function runDoctor(): Promise<void> {
       results.push({ name: 'Config File', status: 'fail', message: `Invalid YAML: ${err}` });
     }
   } else {
-    results.push({ name: 'Config File', status: 'fail', message: 'Not found. Run: jarvis onboard' });
+    results.push({ name: 'Config File', status: 'fail', message: 'Not found. Run: jarvis start (then finish setup at http://localhost:3142)' });
   }
 
   // ── Check 4: LLM API Key ─────────────────────────────────────────
@@ -235,7 +235,7 @@ export async function runDoctor(): Promise<void> {
   console.log(`  ${c.green(`${okCount} passed`)}  ${c.yellow(`${warnCount} warnings`)}  ${c.red(`${failCount} failed`)}`);
 
   if (failCount > 0) {
-    console.log(c.red('\nSome checks failed. Run "jarvis onboard" to fix configuration.\n'));
+    console.log(c.red('\nSome checks failed. Run "jarvis start" and finish setup at http://localhost:3142 to fix configuration.\n'));
   } else if (warnCount > 0) {
     console.log(c.yellow('\nAll critical checks passed, but some optional features need setup.\n'));
   } else {
