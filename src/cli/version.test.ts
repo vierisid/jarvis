@@ -57,7 +57,7 @@ afterEach(async () => {
 });
 
 describe('CLI version resolver', () => {
-  test('reads an exact release tag through the git resolver path', async () => {
+  test('reads an exact release tag and strips the leading v', async () => {
     await withFakeGit(
       'exact-tag',
       `#!/usr/bin/env bash
@@ -68,7 +68,7 @@ fi
 exit 1
 `,
       async (dir) => {
-        expect(getInstalledVersion(dir)).toBe('v9.9.9');
+        expect(getInstalledVersion(dir)).toBe('9.9.9');
       },
     );
   });
@@ -87,17 +87,21 @@ fi
 exit 1
 `,
       async (dir) => {
-        expect(getInstalledVersion(dir)).toBe('v1.2.3-1-gabc123');
+        expect(getInstalledVersion(dir)).toBe('1.2.3-1-gabc123');
       },
     );
   });
 
-  test('prefers the exact release tag over other version sources', () => {
-    expect(selectInstalledVersion('0.4.0', 'v9.9.9', 'v9.9.9-1-gabc123')).toBe('v9.9.9');
+  test('prefers the exact release tag over other version sources (v stripped)', () => {
+    expect(selectInstalledVersion('0.4.0', 'v9.9.9', 'v9.9.9-1-gabc123')).toBe('9.9.9');
   });
 
-  test('uses git describe output when the checkout is ahead of the last release tag', () => {
-    expect(selectInstalledVersion('0.4.0', null, 'v1.2.3-1-gabc123')).toBe('v1.2.3-1-gabc123');
+  test('uses git describe output when ahead of the last release tag (v stripped)', () => {
+    expect(selectInstalledVersion('0.4.0', null, 'v1.2.3-1-gabc123')).toBe('1.2.3-1-gabc123');
+  });
+
+  test('leaves tags without a v prefix unchanged', () => {
+    expect(selectInstalledVersion('0.0.0', '1.0.0', null)).toBe('1.0.0');
   });
 
   test('falls back to package.json version when git metadata is unavailable', async () => {

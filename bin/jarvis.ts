@@ -400,7 +400,7 @@ switch (command) {
   case 'version':
   case '-v':
   case '--version':
-    console.log(getVersion());
+    console.log(`v${getVersion()}`);
     break;
   case 'help':
   case '-h':

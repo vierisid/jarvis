@@ -26,17 +26,21 @@ function runGit(args: string[], cwd: string): string | null {
   return text || null;
 }
 
+function stripLeadingV(s: string): string {
+  return s.startsWith('v') ? s.slice(1) : s;
+}
+
 export function selectInstalledVersion(
   packageVersion: string,
   exactTag: string | null,
   describedVersion: string | null,
 ): string {
   if (exactTag) {
-    return exactTag;
+    return stripLeadingV(exactTag);
   }
 
   if (describedVersion) {
-    return describedVersion;
+    return stripLeadingV(describedVersion);
   }
 
   return packageVersion;
