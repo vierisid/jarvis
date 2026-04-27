@@ -5,7 +5,9 @@ import {
   OpenAIWhisperSTT,
   GroqWhisperSTT,
   LocalWhisperSTT,
+  SarvamSTT,
   EdgeTTSProvider,
+  SarvamTTSProvider,
   splitIntoSentences,
 } from './voice.ts';
 import type { STTConfig, TTSConfig } from '../config/types.ts';
@@ -99,6 +101,19 @@ describe('createSTTProvider factory', () => {
     const provider = createSTTProvider(config);
     expect(provider).toBeInstanceOf(OpenAIWhisperSTT);
   });
+
+  test('returns SarvamSTT when provider=sarvam and key present', () => {
+    const config: STTConfig = {
+      provider: 'sarvam',
+      sarvam: { api_key: 'sk_test_not_real' },
+    };
+    expect(createSTTProvider(config)).toBeInstanceOf(SarvamSTT);
+  });
+
+  test('returns null when provider=sarvam and no key', () => {
+    const config: STTConfig = { provider: 'sarvam' };
+    expect(createSTTProvider(config)).toBeNull();
+  });
 });
 
 describe('createTTSProvider factory', () => {
@@ -123,6 +138,20 @@ describe('createTTSProvider factory', () => {
     const config: TTSConfig = { enabled: true, rate: '+20%', volume: '-10%' };
     const provider = createTTSProvider(config);
     expect(provider).not.toBeNull();
+  });
+
+  test('returns SarvamTTSProvider when provider=sarvam and key present', () => {
+    const config: TTSConfig = {
+      enabled: true,
+      provider: 'sarvam',
+      sarvam: { api_key: 'sk_test_not_real' },
+    };
+    expect(createTTSProvider(config)).toBeInstanceOf(SarvamTTSProvider);
+  });
+
+  test('returns null when provider=sarvam and no key', () => {
+    const config: TTSConfig = { enabled: true, provider: 'sarvam' };
+    expect(createTTSProvider(config)).toBeNull();
   });
 });
 
@@ -431,5 +460,68 @@ describe('LocalWhisperSTT.transcribe', () => {
     } catch (err: any) {
       expect(err.message).toBe('Connection refused');
     }
+  });
+});
+
+describe('SarvamSTT.transcribe', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test('passes configured language_code through to Sarvam request', async () => {
+    const stt = new SarvamSTT('sk_test_not_real', 'saaras:v3', 'hi-IN');
+    const wav = makeWavBuffer();
+    let sentLanguage = '';
+
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      const body = init.body as FormData;
+      sentLanguage = String(body.get('language_code'));
+      return new Response(JSON.stringify({ transcript: 'namaste' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    expect(await stt.transcribe(wav)).toBe('namaste');
+    expect(sentLanguage).toBe('hi-IN');
+  });
+
+  test('defaults language_code to "unknown" (auto-detect) when not configured', async () => {
+    const stt = new SarvamSTT('sk_test_not_real');
+    const wav = makeWavBuffer();
+    let sentLanguage = '';
+
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      const body = init.body as FormData;
+      sentLanguage = String(body.get('language_code'));
+      return new Response(JSON.stringify({ transcript: 'hi' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(wav);
+    expect(sentLanguage).toBe('unknown');
+  });
+
+  test('throws when response body has neither transcript nor text', async () => {
+    const stt = new SarvamSTT('sk_test_not_real');
+    const wav = makeWavBuffer();
+
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ unexpected: 'shape' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    ) as any;
+
+    await expect(stt.transcribe(wav)).rejects.toThrow('Sarvam STT returned no transcript');
+  });
+
+  test('throws on HTTP error with status', async () => {
+    const stt = new SarvamSTT('sk_test_not_real');
+    const wav = makeWavBuffer();
+
+    globalThis.fetch = mock(async () =>
+      new Response('unauthorized', { status: 401 })
+    ) as any;
+
+    await expect(stt.transcribe(wav)).rejects.toThrow(/Sarvam STT error \(401\)/);
   });
 });
