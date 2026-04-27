@@ -164,17 +164,19 @@ export class LocalWhisperSTT implements STTProvider {
 export class SarvamSTT implements STTProvider {
   private apiKey: string;
   private model: string;
+  private language: string;
 
-  constructor(apiKey: string, model: string = 'saaras:v3') {
+  constructor(apiKey: string, model: string = 'saaras:v3', language: string = 'unknown') {
     this.apiKey = apiKey;
     this.model = model;
+    this.language = language;
   }
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
     formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
-    formData.append('language_code', 'en-IN'); 
+    formData.append('language_code', this.language);
 
     const response = await fetch('https://api.sarvam.ai/speech-to-text', {
       method: 'POST',
@@ -187,8 +189,12 @@ export class SarvamSTT implements STTProvider {
       throw new Error(`Sarvam STT error (${response.status}): ${err}`);
     }
 
-    const result = await response.json() as any;
-    return result.transcript || result.text || '';
+    const result = await response.json() as { transcript?: string; text?: string };
+    const transcript = result.transcript ?? result.text;
+    if (typeof transcript !== 'string' || !transcript) {
+      throw new Error(`Sarvam STT returned no transcript: ${JSON.stringify(result).slice(0, 200)}`);
+    }
+    return transcript;
   }
 }
 
@@ -208,7 +214,7 @@ export function createSTTProvider(config: STTConfig): STTProvider | null {
       return new LocalWhisperSTT(config.local?.endpoint, config.local?.model, config.local?.server_type);
     case 'sarvam':
       if (!config.sarvam?.api_key) return null;
-      return new SarvamSTT(config.sarvam.api_key, config.sarvam.model);
+      return new SarvamSTT(config.sarvam.api_key, config.sarvam.model, config.sarvam.language);
     default:
       return null;
   }

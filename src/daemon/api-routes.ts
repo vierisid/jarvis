@@ -1313,6 +1313,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           has_openai_key: !!stt?.openai?.api_key,
           has_groq_key: !!stt?.groq?.api_key,
           has_sarvam_key: !!stt?.sarvam?.api_key,
+          sarvam_language: stt?.sarvam?.language ?? 'unknown',
           local_endpoint: stt?.local?.endpoint ?? null,
           local_server_type: stt?.local?.server_type ?? 'whisper_cpp',
         });

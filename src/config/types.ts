@@ -42,7 +42,7 @@ export type STTConfig = {
   openai?: { api_key: string; model?: string };
   groq?: { api_key: string; model?: string };
   local?: { endpoint: string; model?: string; server_type?: 'whisper_cpp' | 'openai_compatible' };
-  sarvam?: { api_key: string; model?: string };
+  sarvam?: { api_key: string; model?: string; language?: string };
 };
 
 export type TTSConfig = {

@@ -16,6 +16,7 @@ type STTConfigData = {
   has_openai_key: boolean;
   has_groq_key: boolean;
   has_sarvam_key: boolean;
+  sarvam_language: string;
   local_endpoint: string | null;
   local_server_type: string;
 };
@@ -70,6 +71,7 @@ export function ChannelsPanel() {
   const [sttKey, setSttKey] = useState("");
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
   const [sttServerType, setSttServerType] = useState("whisper_cpp");
+  const [sttSarvamLanguage, setSttSarvamLanguage] = useState("unknown");
 
   // TTS form
   const [ttsEnabled, setTtsEnabled] = useState(false);
@@ -114,6 +116,7 @@ export function ChannelsPanel() {
       setSttProvider(sttCfg.provider);
       if (sttCfg.local_endpoint) setSttEndpoint(sttCfg.local_endpoint);
       if (sttCfg.local_server_type) setSttServerType(sttCfg.local_server_type);
+      if (sttCfg.sarvam_language) setSttSarvamLanguage(sttCfg.sarvam_language);
     }
   }, [sttCfg]);
 
@@ -194,8 +197,11 @@ export function ChannelsPanel() {
         body.openai = { api_key: sttKey };
       } else if (sttProvider === "groq" && sttKey) {
         body.groq = { api_key: sttKey };
-      } else if (sttProvider === "sarvam" && sttKey) {
-        body.sarvam = { api_key: sttKey };
+      } else if (sttProvider === "sarvam") {
+        body.sarvam = {
+          ...(sttKey ? { api_key: sttKey } : {}),
+          language: sttSarvamLanguage,
+        };
       } else if (sttProvider === "local") {
         body.local = { endpoint: sttEndpoint, server_type: sttServerType };
       }
@@ -399,6 +405,29 @@ export function ChannelsPanel() {
               <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>
                 API key configured
               </span>
+            )}
+            {sttProvider === "sarvam" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>Spoken language</span>
+                <select
+                  style={inputStyle}
+                  value={sttSarvamLanguage}
+                  onChange={e => setSttSarvamLanguage(e.target.value)}
+                >
+                  <option value="unknown">Auto-detect</option>
+                  <option value="en-IN">English (Indian Accent)</option>
+                  <option value="hi-IN">Hindi</option>
+                  <option value="ta-IN">Tamil</option>
+                  <option value="te-IN">Telugu</option>
+                  <option value="kn-IN">Kannada</option>
+                  <option value="ml-IN">Malayalam</option>
+                  <option value="bn-IN">Bengali</option>
+                  <option value="gu-IN">Gujarati</option>
+                  <option value="mr-IN">Marathi</option>
+                  <option value="pa-IN">Punjabi</option>
+                  <option value="od-IN">Odia</option>
+                </select>
+              </div>
             )}
           </>
         )}
