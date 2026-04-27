@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { SetupRoom } from "./SetupRoom";
 import { ProfileInterviewRoom } from "./ProfileInterviewRoom";
+import { TutorialRoom } from "./TutorialRoom";
+import { TutorialEventProvider } from "./TutorialEventContext";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 
 /**
@@ -61,6 +63,36 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // TODO Phase C: tutorial gate (overlay on top of children)
+  // Phase C — spotlight tutorial overlay. Renders on TOP of the
+  // children (the live AppShell + RoomDispatcher) instead of
+  // replacing them, so the user can see and interact with the real
+  // surfaces being explained. Wraps in TutorialEventProvider so the
+  // AppShell can fire palette_opened / room_opened / notif_opened
+  // events that the tutorial subscribes to for auto-advance.
+  if (!status.tutorial_completed && !status.tutorial_dismissed) {
+    return (
+      <TutorialEventProvider>
+        {children}
+        <TutorialRoom
+          resumeFromStepId={status.tutorial_progress_step}
+          onComplete={() => refresh()}
+          // The samples need to land in the real `live.items` / room
+          // window store. We can't reach the AppShell's `useLiveThread`
+          // from here without prop-drilling — instead, the tutorial
+          // dispatches `injectSampleCard` / `injectSampleRoomWindow`
+          // events that AppShell subscribes to. To keep this gate
+          // dumb, we use window CustomEvents — Jarvis-internal,
+          // never crosses the WS boundary.
+          injectSampleCard={() =>
+            window.dispatchEvent(new CustomEvent("v2-tutorial:inject-card"))
+          }
+          injectSampleRoomWindow={() =>
+            window.dispatchEvent(new CustomEvent("v2-tutorial:inject-roomwindow"))
+          }
+        />
+      </TutorialEventProvider>
+    );
+  }
+
   return <>{children}</>;
 }

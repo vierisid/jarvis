@@ -977,6 +977,105 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // ── Phase C — tutorial completion endpoints ─────────────────────
+    // Three small endpoints powering the spotlight walkthrough's
+    // persistence: complete (user finished), dismiss (user skipped),
+    // progress (resume-from-step support). All three write through
+    // the same loadConfig → mutate → saveConfig pattern as the rest
+    // of the onboarding routes; the existing reset endpoint with
+    // `scope: "tutorial"` already clears all three fields.
+
+    '/api/onboarding/tutorial/complete': {
+      POST: async () => {
+        try {
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const now = Date.now();
+          fresh.onboarding = {
+            setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
+            ...fresh.onboarding,
+            tutorial_completed_at: now,
+            tutorial_progress_step: undefined,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+          return json({ ok: true, tutorial_completed_at: now });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    '/api/onboarding/tutorial/dismiss': {
+      POST: async () => {
+        try {
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const now = Date.now();
+          fresh.onboarding = {
+            setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            ...fresh.onboarding,
+            tutorial_dismissed_at: now,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+          return json({ ok: true, tutorial_dismissed_at: now });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    '/api/onboarding/tutorial/progress': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as { stepId?: string };
+          const stepId = typeof body.stepId === 'string' ? body.stepId.trim() : '';
+          if (!stepId) return error('Missing stepId.', 400);
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          fresh.onboarding = {
+            setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            ...fresh.onboarding,
+            tutorial_progress_step: stepId,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+          return json({ ok: true, tutorial_progress_step: stepId });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
+     * Phase C — tutorial narration TTS broadcast. Speaks `text`
+     * through the existing TTS provider so the AppShell's `useVoice`
+     * picks it up via the regular `tts_start` + binary chunks path.
+     * The orb pulses speaking; the tutorial bubble mirrors it.
+     * Synchronous-ish: returns when synthesis completes (so the UI
+     * can advance to listening for the next "next" command).
+     */
+    '/api/onboarding/tutorial/speak': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as { text?: string };
+          const text = typeof body.text === 'string' ? body.text.trim() : '';
+          if (!text) return error('Missing text.', 400);
+          if (!ctx.wsService) return error('WS service unavailable.', 503);
+          // Reuse the proactive TTS broadcast — it already wraps with
+          // tts_start (with containsWake flag), streams binary chunks,
+          // and emits tts_end. No new transport.
+          await ctx.wsService.broadcastProactiveVoice(text);
+          return json({ ok: true });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
     /**
      * Atomic Phase A setup endpoint. Saves LLM + TTS config + flips
      * the `onboarding.setup_completed_at` flag in one shot, then hot-
