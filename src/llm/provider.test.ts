@@ -614,4 +614,61 @@ describe('Groq request shaping', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
+
+  test('GroqProvider streams successfully after retrying an oversized request', async () => {
+    function makeSseStream(): ReadableStream<Uint8Array> {
+      const enc = new TextEncoder();
+      const chunks = [
+        `data: ${JSON.stringify({
+          id: 'c', object: 'chat.completion.chunk', created: 0, model: 'llama-test',
+          choices: [{ index: 0, delta: { content: 'retry-stream ok' }, finish_reason: null }],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          id: 'c', object: 'chat.completion.chunk', created: 0, model: 'llama-test',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        })}\n\n`,
+        'data: [DONE]\n\n',
+      ];
+      return new ReadableStream({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(enc.encode(c));
+          controller.close();
+        },
+      });
+    }
+
+    globalThis.fetch = mock(async () => {
+      const callCount = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.length;
+      if (callCount === 1) {
+        return new Response('message is too large', { status: 413 });
+      }
+      return new Response(makeSseStream(), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'S'.repeat(14_000) },
+      { role: 'user', content: 'U'.repeat(10_000) },
+      { role: 'user', content: 'Can you still stream?' },
+    ];
+
+    const events: string[] = [];
+    let sawError = false;
+    for await (const ev of provider.stream(messages)) {
+      if (ev.type === 'text') events.push(ev.text);
+      if (ev.type === 'error') sawError = true;
+    }
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+
+    expect(sawError).toBe(false);
+    expect(events.join('')).toBe('retry-stream ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
 });
