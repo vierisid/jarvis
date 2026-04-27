@@ -60,6 +60,8 @@ export class DiscordAdapter implements ChannelAdapter {
         reject(err);
       });
     });
+    // Suppress unhandled-rejection if readyPromise rejects after connect() has already thrown.
+    readyPromise.catch(() => {});
 
     // Set up message handler
     this.client.on('messageCreate', async (message: Message) => {
@@ -72,14 +74,18 @@ export class DiscordAdapter implements ChannelAdapter {
 
     try {
       await this.client.login(this.token);
+      await readyPromise;
     } catch (err) {
-      // Clear the ready timeout to prevent unhandled rejection
       if (loginTimeout) clearTimeout(loginTimeout);
-      this.client.destroy();
+      try {
+        await this.client?.destroy();
+      } catch {
+        // ignore destroy errors during cleanup
+      }
       this.client = null;
+      this.connected = false;
       throw err;
     }
-    await readyPromise;
   }
 
   async disconnect(): Promise<void> {
