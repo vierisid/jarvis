@@ -157,8 +157,9 @@ export type JarvisConfig = {
     data_dir: string;
     db_path: string;
     /**
-     * URL that sidecars dial to reach this brain — signed into enrollment
-     * JWTs, so this is what the sidecar will use forever once enrolled.
+     * Canonical origin signed into sidecar enrollment JWTs as the `brain`
+     * (WebSocket) and `jwks` (public-key fetch) claims, so this is what the
+     * sidecar will keep using once enrolled.
      *
      * NOT the brain's bind address. If the brain is fronted by a reverse
      * proxy or accessed across NAT, this must be the externally-reachable
@@ -172,9 +173,9 @@ export type JarvisConfig = {
      * Precedence: `JARVIS_BRAIN_DOMAIN` env var > this field > internal
      * `localhost:<port>` fallback (with a startup warning).
      *
-     * If sidecars on different network segments need different URLs, set
-     * the canonical one here and override per-sidecar via the sidecar's
-     * own `brain:` config field.
+     * Sidecars must be able to reach both derived endpoints from the
+     * enrolled machine, or JWKS fetch / WebSocket connect will fail until
+     * the token is re-issued with a reachable origin.
      */
     brain_domain?: string;
   };

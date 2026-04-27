@@ -5,6 +5,11 @@ daemon:
   port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
+  # Public origin written into sidecar enrollment JWTs (`brain` + `jwks`).
+  # For remote sidecars, set this to the externally reachable URL/host they
+  # can actually reach, not localhost or a private/container-only hostname.
+  # Env override: JARVIS_BRAIN_DOMAIN="https://brain.example.com"
+  # brain_domain: "https://brain.example.com"
 
 # Authentication — protects dashboard, API, and WebSocket.
 # If unset, the application is open (no auth).

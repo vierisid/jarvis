@@ -4,6 +4,53 @@
 
 Sidecars are lightweight processes running on user PCs that expose local capabilities (terminal, filesystem, desktop, browser) to the Jarvis brain (the central server). This document describes how sidecars are enrolled and authenticated.
 
+## Choosing the Brain and JWKS URLs
+
+Each enrollment token contains two operator-controlled URLs:
+
+- `brain` → the WebSocket endpoint the sidecar dials (`wss://.../sidecar/connect` or `ws://.../sidecar/connect`)
+- `jwks` → the HTTP(S) endpoint the sidecar uses to fetch the signing key (`https://.../api/sidecars/.well-known/jwks.json`)
+
+In the current daemon, those claims are chosen from a single configured brain origin with this precedence:
+
+1. `JARVIS_BRAIN_DOMAIN`
+2. `daemon.brain_domain`
+3. `localhost:<daemon.port>` fallback
+
+At startup, the daemon applies the env override in `src/config/loader.ts`, then passes the effective value into `SidecarManager` in `src/daemon/index.ts`. `src/sidecar/manager.ts` derives both JWT claims from that one origin:
+
+- full `https://...` / `wss://...` URLs keep their host and map to secure `brain` + `jwks` endpoints
+- bare local hosts such as `localhost:3142` stay `ws://` + `http://`
+- other bare hosts default to `wss://` + `https://`
+
+### What to Set for Remote Sidecars
+
+For sidecars running on another machine, set `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` to the public origin that machine can actually reach.
+
+Good examples:
+
+- `https://brain.example.com`
+- `https://brain.example.com:8443`
+- `brain.example.com`
+
+Usually wrong for remote sidecars:
+
+- `localhost:3142`
+- `127.0.0.1:3142`
+- Docker-only hostnames
+- private LAN names the sidecar machine cannot resolve or route to
+
+The sidecar must be able to reach both:
+
+- `wss://<configured-origin>/sidecar/connect` (or `ws://...` for explicit local dev setups)
+- `https://<configured-origin>/api/sidecars/.well-known/jwks.json` (or `http://...` for explicit local dev setups)
+
+If you enroll while the brain is configured with the wrong host, the token will keep those wrong URLs until you re-enroll.
+
+### About `brain_url` Overrides
+
+Older docs or branches may mention a per-enrollment `brain_url` request override. The current `POST /api/sidecars/enroll` route in this worktree only accepts `name` and always uses the daemon-wide origin described above. To change the URLs in newly minted tokens, update `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` and then re-enroll.
+
 ## Architecture
 
 ```
@@ -75,6 +122,13 @@ The brain creates a signed JWT containing:
 | `iat`  | Issued-at timestamp                                      |
 
 **Note:** There is no `exp` (expiration) claim. Tokens are long-lived and revoked explicitly via the dashboard.
+
+The `brain` and `jwks` claims are operational, not informational:
+
+- the sidecar fetches the signing key from `jwks`
+- after verification, it connects to `brain`
+
+If those claims point at the wrong domain, an old ingress, or a host unreachable from the sidecar machine, the token must be re-issued after fixing the configured brain origin.
 
 ### Step 3: User Copies Token to Sidecar
 
@@ -151,6 +205,55 @@ Tokens can be revoked from the dashboard by deleting the sidecar. The brain main
 ```
 
 This endpoint requires no authentication — public keys are safe to expose.
+
+## Troubleshooting Enrollment URL Problems
+
+### Token contains the wrong domain
+
+Symptoms:
+
+- the JWT payload shows `brain` or `jwks` pointing at `localhost`, an outdated hostname, or an internal-only address
+- enrollment looked fine in the dashboard, but the sidecar is on another machine
+
+Fix:
+
+1. Set `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` to the correct public origin
+2. Restart/reload Jarvis so the daemon uses the new value
+3. Re-enroll the sidecar so a fresh token is minted with corrected claims
+
+Remember: existing tokens keep the URLs they were issued with.
+
+### JWKS fetch fails
+
+Symptoms:
+
+- TLS/certificate errors
+- `404`, `502`, DNS failure, or `connection refused` when requesting `/api/sidecars/.well-known/jwks.json`
+
+Fix:
+
+1. Verify the configured origin serves `GET /api/sidecars/.well-known/jwks.json`
+2. Confirm your proxy/tunnel forwards that path to Jarvis
+3. Make sure the sidecar machine can resolve and reach the configured host
+4. Use a certificate trusted by the sidecar machine when using HTTPS
+
+### WebSocket connection fails after verification
+
+Symptoms:
+
+- JWT verification succeeds, but the sidecar cannot connect to `/sidecar/connect`
+- handshake failures, `404`, `426`, or proxy disconnects
+
+Fix:
+
+1. Verify the `brain` claim points to the correct public host and port
+2. Confirm your proxy supports WebSocket upgrades for `/sidecar/connect`
+3. Check firewall and routing rules between the sidecar machine and the brain ingress
+4. Re-enroll after fixing the configured origin so the token carries the corrected `brain` claim
+
+### YAML and environment disagree
+
+`JARVIS_BRAIN_DOMAIN` overrides `daemon.brain_domain`. If the token does not match the YAML value you expected, check the daemon process environment first.
 
 ## Security Considerations
 
