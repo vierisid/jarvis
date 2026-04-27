@@ -287,34 +287,12 @@ export async function installBrowser(): Promise<boolean> {
   // Linux / WSL — install a Linux browser (preferred for CDP)
   if (pm === 'apt') {
     // Try chromium-browser first (most common on Ubuntu/Debian), then chromium
-    console.log(c.dim('  Running: sudo apt install -y chromium-browser'));
-    let result = spawnSync(['sudo', 'apt', 'install', '-y', 'chromium-browser'], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    if (result.exitCode === 0) return true;
-
-    console.log(c.dim('  Trying: sudo apt install -y chromium'));
-    result = spawnSync(['sudo', 'apt', 'install', '-y', 'chromium'], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
+    if (runPackageInstall('apt', ['chromium-browser'])) return true;
+    return runPackageInstall('apt', ['chromium']);
   }
 
-  if (pm === 'dnf') {
-    console.log(c.dim('  Running: sudo dnf install -y chromium'));
-    const result = spawnSync(['sudo', 'dnf', 'install', '-y', 'chromium'], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
-  }
-
-  if (pm === 'pacman') {
-    console.log(c.dim('  Running: sudo pacman -S --noconfirm chromium'));
-    const result = spawnSync(['sudo', 'pacman', '-S', '--noconfirm', 'chromium'], {
-      stdout: 'inherit', stderr: 'inherit',
-    });
-    return result.exitCode === 0;
-  }
+  if (pm === 'dnf') return runPackageInstall('dnf', ['chromium']);
+  if (pm === 'pacman') return runPackageInstall('pacman', ['chromium']);
 
   printInfo('Install Chromium manually for your distribution.');
   return false;
