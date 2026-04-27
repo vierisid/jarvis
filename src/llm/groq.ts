@@ -103,18 +103,16 @@ export class GroqProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      if (this.isRequestTooLargeError(response.status, errorText)) {
-        response = await this.sendRequest(
-          this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
-        );
-      } else {
+      if (!this.isRequestTooLargeError(response.status, errorText)) {
         throw new Error(`Groq API error (${response.status}): ${errorText}`);
       }
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Groq API error (${response.status}): ${errorText}`);
+      response = await this.sendRequest(
+        this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
+      );
+      if (!response.ok) {
+        const retryError = await response.text();
+        throw new Error(`Groq API error after retry (${response.status}): ${retryError}`);
+      }
     }
 
     const data = await response.json() as GroqResponse;
@@ -134,25 +132,23 @@ export class GroqProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      if (this.isRequestTooLargeError(response.status, errorText)) {
-        response = await this.sendRequest(
-          this.buildRequestBody(
-            messages,
-            options,
-            true,
-            GroqProvider.RETRY_PROMPT_CHAR_BUDGET,
-          )
-        );
-      } else {
+      if (!this.isRequestTooLargeError(response.status, errorText)) {
         yield { type: 'error', error: `Groq API error (${response.status}): ${errorText}` };
         return;
       }
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      yield { type: 'error', error: `Groq API error (${response.status}): ${errorText}` };
-      return;
+      response = await this.sendRequest(
+        this.buildRequestBody(
+          messages,
+          options,
+          true,
+          GroqProvider.RETRY_PROMPT_CHAR_BUDGET,
+        )
+      );
+      if (!response.ok) {
+        const retryError = await response.text();
+        yield { type: 'error', error: `Groq API error after retry (${response.status}): ${retryError}` };
+        return;
+      }
     }
 
     if (!response.body) {
