@@ -597,7 +597,7 @@ describe('Groq request shaping', () => {
       });
     }) as unknown as typeof fetch;
 
-    const provider = new GroqProvider('test-key') as any;
+    const provider = new GroqProvider('test-key');
     const messages: LLMMessage[] = [
       { role: 'system', content: 'S'.repeat(14_000) },
       { role: 'user', content: 'U'.repeat(10_000) },

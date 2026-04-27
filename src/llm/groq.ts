@@ -364,6 +364,8 @@ export class GroqProvider implements LLMProvider {
     const recentCount = Math.min(nonSystemMessages.length, GroqProvider.MIN_RECENT_MESSAGES);
     const olderMessages = nonSystemMessages.slice(0, nonSystemMessages.length - recentCount);
     const recentMessages = nonSystemMessages.slice(-recentCount);
+    // 64 = per-message framing overhead reserved for role/JSON keys; 240 = floor
+    // so the recent budget never collapses to nothing on a very tight payload.
     const recentBudget = Math.max(Math.floor(remainingBudget / Math.max(recentCount, 1)) - 64, 240);
     const selectedOlder: LLMMessage[] = [];
     const selectedRecent: LLMMessage[] = [];
@@ -414,13 +416,15 @@ export class GroqProvider implements LLMProvider {
     }
   }
 
+  private static readonly TRUNCATION_MARKER = '\n...[truncated for Groq]...\n';
+
   private truncateText(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text;
     if (maxChars <= 80) return text.slice(0, maxChars);
     const head = Math.floor(maxChars * 0.65);
-    const tail = Math.max(maxChars - head - 29, 0);
+    const tail = Math.max(maxChars - head - GroqProvider.TRUNCATION_MARKER.length, 0);
     const suffix = tail > 0 ? text.slice(-tail) : '';
-    return `${text.slice(0, head)}\n...[truncated for Groq]...\n${suffix}`;
+    return `${text.slice(0, head)}${GroqProvider.TRUNCATION_MARKER}${suffix}`;
   }
 
   private measureMessage(message: LLMMessage): number {
