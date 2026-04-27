@@ -327,8 +327,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
+    // Brain URL precedence: env > config.yaml > default fallback. The loader
+    // already collapses env into config.daemon.brain_domain, so we re-check
+    // the env var here only to attribute the source in the startup log —
+    // the operator needs to see which knob is active when debugging.
+    const brainSource: 'env' | 'config' | 'default' = process.env.JARVIS_BRAIN_DOMAIN
+      ? 'env'
+      : jarvisConfig.daemon.brain_domain
+        ? 'config'
+        : 'default';
     const brainDomain = jarvisConfig.daemon.brain_domain ?? `localhost:${config.port}`;
-    sidecarManager.setBrainUrl(brainDomain);
+    sidecarManager.setBrainUrl(brainDomain, brainSource);
 
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);

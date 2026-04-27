@@ -106,9 +106,25 @@ export class SidecarManager implements Service {
    * Set the brain's external URL (used in JWT claims).
    * Must be called before enrolling sidecars.
    * Example: "shiny-panda.domain.com" or "localhost:3142"
+   *
+   * `source` is rendered in the startup log so operators can see at a
+   * glance which knob is active when something looks wrong (env var vs
+   * config.yaml vs default-fallback). Pass undefined for silent setters.
    */
-  setBrainUrl(url: string): void {
+  setBrainUrl(url: string, source?: 'env' | 'config' | 'default'): void {
     this.brainUrl = url;
+    if (source) {
+      const { brainWs } = buildEnrollmentUrls(url);
+      const sourceLabel = source === 'env' ? 'JARVIS_BRAIN_DOMAIN env var'
+        : source === 'config' ? 'config.yaml daemon.brain_domain'
+        : `default fallback — set daemon.brain_domain in config.yaml or JARVIS_BRAIN_DOMAIN env to override`;
+      console.log(`[SidecarManager] Brain URL: ${brainWs} (source: ${sourceLabel})`);
+      if (isLocalhostBrainUrl(url)) {
+        console.warn(
+          `[SidecarManager] Brain URL points at a local host. Sidecars on other machines will NOT be able to reach this URL — only enroll local sidecars, or set daemon.brain_domain to a routable hostname before enrolling remote sidecars.`,
+        );
+      }
+    }
   }
 
   // --------------- Service Interface ---------------
