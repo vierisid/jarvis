@@ -435,8 +435,14 @@ export class GroqProvider implements LLMProvider {
     return content.length + toolCallsSize + 128;
   }
 
+  // Treat 413 Payload Too Large as authoritative. For 400 Bad Request we
+  // also accept a narrow set of size-related phrases Groq uses in practice;
+  // a smaller retry budget can recover from those. Everything else
+  // (auth, rate limit, generic 400/500) is not retryable here.
   private isRequestTooLargeError(status: number, errorText: string): boolean {
-    return status === 413 || /message is too large|request too large|context length|too many tokens|payload too large/i.test(errorText);
+    if (status === 413) return true;
+    if (status !== 400) return false;
+    return /\b(message is too large|request too large|payload too large|too many tokens|maximum context length|context window)\b/i.test(errorText);
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {
