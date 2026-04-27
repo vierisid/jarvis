@@ -104,7 +104,7 @@ export class OpenAIProvider implements LLMProvider {
     };
 
     if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
+    if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
@@ -142,7 +142,7 @@ export class OpenAIProvider implements LLMProvider {
     };
 
     if (temperature !== undefined) body.temperature = temperature;
-    if (max_tokens !== undefined) body.max_tokens = max_tokens;
+    if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling

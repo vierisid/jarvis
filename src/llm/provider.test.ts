@@ -715,6 +715,56 @@ describe('Groq request shaping', () => {
   });
 });
 
+describe('OpenAI request shaping', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      return new Response(JSON.stringify({
+        id: 'cmpl_test',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: 'gpt-5.4',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-test-body': typeof init?.body === 'string' ? init.body : '',
+        },
+      });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('OpenAIProvider sends max_completion_tokens, not max_tokens', async () => {
+    const provider = new OpenAIProvider('test-key') as any;
+    const messages: LLMMessage[] = [
+      { role: 'user', content: 'hello' },
+    ];
+
+    await provider.chat(messages, { max_tokens: 321 });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+
+    expect(body.max_completion_tokens).toBe(321);
+    expect(body.max_tokens).toBeUndefined();
+  });
+});
+
 describe('classifyHttpStatus', () => {
   test('401/403 → auth', () => {
     expect(classifyHttpStatus(401)).toBe('auth');
