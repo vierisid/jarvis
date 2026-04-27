@@ -55,3 +55,7 @@ eng.traineddata
 
 # install-method marker — written at install time, never committed
 .install-method
+
+# Ignore agent files
+CLAUDE.md
+AGENTS.md
