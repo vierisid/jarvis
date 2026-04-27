@@ -1324,8 +1324,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
 
-          if (!freshConfig.stt) freshConfig.stt = {} as any;
-          const stt = freshConfig.stt!;
+          if (!freshConfig.stt) freshConfig.stt = { provider: 'openai' };
+          const stt = freshConfig.stt;
 
           // Preserve keys for each provider if not provided in the update
           const providers = ['openai', 'groq', 'sarvam'] as const;
@@ -1384,7 +1384,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const freshConfig = await loadConfig();
 
-          if (!freshConfig.tts) freshConfig.tts = {} as any;
+          if (!freshConfig.tts) freshConfig.tts = { enabled: false };
 
           // Deep-merge elevenlabs sub-object to preserve API key across saves
           const incomingEl = body.elevenlabs as Record<string, unknown> | undefined;
