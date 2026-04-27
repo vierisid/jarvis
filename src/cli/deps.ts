@@ -159,15 +159,12 @@ export function checkLinuxTools(): DepStatus[] {
 
   return tools.map(tool => {
     const cmd = tool.cmd ?? tool.name;
-    const result = spawnSync(['which', cmd], { stdout: 'pipe', stderr: 'pipe' });
-    const found = result.exitCode === 0;
-    const path = found ? result.stdout.toString().trim() : undefined;
-
+    const result = commandExists(cmd);
     return {
       name: tool.name,
-      found,
-      path,
-      message: found ? path! : `Not installed (${tool.desc})`,
+      found: result.found,
+      path: result.path,
+      message: result.found ? result.path! : `Not installed (${tool.desc})`,
       installable: true,
     };
   });
