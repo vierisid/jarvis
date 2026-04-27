@@ -156,7 +156,26 @@ export type JarvisConfig = {
     port: number;
     data_dir: string;
     db_path: string;
-    /** External domain for the brain (used in sidecar JWT tokens). Env: JARVIS_BRAIN_DOMAIN */
+    /**
+     * URL that sidecars dial to reach this brain — signed into enrollment
+     * JWTs, so this is what the sidecar will use forever once enrolled.
+     *
+     * NOT the brain's bind address. If the brain is fronted by a reverse
+     * proxy or accessed across NAT, this must be the externally-reachable
+     * URL (e.g. `https://brain.example.com` or `wss://brain.example.com`),
+     * not the internal `localhost:PORT` the brain listens on.
+     *
+     * Accepts a full URL (`https://...`, `wss://...`) or a bare host[:port]
+     * (`brain.example.com`, `10.0.0.5:3142`). Bare local hosts default to
+     * ws/http; everything else defaults to wss/https.
+     *
+     * Precedence: `JARVIS_BRAIN_DOMAIN` env var > this field > internal
+     * `localhost:<port>` fallback (with a startup warning).
+     *
+     * If sidecars on different network segments need different URLs, set
+     * the canonical one here and override per-sidecar via the sidecar's
+     * own `brain:` config field.
+     */
     brain_domain?: string;
   };
   auth?: AuthConfig;
