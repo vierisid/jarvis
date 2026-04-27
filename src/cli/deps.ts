@@ -229,7 +229,7 @@ export function resolveCoreInstallPlan(
       .filter(Boolean) as string[],
   )];
 
-  const unresolved = missing.filter((name) => !packageMap.get(name));
+  const unresolved = [...new Set(missing.filter((name) => !packageMap.get(name)))];
 
   return { packages, unresolved };
 }
@@ -370,13 +370,13 @@ export async function installCoreTools(missing: string[]): Promise<boolean> {
   }
 
   if (unresolved.length > 0) {
-    printInfo(`No ${pm} package mapping for: ${[...new Set(unresolved)].join(', ')}`);
+    printInfo(`No ${pm} package mapping for: ${unresolved.join(', ')}`);
   }
 
   const installed = runPackageInstall(pm, packages);
 
   if (unresolved.length > 0) {
-    printInfo(`Install manually: ${[...new Set(unresolved)].join(', ')}`);
+    printInfo(`Install manually: ${unresolved.join(', ')}`);
   }
 
   return installed && unresolved.length === 0;

@@ -38,4 +38,11 @@ describe('CLI dependency helpers', () => {
       unresolved: ['xdg-open'],
     });
   });
+
+  test('dedupes unresolved entries when missing has duplicates', () => {
+    expect(resolveCoreInstallPlan('brew', 'linux', ['xdg-open', 'xdg-open'])).toEqual({
+      packages: [],
+      unresolved: ['xdg-open'],
+    });
+  });
 });
