@@ -51,9 +51,11 @@ export class LinuxAppController implements AppController {
     }
   }
 
-  async getWindowTree(pid: number): Promise<UIElement[]> {
-    const window = await this.getWindowByPid(pid);
-    return [this.toWindowElement(window)];
+  async getWindowTree(_pid: number): Promise<UIElement[]> {
+    throw new Error(
+      'UI element traversal is not implemented on Linux yet (requires AT-SPI2). ' +
+      'Use desktop_list_windows for window-level info, or pass a "target" sidecar that supports the desktop capability.',
+    );
   }
 
   async listWindows(): Promise<WindowInfo[]> {
@@ -275,31 +277,6 @@ export class LinuxAppController implements AppController {
     }
 
     throw new Error(`No window found for PID ${pid}`);
-  }
-
-  private async getWindowByPid(pid: number): Promise<WindowInfo> {
-    const windows = await this.listWindows();
-    const match = windows.find((window) => window.pid === pid);
-    if (!match) {
-      throw new Error(`No window found for PID ${pid}`);
-    }
-    return match;
-  }
-
-  private toWindowElement(window: WindowInfo): UIElement {
-    return {
-      id: '1',
-      role: 'window',
-      name: window.title,
-      value: null,
-      bounds: window.bounds,
-      children: [],
-      properties: {
-        pid: window.pid,
-        className: window.className,
-        focused: window.focused,
-      },
-    };
   }
 
   private parseCommandArgs(args?: string): string[] {
