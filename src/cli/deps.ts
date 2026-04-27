@@ -342,14 +342,14 @@ export async function installCoreTools(missing: string[]): Promise<boolean> {
   const platform = detectPlatform();
   const pm = detectPackageManager();
   if (!pm) {
-    printInfo('Install manually: ' + missing.join(', '));
+    printInfo('Install manually: ' + [...new Set(missing)].join(', '));
     return false;
   }
 
   const { packages, unresolved } = resolveCoreInstallPlan(pm, platform, missing);
 
   if (packages.length === 0) {
-    printInfo('Install manually: ' + missing.join(', '));
+    printInfo('Install manually: ' + [...new Set(missing)].join(', '));
     return false;
   }
 
