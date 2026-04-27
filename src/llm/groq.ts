@@ -365,34 +365,67 @@ export class GroqProvider implements LLMProvider {
       return systemMessages;
     }
 
-    const recentCount = Math.min(nonSystemMessages.length, GroqProvider.MIN_RECENT_MESSAGES);
-    const olderMessages = nonSystemMessages.slice(0, nonSystemMessages.length - recentCount);
-    const recentMessages = nonSystemMessages.slice(-recentCount);
+    // Group an assistant-with-tool_calls together with its immediately-following
+    // tool responses (matched by tool_call_id) so we can drop/keep tool pairs
+    // atomically. Groq rejects requests where a tool_call_id has no matching
+    // assistant tool_call (or vice versa) as malformed.
+    const groups = this.groupForAtomicCompaction(nonSystemMessages);
+
+    const recentGroupCount = Math.min(groups.length, GroqProvider.MIN_RECENT_MESSAGES);
+    const olderGroups = groups.slice(0, groups.length - recentGroupCount);
+    const recentGroups = groups.slice(-recentGroupCount);
     // 64 = per-message framing overhead reserved for role/JSON keys; 240 = floor
     // so the recent budget never collapses to nothing on a very tight payload.
-    const recentBudget = Math.max(Math.floor(remainingBudget / Math.max(recentCount, 1)) - 64, 240);
+    const recentBudget = Math.max(Math.floor(remainingBudget / Math.max(recentGroupCount, 1)) - 64, 240);
     const selectedOlder: LLMMessage[] = [];
     const selectedRecent: LLMMessage[] = [];
 
-    for (const message of recentMessages) {
-      const candidate = this.normalizeMessage(message, recentBudget);
-      const candidateSize = this.measureMessage(candidate);
-      if (candidateSize <= remainingBudget) {
-        selectedRecent.push(candidate);
-        remainingBudget -= candidateSize;
+    for (const group of recentGroups) {
+      const candidates = group.map((m) => this.normalizeMessage(m, recentBudget));
+      const groupSize = candidates.reduce((sum, m) => sum + this.measureMessage(m), 0);
+      if (groupSize <= remainingBudget) {
+        selectedRecent.push(...candidates);
+        remainingBudget -= groupSize;
       }
     }
 
-    for (let i = olderMessages.length - 1; i >= 0; i--) {
-      const candidate = olderMessages[i]!;
-      const candidateSize = this.measureMessage(candidate);
-      if (candidateSize <= remainingBudget) {
-        selectedOlder.unshift(candidate);
-        remainingBudget -= candidateSize;
+    for (let i = olderGroups.length - 1; i >= 0; i--) {
+      const group = olderGroups[i]!;
+      const groupSize = group.reduce((sum, m) => sum + this.measureMessage(m), 0);
+      if (groupSize <= remainingBudget) {
+        selectedOlder.unshift(...group);
+        remainingBudget -= groupSize;
       }
     }
 
     return [...systemMessages, ...selectedOlder, ...selectedRecent];
+  }
+
+  private groupForAtomicCompaction(messages: LLMMessage[]): LLMMessage[][] {
+    const groups: LLMMessage[][] = [];
+    let i = 0;
+    while (i < messages.length) {
+      const current = messages[i]!;
+      if (current.role === 'assistant' && current.tool_calls && current.tool_calls.length > 0) {
+        const toolCallIds = new Set(current.tool_calls.map((tc) => tc.id));
+        const grouped: LLMMessage[] = [current];
+        i++;
+        while (
+          i < messages.length
+          && messages[i]!.role === 'tool'
+          && messages[i]!.tool_call_id !== undefined
+          && toolCallIds.has(messages[i]!.tool_call_id!)
+        ) {
+          grouped.push(messages[i]!);
+          i++;
+        }
+        groups.push(grouped);
+      } else {
+        groups.push([current]);
+        i++;
+      }
+    }
+    return groups;
   }
 
   private normalizeMessage(message: LLMMessage, overrideBudget?: number): LLMMessage {

@@ -615,6 +615,48 @@ describe('Groq request shaping', () => {
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
 
+  test('GroqProvider compaction never orphans a tool message from its assistant tool_call', async () => {
+    let captured: any = null;
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        id: 'cmpl', object: 'chat.completion', created: 0, model: 'm',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    // Pad the assistant content so the assistant+tool group is large enough
+    // that a per-message budget would tempt the compactor to keep one and
+    // drop the other if pairing weren't enforced.
+    const provider = new GroqProvider('test-key');
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'U'.repeat(20_000) },
+      { role: 'user', content: 'U'.repeat(20_000) },
+      {
+        role: 'assistant',
+        content: 'A'.repeat(2_000),
+        tool_calls: [{ id: 'tc_1', name: 'lookup', arguments: { q: 'x' } }],
+      },
+      { role: 'tool', tool_call_id: 'tc_1', content: 'T'.repeat(2_000) },
+      { role: 'user', content: 'follow up' },
+    ];
+
+    await provider.chat(messages);
+
+    const assistants = (captured.messages as Array<{ role: string; tool_calls?: unknown[] }>)
+      .filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0);
+    const tools = (captured.messages as Array<{ role: string; tool_call_id?: string }>)
+      .filter((m) => m.role === 'tool');
+
+    // Either both survive together, or neither does — but a tool message
+    // must never appear without its originating assistant tool_call.
+    if (tools.length > 0) {
+      expect(assistants.length).toBeGreaterThan(0);
+    }
+  });
+
   test('GroqProvider streams successfully after retrying an oversized request', async () => {
     function makeSseStream(): ReadableStream<Uint8Array> {
       const enc = new TextEncoder();
