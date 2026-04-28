@@ -1,4 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+/** Phase E — same-origin BroadcastChannel name for cross-tab onboarding
+ *  state sync. When one tab finishes a phase (or fires a reset), it
+ *  posts on this channel; peer tabs re-fetch their status so the gate
+ *  re-renders without a manual refresh. Exported so the resetClient
+ *  can also fire the broadcast (covers the reset-from-other-tab case). */
+export const ONBOARDING_BROADCAST_CHANNEL = "v2-onboarding-status";
+
+export type OnboardingBroadcastMessage =
+  | { type: "status_changed" }
+  | { type: "reset"; scope: string };
+
+/** Lazily create the channel — returns null in environments without
+ *  BroadcastChannel (older Safari, SSR, tests). Callers should null-
+ *  check before using. */
+export function getOnboardingBroadcastChannel(): BroadcastChannel | null {
+  if (typeof window === "undefined") return null;
+  if (typeof BroadcastChannel === "undefined") return null;
+  return new BroadcastChannel(ONBOARDING_BROADCAST_CHANNEL);
+}
 
 /**
  * Onboarding status snapshot from `GET /api/onboarding/status`.
@@ -40,6 +60,7 @@ export function useOnboardingStatus(): HookValue {
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const broadcastingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -47,7 +68,23 @@ export function useOnboardingStatus(): HookValue {
       const r = await fetch("/api/onboarding/status");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const json = (await r.json()) as OnboardingStatus;
-      setStatus(json);
+      setStatus((prev) => {
+        // Phase E — when this refresh was triggered locally (not by a
+        // peer tab) and any phase flag flipped, broadcast so peers
+        // re-fetch. The broadcastingRef guard prevents re-broadcasting
+        // a status change we just received from a peer.
+        if (!broadcastingRef.current && prev !== null && phaseFlagsChanged(prev, json)) {
+          const ch = getOnboardingBroadcastChannel();
+          if (ch) {
+            try {
+              ch.postMessage({ type: "status_changed" } satisfies OnboardingBroadcastMessage);
+            } finally {
+              ch.close();
+            }
+          }
+        }
+        return json;
+      });
       setError(null);
     } catch (err) {
       // The status endpoint is one of the few routes that should
@@ -77,5 +114,41 @@ export function useOnboardingStatus(): HookValue {
     refresh();
   }, [refresh]);
 
+  // Phase E — listen for status changes from peer tabs. When a
+  // sibling tab finishes setup / wraps the interview / completes the
+  // tutorial / fires a reset, it posts on the channel and we re-fetch
+  // here. The `broadcastingRef` guard inside `refresh` keeps us from
+  // ping-ponging the broadcast back.
+  useEffect(() => {
+    const ch = getOnboardingBroadcastChannel();
+    if (!ch) return;
+    const onMessage = (e: MessageEvent<OnboardingBroadcastMessage>) => {
+      if (e.data?.type === "status_changed" || e.data?.type === "reset") {
+        broadcastingRef.current = true;
+        refresh().finally(() => {
+          broadcastingRef.current = false;
+        });
+      }
+    };
+    ch.addEventListener("message", onMessage);
+    return () => {
+      ch.removeEventListener("message", onMessage);
+      ch.close();
+    };
+  }, [refresh]);
+
   return { status, loading, error, refresh };
+}
+
+/** Compare phase-relevant flags between two snapshots. Returns true if
+ *  any flag the gate cares about flipped — used to decide whether to
+ *  broadcast a status_changed event to peer tabs. */
+function phaseFlagsChanged(a: OnboardingStatus, b: OnboardingStatus): boolean {
+  return (
+    a.setup_completed !== b.setup_completed ||
+    a.setup_skipped_profile !== b.setup_skipped_profile ||
+    a.profile_completed !== b.profile_completed ||
+    a.tutorial_completed !== b.tutorial_completed ||
+    a.tutorial_dismissed !== b.tutorial_dismissed
+  );
 }

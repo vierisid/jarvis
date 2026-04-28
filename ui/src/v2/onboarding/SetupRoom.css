@@ -26,6 +26,17 @@
   .v2-setup__wrap { padding: var(--s-5) var(--s-4); }
 }
 
+/* Phase E — sub-600px mobile breakpoint. Provider grid already collapses
+   via auto-fill minmax(180px, 1fr); we just tighten chrome padding,
+   scale display headlines down a notch, and stack header chips so the
+   small "step X of Y" badge doesn't push the brand off-screen. */
+@media (max-width: 600px) {
+  .v2-setup__wrap { padding: var(--s-4) var(--s-3); }
+  .v2-setup__head { flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-5); }
+  .v2-setup__brand { font-size: var(--text-sm); letter-spacing: 0.1em; }
+  .v2-setup__progress { font-size: 11px; }
+}
+
 /* ── Header ── */
 
 .v2-setup__head {

@@ -163,3 +163,15 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Phase E — sub-600px mobile breakpoint. Bubble already clamps its
+   own width via SpotlightBubble.tsx (Math.min(BUBBLE_W, W - 32)).
+   Here we tighten internal padding, allow the actions row to wrap so
+   Skip + Replay + Next don't overflow horizontally on narrow screens,
+   and shrink button padding so all three fit a typical 360px width. */
+@media (max-width: 600px) {
+  .v2-spotlight-bubble { padding: var(--s-3); gap: var(--s-2); }
+  .v2-spotlight-bubble__narration { font-size: var(--text-sm); }
+  .v2-spotlight-bubble__actions { flex-wrap: wrap; gap: 6px; }
+  .v2-spotlight-bubble__btn { padding: 6px 10px; font-size: var(--text-xs); }
+}

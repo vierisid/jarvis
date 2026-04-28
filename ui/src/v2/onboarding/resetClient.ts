@@ -61,6 +61,20 @@ export async function resetOnboarding(
     }
   }
 
+  // Phase E — broadcast to peer tabs so any other open dashboard tab
+  // immediately re-fetches its onboarding status and exits the live
+  // shell back to the appropriate phase. Best-effort: if BroadcastChannel
+  // isn't available (older Safari), peers stay until their next refresh.
+  if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
+    try {
+      const ch = new BroadcastChannel("v2-onboarding-status");
+      ch.postMessage({ type: "reset", scope });
+      ch.close();
+    } catch {
+      /* best-effort; the local reload below still fires */
+    }
+  }
+
   if (reload && typeof window !== "undefined") {
     // Strip any ?onboarding=... params so the next mount doesn't
     // re-fire the URL trigger after we reload.

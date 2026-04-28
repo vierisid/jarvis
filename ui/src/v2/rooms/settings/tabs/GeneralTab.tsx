@@ -280,8 +280,64 @@ export function GeneralTab({
         )}
       </section>
 
+      <RerunSetupSection onToast={onToast} />
+
       <OnboardingDebugSection onToast={onToast} />
     </div>
+  );
+}
+
+/**
+ * Phase E — quick-access shortcut for "Re-run first-time setup" so users
+ * who want to switch LLM provider don't have to dig into the debug
+ * dropdown. The debug section below still exposes the full scope picker
+ * for everything else (profile / tutorial / all).
+ */
+function RerunSetupSection({
+  onToast,
+}: {
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const handleRerun = async () => {
+    if (
+      !confirm(
+        "Re-run first-time setup? You'll be sent back to the LLM provider + TTS picker. Your saved profile and tutorial state are preserved. The page will reload.",
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await resetOnboarding("setup");
+      onToast("Re-running setup — reloading…", "ok");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : String(err), "warn");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="v2-set__section">
+      <div className="v2-set__section-head">
+        <div>
+          <h3 className="v2-set__section-title">Re-run first-time setup</h3>
+          <div className="v2-set__section-sub">
+            Send yourself back through the LLM provider + TTS pickers — useful
+            after switching providers or rotating an API key. Your profile and
+            tutorial progress stay intact.
+          </div>
+        </div>
+        <button
+          type="button"
+          className="v2-set__btn"
+          onClick={handleRerun}
+          disabled={busy}
+        >
+          {busy ? "Restarting…" : "Re-run setup"}
+        </button>
+      </div>
+    </section>
   );
 }
 

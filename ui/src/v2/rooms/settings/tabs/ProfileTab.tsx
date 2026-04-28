@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import { resetOnboarding } from "../../../onboarding/resetClient";
 
 export function ProfileTab({
   data,
@@ -229,6 +230,71 @@ export function ProfileTab({
           </p>
         </section>
       )}
+
+      <OnboardingReplaySection onToast={onToast} />
     </div>
+  );
+}
+
+/**
+ * Phase E — quick-access replay buttons for the conversational profile
+ * interview and the spotlight tutorial. These are shortcuts to the
+ * matching scope on `/api/onboarding/reset` (also reachable from
+ * Settings → General → Onboarding for the full scope dropdown, by voice
+ * with "replay onboarding", or via the URL trigger).
+ */
+function OnboardingReplaySection({
+  onToast,
+}: {
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+}) {
+  const [busy, setBusy] = useState<"interview" | "tutorial" | null>(null);
+
+  const replay = async (scope: "profile" | "tutorial") => {
+    const label =
+      scope === "profile"
+        ? "Re-run the profile interview? Your saved profile facts will be cleared first. The page will reload."
+        : "Replay the dashboard tutorial? The page will reload.";
+    if (!confirm(label)) return;
+    setBusy(scope === "profile" ? "interview" : "tutorial");
+    try {
+      await resetOnboarding(scope);
+      onToast("Replay queued — reloading…", "ok");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : String(err), "warn");
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="v2-set__section">
+      <div className="v2-set__section-head">
+        <div>
+          <h3 className="v2-set__section-title">Replay onboarding</h3>
+          <div className="v2-set__section-sub">
+            Re-run the conversational interview to refresh what Jarvis knows about
+            you, or take the dashboard tour again.
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="v2-set__btn"
+          onClick={() => replay("profile")}
+          disabled={busy !== null}
+        >
+          {busy === "interview" ? "Restarting…" : "Re-run profile interview"}
+        </button>
+        <button
+          type="button"
+          className="v2-set__btn"
+          onClick={() => replay("tutorial")}
+          disabled={busy !== null}
+        >
+          {busy === "tutorial" ? "Restarting…" : "Replay tutorial"}
+        </button>
+      </div>
+    </section>
   );
 }
