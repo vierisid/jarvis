@@ -98,6 +98,21 @@ export function TutorialRoom({
     // a proper sample-approval injection path).
   }, [step.id, step.requireSampleCard, step.requireSampleRoomWindow, injectSampleCard, injectSampleRoomWindow]);
 
+  // ── Room navigation for the per-room walkthrough block ─────────────
+  // Each per-room step asks the AppShell to open that Room fullscreen
+  // before the spotlight renders, so the user sees the actual surface
+  // behind the dim while Jarvis explains it. The outro asks for the
+  // open Room to be closed so the centered card lands on the thread.
+  useEffect(() => {
+    if (step.closeRoomBefore) {
+      window.dispatchEvent(new CustomEvent("v2-tutorial:close-room"));
+    } else if (step.openRoomBefore) {
+      window.dispatchEvent(
+        new CustomEvent("v2-tutorial:open-room", { detail: { key: step.openRoomBefore } }),
+      );
+    }
+  }, [step.id, step.openRoomBefore, step.closeRoomBefore]);
+
   // ── TTS narration on every step ──────────────────────────────────
   // Fire the speak endpoint; it returns when synthesis completes.
   // We optimistically set `speaking` for ~estimate(text) so the bubble

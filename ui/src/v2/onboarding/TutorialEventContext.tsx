@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef } from "react";
 import type { RoomKey } from "../router";
 
 /**
@@ -13,7 +13,8 @@ import type { RoomKey } from "../router";
  * `useTutorialEventDispatcher` is what the AppShell calls (cheap;
  * does nothing when the tutorial isn't mounted).
  * `useTutorialEventListener` is what the tutorial calls — registers
- * a callback per event name, returns an unsubscribe.
+ * a callback per event name; subscription is managed via a useEffect
+ * so listeners don't pile up across renders.
  *
  * Implemented with refs so AppShell never re-renders when the
  * tutorial mounts/unmounts a listener.
@@ -103,15 +104,32 @@ function noopFire() {
 }
 
 /**
- * Tutorial-side: register a listener for a single event. Returns
- * the unsubscribe so the consumer can cleanup in `useEffect`.
+ * Tutorial-side: register a listener for a single event. Subscribes
+ * once per provider lifetime via `useEffect` so stale listeners from
+ * earlier renders don't pile up — without this, every step change
+ * leaks a fresh listener that still holds a closure over its render's
+ * `step`, and a single `room_opened` event can cascade through every
+ * stale handler advancing the tutorial multiple times in a single tick.
+ *
+ * The listener prop is stashed in a ref so the latest closure (with the
+ * current step) runs on every event, while the underlying subscription
+ * identity stays stable across renders.
  */
 export function useTutorialEventListener<E extends TutorialEventName>(
   name: E,
   listener: Listener<E>,
-): () => void {
+): void {
   const bus = useContext(TutorialEventContext);
-  const subscribe = bus?.subscribe;
-  if (!subscribe) return () => {};
-  return subscribe(name, listener);
+  const listenerRef = useRef(listener);
+  useEffect(() => {
+    listenerRef.current = listener;
+  }, [listener]);
+  useEffect(() => {
+    if (!bus) return;
+    const unsubscribe = bus.subscribe(name, ((payload: TutorialEventPayload[E]) => {
+      listenerRef.current(payload);
+    }) as Listener<E>);
+    return unsubscribe;
+    // bus + name are stable; listener flows through the ref.
+  }, [bus, name]);
 }

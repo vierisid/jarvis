@@ -408,11 +408,29 @@ function AppShellLive() {
     const onInjectRoomWindow = () => {
       live.openRoomWindow("memory");
     };
+    // Per-room walkthrough block — the tutorial drives Room nav so it
+    // can spotlight each one in turn. We use openRoom/closeRoom (the
+    // same helpers used by the voice-action and palette paths) so the
+    // tutorial-driven nav behaves exactly like a user-driven nav.
+    const onOpenRoom = (e: Event) => {
+      const detail = (e as CustomEvent<{ key?: RoomKey }>).detail;
+      if (detail?.key && isRoomKey(detail.key)) {
+        setRoomEntry(detail.key, "voice");
+        openRoom(detail.key);
+      }
+    };
+    const onCloseRoom = () => {
+      if (window.location.hash.startsWith("#/_room_")) closeRoom();
+    };
     window.addEventListener("v2-tutorial:inject-card", onInjectCard);
     window.addEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
+    window.addEventListener("v2-tutorial:open-room", onOpenRoom);
+    window.addEventListener("v2-tutorial:close-room", onCloseRoom);
     return () => {
       window.removeEventListener("v2-tutorial:inject-card", onInjectCard);
       window.removeEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
+      window.removeEventListener("v2-tutorial:open-room", onOpenRoom);
+      window.removeEventListener("v2-tutorial:close-room", onCloseRoom);
     };
   }, [live]);
 
