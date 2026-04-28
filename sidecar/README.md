@@ -25,6 +25,26 @@ GOOS=windows go build -o jarvis-sidecar.exe .
 ./jarvis-sidecar
 ```
 
+The sidecar persists its token and local settings in:
+
+```text
+~/.jarvis-sidecar/config.yaml
+```
+
+For remote enrollments, make sure the brain generated the token with a routable `daemon.brain_domain` / `JARVIS_BRAIN_DOMAIN`. If the token points at `localhost`, only a sidecar on the same machine can connect.
+
+You can also override the brain URL per sidecar after enrollment by editing the saved config:
+
+```yaml
+token: "<jwt>"
+brain: "wss://brain.example.com/sidecar/connect"
+capabilities:
+  - terminal
+  - filesystem
+  - browser
+  - awareness
+```
+
 ## File Structure
 
 ### Core
@@ -32,7 +52,7 @@ GOOS=windows go build -o jarvis-sidecar.exe .
 | File | Purpose |
 |---|---|
 | `main.go` | Entry point, flag parsing, signal handling |
-| `config.go` | YAML config loading/saving (`~/.jarvis/sidecar.yaml`) |
+| `config.go` | YAML config loading/saving (`~/.jarvis-sidecar/config.yaml`) |
 | `types.go` | Shared types: capabilities, RPC messages, config structs |
 | `client.go` | WebSocket client, reconnect loop, preflight integration |
 | `handlers.go` | RPC handler registry (terminal, filesystem, clipboard, screenshot, config, system info) |
