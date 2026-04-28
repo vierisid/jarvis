@@ -47,7 +47,8 @@ export class SidecarConnection {
     try {
       this.ws.send(JSON.stringify(request));
     } catch (err) {
-      console.error(`[SidecarConnection:${this.sidecarId}] Failed to send RPC:`, err);
+      const cause = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to send RPC to sidecar ${this.sidecarId}: ${cause}`);
     }
   }
 

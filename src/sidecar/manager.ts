@@ -557,11 +557,17 @@ export class SidecarManager implements Service {
       params,
     };
 
-    // Send the request over WebSocket
-    connection.sendRPC(request);
+    // Track before sending so an immediate reply cannot beat registration.
+    const resultPromise = this.rpcTracker.dispatch(rpcId, sidecarId, method, timeouts);
 
-    // Track and await result
-    return this.rpcTracker.dispatch(rpcId, sidecarId, method, timeouts);
+    try {
+      connection.sendRPC(request);
+    } catch (err) {
+      const sendError = err instanceof Error ? err : new Error(String(err));
+      this.rpcTracker.fail(rpcId, sendError);
+    }
+
+    return resultPromise;
   }
 
   /** Register a listener for RPC progress events */
