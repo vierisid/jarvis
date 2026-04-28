@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildEnrollmentUrls, isLocalhostBrainUrl } from './manager.ts';
-import { SidecarManager } from './manager.ts';
+import { buildEnrollmentUrls, isLocalhostBrainUrl, SidecarManager } from './manager.ts';
 
 describe('buildEnrollmentUrls', () => {
   test('parses https URL into wss/https pair', () => {
