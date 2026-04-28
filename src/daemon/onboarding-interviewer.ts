@@ -185,6 +185,17 @@ export async function runInterviewTurn(
 
   if (userText !== null) {
     session.messages.push({ role: 'user', content: userText.trim() });
+  } else if (session.messages.length === 1) {
+    // First turn: the user hasn't said anything yet, but Anthropic
+    // (and a strict reading of the OpenAI spec) require `messages` to
+    // contain at least one non-system turn — a system-only call returns
+    // 400 invalid_request_error. Seed a synthetic kick-off user turn so
+    // the agent has something to respond to. The agent's system prompt
+    // already tells it to open with a warm intro + the first question.
+    session.messages.push({
+      role: 'user',
+      content: '[The user has just opened the onboarding interview. Greet them warmly and begin with your first question.]',
+    });
   }
 
   session.turnCount++;

@@ -29,6 +29,18 @@
   .v2-interview__wrap { padding: var(--s-4) var(--s-4); }
 }
 
+/* Phase E — sub-600px mobile breakpoint. The interview is voice-first
+   so layout doesn't get tortured here, but bubbles widen, the partial
+   transcript loses its hard cap, and headline padding tightens. */
+@media (max-width: 600px) {
+  .v2-interview__wrap { padding: var(--s-3) var(--s-3); gap: var(--s-3); }
+  .v2-interview__bubble { max-width: 92%; font-size: var(--text-sm); }
+  .v2-interview__partial { max-width: 100%; font-size: var(--text-sm); }
+  .v2-interview__head { gap: var(--s-2); }
+  .v2-interview__brand { font-size: var(--text-sm); letter-spacing: 0.1em; }
+  .v2-interview__skip { padding: 4px 8px; }
+}
+
 /* ── Header ── */
 
 .v2-interview__head {
