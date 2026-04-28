@@ -68,7 +68,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
 | Voice with wake word | No | Yes — streaming TTS + openwakeword |
 | Goal pursuit (OKRs) | No | Yes — drill sergeant accountability |
 | Authority gating | No | Yes — runtime enforcement + audit trail |
-| LLM provider choice | Usually locked to one | 5 providers: Anthropic, OpenAI, Gemini, Ollama, Groq |
+| LLM provider choice | Usually locked to one | 7 built-in providers: Anthropic, OpenAI, Groq, Gemini, OpenRouter, Ollama, NVIDIA |
 
 ---
 
@@ -117,7 +117,7 @@ Visit [opencove.host](https://opencove.host) to get started.
 - **Bun** >= 1.0 (installed automatically if missing)
 - **OS (native daemon install)**: macOS, Linux, or WSL
 - **Windows**: use WSL2 for the Bun install, or Docker for the daemon
-- **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
+- **LLM provider** — at least one of: Anthropic, OpenAI, Groq, Google Gemini, OpenRouter, NVIDIA, or a local Ollama instance
 - Google OAuth credentials (optional — Calendar and Gmail integration)
 - Telegram bot token (optional — notification channel)
 - Discord bot token (optional — notification channel)
@@ -223,6 +223,8 @@ The sidecar is what gives JARVIS physical reach beyond the machine it runs on. I
 
 This means you can run the daemon on an always-on server and still interact with your desktop machines as if JARVIS were running locally. Enroll as many sidecars as you want.
 
+> **Important:** If the daemon is not running on the same machine as the sidecar, set `daemon.brain_domain` (or `JARVIS_BRAIN_DOMAIN`) to the externally reachable hostname before enrolling. The enrollment token bakes that brain URL into the sidecar config, so enrolling against `localhost` only works for local sidecars.
+
 ### 1. Install the sidecar
 
 **Via bun:**
@@ -260,7 +262,7 @@ Once connected, the sidecar appears as online in the Settings page where you can
 
 ## 🧠 Core Capabilities
 
-**Conversations** — Multi-provider LLM routing (Anthropic Claude, OpenAI GPT, Google Gemini, Ollama). Streaming responses, personality engine, vault-injected memory context on every message.
+**Conversations** — Multi-provider LLM routing across Anthropic, OpenAI, Groq, Gemini, OpenRouter, Ollama, and NVIDIA. Streaming responses, personality engine, and vault-injected memory context on every message.
 
 **Tool Execution** — 14+ builtin tools with up to 200 iterations per turn. The agent loop runs until the task is complete, not until the response looks done.
 
@@ -315,13 +317,20 @@ daemon:
   port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
+  brain_domain: "https://brain.example.com" # required for remote sidecars
 
 llm:
   primary: "anthropic"
-  fallback: ["openai", "gemini", "ollama"]
+  fallback: ["openai", "gemini", "openrouter", "ollama"]
   anthropic:
     api_key: "sk-ant-..."
     model: "claude-sonnet-4-6"
+  openrouter:
+    api_key: "sk-or-..."
+    model: "anthropic/claude-sonnet-4"
+  nvidia:
+    api_key: "nvapi-..."
+    model: "mistral-nemo-minitron-8b-base"
 
 personality:
   core_traits: ["loyal", "efficient", "proactive"]
@@ -333,7 +342,7 @@ authority:
 active_role: "personal-assistant"
 ```
 
-See [config.example.yaml](config.example.yaml) for the full reference including Google OAuth, Telegram, Discord, ElevenLabs, and voice settings.
+See [config.example.yaml](config.example.yaml) for the full reference including Google OAuth, Telegram, Discord, OpenRouter, NVIDIA, ElevenLabs, voice settings, and sidecar brain URL routing.
 
 ---
 

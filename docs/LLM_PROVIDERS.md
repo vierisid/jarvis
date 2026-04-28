@@ -17,7 +17,7 @@ Complete guide to the LLM provider abstraction layer for Project J.A.R.V.I.S.
 
 ## Overview
 
-The J.A.R.V.I.S. LLM provider system provides a unified abstraction layer for multiple Large Language Model providers, enabling seamless switching between Anthropic Claude, OpenAI GPT, and local Ollama models with automatic fallback support.
+The J.A.R.V.I.S. LLM provider system provides a unified abstraction layer for multiple Large Language Model providers, enabling seamless switching between Anthropic, OpenAI, Groq, Gemini, OpenRouter, Ollama, and NVIDIA models with automatic fallback support.
 
 ### Key Features
 
@@ -30,11 +30,15 @@ The J.A.R.V.I.S. LLM provider system provides a unified abstraction layer for mu
 
 ### Supported Providers
 
-| Provider | Models | Features | Cost |
-|----------|--------|----------|------|
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.5 | Text, Streaming, Tools | Paid |
-| **OpenAI** | GPT-4o, GPT-4 Turbo | Text, Streaming, Functions | Paid |
-| **Ollama** | Llama 3, Mistral, etc. | Text, Streaming, Tools | Free |
+| Provider | Config key | Example default model | Notes |
+|----------|------------|-----------------------|-------|
+| **Anthropic** | `llm.anthropic` | `claude-sonnet-4-6` | Recommended default |
+| **OpenAI** | `llm.openai` | `gpt-5.4` | GPT family, tools, streaming |
+| **Groq** | `llm.groq` | `llama-3.3-70b-versatile` | Fast OpenAI-compatible inference |
+| **Gemini** | `llm.gemini` | `gemini-3-flash-preview` | Google models |
+| **OpenRouter** | `llm.openrouter` | `anthropic/claude-sonnet-4` | Broker for multi-vendor model access |
+| **Ollama** | `llm.ollama` | `llama3` | Local models via `base_url` |
+| **NVIDIA** | `llm.nvidia` | `mistral-nemo-minitron-8b-base` | Runtime/config supported; use YAML or env configuration |
 
 ## Quick Start
 
@@ -61,15 +65,15 @@ This will:
 ### 3. Use
 
 ```typescript
-import { loadConfig } from './src/config/index.ts';
-import { LLMManager, AnthropicProvider } from './src/llm/index.ts';
+import { loadConfig } from './src/config/loader.ts';
+import { LLMManager } from './src/llm/manager.ts';
+import { AnthropicProvider } from './src/llm/anthropic.ts';
 
 const config = await loadConfig();
 const manager = new LLMManager();
-
-manager.registerProvider(
-  new AnthropicProvider(config.llm.anthropic.api_key)
-);
+manager.registerProvider(new AnthropicProvider(config.llm.anthropic!.api_key));
+manager.setPrimary(config.llm.primary);
+manager.setFallbackChain(config.llm.fallback);
 
 const response = await manager.chat([
   { role: 'user', content: 'Hello!' }
@@ -98,15 +102,17 @@ console.log(response.content);
        │        │        │
        ▼        ▼        ▼
 ┌──────────┐ ┌─────────┐ ┌─────────┐
-│Anthropic │ │ OpenAI  │ │ Ollama  │
+│Anthropic │ │ OpenAI  │ │  Groq   │
 │Provider  │ │ Provider│ │ Provider│
 └────┬─────┘ └────┬────┘ └────┬────┘
      │            │            │
      ▼            ▼            ▼
 ┌─────────┐ ┌──────────┐ ┌──────────┐
-│Claude   │ │ OpenAI   │ │  Local   │
-│API      │ │ API      │ │  Models  │
+│Claude   │ │ OpenAI   │ │  Groq    │
+│API      │ │ API      │ │  API     │
 └─────────┘ └──────────┘ └──────────┘
+
+...plus Gemini, OpenRouter, NVIDIA, and local Ollama providers registered through the same `LLMManager`.
 ```
 
 ### Component Overview
@@ -120,6 +126,8 @@ console.log(response.content);
 **Configuration**: YAML-based config system with type-safe loading and defaults.
 
 ## Providers
+
+The runtime currently registers providers from `src/daemon/agent-service.ts` when the corresponding config block is populated. The dashboard settings flow covers the common hosted providers plus Ollama/OpenRouter; NVIDIA is also supported by the runtime and config loader.
 
 ### Anthropic (Claude)
 
@@ -214,25 +222,42 @@ Location: `~/.jarvis/config.yaml`
 
 ```yaml
 daemon:
-  port: 7777
+  port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
+  brain_domain: "https://brain.example.com"
 
 llm:
   primary: "anthropic"
-  fallback: ["openai", "ollama"]
+  fallback: ["openai", "gemini", "openrouter", "ollama"]
 
   anthropic:
     api_key: "sk-ant-..."
-    model: "claude-sonnet-4-5-20250929"
+    model: "claude-sonnet-4-6"
 
   openai:
     api_key: "sk-..."
-    model: "gpt-4o"
+    model: "gpt-5.4"
+
+  groq:
+    api_key: "gsk_..."
+    model: "llama-3.3-70b-versatile"
+
+  gemini:
+    api_key: "AIza..."
+    model: "gemini-3-flash-preview"
+
+  openrouter:
+    api_key: "sk-or-..."
+    model: "anthropic/claude-sonnet-4"
 
   ollama:
     base_url: "http://localhost:11434"
     model: "llama3"
+
+  nvidia:
+    api_key: "nvapi-..."
+    model: "mistral-nemo-minitron-8b-base"
 
 personality:
   core_traits:
@@ -246,6 +271,20 @@ authority:
   default_level: 3
 
 active_role: "default"
+```
+
+### Environment Overrides
+
+The config loader also supports direct env overrides for common provider secrets and runtime routing:
+
+```bash
+JARVIS_API_KEY=...            # Anthropic
+JARVIS_OPENAI_KEY=...
+JARVIS_GROQ_KEY=...
+JARVIS_OPENROUTER_KEY=...
+NVIDIA_API_KEY=...
+JARVIS_OLLAMA_URL=http://localhost:11434
+JARVIS_BRAIN_DOMAIN=https://brain.example.com
 ```
 
 ### Loading Configuration
