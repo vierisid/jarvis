@@ -45,7 +45,7 @@ export type LLMSettingsResponse = {
   openai: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
-  nvidia: { model: string; has_api_key: boolean } | null;
+  nvidia: { model: string; has_api_key: boolean };
   ollama: { base_url: string; model: string } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
 };
@@ -223,42 +223,42 @@ export function saveLLMSettings(
 }
 
 /**
- * Resolve the Anthropic API key: keychain > config.yaml > env var.
+ * Resolve the Anthropic API key: keychain > config (env/YAML).
  */
 function getAnthropicApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_ANTHROPIC) ?? config.llm.anthropic?.api_key ?? null;
 }
 
 /**
- * Resolve the OpenAI API key: keychain > config.yaml > env var.
+ * Resolve the OpenAI API key: keychain > config (env/YAML).
  */
 function getOpenAIApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_OPENAI) ?? config.llm.openai?.api_key ?? null;
 }
 
 /**
- * Resolve the Groq API key: keychain > config.yaml > env var.
+ * Resolve the Groq API key: keychain > config (env/YAML).
  */
 function getGroqApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_GROQ) ?? config.llm.groq?.api_key ?? null;
 }
 
 /**
- * Resolve the Gemini API key: keychain > config.yaml > env var.
+ * Resolve the Gemini API key: keychain > config (env/YAML).
  */
 function getGeminiApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_GEMINI) ?? config.llm.gemini?.api_key ?? null;
 }
 
 /**
- * Resolve the NVIDIA API key: keychain > config.yaml > env var.
+ * Resolve the NVIDIA API key: keychain > config (env/YAML).
  */
 function getNvidiaApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_NVIDIA) ?? config.llm.nvidia?.api_key ?? null;
 }
 
 /**
- * Resolve the OpenRouter API key: keychain > config.yaml > env var.
+ * Resolve the OpenRouter API key: keychain > config (env/YAML).
  */
 function getOpenRouterApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_OPENROUTER) ?? config.llm.openrouter?.api_key ?? null;
