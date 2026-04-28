@@ -11,7 +11,7 @@ type LLMConfig = {
   gemini: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
-  nvidia?: { model: string; has_api_key: boolean } | null;
+  nvidia: { model: string; has_api_key: boolean } | null;
 };
 
 type TestResult = { ok: boolean; model?: string; error?: string };
@@ -236,9 +236,7 @@ export function LLMPanel() {
         setOpenrouterCustomModel(m);
       }
     }
-    // @ts-ignore - config might have nvidia from backend
     if (config.nvidia) {
-      // @ts-ignore
       const m = config.nvidia.model;
       if (NVIDIA_MODELS.includes(m)) {
         setNvidiaModel(m);
@@ -456,7 +454,7 @@ export function LLMPanel() {
           name="LiteLLM"
           provider="litellm"
           isPrimary={primary === "litellm"}
-          hasKey={!!config.litellm?.base_url}
+          hasKey={config.litellm?.has_api_key ?? false}
           apiKey={litellmKey}
           onApiKeyChange={setLitellmKey}
           model={litellmModel}
@@ -472,6 +470,7 @@ export function LLMPanel() {
           expanded={!!expanded.litellm}
           onToggleExpand={() => setExpanded((s) => ({ ...s, litellm: !s.litellm }))}
           baseUrl={litellmBaseUrl}
+          baseUrlPlaceholder="http://localhost:4000/v1"
           onBaseUrlChange={setLitellmBaseUrl}
         />
 
@@ -517,6 +516,7 @@ export function LLMPanel() {
           onToggleExpand={() => setExpanded((s) => ({ ...s, ollama: !s.ollama }))}
           hideApiKey
           baseUrl={ollamaBaseUrl}
+          baseUrlPlaceholder="http://localhost:11434"
           onBaseUrlChange={setOllamaBaseUrl}
         />
 
@@ -566,7 +566,6 @@ export function LLMPanel() {
           name="NVIDIA NIM"
           provider="nvidia"
           isPrimary={primary === "nvidia"}
-          // @ts-ignore
           hasKey={config.nvidia?.has_api_key ?? false}
           apiKey={nvidiaKey}
           onApiKeyChange={setNvidiaKey}
@@ -618,6 +617,7 @@ type ProviderSectionProps = {
   onToggleExpand: () => void;
   hideApiKey?: boolean;
   baseUrl?: string;
+  baseUrlPlaceholder?: string;
   onBaseUrlChange?: (v: string) => void;
 };
 
@@ -665,7 +665,7 @@ function ProviderSection({
   models, testing, testResult, onTest,
   isFallback, onFallbackToggle,
   expanded, onToggleExpand,
-  hideApiKey, baseUrl, onBaseUrlChange,
+  hideApiKey, baseUrl, baseUrlPlaceholder, onBaseUrlChange,
 }: ProviderSectionProps) {
   return (
     <div style={providerCardStyle}>
@@ -722,7 +722,7 @@ function ProviderSection({
                 type="text"
                 value={baseUrl}
                 onChange={(e) => onBaseUrlChange(e.target.value)}
-                placeholder="http://localhost:11434"
+                placeholder={baseUrlPlaceholder ?? "Enter provider base URL"}
                 style={inputStyle}
               />
             </div>

@@ -183,6 +183,8 @@ export type JarvisConfig = {
   active_role: string;  // role file name
 };
 
+export const DEFAULT_LITELLM_BASE_URL = 'http://localhost:4000/v1';
+
 export const DEFAULT_CONFIG: JarvisConfig = {
   user: {
     name: '',
@@ -243,7 +245,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     },
     litellm: {
       api_key: '',
-      base_url: 'http://localhost:4000/v1',
+      base_url: DEFAULT_LITELLM_BASE_URL,
       model: 'openai/gpt-4o-mini',
     },
     groq: {

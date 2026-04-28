@@ -11,7 +11,7 @@ import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type XAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | null;
   tool_calls?: XAIToolCall[];
   tool_call_id?: string;
 };
@@ -300,7 +300,7 @@ export class LiteLLMProvider implements LLMProvider {
         : message.content.map((block) => block.type === 'text' ? block.text : '[image]').join('\n');
       const converted: XAIMessage = {
         role: message.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: (message.tool_calls && message.tool_calls.length > 0) ? '' : text,
+        content: (message.tool_calls && message.tool_calls.length > 0) ? null : text,
       };
       if (message.tool_calls && message.tool_calls.length > 0) {
         converted.tool_calls = message.tool_calls.map((toolCall) => ({

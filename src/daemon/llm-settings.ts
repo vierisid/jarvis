@@ -7,7 +7,7 @@
 
 import { getSetting, setSetting, getSettingsByPrefix } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
-import type { JarvisConfig } from '../config/types.ts';
+import { DEFAULT_LITELLM_BASE_URL, type JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { LiteLLMProvider } from '../llm/litellm.ts';
@@ -38,6 +38,16 @@ const SETTING_GEMINI_MODEL = 'llm.gemini.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
 const SETTING_OLLAMA_BASE_URL = 'llm.ollama.base_url';
 const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
+
+function shouldRegisterLiteLLM(llm: JarvisConfig['llm']): boolean {
+  const liteLLM = llm.litellm;
+  if (!liteLLM?.base_url) return false;
+
+  return llm.primary === 'litellm'
+    || llm.fallback.includes('litellm')
+    || Boolean(liteLLM.api_key)
+    || liteLLM.base_url !== DEFAULT_LITELLM_BASE_URL;
+}
 
 export type LLMSettingsResponse = {
   primary: string;
@@ -243,7 +253,7 @@ function getOpenAIApiKey(config: JarvisConfig): string | null {
 }
 
 /**
- * Resolve the LiteLLM API key: keychain > config.yaml > env var.
+ * Resolve the LiteLLM API key: keychain > config (env/YAML).
  */
 function getLiteLLMApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_LITELLM) ?? config.llm.litellm?.api_key ?? null;
@@ -321,7 +331,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
       model: dbLiteLLMModel ?? config.llm.litellm?.model,
       base_url: (!process.env.JARVIS_LITELLM_URL && dbLiteLLMUrl)
         ? dbLiteLLMUrl
-        : (config.llm.litellm?.base_url ?? 'http://localhost:4000/v1'),
+        : (config.llm.litellm?.base_url ?? DEFAULT_LITELLM_BASE_URL),
     };
   }
 
@@ -394,8 +404,8 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new OpenAIProvider(llm.openai.api_key, llm.openai.model));
     console.log('[LLM] Hot-reloaded OpenAI provider');
   }
-  if (llm.litellm?.base_url) {
-    providers.push(new LiteLLMProvider(llm.litellm.base_url, llm.litellm.model, llm.litellm.api_key ?? ''));
+  if (shouldRegisterLiteLLM(llm)) {
+    providers.push(new LiteLLMProvider(llm.litellm!.base_url, llm.litellm!.model, llm.litellm!.api_key ?? ''));
     console.log('[LLM] Hot-reloaded LiteLLM provider');
   }
   if (llm.groq?.api_key) {

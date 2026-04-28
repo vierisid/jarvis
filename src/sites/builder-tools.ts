@@ -17,7 +17,7 @@ const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|n
 const SECRET_ENV_PATTERNS = [
   /api[_-]?key/i, /secret/i, /token/i, /password/i, /credential/i,
   /^JARVIS_API_KEY$/, /^JARVIS_AUTH_TOKEN$/, /^JARVIS_OPENAI_KEY$/,
-  /^JARVIS_LITELLM_KEY$/, /^JARVIS_OPENROUTER_KEY$/,
+  /^JARVIS_LITELLM_KEY$/, /^JARVIS_LITELLM_URL$/, /^JARVIS_OPENROUTER_KEY$/,
   /^ANTHROPIC_API_KEY$/, /^OPENAI_API_KEY$/,
 ];
 

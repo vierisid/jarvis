@@ -8,7 +8,7 @@
 
 import { join } from 'node:path';
 import type { Service, ServiceStatus } from './services.ts';
-import type { JarvisConfig } from '../config/types.ts';
+import { DEFAULT_LITELLM_BASE_URL, type JarvisConfig } from '../config/types.ts';
 import type { LLMStreamEvent } from '../llm/provider.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { PersonalityModel } from '../personality/model.ts';
@@ -61,6 +61,16 @@ import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import { getSidecarManager } from '../actions/tools/sidecar-route.ts';
+
+function shouldRegisterLiteLLM(llm: JarvisConfig['llm']): boolean {
+  const liteLLM = llm.litellm;
+  if (!liteLLM?.base_url) return false;
+
+  return llm.primary === 'litellm'
+    || llm.fallback.includes('litellm')
+    || Boolean(liteLLM.api_key)
+    || liteLLM.base_url !== DEFAULT_LITELLM_BASE_URL;
+}
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -354,11 +364,11 @@ export class AgentService implements Service, IAgentService {
     }
 
     // Register LiteLLM
-    if (llm.litellm?.base_url) {
+    if (shouldRegisterLiteLLM(llm)) {
       const provider = new LiteLLMProvider(
-        llm.litellm.base_url,
-        llm.litellm.model,
-        llm.litellm.api_key ?? ''
+        llm.litellm!.base_url,
+        llm.litellm!.model,
+        llm.litellm!.api_key ?? ''
       );
       this.llmManager.registerProvider(provider);
       hasProvider = true;

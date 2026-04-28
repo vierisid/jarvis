@@ -367,7 +367,7 @@ export async function runOnboard(): Promise<void> {
   }
 
   // Fallback providers
-  config.llm.fallback = ['anthropic', 'openai', 'litellm', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
+  config.llm.fallback = ['anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq'].filter(p => p !== provider);
 
   // ── Step 3: Fallback API Keys ─────────────────────────────────────
 
