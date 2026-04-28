@@ -40,16 +40,9 @@ Usually wrong for remote sidecars:
 - Docker-only hostnames
 - private LAN names the sidecar machine cannot resolve or route to
 
-The sidecar must be able to reach both:
-
-- `wss://<configured-origin>/sidecar/connect` (or `ws://...` for explicit local dev setups)
-- `https://<configured-origin>/api/sidecars/.well-known/jwks.json` (or `http://...` for explicit local dev setups)
+The sidecar must be able to reach the configured origin for both WebSocket connections and JWKS fetches.
 
 If you enroll while the brain is configured with the wrong host, the token will keep those wrong URLs until you re-enroll.
-
-### About `brain_url` Overrides
-
-Older docs or branches may mention a per-enrollment `brain_url` request override. The current `POST /api/sidecars/enroll` route in this worktree only accepts `name` and always uses the daemon-wide origin described above. To change the URLs in newly minted tokens, update `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` and then re-enroll.
 
 ## Architecture
 
