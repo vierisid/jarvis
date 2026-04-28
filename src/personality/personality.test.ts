@@ -37,6 +37,16 @@ describe('Personality Engine', () => {
       expect(personality.relationship.message_count).toBe(0);
     });
 
+    test('default personality is not shared across calls', () => {
+      const first = getPersonality();
+      first.relationship.message_count = 99;
+      first.core_traits.push('mutated');
+
+      const second = getPersonality();
+      expect(second.relationship.message_count).toBe(0);
+      expect(second.core_traits).toEqual(['direct', 'strategic', 'resourceful']);
+    });
+
     test('should save and load personality', () => {
       const personality = getPersonality();
       personality.learned_preferences.verbosity = 8;

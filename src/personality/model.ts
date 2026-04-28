@@ -55,14 +55,15 @@ export function loadPersonality(): PersonalityModel {
   const row = stmt.get('default') as PersonalityStateRow | null;
 
   if (!row) {
-    return DEFAULT_PERSONALITY;
+    // Clone so callers (e.g. recordInteraction) can't mutate the shared default.
+    return structuredClone(DEFAULT_PERSONALITY);
   }
 
   try {
     return JSON.parse(row.data) as PersonalityModel;
   } catch (error) {
     console.error('Failed to parse personality data:', error);
-    return DEFAULT_PERSONALITY;
+    return structuredClone(DEFAULT_PERSONALITY);
   }
 }
 
