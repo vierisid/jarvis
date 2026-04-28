@@ -1,4 +1,5 @@
 import type { TutorialEventName } from "./TutorialEventContext";
+import type { RoomKey } from "../router";
 
 /**
  * Phase C — the 12-step spotlight walkthrough script.
@@ -37,6 +38,15 @@ export interface TutorialStep {
   requireSampleRoomWindow?: boolean;
   /** True for steps that need a synthetic ApprovalCard in the thread. */
   requireSampleApproval?: boolean;
+  /** Open this Room fullscreen before the step renders. The TutorialRoom
+   *  dispatches a `v2-tutorial:open-room` window event with the key;
+   *  AppShell handles it by calling `openRoom(key)`. Used for the
+   *  per-room walkthrough block so the user sees each Room behind the
+   *  spotlight while Jarvis explains it. */
+  openRoomBefore?: RoomKey;
+  /** Close any open Room before the step renders. Pairs with
+   *  `openRoomBefore` on the step that exits the room block (the outro). */
+  closeRoomBefore?: boolean;
 }
 
 export const TUTORIAL_STEPS: TutorialStep[] = [
@@ -97,10 +107,103 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     id: "rooms-fullscreen",
     target: ".v2-room-overlay",
     narration:
-      "When I open a room fullscreen, it covers the dashboard so you can focus. Press Escape to return to the thread.",
+      "When I open a room fullscreen, it covers the dashboard so you can focus. Press Escape to return to the thread. Now let me give you the quick tour of every room.",
     tryHint: "Try opening a room from the palette, then press Escape.",
     autoAdvanceOn: "room_opened",
   },
+
+  // ── Per-room mini-tour ────────────────────────────────────────────
+  // One short step per Room, opened automatically as we advance. The
+  // user sees each surface behind the spotlight while Jarvis explains
+  // what it's for. Single sentence each — this is "what does this do",
+  // not "how to use it". Sequenced roughly by how often a typical user
+  // touches each room.
+
+  {
+    id: "room-workflows",
+    target: ".v2-room-overlay",
+    narration:
+      "Workflows are visual automations. Build them by dragging nodes — triggers, conditions, actions — or just describe what you want and I'll wire them up. Cron, webhooks, file changes, calendar events, you name it.",
+    openRoomBefore: "workflows",
+  },
+  {
+    id: "room-memory",
+    target: ".v2-room-overlay",
+    narration:
+      "Memory is everything I remember about you and your world — facts, projects, relationships, conversations. Search it, browse by source, or watch it grow as we talk.",
+    openRoomBefore: "memory",
+  },
+  {
+    id: "room-tasks",
+    target: ".v2-room-overlay",
+    narration:
+      "Tasks are the to-do side. Anything you mention, I capture here automatically — by deadline, by project, by priority. I'll also add tasks I want to do for you and ask before running them.",
+    openRoomBefore: "tasks",
+  },
+  {
+    id: "room-goals",
+    target: ".v2-room-overlay",
+    narration:
+      "Goals are your OKRs — north-star outcomes broken into measurable key results. I check in each morning to plan, each evening to review, and nudge you if you're falling behind.",
+    openRoomBefore: "goals",
+  },
+  {
+    id: "room-calendar",
+    target: ".v2-room-overlay",
+    narration:
+      "Calendar shows your schedule across every connected source — Google Calendar, holds you've asked me to make, focus blocks. I use this to time suggestions and avoid pinging you mid-meeting.",
+    openRoomBefore: "calendar",
+  },
+  {
+    id: "room-content",
+    target: ".v2-room-overlay",
+    narration:
+      "Content is the inbox for things I've made for you — research summaries, drafts, briefs, code snippets. Each one shows what I read to make it, so you can verify before using.",
+    openRoomBefore: "content",
+  },
+  {
+    id: "room-agents",
+    target: ".v2-room-overlay",
+    narration:
+      "Agents are the specialist roles I delegate to — researcher, builder, planner, and so on. Each has its own tools and authority band. You can spawn them by name or let me pick.",
+    openRoomBefore: "agents",
+  },
+  {
+    id: "room-tools",
+    target: ".v2-room-overlay",
+    narration:
+      "Tools is every capability I have — built-in actions, sidecar handlers, browser controls, terminal access. Browse them, see permissions, or run one ad-hoc to test it.",
+    openRoomBefore: "tools",
+  },
+  {
+    id: "room-authority",
+    target: ".v2-room-overlay",
+    narration:
+      "Authority is your control panel for what I'm allowed to do unsupervised. Set bands per tool — auto-run, ask first, never. There's also a kill-switch for emergencies.",
+    openRoomBefore: "authority",
+  },
+  {
+    id: "room-logs",
+    target: ".v2-room-overlay",
+    narration:
+      "Logs is the full audit trail — every tool call, every LLM exchange, every approval decision. Filter by time, agent, or tool. This is how you keep me honest.",
+    openRoomBefore: "logs",
+  },
+  {
+    id: "room-workspaces",
+    target: ".v2-room-overlay",
+    narration:
+      "Workspaces are saved windows of work — a layout of rooms, a project context, a set of pinned cards. Switch between projects and your dashboard reshapes around what you're doing.",
+    openRoomBefore: "workspaces",
+  },
+  {
+    id: "room-settings",
+    target: ".v2-room-overlay",
+    narration:
+      "Settings is where you tune everything — LLM provider, voice, channels, personality, integrations, and your profile. You can also replay any onboarding phase from here.",
+    openRoomBefore: "settings",
+  },
+
   {
     id: "voice-room-actions",
     target: ".v2-rail__orb-wrap",
@@ -129,5 +232,6 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     target: "viewport",
     narration:
       "That's it. I've saved everything I learned about you in the Memory room — go take a look. Anything you want me to redo, just say 'replay onboarding'. Welcome aboard.",
+    closeRoomBefore: true,
   },
 ];
