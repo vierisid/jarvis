@@ -415,22 +415,107 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
+          set -euo pipefail
+          export LC_ALL=en_US.UTF-8
+
           TAG=$(cat /tmp/tag.txt)
           HTML_URL=$(cat /tmp/html_url.txt)
-          WHATS_CHANGED=$(cat /tmp/whats_changed.txt)
 
-          # Build the Discord message
-          MESSAGE="@everyone
+          # Strip GitHub HTML comments and the redundant "## What's Changed" header
+          # (the message prefix already announces the release).
+          CLEAN=$(sed -e '/^<!--/d' -e '/^## What.s Changed$/d' /tmp/whats_changed.txt)
+          CLEAN=$(printf '%s\n' "$CLEAN" | awk 'NF{p=1} p')
 
-          **Jarvis ${TAG} has been released!** 🎉
+          PREFIX=$'@everyone\n\n**Jarvis '"${TAG}"$' has been released!** 🎉\n\n'
+          SUFFIX=$'\n\n🔗 **Full release:** <'"${HTML_URL}"'>'
 
-          ${WHATS_CHANGED}
+          TOTAL_PRS=$(printf '%s\n' "$CLEAN" | grep -c '^\* ' || true)
 
-          🔗 **Full release:** ${HTML_URL}"
+          # Per-section bullet counts in the full changelog (preserves order).
+          SECTIONS_FULL=$(printf '%s\n' "$CLEAN" | awk '
+            /^### / { current=$0; if (!(current in seen)) { order[++n]=current; seen[current]=1 } next }
+            /^\* / && current { count[current]++ }
+            END { for (i=1;i<=n;i++) printf "%d\t%s\n", count[order[i]]+0, order[i] }
+          ')
 
-          # Post to Discord via webhook
-          # Trim leading whitespace from heredoc indentation
-          MESSAGE=$(echo "$MESSAGE" | sed 's/^          //')
+          # Reserve worst-case marker length (assume every section appears in the dropped list).
+          ALL_HEADERS=$(printf '%s\n' "$SECTIONS_FULL" | cut -f2- | sed 's/^### //' | paste -sd ', ' -)
+          MARKER_WORST=$(printf '\n\n*...and %d more changes across %s.*' "$TOTAL_PRS" "$ALL_HEADERS")
+
+          BUDGET=$(( 2000 - ${#PREFIX} - ${#SUFFIX} - ${#MARKER_WORST} ))
+
+          USED=0
+          KEPT=""
+          TRUNCATED=0
+          while IFS= read -r LINE; do
+            COST=$(( ${#LINE} + 1 ))
+            if (( USED + COST <= BUDGET )); then
+              KEPT+="${LINE}"$'\n'
+              USED=$(( USED + COST ))
+            else
+              TRUNCATED=1
+              break
+            fi
+          done < <(printf '%s\n' "$CLEAN")
+
+          if (( TRUNCATED )); then
+            # Drop trailing dangling section headers (no bullets kept under them).
+            KEPT=$(printf '%s' "$KEPT" | awk '
+              { lines[NR]=$0 }
+              END {
+                n=NR
+                while (n>0 && lines[n] ~ /^### /) n--
+                for (i=1;i<=n;i++) print lines[i]
+              }')
+
+            KEPT_PRS=$(printf '%s\n' "$KEPT" | grep -c '^\* ' || true)
+            DROPPED=$(( TOTAL_PRS - KEPT_PRS ))
+
+            SECTIONS_KEPT=$(printf '%s\n' "$KEPT" | awk '
+              /^### / { current=$0; if (!(current in seen)) { order[++n]=current; seen[current]=1 } next }
+              /^\* / && current { count[current]++ }
+              END { for (i=1;i<=n;i++) printf "%d\t%s\n", count[order[i]]+0, order[i] }
+            ')
+
+            DROPPED_SECTIONS=$(awk -F'\t' '
+              NR==FNR { kept[$2]=$1; next }
+              {
+                full=$1; header=$2
+                k = (header in kept) ? kept[header] : 0
+                if (k < full) print header
+              }
+            ' <(printf '%s\n' "$SECTIONS_KEPT") <(printf '%s\n' "$SECTIONS_FULL") | sed 's/^### //')
+
+            N=$(printf '%s\n' "$DROPPED_SECTIONS" | sed '/^$/d' | wc -l)
+            if (( N == 0 )); then
+              LIST=""
+            elif (( N == 1 )); then
+              LIST=$(printf '%s' "$DROPPED_SECTIONS")
+            elif (( N == 2 )); then
+              LIST=$(printf '%s\n' "$DROPPED_SECTIONS" | paste -sd '|' - | sed 's/|/ and /')
+            else
+              LIST=$(printf '%s\n' "$DROPPED_SECTIONS" | awk '
+                { a[NR]=$0 }
+                END {
+                  for (i=1;i<NR;i++) printf "%s, ", a[i]
+                  printf "and %s", a[NR]
+                }
+              ')
+            fi
+
+            if [[ -n "$LIST" ]]; then
+              MARKER=$(printf '\n\n*...and %d more changes across %s.*' "$DROPPED" "$LIST")
+            else
+              MARKER=$(printf '\n\n*...and %d more changes.*' "$DROPPED")
+            fi
+
+            KEPT="${KEPT%$'\n'}"
+            BODY="${KEPT}${MARKER}"
+          else
+            BODY="$CLEAN"
+          fi
+
+          MESSAGE="${PREFIX}${BODY}${SUFFIX}"
 
           jq -n --arg content "$MESSAGE" '{"content": $content, "flags": 4}' | \
             curl -sf -X POST "$DISCORD_WEBHOOK_URL" \
