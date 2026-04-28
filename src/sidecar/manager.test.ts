@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { buildEnrollmentUrls, isLocalhostBrainUrl } from './manager.ts';
+import { SidecarManager } from './manager.ts';
 
 describe('buildEnrollmentUrls', () => {
   test('parses https URL into wss/https pair', () => {
@@ -86,5 +87,24 @@ describe('isLocalhostBrainUrl', () => {
     ['notlocalhost.example.com', false],
   ])('isLocalhostBrainUrl(%p) === %p', (input, expected) => {
     expect(isLocalhostBrainUrl(input)).toBe(expected);
+  });
+});
+
+describe('dispatchRPC', () => {
+  test('rejects immediately when sending to the sidecar socket fails', async () => {
+    const manager = new SidecarManager('/tmp/jarvis-sidecar-manager-test');
+    const sendError = new Error('socket is closed');
+
+    (manager as any).sidecarConnections.set('sidecar-1', {
+      sendRPC() {
+        throw sendError;
+      },
+    });
+
+    await expect(
+      manager.dispatchRPC('sidecar-1', 'capture_screen'),
+    ).rejects.toThrow('socket is closed');
+
+    expect((manager as any).rpcTracker.size).toBe(0);
   });
 });
