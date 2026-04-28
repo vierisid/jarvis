@@ -71,9 +71,31 @@ import { AnthropicProvider } from './src/llm/anthropic.ts';
 
 const config = await loadConfig();
 const manager = new LLMManager();
-manager.registerProvider(new AnthropicProvider(config.llm.anthropic!.api_key));
-manager.setPrimary(config.llm.primary);
-manager.setFallbackChain(config.llm.fallback);
+const registeredProviders: string[] = [];
+
+if (config.llm.anthropic?.api_key) {
+  manager.registerProvider(
+    new AnthropicProvider(
+      config.llm.anthropic.api_key,
+      config.llm.anthropic.model
+    )
+  );
+  registeredProviders.push('anthropic');
+}
+
+if (registeredProviders.length === 0) {
+  throw new Error('No LLM providers are configured');
+}
+
+const primaryProvider = registeredProviders.includes(config.llm.primary)
+  ? config.llm.primary
+  : registeredProviders[0];
+const fallbackProviders = config.llm.fallback.filter((provider) =>
+  registeredProviders.includes(provider)
+);
+
+manager.setPrimary(primaryProvider);
+manager.setFallbackChain(fallbackProviders);
 
 const response = await manager.chat([
   { role: 'user', content: 'Hello!' }
