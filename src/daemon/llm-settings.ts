@@ -12,6 +12,7 @@ import { AnthropicProvider } from '../llm/anthropic.ts';
 import { OpenAIProvider } from '../llm/openai.ts';
 import { GroqProvider } from '../llm/groq.ts';
 import { GeminiProvider } from '../llm/gemini.ts';
+import { NVIDIAProvider } from '../llm/nvidia.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import type { LLMProvider } from '../llm/provider.ts';
@@ -23,6 +24,7 @@ const KEY_OPENAI = 'llm.openai.api_key';
 const KEY_GROQ = 'llm.groq.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
 const KEY_OPENROUTER = 'llm.openrouter.api_key';
+const KEY_NVIDIA = 'llm.nvidia.api_key';
 
 // DB setting keys
 const SETTING_PRIMARY = 'llm.primary';
@@ -31,6 +33,7 @@ const SETTING_ANTHROPIC_MODEL = 'llm.anthropic.model';
 const SETTING_OPENAI_MODEL = 'llm.openai.model';
 const SETTING_GROQ_MODEL = 'llm.groq.model';
 const SETTING_GEMINI_MODEL = 'llm.gemini.model';
+const SETTING_NVIDIA_MODEL = 'llm.nvidia.model';
 const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
 const SETTING_OLLAMA_BASE_URL = 'llm.ollama.base_url';
 const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
@@ -42,6 +45,7 @@ export type LLMSettingsResponse = {
   openai: { model: string; has_api_key: boolean } | null;
   groq: { model: string; has_api_key: boolean } | null;
   gemini: { model: string; has_api_key: boolean } | null;
+  nvidia: { model: string; has_api_key: boolean } | null;
   ollama: { base_url: string; model: string } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
 };
@@ -59,6 +63,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
+  const nvidiaModel = getSetting(SETTING_NVIDIA_MODEL) ?? config.llm.nvidia?.model ?? 'mistral-nemo-minitron-8b-base';
   const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
   const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? 'http://localhost:11434';
 
@@ -68,6 +73,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const hasOpenaiKey = hasSecret(KEY_OPENAI) || !!config.llm.openai?.api_key;
   const hasGroqKey = hasSecret(KEY_GROQ) || !!config.llm.groq?.api_key;
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
+  const hasNvidiaKey = hasSecret(KEY_NVIDIA) || !!config.llm.nvidia?.api_key;
   const hasOpenrouterKey = hasSecret(KEY_OPENROUTER) || !!config.llm.openrouter?.api_key;
 
   return {
@@ -77,6 +83,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
+    nvidia: { model: nvidiaModel, has_api_key: hasNvidiaKey },
     ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
     openrouter: { model: openrouterModel, has_api_key: hasOpenrouterKey },
   };
@@ -94,6 +101,7 @@ export function saveLLMSettings(
     openai?: { api_key?: string; model?: string };
     groq?: { api_key?: string; model?: string };
     gemini?: { api_key?: string; model?: string };
+    nvidia?: { api_key?: string; model?: string };
     ollama?: { base_url?: string; model?: string };
     openrouter?: { api_key?: string; model?: string };
   },
@@ -168,6 +176,21 @@ export function saveLLMSettings(
     };
   }
 
+  // NVIDIA
+  if (body.nvidia) {
+    if (body.nvidia.model) {
+      setSetting(SETTING_NVIDIA_MODEL, body.nvidia.model);
+    }
+    if (body.nvidia.api_key) {
+      setSecret(KEY_NVIDIA, body.nvidia.api_key);
+    }
+    config.llm.nvidia = {
+      ...config.llm.nvidia,
+      model: body.nvidia.model ?? config.llm.nvidia?.model,
+      api_key: body.nvidia.api_key ?? getNvidiaApiKey(config) ?? '',
+    };
+  }
+
   // Ollama
   if (body.ollama) {
     if (body.ollama.model) {
@@ -225,6 +248,13 @@ function getGroqApiKey(config: JarvisConfig): string | null {
  */
 function getGeminiApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_GEMINI) ?? config.llm.gemini?.api_key ?? null;
+}
+
+/**
+ * Resolve the NVIDIA API key: keychain > config.yaml > env var.
+ */
+function getNvidiaApiKey(config: JarvisConfig): string | null {
+  return getSecret(KEY_NVIDIA) ?? config.llm.nvidia?.api_key ?? null;
 }
 
 /**
@@ -298,6 +328,19 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     };
   }
 
+  // NVIDIA
+  const dbNvidiaModel = getSetting(SETTING_NVIDIA_MODEL);
+  const keychainNvidiaKey = getSecret(KEY_NVIDIA);
+  if (dbNvidiaModel || keychainNvidiaKey) {
+    config.llm.nvidia = {
+      ...config.llm.nvidia,
+      api_key: (!process.env.NVIDIA_API_KEY && keychainNvidiaKey)
+        ? keychainNvidiaKey
+        : (config.llm.nvidia?.api_key ?? ''),
+      model: dbNvidiaModel ?? config.llm.nvidia?.model,
+    };
+  }
+
   // Ollama
   const dbOllamaModel = getSetting(SETTING_OLLAMA_MODEL);
   const dbOllamaUrl = getSetting(SETTING_OLLAMA_BASE_URL);
@@ -349,6 +392,10 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new GeminiProvider(llm.gemini.api_key, llm.gemini.model));
     console.log('[LLM] Hot-reloaded Gemini provider');
   }
+  if (llm.nvidia?.api_key) {
+    providers.push(new NVIDIAProvider(llm.nvidia.api_key, llm.nvidia.model));
+    console.log('[LLM] Hot-reloaded NVIDIA provider');
+  }
   if (llm.openrouter?.api_key) {
     providers.push(new OpenRouterProvider(llm.openrouter.api_key, llm.openrouter.model));
     console.log('[LLM] Hot-reloaded OpenRouter provider');
@@ -395,6 +442,10 @@ export async function testLLMProvider(
       const key = opts.api_key || config.llm.gemini?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
       instance = new GeminiProvider(key, opts.model ?? config.llm.gemini?.model);
+    } else if (opts.provider === 'nvidia') {
+      const key = opts.api_key || getSecret(KEY_NVIDIA) || config.llm.nvidia?.api_key;
+      if (!key) return { ok: false, error: 'API key required' };
+      instance = new NVIDIAProvider(key, opts.model ?? config.llm.nvidia?.model);
     } else if (opts.provider === 'openrouter') {
       const key = opts.api_key || getSecret(KEY_OPENROUTER) || config.llm.openrouter?.api_key;
       if (!key) return { ok: false, error: 'API key required' };
