@@ -396,8 +396,10 @@ export class AgentService implements Service, IAgentService {
       console.log('[AgentService] Registered NVIDIA provider');
     }
 
-    // Register Ollama (always available, no API key needed)
-    if (llm.ollama) {
+    // Register Ollama only when the user has explicitly set a base_url.
+    // Defaulting to localhost:11434 makes the provider appear active even
+    // when no Ollama server is running, so we require an opt-in URL.
+    if (llm.ollama?.base_url) {
       const provider = new OllamaProvider(
         llm.ollama.base_url,
         llm.ollama.model

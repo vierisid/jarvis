@@ -59,9 +59,6 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const openaiModel = getSetting(SETTING_OPENAI_MODEL) ?? config.llm.openai?.model ?? 'gpt-5.4';
   const groqModel = getSetting(SETTING_GROQ_MODEL) ?? config.llm.groq?.model ?? 'llama-3.3-70b-versatile';
   const geminiModel = getSetting(SETTING_GEMINI_MODEL) ?? config.llm.gemini?.model ?? 'gemini-3-flash-preview';
-  const ollamaModel = getSetting(SETTING_OLLAMA_MODEL) ?? config.llm.ollama?.model ?? 'llama3';
-  const ollamaBaseUrl = getSetting(SETTING_OLLAMA_BASE_URL) ?? config.llm.ollama?.base_url ?? 'http://localhost:11434';
-
   const openrouterModel = getSetting(SETTING_OPENROUTER_MODEL) ?? config.llm.openrouter?.model ?? 'anthropic/claude-sonnet-4';
 
   const hasAnthropicKey = hasSecret(KEY_ANTHROPIC) || !!config.llm.anthropic?.api_key;
@@ -70,6 +67,18 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const hasGeminiKey = hasSecret(KEY_GEMINI) || !!config.llm.gemini?.api_key;
   const hasOpenrouterKey = hasSecret(KEY_OPENROUTER) || !!config.llm.openrouter?.api_key;
 
+  // Ollama is "configured" only when the user has explicitly set a base_url
+  // (DB or env/yaml). Defaults alone shouldn't make it appear active in the UI.
+  const dbOllamaUrl = getSetting(SETTING_OLLAMA_BASE_URL);
+  const dbOllamaModel = getSetting(SETTING_OLLAMA_MODEL);
+  const ollamaConfigured = !!(dbOllamaUrl || config.llm.ollama?.base_url);
+  const ollama = ollamaConfigured
+    ? {
+        base_url: dbOllamaUrl ?? config.llm.ollama?.base_url ?? '',
+        model: dbOllamaModel ?? config.llm.ollama?.model ?? 'llama3',
+      }
+    : null;
+
   return {
     primary,
     fallback,
@@ -77,7 +86,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     openai: { model: openaiModel, has_api_key: hasOpenaiKey },
     groq: { model: groqModel, has_api_key: hasGroqKey },
     gemini: { model: geminiModel, has_api_key: hasGeminiKey },
-    ollama: { base_url: ollamaBaseUrl, model: ollamaModel },
+    ollama,
     openrouter: { model: openrouterModel, has_api_key: hasOpenrouterKey },
   };
 }
@@ -353,7 +362,7 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     providers.push(new OpenRouterProvider(llm.openrouter.api_key, llm.openrouter.model));
     console.log('[LLM] Hot-reloaded OpenRouter provider');
   }
-  if (llm.ollama) {
+  if (llm.ollama?.base_url) {
     providers.push(new OllamaProvider(llm.ollama.base_url, llm.ollama.model));
     console.log('[LLM] Hot-reloaded Ollama provider');
   }
