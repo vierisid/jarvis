@@ -157,6 +157,53 @@ export function shouldSpeechWakeBeRunning(inputs: {
   return true; // "webspeech" or "auto" with the API available
 }
 
+/**
+ * Pure decision: are we still inside the trailing-tail cooldown after a
+ * containsWake speaking turn exited? Used to suppress wake-recognizer
+ * restarts during the window in which trailing speaker audio could echo
+ * the wake word back into the mic.
+ *
+ * Boundary: returns `false` exactly when `now - exitedAt === cooldownMs`
+ * (strictly less than is "still inside"). Exported for unit testing.
+ */
+export function isWithinSpeakingTailCooldown(now: number, exitedAt: number, cooldownMs: number): boolean {
+  return now - exitedAt < cooldownMs;
+}
+
+/**
+ * Pure plan for what `handleTTSContainsWake` should do when invoked.
+ *
+ * The mid-turn `containsWake` flip is one-way (false → true only) because
+ * earlier audio carrying the wake word may still be in the speaker buffer
+ * when a later sentence arrives. Calling this with `currentFlag === true`
+ * is a no-op.
+ *
+ * Critically: the very same call that flips the flag must also stamp the
+ * trailing-tail cooldown. The "exit-stamp" effect inside `useVoice` only
+ * registers a cleanup function when its predicate is true at setup time —
+ * a flag flip via ref does not re-run the effect, so without this
+ * imperative stamp, the cooldown would silently not fire on turn end.
+ *
+ * Exported for unit testing; this is the regression boundary for the bug
+ * where a containsWake flip during a `speaking` turn left the cooldown
+ * un-stamped and trailing TTS audio re-triggered wake.
+ */
+export interface ContainsWakeFlipPlan {
+  /** Whether to perform the flip (false → true). */
+  shouldFlip: boolean;
+  /** Whether to stamp `speakingExitedAtRef.current = now()` immediately. */
+  shouldStampCooldown: boolean;
+  /** Whether to imperatively stop both wake recognizers. */
+  shouldStopRecognizers: boolean;
+}
+
+export function planContainsWakeFlip(currentFlag: boolean): ContainsWakeFlipPlan {
+  if (currentFlag) {
+    return { shouldFlip: false, shouldStampCooldown: false, shouldStopRecognizers: false };
+  }
+  return { shouldFlip: true, shouldStampCooldown: true, shouldStopRecognizers: true };
+}
+
 export type UseVoiceOptions = {
   wsRef: React.MutableRefObject<WebSocket | null>;
   wakeWordEnabled?: boolean;
@@ -170,6 +217,14 @@ export type UseVoiceOptions = {
    * the tasks Room. Returns the literal string "home" for the thread view.
    */
   getCurrentRoom?: () => string | null;
+  /**
+   * Trailing cooldown (ms) applied after a `containsWake` speaking turn
+   * exits, before the wake recognizer is allowed to re-arm. Prevents
+   * trailing TTS speaker audio from self-triggering. Hardware echo on
+   * some headsets needs a longer tail; raise this if you see false
+   * wakes immediately after a reply finishes. Default 700.
+   */
+  speakingTailCooldownMs?: number;
 };
 
 export type UseVoiceReturn = {
@@ -200,7 +255,7 @@ export type UseVoiceReturn = {
   forceIdle: () => void;
 };
 
-export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword", getCurrentRoom }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword", getCurrentRoom, speakingTailCooldownMs = 700 }: UseVoiceOptions): UseVoiceReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
@@ -248,7 +303,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // recognizer so trailing TTS audio (and any speaker reverb) doesn't
   // immediately self-trigger a wake the moment we go idle.
   const speakingExitedAtRef = useRef<number>(0);
-  const SPEAKING_TAIL_COOLDOWN_MS = 700;
+  // Cooldown duration is held in a ref so callbacks below capture the latest
+  // configured value without re-creating on every render.
+  const speakingTailCooldownMsRef = useRef(speakingTailCooldownMs);
+  useEffect(() => { speakingTailCooldownMsRef.current = speakingTailCooldownMs; }, [speakingTailCooldownMs]);
   // True if the in-flight TTS turn contains "Jarvis" anywhere. The
   // daemon sets this in tts_start, and may flip false→true mid-turn via
   // tts_text when a later sentence introduces the wake word. Reset on
@@ -424,7 +482,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     // for the same reason. Both are checked here so the onend-driven
     // restart and the reconcile path agree.
     if (voiceStateRef.current === "speaking" && ttsContainsWakeRef.current) return false;
-    if (Date.now() - speakingExitedAtRef.current < SPEAKING_TAIL_COOLDOWN_MS) return false;
+    if (isWithinSpeakingTailCooldown(Date.now(), speakingExitedAtRef.current, speakingTailCooldownMsRef.current)) return false;
     return shouldSpeechWakeBeRunning({
       isMicAvailable: isMicAvailableRef.current,
       wakeWordEnabled: wakeWordEnabledRef.current,
@@ -470,7 +528,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
         if (sNow === "speaking" && ttsContainsWakeRef.current) return;
         // Trailing-tail guard: a short window after exiting a containsWake
         // speaking turn so trailing TTS audio can't false-trigger.
-        if (Date.now() - speakingExitedAtRef.current < SPEAKING_TAIL_COOLDOWN_MS) return;
+        if (isWithinSpeakingTailCooldown(Date.now(), speakingExitedAtRef.current, speakingTailCooldownMsRef.current)) return;
 
         // Strict matcher during speaking to keep TTS echo from self-triggering;
         // loose prefix matcher when idle so "hey jarvis <command>" wakes in one breath.
@@ -561,8 +619,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
         // After a containsWake speaking turn exits, wait out the tail
         // cooldown so trailing speaker audio can't false-trigger.
         const sinceExit = Date.now() - speakingExitedAtRef.current;
-        const tailDelay = sinceExit < SPEAKING_TAIL_COOLDOWN_MS
-          ? SPEAKING_TAIL_COOLDOWN_MS - sinceExit
+        const tailDelay = sinceExit < speakingTailCooldownMsRef.current
+          ? speakingTailCooldownMsRef.current - sinceExit
           : 0;
         speechWakeRestartTimerRef.current = setTimeout(() => {
           speechWakeRestartTimerRef.current = null;
@@ -736,13 +794,22 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   }, [getAudioContext]);
 
   const handleTTSContainsWake = useCallback(() => {
-    // Only flip false→true; never relax mid-turn because earlier audio
-    // with the wake word may still be in the speaker buffer. Mid-turn
-    // flips don't change voiceState so the reconcile effect won't fire —
-    // we have to stop both wake paths imperatively here.
-    if (!ttsContainsWakeRef.current) {
-      console.log("[Voice] TTS turn now contains wake — suppressing recognizer");
-      ttsContainsWakeRef.current = true;
+    // The plan is computed by a pure helper so the regression boundary
+    // (cooldown stamp on first flip) is unit-testable without React.
+    const plan = planContainsWakeFlip(ttsContainsWakeRef.current);
+    if (!plan.shouldFlip) return;
+    console.log("[Voice] TTS turn now contains wake — suppressing recognizer");
+    ttsContainsWakeRef.current = true;
+    if (plan.shouldStampCooldown) {
+      // Stamp the trailing-tail cooldown NOW. The exit-stamp effect's
+      // cleanup is registered based on the predicate at setup time, so a
+      // false→true flip mid-turn (writing a ref, not state) leaves no
+      // cleanup registered and the timestamp would never get written on
+      // exit — letting trailing TTS audio re-trigger wake. Stamping here
+      // guarantees the cooldown is honored regardless of effect timing.
+      speakingExitedAtRef.current = Date.now();
+    }
+    if (plan.shouldStopRecognizers) {
       stopSpeechWakeIfNeeded();
       if (wakeEngineRef.current) {
         wakeEngineRef.current.stop().catch(() => {});

@@ -17,7 +17,9 @@ import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest, ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { impactFromCategory } from '../roles/authority.ts';
+import type { AuditTrail } from '../authority/audit.ts';
+import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
+import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
 import { getUserProfile } from '../vault/user-profile.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
@@ -62,6 +64,70 @@ type PendingVoiceConfirmation = {
   createdAt: number;
 };
 
+/**
+ * Voice confirmations are dropped after this many ms without resolution.
+ * Tuned so a user who walks away has plenty of time to come back, but a
+ * busy operator who triages "sometime later" doesn't grow the map forever.
+ */
+const VOICE_CONFIRMATION_TTL_MS = 10 * 60_000;
+
+/**
+ * How often the sweep timer fires. 60s is a good balance — granular enough
+ * that an expired card is dismissed within ~1 minute of its TTL, cheap
+ * enough that the sweep itself is invisible on real workloads.
+ */
+const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Pure cleanup helper: removes every per-socket entry from the WS-service
+ * maps when a client disconnects. Extracted so the cleanup contract can
+ * be unit-tested without spinning up a real WebSocket server.
+ *
+ * Returns the number of pendingVoiceConfirmations entries removed (the
+ * other two are at most 1 each — one entry per ws). Mostly useful so the
+ * test can assert "we swept N abandoned cards" without re-querying.
+ */
+export function cleanupPerSocketMaps<W>(
+  ws: W,
+  voiceSessions: Map<W, unknown>,
+  interviewSessions: Map<W, unknown>,
+  pendingVoiceConfirmations: Map<string, { ws: W }>,
+): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number } {
+  const voiceRemoved = voiceSessions.delete(ws);
+  const interviewRemoved = interviewSessions.delete(ws);
+  let pendingRemoved = 0;
+  for (const [id, pending] of pendingVoiceConfirmations) {
+    if (pending.ws === ws) {
+      pendingVoiceConfirmations.delete(id);
+      pendingRemoved += 1;
+    }
+  }
+  return { voiceRemoved, interviewRemoved, pendingRemoved };
+}
+
+/**
+ * Pure TTL-sweep helper: removes pendingVoiceConfirmations entries older
+ * than `ttlMs` and returns the ids of removed entries so the caller can
+ * notify the originating clients (`voice_confirmation_expired`).
+ *
+ * Extracted so the TTL contract can be unit-tested deterministically by
+ * passing an explicit `now` rather than relying on real time.
+ */
+export function sweepExpiredVoiceConfirmations<W>(
+  pendingVoiceConfirmations: Map<string, { ws: W; createdAt: number }>,
+  now: number,
+  ttlMs: number,
+): Array<{ id: string; ws: W }> {
+  const expired: Array<{ id: string; ws: W }> = [];
+  for (const [id, pending] of pendingVoiceConfirmations) {
+    if (now - pending.createdAt > ttlMs) {
+      expired.push({ id, ws: pending.ws });
+      pendingVoiceConfirmations.delete(id);
+    }
+  }
+  return expired;
+}
+
 export class WebSocketService implements Service {
   name = 'websocket';
   private _status: ServiceStatus = 'stopped';
@@ -84,10 +150,19 @@ export class WebSocketService implements Service {
    * persisted via `appendUserProfileFact` inside the agent loop.
    */
   private interviewSessions = new Map<ServerWebSocket<unknown>, InterviewSession>();
+  /**
+   * Periodic sweep handle for `pendingVoiceConfirmations` TTL eviction.
+   * Started in `start()`, cleared in `stop()` so the daemon shuts down
+   * cleanly without a dangling timer.
+   */
+  private voiceConfirmationSweepTimer: ReturnType<typeof setInterval> | null = null;
   private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
   // Phase 6.3.5b — voice approve/cancel for pending approvals.
   private approvalManager: ApprovalManager | null = null;
   private deferredExecutor: DeferredExecutor | null = null;
+  // Audit trail used to tag voice-channel resolutions separately from
+  // dashboard clicks. See gateVoiceApprovalResolution + resolveLatestPendingByVoice.
+  private auditTrail: AuditTrail | null = null;
 
   constructor(port: number, agentService: AgentService) {
     this.port = port;
@@ -123,6 +198,10 @@ export class WebSocketService implements Service {
 
   setDeferredExecutor(exec: DeferredExecutor): void {
     this.deferredExecutor = exec;
+  }
+
+  setAuditTrail(audit: AuditTrail): void {
+    this.auditTrail = audit;
   }
 
   /**
@@ -218,14 +297,49 @@ export class WebSocketService implements Service {
           console.log('[WSService] Client connected');
         },
         onDisconnect: (ws) => {
-          // Clean up any pending voice session for this client
-          this.voiceSessions.delete(ws);
+          // Clean up every per-socket map so a long-running daemon doesn't
+          // accumulate dead-socket entries across reconnects. See
+          // cleanupPerSocketMaps for the contract; tested in
+          // ws-service-cleanup.test.ts.
+          cleanupPerSocketMaps(
+            ws,
+            this.voiceSessions as unknown as Map<typeof ws, unknown>,
+            this.interviewSessions as unknown as Map<typeof ws, unknown>,
+            this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
+          );
           console.log('[WSService] Client disconnected');
         },
       });
 
       // Start the server
       this.wsServer.start();
+
+      // Periodic sweep of abandoned voice-confirmation cards. Without this,
+      // an active client that receives a clarifier and then ignores it
+      // (user walks away, switches context) leaves the entry forever.
+      // 60s tick, 10-min TTL — see sweepExpiredVoiceConfirmations.
+      this.voiceConfirmationSweepTimer = setInterval(() => {
+        const expired = sweepExpiredVoiceConfirmations(
+          this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
+          Date.now(),
+          VOICE_CONFIRMATION_TTL_MS,
+        );
+        for (const { id, ws } of expired) {
+          // Tell the originating client so the card UI can dismiss itself
+          // rather than stay rendered forever.
+          try {
+            ws.send(JSON.stringify({
+              type: 'voice_confirmation_expired',
+              payload: { id },
+              timestamp: Date.now(),
+            }));
+          } catch (err) {
+            // Socket may have died between map-read and send; safe to ignore.
+            console.warn('[WSService] voice_confirmation_expired send failed:', err);
+          }
+        }
+      }, VOICE_CONFIRMATION_SWEEP_INTERVAL_MS);
+
       this._status = 'running';
       console.log(`[WSService] Started on port ${this.port}`);
     } catch (error) {
@@ -236,6 +350,10 @@ export class WebSocketService implements Service {
 
   async stop(): Promise<void> {
     this._status = 'stopping';
+    if (this.voiceConfirmationSweepTimer) {
+      clearInterval(this.voiceConfirmationSweepTimer);
+      this.voiceConfirmationSweepTimer = null;
+    }
     this.wsServer.stop();
     this._status = 'stopped';
     console.log('[WSService] Stopped');
@@ -1411,14 +1529,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // Phase 6.3.5b — voice approve/cancel for pending confirmations.
     // Resolve the most-recent pending action (approval > clarifier >
     // repeat-back). When nothing is pending, fall through to chat so
-    // "yes" / "no" still work as conversational replies.
+    // "yes" / "no" still work as conversational replies. Approvals run
+    // through gateVoiceApprovalResolution first — destructive actions
+    // refuse voice resolution outright; non-destructive require
+    // confidence ≥ 0.85.
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision);
+        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence);
         if (resolved) {
-          const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
-          this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
+          if (resolved.kind === 'gated') {
+            this.broadcastVoiceApprovalGated(resolved.label, resolved.message, requestId);
+          } else {
+            const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
+            this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
+          }
           this.broadcastThinkingEnd(requestId);
           return;
         }
@@ -1490,16 +1615,57 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    */
   async resolveLatestPendingByVoice(
     decision: 'approve' | 'cancel',
-  ): Promise<{ kind: 'approval' | 'clarifier' | 'repeat_back'; label: string } | null> {
+    confidence = 1,
+  ): Promise<
+    | { kind: 'approval' | 'clarifier' | 'repeat_back'; label: string }
+    | { kind: 'gated'; label: string; message: string }
+    | null
+  > {
     // 1. Pending approvals — newest first.
     if (this.approvalManager) {
       const pending = this.approvalManager.getPending();
       if (pending.length > 0) {
         const latest = pending.reduce((a, b) => (a.created_at > b.created_at ? a : b));
         const label = (latest.reason && latest.reason.trim()) || latest.tool_name;
+
+        // Two-tier safety: destructive impacts never resolve by voice;
+        // non-destructive require confidence ≥ 0.85. Gate decision is a
+        // pure helper so it's unit-testable without spinning up the
+        // approval pipeline. See gateVoiceApprovalResolution.
+        const gate = gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
+        if (gate.kind === 'clarify') {
+          // Pending approval STAYS in the queue — user can resolve via
+          // dashboard click. We log a 'voice' channel audit row marked
+          // approval_required so the gated event is forensically visible
+          // even though no decision was applied.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'approval_required',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
+          return { kind: 'gated', label, message: gate.message };
+        }
+
         if (decision === 'approve') {
           const approved = this.approvalManager.approve(latest.id, 'voice');
           if (!approved) return null;
+          // Audit the voice resolution distinctly from the click path so
+          // forensics can isolate any false-positive voice approvals.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'allowed',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
           // Same skip-on-intent-only path as the REST endpoint.
           if (this.deferredExecutor && approved.tool_name !== 'request_approval') {
             try {
@@ -1515,6 +1681,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // cancel
         const denied = this.approvalManager.deny(latest.id, 'voice');
         if (!denied) return null;
+        this.auditTrail?.log({
+          agent_id: latest.agent_id,
+          agent_name: latest.agent_name,
+          tool_name: latest.tool_name,
+          action_category: latest.action_category as ActionCategory,
+          authority_decision: 'denied',
+          approval_id: latest.id,
+          executed: false,
+          channel: 'voice',
+        });
         if (this.deferredExecutor) {
           this.deferredExecutor.recordDenial(denied);
         }
@@ -1610,6 +1786,29 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
+  }
+
+  /**
+   * Broadcast a "voice approval gated" notice — the user's spoken yes/no
+   * was heard but suppressed because either the action is destructive
+   * (always click) or STT confidence was too low (please repeat or click).
+   *
+   * The pending approval STAYS in the queue; this notice tells the UI
+   * to show a transient banner so the user knows their voice didn't
+   * resolve anything (vs silent no-op which would be confusing).
+   */
+  private broadcastVoiceApprovalGated(label: string, message: string, requestId?: string): void {
+    const wsMessage: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'voice_approval_gated',
+        label,
+        message,
+      },
+      id: requestId,
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(wsMessage);
   }
 
   /** Broadcast: classifier didn't understand; ask the user to confirm the verbatim transcript. */

@@ -678,7 +678,7 @@ Transcript: "show only critical goals"
  * Confidence:0.85 ensures the daemon proceeds with the existing chat flow
  * and never strands a user mid-utterance just because the classifier failed.
  */
-function permissiveIntent(transcript: string): Intent {
+export function permissiveIntent(transcript: string): Intent {
   return {
     id: generateId(),
     utterance: transcript,
@@ -744,7 +744,7 @@ function parseAlternatives(raw: unknown): Intent['alternatives'] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-function parseIntent(raw: string, transcript: string): Intent {
+export function parseIntent(raw: string, transcript: string): Intent {
   // Strip code fences if the LLM ignored instructions
   const cleaned = raw.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   let parsed: unknown;

@@ -34,6 +34,12 @@ export interface OnboardingStatus {
   tutorial_dismissed: boolean;
   tutorial_progress_step: string | null;
   last_reset_at: number | null;
+  /** Daemon process boot time (ms). When `setup_completed_at >
+   *  daemon_started_at`, background services (heartbeat, commitments,
+   *  awareness) haven't been constructed yet — the dashboard surfaces
+   *  a "Restart Jarvis" banner until the in-process construction lands
+   *  (follow-up issue F2). */
+  daemon_started_at?: number;
 }
 
 interface HookValue {

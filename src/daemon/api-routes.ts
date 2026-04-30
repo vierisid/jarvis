@@ -116,6 +116,17 @@ import {
 } from '../cli/autostart.ts';
 
 export type ApiContext = {
+  /**
+   * Daemon process boot time (Date.now() at start). Surfaced via the
+   * onboarding-status endpoint so the dashboard can detect when setup
+   * was completed AFTER the daemon started — that's the case where
+   * the daemon is still in setup-mode and needs a restart for
+   * background services (heartbeat / commitments / awareness) to
+   * spin up. Until those services can construct in-process at setup
+   * completion, the dashboard renders a "Restart Jarvis" banner when
+   * `setup_completed_at > daemon_started_at`. (See also issue F2.)
+   */
+  daemonStartedAt: number;
   healthMonitor: HealthMonitor;
   agentService: AgentService;
   config: JarvisConfig;
@@ -880,6 +891,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_dismissed: o?.tutorial_dismissed_at != null,
             tutorial_progress_step: o?.tutorial_progress_step ?? null,
             last_reset_at: o?.last_reset_at ?? null,
+            // Boot timestamp lets the dashboard detect when setup
+            // completed AFTER the daemon started (= restart needed
+            // before background services activate).
+            daemon_started_at: ctx.daemonStartedAt,
           });
         } catch (err) {
           return errorFromException(err);
@@ -2472,23 +2487,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             return error(`Invalid action: ${body.action}`, 400);
           }
 
-          const currentConfig = ctx.authorityEngine.getConfig();
-          const overrides = [...(currentConfig.overrides ?? [])];
-          const idx = overrides.findIndex(
-            (o: any) =>
-              o.action === body.action &&
-              (o.role_id ?? undefined) === (body.role_id ?? undefined),
-          );
-          const next = {
+          // Single source of truth for the merge logic — shared with
+          // the unit test in quick-override.test.ts so they can't drift.
+          const { applyQuickOverride } = await import('../authority/quick-override.ts');
+          const currentConfig = applyQuickOverride(ctx.authorityEngine.getConfig(), {
             action: body.action,
-            ...(body.role_id ? { role_id: body.role_id } : {}),
-            allowed: body.allow,
-            requires_approval: false,
-          };
-          if (idx >= 0) overrides[idx] = next;
-          else overrides.push(next);
-
-          currentConfig.overrides = overrides;
+            allow: body.allow,
+            role_id: body.role_id,
+          });
           ctx.authorityEngine.updateConfig(currentConfig);
 
           // Persist to config.yaml — same path as the full POST.

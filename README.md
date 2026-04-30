@@ -135,6 +135,8 @@ jarvis start
 
 The first time you run `jarvis start`, the daemon boots in setup mode and the dashboard at `http://localhost:3142` guides you through LLM provider, voice (TTS) choice, a conversational profile interview, and a 10-minute spotlight tour.
 
+> **Restart after first-time setup:** The daemon constructs background services (heartbeat, commitments, awareness) at boot, gated on setup having already been completed. Once you finish setup in the dashboard, those services don't activate until the next start — the dashboard shows a banner reminding you. Run `jarvis restart` (or stop/start) to bring them online. This will go away in a follow-up that constructs the services in-process at setup completion.
+
 > **Note:** Native Windows installs are blocked for the JARVIS daemon. On Windows, use WSL2 for the Bun install above, or use the Docker install instead.
 
 ### Docker

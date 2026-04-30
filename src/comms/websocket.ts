@@ -16,7 +16,11 @@ export type WSMessage = {
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'
-      | 'site_event';
+      | 'site_event'
+      // Emitted when a pending voice confirmation (clarifier / repeat-back)
+      // expires from the server-side TTL sweep. Payload: { id: string }.
+      // Clients should dismiss the corresponding card from their UI.
+      | 'voice_confirmation_expired';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

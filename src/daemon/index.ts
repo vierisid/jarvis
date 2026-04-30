@@ -396,6 +396,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
+    // Voice-channel audit tagging for forensic separation from click path.
+    wsService.setAuditTrail(auditTrail);
 
     // Restore emergency state from config
     const savedEmergencyState = authorityConfig.emergency_state ?? 'normal';
@@ -480,6 +482,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
+      daemonStartedAt: Date.now(),
       healthMonitor,
       agentService,
       config: jarvisConfig,

@@ -2,35 +2,12 @@ import { test, expect, describe, beforeEach } from 'bun:test';
 import { initDatabase } from '../vault/schema.ts';
 import { AuthorityEngine, type AuthorityConfig } from './engine.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-
-/**
- * Phase 6.6 — pins the merge semantics of the new
- * /api/authority/config/quick-override endpoint. The route handler is a
- * thin wrapper around AuthorityEngine.updateConfig, but the merge logic
- * (insert-or-update by action+role_id tuple, idempotent across repeated
- * grants) lives in the route. This test covers it directly by mirroring
- * the same merge function — if the route ever drifts, the test catches it.
- */
-function applyQuickOverride(
-  cfg: AuthorityConfig,
-  body: { action: ActionCategory; allow: boolean; role_id?: string },
-): AuthorityConfig {
-  const overrides = [...(cfg.overrides ?? [])];
-  const idx = overrides.findIndex(
-    (o) =>
-      o.action === body.action &&
-      ((o as any).role_id ?? undefined) === (body.role_id ?? undefined),
-  );
-  const next = {
-    action: body.action,
-    ...(body.role_id ? { role_id: body.role_id } : {}),
-    allowed: body.allow,
-    requires_approval: false,
-  };
-  if (idx >= 0) overrides[idx] = next as any;
-  else overrides.push(next as any);
-  return { ...cfg, overrides };
-}
+// Phase 6.6 — pins the merge semantics of the new
+// /api/authority/config/quick-override endpoint. The merge logic is
+// imported as a shared helper here AND in api-routes.ts; that way the
+// test verifies the same code the route runs (no risk of drift between
+// a duplicated test fixture and the production path).
+import { applyQuickOverride } from './quick-override.ts';
 
 function makeConfig(): AuthorityConfig {
   return {

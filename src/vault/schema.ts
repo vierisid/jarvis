@@ -383,6 +383,10 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_trail(agent_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_trail(action_category)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_trail(created_at)`);
+  // Migration: tag the resolution channel ('click' | 'voice' | 'system' | null).
+  // Useful forensics if a voice misfire ever resolves something it shouldn't.
+  // Column is nullable so existing rows remain valid; new rows specify it.
+  try { db.run(`ALTER TABLE audit_trail ADD COLUMN channel TEXT`); } catch {}
 
   // Authority: Approval patterns (for learning)
   db.run(`

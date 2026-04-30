@@ -7,6 +7,15 @@ import type { ActionCategory } from '../roles/authority.ts';
 
 export type AuthorityDecisionType = 'allowed' | 'denied' | 'approval_required';
 
+/**
+ * The resolution channel for an approval decision. `click` is the
+ * dashboard card path; `voice` is the spoken-yes/no path; `system` is for
+ * automatic decisions (heartbeat-driven cleanup, expired requests, etc.).
+ * `null` is allowed for backward compatibility with rows written before
+ * this column existed.
+ */
+export type ResolutionChannel = 'click' | 'voice' | 'system';
+
 export type AuditEntry = {
   id: string;
   agent_id: string;
@@ -18,6 +27,7 @@ export type AuditEntry = {
   executed: number; // 0 or 1
   execution_time_ms: number | null;
   created_at: number;
+  channel: ResolutionChannel | null;
 };
 
 export class AuditTrail {
@@ -33,14 +43,16 @@ export class AuditTrail {
     approval_id?: string | null;
     executed: boolean;
     execution_time_ms?: number | null;
+    /** Resolution channel for forensics. Optional; defaults to null. */
+    channel?: ResolutionChannel | null;
   }): AuditEntry {
     const db = getDb();
     const id = generateId();
     const now = Date.now();
 
     db.run(
-      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at, channel)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         entry.agent_id,
@@ -52,6 +64,7 @@ export class AuditTrail {
         entry.executed ? 1 : 0,
         entry.execution_time_ms ?? null,
         now,
+        entry.channel ?? null,
       ]
     );
 
@@ -66,6 +79,7 @@ export class AuditTrail {
       executed: entry.executed ? 1 : 0,
       execution_time_ms: entry.execution_time_ms ?? null,
       created_at: now,
+      channel: entry.channel ?? null,
     };
   }
 

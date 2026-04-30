@@ -5,6 +5,8 @@ import {
   shouldSpeechWakeBeRunning,
   classifySpeechWakeError,
   selectActiveWakeEngine,
+  isWithinSpeakingTailCooldown,
+  planContainsWakeFlip,
 } from "./useVoice.ts";
 
 describe("matchesSpeechWakePhrase (strict; used during TTS playback)", () => {
@@ -174,5 +176,71 @@ describe("classifySpeechWakeError", () => {
   test("bad-grammar and language-not-supported are fatal (config problems)", () => {
     expect(classifySpeechWakeError("bad-grammar")).toBe("fatal");
     expect(classifySpeechWakeError("language-not-supported")).toBe("fatal");
+  });
+});
+
+describe("isWithinSpeakingTailCooldown", () => {
+  test("returns true while now is strictly inside the cooldown window", () => {
+    expect(isWithinSpeakingTailCooldown(0, 0, 700)).toBe(true);
+    expect(isWithinSpeakingTailCooldown(1, 0, 700)).toBe(true);
+    expect(isWithinSpeakingTailCooldown(699, 0, 700)).toBe(true);
+  });
+
+  test("returns false at the boundary and beyond", () => {
+    expect(isWithinSpeakingTailCooldown(700, 0, 700)).toBe(false);
+    expect(isWithinSpeakingTailCooldown(701, 0, 700)).toBe(false);
+    expect(isWithinSpeakingTailCooldown(10_000, 0, 700)).toBe(false);
+  });
+
+  test("respects an absolute exitedAt timestamp, not just zero-anchored math", () => {
+    const exitedAt = 1_700_000_000_000;
+    expect(isWithinSpeakingTailCooldown(exitedAt + 100, exitedAt, 700)).toBe(true);
+    expect(isWithinSpeakingTailCooldown(exitedAt + 700, exitedAt, 700)).toBe(false);
+  });
+
+  test("a zero cooldown means we're never inside (always allow)", () => {
+    expect(isWithinSpeakingTailCooldown(0, 0, 0)).toBe(false);
+    expect(isWithinSpeakingTailCooldown(1000, 999, 0)).toBe(false);
+  });
+
+  test("a custom (longer) cooldown extends the window per the option", () => {
+    expect(isWithinSpeakingTailCooldown(1500, 0, 2000)).toBe(true);
+    expect(isWithinSpeakingTailCooldown(2000, 0, 2000)).toBe(false);
+  });
+});
+
+describe("planContainsWakeFlip — regression boundary for the mid-turn cooldown stamp bug", () => {
+  // Background: when a TTS turn enters `speaking` with containsWake=false
+  // and a later sentence introduces "Jarvis", the daemon flips containsWake
+  // to true via a ref write. The exit-stamp effect inside useVoice
+  // registers a cleanup function based on the predicate at setup time, so
+  // a flag flip via ref does NOT re-run the effect — meaning when the turn
+  // ends, no cleanup runs, no timestamp is stamped, and trailing TTS audio
+  // re-triggers wake. The fix moves the stamp into the imperative handler
+  // path. This test pins the contract: a false→true flip MUST stamp the
+  // cooldown; a no-op call (already true) MUST NOT.
+  test("first false→true flip stamps the cooldown and stops recognizers", () => {
+    const plan = planContainsWakeFlip(false);
+    expect(plan.shouldFlip).toBe(true);
+    expect(plan.shouldStampCooldown).toBe(true);
+    expect(plan.shouldStopRecognizers).toBe(true);
+  });
+
+  test("second call with flag already true is a complete no-op (don't re-stamp, don't re-stop)", () => {
+    const plan = planContainsWakeFlip(true);
+    expect(plan.shouldFlip).toBe(false);
+    expect(plan.shouldStampCooldown).toBe(false);
+    expect(plan.shouldStopRecognizers).toBe(false);
+  });
+
+  test("the three side-effects always travel together (atomic plan)", () => {
+    // Either we're flipping and stamping and stopping, or we're doing none
+    // of them. There's no half-state where we stamp but don't stop, etc.
+    for (const current of [false, true]) {
+      const plan = planContainsWakeFlip(current);
+      const flags = [plan.shouldFlip, plan.shouldStampCooldown, plan.shouldStopRecognizers];
+      const allEqual = flags.every((f) => f === flags[0]);
+      expect(allEqual).toBe(true);
+    }
   });
 });

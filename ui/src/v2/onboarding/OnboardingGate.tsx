@@ -4,6 +4,7 @@ import { ProfileInterviewRoom } from "./ProfileInterviewRoom";
 import { TutorialRoom } from "./TutorialRoom";
 import { TutorialEventProvider } from "./TutorialEventContext";
 import { useOnboardingStatus } from "./useOnboardingStatus";
+import { RestartRequiredBanner } from "./RestartRequiredBanner";
 
 /**
  * Phase A + B onboarding gate. Sits between AppShellV2's render and
@@ -72,6 +73,7 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   if (!status.tutorial_completed && !status.tutorial_dismissed) {
     return (
       <TutorialEventProvider>
+        <RestartRequiredBanner status={status} />
         {children}
         <TutorialRoom
           resumeFromStepId={status.tutorial_progress_step}
@@ -94,5 +96,10 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      <RestartRequiredBanner status={status} />
+      {children}
+    </>
+  );
 }
