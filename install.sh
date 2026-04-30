@@ -218,6 +218,17 @@ main() {
     fi
   fi
 
+  if ! command -v make &> /dev/null; then
+    info "make not found. Installing..."
+    if pkg_install make; then
+      ok "make installed"
+    else
+      err "make is required but could not be installed automatically."
+      err "Please install make manually and re-run the installer."
+      exit 1
+    fi
+  fi
+
   # ── Step 0.5: Ensure libc dev headers on Linux/WSL ──────────────
 
   if [ "$OS" = "linux" ] || [ "$OS" = "wsl" ]; then
