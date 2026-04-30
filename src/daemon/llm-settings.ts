@@ -5,7 +5,7 @@
  * API keys are stored in the encrypted secrets file via the keychain module.
  */
 
-import { getSetting, setSetting, getSettingsByPrefix } from '../vault/settings.ts';
+import { getSetting, setSetting, deleteSetting, getSettingsByPrefix } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { AnthropicProvider } from '../llm/anthropic.ts';
@@ -177,19 +177,25 @@ export function saveLLMSettings(
     };
   }
 
-  // Ollama
+  // Ollama. An explicit empty base_url is a "disable / clear" signal: wipe the
+  // stored URL/model so the provider stops appearing as configured in the UI.
   if (body.ollama) {
-    if (body.ollama.model) {
-      setSetting(SETTING_OLLAMA_MODEL, body.ollama.model);
+    const url = body.ollama.base_url?.trim();
+    if (url) {
+      setSetting(SETTING_OLLAMA_BASE_URL, url);
+      if (body.ollama.model) {
+        setSetting(SETTING_OLLAMA_MODEL, body.ollama.model);
+      }
+      config.llm.ollama = {
+        ...config.llm.ollama,
+        model: body.ollama.model ?? config.llm.ollama?.model,
+        base_url: url,
+      };
+    } else if (body.ollama.base_url !== undefined) {
+      deleteSetting(SETTING_OLLAMA_BASE_URL);
+      deleteSetting(SETTING_OLLAMA_MODEL);
+      config.llm.ollama = undefined;
     }
-    if (body.ollama.base_url) {
-      setSetting(SETTING_OLLAMA_BASE_URL, body.ollama.base_url);
-    }
-    config.llm.ollama = {
-      ...config.llm.ollama,
-      model: body.ollama.model ?? config.llm.ollama?.model,
-      base_url: body.ollama.base_url ?? config.llm.ollama?.base_url,
-    };
   }
 
   // OpenRouter

@@ -259,7 +259,7 @@ describe('Default Config', () => {
     expect(DEFAULT_CONFIG.llm.openai?.model).toBe('gpt-5.4');
     expect(DEFAULT_CONFIG.llm.gemini?.model).toBe('gemini-3-flash-preview');
     expect(DEFAULT_CONFIG.llm.ollama?.model).toBe('llama3');
-    expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('http://localhost:11434');
+    expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('');
   });
 });
 

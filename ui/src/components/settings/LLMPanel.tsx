@@ -121,7 +121,7 @@ export function LLMPanel() {
   const [geminiCustomModel, setGeminiCustomModel] = useState("");
 
   // Ollama
-  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("");
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [ollamaCustomModel, setOllamaCustomModel] = useState("");
 
@@ -198,6 +198,8 @@ export function LLMPanel() {
         setOllamaModel("custom");
         setOllamaCustomModel(m);
       }
+    } else {
+      setOllamaBaseUrl("");
     }
     if (config.openrouter) {
       const m = config.openrouter.model;
@@ -250,7 +252,7 @@ export function LLMPanel() {
           ...(geminiKey ? { api_key: geminiKey } : {}),
         },
         ollama: {
-          base_url: ollamaBaseUrl,
+          base_url: ollamaBaseUrl.trim(),
           model: resolveModel(ollamaModel, ollamaCustomModel),
         },
         openrouter: {
@@ -658,13 +660,22 @@ function ProviderSection({
           {baseUrl !== undefined && onBaseUrlChange && (
             <div>
               <div style={fieldLabelStyle}>Base URL</div>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => onBaseUrlChange(e.target.value)}
-                placeholder="http://localhost:11434"
-                style={inputStyle}
-              />
+              <div style={{ display: "flex", gap: "6px" }}>
+                <input
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => onBaseUrlChange(e.target.value)}
+                  placeholder="http://localhost:11434"
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => onBaseUrlChange("http://localhost:11434")}
+                  style={useDefaultBtnStyle}
+                >
+                  Default
+                </button>
+              </div>
             </div>
           )}
 
@@ -782,6 +793,17 @@ const selectStyle: React.CSSProperties = {
   color: "var(--j-text)",
   outline: "none",
   cursor: "pointer",
+};
+
+const useDefaultBtnStyle: React.CSSProperties = {
+  padding: "4px 12px",
+  fontSize: "11px",
+  background: "rgba(0, 212, 255, 0.1)",
+  border: "1px solid rgba(0, 212, 255, 0.3)",
+  borderRadius: "4px",
+  color: "var(--j-accent)",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 
 const testBtnStyle: React.CSSProperties = {
