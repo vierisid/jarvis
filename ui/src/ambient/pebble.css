@@ -1,35 +1,27 @@
+/* Pebble — riso aesthetic.
+   Mirrors the dashboard design tokens (ui/src/styles/tokens.css):
+   paper-toned warm beige, single vermilion accent, hairline rules,
+   hard offset shadows (no drift), Inter Tight / Fraunces / JetBrains Mono. */
+
 :root {
-  --pebble-ink: #0c0c0e;
-  --pebble-ink-soft: rgba(0, 0, 0, 0.55);
-  --pebble-paper: #fdfdfd;
-  --pebble-line: rgba(0, 0, 0, 0.06);
-  --pebble-accent: #007aff;          /* iOS blue */
-  --pebble-accent-soft: rgba(0, 122, 255, 0.14);
-  --pebble-warm: #ff9f0a;            /* macOS amber */
+  --paper:      #F5F2EB;
+  --paper-2:    #EEE9DC;
+  --paper-3:    #E3DCC8;
+  --rule:       #CBC3B2;
+  --rule-soft:  #DFD9CC;
+  --ink:        #1A1A1A;
+  --ink-2:      #4A4A46;
+  --ink-3:      #6A6760;
+  --accent:     #C23A2A;
+  --accent-ink: #FFFFFF;
+  --ok:         #2E5E3A;
+  --warn:       #8A6A1F;
 
-  /* Apple-style multi-layer shadow stack — tuned for a small companion */
-  --pebble-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.04),
-    0 3px 8px -3px rgba(0, 0, 0, 0.16),
-    0 10px 22px -8px rgba(0, 0, 0, 0.14),
-    0 18px 36px -14px rgba(0, 0, 0, 0.12),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.85),
-    inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --font-sans:    "Inter Tight", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-display: "Fraunces", "Inter Tight", serif;
 
-  --pebble-shadow-listening:
-    0 0 0 0.5px rgba(0, 122, 255, 0.5),
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 6px 16px -4px rgba(0, 122, 255, 0.28),
-    0 14px 32px -10px rgba(0, 0, 0, 0.18),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.9);
-
-  --pebble-shadow-speaking:
-    0 1px 2px rgba(0, 0, 0, 0.16),
-    0 6px 16px -4px rgba(0, 0, 0, 0.4),
-    0 16px 38px -12px rgba(0, 0, 0, 0.42),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
-
-  --pebble-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(.2, .7, .2, 1);
 }
 
 html,
@@ -38,8 +30,9 @@ body,
   margin: 0;
   padding: 0;
   background: transparent;
-  /* Apple system font stack — picks SF Pro on macOS, Segoe UI Variable on Win11, Inter elsewhere. */
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Inter", system-ui, sans-serif;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
@@ -48,12 +41,13 @@ body,
   height: 100%;
 }
 
+/* Dev-only backdrop — paper-toned so the pebble looks at home.
+   Daemon strips this class via ?native=1. */
 body.pebble-dev-backdrop {
-  background:
-    radial-gradient(1200px 800px at 70% 15%, rgba(124, 154, 255, 0.35), transparent 60%),
-    radial-gradient(900px 600px at 5% 95%, rgba(255, 170, 140, 0.3), transparent 60%),
-    radial-gradient(700px 500px at 95% 85%, rgba(180, 140, 255, 0.28), transparent 60%),
-    linear-gradient(160deg, #4c5fc8 0%, #6c7ce4 35%, #b97ab8 75%, #d68c89 100%);
+  background: var(--paper);
+  background-image:
+    radial-gradient(800px 500px at 70% 15%, rgba(194, 58, 42, 0.04), transparent 60%),
+    radial-gradient(600px 400px at 5% 95%, rgba(26, 26, 26, 0.04), transparent 60%);
   min-height: 100vh;
 }
 
@@ -62,13 +56,12 @@ body.pebble-dev-backdrop::before {
   position: fixed;
   left: 16px;
   top: 16px;
+  font-family: var(--font-mono);
   font-size: 10.5px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.78);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  color: var(--ink-3);
   pointer-events: none;
-  font-weight: 500;
 }
 
 /* ============================================================
@@ -84,23 +77,18 @@ body.pebble-dev-backdrop::before {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.96) 0%,
-    rgba(252, 252, 253, 0.94) 100%
-  );
+  gap: 7px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
   border-radius: 999px;
-  box-shadow: var(--pebble-shadow);
-  backdrop-filter: blur(28px) saturate(180%);
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: 2px 2px 0 0 rgba(26, 26, 26, 0.10);
   transition:
-    width 380ms var(--pebble-spring),
-    height 380ms var(--pebble-spring),
-    padding 380ms var(--pebble-spring),
-    background 240ms ease,
-    box-shadow 280ms ease,
-    color 240ms ease;
+    width 280ms var(--ease-out),
+    height 280ms var(--ease-out),
+    padding 280ms var(--ease-out),
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
   will-change: transform, width;
 }
 
@@ -121,87 +109,66 @@ body.pebble-dev-backdrop::before {
   width: 4px;
   height: 4px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--ink-3);
   animation: idle-breathe 4s ease-in-out infinite;
 }
 
 @keyframes idle-breathe {
-  0%, 100% { opacity: 0.5; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.05); }
+  0%, 100% { opacity: 0.55; transform: scale(0.8); }
+  50%      { opacity: 1;    transform: scale(1.05); }
 }
 
 /* ---- LISTENING ---- */
 .pebble--listening {
-  height: 24px;
-  padding: 0 10px 0 9px;
-  gap: 6px;
-  background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
-  box-shadow: var(--pebble-shadow-listening);
+  height: 22px;
+  padding: 0 10px 0 8px;
+  border-color: var(--accent);
 }
 
 .pebble--listening .pebble-label {
-  color: var(--pebble-accent);
-  font-weight: 530;
+  color: var(--accent);
 }
 
 /* ---- THINKING (follows cursor; just dots, no label) ---- */
 .pebble--thinking {
   height: 18px;
-  padding: 0 8px;
+  padding: 0 7px;
 }
 
 /* ---- SPEAKING ---- */
 .pebble--speaking {
-  height: 24px;
-  padding: 0 10px 0 9px;
-  gap: 6px;
-  background: linear-gradient(180deg, #1c1c1e 0%, #0a0a0c 100%);
-  color: white;
-  box-shadow: var(--pebble-shadow-speaking);
+  height: 22px;
+  padding: 0 10px 0 8px;
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
 }
 .pebble--speaking .pebble-label {
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 530;
+  color: var(--paper);
 }
 
 /* ---- WORKING ---- */
 .pebble--working {
   height: 22px;
   padding: 0 10px 0 8px;
-  gap: 6px;
-  background: linear-gradient(180deg, #ffffff 0%, #fef9f1 100%);
 }
 
 .pebble--working .working-dot {
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: var(--pebble-warm);
-  box-shadow:
-    0 0 0 2.5px rgba(255, 159, 10, 0.16),
-    0 0 6px 1px rgba(255, 159, 10, 0.45);
+  background: var(--warn);
   animation: working-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes working-pulse {
-  0%, 100% { opacity: 0.85; transform: scale(0.95); }
-  50% { opacity: 1; transform: scale(1.1); }
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
 }
 
-/* ---- Locked ring ---- */
-.pebble--locked::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 999px;
-  border: 0.5px dashed rgba(0, 122, 255, 0.35);
-  pointer-events: none;
-  animation: locked-ring 2.4s ease-in-out infinite;
-}
-
-@keyframes locked-ring {
-  0%, 100% { opacity: 0.35; transform: scale(1); }
-  50% { opacity: 0.7; transform: scale(1.05); }
+/* ---- Locked ring (riso = hard offset, not pulse-glow) ---- */
+.pebble--locked {
+  box-shadow: 2px 2px 0 0 var(--accent);
 }
 
 /* ---- Glyph slot + label ---- */
@@ -212,15 +179,17 @@ body.pebble-dev-backdrop::before {
 }
 
 .pebble-label {
-  font-size: 11px;
-  font-weight: 510;
-  letter-spacing: -0.005em;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   white-space: nowrap;
-  color: var(--pebble-ink);
+  color: var(--ink-2);
 }
 
 /* ============================================================
-   Wave bars (listening + speaking)
+   Wave bars (listening + speaking) — vermilion accent
    ============================================================ */
 .wave {
   display: inline-flex;
@@ -231,25 +200,25 @@ body.pebble-dev-backdrop::before {
 .wave-bar {
   width: 2px;
   height: 3px;
-  border-radius: 1px;
-  background: var(--pebble-accent);
+  border-radius: 0;          /* riso = flat */
+  background: var(--accent);
   animation: wave-pulse 0.95s ease-in-out infinite;
   transform-origin: center;
   will-change: height;
 }
 .pebble--speaking .wave-bar {
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--paper);
 }
 @keyframes wave-pulse {
   0%, 100% { height: 3px; }
-  20% { height: 8px; }
-  40% { height: 4px; }
-  60% { height: 10px; }
-  80% { height: 5px; }
+  20%      { height: 8px; }
+  40%      { height: 4px; }
+  60%      { height: 10px; }
+  80%      { height: 5px; }
 }
 
 /* ============================================================
-   Thinking dots (typing-indicator style)
+   Thinking dots
    ============================================================ */
 .think {
   display: inline-flex;
@@ -261,17 +230,17 @@ body.pebble-dev-backdrop::before {
   width: 3px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--ink-3);
   animation: think-bounce 1.3s ease-in-out infinite;
   will-change: transform, opacity;
 }
 @keyframes think-bounce {
   0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
+  40%           { opacity: 1;    transform: translateY(-2px); }
 }
 
 /* ============================================================
-   Thread bubble — Apple-vibrant glass
+   Thread bubble — riso card
    ============================================================ */
 
 .pebble-thread {
@@ -279,66 +248,61 @@ body.pebble-dev-backdrop::before {
   z-index: 99;
   pointer-events: auto;
   width: 320px;
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(36px) saturate(180%);
-  -webkit-backdrop-filter: blur(36px) saturate(180%);
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
-  border-radius: 16px;
+  background: var(--paper);
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
   padding: 12px 14px 10px;
   transform: translate(-50%, -100%);
-  box-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.04),
-    0 6px 16px -4px rgba(0, 0, 0, 0.12),
-    0 22px 50px -10px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  animation: bubble-in 320ms var(--pebble-spring);
+  box-shadow: 4px 4px 0 0 rgba(26, 26, 26, 0.12);
+  animation: bubble-in 220ms var(--ease-out);
 }
 
 @keyframes bubble-in {
-  from { opacity: 0; transform: translate(-50%, calc(-100% + 8px)) scale(0.96); }
-  to   { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+  from { opacity: 0; transform: translate(-50%, calc(-100% + 6px)); }
+  to   { opacity: 1; transform: translate(-50%, -100%); }
 }
 
 .thread-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: rgba(0, 0, 0, 0.42);
+  letter-spacing: 0.18em;
+  color: var(--ink-3);
   margin-bottom: 8px;
-  font-weight: 600;
 }
 
 .thread-dismiss {
   background: transparent;
   border: 0;
   font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: rgba(0, 0, 0, 0.42);
+  color: var(--ink-3);
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
+  padding: 2px 4px;
 }
 .thread-dismiss:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: rgba(0, 0, 0, 0.75);
+  color: var(--ink);
 }
 
 .thread-body {
-  font-size: 13px;
-  color: rgba(0, 0, 0, 0.82);
+  font-family: var(--font-display);
+  font-size: 14px;
   line-height: 1.45;
+  color: var(--ink);
   letter-spacing: -0.005em;
 }
 
 .thread-from {
-  color: var(--pebble-accent);
-  font-weight: 590;
-  margin-right: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  margin-right: 8px;
 }
 
 .thread-actions {
@@ -348,52 +312,53 @@ body.pebble-dev-backdrop::before {
 }
 
 .thread-btn {
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 510;
-  letter-spacing: -0.005em;
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 0.5px solid rgba(0, 0, 0, 0.12);
-  background: rgba(255, 255, 255, 0.6);
-  color: var(--pebble-ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  padding: 5px 11px;
+  border-radius: 2px;
+  border: 1px solid var(--rule);
+  background: var(--paper-2);
+  color: var(--ink);
   cursor: pointer;
-  transition: background 140ms, transform 100ms, border-color 140ms;
+  transition: background 120ms, border-color 120ms;
 }
 .thread-btn:hover {
-  background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(0, 0, 0, 0.18);
+  background: var(--paper-3);
+  border-color: var(--ink-3);
 }
 .thread-btn:active {
-  transform: scale(0.97);
+  transform: translate(1px, 1px);
 }
 
 .thread-btn--primary {
-  background: var(--pebble-accent);
-  color: white;
-  border-color: var(--pebble-accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 .thread-btn--primary:hover {
-  background: #0866d6;
-  border-color: #0866d6;
+  background: #a82e20;
+  border-color: #a82e20;
 }
 
 .thread-hint {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-top: 1px solid var(--rule-soft);
+  font-family: var(--font-mono);
   font-size: 10px;
-  color: rgba(0, 0, 0, 0.45);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
 }
 .thread-hint kbd {
-  background: rgba(0, 0, 0, 0.05);
-  border: 0.5px solid rgba(0, 0, 0, 0.12);
-  border-bottom-width: 1.5px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 2px;
   padding: 1px 4px;
-  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
   font-size: 10px;
-  color: rgba(0, 0, 0, 0.6);
+  color: var(--ink-2);
   margin: 0 1px;
 }
