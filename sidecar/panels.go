@@ -33,6 +33,18 @@ type PanelSpec struct {
 	Transparent   bool        `json:"transparent"`
 	Resizable     bool        `json:"resizable"`
 	MultiInstance bool        `json:"multi_instance"`
+	// FollowCursor turns on the sidecar-side cursor-tracking goroutine
+	// that polls platformGetCursorPos() at ~60fps and moves the window
+	// to (cursor + offset). The page can pause tracking via the
+	// panel.set_follow RPC when it wants the window to stay put (e.g.
+	// while the bubble is open).
+	FollowCursor  bool        `json:"follow_cursor"`
+	// CursorOffsetX/Y is the pixel offset applied to (cursor.x, cursor.y)
+	// when computing the window's top-left position. Defaults to (24, 28)
+	// when both are zero — keeps the cursor above-left of the pebble so
+	// it never sits on top of the visible pixels.
+	CursorOffsetX int         `json:"cursor_offset_x"`
+	CursorOffsetY int         `json:"cursor_offset_y"`
 }
 
 // PanelService manages the lifecycle of native panel windows.
@@ -44,6 +56,11 @@ type PanelService interface {
 	Close(id PanelID) error
 	Focus(id PanelID) error
 	List() []PanelID
+	// SetFollow toggles the cursor-tracking goroutine for a panel that was
+	// spawned with FollowCursor=true. The page calls this to pause tracking
+	// when the bubble opens (so the window stops jittering while the user
+	// reaches for buttons) and resumes when the bubble dismisses.
+	SetFollow(id PanelID, follow bool) error
 	Stop()
 }
 

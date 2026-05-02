@@ -10,14 +10,15 @@ import (
 // It records calls, lets tests pre-seed an error, and never opens real
 // windows so the test suite has no GUI dependency.
 type fakePanelService struct {
-	mu       sync.Mutex
-	spawned  map[PanelID]PanelSpec
-	closed   []PanelID
-	focused  []PanelID
-	spawnErr error
-	closeErr error
-	focusErr error
-	nextID   int
+	mu          sync.Mutex
+	spawned     map[PanelID]PanelSpec
+	closed      []PanelID
+	focused     []PanelID
+	followCalls map[PanelID]bool
+	spawnErr    error
+	closeErr    error
+	focusErr    error
+	nextID      int
 }
 
 func newFakePanelService() *fakePanelService {
@@ -62,6 +63,19 @@ func (f *fakePanelService) Focus(id PanelID) error {
 		return ErrPanelUnknown
 	}
 	f.focused = append(f.focused, id)
+	return nil
+}
+
+func (f *fakePanelService) SetFollow(id PanelID, follow bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	if f.followCalls == nil {
+		f.followCalls = make(map[PanelID]bool)
+	}
+	f.followCalls[id] = follow
 	return nil
 }
 
@@ -208,6 +222,45 @@ func TestPanelFocusHandler_HappyPath(t *testing.T) {
 	}
 	if len(svc.focused) != 1 {
 		t.Errorf("focus not recorded: %v", svc.focused)
+	}
+}
+
+// ---------- panel.set_follow ----------
+
+func TestPanelSetFollowHandler_HappyPath(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["pebble"] = PanelSpec{ID: "pebble", URL: "http://x"}
+
+	h := makePanelSetFollowHandler(svc)
+	res, err := h(map[string]any{"id": "pebble", "follow": false})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := res.Result.(map[string]any)["id"]; got != "pebble" {
+		t.Errorf("expected id=pebble, got %v", got)
+	}
+	if v, ok := svc.followCalls["pebble"]; !ok || v != false {
+		t.Errorf("set_follow not recorded as false: %v", svc.followCalls)
+	}
+}
+
+func TestPanelSetFollowHandler_MissingFollow(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["pebble"] = PanelSpec{ID: "pebble", URL: "http://x"}
+	h := makePanelSetFollowHandler(svc)
+	_, err := h(map[string]any{"id": "pebble"})
+	if err == nil {
+		t.Fatal("expected error for missing follow param")
+	}
+}
+
+func TestPanelSetFollowHandler_NonBoolFollow(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["pebble"] = PanelSpec{ID: "pebble", URL: "http://x"}
+	h := makePanelSetFollowHandler(svc)
+	_, err := h(map[string]any{"id": "pebble", "follow": "yes"})
+	if err == nil {
+		t.Fatal("expected error for non-boolean follow")
 	}
 }
 

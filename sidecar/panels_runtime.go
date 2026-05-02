@@ -5,6 +5,7 @@ import (
 	"log"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	webview "github.com/webview/webview_go"
@@ -12,10 +13,12 @@ import (
 
 // panelImpl wraps a single webview window and the channel used to control it.
 type panelImpl struct {
-	spec PanelSpec
-	wv   webview.WebView // assigned by the runner goroutine
-	ready chan struct{}  // closed once wv is set + flags applied
-	done  chan struct{}  // closed when Run() returns
+	spec       PanelSpec
+	wv         webview.WebView // assigned by the runner goroutine
+	ready      chan struct{}   // closed once wv is set + flags applied
+	done       chan struct{}   // closed when Run() returns
+	following  atomic.Bool     // when true, cursor-tracker actively moves window
+	followStop chan struct{}   // closed by Close()/Stop() to halt the tracker
 }
 
 // panelService is the cross-platform PanelService implementation. The actual
@@ -47,9 +50,13 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		}
 	}
 	impl := &panelImpl{
-		spec:  spec,
-		ready: make(chan struct{}),
-		done:  make(chan struct{}),
+		spec:       spec,
+		ready:      make(chan struct{}),
+		done:       make(chan struct{}),
+		followStop: make(chan struct{}),
+	}
+	if spec.FollowCursor {
+		impl.following.Store(true)
 	}
 	s.reg.put(spec.ID, &panelEntry{spec: spec, handle: impl})
 	s.mu.Unlock()
@@ -64,6 +71,12 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 
 		defer s.reg.delete(spec.ID)
 		defer close(impl.done)
+		defer func() {
+			// idempotent close — guard against double-close panic if
+			// SetFollow already closed this channel before us.
+			defer func() { _ = recover() }()
+			close(impl.followStop)
+		}()
 
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
@@ -107,6 +120,42 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
 		}
 
+		// Cursor-follow goroutine — runs on a separate, non-locked OS thread.
+		// Polls platformGetCursorPos at ~60fps and moves the window to track
+		// the cursor with offset. The page can pause tracking via panel.set_follow.
+		if spec.FollowCursor {
+			ox := spec.CursorOffsetX
+			oy := spec.CursorOffsetY
+			if ox == 0 && oy == 0 {
+				ox, oy = 24, 28
+			}
+			panelHandle := handle
+			panelID := spec.ID
+			go func() {
+				ticker := time.NewTicker(16 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-impl.followStop:
+						return
+					case <-impl.done:
+						return
+					case <-ticker.C:
+						if !impl.following.Load() {
+							continue
+						}
+						x, y, err := platformGetCursorPos()
+						if err != nil {
+							log.Printf("[panels] follow(%s): cursor poll: %v", panelID, err)
+							continue
+						}
+						_ = platformMoveWindow(panelHandle, x+ox, y+oy)
+					}
+				}
+			}()
+			log.Printf("[panels] spawn(%s): cursor-follow goroutine started (offset %d,%d)", spec.ID, ox, oy)
+		}
+
 		close(impl.ready)
 		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
 		wv.Run() // blocks until Terminate() or window closed
@@ -136,6 +185,19 @@ func (s *panelService) Close(id PanelID) error {
 	if impl.wv != nil {
 		impl.wv.Terminate()
 	}
+	return nil
+}
+
+func (s *panelService) SetFollow(id PanelID, follow bool) error {
+	e, ok := s.reg.get(id)
+	if !ok {
+		return formatPanelError("set_follow", id, ErrPanelUnknown)
+	}
+	impl, ok := e.handle.(*panelImpl)
+	if !ok {
+		return formatPanelError("set_follow", id, fmt.Errorf("handle type mismatch"))
+	}
+	impl.following.Store(follow)
 	return nil
 }
 

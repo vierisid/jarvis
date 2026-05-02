@@ -53,6 +53,31 @@ func makePanelFocusHandler(svc PanelService) RPCHandler {
 	}
 }
 
+// panel.set_follow — turn the cursor-tracking goroutine on/off for a panel
+// that was spawned with FollowCursor=true. Page calls this when the bubble
+// opens (pause tracking so window stops jittering) and again on dismiss.
+// Params: { "id": "<panel-id>", "follow": true|false }
+func makePanelSetFollowHandler(svc PanelService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		id, err := requirePanelID(params)
+		if err != nil {
+			return nil, err
+		}
+		raw, ok := params["follow"]
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: follow")
+		}
+		follow, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("follow must be a boolean")
+		}
+		if err := svc.SetFollow(id, follow); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"id": string(id), "follow": follow}}, nil
+	}
+}
+
 // panel.list — return all currently-open panel ids.
 // Result: { "ids": ["a", "b", ...] }
 func makePanelListHandler(svc PanelService) RPCHandler {
