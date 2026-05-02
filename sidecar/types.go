@@ -13,6 +13,7 @@ const (
 	CapSystemInfo SidecarCapability = "system_info"
 	CapAwareness  SidecarCapability = "awareness"
 	CapOCR        SidecarCapability = "ocr"
+	CapWindows    SidecarCapability = "windows"
 )
 
 // AwarenessConfig controls screen and window observer behavior.

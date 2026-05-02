@@ -63,6 +63,12 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, o
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
 	}
 
+	if caps[CapWindows] {
+		// Panel service handlers (panel.spawn / close / focus / list) wired in W1-T4.
+		// CapWindows is registered here so the brain sees the capability available
+		// when the sidecar starts; the actual RPC methods land with T4.
+	}
+
 	// Administrative handlers — not gated by capability
 	registry["get_config"] = makeGetConfigHandler(cfg)
 	registry["update_config"] = makeUpdateConfigHandler(cfg, onReloaded)
