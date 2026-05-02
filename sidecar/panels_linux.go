@@ -61,6 +61,30 @@ static void jarvis_panel_focus(void* gtkwin_ptr) {
     if (!GTK_IS_WINDOW(w)) return;
     gtk_window_present(w);
 }
+
+// Cursor position in screen-root coords. Uses the default GdkDisplay's
+// default seat → pointing device, which works on both X11 and Wayland.
+static void jarvis_panel_cursor_pos(int* x, int* y) {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) { *x = 0; *y = 0; return; }
+    GdkSeat* seat = gdk_display_get_default_seat(display);
+    if (!seat) { *x = 0; *y = 0; return; }
+    GdkDevice* dev = gdk_seat_get_pointer(seat);
+    if (!dev) { *x = 0; *y = 0; return; }
+    int gx = 0, gy = 0;
+    gdk_device_get_position(dev, NULL, &gx, &gy);
+    *x = gx;
+    *y = gy;
+}
+
+static void jarvis_panel_move_window(void* gtkwin_ptr, int x, int y) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    gtk_window_move(w, x, y);
+    // Re-assert keep-above so the window stays on top across focus changes.
+    gtk_window_set_keep_above(w, TRUE);
+}
 */
 import "C"
 
@@ -96,5 +120,19 @@ func platformFocusWindow(handle unsafe.Pointer) error {
 		return fmt.Errorf("nil GtkWindow*")
 	}
 	C.jarvis_panel_focus(handle)
+	return nil
+}
+
+func platformGetCursorPos() (int, int, error) {
+	var x, y C.int
+	C.jarvis_panel_cursor_pos(&x, &y)
+	return int(x), int(y), nil
+}
+
+func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	C.jarvis_panel_move_window(handle, C.int(x), C.int(y))
 	return nil
 }

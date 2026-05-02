@@ -20,9 +20,21 @@ const SETTLE_FACTOR = 0.18;
 const CURSOR_OFFSET_X = 18;
 const CURSOR_OFFSET_Y = 22;
 
-// Number of bars in the waveform-style indicators.
+// In native mode the sidecar moves the entire window to follow the cursor,
+// so the pebble div itself stays put. Pinned a few px from the window's
+// top-left so the visible disc sits right next to the OS cursor tip
+// (which lives just outside the window's TL corner).
+const NATIVE_PEBBLE_X = 4;
+const NATIVE_PEBBLE_Y = 4;
+
 const WAVE_BARS = 4;
 const THINK_DOTS = 3;
+
+// True when the daemon spawned this page with ?native=1, meaning the
+// sidecar is doing native cursor-follow at the window level. The page
+// should NOT do its own cursor-follow physics in this mode.
+const IS_NATIVE = typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("native") === "1";
 
 export function Pebble() {
   const [state, setState] = useState<PebbleState>("idle");
@@ -82,6 +94,27 @@ export function Pebble() {
   }, []);
 
   useEffect(() => {
+    // Native mode: the sidecar moves the entire window every frame, so the
+    // pebble + bubble are pinned to fixed screen-relative positions inside
+    // the window. The bubble drops *below* the pebble (rather than above as
+    // in browser mode) because the window's top edge is closest to the
+    // cursor — the pebble sits there and the bubble extends downward into
+    // the window.
+    if (IS_NATIVE) {
+      if (pebbleRef.current) {
+        pebbleRef.current.style.left = `${NATIVE_PEBBLE_X}px`;
+        pebbleRef.current.style.top = `${NATIVE_PEBBLE_Y}px`;
+        // Override the centering transform — pinning to top-left.
+        pebbleRef.current.style.transform = "none";
+      }
+      if (bubbleRef.current) {
+        bubbleRef.current.style.left = `${NATIVE_PEBBLE_X - 8}px`;
+        bubbleRef.current.style.top = `${NATIVE_PEBBLE_Y + 32}px`;
+        bubbleRef.current.style.transform = "none";
+      }
+      return;
+    }
+
     let raf = 0;
     function tick() {
       const locked = LOCKED.has(stateRef.current);

@@ -68,6 +68,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["panel.close"] = makePanelCloseHandler(panels)
 		registry["panel.focus"] = makePanelFocusHandler(panels)
 		registry["panel.list"] = makePanelListHandler(panels)
+		registry["panel.set_follow"] = makePanelSetFollowHandler(panels)
 	}
 
 	// Administrative handlers — not gated by capability

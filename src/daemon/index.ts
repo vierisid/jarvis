@@ -359,17 +359,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: 'pebble',
             url: pebbleUrl,
             title: 'JARVIS',
-            // W1 final spawn: small frameless always-on-top floating window.
-            // Pebble follows cursor inside the window, bubble works on
-            // summon. Click-through + transparent (true ambient cursor
-            // companion across the whole screen) requires native cursor
-            // polling + WebView2 controller config — scoped to W2.
-            bounds: { x: 100, y: 100, w: 420, h: 160 },
+            // W2-T1: small floating pebble window that follows the cursor
+            // across the whole screen via sidecar-side native cursor polling
+            // + SetWindowPos at ~60fps. Window is small (just the pebble +
+            // bubble area); cursor is offset above-left so it never sits on
+            // the visible pixels.
+            bounds: { x: 0, y: 0, w: 360, h: 160 },
             frameless: true,
             transparent: false,
             always_on_top: true,
             click_through: false,
             resizable: false,
+            follow_cursor: true,
+            // Window sits 4 px right + 4 px down from the cursor; pebble is
+            // pinned at (4, 4) inside the window. Visible pebble disc lands
+            // ~12 px down-right of the cursor tip — close enough to feel
+            // like a companion, far enough that the cursor never overlaps.
+            cursor_offset_x: 4,
+            cursor_offset_y: 4,
           });
           console.log(`[ambient-ui] Pebble spawned on ${sidecar.id}:`, result);
         } catch (err) {

@@ -58,6 +58,7 @@ var (
 	procSetWindowLongPtrW          = user32.NewProc("SetWindowLongPtrW") // 64-bit
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
+	procGetCursorPos               = user32.NewProc("GetCursorPos")
 )
 
 func getWindowLong(hwnd uintptr, idx int32) uintptr {
@@ -134,5 +135,39 @@ func platformFocusWindow(handle unsafe.Pointer) error {
 	const swShow = 5
 	procShowWindow.Call(hwnd, swShow)
 	procSetForegroundWindow.Call(hwnd)
+	return nil
+}
+
+// POINT mirrors Win32 POINT — two LONGs (32-bit signed).
+type w32Point struct {
+	X int32
+	Y int32
+}
+
+func platformGetCursorPos() (int, int, error) {
+	var p w32Point
+	r, _, err := procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	if r == 0 {
+		return 0, 0, fmt.Errorf("GetCursorPos failed: %v", err)
+	}
+	return int(p.X), int(p.Y), nil
+}
+
+func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	// Re-assert HWND_TOPMOST on every frame so the window stays above
+	// other apps even when they activate. SWP_NOZORDER would preserve
+	// the current order, but topmost is sometimes demoted by Windows
+	// when other windows take focus — passing HWND_TOPMOST here forces
+	// the window back to the top of the topmost group every move.
+	procSetWindowPos.Call(
+		uintptr(handle),
+		hwndTopmost,
+		uintptr(int32(x)), uintptr(int32(y)),
+		0, 0,
+		swpNoSize|swpNoActivate,
+	)
 	return nil
 }
