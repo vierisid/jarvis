@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, onReloaded func()) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, onReloaded func()) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -63,10 +63,11 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, o
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
 	}
 
-	if caps[CapWindows] {
-		// Panel service handlers (panel.spawn / close / focus / list) wired in W1-T4.
-		// CapWindows is registered here so the brain sees the capability available
-		// when the sidecar starts; the actual RPC methods land with T4.
+	if caps[CapWindows] && panels != nil {
+		registry["panel.spawn"] = makePanelSpawnHandler(panels)
+		registry["panel.close"] = makePanelCloseHandler(panels)
+		registry["panel.focus"] = makePanelFocusHandler(panels)
+		registry["panel.list"] = makePanelListHandler(panels)
 	}
 
 	// Administrative handlers — not gated by capability

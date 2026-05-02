@@ -1,0 +1,243 @@
+package main
+
+import (
+	"errors"
+	"sync"
+	"testing"
+)
+
+// fakePanelService is a stand-in for the real webview-backed service.
+// It records calls, lets tests pre-seed an error, and never opens real
+// windows so the test suite has no GUI dependency.
+type fakePanelService struct {
+	mu       sync.Mutex
+	spawned  map[PanelID]PanelSpec
+	closed   []PanelID
+	focused  []PanelID
+	spawnErr error
+	closeErr error
+	focusErr error
+	nextID   int
+}
+
+func newFakePanelService() *fakePanelService {
+	return &fakePanelService{spawned: make(map[PanelID]PanelSpec)}
+}
+
+func (f *fakePanelService) Spawn(spec PanelSpec) (PanelID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.spawnErr != nil {
+		return "", f.spawnErr
+	}
+	if spec.ID == "" {
+		f.nextID++
+		spec.ID = PanelID("test-" + itoa(f.nextID))
+	}
+	f.spawned[spec.ID] = spec
+	return spec.ID, nil
+}
+
+func (f *fakePanelService) Close(id PanelID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	delete(f.spawned, id)
+	f.closed = append(f.closed, id)
+	return nil
+}
+
+func (f *fakePanelService) Focus(id PanelID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.focusErr != nil {
+		return f.focusErr
+	}
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	f.focused = append(f.focused, id)
+	return nil
+}
+
+func (f *fakePanelService) List() []PanelID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]PanelID, 0, len(f.spawned))
+	for id := range f.spawned {
+		out = append(out, id)
+	}
+	return out
+}
+
+func (f *fakePanelService) Stop() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.spawned = map[PanelID]PanelSpec{}
+}
+
+// tiny itoa to avoid pulling strconv in this test file
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := []byte{}
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	return string(digits)
+}
+
+// ---------- panel.spawn ----------
+
+func TestPanelSpawnHandler_HappyPath(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelSpawnHandler(svc)
+
+	res, err := h(map[string]any{
+		"id":            "pebble",
+		"url":           "http://localhost:3142/pebble.html",
+		"title":         "JARVIS",
+		"frameless":     true,
+		"transparent":   true,
+		"always_on_top": true,
+		"click_through": true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := res.Result.(map[string]any)["id"].(string); got != "pebble" {
+		t.Errorf("expected id=pebble, got %q", got)
+	}
+	spec, ok := svc.spawned["pebble"]
+	if !ok {
+		t.Fatalf("spec not recorded in fake service")
+	}
+	if !spec.Frameless || !spec.Transparent || !spec.AlwaysOnTop || !spec.ClickThrough {
+		t.Errorf("flags lost in decode: %+v", spec)
+	}
+}
+
+func TestPanelSpawnHandler_MissingURL(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelSpawnHandler(svc)
+
+	_, err := h(map[string]any{"id": "x"})
+	if err == nil {
+		t.Fatal("expected error for missing url, got nil")
+	}
+}
+
+func TestPanelSpawnHandler_MissingParams(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelSpawnHandler(svc)
+
+	_, err := h(nil)
+	if err == nil {
+		t.Fatal("expected error for nil params, got nil")
+	}
+}
+
+func TestPanelSpawnHandler_ServiceError(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawnErr = errors.New("boom")
+	h := makePanelSpawnHandler(svc)
+
+	_, err := h(map[string]any{"url": "http://x"})
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("expected service error, got %v", err)
+	}
+}
+
+// ---------- panel.close ----------
+
+func TestPanelCloseHandler_HappyPath(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["abc"] = PanelSpec{ID: "abc", URL: "http://x"}
+
+	h := makePanelCloseHandler(svc)
+	res, err := h(map[string]any{"id": "abc"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := res.Result.(map[string]any)["closed"]; got != "abc" {
+		t.Errorf("expected closed=abc, got %v", got)
+	}
+	if len(svc.closed) != 1 {
+		t.Errorf("close not recorded: %v", svc.closed)
+	}
+}
+
+func TestPanelCloseHandler_UnknownID(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelCloseHandler(svc)
+	_, err := h(map[string]any{"id": "ghost"})
+	if err == nil {
+		t.Fatal("expected error for unknown id")
+	}
+}
+
+func TestPanelCloseHandler_MissingID(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelCloseHandler(svc)
+	_, err := h(map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing id")
+	}
+}
+
+// ---------- panel.focus ----------
+
+func TestPanelFocusHandler_HappyPath(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["a"] = PanelSpec{ID: "a", URL: "http://x"}
+
+	h := makePanelFocusHandler(svc)
+	res, err := h(map[string]any{"id": "a"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := res.Result.(map[string]any)["focused"]; got != "a" {
+		t.Errorf("expected focused=a, got %v", got)
+	}
+	if len(svc.focused) != 1 {
+		t.Errorf("focus not recorded: %v", svc.focused)
+	}
+}
+
+// ---------- panel.list ----------
+
+func TestPanelListHandler_Empty(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelListHandler(svc)
+	res, err := h(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := res.Result.(map[string]any)["ids"].([]string)
+	if len(ids) != 0 {
+		t.Errorf("expected empty, got %v", ids)
+	}
+}
+
+func TestPanelListHandler_WithPanels(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["a"] = PanelSpec{ID: "a", URL: "http://x"}
+	svc.spawned["b"] = PanelSpec{ID: "b", URL: "http://x"}
+
+	h := makePanelListHandler(svc)
+	res, err := h(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := res.Result.(map[string]any)["ids"].([]string)
+	if len(ids) != 2 {
+		t.Errorf("expected 2 ids, got %d: %v", len(ids), ids)
+	}
+}

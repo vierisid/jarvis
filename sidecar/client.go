@@ -37,6 +37,8 @@ type SidecarClient struct {
 	obsCtx    context.Context    // parent context (from connectAndServe's ctx)
 	sendFn    EventSender        // event sender for observers
 	mu        sync.Mutex         // protects handlers/obsCancel during reload
+
+	panels PanelService // native window service (lazily set when CapWindows enabled)
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -54,8 +56,21 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		reconnectDelay: minReconnectDelay,
 	}
 	client.runPreflight()
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.reloadConfig)
+	client.panels = maybeNewPanelService(client.availableCaps)
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.reloadConfig)
 	return client, nil
+}
+
+// maybeNewPanelService returns a PanelService if CapWindows is enabled,
+// otherwise nil. Handlers gate on nil so the rest of the system still works
+// when panels are disabled.
+func maybeNewPanelService(caps []SidecarCapability) PanelService {
+	for _, c := range caps {
+		if c == CapWindows {
+			return NewPanelService()
+		}
+	}
+	return nil
 }
 
 func normalizeBrainOverride(raw string) string {
@@ -120,8 +135,23 @@ func (c *SidecarClient) reloadConfig() {
 	// Re-run preflight checks (capabilities or tools may have changed)
 	c.runPreflight()
 
+	// (Re-)init panel service if CapWindows toggled on; tear it down if off.
+	hasWindows := false
+	for _, cap := range c.availableCaps {
+		if cap == CapWindows {
+			hasWindows = true
+			break
+		}
+	}
+	if hasWindows && c.panels == nil {
+		c.panels = NewPanelService()
+	} else if !hasWindows && c.panels != nil {
+		c.panels.Stop()
+		c.panels = nil
+	}
+
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.reloadConfig)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
