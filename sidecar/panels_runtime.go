@@ -65,15 +65,17 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		defer s.reg.delete(spec.ID)
 		defer close(impl.done)
 
+		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
 		wv := webview.New(debug)
 		if wv == nil {
-			log.Printf("[panels] webview.New returned nil for %s", spec.ID)
+			log.Printf("[panels] spawn(%s): webview.New returned nil — WebView2 runtime missing?", spec.ID)
 			close(impl.ready)
 			return
 		}
 		defer wv.Destroy()
 		impl.wv = wv
+		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 
 		if spec.Title != "" {
 			wv.SetTitle(spec.Title)
@@ -91,23 +93,24 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				hint = webview.HintFixed
 			}
 			wv.SetSize(w, h, hint)
+			log.Printf("[panels] spawn(%s): size set to %dx%d", spec.ID, w, h)
 		}
 
-		// Apply native flags after the window exists. Window() returns the
-		// platform-native handle (HWND / NSWindow* / GtkWindow*) as an
-		// unsafe.Pointer; we keep it as-is through the chain so go vet's
-		// unsafeptr check doesn't flag a uintptr→Pointer round-trip.
 		handle := wv.Window()
+		log.Printf("[panels] spawn(%s): native handle=%v", spec.ID, handle)
 		if err := applyPlatformFlags(handle, spec); err != nil {
 			log.Printf("[panels] applyPlatformFlags(%s): %v", spec.ID, err)
 		}
 
 		if spec.URL != "" {
 			wv.Navigate(spec.URL)
+			log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
 		}
 
 		close(impl.ready)
+		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
 		wv.Run() // blocks until Terminate() or window closed
+		log.Printf("[panels] spawn(%s): event loop exited", spec.ID)
 	}()
 
 	// Wait briefly for the window to become ready so the caller knows it

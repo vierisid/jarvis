@@ -96,7 +96,15 @@ export class SidecarManager implements Service {
   private sidecarConnections = new Map<string, SidecarConnection>();
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
+  // Two parallel notify APIs:
+  //   • onConnect(id) — main's lightweight handler (just an id, fires on
+  //     each WS reconnect for routing-table refreshes)
+  //   • onSidecarConnected(sidecar) / onSidecarDisconnected(id) — our
+  //     ambient-UI pebble-spawn handler (needs the full ConnectedSidecar
+  //     to read capabilities before deciding to spawn)
   private connectListeners = new Set<(sidecarId: string) => void>();
+  private connectedListeners = new Set<(sidecar: ConnectedSidecar) => void>();
+  private disconnectedListeners = new Set<(sidecarId: string) => void>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -402,9 +410,18 @@ export class SidecarManager implements Service {
       [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.id],
     );
     console.log(`[SidecarManager] Sidecar connected: ${sidecar.name} (${sidecar.id})`);
+    // Fire both listener flavours — main uses onConnect(id) for routing,
+    // our ambient block uses onSidecarConnected(sidecar) for the pebble spawn.
     for (const listener of this.connectListeners) {
       try { listener(sidecar.id); } catch (err) {
         console.error('[SidecarManager] connect listener error:', err instanceof Error ? err.message : err);
+      }
+    }
+    for (const listener of this.connectedListeners) {
+      try {
+        listener(sidecar);
+      } catch (err) {
+        console.warn(`[SidecarManager] connected listener threw:`, err);
       }
     }
   }
@@ -415,7 +432,24 @@ export class SidecarManager implements Service {
     this.connected.delete(id);
     if (sc) {
       console.log(`[SidecarManager] Sidecar disconnected: ${sc.name} (${id})`);
+      for (const listener of this.disconnectedListeners) {
+        try {
+          listener(id);
+        } catch (err) {
+          console.warn(`[SidecarManager] disconnected listener threw:`, err);
+        }
+      }
     }
+  }
+
+  /** Register a callback fired after a sidecar registers (post-handshake). */
+  onSidecarConnected(listener: (sidecar: ConnectedSidecar) => void): void {
+    this.connectedListeners.add(listener);
+  }
+
+  /** Register a callback fired when a sidecar disconnects. */
+  onSidecarDisconnected(listener: (sidecarId: string) => void): void {
+    this.disconnectedListeners.add(listener);
   }
 
   /** Update capabilities for a connected sidecar (called on config reload) */

@@ -29,7 +29,11 @@ body,
 #pebble-root {
   margin: 0;
   padding: 0;
-  background: transparent;
+  /* Paper-toned default. WebView2 has no API for true transparent
+     background via webview_go yet; until W2 ships native window-shape
+     control, an opaque paper-coloured window is the closest match to the
+     riso aesthetic and shows the pebble cleanly. */
+  background: var(--paper);
   font-family: var(--font-sans);
   color: var(--ink);
   font-feature-settings: "ss01", "cv11";

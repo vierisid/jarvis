@@ -122,6 +122,9 @@ func (c *SidecarClient) Start(ctx context.Context) {
 
 func (c *SidecarClient) Stop() {
 	c.stopped = true
+	if c.panels != nil {
+		c.panels.Stop()
+	}
 	if c.conn != nil {
 		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
 		c.conn = nil

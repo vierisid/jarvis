@@ -25,7 +25,7 @@ func homeDir() string {
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
-			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR,
+			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR, CapWindows,
 		},
 		Terminal: TerminalConfig{
 			BlockedCommands: []string{},
@@ -76,6 +76,20 @@ func LoadConfig() (*SidecarConfig, error) {
 	}
 	if len(cfg.Capabilities) == 0 {
 		cfg.Capabilities = defaultConfig().Capabilities
+	} else {
+		// Merge in any default capabilities that aren't already present in the
+		// saved config. This makes new capabilities (e.g. CapWindows added in
+		// Phase 2) auto-enable on existing installs without requiring users to
+		// hand-edit ~/.jarvis-sidecar/config.yaml.
+		have := make(map[SidecarCapability]bool, len(cfg.Capabilities))
+		for _, c := range cfg.Capabilities {
+			have[c] = true
+		}
+		for _, c := range defaultConfig().Capabilities {
+			if !have[c] {
+				cfg.Capabilities = append(cfg.Capabilities, c)
+			}
+		}
 	}
 
 	// Awareness defaults

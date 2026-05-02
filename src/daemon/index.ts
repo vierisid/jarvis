@@ -342,6 +342,47 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
 
+    // 6e. Ambient UX (Phase 2): if JARVIS_AMBIENT_UI=1, spawn the pebble
+    // panel on any connected sidecar that has the windows capability.
+    if (process.env.JARVIS_AMBIENT_UI === '1') {
+      const pebbleUrl = `http://localhost:${config.port}/pebble.html?native=1`;
+      const spawnedOn = new Set<string>();
+      sidecarManager.onSidecarConnected(async (sidecar) => {
+        if (!sidecar.capabilities.includes('windows')) {
+          console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'windows' capability — skipping pebble spawn`);
+          return;
+        }
+        if (spawnedOn.has(sidecar.id)) return;
+        spawnedOn.add(sidecar.id);
+        try {
+          const result = await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
+            id: 'pebble',
+            url: pebbleUrl,
+            title: 'JARVIS',
+            // W1 final spawn: small frameless always-on-top floating window.
+            // Pebble follows cursor inside the window, bubble works on
+            // summon. Click-through + transparent (true ambient cursor
+            // companion across the whole screen) requires native cursor
+            // polling + WebView2 controller config — scoped to W2.
+            bounds: { x: 100, y: 100, w: 420, h: 160 },
+            frameless: true,
+            transparent: false,
+            always_on_top: true,
+            click_through: false,
+            resizable: false,
+          });
+          console.log(`[ambient-ui] Pebble spawned on ${sidecar.id}:`, result);
+        } catch (err) {
+          spawnedOn.delete(sidecar.id);
+          console.warn(`[ambient-ui] Failed to spawn pebble on ${sidecar.id}:`, err);
+        }
+      });
+      sidecarManager.onSidecarDisconnected((sidecarId) => {
+        spawnedOn.delete(sidecarId);
+      });
+      console.log(`[ambient-ui] Enabled — pebble will spawn on sidecars with the 'windows' capability (URL: ${pebbleUrl})`);
+    }
+
     // 7. Register services in startup order
     //    Agent first (needs DB), Observers second, Channels third, Sidecar, WebSocket last (needs Agent)
     registry.register(agentService);
