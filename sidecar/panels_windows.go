@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"syscall"
 	"unsafe"
 )
 
@@ -50,17 +49,15 @@ const (
 // HWND_TOPMOST is officially -1, encoded as the largest uintptr.
 const hwndTopmost = ^uintptr(0)
 
+// user32, procSetForegroundWindow, procShowWindow are already declared in
+// uia_windows.go — reuse those. The procs below are panel-service specific.
 var (
-	user32 = syscall.NewLazyDLL("user32.dll")
-
 	procGetWindowLongW             = user32.NewProc("GetWindowLongW")
 	procSetWindowLongW             = user32.NewProc("SetWindowLongW")
 	procGetWindowLongPtrW          = user32.NewProc("GetWindowLongPtrW") // 64-bit
 	procSetWindowLongPtrW          = user32.NewProc("SetWindowLongPtrW") // 64-bit
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
-	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
-	procShowWindow                 = user32.NewProc("ShowWindow")
 )
 
 func getWindowLong(hwnd uintptr, idx int32) uintptr {
