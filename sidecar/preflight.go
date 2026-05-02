@@ -30,6 +30,11 @@ func CheckCapabilities(cfg *SidecarConfig) (available []SidecarCapability, unava
 			reason = checkBrowser(cfg)
 		case CapDesktop:
 			reason = checkDesktop()
+		case CapWindows:
+			// Native panel windows (webview-backed). The runtime check is
+			// effectively "do we have a webview lib at runtime?" which we
+			// can't probe statically without trying to spawn a window.
+			// Spawning fails gracefully via the RPC layer, so accept here.
 		}
 		if reason != "" {
 			unavailable = append(unavailable, UnavailableCapability{Name: cap, Reason: reason})

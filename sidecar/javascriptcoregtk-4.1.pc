@@ -1,0 +1,1 @@
+/usr/lib/x86_64-linux-gnu/pkgconfig/javascriptcoregtk-4.1.pc
