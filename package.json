@@ -36,7 +36,7 @@
     "dev": "bun --hot run src/daemon/index.ts",
     "copy:models": "mkdir -p ui/public/openwakeword/models ui/public/ort && cp node_modules/openwakeword-wasm-browser/models/melspectrogram.onnx node_modules/openwakeword-wasm-browser/models/embedding_model.onnx node_modules/openwakeword-wasm-browser/models/silero_vad.onnx node_modules/openwakeword-wasm-browser/models/hey_jarvis_v0.1.onnx ui/public/openwakeword/models/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs ui/public/ort/",
     "prebuild:ui": "bun run copy:models",
-    "build:ui": "bun build ui/index.html --outdir ui/dist",
+    "build:ui": "bun build ui/index.html ui/pebble.html --outdir ui/dist",
     "test": "bun test",
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
     "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
