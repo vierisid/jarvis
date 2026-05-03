@@ -45,6 +45,14 @@ type PanelSpec struct {
 	// it never sits on top of the visible pixels.
 	CursorOffsetX int         `json:"cursor_offset_x"`
 	CursorOffsetY int         `json:"cursor_offset_y"`
+	// SummonHotkey, if non-empty, registers a global OS hotkey that
+	// toggles cursor-follow on this panel and dispatches a JS callback
+	// in the page (`window.__pebble_summon` / `window.__pebble_dismiss`)
+	// to set the visual state. Format: "ctrl+space", "alt+j", etc.
+	// Currently only "ctrl+space" is supported (Win11). Returns an error
+	// silently logged on platforms where global hotkeys aren't wired yet
+	// (macOS / Linux); the panel still spawns and follows cursor.
+	SummonHotkey string `json:"summon_hotkey"`
 }
 
 // PanelService manages the lifecycle of native panel windows.

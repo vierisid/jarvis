@@ -58,6 +58,23 @@ export function Pebble() {
     }
   }, [state]);
 
+  // Expose summon/dismiss globals so the sidecar (via webview Eval) can
+  // drive the pebble's state from a global hotkey or other native trigger.
+  // Only exposed in native mode — browser dev mode uses the in-page chord.
+  useEffect(() => {
+    if (!IS_NATIVE) return;
+    (window as unknown as Record<string, unknown>).__pebble_summon = () => {
+      setState("listening");
+    };
+    (window as unknown as Record<string, unknown>).__pebble_dismiss = () => {
+      setState("idle");
+    };
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__pebble_summon;
+      delete (window as unknown as Record<string, unknown>).__pebble_dismiss;
+    };
+  }, []);
+
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
       tx.current = e.clientX;
