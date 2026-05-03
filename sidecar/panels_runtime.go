@@ -19,6 +19,7 @@ type panelImpl struct {
 	done       chan struct{}   // closed when Run() returns
 	following  atomic.Bool     // when true, cursor-tracker actively moves window
 	followStop chan struct{}   // closed by Close()/Stop() to halt the tracker
+	hotkeyStop func()          // unregister + stop the hotkey listener
 }
 
 // panelService is the cross-platform PanelService implementation. The actual
@@ -77,6 +78,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			defer func() { _ = recover() }()
 			close(impl.followStop)
 		}()
+		defer func() {
+			if impl.hotkeyStop != nil {
+				impl.hotkeyStop()
+			}
+		}()
 
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
@@ -118,6 +124,38 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		if spec.URL != "" {
 			wv.Navigate(spec.URL)
 			log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
+		}
+
+		// Global summon hotkey: toggles cursor-follow and dispatches a JS
+		// callback in the page so the user can summon/dismiss from any app.
+		if spec.SummonHotkey != "" {
+			panelID := spec.ID
+			onFire := func() {
+				e, ok := s.reg.get(panelID)
+				if !ok {
+					return
+				}
+				p, ok := e.handle.(*panelImpl)
+				if !ok || p.wv == nil {
+					return
+				}
+				wasFollowing := p.following.Load()
+				p.following.Store(!wasFollowing)
+				p.wv.Dispatch(func() {
+					if wasFollowing {
+						p.wv.Eval("if (window.__pebble_summon) window.__pebble_summon();")
+					} else {
+						p.wv.Eval("if (window.__pebble_dismiss) window.__pebble_dismiss();")
+					}
+				})
+			}
+			stop, err := startHotkeyListener(spec.SummonHotkey, onFire)
+			if err != nil {
+				log.Printf("[panels] spawn(%s): hotkey '%s' not registered: %v", spec.ID, spec.SummonHotkey, err)
+			} else {
+				impl.hotkeyStop = stop
+				log.Printf("[panels] spawn(%s): summon hotkey '%s' registered", spec.ID, spec.SummonHotkey)
+			}
 		}
 
 		// Cursor-follow goroutine — runs on a separate, non-locked OS thread.

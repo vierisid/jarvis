@@ -377,6 +377,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // like a companion, far enough that the cursor never overlaps.
             cursor_offset_x: 4,
             cursor_offset_y: 4,
+            // Global hotkey: Ctrl+Space toggles summon/dismiss. On Windows
+            // this freezes the cursor-follow + transitions the pebble into
+            // listening (showing the bubble); pressing again returns to
+            // idle and resumes follow. Mac/Linux are stubbed for now.
+            summon_hotkey: 'ctrl+space',
           });
           console.log(`[ambient-ui] Pebble spawned on ${sidecar.id}:`, result);
         } catch (err) {
