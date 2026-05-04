@@ -153,6 +153,11 @@ type pebbleServiceWindows struct {
 	// hotkeyStop is the cleanup function returned by startHotkeyListener.
 	// Called when the pebble is closed.
 	hotkeyStop func()
+
+	// summonCallback is invoked each time the user fires the summon
+	// hotkey. Set via OnSummon(); the daemon drives state transitions
+	// from there.
+	summonCallback func()
 }
 
 // NewPebbleService returns the Windows-native pebble service.
@@ -188,10 +193,11 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 	go s.run()
 	log.Printf("[pebble] spawned (offset %d,%d, hotkey=%q)", s.spec.CursorOffsetX, s.spec.CursorOffsetY, s.spec.SummonHotkey)
 
-	// Register the global summon hotkey — toggles idle ↔ listening.
+	// Register the global summon hotkey — fires the user-supplied callback
+	// (set via OnSummon). The daemon decides what to do next.
 	if s.spec.SummonHotkey != "" {
 		stop, err := startHotkeyListener(s.spec.SummonHotkey, func() {
-			s.toggleSummon()
+			s.onSummonHotkey()
 		})
 		if err != nil {
 			log.Printf("[pebble] hotkey '%s' not registered: %v", s.spec.SummonHotkey, err)
@@ -203,16 +209,19 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 	return nil
 }
 
-// toggleSummon flips between idle and listening. Future states (thinking,
-// speaking, working) are driven from the daemon via SetState — the local
-// hotkey is just a quick "summon / dismiss" affordance.
-func (s *pebbleServiceWindows) toggleSummon() {
-	current, _ := s.state.Load().(PebbleState)
-	if current == PebbleListening || current == PebbleSpeaking {
-		s.state.Store(PebbleIdle)
-	} else {
-		s.state.Store(PebbleListening)
+// onSummonHotkey fires the user-supplied summon callback. The pebble is
+// purely visual now — state changes flow exclusively from the daemon via
+// SetState() so the brain stays the source of truth (wake-word, LLM
+// lifecycle, manual hotkey all funnel through the same path).
+func (s *pebbleServiceWindows) onSummonHotkey() {
+	cb := s.summonCallback
+	if cb != nil {
+		go cb()
 	}
+}
+
+func (s *pebbleServiceWindows) OnSummon(callback func()) {
+	s.summonCallback = callback
 }
 
 func (s *pebbleServiceWindows) SetState(state PebbleState) error {
