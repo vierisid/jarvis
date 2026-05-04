@@ -38,7 +38,8 @@ type SidecarClient struct {
 	sendFn    EventSender        // event sender for observers
 	mu        sync.Mutex         // protects handlers/obsCancel during reload
 
-	panels PanelService // native window service (lazily set when CapWindows enabled)
+	panels PanelService  // native window service (lazily set when CapWindows enabled)
+	pebble PebbleService // native pebble overlay (lazily set when CapPebble enabled)
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -57,7 +58,8 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	}
 	client.runPreflight()
 	client.panels = maybeNewPanelService(client.availableCaps)
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.reloadConfig)
+	client.pebble = maybeNewPebbleService(client.availableCaps)
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.reloadConfig)
 	return client, nil
 }
 
@@ -68,6 +70,18 @@ func maybeNewPanelService(caps []SidecarCapability) PanelService {
 	for _, c := range caps {
 		if c == CapWindows {
 			return NewPanelService()
+		}
+	}
+	return nil
+}
+
+// maybeNewPebbleService mirrors maybeNewPanelService for the native pebble
+// overlay. Returns nil if CapPebble isn't enabled so the rest of the
+// sidecar still functions.
+func maybeNewPebbleService(caps []SidecarCapability) PebbleService {
+	for _, c := range caps {
+		if c == CapPebble {
+			return NewPebbleService()
 		}
 	}
 	return nil
@@ -125,6 +139,9 @@ func (c *SidecarClient) Stop() {
 	if c.panels != nil {
 		c.panels.Stop()
 	}
+	if c.pebble != nil {
+		_ = c.pebble.Close()
+	}
 	if c.conn != nil {
 		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
 		c.conn = nil
@@ -153,8 +170,22 @@ func (c *SidecarClient) reloadConfig() {
 		c.panels = nil
 	}
 
+	hasPebble := false
+	for _, cap := range c.availableCaps {
+		if cap == CapPebble {
+			hasPebble = true
+			break
+		}
+	}
+	if hasPebble && c.pebble == nil {
+		c.pebble = NewPebbleService()
+	} else if !hasPebble && c.pebble != nil {
+		_ = c.pebble.Close()
+		c.pebble = nil
+	}
+
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.reloadConfig)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {

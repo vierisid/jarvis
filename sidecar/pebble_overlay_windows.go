@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,9 @@ import (
 	"time"
 	"unsafe"
 )
+
+// alias so the inline math is readable
+var sqrt = math.Sqrt
 
 // ─────────────────────────── Win32 syscalls ────────────────────────────────
 
@@ -128,13 +132,18 @@ type pblBitmapInfo struct {
 // ─────────────────────────── Service ────────────────────────────────────────
 
 type pebbleServiceWindows struct {
-	mu       sync.Mutex
-	state    atomic.Value // PebbleState
-	spec     PebbleSpec
-	hwnd     uintptr
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	spawned  atomic.Bool
+	mu      sync.Mutex
+	state   atomic.Value // PebbleState
+	spec    PebbleSpec
+	hwnd    uintptr
+	stopCh  chan struct{}
+	doneCh  chan struct{}
+	spawned atomic.Bool
+
+	// Eased rendered position — matches the mock's 0.18 follow factor.
+	// `current` chases `target = cursor + offset` each frame.
+	curX float64
+	curY float64
 }
 
 // NewPebbleService returns the Windows-native pebble service.
@@ -151,8 +160,17 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 	s.mu.Lock()
 	s.spec = spec
 	if s.spec.CursorOffsetX == 0 && s.spec.CursorOffsetY == 0 {
-		s.spec.CursorOffsetX = 14
-		s.spec.CursorOffsetY = 16
+		// Comfortable companion distance — far enough that the cursor
+		// never sits on the visible pebble disc (which is ~22 px wide
+		// in the placeholder). Matches the riso mock spacing.
+		s.spec.CursorOffsetX = 28
+		s.spec.CursorOffsetY = 32
+	}
+	// Seed the eased position at cursor + offset so the pebble doesn't
+	// fly across the screen on first frame.
+	if cx, cy, err := platformGetCursorPos(); err == nil {
+		s.curX = float64(cx + s.spec.CursorOffsetX)
+		s.curY = float64(cy + s.spec.CursorOffsetY)
 	}
 	s.stopCh = make(chan struct{})
 	s.doneCh = make(chan struct{})
@@ -324,19 +342,27 @@ func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 // paint renders the current state into a 32-bit pre-multiplied ARGB DIB and
 // hands it to UpdateLayeredWindow. UpdateLayeredWindow ALSO controls the
-// window's screen position — we pass cursor + offset.
+// window's screen position — we pass the eased pebble position.
 //
-// In this skeleton we draw a single solid disc using GDI BitBlt of a
-// pre-filled buffer. Real GDI+ shape rendering (rounded pill, hairline
-// border, shadow, state glyphs) lands in the next iteration once the
-// transparency + topmost + cursor-follow are confirmed working.
+// Eased physics: each frame, curX/curY interpolate toward (cursor + offset)
+// at factor 0.18 — matches the mock's "lagging companion" feel.
+//
+// Skeleton draw: anti-aliased paper-tone disc with a vermilion centre dot.
+// Full riso rendering (rounded pill, hairline border, hard offset shadow,
+// state-specific glyphs) lands in the next pass.
 func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	cx, cy, err := platformGetCursorPos()
 	if err != nil {
 		return err
 	}
-	winX := int32(cx + s.spec.CursorOffsetX - pebbleWindowSizePx/2)
-	winY := int32(cy + s.spec.CursorOffsetY - pebbleWindowSizePx/2)
+	const followFactor = 0.18
+	tgtX := float64(cx + s.spec.CursorOffsetX)
+	tgtY := float64(cy + s.spec.CursorOffsetY)
+	s.curX += (tgtX - s.curX) * followFactor
+	s.curY += (tgtY - s.curY) * followFactor
+
+	winX := int32(s.curX - pebbleWindowSizePx/2)
+	winY := int32(s.curY - pebbleWindowSizePx/2)
 
 	// Create memory DC + 32-bit DIB
 	screenDC, _, _ := procGetDC.Call(0)
@@ -369,28 +395,57 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	procSelectObject.Call(memDC, dib)
 
 	// Fill the pixel buffer manually — premultiplied ARGB, top-down.
-	// SKELETON: solid 18×18 paper-tone disc with vermilion centre dot at
-	// the window's centre. All other pixels alpha=0 (true transparent).
+	// SKELETON: ~22 px paper-tone disc with vermilion centre dot, both
+	// with 1-px anti-aliased edges (alpha gradient where the floating-
+	// point distance crosses the radius). Everywhere else stays alpha=0.
 	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowSizePx*pebbleWindowSizePx)
 	for i := range pixels {
 		pixels[i] = 0
 	}
-	cxs := int32(pebbleWindowSizePx / 2)
-	cys := int32(pebbleWindowSizePx / 2)
-	const discR = 14    // outer radius (paper pill)
-	const dotR = 3      // inner indicator dot
-	for py := int32(0); py < pebbleWindowSizePx; py++ {
-		for px := int32(0); px < pebbleWindowSizePx; px++ {
-			dx := px - cxs
-			dy := py - cys
-			d2 := dx*dx + dy*dy
-			if d2 <= dotR*dotR {
-				// Vermilion-ish dot, fully opaque, premultiplied
-				// 0xAARRGGBB — premultiplied means RGB *= A/255
-				pixels[py*pebbleWindowSizePx+px] = 0xFF_C2_3A_2A
-			} else if d2 <= discR*discR {
-				// Paper #F5F2EB
-				pixels[py*pebbleWindowSizePx+px] = 0xFF_F5_F2_EB
+	cxs := float64(pebbleWindowSizePx / 2)
+	cys := float64(pebbleWindowSizePx / 2)
+	const discR = 7.0 // outer radius (~14 px diameter — small companion)
+	const dotR = 1.8  // inner indicator dot
+
+	// Premultiplied colour helper: alpha 0..255, RGB scaled by alpha/255.
+	premul := func(a uint8, r, g, b uint8) uint32 {
+		ar := uint32(uint16(r) * uint16(a) / 255)
+		ag := uint32(uint16(g) * uint16(a) / 255)
+		ab := uint32(uint16(b) * uint16(a) / 255)
+		return uint32(a)<<24 | ar<<16 | ag<<8 | ab
+	}
+
+	// Smoothstep-ish edge: full alpha until r-0.5, fades to 0 over 1 px.
+	edge := func(d, r float64) float64 {
+		if d <= r-0.5 {
+			return 1
+		}
+		if d >= r+0.5 {
+			return 0
+		}
+		return r + 0.5 - d
+	}
+
+	// Paper-tone #F5F2EB and vermilion #C23A2A — riso palette.
+	const paperR, paperG, paperB uint8 = 0xF5, 0xF2, 0xEB
+	const dotRr, dotGg, dotBb uint8 = 0xC2, 0x3A, 0x2A
+
+	for py := 0; py < pebbleWindowSizePx; py++ {
+		for px := 0; px < pebbleWindowSizePx; px++ {
+			dx := float64(px) + 0.5 - cxs
+			dy := float64(py) + 0.5 - cys
+			d := sqrt(dx*dx + dy*dy)
+
+			dotA := edge(d, dotR)
+			discA := edge(d, discR)
+
+			if dotA > 0 {
+				// Dot pixel — blend dot over disc by treating dot as fully
+				// opaque (alpha=dotA) and ignoring disc beneath since dot
+				// covers it.
+				pixels[py*pebbleWindowSizePx+px] = premul(uint8(dotA*255), dotRr, dotGg, dotBb)
+			} else if discA > 0 {
+				pixels[py*pebbleWindowSizePx+px] = premul(uint8(discA*255), paperR, paperG, paperB)
 			}
 		}
 	}

@@ -437,14 +437,38 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
 
-    // 6e. Ambient UX (Phase 2): the WebView2-based pebble path was abandoned
-    // (transparency unattainable through webview_go on Windows). Native
-    // GDI+/UpdateLayeredWindow pebble lands in W2-T10/T13 — when ready, this
-    // hook will dispatch `pebble.spawn` (a new sidecar RPC backed by the
-    // native overlay) instead of `panel.spawn`. For now we just log so users
-    // running with the env var know it's intentionally a no-op.
+    // 6e. Ambient UX (Phase 2): native pebble overlay (GDI+/Cocoa/Cairo,
+    // per-platform). On sidecar connect, if the sidecar advertises the
+    // `pebble` capability, dispatch `pebble.spawn`. On disconnect or daemon
+    // shutdown, the sidecar's own Stop() closes the overlay cleanly.
     if (process.env.JARVIS_AMBIENT_UI === '1') {
-      console.log('[ambient-ui] JARVIS_AMBIENT_UI=1 set — native pebble overlay is in development (W2-T10/T13). Run without the env var to use the dashboard at :' + config.port);
+      const spawnedOn = new Set<string>();
+      sidecarManager.onSidecarConnected(async (sidecar) => {
+        if (!sidecar.capabilities.includes('pebble')) {
+          console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
+          return;
+        }
+        if (spawnedOn.has(sidecar.id)) return;
+        spawnedOn.add(sidecar.id);
+        try {
+          const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
+            // Pebble centre lands ~26 px down-right of the cursor tip —
+            // close enough to feel like a companion, far enough that the
+            // ~14 px visible disc never overlaps the cursor.
+            cursor_offset_x: 22,
+            cursor_offset_y: 26,
+            summon_hotkey: 'ctrl+space',
+          });
+          console.log(`[ambient-ui] Native pebble spawned on ${sidecar.id}:`, result);
+        } catch (err) {
+          spawnedOn.delete(sidecar.id);
+          console.warn(`[ambient-ui] Failed to spawn native pebble on ${sidecar.id}:`, err);
+        }
+      });
+      sidecarManager.onSidecarDisconnected((sidecarId) => {
+        spawnedOn.delete(sidecarId);
+      });
+      console.log('[ambient-ui] Enabled — native pebble overlay (GDI+/Cocoa/Cairo) will spawn on sidecars with the \'pebble\' capability');
     }
 
     // 7. Register services in startup order
