@@ -257,26 +257,6 @@ jobs:
             "${{ env.SIDECAR_BIN }}.exe"
           cd "$GITHUB_WORKSPACE"
 
-      - name: Generate install instructions
-        id: install
-        run: |
-          DAEMON_PKG=$(jq -r .name package.json)
-          SIDECAR_PKG=$(jq -r .name sidecar/npm/jarvis-sidecar/package.json)
-
-          cat > release/INSTALL.md << EOF
-          ## Installation
-
-          \`\`\`bash
-          # Install the daemon
-          npm install -g ${DAEMON_PKG}
-
-          # Install the sidecar (auto-selects your platform)
-          npm install -g ${SIDECAR_PKG}
-          \`\`\`
-
-          Or download the sidecar binary for your platform from the assets below.
-          EOF
-
       - name: Create GitHub Release
         if: env.DRY_RUN != 'true'
         uses: softprops/action-gh-release@v2
@@ -284,8 +264,6 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Jarvis v${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
-          append_body: true
-          body_path: release/INSTALL.md
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
           files: |
@@ -403,11 +381,8 @@ jobs:
           HTML_URL=$(echo "$RELEASE_JSON" | jq -r '.html_url')
           TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
 
-          # Extract "What's Changed" section (everything between "## What's Changed" and the next "## " heading or end)
-          WHATS_CHANGED=$(echo "$BODY" | sed -n '/^## What'\''s Changed/,/^## /{ /^## What'\''s Changed/p; /^## [^W]/!{ /^## What'\''s Changed/!p; }; }')
-
           # Store in files to avoid delimiter issues
-          echo "$WHATS_CHANGED" > /tmp/whats_changed.txt
+          echo "$BODY" > /tmp/whats_changed.txt
           echo "$HTML_URL" > /tmp/html_url.txt
           echo "$TAG" > /tmp/tag.txt
 
