@@ -50,6 +50,11 @@ type PebbleService interface {
 	// repaint on the next frame. Calling while not spawned returns an error.
 	SetState(state PebbleState) error
 
+	// SetText updates the body line shown in the bubble (listening hint,
+	// speaking transcript). Empty string falls back to the default per-state
+	// copy. Safe to call before Spawn — value is just stashed until paint.
+	SetText(text string) error
+
 	// Close hides + destroys the overlay. Idempotent.
 	Close() error
 

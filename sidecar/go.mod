@@ -10,4 +10,7 @@ require (
 	nhooyr.io/websocket v1.8.17
 )
 
-require golang.org/x/sys v0.1.0 // indirect
+require (
+	github.com/gen2brain/malgo v0.11.24 // indirect
+	golang.org/x/sys v0.1.0 // indirect
+)

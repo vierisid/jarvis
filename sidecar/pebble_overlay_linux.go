@@ -45,6 +45,10 @@ static double gCurX = 0;
 static double gCurY = 0;
 static unsigned long long gFrameTick = 0;
 static guint gTimerId = 0;
+// gPebbleBodyText is the dynamic body line (live LLM response). Owned by
+// this module — replaced with g_free + g_strdup. NULL means use the
+// per-state placeholder.
+static gchar* gPebbleBodyText = NULL;
 
 static void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
     cairo_new_sub_path(cr);
@@ -62,6 +66,27 @@ static void draw_text_layout(cairo_t* cr, double x, double y, const char* text,
     PangoFontDescription* desc = pango_font_description_from_string(font_desc);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
+    cairo_set_source_rgba(cr, r, g, b, 1.0);
+    cairo_move_to(cr, x, y);
+    pango_cairo_show_layout(cr, layout);
+    g_object_unref(layout);
+}
+
+// draw_text_wrapped renders multi-line body copy inside (x,y,w,h). Pango
+// handles word wrapping. Used for the bubble body where transcripts can
+// overflow a single line.
+static void draw_text_wrapped(cairo_t* cr, double x, double y, double w, double h,
+                              const char* text, const char* font_desc,
+                              double r, double g, double b) {
+    PangoLayout* layout = pango_cairo_create_layout(cr);
+    pango_layout_set_text(layout, text, -1);
+    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_width(layout, (int)(w * PANGO_SCALE));
+    pango_layout_set_height(layout, (int)(h * PANGO_SCALE));
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
     cairo_set_source_rgba(cr, r, g, b, 1.0);
     cairo_move_to(cr, x, y);
     pango_cairo_show_layout(cr, layout);
@@ -167,8 +192,15 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
         double eyG = speaking ? kPaperG : kAccG;
         double eyB = speaking ? kPaperB : kAccB;
         draw_text_layout(cr, 26, 60, "JARVIS", "JetBrains Mono Medium 8", eyR, eyG, eyB);
-        const char* body = speaking ? "speaking…" : "listening — go ahead.";
-        draw_text_layout(cr, 26, 80, body, "Inter Tight 11", textR, textG, textB);
+        const char* body;
+        if (gPebbleBodyText && *gPebbleBodyText) {
+            body = gPebbleBodyText;
+        } else {
+            body = speaking ? "speaking…" : "listening — go ahead.";
+        }
+        // Wrap inside the bubble's body region (matches Win32/macOS rect).
+        draw_text_wrapped(cr, 26, 80, 300, 112, body, "Inter Tight 11",
+                          textR, textG, textB);
         return FALSE;
     }
 
@@ -302,6 +334,21 @@ static gboolean set_state_idle(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+// set_text_idle takes ownership of user_data — a heap-allocated UTF-8
+// string previously dup'd by jarvisPebbleSetText (or NULL). Replaces the
+// current body text and triggers a repaint.
+static gboolean set_text_idle(gpointer user_data) {
+    if (gPebbleBodyText) {
+        g_free(gPebbleBodyText);
+        gPebbleBodyText = NULL;
+    }
+    if (user_data) {
+        gPebbleBodyText = (gchar*)user_data; // takes ownership
+    }
+    if (gPebbleArea) gtk_widget_queue_draw(gPebbleArea);
+    return G_SOURCE_REMOVE;
+}
+
 void jarvisPebbleSpawn(int offsetX, int offsetY) {
     gOffsetX = offsetX;
     gOffsetY = offsetY;
@@ -310,6 +357,13 @@ void jarvisPebbleSpawn(int offsetX, int offsetY) {
 
 void jarvisPebbleSetState(int state) {
     g_idle_add(set_state_idle, GINT_TO_POINTER(state));
+}
+
+void jarvisPebbleSetText(const char* utf8) {
+    // Dup so the Go-side buffer can be freed immediately. The idle handler
+    // takes ownership and frees the previous text on replacement.
+    gchar* copy = (utf8 && *utf8) ? g_strdup(utf8) : NULL;
+    g_idle_add(set_text_idle, copy);
 }
 
 void jarvisPebbleClose(void) {
@@ -321,6 +375,7 @@ import "C"
 import (
 	"runtime"
 	"sync/atomic"
+	"unsafe"
 )
 
 type pebbleServiceLinux struct {
@@ -369,6 +424,17 @@ func (s *pebbleServiceLinux) SetState(state PebbleState) error {
 		i = 0
 	}
 	C.jarvisPebbleSetState(i)
+	return nil
+}
+
+func (s *pebbleServiceLinux) SetText(text string) error {
+	if text == "" {
+		C.jarvisPebbleSetText(nil)
+		return nil
+	}
+	cstr := C.CString(text)
+	defer C.free(unsafe.Pointer(cstr))
+	C.jarvisPebbleSetText(cstr)
 	return nil
 }
 

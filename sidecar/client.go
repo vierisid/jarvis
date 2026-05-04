@@ -261,17 +261,77 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// for what happens after summon (voice capture / LLM / TTS / element
 	// pointing). Pebble itself is purely visual.
 	if c.pebble != nil {
+		audioSvc := NewAudioCaptureService()
 		c.pebble.OnSummon(func() {
-			evt := SidecarEvent{
+			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
+
+			// 1. Notify the daemon that a summon happened (still fires; the
+			//    daemon's voice cycle uses this to drive pebble state).
+			summonEvt := SidecarEvent{
 				Type:      "sidecar_event",
 				EventType: "pebble.summon",
 				Timestamp: time.Now().UnixMilli(),
 				Priority:  "normal",
-				Payload:   map[string]any{},
+				Payload:   map[string]any{"session_id": sessionID},
 			}
-			if err := sendFn(ctx, evt, nil); err != nil {
+			if err := sendFn(ctx, summonEvt, nil); err != nil {
 				log.Printf("[pebble] failed to emit summon event: %v", err)
 			}
+
+			// 2. W2-T22: capture audio + stream PCM to the daemon. We
+			//    emit `audio.session_start` immediately, then capture
+			//    for a fixed window (5s placeholder until T25 adds VAD-
+			//    driven end-of-speech), then emit `audio.session_end`
+			//    with the full PCM payload as binary. Daemon receives
+			//    both and gets the audio buffer it needs for STT (T23).
+			go func() {
+				startEvt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "audio.session_start",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "normal",
+					Payload: map[string]any{
+						"session_id":  sessionID,
+						"sample_rate": pebbleAudioSampleRate,
+						"channels":    pebbleAudioChannels,
+						"format":      "pcm_s16le",
+					},
+				}
+				_ = sendFn(ctx, startEvt, nil)
+
+				pcm, dur, err := pebbleCaptureForDuration(audioSvc, sessionID, 5*time.Second)
+				if err != nil {
+					log.Printf("[audio] capture failed: %v", err)
+					return
+				}
+
+				// Inline base64 — for 5s @ 16 kHz s16 mono, ~213 KB
+				// encoded. Well under the inline threshold; no need for
+				// a separate binary frame ref.
+				endEvt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "audio.session_end",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "normal",
+					Payload: map[string]any{
+						"session_id":  sessionID,
+						"duration_ms": dur.Milliseconds(),
+						"sample_rate": pebbleAudioSampleRate,
+						"channels":    pebbleAudioChannels,
+						"format":      "pcm_s16le",
+					},
+					Binary: BinaryDataInline{
+						Type:     "inline",
+						MimeType: "audio/pcm",
+						Data:     base64.StdEncoding.EncodeToString(pcm),
+					},
+				}
+				if err := sendFn(ctx, endEvt, nil); err != nil {
+					log.Printf("[audio] failed to emit session_end event: %v", err)
+				} else {
+					log.Printf("[audio] streamed session %s to daemon (%d PCM bytes, %.2fs)", sessionID, len(pcm), dur.Seconds())
+				}
+			}()
 		})
 	}
 

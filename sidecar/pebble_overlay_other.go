@@ -21,6 +21,10 @@ func (s *pebbleServiceStub) SetState(state PebbleState) error {
 	return fmt.Errorf("native pebble overlay not yet implemented on this platform")
 }
 
+func (s *pebbleServiceStub) SetText(text string) error {
+	return nil
+}
+
 func (s *pebbleServiceStub) Close() error {
 	return nil
 }

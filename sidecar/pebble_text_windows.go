@@ -29,9 +29,12 @@ const (
 
 // DrawText format flags (subset).
 const (
-	dtLeft       = 0x00000000
-	dtSingleLine = 0x00000020
-	dtNoClip     = 0x00000100
+	dtLeft        = 0x00000000
+	dtWordBreak   = 0x00000010
+	dtSingleLine  = 0x00000020
+	dtNoClip      = 0x00000100
+	dtEndEllipsis = 0x00008000
+	dtEditControl = 0x00002000
 )
 
 // CreateFont quality presets.
@@ -63,15 +66,25 @@ func colorRef(r, g, b uint8) uint32 {
 // and a 13 px sans body line in ink colour. Antialiased quality for clean
 // edges on the bubble background.
 func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) {
-	// State-driven copy. Speaking gets a softer message; listening invites
-	// the user to keep talking; thinking/working/idle don't render the
-	// bubble at all so we never reach this path for them.
+	// Dynamic body text wins when set (e.g. the live LLM response during
+	// speaking). Falls back to per-state placeholders so listening still
+	// invites the user, and speaking stays meaningful before the response
+	// arrives.
+	dynText, _ := s.bubbleText.Load().(string)
 	var bodyText string
 	switch state {
 	case PebbleListening:
-		bodyText = "listening — go ahead."
+		if dynText != "" {
+			bodyText = dynText
+		} else {
+			bodyText = "listening — go ahead."
+		}
 	case PebbleSpeaking:
-		bodyText = "speaking…"
+		if dynText != "" {
+			bodyText = dynText
+		} else {
+			bodyText = "speaking…"
+		}
 	default:
 		return
 	}
@@ -145,16 +158,19 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) 
 		uintptr(uint32(dtLeft|dtSingleLine|dtNoClip)),
 	)
 
-	// Body row.
+	// Body row. Bubble runs from y=50 to y=200; eyebrow ends at 80.
+	// Reserve 84..192 for body so longer responses wrap up to ~6 lines
+	// at 13 px line-height before getting clipped. End-ellipsis trims the
+	// tail when even that runs out, so we never blow past the bubble edge.
 	procSelectObject.Call(memDC, bodyFont)
 	procSetTextColor.Call(memDC, uintptr(bodyCol))
 	bodyStr, _ := syscall.UTF16PtrFromString(bodyText)
-	bodyRect := pblRect{Left: 26, Top: 84, Right: 326, Bottom: 110}
+	bodyRect := pblRect{Left: 26, Top: 84, Right: 326, Bottom: 192}
 	procDrawTextW.Call(
 		memDC,
 		uintptr(unsafe.Pointer(bodyStr)),
 		uintptr(nullTerm),
 		uintptr(unsafe.Pointer(&bodyRect)),
-		uintptr(uint32(dtLeft|dtSingleLine|dtNoClip)),
+		uintptr(uint32(dtLeft|dtWordBreak|dtEndEllipsis|dtEditControl)),
 	)
 }
