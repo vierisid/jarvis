@@ -342,57 +342,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
 
-    // 6e. Ambient UX (Phase 2): if JARVIS_AMBIENT_UI=1, spawn the pebble
-    // panel on any connected sidecar that has the windows capability.
+    // 6e. Ambient UX (Phase 2): the WebView2-based pebble path was abandoned
+    // (transparency unattainable through webview_go on Windows). Native
+    // GDI+/UpdateLayeredWindow pebble lands in W2-T10/T13 — when ready, this
+    // hook will dispatch `pebble.spawn` (a new sidecar RPC backed by the
+    // native overlay) instead of `panel.spawn`. For now we just log so users
+    // running with the env var know it's intentionally a no-op.
     if (process.env.JARVIS_AMBIENT_UI === '1') {
-      const pebbleUrl = `http://localhost:${config.port}/pebble.html?native=1`;
-      const spawnedOn = new Set<string>();
-      sidecarManager.onSidecarConnected(async (sidecar) => {
-        if (!sidecar.capabilities.includes('windows')) {
-          console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'windows' capability — skipping pebble spawn`);
-          return;
-        }
-        if (spawnedOn.has(sidecar.id)) return;
-        spawnedOn.add(sidecar.id);
-        try {
-          const result = await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
-            id: 'pebble',
-            url: pebbleUrl,
-            title: 'JARVIS',
-            // W2-T1: small floating pebble window that follows the cursor
-            // across the whole screen via sidecar-side native cursor polling
-            // + SetWindowPos at ~60fps. Window is small (just the pebble +
-            // bubble area); cursor is offset above-left so it never sits on
-            // the visible pixels.
-            bounds: { x: 0, y: 0, w: 360, h: 160 },
-            frameless: true,
-            transparent: false,
-            always_on_top: true,
-            click_through: false,
-            resizable: false,
-            follow_cursor: true,
-            // Window sits 4 px right + 4 px down from the cursor; pebble is
-            // pinned at (4, 4) inside the window. Visible pebble disc lands
-            // ~12 px down-right of the cursor tip — close enough to feel
-            // like a companion, far enough that the cursor never overlaps.
-            cursor_offset_x: 4,
-            cursor_offset_y: 4,
-            // Global hotkey: Ctrl+Space toggles summon/dismiss. On Windows
-            // this freezes the cursor-follow + transitions the pebble into
-            // listening (showing the bubble); pressing again returns to
-            // idle and resumes follow. Mac/Linux are stubbed for now.
-            summon_hotkey: 'ctrl+space',
-          });
-          console.log(`[ambient-ui] Pebble spawned on ${sidecar.id}:`, result);
-        } catch (err) {
-          spawnedOn.delete(sidecar.id);
-          console.warn(`[ambient-ui] Failed to spawn pebble on ${sidecar.id}:`, err);
-        }
-      });
-      sidecarManager.onSidecarDisconnected((sidecarId) => {
-        spawnedOn.delete(sidecarId);
-      });
-      console.log(`[ambient-ui] Enabled — pebble will spawn on sidecars with the 'windows' capability (URL: ${pebbleUrl})`);
+      console.log('[ambient-ui] JARVIS_AMBIENT_UI=1 set — native pebble overlay is in development (W2-T10/T13). Run without the env var to use the dashboard at :' + config.port);
     }
 
     // 7. Register services in startup order

@@ -7,7 +7,11 @@ import "./pebble.css";
 // and adds `?native=1` to the URL. Otherwise we're in browser dev mode and
 // need a backdrop so the pebble is visible against something.
 const params = new URLSearchParams(window.location.search);
-if (params.get("native") !== "1") {
+if (params.get("native") === "1") {
+  // Magic magenta body background — Win32 LWA_COLORKEY transparency relies
+  // on this exact colour. Anything painted #FE00FE becomes invisible.
+  document.body.classList.add("pebble-native-transparent");
+} else {
   document.body.classList.add("pebble-dev-backdrop");
 }
 

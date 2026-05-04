@@ -99,8 +99,15 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		if spec.Title != "" {
 			wv.SetTitle(spec.Title)
 		}
-		if spec.Bounds.W > 0 || spec.Bounds.H > 0 {
-			w, h := spec.Bounds.W, spec.Bounds.H
+		// Fullscreen mode (W2-T7) overrides bounds with the virtual screen
+		// dimensions and positions the window at the virtual screen's origin
+		// — secondary monitors extending left/up of primary have negative
+		// origin coords. Page renders pebble at OS cursor pos via CSS.
+		w, h := spec.Bounds.W, spec.Bounds.H
+		if spec.Fullscreen {
+			w, h = platformGetScreenSize()
+		}
+		if w > 0 || h > 0 {
 			if w <= 0 {
 				w = 200
 			}
@@ -112,13 +119,39 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				hint = webview.HintFixed
 			}
 			wv.SetSize(w, h, hint)
-			log.Printf("[panels] spawn(%s): size set to %dx%d", spec.ID, w, h)
+			log.Printf("[panels] spawn(%s): size set to %dx%d (fullscreen=%v)", spec.ID, w, h, spec.Fullscreen)
 		}
 
 		handle := wv.Window()
 		log.Printf("[panels] spawn(%s): native handle=%v", spec.ID, handle)
 		if err := applyPlatformFlags(handle, spec); err != nil {
 			log.Printf("[panels] applyPlatformFlags(%s): %v", spec.ID, err)
+		}
+
+		// Reposition fullscreen window to the virtual-screen origin so it
+		// truly covers every connected monitor (secondaries can extend
+		// left/up of primary, giving negative origin coords).
+		if spec.Fullscreen {
+			origX, origY := platformGetVirtualScreenOrigin()
+			if err := platformMoveWindow(handle, origX, origY); err != nil {
+				log.Printf("[panels] spawn(%s): move to (%d,%d): %v", spec.ID, origX, origY, err)
+			} else {
+				log.Printf("[panels] spawn(%s): positioned at virtual-screen origin (%d,%d)", spec.ID, origX, origY)
+			}
+		}
+
+		// JS-callable bindings: page calls these directly via webview, no
+		// daemon round-trip. Must be bound before Run.
+		panelID := spec.ID
+		if err := wv.Bind("__sidecar_set_regions", func(rects []PanelRect) error {
+			return s.SetInteractiveRegions(panelID, rects)
+		}); err != nil {
+			log.Printf("[panels] spawn(%s): Bind(__sidecar_set_regions) failed: %v", spec.ID, err)
+		}
+		if err := wv.Bind("__sidecar_set_clickthrough", func(ct bool) error {
+			return s.SetClickThrough(panelID, ct)
+		}); err != nil {
+			log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
 		}
 
 		if spec.URL != "" {
@@ -158,9 +191,18 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 		}
 
-		// Cursor-follow goroutine — runs on a separate, non-locked OS thread.
-		// Polls platformGetCursorPos at ~60fps and moves the window to track
-		// the cursor with offset. The page can pause tracking via panel.set_follow.
+		// Cursor-follow goroutine.
+		//
+		// Two modes:
+		//
+		//   Fullscreen=true (Clicky pattern): the window is screen-sized and
+		//   never moves. The page POLLS the cursor via __sidecar_get_cursor
+		//   binding (registered above). This goroutine instead reasserts
+		//   HWND_TOPMOST every second so the window stays above other apps
+		//   that try to take topmost.
+		//
+		//   Fullscreen=false (legacy small-window pattern): goroutine eases
+		//   window position toward (cursor + offset).
 		if spec.FollowCursor {
 			ox := spec.CursorOffsetX
 			oy := spec.CursorOffsetY
@@ -169,16 +211,38 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 			panelHandle := handle
 			panelID := spec.ID
+			fullscreen := spec.Fullscreen
 			go func() {
+				const followFactor = 0.18
 				ticker := time.NewTicker(16 * time.Millisecond)
+				topmostTicker := time.NewTicker(1 * time.Second)
 				defer ticker.Stop()
+				defer topmostTicker.Stop()
+
+				cx, cy, _ := platformGetCursorPos()
+				curX := float64(cx + ox)
+				curY := float64(cy + oy)
+
 				for {
 					select {
 					case <-impl.followStop:
 						return
 					case <-impl.done:
 						return
+					case <-topmostTicker.C:
+						// Reassert always-on-top in fullscreen mode so other
+						// apps activating don't bury us. In non-fullscreen
+						// mode platformMoveWindow already does this per frame.
+						if fullscreen {
+							_ = platformReassertTopmost(panelHandle)
+						}
 					case <-ticker.C:
+						if fullscreen {
+							// Page polls cursor via Bind, nothing to do here
+							// at 60fps. Just stay alive for the topmost
+							// ticker and stop signals.
+							continue
+						}
 						if !impl.following.Load() {
 							continue
 						}
@@ -187,11 +251,19 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 							log.Printf("[panels] follow(%s): cursor poll: %v", panelID, err)
 							continue
 						}
-						_ = platformMoveWindow(panelHandle, x+ox, y+oy)
+						targetX := float64(x + ox)
+						targetY := float64(y + oy)
+						curX += (targetX - curX) * followFactor
+						curY += (targetY - curY) * followFactor
+						_ = platformMoveWindow(panelHandle, int(curX), int(curY))
 					}
 				}
 			}()
-			log.Printf("[panels] spawn(%s): cursor-follow goroutine started (offset %d,%d)", spec.ID, ox, oy)
+			mode := "window-move"
+			if fullscreen {
+				mode = "page-poll"
+			}
+			log.Printf("[panels] spawn(%s): cursor-follow started (mode=%s, offset %d,%d)", spec.ID, mode, ox, oy)
 		}
 
 		close(impl.ready)
@@ -236,6 +308,36 @@ func (s *panelService) SetFollow(id PanelID, follow bool) error {
 		return formatPanelError("set_follow", id, fmt.Errorf("handle type mismatch"))
 	}
 	impl.following.Store(follow)
+	return nil
+}
+
+func (s *panelService) SetInteractiveRegions(id PanelID, rects []PanelRect) error {
+	e, ok := s.reg.get(id)
+	if !ok {
+		return formatPanelError("set_regions", id, ErrPanelUnknown)
+	}
+	impl, ok := e.handle.(*panelImpl)
+	if !ok || impl.wv == nil {
+		return formatPanelError("set_regions", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetInteractiveRegions(impl.wv.Window(), rects); err != nil {
+		return formatPanelError("set_regions", id, err)
+	}
+	return nil
+}
+
+func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
+	e, ok := s.reg.get(id)
+	if !ok {
+		return formatPanelError("set_clickthrough", id, ErrPanelUnknown)
+	}
+	impl, ok := e.handle.(*panelImpl)
+	if !ok || impl.wv == nil {
+		return formatPanelError("set_clickthrough", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetClickThrough(impl.wv.Window(), clickThrough); err != nil {
+		return formatPanelError("set_clickthrough", id, err)
+	}
 	return nil
 }
 

@@ -62,6 +62,22 @@ static void jarvis_panel_focus(void* gtkwin_ptr) {
     gtk_window_present(w);
 }
 
+static void jarvis_panel_set_click_through(void* gtkwin_ptr, int clickThrough) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    GdkWindow* gdkw = gtk_widget_get_window(GTK_WIDGET(w));
+    if (!gdkw) return;
+    if (clickThrough) {
+        cairo_region_t* empty = cairo_region_create();
+        gdk_window_input_shape_combine_region(gdkw, empty, 0, 0);
+        cairo_region_destroy(empty);
+    } else {
+        // NULL = remove input shape, restoring full clickability.
+        gdk_window_input_shape_combine_region(gdkw, NULL, 0, 0);
+    }
+}
+
 // Cursor position in screen-root coords. Uses the default GdkDisplay's
 // default seat → pointing device, which works on both X11 and Wayland.
 static void jarvis_panel_cursor_pos(int* x, int* y) {
@@ -84,6 +100,32 @@ static void jarvis_panel_move_window(void* gtkwin_ptr, int x, int y) {
     gtk_window_move(w, x, y);
     // Re-assert keep-above so the window stays on top across focus changes.
     gtk_window_set_keep_above(w, TRUE);
+}
+
+// rects is a flat array of 4 ints per rectangle (x, y, w, h). count is the
+// rectangle count. Sets both the input shape (clicks pass through outside
+// the union) and the visible shape on X11 (pixels outside aren't drawn).
+static void jarvis_panel_set_regions(void* gtkwin_ptr, int* rects, int count) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    GdkWindow* gdkw = gtk_widget_get_window(GTK_WIDGET(w));
+    if (!gdkw) return;
+    cairo_region_t* region = cairo_region_create();
+    for (int i = 0; i < count; i++) {
+        cairo_rectangle_int_t rect = {
+            rects[i*4],
+            rects[i*4+1],
+            rects[i*4+2],
+            rects[i*4+3],
+        };
+        cairo_region_union_rectangle(region, &rect);
+    }
+    gdk_window_input_shape_combine_region(gdkw, region, 0, 0);
+    // gtk_widget_shape_combine_region is deprecated in GTK 3.16+ but still
+    // works on X11; on Wayland the visible shape is controlled differently.
+    gtk_widget_shape_combine_region(GTK_WIDGET(w), region);
+    cairo_region_destroy(region);
 }
 */
 import "C"
@@ -134,5 +176,53 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 		return fmt.Errorf("nil GtkWindow*")
 	}
 	C.jarvis_panel_move_window(handle, C.int(x), C.int(y))
+	return nil
+}
+
+func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	C.jarvis_panel_set_click_through(handle, boolToCInt(clickThrough))
+	return nil
+}
+
+func platformGetScreenSize() (int, int) {
+	// Stub — fullscreen mode is Windows-only for now.
+	return 1920, 1080
+}
+
+func platformGetVirtualScreenOrigin() (int, int) {
+	return 0, 0
+}
+
+func platformReassertTopmost(handle unsafe.Pointer) error {
+	if handle == nil {
+		return nil
+	}
+	C.jarvis_panel_focus(handle)
+	return nil
+}
+
+func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	if len(rects) == 0 {
+		// Empty region — apply via 0-count call so cairo creates the empty
+		// region inside the C side.
+		C.jarvis_panel_set_regions(handle, nil, 0)
+		return nil
+	}
+	flat := make([]C.int, 0, len(rects)*4)
+	for _, r := range rects {
+		flat = append(flat,
+			C.int(r.X),
+			C.int(r.Y),
+			C.int(r.W),
+			C.int(r.H),
+		)
+	}
+	C.jarvis_panel_set_regions(handle, &flat[0], C.int(len(rects)))
 	return nil
 }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"syscall"
 	"unsafe"
 )
 
@@ -46,6 +47,13 @@ const (
 	lwaAlpha    = 0x00000002
 )
 
+// magicColorKey — magenta the page paints on body background. Win32 sees
+// any pixel with this exact RGB and treats it as fully transparent. Since
+// WebView2 doesn't expose a controller-level transparency API, this is the
+// most reliable way to get see-through pebble windows on Windows.
+// COLORREF format is 0x00BBGGRR. RGB(0xFE, 0x00, 0xFE) = magenta.
+const magicColorKey = 0x00FE00FE
+
 // HWND_TOPMOST is officially -1, encoded as the largest uintptr.
 const hwndTopmost = ^uintptr(0)
 
@@ -59,7 +67,41 @@ var (
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
+	procSetWindowRgn               = user32.NewProc("SetWindowRgn")
+	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
+
+	gdi32                  = syscall.NewLazyDLL("gdi32.dll")
+	procCreateRectRgn      = gdi32.NewProc("CreateRectRgn")
+	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
+	procCombineRgn         = gdi32.NewProc("CombineRgn")
+	procDeleteObject       = gdi32.NewProc("DeleteObject")
 )
+
+// Virtual screen metric indices — together describe the bounding rect of all
+// connected monitors as a single coordinate space.
+const (
+	smXVirtualScreen  = 76
+	smYVirtualScreen  = 77
+	smCxVirtualScreen = 78
+	smCyVirtualScreen = 79
+)
+
+// platformGetScreenSize returns the size of the virtual screen (the bounding
+// box of all connected monitors) so a fullscreen panel covers every display.
+func platformGetScreenSize() (w, h int) {
+	cx, _, _ := procGetSystemMetrics.Call(uintptr(smCxVirtualScreen))
+	cy, _, _ := procGetSystemMetrics.Call(uintptr(smCyVirtualScreen))
+	return int(int32(cx)), int(int32(cy))
+}
+
+// platformGetVirtualScreenOrigin returns the top-left corner of the virtual
+// screen — needed when secondary monitors extend left/up of the primary
+// monitor (origin can be negative).
+func platformGetVirtualScreenOrigin() (x, y int) {
+	xv, _, _ := procGetSystemMetrics.Call(uintptr(smXVirtualScreen))
+	yv, _, _ := procGetSystemMetrics.Call(uintptr(smYVirtualScreen))
+	return int(int32(xv)), int(int32(yv))
+}
 
 func getWindowLong(hwnd uintptr, idx int32) uintptr {
 	if proc := procGetWindowLongPtrW; proc.Find() == nil {
@@ -101,10 +143,16 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 	}
 	setWindowLong(hwnd, gwlExStyle, exStyle)
 
-	if spec.Transparent || spec.ClickThrough {
-		// LWA_ALPHA with 255 = fully opaque window content; transparent
-		// regions in the page (background: transparent on body) compose with
-		// whatever is behind on the desktop.
+	if spec.Transparent {
+		// Don't call SetLayeredWindowAttributes when transparent — that
+		// forces a Windows GDI compositing path that fights WebView2's
+		// DirectComposition. Just leaving WS_EX_LAYERED set lets DComp
+		// compose WebView2's alpha-blended content with the desktop.
+		// The WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0 env var (set in
+		// panels_runtime.go before webview.New) makes WebView2's default
+		// surface transparent; body { background: transparent } in CSS
+		// then leaves only the explicitly-painted pebble + bubble pixels.
+	} else if spec.ClickThrough {
 		procSetLayeredWindowAttributes.Call(hwnd, 0, 255, lwaAlpha)
 	}
 
@@ -124,6 +172,39 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 		)
 	}
 
+	return nil
+}
+
+func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	hwnd := uintptr(handle)
+	exStyle := getWindowLong(hwnd, gwlExStyle)
+	if clickThrough {
+		exStyle |= wsExLayered | wsExTransparent
+	} else {
+		exStyle &^= wsExTransparent
+		exStyle |= wsExLayered // keep layered for transparency compositing
+	}
+	setWindowLong(hwnd, gwlExStyle, exStyle)
+	return nil
+}
+
+// platformReassertTopmost forces the window back to the top of the topmost
+// z-band without moving or resizing it. Useful for fullscreen overlays that
+// other always-on-top apps (taskbar, virtual keyboards, etc.) might bury.
+func platformReassertTopmost(handle unsafe.Pointer) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	const swpNoMove = 0x0002
+	procSetWindowPos.Call(
+		uintptr(handle),
+		hwndTopmost,
+		0, 0, 0, 0,
+		swpNoMove|swpNoSize|swpNoActivate,
+	)
 	return nil
 }
 
@@ -151,6 +232,46 @@ func platformGetCursorPos() (int, int, error) {
 		return 0, 0, fmt.Errorf("GetCursorPos failed: %v", err)
 	}
 	return int(p.X), int(p.Y), nil
+}
+
+// platformSetInteractiveRegions takes ownership of newly-created HRGN handles
+// and passes them to SetWindowRgn (which assumes ownership of the final
+// combined region). Pixels outside the union are non-rendered AND
+// click-through. Empty rects collapse to a 0×0 region (fully invisible).
+func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	const RGN_OR = 2
+	// Start with an empty region; OR each rect/round-rect into it.
+	combined, _, _ := procCreateRectRgn.Call(0, 0, 0, 0)
+	for _, r := range rects {
+		var rgn uintptr
+		if r.Radius > 0 {
+			rgn, _, _ = procCreateRoundRectRgn.Call(
+				uintptr(int32(r.X)),
+				uintptr(int32(r.Y)),
+				uintptr(int32(r.X+r.W)),
+				uintptr(int32(r.Y+r.H)),
+				uintptr(int32(r.Radius*2)),
+				uintptr(int32(r.Radius*2)),
+			)
+		} else {
+			rgn, _, _ = procCreateRectRgn.Call(
+				uintptr(int32(r.X)),
+				uintptr(int32(r.Y)),
+				uintptr(int32(r.X+r.W)),
+				uintptr(int32(r.Y+r.H)),
+			)
+		}
+		if rgn != 0 {
+			procCombineRgn.Call(combined, combined, rgn, RGN_OR)
+			procDeleteObject.Call(rgn)
+		}
+	}
+	// SetWindowRgn(hwnd, hRgn, bRedraw=TRUE) — Windows takes ownership of hRgn.
+	procSetWindowRgn.Call(uintptr(handle), combined, 1)
+	return nil
 }
 
 func platformMoveWindow(handle unsafe.Pointer, x, y int) error {

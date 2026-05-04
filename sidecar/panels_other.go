@@ -22,3 +22,23 @@ func platformGetCursorPos() (int, int, error) {
 func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	return fmt.Errorf("window move not supported on this platform")
 }
+
+func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
+	return fmt.Errorf("region shaping not supported on this platform")
+}
+
+func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
+	return fmt.Errorf("click-through not supported on this platform")
+}
+
+func platformGetScreenSize() (int, int) {
+	return 1920, 1080
+}
+
+func platformGetVirtualScreenOrigin() (int, int) {
+	return 0, 0
+}
+
+func platformReassertTopmost(handle unsafe.Pointer) error {
+	return nil
+}

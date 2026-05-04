@@ -20,6 +20,21 @@ type PanelBounds struct {
 	H int `json:"h"`
 }
 
+// PanelRect is a single interactive (and visible) region within a panel
+// window, expressed in window-relative pixels. Optional Radius creates a
+// rounded rectangle (or a circle when Radius >= W/2 = H/2).
+//
+// Pixels outside the union of all PanelRects are made fully click-through
+// AND non-rendered by the platform (Win32 SetWindowRgn / GTK input/visible
+// shape regions), so the rest of the OS window is effectively absent.
+type PanelRect struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	W      int `json:"w"`
+	H      int `json:"h"`
+	Radius int `json:"radius,omitempty"`
+}
+
 // PanelSpec is the full specification for a panel window. It is sent from
 // the daemon to the sidecar via the panel.spawn RPC.
 type PanelSpec struct {
@@ -53,6 +68,12 @@ type PanelSpec struct {
 	// silently logged on platforms where global hotkeys aren't wired yet
 	// (macOS / Linux); the panel still spawns and follows cursor.
 	SummonHotkey string `json:"summon_hotkey"`
+	// Fullscreen sizes the window to the primary monitor and disables
+	// window movement (the Clicky pattern). The page is responsible for
+	// rendering the pebble at the cursor's screen position via CSS
+	// transform; the sidecar feeds cursor positions to the page via
+	// __pebble_set_cursor invoked through wv.Eval at ~60fps.
+	Fullscreen bool `json:"fullscreen"`
 }
 
 // PanelService manages the lifecycle of native panel windows.
@@ -69,6 +90,21 @@ type PanelService interface {
 	// when the bubble opens (so the window stops jittering while the user
 	// reaches for buttons) and resumes when the bubble dismisses.
 	SetFollow(id PanelID, follow bool) error
+	// SetInteractiveRegions defines the visible + clickable shape of the
+	// panel window. Anything outside the union of rects becomes
+	// non-rendered AND click-through to the desktop. Page calls this on
+	// every layout change so the OS window matches the rendered UI.
+	// Note: kept for cross-platform parity (Linux uses it for click-through)
+	// but Windows skips it in favour of dynamic WS_EX_TRANSPARENT toggling
+	// since SetWindowRgn crops the layered+transparent window's contents.
+	SetInteractiveRegions(id PanelID, rects []PanelRect) error
+	// SetClickThrough toggles whole-window click-through (Win32
+	// WS_EX_TRANSPARENT). When true, every click passes through to the
+	// desktop including over the visible UI; when false, the window grabs
+	// all clicks in its bounds. Page calls this on state transitions:
+	// idle = true (cursor passes through), listening = false (bubble
+	// buttons clickable).
+	SetClickThrough(id PanelID, clickThrough bool) error
 	Stop()
 }
 

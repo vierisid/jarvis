@@ -75,6 +75,25 @@ export function Pebble() {
     };
   }, []);
 
+  // Toggle whole-window click-through on state changes (Clicky-style):
+  //   idle / thinking / working → clicks pass through (everywhere) so the
+  //                                user never feels the pebble window
+  //   listening / speaking      → window grabs clicks so bubble buttons
+  //                                respond. Whole desktop is "frozen" while
+  //                                the user has the bubble open.
+  // Visibility is handled entirely by WebView2 transparency
+  // (WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0, set before process start) +
+  // body { background: transparent }. No region masking — only the
+  // explicitly painted pebble + bubble pixels render.
+  useEffect(() => {
+    if (!IS_NATIVE) return;
+    type SidecarSetClickThrough = (ct: boolean) => Promise<unknown>;
+    const fn = (window as unknown as { __sidecar_set_clickthrough?: SidecarSetClickThrough }).__sidecar_set_clickthrough;
+    if (!fn) return;
+    const interactive = state === "listening" || state === "speaking";
+    fn(!interactive).catch(() => { /* sidecar may be down */ });
+  }, [state]);
+
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
       tx.current = e.clientX;
@@ -111,24 +130,12 @@ export function Pebble() {
   }, []);
 
   useEffect(() => {
-    // Native mode: the sidecar moves the entire window every frame, so the
-    // pebble + bubble are pinned to fixed screen-relative positions inside
-    // the window. The bubble drops *below* the pebble (rather than above as
-    // in browser mode) because the window's top edge is closest to the
-    // cursor — the pebble sits there and the bubble extends downward into
-    // the window.
+    // Browser dev mode kept for design reference (open pebble.html in a
+    // browser to see the visual). Production native pebble is rendered
+    // by the sidecar via GDI+/Cocoa/Cairo (W2-T10/T11/T12) — this React
+    // component is no longer used in the native path.
     if (IS_NATIVE) {
-      if (pebbleRef.current) {
-        pebbleRef.current.style.left = `${NATIVE_PEBBLE_X}px`;
-        pebbleRef.current.style.top = `${NATIVE_PEBBLE_Y}px`;
-        // Override the centering transform — pinning to top-left.
-        pebbleRef.current.style.transform = "none";
-      }
-      if (bubbleRef.current) {
-        bubbleRef.current.style.left = `${NATIVE_PEBBLE_X - 8}px`;
-        bubbleRef.current.style.top = `${NATIVE_PEBBLE_Y + 32}px`;
-        bubbleRef.current.style.transform = "none";
-      }
+      // No-op: native pebble doesn't run this React component.
       return;
     }
 
