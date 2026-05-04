@@ -462,6 +462,12 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	}
 	state, _ := s.state.Load().(PebbleState)
 	s.drawState(pixels, state)
+	// GDI text rendering on top of the bubble's fully-opaque (alpha=255)
+	// pixels. DrawText writes RGB without touching alpha, so the result
+	// remains pre-multiplied-ARGB-correct for UpdateLayeredWindow.
+	if state == PebbleListening || state == PebbleSpeaking {
+		s.drawBubbleText(memDC, state)
+	}
 
 	// UpdateLayeredWindow — moves AND repaints the window in one call.
 	// The blend function with AC_SRC_ALPHA tells the OS to honour the
