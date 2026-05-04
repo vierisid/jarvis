@@ -314,7 +314,17 @@ func (s *pebbleServiceWindows) pumpMessages() {
 
 // ─────────────────────────── Window creation ────────────────────────────────
 
-const pebbleWindowSizePx = 96 // padding around the visible pebble disc
+// Window size and anchor — the window is sized to fit the pebble pill PLUS
+// a bubble that drops below it. Most pixels are alpha=0 (true transparent);
+// only the pebble + bubble paint visible content. The pebble's centre is
+// pinned at (pebbleAnchorX, pebbleAnchorY) within the window, and the
+// window is positioned so that anchor lands at (cursor + offset).
+const (
+	pebbleWindowW   = 360
+	pebbleWindowH   = 220
+	pebbleAnchorX   = 40
+	pebbleAnchorY   = 28
+)
 
 func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 	className, _ := syscall.UTF16PtrFromString("JarvisPebbleOverlay")
@@ -341,8 +351,8 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 	style := uintptr(pblWsPopup | pblWsVisible)
 	x := int32(0)
 	y := int32(0)
-	w := int32(pebbleWindowSizePx)
-	h := int32(pebbleWindowSizePx)
+	w := int32(pebbleWindowW)
+	h := int32(pebbleWindowH)
 
 	hwnd, _, err := procCreateWindowExW.Call(
 		exStyle,
@@ -411,8 +421,10 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	s.curY += (tgtY - s.curY) * followFactor
 	s.frameTick++
 
-	winX := int32(s.curX - pebbleWindowSizePx/2)
-	winY := int32(s.curY - pebbleWindowSizePx/2)
+	// Position the window so the pebble's anchor (where we draw the pebble
+	// centre) lands at (s.curX, s.curY) — the eased cursor + offset.
+	winX := int32(s.curX - pebbleAnchorX)
+	winY := int32(s.curY - pebbleAnchorY)
 
 	// Create memory DC + 32-bit DIB
 	screenDC, _, _ := procGetDC.Call(0)
@@ -423,8 +435,8 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	bi := pblBitmapInfo{
 		Header: pblBitmapInfoHeader{
 			BiSize:        uint32(unsafe.Sizeof(pblBitmapInfoHeader{})),
-			BiWidth:       pebbleWindowSizePx,
-			BiHeight:      -pebbleWindowSizePx, // top-down
+			BiWidth:       pebbleWindowW,
+			BiHeight:      -pebbleWindowH, // top-down
 			BiPlanes:      1,
 			BiBitCount:    32,
 			BiCompression: 0,
@@ -444,7 +456,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	defer procDeleteObjectGdi.Call(dib)
 	procSelectObject.Call(memDC, dib)
 
-	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowSizePx*pebbleWindowSizePx)
+	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowW*pebbleWindowH)
 	for i := range pixels {
 		pixels[i] = 0
 	}
@@ -463,7 +475,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 		AlphaFormat:         acSrcAlpha,
 	}
 	winPt := pblPoint{X: winX, Y: winY}
-	winSz := pblSize{CX: pebbleWindowSizePx, CY: pebbleWindowSizePx}
+	winSz := pblSize{CX: pebbleWindowW, CY: pebbleWindowH}
 	srcPt := pblPoint{X: 0, Y: 0}
 
 	r, _, _ := procUpdateLayeredWindow.Call(
