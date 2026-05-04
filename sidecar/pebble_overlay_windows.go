@@ -144,6 +144,15 @@ type pebbleServiceWindows struct {
 	// `current` chases `target = cursor + offset` each frame.
 	curX float64
 	curY float64
+
+	// frameTick increments each paint and feeds time-based animations
+	// (idle breathing, listening/speaking waveform bars, thinking dot
+	// bounce). Wraps around — only relative phase matters.
+	frameTick uint64
+
+	// hotkeyStop is the cleanup function returned by startHotkeyListener.
+	// Called when the pebble is closed.
+	hotkeyStop func()
 }
 
 // NewPebbleService returns the Windows-native pebble service.
@@ -178,7 +187,32 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 
 	go s.run()
 	log.Printf("[pebble] spawned (offset %d,%d, hotkey=%q)", s.spec.CursorOffsetX, s.spec.CursorOffsetY, s.spec.SummonHotkey)
+
+	// Register the global summon hotkey — toggles idle ↔ listening.
+	if s.spec.SummonHotkey != "" {
+		stop, err := startHotkeyListener(s.spec.SummonHotkey, func() {
+			s.toggleSummon()
+		})
+		if err != nil {
+			log.Printf("[pebble] hotkey '%s' not registered: %v", s.spec.SummonHotkey, err)
+		} else {
+			s.hotkeyStop = stop
+			log.Printf("[pebble] summon hotkey '%s' registered", s.spec.SummonHotkey)
+		}
+	}
 	return nil
+}
+
+// toggleSummon flips between idle and listening. Future states (thinking,
+// speaking, working) are driven from the daemon via SetState — the local
+// hotkey is just a quick "summon / dismiss" affordance.
+func (s *pebbleServiceWindows) toggleSummon() {
+	current, _ := s.state.Load().(PebbleState)
+	if current == PebbleListening || current == PebbleSpeaking {
+		s.state.Store(PebbleIdle)
+	} else {
+		s.state.Store(PebbleListening)
+	}
 }
 
 func (s *pebbleServiceWindows) SetState(state PebbleState) error {
@@ -192,6 +226,10 @@ func (s *pebbleServiceWindows) SetState(state PebbleState) error {
 func (s *pebbleServiceWindows) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil
+	}
+	if s.hotkeyStop != nil {
+		s.hotkeyStop()
+		s.hotkeyStop = nil
 	}
 	close(s.stopCh)
 	<-s.doneCh
@@ -347,9 +385,11 @@ func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 // Eased physics: each frame, curX/curY interpolate toward (cursor + offset)
 // at factor 0.18 — matches the mock's "lagging companion" feel.
 //
-// Skeleton draw: anti-aliased paper-tone disc with a vermilion centre dot.
-// Full riso rendering (rounded pill, hairline border, hard offset shadow,
-// state-specific glyphs) lands in the next pass.
+// Riso rendering (idle for now, expanding to other states):
+//   - Hard offset shadow — 2 px down-right, ink at 10% alpha, no blur
+//   - Paper-tone fill with a 1 px hairline border
+//   - State-specific glyph inside (idle: small ink-3 centre dot)
+//   - Subtle breathing animation (opacity oscillation, 4 s cycle)
 func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	cx, cy, err := platformGetCursorPos()
 	if err != nil {
@@ -360,6 +400,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	tgtY := float64(cy + s.spec.CursorOffsetY)
 	s.curX += (tgtX - s.curX) * followFactor
 	s.curY += (tgtY - s.curY) * followFactor
+	s.frameTick++
 
 	winX := int32(s.curX - pebbleWindowSizePx/2)
 	winY := int32(s.curY - pebbleWindowSizePx/2)
@@ -394,61 +435,12 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	defer procDeleteObjectGdi.Call(dib)
 	procSelectObject.Call(memDC, dib)
 
-	// Fill the pixel buffer manually — premultiplied ARGB, top-down.
-	// SKELETON: ~22 px paper-tone disc with vermilion centre dot, both
-	// with 1-px anti-aliased edges (alpha gradient where the floating-
-	// point distance crosses the radius). Everywhere else stays alpha=0.
 	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowSizePx*pebbleWindowSizePx)
 	for i := range pixels {
 		pixels[i] = 0
 	}
-	cxs := float64(pebbleWindowSizePx / 2)
-	cys := float64(pebbleWindowSizePx / 2)
-	const discR = 7.0 // outer radius (~14 px diameter — small companion)
-	const dotR = 1.8  // inner indicator dot
-
-	// Premultiplied colour helper: alpha 0..255, RGB scaled by alpha/255.
-	premul := func(a uint8, r, g, b uint8) uint32 {
-		ar := uint32(uint16(r) * uint16(a) / 255)
-		ag := uint32(uint16(g) * uint16(a) / 255)
-		ab := uint32(uint16(b) * uint16(a) / 255)
-		return uint32(a)<<24 | ar<<16 | ag<<8 | ab
-	}
-
-	// Smoothstep-ish edge: full alpha until r-0.5, fades to 0 over 1 px.
-	edge := func(d, r float64) float64 {
-		if d <= r-0.5 {
-			return 1
-		}
-		if d >= r+0.5 {
-			return 0
-		}
-		return r + 0.5 - d
-	}
-
-	// Paper-tone #F5F2EB and vermilion #C23A2A — riso palette.
-	const paperR, paperG, paperB uint8 = 0xF5, 0xF2, 0xEB
-	const dotRr, dotGg, dotBb uint8 = 0xC2, 0x3A, 0x2A
-
-	for py := 0; py < pebbleWindowSizePx; py++ {
-		for px := 0; px < pebbleWindowSizePx; px++ {
-			dx := float64(px) + 0.5 - cxs
-			dy := float64(py) + 0.5 - cys
-			d := sqrt(dx*dx + dy*dy)
-
-			dotA := edge(d, dotR)
-			discA := edge(d, discR)
-
-			if dotA > 0 {
-				// Dot pixel — blend dot over disc by treating dot as fully
-				// opaque (alpha=dotA) and ignoring disc beneath since dot
-				// covers it.
-				pixels[py*pebbleWindowSizePx+px] = premul(uint8(dotA*255), dotRr, dotGg, dotBb)
-			} else if discA > 0 {
-				pixels[py*pebbleWindowSizePx+px] = premul(uint8(discA*255), paperR, paperG, paperB)
-			}
-		}
-	}
+	state, _ := s.state.Load().(PebbleState)
+	s.drawState(pixels, state)
 
 	// UpdateLayeredWindow — moves AND repaints the window in one call.
 	// The blend function with AC_SRC_ALPHA tells the OS to honour the
