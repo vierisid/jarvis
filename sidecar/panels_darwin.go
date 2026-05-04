@@ -58,6 +58,12 @@ static void jarvis_panel_focus(void* nswindow_ptr) {
     [w makeKeyAndOrderFront:nil];
 }
 
+static void jarvis_panel_set_click_through(void* nswindow_ptr, int clickThrough) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    [w setIgnoresMouseEvents:(clickThrough ? YES : NO)];
+}
+
 // Returns cursor position in screen coordinates with origin at top-left
 // (Cocoa native is bottom-left; we flip Y so the value matches the
 // cross-platform contract used by the tracker goroutine).
@@ -131,5 +137,38 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 		return fmt.Errorf("nil NSWindow*")
 	}
 	C.jarvis_panel_move_window(handle, C.int(x), C.int(y))
+	return nil
+}
+
+// platformSetInteractiveRegions on macOS is non-trivial (requires custom
+// NSView hit-testing + masking) — deferred to a follow-up. For now this
+// is a no-op; the entire window stays interactive and visible.
+func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
+	return nil
+}
+
+func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil NSWindow*")
+	}
+	C.jarvis_panel_set_click_through(handle, boolToCInt(clickThrough))
+	return nil
+}
+
+func platformGetScreenSize() (int, int) {
+	// Stub — fullscreen mode is currently Windows-only.
+	return 1920, 1080
+}
+
+func platformGetVirtualScreenOrigin() (int, int) {
+	return 0, 0
+}
+
+func platformReassertTopmost(handle unsafe.Pointer) error {
+	// macOS NSWindow level reassertion; reuses the same C bridge.
+	if handle == nil {
+		return nil
+	}
+	C.jarvis_panel_focus(handle)
 	return nil
 }

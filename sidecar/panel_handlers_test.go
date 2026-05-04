@@ -10,15 +10,17 @@ import (
 // It records calls, lets tests pre-seed an error, and never opens real
 // windows so the test suite has no GUI dependency.
 type fakePanelService struct {
-	mu          sync.Mutex
-	spawned     map[PanelID]PanelSpec
-	closed      []PanelID
-	focused     []PanelID
-	followCalls map[PanelID]bool
-	spawnErr    error
-	closeErr    error
-	focusErr    error
-	nextID      int
+	mu                sync.Mutex
+	spawned           map[PanelID]PanelSpec
+	closed            []PanelID
+	focused           []PanelID
+	followCalls       map[PanelID]bool
+	regionCalls       map[PanelID][]PanelRect
+	clickThroughCalls map[PanelID]bool
+	spawnErr          error
+	closeErr          error
+	focusErr          error
+	nextID            int
 }
 
 func newFakePanelService() *fakePanelService {
@@ -76,6 +78,32 @@ func (f *fakePanelService) SetFollow(id PanelID, follow bool) error {
 		f.followCalls = make(map[PanelID]bool)
 	}
 	f.followCalls[id] = follow
+	return nil
+}
+
+func (f *fakePanelService) SetInteractiveRegions(id PanelID, rects []PanelRect) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	if f.regionCalls == nil {
+		f.regionCalls = make(map[PanelID][]PanelRect)
+	}
+	f.regionCalls[id] = rects
+	return nil
+}
+
+func (f *fakePanelService) SetClickThrough(id PanelID, ct bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	if f.clickThroughCalls == nil {
+		f.clickThroughCalls = make(map[PanelID]bool)
+	}
+	f.clickThroughCalls[id] = ct
 	return nil
 }
 
