@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, onReloaded func()) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, playback *AudioPlaybackService, onReloaded func()) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -75,6 +75,9 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["pebble.spawn"] = makePebbleSpawnHandler(pebble)
 		registry["pebble.close"] = makePebbleCloseHandler(pebble)
 		registry["pebble.set_state"] = makePebbleSetStateHandler(pebble)
+		if playback != nil {
+			registry["pebble.play_audio"] = makePebblePlayAudioHandler(playback)
+		}
 	}
 
 	// Administrative handlers — not gated by capability
