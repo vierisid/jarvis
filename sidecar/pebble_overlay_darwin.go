@@ -157,19 +157,47 @@ static const CGFloat kAnchorY = 28.0;
             CGPathRelease(barPath);
         }
 
-        // Bubble
-        CGFloat bx0 = 12, by0 = 50, bx1 = 340, by1 = 200;
+        // Resolve body text (dynamic transcript wins over per-state placeholder).
+        NSString* bodyText;
+        if (gPebbleBodyText && [gPebbleBodyText length] > 0) {
+            bodyText = gPebbleBodyText;
+        } else {
+            bodyText = speaking ? @"speaking…" : @"listening — go ahead.";
+        }
+
+        // Auto-fit bubble height: measure how tall the wrapped body text needs
+        // to be inside the bubble's inner width, add eyebrow + paddings, clamp
+        // to [108, 200]. Mirrors the Win32 computeBubbleBottom math.
+        const CGFloat kBubbleX0 = 12, kBubbleY0 = 50, kBubbleX1 = 340;
+        const CGFloat kBubbleY1Min = 108, kBubbleY1Max = 200;
+        const CGFloat kBodyX0 = 26, kBodyX1 = 326, kBodyY0 = 84, kBubbleBottomP = 12;
+
+        NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
+        paragraph.lineBreakMode = NSLineBreakByWordWrapping;
+        NSDictionary* bodyAttrsForMeasure = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+            NSParagraphStyleAttributeName: paragraph,
+        };
+        NSRect measureRect = [bodyText boundingRectWithSize:NSMakeSize(kBodyX1-kBodyX0, CGFLOAT_MAX)
+                                                    options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                 attributes:bodyAttrsForMeasure];
+        CGFloat textHeight = ceil(measureRect.size.height);
+        CGFloat by1 = kBodyY0 + textHeight + kBubbleBottomP;
+        if (by1 < kBubbleY1Min) by1 = kBubbleY1Min;
+        if (by1 > kBubbleY1Max) by1 = kBubbleY1Max;
+
+        // Bubble (auto-fit height)
         CGFloat cornerR = 6;
         CGFloat bs = 4; // shadow offset
 
-        CGRect bubShadow = CGRectMake(bx0+bs, by0+bs, bx1-bx0, by1-by0);
+        CGRect bubShadow = CGRectMake(kBubbleX0+bs, kBubbleY0+bs, kBubbleX1-kBubbleX0, by1-kBubbleY0);
         CGPathRef bubShadowPath = CGPathCreateWithRoundedRect(bubShadow, cornerR, cornerR, NULL);
         CGContextAddPath(ctx, bubShadowPath);
         CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.12);
         CGContextFillPath(ctx);
         CGPathRelease(bubShadowPath);
 
-        CGRect bub = CGRectMake(bx0, by0, bx1-bx0, by1-by0);
+        CGRect bub = CGRectMake(kBubbleX0, kBubbleY0, kBubbleX1-kBubbleX0, by1-kBubbleY0);
         CGPathRef bubPath = CGPathCreateWithRoundedRect(bub, cornerR, cornerR, NULL);
         CGContextAddPath(ctx, bubPath);
         CGContextSetRGBFillColor(ctx, bgR, bgG, bgB, 1.0);
@@ -198,22 +226,17 @@ static const CGFloat kAnchorY = 28.0;
         NSAttributedString* eyebrow = [[NSAttributedString alloc] initWithString:@"JARVIS" attributes:eyebrowAttrs];
         [eyebrow drawAtPoint:NSMakePoint(26, 64)];
 
-        NSString* bodyText;
-        if (gPebbleBodyText && [gPebbleBodyText length] > 0) {
-            bodyText = gPebbleBodyText;
-        } else {
-            bodyText = speaking ? @"speaking…" : @"listening — go ahead.";
-        }
-        NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
-        paragraph.lineBreakMode = NSLineBreakByWordWrapping;
         NSDictionary* bodyAttrs = @{
             NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:textR green:textG blue:textB alpha:1.0],
             NSParagraphStyleAttributeName: paragraph,
         };
         NSAttributedString* body = [[NSAttributedString alloc] initWithString:bodyText attributes:bodyAttrs];
-        // Wrap inside the bubble's body region (matches the Win32 rect).
-        [body drawWithRect:NSMakeRect(26, 84, 300, 108)
+        // Wrap inside the bubble's auto-fitted body region. Last-line
+        // truncation kicks in only when content would overflow the *capped*
+        // card; otherwise the bubble grew to fit.
+        CGFloat bodyDrawHeight = by1 - kBodyY0 - kBubbleBottomP/2.0;
+        [body drawWithRect:NSMakeRect(kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawHeight)
                    options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
                    context:nil];
         return;

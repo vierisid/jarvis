@@ -32,9 +32,23 @@ const (
 	dtLeft        = 0x00000000
 	dtWordBreak   = 0x00000010
 	dtSingleLine  = 0x00000020
+	dtCalcRect    = 0x00000400
 	dtNoClip      = 0x00000100
 	dtEndEllipsis = 0x00008000
 	dtEditControl = 0x00002000
+)
+
+// Bubble layout constants — keep in sync with drawBubble in pebble_draw_windows.go.
+const (
+	pebbleBubbleX0      = 12
+	pebbleBubbleY0      = 50
+	pebbleBubbleX1      = 340
+	pebbleBubbleBodyX0  = 26  // body text left, with 14 px inner pad from the card
+	pebbleBubbleBodyX1  = 326 // body text right, with 14 px inner pad
+	pebbleBubbleBodyY0  = 84  // body text top, after the JARVIS eyebrow row
+	pebbleBubbleBottomP = 12  // padding under the body text before the bubble border
+	pebbleBubbleY1Min   = 108 // bubble bottom for a single short line — keeps the card from looking pinched
+	pebbleBubbleY1Max   = 200 // window-imposed cap — keeps card inside the layered window
 )
 
 // CreateFont quality presets.
@@ -57,35 +71,108 @@ func colorRef(r, g, b uint8) uint32 {
 	return uint32(r) | uint32(g)<<8 | uint32(b)<<16
 }
 
+// resolveBodyText returns the body line for the bubble in this state, with
+// dynamic text from SetText winning over the per-state placeholder.
+func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
+	dyn, _ := s.bubbleText.Load().(string)
+	switch state {
+	case PebbleListening:
+		if dyn != "" {
+			return dyn
+		}
+		return "listening — go ahead."
+	case PebbleSpeaking:
+		if dyn != "" {
+			return dyn
+		}
+		return "speaking…"
+	default:
+		return ""
+	}
+}
+
+// makeBodyFont builds the body font (13 px Inter Tight, antialiased). The
+// caller owns the returned HFONT and must DeleteObject it. Shared between
+// measure (DT_CALCRECT) and paint passes so wrapping math is consistent.
+func makeBodyFont() uintptr {
+	bodyHeight := int32(-13)
+	weightNormal := int32(fwNormal)
+	bodyFace, _ := syscall.UTF16PtrFromString("Inter Tight")
+	font, _, _ := procCreateFontW.Call(
+		uintptr(bodyHeight),
+		0, 0, 0,
+		uintptr(weightNormal),
+		0, 0, 0,
+		uintptr(ansiCharset),
+		0, 0,
+		uintptr(antialiasedQuality),
+		0,
+		uintptr(unsafe.Pointer(bodyFace)),
+	)
+	return font
+}
+
+// computeBubbleBottom measures how tall the bubble needs to be to fit the
+// current body text (wrapped at the bubble's inner width). Result is clamped
+// to [pebbleBubbleY1Min, pebbleBubbleY1Max] so single-line copy doesn't
+// look pinched and long responses don't run past the layered window.
+//
+// Returns 0 when the bubble shouldn't be drawn at all (idle/thinking/working).
+func (s *pebbleServiceWindows) computeBubbleBottom(memDC uintptr, state PebbleState) int32 {
+	if state != PebbleListening && state != PebbleSpeaking {
+		return 0
+	}
+	body := s.resolveBodyText(state)
+	if body == "" {
+		return pebbleBubbleY1Min
+	}
+
+	bodyFont := makeBodyFont()
+	defer procDeleteObjectGdi.Call(bodyFont)
+
+	prev, _, _ := procSelectObject.Call(memDC, bodyFont)
+	defer procSelectObject.Call(memDC, prev)
+
+	bodyStr, _ := syscall.UTF16PtrFromString(body)
+	// DT_CALCRECT modifies the rect in place — Right stays fixed at the
+	// bubble's inner width, Bottom comes back as the height required to
+	// render the wrapped text without truncation.
+	rect := pblRect{
+		Left:   pebbleBubbleBodyX0,
+		Top:    pebbleBubbleBodyY0,
+		Right:  pebbleBubbleBodyX1,
+		Bottom: pebbleBubbleBodyY0,
+	}
+	nullTerm := int32(-1)
+	procDrawTextW.Call(
+		memDC,
+		uintptr(unsafe.Pointer(bodyStr)),
+		uintptr(nullTerm),
+		uintptr(unsafe.Pointer(&rect)),
+		uintptr(uint32(dtLeft|dtWordBreak|dtCalcRect)),
+	)
+
+	bottom := rect.Bottom + int32(pebbleBubbleBottomP)
+	if bottom < int32(pebbleBubbleY1Min) {
+		bottom = int32(pebbleBubbleY1Min)
+	}
+	if bottom > int32(pebbleBubbleY1Max) {
+		bottom = int32(pebbleBubbleY1Max)
+	}
+	return bottom
+}
+
 // drawBubbleText renders the riso "JARVIS" eyebrow + state-specific body
 // line into the bubble area. Called from paint() after drawBubble has
 // painted the rounded card background at alpha=255 — text writes opaque
 // RGB onto those pixels, which is correct for pre-multiplied ARGB at α=255.
 //
-// Two fonts: a 10 px mono uppercase eyebrow ("JARVIS") in the accent colour,
-// and a 13 px sans body line in ink colour. Antialiased quality for clean
-// edges on the bubble background.
-func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) {
-	// Dynamic body text wins when set (e.g. the live LLM response during
-	// speaking). Falls back to per-state placeholders so listening still
-	// invites the user, and speaking stays meaningful before the response
-	// arrives.
-	dynText, _ := s.bubbleText.Load().(string)
-	var bodyText string
-	switch state {
-	case PebbleListening:
-		if dynText != "" {
-			bodyText = dynText
-		} else {
-			bodyText = "listening — go ahead."
-		}
-	case PebbleSpeaking:
-		if dynText != "" {
-			bodyText = dynText
-		} else {
-			bodyText = "speaking…"
-		}
-	default:
+// bubbleY1 is the actual bubble bottom (computed via computeBubbleBottom)
+// so the text rect tracks the auto-fitted card and ellipsis kicks in only
+// when content would overflow the *capped* card.
+func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, bubbleY1 int32) {
+	bodyText := s.resolveBodyText(state)
+	if bodyText == "" {
 		return
 	}
 
@@ -94,9 +181,7 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) 
 	// Cast through int32 vars at runtime so the negative bit pattern
 	// doesn't trip Go's constant overflow check on uintptr conversion.
 	eyebrowHeight := int32(-10)
-	bodyHeight := int32(-13)
 	weightMedium := int32(fwMedium)
-	weightNormal := int32(fwNormal)
 
 	// Eyebrow font — uppercase mono, medium weight.
 	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
@@ -114,18 +199,7 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) 
 	defer procDeleteObjectGdi.Call(eyebrowFont)
 
 	// Body font — Inter Tight if installed, else Segoe UI Variable / Segoe UI.
-	bodyFace, _ := syscall.UTF16PtrFromString("Inter Tight")
-	bodyFont, _, _ := procCreateFontW.Call(
-		uintptr(bodyHeight),
-		0, 0, 0,
-		uintptr(weightNormal),
-		0, 0, 0,
-		uintptr(ansiCharset),
-		0, 0,
-		uintptr(antialiasedQuality),
-		0,
-		uintptr(unsafe.Pointer(bodyFace)),
-	)
+	bodyFont := makeBodyFont()
 	defer procDeleteObjectGdi.Call(bodyFont)
 
 	// Transparent text background — preserves the bubble fill underneath.
@@ -149,7 +223,7 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) 
 	procSetTextColor.Call(memDC, uintptr(eyebrowCol))
 	nullTerm := int32(-1) // DrawText sentinel for null-terminated string
 	eyebrowStr, _ := syscall.UTF16PtrFromString("JARVIS")
-	eyebrowRect := pblRect{Left: 26, Top: 62, Right: 326, Bottom: 80}
+	eyebrowRect := pblRect{Left: pebbleBubbleBodyX0, Top: 62, Right: pebbleBubbleBodyX1, Bottom: 80}
 	procDrawTextW.Call(
 		memDC,
 		uintptr(unsafe.Pointer(eyebrowStr)),
@@ -158,14 +232,19 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState) 
 		uintptr(uint32(dtLeft|dtSingleLine|dtNoClip)),
 	)
 
-	// Body row. Bubble runs from y=50 to y=200; eyebrow ends at 80.
-	// Reserve 84..192 for body so longer responses wrap up to ~6 lines
-	// at 13 px line-height before getting clipped. End-ellipsis trims the
-	// tail when even that runs out, so we never blow past the bubble edge.
+	// Body row — fills from below the eyebrow down to the auto-fitted bubble
+	// bottom (minus the bottom padding). End-ellipsis trims when content
+	// would overflow the *capped* card; otherwise the bubble grew to fit.
 	procSelectObject.Call(memDC, bodyFont)
 	procSetTextColor.Call(memDC, uintptr(bodyCol))
 	bodyStr, _ := syscall.UTF16PtrFromString(bodyText)
-	bodyRect := pblRect{Left: 26, Top: 84, Right: 326, Bottom: 192}
+	bodyBottom := bubbleY1 - int32(pebbleBubbleBottomP)/2
+	bodyRect := pblRect{
+		Left:   pebbleBubbleBodyX0,
+		Top:    pebbleBubbleBodyY0,
+		Right:  pebbleBubbleBodyX1,
+		Bottom: bodyBottom,
+	}
 	procDrawTextW.Call(
 		memDC,
 		uintptr(unsafe.Pointer(bodyStr)),

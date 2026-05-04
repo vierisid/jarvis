@@ -161,12 +161,14 @@ func edgeAA(d, r float64) float64 {
 	return r + 0.5 - d
 }
 
-// drawState dispatches to the per-state renderer.
-func (s *pebbleServiceWindows) drawState(pixels []uint32, state PebbleState) {
+// drawState dispatches to the per-state renderer. bubbleY1 is the
+// auto-fitted bubble bottom (computed from the wrapped body text height
+// in computeBubbleBottom); 0 means "no bubble this frame".
+func (s *pebbleServiceWindows) drawState(pixels []uint32, state PebbleState, bubbleY1 int32) {
 	switch state {
 	case PebbleListening, PebbleSpeaking:
 		s.drawListeningOrSpeaking(pixels, state == PebbleSpeaking)
-		s.drawBubble(pixels, state == PebbleSpeaking)
+		s.drawBubble(pixels, state == PebbleSpeaking, float64(bubbleY1))
 	case PebbleThinking:
 		s.drawThinking(pixels)
 	case PebbleWorking:
@@ -178,19 +180,25 @@ func (s *pebbleServiceWindows) drawState(pixels []uint32, state PebbleState) {
 
 // drawBubble — paper card that drops below the pebble during listening
 // and speaking. Riso aesthetic: rounded paper rect with hairline rule
-// border + hard offset shadow. Text rendering lands in W2-T15.
-func (s *pebbleServiceWindows) drawBubble(pixels []uint32, dark bool) {
-	// Bubble bounds: starts ~22 px below the pebble anchor, extends
-	// across most of the window width, ~150 px tall — fits the riso
-	// thread layout (header + body + actions + hint).
+// border + hard offset shadow. Card height is dynamic: bubbleY1 is
+// computed from the actual wrapped body text so the card never wastes
+// space below short responses.
+func (s *pebbleServiceWindows) drawBubble(pixels []uint32, dark bool, bubbleY1 float64) {
+	// Bubble bounds: top + width are fixed; bottom comes from the caller
+	// (auto-fit). cornerR + shadow keep the riso aesthetic identical
+	// regardless of card height.
 	const (
 		bubbleX0 = 12.0
 		bubbleY0 = 50.0
 		bubbleX1 = 340.0
-		bubbleY1 = 200.0
 		cornerR  = 6.0
 		shadow   = 4.0 // riso 4×4 hard offset shadow
 	)
+	if bubbleY1 < bubbleY0+10 {
+		// Fallback for safety — should never happen since paint clamps
+		// to pebbleBubbleY1Min, but keeps drawBubble robust on its own.
+		bubbleY1 = bubbleY0 + float64(pebbleBubbleY1Min-pebbleBubbleY0)
+	}
 
 	bgR, bgG, bgB := pebblePaperR, pebblePaperG, pebblePaperB
 	borderR, borderG, borderB := pebbleRuleR, pebbleRuleG, pebbleRuleB
