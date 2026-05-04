@@ -441,8 +441,51 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // per-platform). On sidecar connect, if the sidecar advertises the
     // `pebble` capability, dispatch `pebble.spawn`. On disconnect or daemon
     // shutdown, the sidecar's own Stop() closes the overlay cleanly.
+    //
+    // The daemon (brain) is the source of truth for pebble state. The
+    // sidecar emits a `pebble.summon` event when the user presses the
+    // summon hotkey (Ctrl+Space); the daemon receives it and drives the
+    // state machine via `pebble.set_state` RPC. For now this runs a fixed
+    // demo cycle (listening → thinking → speaking → idle) so we can
+    // verify all the state renderers end-to-end. Real voice/LLM
+    // integration replaces the timer logic in a follow-up ticket.
     if (process.env.JARVIS_AMBIENT_UI === '1') {
       const spawnedOn = new Set<string>();
+      const activeCycles = new Map<string, NodeJS.Timeout[]>();
+
+      const cancelCycle = (sidecarId: string) => {
+        const timers = activeCycles.get(sidecarId);
+        if (timers) {
+          for (const t of timers) clearTimeout(t);
+          activeCycles.delete(sidecarId);
+        }
+      };
+
+      const setState = async (sidecarId: string, state: string) => {
+        try {
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_state', { state });
+        } catch (err) {
+          console.warn(`[ambient-ui] pebble.set_state(${state}) on ${sidecarId} failed:`, err);
+        }
+      };
+
+      const runDemoCycle = (sidecarId: string) => {
+        cancelCycle(sidecarId);
+        const timers: NodeJS.Timeout[] = [];
+        // listening: immediately
+        setState(sidecarId, 'listening');
+        // thinking: after 2s
+        timers.push(setTimeout(() => setState(sidecarId, 'thinking'), 2000));
+        // speaking: after 4s
+        timers.push(setTimeout(() => setState(sidecarId, 'speaking'), 4000));
+        // idle: after 7s
+        timers.push(setTimeout(() => {
+          setState(sidecarId, 'idle');
+          activeCycles.delete(sidecarId);
+        }, 7000));
+        activeCycles.set(sidecarId, timers);
+      };
+
       sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) {
           console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
@@ -452,9 +495,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         spawnedOn.add(sidecar.id);
         try {
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
-            // Pebble centre lands ~26 px down-right of the cursor tip —
-            // close enough to feel like a companion, far enough that the
-            // ~14 px visible disc never overlaps the cursor.
             cursor_offset_x: 22,
             cursor_offset_y: 26,
             summon_hotkey: 'ctrl+space',
@@ -465,9 +505,27 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn(`[ambient-ui] Failed to spawn native pebble on ${sidecar.id}:`, err);
         }
       });
+
       sidecarManager.onSidecarDisconnected((sidecarId) => {
         spawnedOn.delete(sidecarId);
+        cancelCycle(sidecarId);
       });
+
+      // Listen for pebble.summon — fired by the sidecar's hotkey listener.
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type === 'pebble.summon') {
+          // If a cycle is already running, hotkey acts as a dismiss.
+          if (activeCycles.has(sidecarId)) {
+            cancelCycle(sidecarId);
+            setState(sidecarId, 'idle');
+            console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
+            return;
+          }
+          console.log(`[ambient-ui] pebble.summon on ${sidecarId} — running demo state cycle`);
+          runDemoCycle(sidecarId);
+        }
+      });
+
       console.log('[ambient-ui] Enabled — native pebble overlay (GDI+/Cocoa/Cairo) will spawn on sidecars with the \'pebble\' capability');
     }
 

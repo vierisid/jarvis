@@ -255,6 +255,26 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 
 	StartObservers(obsCtx, c.config, c.availableCaps, sendFn)
 
+	// Wire the pebble's summon hotkey to the brain via a SidecarEvent.
+	// The daemon listens for "pebble.summon" and drives state transitions
+	// via pebble.set_state RPC — so the brain stays the source of truth
+	// for what happens after summon (voice capture / LLM / TTS / element
+	// pointing). Pebble itself is purely visual.
+	if c.pebble != nil {
+		c.pebble.OnSummon(func() {
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "pebble.summon",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{},
+			}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[pebble] failed to emit summon event: %v", err)
+			}
+		})
+	}
+
 	return c.readLoop(ctx)
 }
 

@@ -52,6 +52,17 @@ type PebbleService interface {
 
 	// Close hides + destroys the overlay. Idempotent.
 	Close() error
+
+	// OnSummon registers a callback fired each time the user triggers the
+	// summon hotkey (Ctrl+Space). The callback runs on whatever goroutine
+	// the hotkey listener uses; receivers should not block.
+	//
+	// The pebble itself does NOT change state on summon — it leaves that
+	// to the brain. The callback is the sidecar's signal to the daemon
+	// ("user wants attention"); the daemon then drives state transitions
+	// via SetState (listening → thinking → speaking → idle, or whatever
+	// the voice/LLM lifecycle dictates).
+	OnSummon(callback func())
 }
 
 // NewPebbleService returns the platform-specific implementation. Defined in

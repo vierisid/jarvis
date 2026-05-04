@@ -24,3 +24,7 @@ func (s *pebbleServiceStub) SetState(state PebbleState) error {
 func (s *pebbleServiceStub) Close() error {
 	return nil
 }
+
+func (s *pebbleServiceStub) OnSummon(callback func()) {
+	// no-op — native pebble is Windows-only for now
+}
