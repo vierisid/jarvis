@@ -93,6 +93,23 @@ static void draw_text_wrapped(cairo_t* cr, double x, double y, double w, double 
     g_object_unref(layout);
 }
 
+// measure_text_height returns the wrapped height (px) the body text needs
+// at the given inner width + font. Mirrors Win32 DT_CALCRECT / Cocoa
+// boundingRectWithSize so the bubble can auto-fit identically across OSes.
+static int measure_text_height(cairo_t* cr, double w, const char* text, const char* font_desc) {
+    PangoLayout* layout = pango_cairo_create_layout(cr);
+    pango_layout_set_text(layout, text, -1);
+    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_width(layout, (int)(w * PANGO_SCALE));
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    int pw = 0, ph = 0;
+    pango_layout_get_pixel_size(layout, &pw, &ph);
+    g_object_unref(layout);
+    return ph;
+}
+
 static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
     // Clear to fully transparent.
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -169,12 +186,31 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
             cairo_fill(cr);
         }
 
-        // bubble
-        double bx0=12, by0=50, bx1=340, by1=200, cornerR=6, bs=4;
-        rounded_rect(cr, bx0+bs, by0+bs, bx1-bx0, by1-by0, cornerR);
+        // Resolve body text first so we can measure for auto-fit.
+        const char* body;
+        if (gPebbleBodyText && *gPebbleBodyText) {
+            body = gPebbleBodyText;
+        } else {
+            body = speaking ? "speaking…" : "listening — go ahead.";
+        }
+
+        // Auto-fit bubble height: measure wrapped text height inside the
+        // bubble's inner width, then size the card to fit. Mirrors the
+        // Win32 computeBubbleBottom math.
+        const double kBubbleX0 = 12, kBubbleY0 = 50, kBubbleX1 = 340;
+        const double kBubbleY1Min = 108, kBubbleY1Max = 200;
+        const double kBodyX0 = 26, kBodyX1 = 326, kBodyY0 = 80, kBubbleBottomP = 12;
+        int textH = measure_text_height(cr, kBodyX1-kBodyX0, body, "Inter Tight 11");
+        double by1 = kBodyY0 + (double)textH + kBubbleBottomP;
+        if (by1 < kBubbleY1Min) by1 = kBubbleY1Min;
+        if (by1 > kBubbleY1Max) by1 = kBubbleY1Max;
+
+        // bubble (auto-fit)
+        double cornerR = 6, bs = 4;
+        rounded_rect(cr, kBubbleX0+bs, kBubbleY0+bs, kBubbleX1-kBubbleX0, by1-kBubbleY0, cornerR);
         cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.12);
         cairo_fill(cr);
-        rounded_rect(cr, bx0, by0, bx1-bx0, by1-by0, cornerR);
+        rounded_rect(cr, kBubbleX0, kBubbleY0, kBubbleX1-kBubbleX0, by1-kBubbleY0, cornerR);
         cairo_set_source_rgba(cr, bgR, bgG, bgB, 1.0);
         cairo_fill_preserve(cr);
         cairo_set_source_rgba(cr,
@@ -192,15 +228,10 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
         double eyG = speaking ? kPaperG : kAccG;
         double eyB = speaking ? kPaperB : kAccB;
         draw_text_layout(cr, 26, 60, "JARVIS", "JetBrains Mono Medium 8", eyR, eyG, eyB);
-        const char* body;
-        if (gPebbleBodyText && *gPebbleBodyText) {
-            body = gPebbleBodyText;
-        } else {
-            body = speaking ? "speaking…" : "listening — go ahead.";
-        }
-        // Wrap inside the bubble's body region (matches Win32/macOS rect).
-        draw_text_wrapped(cr, 26, 80, 300, 112, body, "Inter Tight 11",
-                          textR, textG, textB);
+        // Body draw height tracks the auto-fitted card.
+        double bodyDrawH = by1 - kBodyY0 - kBubbleBottomP/2.0;
+        draw_text_wrapped(cr, kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawH,
+                          body, "Inter Tight 11", textR, textG, textB);
         return FALSE;
     }
 

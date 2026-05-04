@@ -468,12 +468,17 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 		pixels[i] = 0
 	}
 	state, _ := s.state.Load().(PebbleState)
-	s.drawState(pixels, state)
+	// Auto-fit bubble height: measure the wrapped body text first (DT_CALCRECT
+	// against the same memDC + body font we'll paint with) so the rounded card
+	// is exactly tall enough to hold the response — no wasted black space for
+	// short replies, but still capped so it can't overflow the layered window.
+	bubbleY1 := s.computeBubbleBottom(memDC, state)
+	s.drawState(pixels, state, bubbleY1)
 	// GDI text rendering on top of the bubble's fully-opaque (alpha=255)
 	// pixels. DrawText writes RGB without touching alpha, so the result
 	// remains pre-multiplied-ARGB-correct for UpdateLayeredWindow.
 	if state == PebbleListening || state == PebbleSpeaking {
-		s.drawBubbleText(memDC, state)
+		s.drawBubbleText(memDC, state, bubbleY1)
 	}
 
 	// UpdateLayeredWindow — moves AND repaints the window in one call.
