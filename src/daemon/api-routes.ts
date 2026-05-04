@@ -18,6 +18,7 @@ import type { AuditTrail, AuthorityDecisionType } from '../authority/audit.ts';
 import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
+import { applyQuickOverride } from '../authority/quick-override.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
@@ -2487,9 +2488,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             return error(`Invalid action: ${body.action}`, 400);
           }
 
-          // Single source of truth for the merge logic — shared with
+          // Single source of truth for the merge logic - shared with
           // the unit test in quick-override.test.ts so they can't drift.
-          const { applyQuickOverride } = await import('../authority/quick-override.ts');
           const currentConfig = applyQuickOverride(ctx.authorityEngine.getConfig(), {
             action: body.action,
             allow: body.allow,
