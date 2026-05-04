@@ -124,6 +124,16 @@ func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 	}
 }
 
+// pebble.stop_audio — interrupt the currently playing TTS clip. Used
+// when the user dismisses the pebble mid-speech (e.g. second hotkey
+// press during the speaking state). No-op when nothing is playing.
+func makePebbleStopAudioHandler(svc *AudioPlaybackService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		svc.Stop()
+		return &RPCResult{Result: map[string]any{"stopped": true}}, nil
+	}
+}
+
 // decodePebbleSpec converts a loose JSON params map into a typed PebbleSpec
 // via a JSON round-trip. All fields optional — Spawn applies sensible
 // defaults when zero.

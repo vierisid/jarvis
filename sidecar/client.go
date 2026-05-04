@@ -307,7 +307,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				}
 				_ = sendFn(ctx, startEvt, nil)
 
-				pcm, dur, err := pebbleCaptureForDuration(audioSvc, sessionID, 5*time.Second)
+				// VAD-driven capture (T25): runs until the user stops talking
+				// (silence > SilenceCutoff after speech) or the hard cap fires.
+				// Replaces the fixed 5 s window so short utterances don't
+				// pad with silence and long ones aren't cut off mid-thought.
+				pcm, dur, err := pebbleCaptureWithVAD(audioSvc, sessionID, DefaultVADOpts())
 				if err != nil {
 					log.Printf("[audio] capture failed: %v", err)
 					return

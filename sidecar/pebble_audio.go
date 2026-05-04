@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -53,6 +54,11 @@ type AudioCaptureService struct {
 	device  *malgo.Device
 	session *AudioSession
 	active  atomic.Bool
+	// onChunk, when set, is invoked synchronously on every PCM chunk
+	// delivered by the audio device. Used by VAD-driven capture to
+	// monitor speech energy without exposing the malgo callback.
+	onChunkMu sync.RWMutex
+	onChunk   func([]byte)
 }
 
 func NewAudioCaptureService() *AudioCaptureService {
@@ -100,6 +106,12 @@ func (s *AudioCaptureService) Start(sessionID string) error {
 		session.mu.Lock()
 		session.pcm.Write(input)
 		session.mu.Unlock()
+		s.onChunkMu.RLock()
+		cb := s.onChunk
+		s.onChunkMu.RUnlock()
+		if cb != nil {
+			cb(input)
+		}
 	}
 	deviceCallbacks := malgo.DeviceCallbacks{Data: onRecv}
 	device, err := malgo.InitDevice(s.ctx.Context, deviceConfig, deviceCallbacks)
@@ -220,6 +232,138 @@ func pebbleCaptureForDuration(svc *AudioCaptureService, sessionID string, dur ti
 	}
 	time.Sleep(dur)
 	return svc.Stop()
+}
+
+// SetChunkListener registers a callback invoked synchronously for each
+// PCM chunk the device delivers. Pass nil to clear. Used by VAD capture;
+// not thread-safe with concurrent registrations but the audio service
+// only ever has one consumer at a time.
+func (s *AudioCaptureService) SetChunkListener(cb func([]byte)) {
+	s.onChunkMu.Lock()
+	s.onChunk = cb
+	s.onChunkMu.Unlock()
+}
+
+// VADOpts tunes end-of-speech detection. All durations are wall-clock.
+type VADOpts struct {
+	HardCap       time.Duration // Max session length (e.g. 15s) — safety bound.
+	PreSpeechCap  time.Duration // Abort if no speech detected by this point (e.g. 4s).
+	SilenceCutoff time.Duration // End capture after this much silence post-speech (e.g. 1.1s).
+	RMSThreshold  float64       // RMS energy above which a chunk counts as speech (e.g. 500).
+}
+
+// DefaultVADOpts returns sensible defaults tuned for typical desktop mics.
+// Tweak via env vars or RPC params if a user's mic is unusually noisy.
+func DefaultVADOpts() VADOpts {
+	return VADOpts{
+		HardCap:       15 * time.Second,
+		PreSpeechCap:  4 * time.Second,
+		SilenceCutoff: 1100 * time.Millisecond,
+		RMSThreshold:  500.0,
+	}
+}
+
+// pebbleCaptureWithVAD captures audio until the user stops speaking
+// (silenceCutoff after the last detected speech), with safety bounds:
+//   - HardCap caps total session length so a stuck mic can't run forever.
+//   - PreSpeechCap aborts with empty PCM if no speech is detected at all,
+//     letting the daemon short-circuit the LLM call.
+//
+// Energy-based VAD: per chunk, compute RMS over the s16 samples. RMS above
+// the threshold flags speech. Coordinator polls the shared state every
+// 50 ms and decides when to stop. Simple and works well for desktop mics
+// where speech sits well above noise floor; can be swapped for WebRTC VAD
+// or Silero later if accuracy matters.
+func pebbleCaptureWithVAD(svc *AudioCaptureService, sessionID string, opts VADOpts) ([]byte, time.Duration, error) {
+	type vadState struct {
+		mu             sync.Mutex
+		startedAt      time.Time
+		speechSeen     bool
+		lastSpeechAt   time.Time
+		peakRMS        float64
+		chunksAnalyzed int
+	}
+	st := &vadState{startedAt: time.Now()}
+
+	svc.SetChunkListener(func(input []byte) {
+		rms := pcmRMSint16(input)
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		st.chunksAnalyzed++
+		if rms > st.peakRMS {
+			st.peakRMS = rms
+		}
+		if rms > opts.RMSThreshold {
+			if !st.speechSeen {
+				st.speechSeen = true
+				log.Printf("[audio] VAD: speech detected (rms=%.0f) after %dms",
+					rms, time.Since(st.startedAt).Milliseconds())
+			}
+			st.lastSpeechAt = time.Now()
+		}
+	})
+	defer svc.SetChunkListener(nil)
+
+	if err := svc.Start(sessionID); err != nil {
+		return nil, 0, err
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	reason := "hard-cap"
+	for range ticker.C {
+		now := time.Now()
+		st.mu.Lock()
+		elapsed := now.Sub(st.startedAt)
+		speechSeen := st.speechSeen
+		var silence time.Duration
+		if speechSeen {
+			silence = now.Sub(st.lastSpeechAt)
+		}
+		st.mu.Unlock()
+
+		if elapsed >= opts.HardCap {
+			reason = fmt.Sprintf("hard-cap %.1fs", opts.HardCap.Seconds())
+			break
+		}
+		if !speechSeen && elapsed >= opts.PreSpeechCap {
+			reason = fmt.Sprintf("no speech in %.1fs", opts.PreSpeechCap.Seconds())
+			break
+		}
+		if speechSeen && silence >= opts.SilenceCutoff {
+			reason = fmt.Sprintf("silence %.0fms after speech", silence.Seconds()*1000)
+			break
+		}
+	}
+
+	st.mu.Lock()
+	peak := st.peakRMS
+	chunks := st.chunksAnalyzed
+	st.mu.Unlock()
+	log.Printf("[audio] VAD: stop (reason=%s, peak_rms=%.0f, chunks=%d)", reason, peak, chunks)
+
+	return svc.Stop()
+}
+
+// pcmRMSint16 computes the root-mean-square energy of a chunk of
+// little-endian s16 PCM samples. Returns 0 for empty/odd-length buffers.
+// Used by VAD to flag chunks as speech vs silence.
+func pcmRMSint16(buf []byte) float64 {
+	if len(buf) < 2 {
+		return 0
+	}
+	n := len(buf) / 2
+	if n == 0 {
+		return 0
+	}
+	var sumSq float64
+	for i := 0; i < n; i++ {
+		s := int16(binary.LittleEndian.Uint16(buf[i*2 : i*2+2]))
+		v := float64(s)
+		sumSq += v * v
+	}
+	return math.Sqrt(sumSq / float64(n))
 }
 
 // suppress unused-import warning when the WAV path isn't used elsewhere

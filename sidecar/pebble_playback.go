@@ -38,6 +38,11 @@ type AudioPlaybackService struct {
 	mu      sync.Mutex
 	ctx     *malgo.AllocatedContext
 	playing atomic.Bool
+	// stopReq is set by Stop() to signal an in-flight Play() to abort.
+	// The data callback observes this each frame, fills the output buffer
+	// with silence, and closes the done channel — so playback ends within
+	// one buffer (~10ms) of the request, not at the next clip boundary.
+	stopReq atomic.Bool
 }
 
 func NewAudioPlaybackService() *AudioPlaybackService {
@@ -56,6 +61,8 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 		return fmt.Errorf("playback already in progress")
 	}
 	defer s.playing.Store(false)
+	// Reset any stale stop request from a previous session before we begin.
+	s.stopReq.Store(false)
 
 	pcm, sampleRate, channels, err := decodeAudio(audio, mimeHint)
 	if err != nil {
@@ -96,6 +103,17 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 	onSend := func(output, _ []byte, frameCount uint32) {
 		bytesPerFrame := int(channels) * 2 // s16 mono/stereo
 		need := int(frameCount) * bytesPerFrame
+		// Stop request from outside (e.g. user pressed Ctrl+Space mid-
+		// playback to interrupt). Treat exactly like EOF — silence the
+		// output buffer and signal completion. The blocking Play() then
+		// stops + uninits the device on its own goroutine.
+		if s.stopReq.Load() {
+			for i := range output[:need] {
+				output[i] = 0
+			}
+			closeDone()
+			return
+		}
 		if cursor >= len(pcm) {
 			// Past EOF — feed silence and signal done.
 			for i := range output[:need] {
@@ -132,6 +150,17 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 	<-done
 	device.Stop() //nolint:errcheck — best-effort; defer will Uninit anyway
 	return nil
+}
+
+// Stop signals an in-flight Play() to abort. Idempotent and safe to call
+// when no playback is active. Returns once the request is registered;
+// the actual device shutdown happens on Play()'s goroutine within the
+// next buffer (~10 ms on default malgo config).
+func (s *AudioPlaybackService) Stop() {
+	if !s.playing.Load() {
+		return
+	}
+	s.stopReq.Store(true)
 }
 
 // decodeAudio dispatches to the right decoder based on the byte stream's
