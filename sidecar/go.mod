@@ -12,5 +12,6 @@ require (
 
 require (
 	github.com/gen2brain/malgo v0.11.24 // indirect
+	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	golang.org/x/sys v0.1.0 // indirect
 )

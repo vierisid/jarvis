@@ -38,8 +38,9 @@ type SidecarClient struct {
 	sendFn    EventSender        // event sender for observers
 	mu        sync.Mutex         // protects handlers/obsCancel during reload
 
-	panels PanelService  // native window service (lazily set when CapWindows enabled)
-	pebble PebbleService // native pebble overlay (lazily set when CapPebble enabled)
+	panels   PanelService          // native window service (lazily set when CapWindows enabled)
+	pebble   PebbleService         // native pebble overlay (lazily set when CapPebble enabled)
+	playback *AudioPlaybackService // pebble TTS playback (alongside CapPebble)
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -59,7 +60,12 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client.runPreflight()
 	client.panels = maybeNewPanelService(client.availableCaps)
 	client.pebble = maybeNewPebbleService(client.availableCaps)
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.reloadConfig)
+	if client.pebble != nil {
+		// Playback service rides alongside the pebble — same capability gate
+		// (CapPebble) since both are part of the ambient voice loop.
+		client.playback = NewAudioPlaybackService()
+	}
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.playback, client.reloadConfig)
 	return client, nil
 }
 
@@ -179,13 +185,15 @@ func (c *SidecarClient) reloadConfig() {
 	}
 	if hasPebble && c.pebble == nil {
 		c.pebble = NewPebbleService()
+		c.playback = NewAudioPlaybackService()
 	} else if !hasPebble && c.pebble != nil {
 		_ = c.pebble.Close()
 		c.pebble = nil
+		c.playback = nil
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.playback, c.reloadConfig)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {

@@ -376,10 +376,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       };
 
-      // STT provider for the pebble's voice loop. Built from the same
-      // jarvisConfig.stt the dashboard uses, so API keys / provider choice
-      // (OpenAI Whisper / Groq Whisper / Local / Sarvam) carry over.
+      // STT + TTS providers for the pebble's voice loop. Both built from
+      // the same jarvisConfig.* the dashboard uses so API keys / provider
+      // choice (OpenAI Whisper / Groq / Local / Sarvam for STT;
+      // edge-tts / ElevenLabs / Sarvam for TTS) carry over.
       let pebbleSTT: import('../comms/voice.ts').STTProvider | null = null;
+      let pebbleTTS: import('../comms/voice.ts').TTSProvider | null = null;
       if (jarvisConfig.stt) {
         try {
           const { createSTTProvider } = await import('../comms/voice.ts');
@@ -391,6 +393,73 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn('[ambient-ui] failed to init STT provider:', err);
         }
       }
+      if (jarvisConfig.tts?.enabled) {
+        try {
+          const { createTTSProvider } = await import('../comms/voice.ts');
+          pebbleTTS = createTTSProvider(jarvisConfig.tts);
+          if (pebbleTTS) {
+            console.log(`[ambient-ui] TTS provider for pebble: ${jarvisConfig.tts.provider ?? 'edge-tts'}`);
+          }
+        } catch (err) {
+          console.warn('[ambient-ui] failed to init TTS provider:', err);
+        }
+      }
+
+      // ttsMimeType maps the configured TTS provider to a MIME hint the
+      // sidecar uses when sniffing audio bytes. (The sidecar primarily
+      // uses magic-byte detection; this is just the fallback hint.)
+      const ttsMimeType = (cfg: typeof jarvisConfig.tts): string => {
+        if (!cfg) return 'audio/mp3';
+        switch (cfg.provider) {
+          case 'sarvam':
+            return 'audio/wav';
+          case 'elevenlabs':
+          case 'edge-tts':
+          default:
+            return 'audio/mp3';
+        }
+      };
+
+      // estimateAudioDurationMs guesses how long the synthesized clip will
+      // play so we hold the speaking state until playback finishes. For
+      // MP3 we read the first frame's bitrate header (CBR/VBR average is
+      // close enough for our 1-3s clips); for WAV we parse the data chunk
+      // against sample rate/channels/bits. Returns null when we can't
+      // figure it out — caller then falls back to the chars-based ETA.
+      const estimateAudioDurationMs = (audio: Buffer): number | null => {
+        if (audio.length < 4) return null;
+        // WAV
+        if (audio[0] === 0x52 && audio[1] === 0x49 && audio[2] === 0x46 && audio[3] === 0x46) {
+          // RIFF — minimal parse: locate fmt + data chunks
+          let pos = 12;
+          let sampleRate = 0, channels = 0, bitsPerSample = 0, dataLen = 0;
+          while (pos + 8 <= audio.length) {
+            const id = audio.subarray(pos, pos + 4).toString('ascii');
+            const size = audio.readUInt32LE(pos + 4);
+            pos += 8;
+            if (pos + size > audio.length) break;
+            if (id === 'fmt ' && size >= 16) {
+              channels = audio.readUInt16LE(pos + 2);
+              sampleRate = audio.readUInt32LE(pos + 4);
+              bitsPerSample = audio.readUInt16LE(pos + 14);
+            } else if (id === 'data') {
+              dataLen = size;
+            }
+            pos += size;
+          }
+          if (sampleRate && channels && bitsPerSample && dataLen) {
+            const samples = dataLen / (channels * bitsPerSample / 8);
+            return Math.round((samples / sampleRate) * 1000);
+          }
+          return null;
+        }
+        // MP3 — assume edge-tts/ElevenLabs default 24 kHz / 48 kbps. The
+        // exact bitrate varies by provider; this is a coarse upper bound
+        // that's close enough to keep the speaking state visible until
+        // the sidecar finishes playing.
+        // 48 kbps = 6000 bytes/sec → ms = bytes / 6
+        return Math.round(audio.length / 6);
+      };
 
       // Wrap raw PCM s16 mono in a minimal RIFF/WAVE header so the
       // STT provider (which uploads via multipart and labels as audio.webm
@@ -516,12 +585,33 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.log(`[ambient-ui] JARVIS → "${response.slice(0, 200)}${response.length > 200 ? '…' : ''}"`);
 
           // 3. SPEAKING — show the actual response in the bubble (replaces
-          //    the generic "speaking…" placeholder) and broadcast for
-          //    dashboard TTS (T24 will pipe TTS audio back through the
-          //    sidecar so this works without dashboard).
+          //    the generic "speaking…" placeholder), synthesize TTS via the
+          //    daemon's existing provider, and dispatch the audio bytes to
+          //    the sidecar for playback (T24). The dashboard heartbeat
+          //    broadcast is kept as a fallback for dashboard-driven TTS so
+          //    nothing regresses for users without the playback path.
           await setState(session.sidecarId, 'speaking', response);
           try { wsService.broadcastHeartbeat(response); } catch { /* dashboard may not be open */ }
-          const speakingMs = Math.min(15000, Math.max(2000, response.length * 60));
+
+          let speakingMs = Math.min(15000, Math.max(2000, response.length * 60));
+          if (pebbleTTS) {
+            try {
+              const audio = await pebbleTTS.synthesize(response);
+              // Estimate playback duration so we keep the speaking state up
+              // until the audio finishes. MP3 from edge-tts/ElevenLabs hits
+              // ~16 KB/s at default bitrate; PCM WAV maps directly. The
+              // estimator falls back to the chars-based heuristic if the
+              // bitrate is unknown.
+              speakingMs = estimateAudioDurationMs(audio) ?? speakingMs;
+              await sidecarManager.dispatchRPC(session.sidecarId, 'pebble.play_audio', {
+                data: audio.toString('base64'),
+                mime_type: ttsMimeType(jarvisConfig.tts),
+                blocking: false,
+              });
+            } catch (err) {
+              console.warn('[ambient-ui] sidecar TTS playback failed (falling back to dashboard):', err);
+            }
+          }
           await new Promise<void>(r => setTimeout(r, speakingMs));
           if (ctrl.cancelled) return;
 

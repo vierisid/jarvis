@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 )
@@ -59,6 +60,67 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 			return nil, err
 		}
 		return &RPCResult{Result: map[string]any{"state": s}}, nil
+	}
+}
+
+// pebble.play_audio — plays a TTS clip through the system's default output
+// device. Used by the daemon's voice cycle once an LLM response has been
+// synthesized; lets JARVIS speak even when the dashboard isn't running.
+//
+// Params: {
+//   "data":      base64-encoded audio bytes (MP3 or WAV — sniffed at decode),
+//   "mime_type": optional hint ("audio/mp3" / "audio/wav"); used as a
+//                fallback when the magic-byte sniff is ambiguous,
+//   "blocking":  optional bool — if true, the RPC waits until playback
+//                finishes; otherwise it returns immediately and playback
+//                runs in the background.
+// }
+func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		rawData, ok := params["data"]
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: data")
+		}
+		dataStr, ok := rawData.(string)
+		if !ok {
+			return nil, fmt.Errorf("data must be a base64 string")
+		}
+		audio, err := base64.StdEncoding.DecodeString(dataStr)
+		if err != nil {
+			return nil, fmt.Errorf("decode base64: %w", err)
+		}
+
+		mime := ""
+		if v, ok := params["mime_type"].(string); ok {
+			mime = v
+		}
+		blocking := false
+		if v, ok := params["blocking"].(bool); ok {
+			blocking = v
+		}
+
+		if blocking {
+			if err := svc.Play(audio, mime); err != nil {
+				return nil, err
+			}
+			return &RPCResult{Result: map[string]any{
+				"played": true,
+				"bytes":  len(audio),
+			}}, nil
+		}
+
+		// Fire-and-forget — daemon's voice cycle calls this and continues.
+		// Sidecar logs (not RPC-returns) any decode/playback failure.
+		go func(buf []byte, m string) {
+			if err := svc.Play(buf, m); err != nil {
+				fmt.Printf("[playback] error: %v\n", err)
+			}
+		}(audio, mime)
+
+		return &RPCResult{Result: map[string]any{
+			"queued": true,
+			"bytes":  len(audio),
+		}}, nil
 	}
 }
 
