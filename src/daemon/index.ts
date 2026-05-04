@@ -700,6 +700,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           existing.cancelled = true;
           pendingSummons.delete(sidecarId);
           setState(sidecarId, 'idle', '');
+          // Cut off any in-flight TTS playback. Best-effort — the RPC
+          // is a no-op when nothing is playing (e.g. dismissed during
+          // listening/thinking). Without this, the audio keeps playing
+          // through to the end even though the bubble is back to idle.
+          sidecarManager.dispatchRPC(sidecarId, 'pebble.stop_audio', {}).catch(() => { /* sidecar may not have audio */ });
           console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
           return;
         }
