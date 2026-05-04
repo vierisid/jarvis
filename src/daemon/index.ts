@@ -451,39 +451,67 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // integration replaces the timer logic in a follow-up ticket.
     if (process.env.JARVIS_AMBIENT_UI === '1') {
       const spawnedOn = new Set<string>();
-      const activeCycles = new Map<string, NodeJS.Timeout[]>();
 
-      const cancelCycle = (sidecarId: string) => {
-        const timers = activeCycles.get(sidecarId);
-        if (timers) {
-          for (const t of timers) clearTimeout(t);
-          activeCycles.delete(sidecarId);
-        }
-      };
+      // Per-sidecar in-flight summon control. Tracks whether a summon is
+      // active and lets us cancel mid-flight when the user dismisses with
+      // a second hotkey press.
+      const pendingSummons = new Map<string, { cancelled: boolean }>();
 
-      const setState = async (sidecarId: string, state: string) => {
+      // setState pairs the visual state with optional bubble body text. The
+      // text wins over the per-state placeholder ("speaking…", "listening —
+      // go ahead.") so we can surface the live LLM response instead of the
+      // generic copy. Empty/undefined text falls back to the placeholder.
+      const setState = async (sidecarId: string, state: string, text?: string) => {
         try {
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_state', { state });
+          const params: { state: string; text?: string } = { state };
+          if (text !== undefined) params.text = text;
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_state', params);
         } catch (err) {
           console.warn(`[ambient-ui] pebble.set_state(${state}) on ${sidecarId} failed:`, err);
         }
       };
 
-      const runDemoCycle = (sidecarId: string) => {
-        cancelCycle(sidecarId);
-        const timers: NodeJS.Timeout[] = [];
-        // listening: immediately
-        setState(sidecarId, 'listening');
-        // thinking: after 2s
-        timers.push(setTimeout(() => setState(sidecarId, 'thinking'), 2000));
-        // speaking: after 4s
-        timers.push(setTimeout(() => setState(sidecarId, 'speaking'), 4000));
-        // idle: after 7s
-        timers.push(setTimeout(() => {
-          setState(sidecarId, 'idle');
-          activeCycles.delete(sidecarId);
-        }, 7000));
-        activeCycles.set(sidecarId, timers);
+      // STT provider for the pebble's voice loop. Built from the same
+      // jarvisConfig.stt the dashboard uses, so API keys / provider choice
+      // (OpenAI Whisper / Groq Whisper / Local / Sarvam) carry over.
+      let pebbleSTT: import('../comms/voice.ts').STTProvider | null = null;
+      if (jarvisConfig.stt) {
+        try {
+          const { createSTTProvider } = await import('../comms/voice.ts');
+          pebbleSTT = createSTTProvider(jarvisConfig.stt);
+          if (pebbleSTT) {
+            console.log(`[ambient-ui] STT provider for pebble: ${jarvisConfig.stt.provider}`);
+          }
+        } catch (err) {
+          console.warn('[ambient-ui] failed to init STT provider:', err);
+        }
+      }
+
+      // Wrap raw PCM s16 mono in a minimal RIFF/WAVE header so the
+      // STT provider (which uploads via multipart and labels as audio.webm
+      // by default) sees a recognizable audio container. Whisper sniffs
+      // file content, not just the filename hint.
+      const pcmToWav = (pcm: Buffer, sampleRate: number, channels: number): Buffer => {
+        const bitsPerSample = 16;
+        const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+        const blockAlign = (channels * bitsPerSample) / 8;
+        const dataLen = pcm.length;
+        const chunkSize = 36 + dataLen;
+        const header = Buffer.alloc(44);
+        header.write('RIFF', 0);
+        header.writeUInt32LE(chunkSize, 4);
+        header.write('WAVE', 8);
+        header.write('fmt ', 12);
+        header.writeUInt32LE(16, 16);
+        header.writeUInt16LE(1, 20); // PCM
+        header.writeUInt16LE(channels, 22);
+        header.writeUInt32LE(sampleRate, 24);
+        header.writeUInt32LE(byteRate, 28);
+        header.writeUInt16LE(blockAlign, 32);
+        header.writeUInt16LE(bitsPerSample, 34);
+        header.write('data', 36);
+        header.writeUInt32LE(dataLen, 40);
+        return Buffer.concat([header, pcm]);
       };
 
       sidecarManager.onSidecarConnected(async (sidecar) => {
@@ -508,21 +536,98 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       sidecarManager.onSidecarDisconnected((sidecarId) => {
         spawnedOn.delete(sidecarId);
-        cancelCycle(sidecarId);
+        const ctrl = pendingSummons.get(sidecarId);
+        if (ctrl) ctrl.cancelled = true;
+        pendingSummons.delete(sidecarId);
       });
 
-      // Listen for pebble.summon — fired by the sidecar's hotkey listener.
+      // pebble.summon — first press starts listening, second press dismisses.
+      // The actual voice work (STT → LLM → TTS) runs once the audio session
+      // completes (audioSessions.onComplete below), since that's when we
+      // have the PCM to transcribe.
       sidecarManager.onEvent((sidecarId, event) => {
-        if (event.event_type === 'pebble.summon') {
-          // If a cycle is already running, hotkey acts as a dismiss.
-          if (activeCycles.has(sidecarId)) {
-            cancelCycle(sidecarId);
-            setState(sidecarId, 'idle');
-            console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
+        if (event.event_type !== 'pebble.summon') return;
+        const existing = pendingSummons.get(sidecarId);
+        if (existing && !existing.cancelled) {
+          existing.cancelled = true;
+          pendingSummons.delete(sidecarId);
+          setState(sidecarId, 'idle', '');
+          console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
+          return;
+        }
+        pendingSummons.set(sidecarId, { cancelled: false });
+        setState(sidecarId, 'listening', '');
+        console.log(`[ambient-ui] pebble.summon on ${sidecarId} — listening for audio…`);
+      });
+
+      // W2-T22 + T23: audio session arrives → STT → LLM → speaking → idle.
+      // The pebble's state transitions are now driven by the actual audio
+      // pipeline (capture done → transcribe → think → speak), not timers.
+      const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
+      audioSessions.attach((cb) => sidecarManager.onEvent(cb));
+      audioSessions.onComplete(async (session) => {
+        const ctrl = pendingSummons.get(session.sidecarId);
+        if (!ctrl || ctrl.cancelled) return; // user dismissed mid-capture
+
+        console.log(
+          `[ambient-ui] session ${session.sessionId} captured: ` +
+          `${session.pcm.length} PCM bytes, ${session.durationMs}ms`
+        );
+
+        try {
+          // 1. THINKING — STT first, then LLM. Both happen during this state.
+          await setState(session.sidecarId, 'thinking', '');
+
+          let transcript = '';
+          if (pebbleSTT) {
+            const wav = pcmToWav(session.pcm, session.sampleRate, session.channels);
+            try {
+              transcript = (await pebbleSTT.transcribe(wav)).trim();
+            } catch (err) {
+              console.warn('[ambient-ui] STT error:', err);
+            }
+          } else {
+            console.warn('[ambient-ui] no STT configured — pebble can capture but not understand');
+          }
+          if (ctrl.cancelled) return;
+
+          if (!transcript) {
+            console.log('[ambient-ui] empty transcript — returning to idle');
+            await setState(session.sidecarId, 'idle', '');
+            pendingSummons.delete(session.sidecarId);
             return;
           }
-          console.log(`[ambient-ui] pebble.summon on ${sidecarId} — running demo state cycle`);
-          runDemoCycle(sidecarId);
+          console.log(`[ambient-ui] user said: "${transcript}"`);
+
+          // 2. LLM call with the real transcript.
+          let response = '';
+          try {
+            response = await agentService.handleMessage(transcript, 'pebble');
+          } catch (err) {
+            console.warn('[ambient-ui] LLM call failed:', err);
+            response = "I had trouble with that — say it again?";
+          }
+          if (ctrl.cancelled) return;
+          console.log(`[ambient-ui] JARVIS → "${response.slice(0, 200)}${response.length > 200 ? '…' : ''}"`);
+
+          // 3. SPEAKING — show the actual response in the bubble (replaces
+          //    the generic "speaking…" placeholder) and broadcast for
+          //    dashboard TTS (T24 will pipe TTS audio back through the
+          //    sidecar so this works without dashboard).
+          await setState(session.sidecarId, 'speaking', response);
+          try { wsService.broadcastHeartbeat(response); } catch { /* dashboard may not be open */ }
+          const speakingMs = Math.min(15000, Math.max(2000, response.length * 60));
+          await new Promise<void>(r => setTimeout(r, speakingMs));
+          if (ctrl.cancelled) return;
+
+          // 4. IDLE — clear the response text so the next listening cycle
+          //    starts with the placeholder hint, not the previous answer.
+          await setState(session.sidecarId, 'idle', '');
+          pendingSummons.delete(session.sidecarId);
+        } catch (err) {
+          console.warn('[ambient-ui] voice cycle error:', err);
+          await setState(session.sidecarId, 'idle', '');
+          pendingSummons.delete(session.sidecarId);
         }
       });
 

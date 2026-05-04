@@ -21,6 +21,8 @@ package main
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+#include <string.h>
+#include <stdlib.h>
 
 // Forward declaration so the Objective-C category can call back into Go.
 void jarvisPebbleSummonCallback(void);
@@ -35,6 +37,10 @@ static int        gOffsetY           = 26;
 static double     gCurX              = 0;
 static double     gCurY              = 0;
 static unsigned long long gFrameTick = 0;
+// gPebbleBodyText is the dynamic bubble copy (the live LLM transcript while
+// speaking). Empty falls back to the per-state placeholder ("speaking…",
+// "listening — go ahead.").
+static NSString*  gPebbleBodyText    = nil;
 
 // Riso colours (matched to the Windows pipeline / mock).
 static const CGFloat kPaperR = 245.0/255.0, kPaperG = 242.0/255.0, kPaperB = 235.0/255.0;
@@ -192,13 +198,24 @@ static const CGFloat kAnchorY = 28.0;
         NSAttributedString* eyebrow = [[NSAttributedString alloc] initWithString:@"JARVIS" attributes:eyebrowAttrs];
         [eyebrow drawAtPoint:NSMakePoint(26, 64)];
 
-        NSString* bodyText = speaking ? @"speaking…" : @"listening — go ahead.";
+        NSString* bodyText;
+        if (gPebbleBodyText && [gPebbleBodyText length] > 0) {
+            bodyText = gPebbleBodyText;
+        } else {
+            bodyText = speaking ? @"speaking…" : @"listening — go ahead.";
+        }
+        NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
+        paragraph.lineBreakMode = NSLineBreakByWordWrapping;
         NSDictionary* bodyAttrs = @{
             NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:textR green:textG blue:textB alpha:1.0],
+            NSParagraphStyleAttributeName: paragraph,
         };
         NSAttributedString* body = [[NSAttributedString alloc] initWithString:bodyText attributes:bodyAttrs];
-        [body drawAtPoint:NSMakePoint(26, 84)];
+        // Wrap inside the bubble's body region (matches the Win32 rect).
+        [body drawWithRect:NSMakeRect(26, 84, 300, 108)
+                   options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
+                   context:nil];
         return;
     }
 
@@ -340,6 +357,15 @@ static void jarvisPebbleSetStateImpl(int state) {
     if (gPebbleView) [gPebbleView setNeedsDisplay:YES];
 }
 
+static void jarvisPebbleSetTextImpl(const char* utf8) {
+    if (utf8 == NULL) {
+        gPebbleBodyText = nil;
+    } else {
+        gPebbleBodyText = [NSString stringWithUTF8String:utf8];
+    }
+    if (gPebbleView) [gPebbleView setNeedsDisplay:YES];
+}
+
 static void jarvisPebbleCloseImpl(void) {
     if (gPebbleTimer) {
         [gPebbleTimer invalidate];
@@ -361,6 +387,15 @@ void jarvisPebbleSetState(int state) {
     dispatch_async(dispatch_get_main_queue(), ^{ jarvisPebbleSetStateImpl(state); });
 }
 
+void jarvisPebbleSetText(const char* utf8) {
+    // Copy onto the heap so the Go-side buffer can be freed immediately.
+    char* copy = utf8 ? strdup(utf8) : NULL;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        jarvisPebbleSetTextImpl(copy);
+        if (copy) free(copy);
+    });
+}
+
 void jarvisPebbleClose(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ jarvisPebbleCloseImpl(); });
 }
@@ -369,6 +404,7 @@ import "C"
 
 import (
 	"sync/atomic"
+	"unsafe"
 )
 
 type pebbleServiceDarwin struct {
@@ -408,6 +444,17 @@ func (s *pebbleServiceDarwin) SetState(state PebbleState) error {
 		i = 0
 	}
 	C.jarvisPebbleSetState(i)
+	return nil
+}
+
+func (s *pebbleServiceDarwin) SetText(text string) error {
+	if text == "" {
+		C.jarvisPebbleSetText(nil)
+		return nil
+	}
+	cstr := C.CString(text)
+	defer C.free(unsafe.Pointer(cstr))
+	C.jarvisPebbleSetText(cstr)
 	return nil
 }
 

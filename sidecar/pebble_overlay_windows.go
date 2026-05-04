@@ -51,27 +51,27 @@ var (
 	procReleaseDC           = pebbleUser32.NewProc("ReleaseDC")
 	procUpdateLayeredWindow = pebbleUser32.NewProc("UpdateLayeredWindow")
 
-	procCreateCompatibleDC     = pebbleGdi32.NewProc("CreateCompatibleDC")
-	procDeleteDC               = pebbleGdi32.NewProc("DeleteDC")
-	procCreateDIBSection       = pebbleGdi32.NewProc("CreateDIBSection")
-	procSelectObject           = pebbleGdi32.NewProc("SelectObject")
-	procDeleteObjectGdi        = pebbleGdi32.NewProc("DeleteObject")
-	procBitBlt                 = pebbleGdi32.NewProc("BitBlt")
-	_                          = pebbleMsimg32 // keep referenced
+	procCreateCompatibleDC = pebbleGdi32.NewProc("CreateCompatibleDC")
+	procDeleteDC           = pebbleGdi32.NewProc("DeleteDC")
+	procCreateDIBSection   = pebbleGdi32.NewProc("CreateDIBSection")
+	procSelectObject       = pebbleGdi32.NewProc("SelectObject")
+	procDeleteObjectGdi    = pebbleGdi32.NewProc("DeleteObject")
+	procBitBlt             = pebbleGdi32.NewProc("BitBlt")
+	_                      = pebbleMsimg32 // keep referenced
 )
 
 // Window styles
 const (
-	pblWsPopup           = 0x80000000
-	pblWsVisible         = 0x10000000
-	pblWsExLayered       = 0x00080000
-	pblWsExTransparent   = 0x00000020
-	pblWsExTopmost       = 0x00000008
-	pblWsExNoActivate    = 0x08000000
-	pblWsExToolWindow    = 0x00000080
-	pblUlwAlpha          = 0x00000002
-	pblWmDestroy         = 0x0002
-	pblPmRemove          = 0x0001
+	pblWsPopup         = 0x80000000
+	pblWsVisible       = 0x10000000
+	pblWsExLayered     = 0x00080000
+	pblWsExTransparent = 0x00000020
+	pblWsExTopmost     = 0x00000008
+	pblWsExNoActivate  = 0x08000000
+	pblWsExToolWindow  = 0x00000080
+	pblUlwAlpha        = 0x00000002
+	pblWmDestroy       = 0x0002
+	pblPmRemove        = 0x0001
 )
 
 // HWND_TOPMOST = -1.
@@ -132,13 +132,14 @@ type pblBitmapInfo struct {
 // ─────────────────────────── Service ────────────────────────────────────────
 
 type pebbleServiceWindows struct {
-	mu      sync.Mutex
-	state   atomic.Value // PebbleState
-	spec    PebbleSpec
-	hwnd    uintptr
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	spawned atomic.Bool
+	mu         sync.Mutex
+	state      atomic.Value // PebbleState
+	bubbleText atomic.Value // string — body line; "" means use default per-state copy
+	spec       PebbleSpec
+	hwnd       uintptr
+	stopCh     chan struct{}
+	doneCh     chan struct{}
+	spawned    atomic.Bool
 
 	// Eased rendered position — matches the mock's 0.18 follow factor.
 	// `current` chases `target = cursor + offset` each frame.
@@ -164,6 +165,7 @@ type pebbleServiceWindows struct {
 func NewPebbleService() PebbleService {
 	s := &pebbleServiceWindows{}
 	s.state.Store(PebbleIdle)
+	s.bubbleText.Store("")
 	return s
 }
 
@@ -229,6 +231,11 @@ func (s *pebbleServiceWindows) SetState(state PebbleState) error {
 		return fmt.Errorf("pebble not spawned")
 	}
 	s.state.Store(state)
+	return nil
+}
+
+func (s *pebbleServiceWindows) SetText(text string) error {
+	s.bubbleText.Store(text)
 	return nil
 }
 
@@ -320,10 +327,10 @@ func (s *pebbleServiceWindows) pumpMessages() {
 // pinned at (pebbleAnchorX, pebbleAnchorY) within the window, and the
 // window is positioned so that anchor lands at (cursor + offset).
 const (
-	pebbleWindowW   = 360
-	pebbleWindowH   = 220
-	pebbleAnchorX   = 40
-	pebbleAnchorY   = 28
+	pebbleWindowW = 360
+	pebbleWindowH = 220
+	pebbleAnchorX = 40
+	pebbleAnchorY = 28
 )
 
 func (s *pebbleServiceWindows) createWindow() (uintptr, error) {

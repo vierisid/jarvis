@@ -30,8 +30,13 @@ func makePebbleCloseHandler(svc PebbleService) RPCHandler {
 	}
 }
 
-// pebble.set_state — transition the overlay to a new visual state.
-// Params: { "state": "idle"|"listening"|"thinking"|"speaking"|"working" }
+// pebble.set_state — transition the overlay to a new visual state and
+// optionally update the bubble body text.
+//
+//	Params: {
+//	  "state": "idle"|"listening"|"thinking"|"speaking"|"working",
+//	  "text":  optional string — bubble body line; omit/empty for default copy
+//	}
 func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		raw, ok := params["state"]
@@ -41,6 +46,14 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 		s, ok := raw.(string)
 		if !ok || s == "" {
 			return nil, fmt.Errorf("state must be a non-empty string")
+		}
+		// Apply text BEFORE state so the next paint already has the new
+		// body line — avoids one frame of stale "speaking…" placeholder.
+		if rawText, hasText := params["text"]; hasText {
+			text, _ := rawText.(string)
+			if err := svc.SetText(text); err != nil {
+				return nil, err
+			}
 		}
 		if err := svc.SetState(PebbleState(s)); err != nil {
 			return nil, err
