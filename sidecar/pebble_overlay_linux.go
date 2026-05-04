@@ -1,0 +1,388 @@
+//go:build linux
+
+package main
+
+// Native pebble overlay — Linux (GTK 3 + Cairo).
+//
+// W2-T12: mirrors the Windows + macOS implementations. GtkWindow with an
+// RGBA visual + decorated=false + keep_above + skip_taskbar gives the
+// transparent always-on-top frame; cairo_t in the draw signal renders
+// the riso pebble shapes. Pango handles text layout.
+//
+// IMPORTANT: GTK widgets are NOT thread-safe — every call must happen on
+// the main thread. The cgo bridge marshals onto the GLib main loop via
+// g_idle_add. The pebble's run goroutine pumps a 60fps timer.
+
+/*
+#cgo pkg-config: gtk+-3.0
+
+#include <gtk/gtk.h>
+#include <gdk/gdk.h>
+#include <cairo.h>
+#include <pango/pango.h>
+#include <math.h>
+#include <stdlib.h>
+
+// Riso colours.
+static const double kPaperR = 245.0/255.0, kPaperG = 242.0/255.0, kPaperB = 235.0/255.0;
+static const double kInkR   = 26.0/255.0,  kInkG   = 26.0/255.0,  kInkB   = 26.0/255.0;
+static const double kInk3R  = 106.0/255.0, kInk3G  = 103.0/255.0, kInk3B  = 96.0/255.0;
+static const double kRuleR  = 203.0/255.0, kRuleG  = 195.0/255.0, kRuleB = 178.0/255.0;
+static const double kAccR   = 194.0/255.0, kAccG   = 58.0/255.0,  kAccB   = 42.0/255.0;
+static const double kWarmR  = 138.0/255.0, kWarmG  = 106.0/255.0, kWarmB  = 31.0/255.0;
+
+static const int kWindowW = 360;
+static const int kWindowH = 220;
+static const double kAnchorX = 40;
+static const double kAnchorY = 28;
+
+static GtkWidget* gPebbleWindow = NULL;
+static GtkWidget* gPebbleArea   = NULL;
+static int gPebbleState = 0;
+static int gOffsetX = 22;
+static int gOffsetY = 26;
+static double gCurX = 0;
+static double gCurY = 0;
+static unsigned long long gFrameTick = 0;
+static guint gTimerId = 0;
+
+static void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x+w-r, y+r,   r, -M_PI/2, 0);
+    cairo_arc(cr, x+w-r, y+h-r, r, 0, M_PI/2);
+    cairo_arc(cr, x+r,   y+h-r, r, M_PI/2, M_PI);
+    cairo_arc(cr, x+r,   y+r,   r, M_PI, 3*M_PI/2);
+    cairo_close_path(cr);
+}
+
+static void draw_text_layout(cairo_t* cr, double x, double y, const char* text,
+                              const char* font_desc, double r, double g, double b) {
+    PangoLayout* layout = pango_cairo_create_layout(cr);
+    pango_layout_set_text(layout, text, -1);
+    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    cairo_set_source_rgba(cr, r, g, b, 1.0);
+    cairo_move_to(cr, x, y);
+    pango_cairo_show_layout(cr, layout);
+    g_object_unref(layout);
+}
+
+static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
+    // Clear to fully transparent.
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+    double cx = kAnchorX, cy = kAnchorY;
+    double phase4s     = (double)(gFrameTick % 240) / 240.0;
+    double phaseListen = (double)(gFrameTick % 57)  / 57.0;
+    double phaseThink  = (double)(gFrameTick % 78)  / 78.0;
+    double phaseWork   = (double)(gFrameTick % 96)  / 96.0;
+
+    if (gPebbleState == 0) {
+        const double discR = 8.0, dotR = 2.0, shadowOffset = 2.0;
+        // shadow
+        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
+        cairo_arc(cr, cx+shadowOffset, cy+shadowOffset, discR, 0, 2*M_PI);
+        cairo_fill(cr);
+        // disc
+        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
+        cairo_arc(cr, cx, cy, discR, 0, 2*M_PI);
+        cairo_fill(cr);
+        // border
+        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_arc(cr, cx, cy, discR, 0, 2*M_PI);
+        cairo_stroke(cr);
+        // breathing dot
+        double breathe = 0.5 + 0.5*sin(phase4s * 2 * M_PI);
+        double dotAlpha = 0.5 + 0.5*breathe;
+        cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, dotAlpha);
+        cairo_arc(cr, cx, cy, dotR, 0, 2*M_PI);
+        cairo_fill(cr);
+        return FALSE;
+    }
+
+    if (gPebbleState == 1 || gPebbleState == 3) {
+        gboolean speaking = (gPebbleState == 3);
+        double pillW = 36, pillH = 9, shadowOffset = 2;
+        double bgR  = speaking ? kInkR  : kPaperR;
+        double bgG  = speaking ? kInkG  : kPaperG;
+        double bgB  = speaking ? kInkB  : kPaperB;
+        double brR  = speaking ? kInkR  : kAccR;
+        double brG  = speaking ? kInkG  : kAccG;
+        double brB  = speaking ? kInkB  : kAccB;
+        double barR = speaking ? kPaperR : kAccR;
+        double barG = speaking ? kPaperG : kAccG;
+        double barB = speaking ? kPaperB : kAccB;
+
+        // pill shadow
+        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
+        cairo_fill(cr);
+        // pill
+        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, bgR, bgG, bgB, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, brR, brG, brB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+        // wave bars
+        const int barCount = 4;
+        const double barW = 2.0, barGap = 2.5;
+        double totalW = barCount*barW + (barCount-1)*barGap;
+        double startX = cx - totalW/2;
+        for (int i = 0; i < barCount; i++) {
+            double bx = startX + i*(barW+barGap);
+            double phase = phaseListen + i*0.18;
+            double v = 0.5 + 0.5*sin(phase * 2 * M_PI);
+            double barH = 2.5 + v*5.5;
+            rounded_rect(cr, bx, cy-barH/2, barW, barH, barW/2);
+            cairo_set_source_rgba(cr, barR, barG, barB, 1.0);
+            cairo_fill(cr);
+        }
+
+        // bubble
+        double bx0=12, by0=50, bx1=340, by1=200, cornerR=6, bs=4;
+        rounded_rect(cr, bx0+bs, by0+bs, bx1-bx0, by1-by0, cornerR);
+        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.12);
+        cairo_fill(cr);
+        rounded_rect(cr, bx0, by0, bx1-bx0, by1-by0, cornerR);
+        cairo_set_source_rgba(cr, bgR, bgG, bgB, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr,
+            speaking ? kInkR : kRuleR,
+            speaking ? kInkG : kRuleG,
+            speaking ? kInkB : kRuleB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        // text
+        double textR = speaking ? kPaperR : kInkR;
+        double textG = speaking ? kPaperG : kInkG;
+        double textB = speaking ? kPaperB : kInkB;
+        double eyR = speaking ? kPaperR : kAccR;
+        double eyG = speaking ? kPaperG : kAccG;
+        double eyB = speaking ? kPaperB : kAccB;
+        draw_text_layout(cr, 26, 60, "JARVIS", "JetBrains Mono Medium 8", eyR, eyG, eyB);
+        const char* body = speaking ? "speaking…" : "listening — go ahead.";
+        draw_text_layout(cr, 26, 80, body, "Inter Tight 11", textR, textG, textB);
+        return FALSE;
+    }
+
+    if (gPebbleState == 2) {
+        double pillW=14, pillH=6, shadowOffset=2;
+        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
+        cairo_fill(cr);
+        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        const int dotCount=3;
+        const double dotR=1.4, dotGap=4.0;
+        double startX = cx - (dotCount-1)*dotGap/2;
+        for (int i=0; i<dotCount; i++) {
+            double ph = phaseThink + i*0.15;
+            double bounce = sin(ph*2*M_PI);
+            double dy = -bounce*1.5;
+            double alpha = 0.35 + 0.65 * fmax(0.0, bounce);
+            cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, alpha);
+            cairo_arc(cr, startX+i*dotGap, cy+dy, dotR, 0, 2*M_PI);
+            cairo_fill(cr);
+        }
+        return FALSE;
+    }
+
+    if (gPebbleState == 4) {
+        double pillW=18, pillH=7, shadowOffset=2;
+        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
+        cairo_fill(cr);
+        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
+        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        double pulse = 0.85 + 0.15*sin(phaseWork * 2 * M_PI);
+        double dotR = 2.5 * pulse;
+        cairo_set_source_rgba(cr, kWarmR, kWarmG, kWarmB, 1.0);
+        cairo_arc(cr, cx-pillW+5, cy, dotR, 0, 2*M_PI);
+        cairo_fill(cr);
+    }
+    return FALSE;
+}
+
+static gboolean tick(gpointer user_data) {
+    if (!gPebbleWindow || !gPebbleArea) return G_SOURCE_REMOVE;
+
+    GdkDisplay* d = gdk_display_get_default();
+    GdkSeat* seat = gdk_display_get_default_seat(d);
+    GdkDevice* dev = gdk_seat_get_pointer(seat);
+    int mx = 0, my = 0;
+    gdk_device_get_position(dev, NULL, &mx, &my);
+
+    double tgtX = (double)mx + gOffsetX;
+    double tgtY = (double)my + gOffsetY;
+    const double followFactor = 0.18;
+    gCurX += (tgtX - gCurX) * followFactor;
+    gCurY += (tgtY - gCurY) * followFactor;
+    gFrameTick++;
+
+    int wx = (int)(gCurX - kAnchorX);
+    int wy = (int)(gCurY - kAnchorY);
+    gtk_window_move(GTK_WINDOW(gPebbleWindow), wx, wy);
+    gtk_window_set_keep_above(GTK_WINDOW(gPebbleWindow), TRUE);
+
+    gtk_widget_queue_draw(gPebbleArea);
+    return G_SOURCE_CONTINUE;
+}
+
+static gboolean spawn_idle(gpointer user_data) {
+    if (gPebbleWindow) return G_SOURCE_REMOVE;
+
+    if (!gtk_init_check(NULL, NULL)) {
+        g_warning("[pebble] gtk_init_check failed");
+        return G_SOURCE_REMOVE;
+    }
+
+    gPebbleWindow = gtk_window_new(GTK_WINDOW_POPUP);
+    gtk_window_set_default_size(GTK_WINDOW(gPebbleWindow), kWindowW, kWindowH);
+    gtk_window_set_decorated(GTK_WINDOW(gPebbleWindow), FALSE);
+    gtk_window_set_keep_above(GTK_WINDOW(gPebbleWindow), TRUE);
+    gtk_window_set_skip_taskbar_hint(GTK_WINDOW(gPebbleWindow), TRUE);
+    gtk_window_set_skip_pager_hint(GTK_WINDOW(gPebbleWindow), TRUE);
+    gtk_window_set_accept_focus(GTK_WINDOW(gPebbleWindow), FALSE);
+    gtk_window_set_type_hint(GTK_WINDOW(gPebbleWindow), GDK_WINDOW_TYPE_HINT_DOCK);
+    gtk_widget_set_app_paintable(gPebbleWindow, TRUE);
+
+    GdkScreen* screen = gtk_widget_get_screen(gPebbleWindow);
+    GdkVisual* visual = gdk_screen_get_rgba_visual(screen);
+    if (visual) gtk_widget_set_visual(gPebbleWindow, visual);
+
+    gPebbleArea = gtk_drawing_area_new();
+    gtk_widget_set_size_request(gPebbleArea, kWindowW, kWindowH);
+    g_signal_connect(gPebbleArea, "draw", G_CALLBACK(draw_pebble), NULL);
+    gtk_container_add(GTK_CONTAINER(gPebbleWindow), gPebbleArea);
+
+    gtk_widget_show_all(gPebbleWindow);
+
+    GdkWindow* gdkw = gtk_widget_get_window(gPebbleWindow);
+    if (gdkw) {
+        cairo_region_t* empty = cairo_region_create();
+        gdk_window_input_shape_combine_region(gdkw, empty, 0, 0);
+        cairo_region_destroy(empty);
+    }
+
+    gTimerId = g_timeout_add(16, tick, NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean close_idle(gpointer user_data) {
+    if (gTimerId) { g_source_remove(gTimerId); gTimerId = 0; }
+    if (gPebbleWindow) {
+        gtk_widget_destroy(gPebbleWindow);
+        gPebbleWindow = NULL;
+        gPebbleArea = NULL;
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean set_state_idle(gpointer user_data) {
+    int s = GPOINTER_TO_INT(user_data);
+    gPebbleState = s;
+    if (gPebbleArea) gtk_widget_queue_draw(gPebbleArea);
+    return G_SOURCE_REMOVE;
+}
+
+void jarvisPebbleSpawn(int offsetX, int offsetY) {
+    gOffsetX = offsetX;
+    gOffsetY = offsetY;
+    g_idle_add(spawn_idle, NULL);
+}
+
+void jarvisPebbleSetState(int state) {
+    g_idle_add(set_state_idle, GINT_TO_POINTER(state));
+}
+
+void jarvisPebbleClose(void) {
+    g_idle_add(close_idle, NULL);
+}
+*/
+import "C"
+
+import (
+	"runtime"
+	"sync/atomic"
+)
+
+type pebbleServiceLinux struct {
+	spawned        atomic.Bool
+	summonCallback func()
+}
+
+func NewPebbleService() PebbleService {
+	// Lock to a thread that will pump the GTK main loop.
+	runtime.LockOSThread()
+	go func() {
+		// Run the GLib main loop on a dedicated goroutine. gtk_init is
+		// called in the spawn handler. gtk_main blocks; idle callbacks
+		// fire on this goroutine's thread.
+		C.gtk_init(nil, nil)
+		C.gtk_main()
+	}()
+	return &pebbleServiceLinux{}
+}
+
+func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
+	if !s.spawned.CompareAndSwap(false, true) {
+		return nil
+	}
+	ox := spec.CursorOffsetX
+	oy := spec.CursorOffsetY
+	if ox == 0 && oy == 0 {
+		ox, oy = 22, 26
+	}
+	C.jarvisPebbleSpawn(C.int(ox), C.int(oy))
+	return nil
+}
+
+func (s *pebbleServiceLinux) SetState(state PebbleState) error {
+	var i C.int
+	switch state {
+	case PebbleListening:
+		i = 1
+	case PebbleThinking:
+		i = 2
+	case PebbleSpeaking:
+		i = 3
+	case PebbleWorking:
+		i = 4
+	default:
+		i = 0
+	}
+	C.jarvisPebbleSetState(i)
+	return nil
+}
+
+func (s *pebbleServiceLinux) Close() error {
+	if !s.spawned.CompareAndSwap(true, false) {
+		return nil
+	}
+	C.jarvisPebbleClose()
+	return nil
+}
+
+func (s *pebbleServiceLinux) OnSummon(callback func()) {
+	s.summonCallback = callback
+	// Linux X11 hotkey integration (XGrabKey on the root window) lives
+	// in hotkeys_linux.go (currently stubbed). Wiring it lands in the
+	// Linux hotkey ticket.
+}
