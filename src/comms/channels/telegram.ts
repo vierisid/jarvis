@@ -86,9 +86,12 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
-    // Verify bot token by calling getMe
+    // Verify bot token by calling getMe (with timeout so an unreachable
+    // api.telegram.org or hung connection doesn't block daemon startup)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(`${this.baseUrl}/getMe`);
+      const response = await fetch(`${this.baseUrl}/getMe`, { signal: controller.signal });
       const data = await response.json() as any;
 
       if (!data.ok) {
@@ -97,9 +100,12 @@ export class TelegramAdapter implements ChannelAdapter {
 
       console.log('[TelegramAdapter] Connected as:', data.result.username);
     } catch (error) {
-      throw new Error(
-        `Failed to connect to Telegram: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      const msg = error instanceof Error
+        ? (error.name === 'AbortError' ? 'getMe request timed out after 10s' : error.message)
+        : 'Unknown error';
+      throw new Error(`Failed to connect to Telegram: ${msg}`);
+    } finally {
+      clearTimeout(timeout);
     }
 
     this.polling = true;
