@@ -509,23 +509,73 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'sarvam':
             return 'audio/wav';
           case 'elevenlabs':
-          case 'edge-tts':
+          case 'edge':
           default:
             return 'audio/mp3';
         }
       };
 
-      // estimateAudioDurationMs guesses how long the synthesized clip will
-      // play so we hold the speaking state until playback finishes. For
-      // MP3 we read the first frame's bitrate header (CBR/VBR average is
-      // close enough for our 1-3s clips); for WAV we parse the data chunk
-      // against sample rate/channels/bits. Returns null when we can't
-      // figure it out — caller then falls back to the chars-based ETA.
+      // runTypewriter reveals `text` in the speaking bubble at a pace that
+      // *outruns* the TTS audio so the user can read ahead while listening.
+      // Reveal ends in ~60% of audioDurationMs (so a 5 s clip fully shows
+      // by 3 s), then the bubble holds at full text until the audio
+      // finishes. 30 ms tick (~33 fps) keeps the reveal smooth. Honours
+      // `ctrl.cancelled` so a second hotkey press aborts cleanly.
+      const runTypewriter = async (
+        sid: string,
+        text: string,
+        durationMs: number,
+        ctrl: { cancelled: boolean },
+      ): Promise<void> => {
+        if (!text) {
+          await new Promise<void>(r => setTimeout(r, durationMs));
+          return;
+        }
+        // Reveal-only window: outpace audio by ~40%, but never finish so
+        // fast it looks like a "paste" (≥600 ms) and never run past the
+        // audio itself (durationMs).
+        const revealMs = Math.max(600, Math.min(durationMs, Math.round(durationMs * 0.6)));
+        const tickMs = 30;
+        const totalTicks = Math.max(1, Math.round(revealMs / tickMs));
+        const charsPerTick = text.length / totalTicks;
+        let lastShown = -1;
+        const start = Date.now();
+        for (let i = 1; i <= totalTicks; i++) {
+          if (ctrl.cancelled) return;
+          const target = Math.min(text.length, Math.ceil(i * charsPerTick));
+          if (target !== lastShown) {
+            lastShown = target;
+            // Fire-and-forget — setState wraps dispatchRPC in try/catch.
+            // Awaiting would make the cadence drift on slow WS RTTs.
+            void setState(sid, 'speaking', text.slice(0, target));
+          }
+          await new Promise<void>(r => setTimeout(r, tickMs));
+        }
+        if (ctrl.cancelled) return;
+        if (lastShown < text.length) {
+          void setState(sid, 'speaking', text);
+        }
+        // Hold at full text until the audio finishes so the bubble doesn't
+        // disappear mid-playback.
+        const elapsed = Date.now() - start;
+        if (elapsed < durationMs) {
+          await new Promise<void>(r => setTimeout(r, durationMs - elapsed));
+        }
+      };
+
+      // estimateAudioDurationMs returns the playback duration of the
+      // synthesized clip in milliseconds. WAV: parse `data` chunk against
+      // sample rate/channels/bits. MP3: skip any ID3v2 tag, find the first
+      // MPEG sync frame, read its bitrate from the header, and compute
+      // `bytes * 8 / bitrate`. Reading the actual bitrate is necessary
+      // because providers vary widely (edge-tts ≈ 48 kbps, ElevenLabs
+      // ≈ 128 kbps) and an assumed bitrate produces wildly wrong durations.
+      // Returns null when the format isn't recognized so the caller can
+      // fall back to a chars-based heuristic.
       const estimateAudioDurationMs = (audio: Buffer): number | null => {
         if (audio.length < 4) return null;
         // WAV
         if (audio[0] === 0x52 && audio[1] === 0x49 && audio[2] === 0x46 && audio[3] === 0x46) {
-          // RIFF — minimal parse: locate fmt + data chunks
           let pos = 12;
           let sampleRate = 0, channels = 0, bitsPerSample = 0, dataLen = 0;
           while (pos + 8 <= audio.length) {
@@ -548,12 +598,41 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
           return null;
         }
-        // MP3 — assume edge-tts/ElevenLabs default 24 kHz / 48 kbps. The
-        // exact bitrate varies by provider; this is a coarse upper bound
-        // that's close enough to keep the speaking state visible until
-        // the sidecar finishes playing.
-        // 48 kbps = 6000 bytes/sec → ms = bytes / 6
-        return Math.round(audio.length / 6);
+        // MP3 — parse the first frame header for an accurate bitrate.
+        // Use readUInt8 throughout to keep TS happy under
+        // noUncheckedIndexedAccess; bounds are already validated.
+        let pos = 0;
+        if (audio.length >= 10 && audio.readUInt8(0) === 0x49 && audio.readUInt8(1) === 0x44 && audio.readUInt8(2) === 0x33) {
+          // ID3v2 header: 10 bytes + synchsafe size in bytes 6..9.
+          const tagSize =
+            ((audio.readUInt8(6) & 0x7f) << 21) |
+            ((audio.readUInt8(7) & 0x7f) << 14) |
+            ((audio.readUInt8(8) & 0x7f) << 7) |
+            (audio.readUInt8(9) & 0x7f);
+          pos = 10 + tagSize;
+        }
+        // MPEG-1 / MPEG-2 Layer 3 bitrate tables (kbps; index 0 = free, 15 = bad).
+        const v1L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+        const v2L3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+        while (pos + 4 <= audio.length) {
+          const b0 = audio.readUInt8(pos);
+          const b1 = audio.readUInt8(pos + 1);
+          if (b0 === 0xff && (b1 & 0xe0) === 0xe0) {
+            const b2 = audio.readUInt8(pos + 2);
+            const versionBits = (b1 >> 3) & 0x03; // 11=v1, 10=v2, 00=v2.5
+            const layerBits = (b1 >> 1) & 0x03;   // 01=Layer 3
+            const bitrateIdx = (b2 >> 4) & 0x0f;
+            const sampleRateIdx = (b2 >> 2) & 0x03;
+            if (layerBits !== 0 && bitrateIdx !== 0 && bitrateIdx !== 0x0f && sampleRateIdx !== 0x03) {
+              const kbps = versionBits === 0x03 ? v1L3[bitrateIdx] : v2L3[bitrateIdx];
+              if (kbps) {
+                return Math.round((audio.length * 8) / kbps);
+              }
+            }
+          }
+          pos++;
+        }
+        return null;
       };
 
       // Wrap raw PCM s16 mono in a minimal RIFF/WAVE header so the
@@ -679,35 +758,46 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (ctrl.cancelled) return;
           console.log(`[ambient-ui] JARVIS → "${response.slice(0, 200)}${response.length > 200 ? '…' : ''}"`);
 
-          // 3. SPEAKING — show the actual response in the bubble (replaces
-          //    the generic "speaking…" placeholder), synthesize TTS via the
-          //    daemon's existing provider, and dispatch the audio bytes to
-          //    the sidecar for playback (T24). The dashboard heartbeat
-          //    broadcast is kept as a fallback for dashboard-driven TTS so
-          //    nothing regresses for users without the playback path.
-          await setState(session.sidecarId, 'speaking', response);
+          // 3. SPEAKING — synthesize TTS first so we know the real audio
+          //    duration, then start the typewriter reveal in lockstep with
+          //    playback. The bubble enters speaking state with empty text,
+          //    grows char-by-char, and lands on the full response right as
+          //    the audio finishes. Dashboard heartbeat stays as fallback for
+          //    dashboard-driven TTS so existing flows don't regress.
           try { wsService.broadcastHeartbeat(response); } catch { /* dashboard may not be open */ }
 
           let speakingMs = Math.min(15000, Math.max(2000, response.length * 60));
+          let audioDispatched = false;
           if (pebbleTTS) {
             try {
               const audio = await pebbleTTS.synthesize(response);
-              // Estimate playback duration so we keep the speaking state up
-              // until the audio finishes. MP3 from edge-tts/ElevenLabs hits
-              // ~16 KB/s at default bitrate; PCM WAV maps directly. The
-              // estimator falls back to the chars-based heuristic if the
-              // bitrate is unknown.
+              // Estimate playback duration so the typewriter pace can align
+              // with the audio. MP3 from edge-tts/ElevenLabs hits ~16 KB/s
+              // at default bitrate; PCM WAV maps directly. Falls back to
+              // the chars-based heuristic if the bitrate is unknown.
               speakingMs = estimateAudioDurationMs(audio) ?? speakingMs;
               await sidecarManager.dispatchRPC(session.sidecarId, 'pebble.play_audio', {
                 data: audio.toString('base64'),
                 mime_type: ttsMimeType(jarvisConfig.tts),
                 blocking: false,
               });
+              audioDispatched = true;
             } catch (err) {
               console.warn('[ambient-ui] sidecar TTS playback failed (falling back to dashboard):', err);
             }
           }
-          await new Promise<void>(r => setTimeout(r, speakingMs));
+          if (ctrl.cancelled) return;
+
+          // Typewriter reveal — paced over speakingMs so the last character
+          // lands as the audio ends. Without TTS, falls back to the chars-
+          // based ETA so the timing still looks intentional. Updates fire
+          // through the regular setState path; the sidecar's bubble repaints
+          // on every text change.
+          await setState(session.sidecarId, 'speaking', '');
+          // Typewriter runs ~60 % of the audio length so the reader gets
+          // the full text well before the audio ends — exactly the
+          // "read along while listening" feel we want.
+          await runTypewriter(session.sidecarId, response, speakingMs, ctrl);
           if (ctrl.cancelled) return;
 
           // 4. IDLE — clear the response text so the next listening cycle
