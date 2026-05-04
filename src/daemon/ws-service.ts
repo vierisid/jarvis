@@ -334,8 +334,10 @@ export class WebSocketService implements Service {
               timestamp: Date.now(),
             }));
           } catch (err) {
-            // Socket may have died between map-read and send; safe to ignore.
-            console.warn('[WSService] voice_confirmation_expired send failed:', err);
+            // Socket may have died between map-read and send; safe to
+            // ignore. Use debug instead of warn so a burst of expirations
+            // against half-closed sockets doesn't spam the daemon log.
+            console.debug('[WSService] voice_confirmation_expired send failed:', err);
           }
         }
       }, VOICE_CONFIRMATION_SWEEP_INTERVAL_MS);
