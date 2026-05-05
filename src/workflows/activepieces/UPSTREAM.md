@@ -36,18 +36,46 @@ We also intentionally do not vendor:
 
 ## Curated pieces
 
-Initial bundled pieces (Phase 1, ~30):
+Initial bundled pieces (Phase 1):
+
+From `packages/pieces/core/` (built-in primitives):
 
 ```
-schedule, webhook, http, branch, loop, delay, approval, files-helper,
-store-storage, gmail, google-calendar, google-drive, slack, discord,
-telegram-bot, github, notion, openai, anthropic
+approval, delay, file-helper, http, schedule, store, webhook
 ```
+
+From `packages/pieces/community/`:
+
+```
+claude, discord, github, gmail, google-calendar, google-drive,
+notion, openai, slack, telegram-bot
+```
+
+Plus the piece SDK and shared utilities: `packages/pieces/framework`, `packages/pieces/common`.
 
 Plus the Jarvis-native pieces (Phase 3): `jarvis-ask`, `jarvis-agent`, `jarvis-tool`, `jarvis-context`, `jarvis-notify`, `jarvis-trigger`.
 
-Additional pieces can be added later by re-running the sync script with an expanded curated set.
+Additional pieces can be added later by editing `VENDOR_PATHS` in `scripts/sync-activepieces.ts` and re-running the sync.
 
-## Sync procedure (placeholder)
+## Vendored top-level paths
 
-The sync script lands in Phase 1. Until then, this directory is empty (apart from this file) and serves as a placeholder for the planned vendored tree.
+- `packages/server/engine` -- the flow runner.
+- `packages/shared` -- shared types and utilities (the `/ee/` subtree is filtered during copy).
+- `packages/pieces/framework` -- the piece SDK.
+- `packages/pieces/common` -- shared piece utilities.
+- `packages/pieces/core/<curated>` -- built-in primitives (see list above).
+- `packages/pieces/community/<curated>` -- integrations (see list above).
+- `packages/web` -- the Vite-based visual builder app (formerly `packages/react-ui` before 0.82).
+- `packages/react-ui` -- locale assets the web app references at runtime.
+
+`LICENSE.activepieces` (a copy of upstream's MIT LICENSE) sits next to this file.
+
+## Sync procedure
+
+To re-sync to a different upstream version:
+
+1. Update `PINNED_TAG` and `PINNED_SHA` in `scripts/sync-activepieces.ts` and the table at the top of this file.
+2. Run `bun run scripts/sync-activepieces.ts --check` to confirm the pinned SHA matches and all paths still exist.
+3. Run `bun run scripts/sync-activepieces.ts` to perform the sync.
+4. Run `bun run check:no-ee` to confirm the EE guard is still green.
+5. Resolve any local patches against new upstream.

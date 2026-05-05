@@ -1,0 +1,205 @@
+#!/usr/bin/env bun
+/**
+ * Sync vendored Activepieces source from upstream at a pinned commit.
+ *
+ * Usage:
+ *   bun run scripts/sync-activepieces.ts             # sync to pinned SHA
+ *   bun run scripts/sync-activepieces.ts --check     # verify without writing
+ *
+ * What it does:
+ *   1. Shallow-clones https://github.com/activepieces/activepieces at PINNED_TAG into a temp dir.
+ *   2. Verifies HEAD SHA matches PINNED_SHA.
+ *   3. Copies the curated subset of MIT-licensed paths into src/workflows/activepieces/.
+ *   4. Refuses any source path containing an `/ee/` segment (defense in depth).
+ *   5. Writes LICENSE.activepieces alongside UPSTREAM.md.
+ *
+ * What it does NOT do:
+ *   - Touch UPSTREAM.md (preserved).
+ *   - Pull in packages/server/api (NestJS, replaced in Phase 2).
+ *   - Pull in packages/ee/** or any /ee/ path (Activepieces Enterprise License).
+ *   - Pull in packages we don't yet need (cli, web, tests-e2e, custom pieces).
+ *
+ * After running, re-run `bun run check:no-ee` for sanity.
+ */
+
+import { existsSync, mkdirSync, readdirSync, statSync, rmSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+
+const PINNED_TAG = "0.82.1";
+const PINNED_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
+const REMOTE = "https://github.com/activepieces/activepieces.git";
+
+const REPO_ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const VENDOR_DIR = join(REPO_ROOT, "src/workflows/activepieces");
+
+/** Paths relative to upstream repo root, copied verbatim into VENDOR_DIR. */
+const VENDOR_PATHS: string[] = [
+  // Engine + supporting packages
+  "packages/server/engine",
+  "packages/shared",
+  // Piece SDK and shared utils
+  "packages/pieces/framework",
+  "packages/pieces/common",
+  // Built-in primitives (live under packages/pieces/core in upstream)
+  "packages/pieces/core/approval",
+  "packages/pieces/core/delay",
+  "packages/pieces/core/file-helper",
+  "packages/pieces/core/http",
+  "packages/pieces/core/schedule",
+  "packages/pieces/core/store",
+  "packages/pieces/core/webhook",
+  // Curated community pieces (Phase 1 set; expand later by editing this list)
+  "packages/pieces/community/claude",
+  "packages/pieces/community/discord",
+  "packages/pieces/community/github",
+  "packages/pieces/community/gmail",
+  "packages/pieces/community/google-calendar",
+  "packages/pieces/community/google-drive",
+  "packages/pieces/community/notion",
+  "packages/pieces/community/openai",
+  "packages/pieces/community/slack",
+  "packages/pieces/community/telegram-bot",
+  // React UI for the visual builder (Vite app) + locale assets
+  "packages/web",
+  "packages/react-ui",
+];
+
+const EE_SEGMENT = /(^|\/)ee(\/|$)/;
+const checkOnly = process.argv.includes("--check");
+
+function run(cmd: string, args: string[], cwd?: string): { stdout: string; stderr: string; code: number } {
+  const r = spawnSync(cmd, args, { cwd, encoding: "utf8" });
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 1 };
+}
+
+function fail(msg: string): never {
+  console.error(`[sync-activepieces] FAILED: ${msg}`);
+  process.exit(1);
+}
+
+function info(msg: string): void {
+  console.log(`[sync-activepieces] ${msg}`);
+}
+
+function assertNoEePaths(root: string): void {
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const p = stack.pop()!;
+    let s;
+    try {
+      s = statSync(p);
+    } catch {
+      continue;
+    }
+    if (s.isDirectory()) {
+      for (const name of readdirSync(p)) stack.push(join(p, name));
+    } else {
+      const rel = relative(root, p);
+      if (EE_SEGMENT.test(rel)) {
+        fail(`copied path contains an /ee/ segment: ${rel} -- this is Enterprise-licensed and forbidden`);
+      }
+    }
+  }
+}
+
+info(`Syncing Activepieces ${PINNED_TAG} (${PINNED_SHA.slice(0, 12)}) ${checkOnly ? "[check only]" : ""}`);
+
+// 1. Shallow clone into a temp dir
+const work = join(tmpdir(), `activepieces-sync-${PINNED_SHA.slice(0, 12)}`);
+if (existsSync(work)) {
+  info(`Removing stale temp dir ${work}`);
+  rmSync(work, { recursive: true, force: true });
+}
+info(`Cloning ${REMOTE} (depth=1, branch=${PINNED_TAG}) into ${work}`);
+const clone = run("git", ["clone", "--depth=1", "--branch", PINNED_TAG, REMOTE, work]);
+if (clone.code !== 0) fail(`git clone failed:\n${clone.stderr}`);
+
+// 2. Verify HEAD SHA
+const sha = run("git", ["rev-parse", "HEAD"], work).stdout.trim();
+if (sha !== PINNED_SHA) {
+  fail(`HEAD SHA mismatch: expected ${PINNED_SHA}, got ${sha}. Tag may have been re-pointed upstream.`);
+}
+info(`HEAD SHA verified: ${sha}`);
+
+// 3. Pre-flight: validate every requested vendor path exists upstream, and refuse if any contain /ee/
+for (const p of VENDOR_PATHS) {
+  if (EE_SEGMENT.test(p)) fail(`vendor path list contains an /ee/ segment: ${p}`);
+  const abs = join(work, p);
+  if (!existsSync(abs)) fail(`upstream path missing: ${p}`);
+}
+
+// 4. Copy LICENSE (top-level upstream LICENSE is MIT)
+const upstreamLicense = join(work, "LICENSE");
+if (!existsSync(upstreamLicense)) fail(`upstream LICENSE not found at ${upstreamLicense}`);
+const upstreamLicenseText = readFileSync(upstreamLicense, "utf8");
+
+if (checkOnly) {
+  info("--check mode: no files written. Pre-flight passed.");
+  rmSync(work, { recursive: true, force: true });
+  process.exit(0);
+}
+
+// 5. Wipe vendor tree except UPSTREAM.md
+mkdirSync(VENDOR_DIR, { recursive: true });
+const PRESERVE = new Set(["UPSTREAM.md"]);
+for (const name of readdirSync(VENDOR_DIR)) {
+  if (PRESERVE.has(name)) continue;
+  rmSync(join(VENDOR_DIR, name), { recursive: true, force: true });
+}
+
+// 6. Copy each vendor path
+let totalFiles = 0;
+const TEST_DIR_NAMES = new Set(["test", "tests", "__tests__"]);
+const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx)$/;
+
+/**
+ * Recursive copy that skips:
+ *   1. Any path whose relative segment matches `/ee/` (Activepieces Enterprise-licensed,
+ *      or any MIT subdirectory named `ee` that we don't vendor on principle).
+ *   2. Upstream test directories and `*.test.ts` / `*.spec.ts` files. We don't run
+ *      their tests against our project's tsconfig/runtime; the sync script always
+ *      pulls fresh from a known SHA, so upstream tests are never load-bearing here.
+ */
+function copyFiltered(src: string, dst: string, base: string): number {
+  const relFromBase = relative(base, src);
+  if (relFromBase && EE_SEGMENT.test(relFromBase)) return 0;
+  const s = statSync(src);
+  const baseName = src.split("/").pop() ?? "";
+  if (s.isDirectory()) {
+    if (TEST_DIR_NAMES.has(baseName)) return 0;
+    mkdirSync(dst, { recursive: true });
+    let n = 0;
+    for (const name of readdirSync(src)) {
+      n += copyFiltered(join(src, name), join(dst, name), base);
+    }
+    return n;
+  }
+  if (TEST_FILE_RE.test(baseName)) return 0;
+  mkdirSync(dirname(dst), { recursive: true });
+  copyFileSync(src, dst);
+  return 1;
+}
+
+for (const p of VENDOR_PATHS) {
+  const src = join(work, p);
+  const dst = join(VENDOR_DIR, p);
+  const n = copyFiltered(src, dst, src);
+  totalFiles += n;
+  info(`copied ${p} (${n} files)`);
+}
+
+// 7. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through
+assertNoEePaths(VENDOR_DIR);
+
+// 8. Write the LICENSE alongside UPSTREAM.md
+const licensePath = join(VENDOR_DIR, "LICENSE.activepieces");
+writeFileSync(licensePath, upstreamLicenseText);
+info(`wrote ${relative(REPO_ROOT, licensePath)}`);
+
+// 9. Cleanup temp dir
+rmSync(work, { recursive: true, force: true });
+
+info(`Done. Vendored ${totalFiles} files into ${relative(REPO_ROOT, VENDOR_DIR)}/.`);
+info("Next: run `bun run check:no-ee` to confirm the EE guard is still green.");
