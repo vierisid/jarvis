@@ -44,6 +44,44 @@ export interface JarvisPieceServices {
   toolRegistry?: PieceToolRegistry;
   notifier?: PieceNotifier;
   context?: PieceContextProvider;
+  agentDelegator?: PieceAgentDelegator;
+}
+
+/**
+ * Delegate a sub-agent run to M7. The daemon's implementation calls
+ * `assignPersistentAgentTask` (or equivalent) and waits for completion.
+ *
+ * `role` corresponds to M7's specialist role names (researcher, planner, ...).
+ * `maxIterations` caps the agent's tool loop.
+ */
+export interface PieceAgentDelegator {
+  delegate(input: PieceAgentDelegateInput): Promise<PieceAgentDelegateResult>;
+}
+
+export interface PieceAgentDelegateInput {
+  goal: string;
+  role?: string;
+  maxIterations?: number;
+}
+
+export type PieceAgentRunStatus = "completed" | "max_iterations" | "error" | "canceled";
+
+export interface PieceAgentToolCall {
+  name: string;
+  /** JSON-stringified arguments. Pieces don't introspect them. */
+  args?: string;
+  /** Stringified result (truncated to a sensible size by the delegator). */
+  result?: string;
+  error?: string;
+}
+
+export interface PieceAgentDelegateResult {
+  /** The agent's final message to the user. May be empty if status='error'. */
+  finalMessage: string;
+  toolCalls: PieceAgentToolCall[];
+  status: PieceAgentRunStatus;
+  /** Optional error detail when status='error'. */
+  error?: string;
 }
 
 /**

@@ -21,7 +21,11 @@ import {
   vaultGetEntityAction,
   vaultSearchAction,
 } from "./jarvis-context";
+import { delegateAction, jarvisAgentPiece } from "./jarvis-agent";
 import type {
+  PieceAgentDelegateInput,
+  PieceAgentDelegateResult,
+  PieceAgentDelegator,
   AwarenessActivitySnapshot,
   AwarenessRecentInput,
   CommitmentSnapshot,
@@ -526,6 +530,96 @@ describe("jarvis-context registration", () => {
     expect(r.resolveAction("jarvis-context:vault_get_entity")?.name).toBe("vault_get_entity");
     expect(r.resolveAction("jarvis-context:awareness_recent")?.name).toBe("awareness_recent");
     expect(r.resolveAction("jarvis-context:commitments_list")?.name).toBe("commitments_list");
+  });
+});
+
+// ---------------------------------------------------------- jarvis-agent
+
+class StubAgentDelegator implements PieceAgentDelegator {
+  public calls: PieceAgentDelegateInput[] = [];
+  constructor(private readonly result: PieceAgentDelegateResult) {}
+  async delegate(input: PieceAgentDelegateInput): Promise<PieceAgentDelegateResult> {
+    this.calls.push(input);
+    return this.result;
+  }
+}
+
+describe("jarvis-agent: parseInput", () => {
+  test("requires a goal; supports optional role + maxIterations", () => {
+    expect(delegateAction.parseInput({ goal: "summarize my inbox" })).toEqual({
+      goal: "summarize my inbox",
+    });
+    expect(
+      delegateAction.parseInput({ goal: "x", role: "researcher", maxIterations: 5 }),
+    ).toEqual({ goal: "x", role: "researcher", maxIterations: 5 });
+  });
+
+  test("rejects bad inputs", () => {
+    expect(() => delegateAction.parseInput({})).toThrow();
+    expect(() => delegateAction.parseInput({ goal: "" })).toThrow();
+    expect(() => delegateAction.parseInput({ goal: "x", role: "" })).toThrow();
+    expect(() => delegateAction.parseInput({ goal: "x", maxIterations: 0 })).toThrow();
+    expect(() => delegateAction.parseInput({ goal: "x", maxIterations: 2.5 })).toThrow();
+    expect(() => delegateAction.parseInput({ goal: "x", maxIterations: -3 })).toThrow();
+  });
+});
+
+describe("jarvis-agent: execute", () => {
+  test("dispatches to the delegator and returns the agent's result", async () => {
+    const delegator = new StubAgentDelegator({
+      finalMessage: "Done. 3 emails summarized.",
+      toolCalls: [
+        { name: "gmail_list", args: '{"query":"in:inbox"}', result: "[3 messages]" },
+        { name: "vault_save", args: "{}" },
+      ],
+      status: "completed",
+    });
+    const out = await delegateAction.execute(
+      { goal: "summarize my inbox", role: "researcher", maxIterations: 4 },
+      { services: { agentDelegator: delegator } },
+    );
+    expect(out.status).toBe("completed");
+    expect(out.toolCalls).toHaveLength(2);
+    expect(out.finalMessage).toMatch(/3 emails/);
+    expect(delegator.calls).toEqual([
+      { goal: "summarize my inbox", role: "researcher", maxIterations: 4 },
+    ]);
+  });
+
+  test("propagates a non-completed status verbatim", async () => {
+    const delegator = new StubAgentDelegator({
+      finalMessage: "",
+      toolCalls: [],
+      status: "max_iterations",
+    });
+    const out = await delegateAction.execute(
+      { goal: "g" },
+      { services: { agentDelegator: delegator } },
+    );
+    expect(out.status).toBe("max_iterations");
+  });
+
+  test("throws when the delegator service is missing", async () => {
+    await expect(
+      delegateAction.execute({ goal: "x" }, { services: {} }),
+    ).rejects.toThrow(/agentDelegator is not configured/);
+  });
+
+  test("registers cleanly alongside the other pieces", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisAskPiece);
+    r.register(jarvisToolPiece);
+    r.register(jarvisNotifyPiece);
+    r.register(jarvisContextPiece);
+    r.register(jarvisAgentPiece);
+    expect(r.list().map((p) => p.name).sort()).toEqual([
+      "jarvis-agent",
+      "jarvis-ask",
+      "jarvis-context",
+      "jarvis-notify",
+      "jarvis-tool",
+    ]);
+    expect(r.resolveAction("jarvis-agent:delegate")?.name).toBe("delegate");
   });
 });
 
