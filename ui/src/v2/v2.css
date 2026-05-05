@@ -33,6 +33,15 @@
   overflow: hidden;
 }
 
+/* T18 panel mode — bare RoomBody hosted in a sidecar-spawned native
+   window. No AppShell, no Thread/Rail, no voice handlers. Padding gives
+   the body breathing room from the OS window chrome; overflow:auto so
+   long lists scroll within the panel rather than the whole window. */
+.jarvis-v2-panel-mode {
+  padding: 16px 20px;
+  overflow: auto;
+}
+
 /* Phase 7 Pass B — visually-hidden utility for screen-reader-only
    announcements (voice state changes, room transitions). Standard
    recipe: takes itself out of the visual tree without `display: none`
