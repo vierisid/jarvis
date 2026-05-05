@@ -141,9 +141,9 @@ if (checkOnly) {
   process.exit(0);
 }
 
-// 5. Wipe vendor tree except UPSTREAM.md
+// 5. Wipe vendor tree except Jarvis-authored docs
 mkdirSync(VENDOR_DIR, { recursive: true });
-const PRESERVE = new Set(["UPSTREAM.md"]);
+const PRESERVE = new Set(["UPSTREAM.md", "SPIKE-SANDBOXING.md", "LICENSE.activepieces"]);
 for (const name of readdirSync(VENDOR_DIR)) {
   if (PRESERVE.has(name)) continue;
   rmSync(join(VENDOR_DIR, name), { recursive: true, force: true });
