@@ -13,6 +13,8 @@ import {
 } from "./types";
 import { askAction, jarvisAskPiece, parseJsonReply } from "./jarvis-ask";
 import { invokeAction, jarvisToolPiece } from "./jarvis-tool";
+import { jarvisNotifyPiece, notifyAction } from "./jarvis-notify";
+import type { PieceNotifier, PieceNotifyInput, PieceNotifyResult } from "./types";
 
 class StubLlm implements PieceLlmClient {
   public calls: PieceLlmInput[] = [];
@@ -292,6 +294,101 @@ describe("jarvis-tool: execute", () => {
     r.register(jarvisToolPiece);
     expect(r.list().map((p) => p.name).sort()).toEqual(["jarvis-ask", "jarvis-tool"]);
     expect(r.resolveAction("jarvis-tool:invoke")?.name).toBe("invoke");
+  });
+});
+
+// --------------------------------------------------------- jarvis-notify
+
+class StubNotifier implements PieceNotifier {
+  public calls: PieceNotifyInput[] = [];
+  constructor(private readonly result: PieceNotifyResult) {}
+  async notify(input: PieceNotifyInput): Promise<PieceNotifyResult> {
+    this.calls.push(input);
+    return this.result;
+  }
+}
+
+describe("jarvis-notify: parseInput", () => {
+  test("requires a non-empty message; defaults channels=['auto'] priority='normal'", () => {
+    expect(notifyAction.parseInput({ message: "hi" })).toEqual({
+      message: "hi",
+      channels: ["auto"],
+      priority: "normal",
+    });
+  });
+
+  test("accepts explicit channels and priority", () => {
+    expect(
+      notifyAction.parseInput({ message: "hi", channels: ["telegram", "voice"], priority: "high" }),
+    ).toEqual({ message: "hi", channels: ["telegram", "voice"], priority: "high" });
+  });
+
+  test("rejects unknown channels and priorities", () => {
+    expect(() =>
+      notifyAction.parseInput({ message: "hi", channels: ["sms"] }),
+    ).toThrow(/channels\[\] must contain only/);
+    expect(() => notifyAction.parseInput({ message: "hi", priority: "urgent" })).toThrow();
+  });
+
+  test("rejects missing/empty message", () => {
+    expect(() => notifyAction.parseInput({})).toThrow();
+    expect(() => notifyAction.parseInput({ message: "" })).toThrow();
+  });
+
+  test("empty channels array is normalized to ['auto']", () => {
+    expect(notifyAction.parseInput({ message: "hi", channels: [] })).toEqual({
+      message: "hi",
+      channels: ["auto"],
+      priority: "normal",
+    });
+  });
+});
+
+describe("jarvis-notify: execute", () => {
+  test("forwards message + channels + priority to the notifier", async () => {
+    const notifier = new StubNotifier({ delivered: ["telegram"], failed: [] });
+    const out = await notifyAction.execute(
+      { message: "hello world", channels: ["telegram"], priority: "high" },
+      { services: { notifier } },
+    );
+    expect(out).toEqual({ delivered: ["telegram"], failed: [] });
+    expect(notifier.calls).toEqual([
+      { message: "hello world", channels: ["telegram"], priority: "high" },
+    ]);
+  });
+
+  test("returns the notifier's failure report verbatim", async () => {
+    const notifier = new StubNotifier({
+      delivered: ["dashboard"],
+      failed: [{ channel: "telegram", error: "rate limited" }],
+    });
+    const out = await notifyAction.execute(
+      { message: "x", channels: ["auto"], priority: "normal" },
+      { services: { notifier } },
+    );
+    expect(out.failed).toEqual([{ channel: "telegram", error: "rate limited" }]);
+  });
+
+  test("throws when the notifier service is missing", async () => {
+    await expect(
+      notifyAction.execute(
+        { message: "x", channels: ["auto"], priority: "normal" },
+        { services: {} },
+      ),
+    ).rejects.toThrow(/notifier is not configured/);
+  });
+
+  test("registers cleanly alongside the other pieces", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisAskPiece);
+    r.register(jarvisToolPiece);
+    r.register(jarvisNotifyPiece);
+    expect(r.list().map((p) => p.name).sort()).toEqual([
+      "jarvis-ask",
+      "jarvis-notify",
+      "jarvis-tool",
+    ]);
+    expect(r.resolveAction("jarvis-notify:notify")?.name).toBe("notify");
   });
 });
 

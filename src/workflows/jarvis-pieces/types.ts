@@ -42,6 +42,34 @@ export interface JarvisPieceContext {
 export interface JarvisPieceServices {
   llm?: PieceLlmClient;
   toolRegistry?: PieceToolRegistry;
+  notifier?: PieceNotifier;
+}
+
+/**
+ * Channel-aware delivery surface used by `jarvis-notify`. The daemon's
+ * implementation routes through M8 (telegram/discord/signal), the dashboard
+ * broadcaster (WebSocketService), and the voice TTS pipeline (M10).
+ *
+ * "auto" lets the implementation pick reasonable defaults given the user's
+ * configured channels and the current priority.
+ */
+export interface PieceNotifier {
+  notify(input: PieceNotifyInput): Promise<PieceNotifyResult>;
+}
+
+export type PieceNotifyChannel = "auto" | "telegram" | "discord" | "voice" | "dashboard" | "desktop";
+
+export type PieceNotifyPriority = "low" | "normal" | "high";
+
+export interface PieceNotifyInput {
+  message: string;
+  channels?: PieceNotifyChannel[];
+  priority?: PieceNotifyPriority;
+}
+
+export interface PieceNotifyResult {
+  delivered: string[];
+  failed: { channel: string; error: string }[];
 }
 
 /**
