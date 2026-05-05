@@ -30,6 +30,16 @@ export interface BuildPieceServicesDeps {
   llmManager?: LLMManager;
   toolRegistry?: ToolRegistry;
   notifier?: NotifierDeps;
+  /**
+   * Pre-constructed event bus. Pass when daemon code (TriggerManager,
+   * publishers elsewhere) needs to share the same bus instance pieces use.
+   * If omitted, a fresh bus is created.
+   */
+  eventBus?: JarvisEventBusAdapter;
+  /**
+   * Pre-constructed workflow runner. Same rationale as eventBus.
+   */
+  workflowRunner?: JarvisWorkflowRunnerAdapter;
 }
 
 /**
@@ -51,8 +61,8 @@ export interface BuildPieceServicesDeps {
 export function buildPieceServices(deps: BuildPieceServicesDeps): JarvisPieceServices {
   const services: JarvisPieceServices = {
     context: new JarvisContextProviderAdapter(),
-    eventBus: new JarvisEventBusAdapter(),
-    workflowRunner: new JarvisWorkflowRunnerAdapter(),
+    eventBus: deps.eventBus ?? new JarvisEventBusAdapter(),
+    workflowRunner: deps.workflowRunner ?? new JarvisWorkflowRunnerAdapter(),
   };
 
   if (deps.llmManager) {

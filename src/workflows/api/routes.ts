@@ -49,6 +49,7 @@ import {
   type RunEnvironment,
 } from "../db/repos/flow-run";
 import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
+import type { TriggerManager } from "../runner/triggers/manager";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -88,8 +89,30 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
 
 const isStatus = (v: unknown): v is FlowStatus => v === "ENABLED" || v === "DISABLED";
 
+export interface CreateWorkflowRoutesOptions {
+  /**
+   * Optional trigger manager. When provided, every flow status / version
+   * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
+   * subscriptions reconcile to the current state. Without it, mutations are
+   * still persisted but triggers won't fire (manual `/run` still works).
+   */
+  triggerManager?: TriggerManager;
+}
+
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
-export function createWorkflowRoutes(): WorkflowRouteMap {
+export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): WorkflowRouteMap {
+  const refreshTrigger = (flowId: string): void => {
+    if (opts.triggerManager) {
+      try {
+        opts.triggerManager.refresh(flowId);
+      } catch (e) {
+        // Trigger management must never destabilize the API. Log and move on.
+        console.warn(
+          `[workflow-api] triggerManager.refresh(${flowId}) failed: ${(e as Error).message}`,
+        );
+      }
+    }
+  };
   return {
     // ------------------------------------------------------------------ flows
     "/api/v2/workflows": {
@@ -155,6 +178,7 @@ export function createWorkflowRoutes(): WorkflowRouteMap {
           if (body.metadata !== undefined) {
             updateFlowMetadata(id, body.metadata);
           }
+          if (body.status !== undefined) refreshTrigger(id);
           const flow = getFlow(id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
         }),
@@ -162,6 +186,7 @@ export function createWorkflowRoutes(): WorkflowRouteMap {
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           deleteFlow(id);
+          refreshTrigger(id);
           return ok({ ok: true });
         }),
     },
@@ -238,6 +263,7 @@ export function createWorkflowRoutes(): WorkflowRouteMap {
           if (target.state !== "LOCKED") target = lockVersion(target.id);
           setPublishedVersion(id, target.id);
           updateFlowStatus(id, "ENABLED");
+          refreshTrigger(id);
           const flow = getFlow(id);
           return flow ? ok({ flow: serializeFlow(flow), version: target }) : err("flow not found", 404);
         }),
@@ -309,6 +335,26 @@ export function createWorkflowRoutes(): WorkflowRouteMap {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = getFlowRun(runId);
           return run ? ok(run) : err("run not found", 404);
+        }),
+    },
+
+    // Webhook ingress. Path is /api/v2/webhooks/:flowId; we deliberately keep
+    // the v2 prefix so the legacy /webhooks/:flowId routes (still served by
+    // the legacy engine until Phase 6) don't collide.
+    "/api/v2/webhooks/:flowId": {
+      POST: (req) =>
+        trapErrors(async () => {
+          if (!opts.triggerManager) return err("webhooks are not enabled in this build", 503);
+          const { flowId } = (req as RequestWithParams<{ flowId: string }>).params;
+          return opts.triggerManager.webhookManager().handleRequest(flowId, req);
+        }),
+      // Allow GET too -- some providers (Slack, GitHub URL verification) probe
+      // with GET first. The webhook manager treats any method the same.
+      GET: (req) =>
+        trapErrors(async () => {
+          if (!opts.triggerManager) return err("webhooks are not enabled in this build", 503);
+          const { flowId } = (req as RequestWithParams<{ flowId: string }>).params;
+          return opts.triggerManager.webhookManager().handleRequest(flowId, req);
         }),
     },
 

@@ -49,6 +49,7 @@ import { jarvisContextPiece } from "../workflows/jarvis-pieces/jarvis-context.ts
 import { jarvisAgentPiece } from "../workflows/jarvis-pieces/jarvis-agent.ts";
 import { jarvisTriggerPiece } from "../workflows/jarvis-pieces/jarvis-trigger.ts";
 import { buildPieceServices } from "../workflows/adapters/index.ts";
+import { TriggerManager } from "../workflows/runner/triggers/manager.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -71,6 +72,7 @@ let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
+let triggerManager: TriggerManager | null = null;
 
 /**
  * Parse command line arguments
@@ -193,6 +195,13 @@ async function handleShutdown(signal: string): Promise<void> {
     // Stop all services (reverse order: websocket -> observers -> agent)
     if (registry) {
       await registry.stopAll();
+    }
+
+    // Stop the trigger manager first so no new RUN_FLOW jobs get enqueued
+    // while the worker drains.
+    if (triggerManager) {
+      triggerManager.stop();
+      triggerManager = null;
     }
 
     // Stop the workflow worker (drains in-flight jobs, then exits the poll loop)
@@ -529,11 +538,27 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager,
     };
     setCorsOrigin(jarvisConfig.daemon.port);
+
+    // Construct the workflow runtime's shared collaborators early so the
+    // route table can carry a TriggerManager reference (used for cron /
+    // webhook / on_event registration after API mutations) and the worker
+    // can pass the SAME event bus + runner instances into piece services.
+    const { JarvisEventBusAdapter, JarvisWorkflowRunnerAdapter } = await import("../workflows/adapters/index.ts");
+    const sharedEventBus = new JarvisEventBusAdapter();
+    const sharedWorkflowRunner = new JarvisWorkflowRunnerAdapter();
+    triggerManager = new TriggerManager({
+      workflowRunner: sharedWorkflowRunner,
+      eventBus: sharedEventBus,
+    });
+
     // Mount the legacy workflow routes (createApiRoutes) and the new v2 routes
     // side by side. v2 lives under /api/v2/workflows/* so they don't collide.
     // At Phase 6 cutover the legacy /api/workflows/* paths get removed and we
     // can drop the v2 prefix.
-    const apiRoutes = { ...createApiRoutes(apiContext), ...createWorkflowRoutes() };
+    const apiRoutes = {
+      ...createApiRoutes(apiContext),
+      ...createWorkflowRoutes({ triggerManager }),
+    };
     wsService.setApiRoutes(apiRoutes);
 
     // Serve dashboard from ui/dist/
@@ -624,6 +649,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const pieceServices = buildPieceServices({
       llmManager: agentService.getLLMManager(),
       toolRegistry: toolRegistry ?? undefined,
+      eventBus: sharedEventBus,
+      workflowRunner: sharedWorkflowRunner,
       notifier: {
         broadcastToDashboard: (text, priority) => wsService.broadcastNotification(text, priority),
         broadcastToChannels: async (channels, text) => {
@@ -652,6 +679,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     });
     workflowWorker.start();
     logWithTimestamp(`Workflow worker started with ${pieceRegistry.list().length} Jarvis pieces`);
+
+    // Start the trigger manager: scan ENABLED flows and register cron /
+    // webhook / on_event subscriptions. From this point on, any flow whose
+    // status flips ENABLED via the v2 API gets reconciled by the route
+    // hooks calling `triggerManager.refresh(flowId)`.
+    triggerManager.start();
+    logWithTimestamp(`Trigger manager started with ${triggerManager.list().length} active subscription(s)`);
 
     // Phase A — onboarding setup-mode guard for LLM-dependent services.
     // While `setup_completed_at === null` the user hasn't saved an LLM
