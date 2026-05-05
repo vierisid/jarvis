@@ -283,6 +283,45 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
+   * Multi-modal stream — same as streamMessage but the user message
+   * carries both an inline base64 image (e.g. a region screenshot
+   * captured by the pebble) and the user's text. Used by T19's
+   * "help with this" flow.
+   */
+  streamMessageWithImage(
+    text: string,
+    imageBase64: string,
+    mediaType: string,
+    channel: string = 'websocket',
+    siteContext?: string,
+  ): {
+    stream: AsyncIterable<LLMStreamEvent>;
+    onComplete: (fullText: string) => Promise<void>;
+  } {
+    let systemPrompt = this.buildFullSystemPrompt(channel, text);
+    if (siteContext) systemPrompt += '\n\n' + siteContext;
+
+    const content: import('../llm/provider.ts').ContentBlock[] = [
+      { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+      { type: 'text', text },
+    ];
+    const stream = this.orchestrator.streamMessage(systemPrompt, content);
+
+    const onComplete = async (fullText: string): Promise<void> => {
+      await Promise.allSettled([
+        this.extractKnowledge(text, fullText).catch((err) =>
+          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+        ),
+        this.learnFromInteraction(text, fullText, channel).catch((err) =>
+          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+        ),
+      ]);
+    };
+
+    return { stream, onComplete };
+  }
+
+  /**
    * Non-streaming message handler. Returns full response string.
    */
   async handleMessage(text: string, channel: string = 'websocket'): Promise<string> {

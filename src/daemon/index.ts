@@ -643,6 +643,43 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // T19 — region selection ("help with this"). Tracks the
+      // original transcript while the sidecar overlay runs so the
+      // LLM gets the user's question paired with the captured image.
+      const pendingRegionByPebble = new Map<string, { userText: string; ctrl: { cancelled: boolean }; startedAt: number }>();
+
+      const tryHandleRegionIntent = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        const t = userText.toLowerCase();
+        // Wide net for natural phrasing — "help with this", "look at
+        // this", "what's this", "explain what's on the screen", etc.
+        // Required deictic ("this", "that", "here", "on screen") so we
+        // don't false-positive on conversational sentences.
+        const re = /\b(help|look|explain|what'?s?|what is|describe|tell me about|analy[sz]e)\b[^.?!]*\b(this|that|here|the screen|on (?:my )?screen|the area|the region)\b/;
+        if (!re.test(t)) return false;
+
+        // The runResponseCycle caller already claimed the pendingSummons
+        // slot for this turn (Ctrl+Space → listening → audio.session_end
+        // → onComplete → here, OR wake-with-command → here). We just
+        // hand control off to the region overlay and re-use the same
+        // ctrl so a hotkey press still cancels cleanly.
+        pendingRegionByPebble.set(sidecarId, { userText, ctrl, startedAt: Date.now() });
+
+        await setState(sidecarId, 'working', '');
+        try {
+          await sidecarManager.dispatchRPC(sidecarId, 'region.start_selection', {});
+          console.log(`[ambient-ui] region selection started: "${userText}"`);
+        } catch (err) {
+          console.warn('[ambient-ui] region.start_selection failed:', err);
+          pendingRegionByPebble.delete(sidecarId);
+          await speakConfirmation(sidecarId, "I can't capture a region right now.", ctrl);
+        }
+        return true;
+      };
+
       // T20c — voice-driven in-panel navigation. The dashboard's
       // RoomActionBus already supports `switch_tab` and similar actions
       // for most rooms (workflows, goals, settings, authority, etc.);
@@ -1149,16 +1186,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
+        opts?: { image?: { base64: string; mediaType: string } },
       ): Promise<void> => {
         const cycleStart = Date.now();
 
-        // Fast paths (skip the LLM entirely):
-        //   1. Settings mutations ("turn off TTS", "switch STT to groq")
-        //   2. In-panel actions ("switch to editor tab", "go to logs")
-        //   3. Window controls ("open settings", "expand it", "close that")
-        // Order matters: in-panel ("switch to editor tab") must beat
-        // panel-spawn ("switch to editor"), and settings must beat
-        // panel ("turn off TTS in settings").
+        // Fast paths (skip the LLM entirely). Skipped when an image is
+        // already attached — the region-captured re-entry path lands
+        // here too and shouldn't try to trigger region capture again.
+        if (!opts?.image) {
+          if (await tryHandleRegionIntent(sidecarId, userText, ctrl)) {
+            console.log(`[ambient-ui] region-intent fast path took ${Date.now() - cycleStart}ms (waiting for capture…)`);
+            return;
+          }
+        }
         if (await tryHandleSettingsIntent(sidecarId, userText, ctrl)) {
           console.log(`[ambient-ui] settings-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
@@ -1233,11 +1273,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // windows the user might be referring to. Empty when no
           // panels are open — saves the prompt tokens.
           const panelCtx = buildPanelContext(sidecarId);
-          const { stream, onComplete } = agentService.streamMessage(
-            userText,
-            'pebble',
-            panelCtx || undefined,
-          );
+          // Multi-modal path (T19) — user shared a screenshot via region
+          // selection. Otherwise the regular text stream.
+          const handle = opts?.image
+            ? agentService.streamMessageWithImage(
+                userText,
+                opts.image.base64,
+                opts.image.mediaType,
+                'pebble',
+                panelCtx || undefined,
+              )
+            : agentService.streamMessage(
+                userText,
+                'pebble',
+                panelCtx || undefined,
+              );
+          const { stream, onComplete } = handle;
           for await (const event of stream) {
             if (ctrl.cancelled) {
               // User dismissed mid-stream. Stop sidecar playback + drain queue.
@@ -1458,6 +1509,60 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           await runResponseCycle(sidecarId, command, ctrl);
         } catch (err) {
           console.warn('[ambient-ui] wake voice cycle error:', err);
+          await setState(sidecarId, 'idle', '');
+        } finally {
+          pendingSummons.delete(sidecarId);
+        }
+      });
+
+      // T19 — region.captured / region.cancelled. The user said "help
+      // with this", we kicked off the overlay; now the screenshot is
+      // here (or they cancelled). Run a multi-modal LLM cycle with the
+      // image attached.
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type === 'region.cancelled') {
+          const pending = pendingRegionByPebble.get(sidecarId);
+          pendingRegionByPebble.delete(sidecarId);
+          if (pending) {
+            pending.ctrl.cancelled = true;
+            await setState(sidecarId, 'idle', '');
+            pendingSummons.delete(sidecarId);
+          }
+          return;
+        }
+        if (event.event_type !== 'region.captured') return;
+        const pending = pendingRegionByPebble.get(sidecarId);
+        if (!pending) return;
+        pendingRegionByPebble.delete(sidecarId);
+
+        const binary = event.binary as { type?: string; data?: string; mime_type?: string } | undefined;
+        if (!binary || binary.type !== 'inline' || typeof binary.data !== 'string') {
+          await setState(sidecarId, 'idle', '');
+          pendingSummons.delete(sidecarId);
+          return;
+        }
+        const imageBase64 = binary.data;
+        const mimeType = binary.mime_type || 'image/png';
+        const { ctrl, userText } = pending;
+        const payload = (event.payload as Record<string, unknown> | undefined) ?? {};
+        console.log(
+          `[ambient-ui] region.captured: ${imageBase64.length} base64 chars, ` +
+          `${payload.width}x${payload.height}, mime=${mimeType}, prompt="${userText}"`,
+        );
+        if (ctrl.cancelled) {
+          pendingSummons.delete(sidecarId);
+          return;
+        }
+
+        // Frame the question for the LLM: include the original voice
+        // text plus a hint that the image is the user's pointer.
+        const promptText = `${userText}\n\n(I've attached a screenshot of the area I selected on screen. Look at the image and answer based on what's shown there.)`;
+        try {
+          await runResponseCycle(sidecarId, promptText, ctrl, {
+            image: { base64: imageBase64, mediaType: mimeType },
+          });
+        } catch (err) {
+          console.warn('[ambient-ui] region voice cycle error:', err);
           await setState(sidecarId, 'idle', '');
         } finally {
           pendingSummons.delete(sidecarId);

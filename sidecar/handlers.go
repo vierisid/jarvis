@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, playback *AudioPlaybackService, onReloaded func()) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func()) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -80,6 +80,9 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 			registry["pebble.play_audio"] = makePebblePlayAudioHandler(playback)
 			registry["pebble.stop_audio"] = makePebbleStopAudioHandler(playback)
 		}
+		// Region selection (T19) is gated alongside the pebble cap since
+		// it's only useful in the ambient flow.
+		_ = regions // wired via direct closure in client.go (needs sendFn)
 	}
 
 	// Administrative handlers — not gated by capability

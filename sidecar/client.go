@@ -42,6 +42,7 @@ type SidecarClient struct {
 	panels   PanelService          // native window service (lazily set when CapWindows enabled)
 	pebble   PebbleService         // native pebble overlay (lazily set when CapPebble enabled)
 	playback *AudioPlaybackService // pebble TTS playback (alongside CapPebble)
+	regions  RegionSelectionService // T19 drag-select capture (alongside CapPebble)
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -65,8 +66,11 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		// Playback service rides alongside the pebble — same capability gate
 		// (CapPebble) since both are part of the ambient voice loop.
 		client.playback = NewAudioPlaybackService()
+		// Region selection (T19) — same gate; spawning the overlay only
+		// makes sense when the ambient UI is active.
+		client.regions = NewRegionSelectionService()
 	}
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.playback, client.reloadConfig)
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.playback, client.regions, client.reloadConfig)
 	return client, nil
 }
 
@@ -187,14 +191,16 @@ func (c *SidecarClient) reloadConfig() {
 	if hasPebble && c.pebble == nil {
 		c.pebble = NewPebbleService()
 		c.playback = NewAudioPlaybackService()
+		c.regions = NewRegionSelectionService()
 	} else if !hasPebble && c.pebble != nil {
 		_ = c.pebble.Close()
 		c.pebble = nil
 		c.playback = nil
+		c.regions = nil
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.playback, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.playback, c.regions, c.reloadConfig)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
@@ -381,6 +387,69 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			return &RPCResult{Result: map[string]any{"session_id": sessionID, "started": true}}, nil
 		}
 		c.mu.Unlock()
+
+		// region.start_selection (T19) — start a drag-select overlay.
+		// On capture, emit a `region.captured` event with the PNG bytes
+		// inline so the daemon can hand it to the LLM. On cancel, emit
+		// `region.cancelled` so the daemon can flip the pebble back to
+		// idle. Pause the wake listener for the duration so chord-press
+		// audio ("help with this") doesn't bleed into the capture.
+		if c.regions != nil {
+			c.mu.Lock()
+			c.handlers["region.start_selection"] = func(_ map[string]any) (*RPCResult, error) {
+				selectionID := fmt.Sprintf("region-%d", time.Now().UnixMilli())
+				if wakeListener != nil {
+					wakeListener.Suppress(true)
+				}
+				err := c.regions.Start(
+					func(pngBytes []byte, w, h int) {
+						if wakeListener != nil {
+							wakeListener.Suppress(false)
+						}
+						evt := SidecarEvent{
+							Type:      "sidecar_event",
+							EventType: "region.captured",
+							Timestamp: time.Now().UnixMilli(),
+							Priority:  "normal",
+							Payload: map[string]any{
+								"selection_id": selectionID,
+								"width":        w,
+								"height":       h,
+							},
+							Binary: BinaryDataInline{
+								Type:     "inline",
+								MimeType: "image/png",
+								Data:     base64.StdEncoding.EncodeToString(pngBytes),
+							},
+						}
+						if err := sendFn(ctx, evt, nil); err != nil {
+							log.Printf("[region] failed to emit captured: %v", err)
+						}
+					},
+					func() {
+						if wakeListener != nil {
+							wakeListener.Suppress(false)
+						}
+						evt := SidecarEvent{
+							Type:      "sidecar_event",
+							EventType: "region.cancelled",
+							Timestamp: time.Now().UnixMilli(),
+							Priority:  "normal",
+							Payload:   map[string]any{"selection_id": selectionID},
+						}
+						_ = sendFn(ctx, evt, nil)
+					},
+				)
+				if err != nil {
+					if wakeListener != nil {
+						wakeListener.Suppress(false)
+					}
+					return nil, err
+				}
+				return &RPCResult{Result: map[string]any{"selection_id": selectionID, "started": true}}, nil
+			}
+			c.mu.Unlock()
+		}
 	}
 
 	return c.readLoop(ctx)

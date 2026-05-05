@@ -10,9 +10,16 @@ import type {
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
+type OpenAIContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
+
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  // GPT-4o + later vision models accept an array of content parts on
+  // user messages so images can travel inline. System / assistant /
+  // tool messages stick to plain string for compatibility.
+  content: string | OpenAIContentPart[];
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 };
@@ -315,13 +322,30 @@ export class OpenAIProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
-        ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      // Multi-modal user messages (T19 region capture) need the image to
+      // ride alongside the text. OpenAI's vision API takes a content
+      // array of {type:'text'} / {type:'image_url'} parts on user
+      // messages. Other roles stay string for compat.
+      let content: string | OpenAIContentPart[];
+      if (typeof m.content === 'string') {
+        content = m.content;
+      } else if (m.role === 'user' && m.content.some(b => b.type === 'image')) {
+        content = m.content.map<OpenAIContentPart>((b) => {
+          if (b.type === 'text') return { type: 'text', text: b.text };
+          return {
+            type: 'image_url',
+            image_url: {
+              url: `data:${b.source.media_type};base64,${b.source.data}`,
+            },
+          };
+        });
+      } else {
+        content = m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      }
       const msg: OpenAIMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
         // When assistant made tool calls, content must be null (not empty string)
-        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,
+        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : content,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({

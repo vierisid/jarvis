@@ -10,9 +10,16 @@ import type {
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
+type OpenAIContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  // NVIDIA NIM is OpenAI-API-compatible; user messages with images
+  // ride as a content-parts array (text + image_url data URLs). Other
+  // roles keep the plain string for compatibility.
+  content: string | OpenAIContentPart[];
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 };
@@ -293,12 +300,25 @@ export class NVIDIAProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
-        ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      let content: string | OpenAIContentPart[];
+      if (typeof m.content === 'string') {
+        content = m.content;
+      } else if (m.role === 'user' && m.content.some(b => b.type === 'image')) {
+        // Multi-modal user message — translate ContentBlock[] into the
+        // OpenAI content-parts shape NVIDIA NIM accepts.
+        content = m.content.map<OpenAIContentPart>((b) => {
+          if (b.type === 'text') return { type: 'text', text: b.text };
+          return {
+            type: 'image_url',
+            image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` },
+          };
+        });
+      } else {
+        content = m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      }
       const msg: OpenAIMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,
+        content: (m.tool_calls && m.tool_calls.length > 0) ? '' : content,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({
