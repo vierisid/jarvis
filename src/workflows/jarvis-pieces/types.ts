@@ -41,6 +41,28 @@ export interface JarvisPieceContext {
  */
 export interface JarvisPieceServices {
   llm?: PieceLlmClient;
+  toolRegistry?: PieceToolRegistry;
+}
+
+/**
+ * Minimal slice of the Jarvis tool registry that pieces use. The daemon's
+ * concrete `ToolRegistry` satisfies this shape; tests pass a stub.
+ */
+export interface PieceToolRegistry {
+  has(name: string): boolean;
+  /** Throws if the tool is missing or invocation fails. */
+  execute(name: string, params: Record<string, unknown>): Promise<unknown>;
+  /** Returns metadata for the named tool, or null if absent. */
+  describe(name: string): PieceToolDescription | null;
+  /** Returns the names of all registered tools (optionally filtered by category). */
+  listNames(category?: string): string[];
+}
+
+export interface PieceToolDescription {
+  name: string;
+  description: string;
+  category: string;
+  parameters: Record<string, { type: string; description: string; required: boolean }>;
 }
 
 /** Minimal LLM client surface a piece needs. Concrete impls wrap the daemon's LLMManager. */

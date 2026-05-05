@@ -8,8 +8,11 @@ import {
   type PieceLlmClient,
   type PieceLlmInput,
   type PieceLlmResponse,
+  type PieceToolDescription,
+  type PieceToolRegistry,
 } from "./types";
 import { askAction, jarvisAskPiece, parseJsonReply } from "./jarvis-ask";
+import { invokeAction, jarvisToolPiece } from "./jarvis-tool";
 
 class StubLlm implements PieceLlmClient {
   public calls: PieceLlmInput[] = [];
@@ -22,6 +25,33 @@ class StubLlm implements PieceLlmClient {
 
 function makeCtx(llm?: PieceLlmClient): JarvisPieceContext {
   return { services: llm ? { llm } : {} };
+}
+
+class StubToolRegistry implements PieceToolRegistry {
+  public calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  constructor(
+    private readonly tools: Record<string, PieceToolDescription>,
+    private readonly impl: (name: string, params: Record<string, unknown>) => Promise<unknown> = async () => "ok",
+  ) {}
+  has(name: string): boolean {
+    return name in this.tools;
+  }
+  async execute(name: string, params: Record<string, unknown>): Promise<unknown> {
+    this.calls.push({ name, params });
+    return this.impl(name, params);
+  }
+  describe(name: string): PieceToolDescription | null {
+    return this.tools[name] ?? null;
+  }
+  listNames(category?: string): string[] {
+    return Object.values(this.tools)
+      .filter((t) => !category || t.category === category)
+      .map((t) => t.name);
+  }
+}
+
+function makeToolCtx(registry: PieceToolRegistry): JarvisPieceContext {
+  return { services: { toolRegistry: registry } };
 }
 
 // ---------------------------------------------------------------- registry
@@ -179,6 +209,89 @@ describe("integration: registry + jarvis-ask", () => {
     const parsed = handler!.parseInput({ prompt: "hi" });
     const result = await handler!.execute(parsed, makeCtx(llm));
     expect((result as { text: string }).text).toBe("from-registry");
+  });
+});
+
+// ----------------------------------------------------------- jarvis-tool
+
+describe("jarvis-tool: parseInput", () => {
+  test("requires a toolName, defaults params to empty object", () => {
+    expect(invokeAction.parseInput({ toolName: "search" })).toEqual({
+      toolName: "search",
+      params: {},
+    });
+  });
+
+  test("accepts an explicit params object", () => {
+    expect(
+      invokeAction.parseInput({ toolName: "run_command", params: { command: "ls" } }),
+    ).toEqual({ toolName: "run_command", params: { command: "ls" } });
+  });
+
+  test("rejects missing/empty toolName", () => {
+    expect(() => invokeAction.parseInput({})).toThrow(JarvisActionInputError);
+    expect(() => invokeAction.parseInput({ toolName: "" })).toThrow(JarvisActionInputError);
+  });
+
+  test("rejects non-object params", () => {
+    expect(() => invokeAction.parseInput({ toolName: "x", params: "no" })).toThrow();
+    expect(() => invokeAction.parseInput({ toolName: "x", params: [] })).toThrow();
+    expect(() => invokeAction.parseInput({ toolName: "x", params: 1 })).toThrow();
+  });
+});
+
+describe("jarvis-tool: execute", () => {
+  const greetTool: PieceToolDescription = {
+    name: "greet",
+    description: "say hi",
+    category: "demo",
+    parameters: { name: { type: "string", description: "who", required: true } },
+  };
+
+  test("invokes the tool through the registry and echoes toolName", async () => {
+    const registry = new StubToolRegistry(
+      { greet: greetTool },
+      async (_name, params) => `hi ${(params as { name: string }).name}`,
+    );
+    const out = await invokeAction.execute(
+      { toolName: "greet", params: { name: "Vieri" } },
+      makeToolCtx(registry),
+    );
+    expect(out).toEqual({ result: "hi Vieri", toolName: "greet" });
+    expect(registry.calls).toEqual([{ name: "greet", params: { name: "Vieri" } }]);
+  });
+
+  test("throws a clear error when the tool is not registered", async () => {
+    const registry = new StubToolRegistry({});
+    await expect(
+      invokeAction.execute({ toolName: "ghost", params: {} }, makeToolCtx(registry)),
+    ).rejects.toThrow(/tool not found: ghost/);
+  });
+
+  test("throws when the tool registry is missing from the context", async () => {
+    await expect(
+      invokeAction.execute({ toolName: "x", params: {} }, { services: {} }),
+    ).rejects.toThrow(/toolRegistry is not configured/);
+  });
+
+  test("propagates errors thrown by the underlying tool", async () => {
+    const registry = new StubToolRegistry(
+      { boom: { ...greetTool, name: "boom" } },
+      async () => {
+        throw new Error("kaboom");
+      },
+    );
+    await expect(
+      invokeAction.execute({ toolName: "boom", params: {} }, makeToolCtx(registry)),
+    ).rejects.toThrow(/kaboom/);
+  });
+
+  test("registers cleanly alongside jarvis-ask", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisAskPiece);
+    r.register(jarvisToolPiece);
+    expect(r.list().map((p) => p.name).sort()).toEqual(["jarvis-ask", "jarvis-tool"]);
+    expect(r.resolveAction("jarvis-tool:invoke")?.name).toBe("invoke");
   });
 });
 
