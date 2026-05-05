@@ -292,3 +292,50 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	)
 	return nil
 }
+
+// Win32 ShowWindow nCmdShow values for T18b voice window-state commands.
+const (
+	swShowNormal    = 1 // SW_SHOWNORMAL — restore from minimized/maximized
+	swShowMaximized = 3 // SW_SHOWMAXIMIZED
+	swMinimize      = 6 // SW_MINIMIZE — to taskbar without activating
+	swRestore       = 9 // SW_RESTORE — restore + activate
+)
+
+var procShowWindowPanel = user32.NewProc("ShowWindow")
+var procPostMessageW = user32.NewProc("PostMessageW")
+
+const wmClose = 0x0010
+
+// platformDestroyWindow forces an HWND to close even when the webview's
+// own message loop didn't pick up Terminate() promptly. Posts WM_CLOSE
+// to the window's queue — the webview's WndProc handles it the same way
+// the user clicking the X would, which actually destroys the HWND and
+// makes wv.Run() return so the deferred reg.delete fires.
+func platformDestroyWindow(handle unsafe.Pointer) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	procPostMessageW.Call(uintptr(handle), wmClose, 0, 0)
+	return nil
+}
+
+// platformSetWindowState transitions a panel HWND between normal,
+// minimized, and maximized states using ShowWindow.
+func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	var cmd int32
+	switch state {
+	case PanelWindowMinimized:
+		cmd = swMinimize
+	case PanelWindowMaximized:
+		cmd = swShowMaximized
+	case PanelWindowNormal:
+		cmd = swRestore
+	default:
+		return fmt.Errorf("unknown window state: %q", state)
+	}
+	procShowWindowPanel.Call(uintptr(handle), uintptr(cmd))
+	return nil
+}

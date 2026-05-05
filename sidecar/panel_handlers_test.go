@@ -123,6 +123,15 @@ func (f *fakePanelService) Stop() {
 	f.spawned = map[PanelID]PanelSpec{}
 }
 
+func (f *fakePanelService) SetWindowState(id PanelID, _ PanelWindowState) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.spawned[id]; !ok {
+		return ErrPanelUnknown
+	}
+	return nil
+}
+
 // tiny itoa to avoid pulling strconv in this test file
 func itoa(n int) string {
 	if n == 0 {

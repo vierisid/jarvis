@@ -293,6 +293,16 @@ func (s *panelService) Close(id PanelID) error {
 		return formatPanelError("close", id, fmt.Errorf("handle type mismatch"))
 	}
 	if impl.wv != nil {
+		// On Windows, wv.Terminate() asks the webview's message loop to
+		// return but doesn't actually destroy the OS HWND, so the user
+		// still sees the window after Close() reports success. Force the
+		// OS-level close by posting WM_CLOSE (Win32) / [w close] (Cocoa)
+		// / gtk_widget_destroy (Linux) to the underlying handle, then
+		// fall through to wv.Terminate so the webview's deferred cleanup
+		// (`reg.delete`, `wv.Destroy`) still runs.
+		if err := platformDestroyWindow(impl.wv.Window()); err != nil {
+			log.Printf("[panels] platformDestroyWindow(%s): %v (falling back to wv.Terminate)", id, err)
+		}
 		impl.wv.Terminate()
 	}
 	return nil
@@ -358,6 +368,21 @@ func (s *panelService) Focus(id PanelID) error {
 
 func (s *panelService) List() []PanelID {
 	return s.reg.ids()
+}
+
+func (s *panelService) SetWindowState(id PanelID, state PanelWindowState) error {
+	e, ok := s.reg.get(id)
+	if !ok {
+		return formatPanelError("set_window_state", id, ErrPanelUnknown)
+	}
+	impl, ok := e.handle.(*panelImpl)
+	if !ok || impl.wv == nil {
+		return formatPanelError("set_window_state", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetWindowState(impl.wv.Window(), state); err != nil {
+		return formatPanelError("set_window_state", id, err)
+	}
+	return nil
 }
 
 func (s *panelService) Stop() {

@@ -69,6 +69,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["panel.focus"] = makePanelFocusHandler(panels)
 		registry["panel.list"] = makePanelListHandler(panels)
 		registry["panel.set_follow"] = makePanelSetFollowHandler(panels)
+		registry["panel.set_window_state"] = makePanelSetWindowStateHandler(panels)
 	}
 
 	if caps[CapPebble] && pebble != nil {

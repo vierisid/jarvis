@@ -91,6 +91,37 @@ func makePanelListHandler(svc PanelService) RPCHandler {
 	}
 }
 
+// panel.set_window_state — switch a panel between normal / minimized /
+// maximized. Used by T18b voice commands ("expand", "minimize",
+// "restore"). Idempotent.
+// Params: { "id": "<panel-id>", "state": "normal"|"minimized"|"maximized" }
+func makePanelSetWindowStateHandler(svc PanelService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		id, err := requirePanelID(params)
+		if err != nil {
+			return nil, err
+		}
+		raw, ok := params["state"]
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: state")
+		}
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			return nil, fmt.Errorf("state must be a non-empty string")
+		}
+		state := PanelWindowState(s)
+		switch state {
+		case PanelWindowNormal, PanelWindowMinimized, PanelWindowMaximized:
+		default:
+			return nil, fmt.Errorf("state must be one of: normal, minimized, maximized")
+		}
+		if err := svc.SetWindowState(id, state); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"id": string(id), "state": s}}, nil
+	}
+}
+
 // decodePanelSpec converts the loose JSON params map into a typed PanelSpec
 // via a JSON round-trip. This avoids hand-coding type assertions for ~10 fields.
 func decodePanelSpec(params map[string]any) (PanelSpec, error) {
