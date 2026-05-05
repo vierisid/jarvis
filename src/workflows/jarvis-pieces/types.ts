@@ -43,6 +43,75 @@ export interface JarvisPieceServices {
   llm?: PieceLlmClient;
   toolRegistry?: PieceToolRegistry;
   notifier?: PieceNotifier;
+  context?: PieceContextProvider;
+}
+
+/**
+ * Read-only surface over Jarvis state used by `jarvis-context`. The daemon's
+ * implementation reads directly from the vault DB and from the awareness /
+ * commitment services. Tests inject stubs.
+ *
+ * Returned values are POJOs (no class instances) so they survive any future
+ * subprocess IPC boundary unchanged.
+ */
+export interface PieceContextProvider {
+  vaultSearch(input: VaultSearchInput): Promise<VaultEntitySnapshot[]>;
+  vaultGetEntity(id: string): Promise<VaultEntitySnapshot | null>;
+  awarenessRecent(input: AwarenessRecentInput): Promise<AwarenessActivitySnapshot[]>;
+  commitmentsList(input: CommitmentsListInput): Promise<CommitmentSnapshot[]>;
+}
+
+export type VaultEntityType = "person" | "project" | "tool" | "place" | "concept" | "event";
+
+export interface VaultSearchInput {
+  /** Free-text fragment matched against entity name (substring, case-insensitive). */
+  query?: string;
+  type?: VaultEntityType;
+  /** Cap. Default 25. */
+  limit?: number;
+}
+
+export interface VaultEntitySnapshot {
+  id: string;
+  type: VaultEntityType;
+  name: string;
+  properties: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AwarenessRecentInput {
+  /** Cap. Default 25. */
+  limit?: number;
+  /** Optional epoch-ms cutoff: only items with start_time >= since. */
+  since?: number;
+}
+
+export interface AwarenessActivitySnapshot {
+  id: string;
+  appName: string | null;
+  windowTitle: string | null;
+  url: string | null;
+  startTime: number;
+  endTime: number | null;
+  summary: string | null;
+}
+
+export type CommitmentStatus = "pending" | "scheduled" | "in_progress" | "completed" | "failed";
+
+export interface CommitmentsListInput {
+  status?: CommitmentStatus;
+  /** Cap. Default 25. */
+  limit?: number;
+}
+
+export interface CommitmentSnapshot {
+  id: string;
+  description: string;
+  status: CommitmentStatus;
+  dueAt: number | null;
+  priority: "low" | "normal" | "high" | "urgent";
+  createdAt: number;
 }
 
 /**

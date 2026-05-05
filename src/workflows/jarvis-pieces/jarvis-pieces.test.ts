@@ -14,7 +14,25 @@ import {
 import { askAction, jarvisAskPiece, parseJsonReply } from "./jarvis-ask";
 import { invokeAction, jarvisToolPiece } from "./jarvis-tool";
 import { jarvisNotifyPiece, notifyAction } from "./jarvis-notify";
-import type { PieceNotifier, PieceNotifyInput, PieceNotifyResult } from "./types";
+import {
+  awarenessRecentAction,
+  commitmentsListAction,
+  jarvisContextPiece,
+  vaultGetEntityAction,
+  vaultSearchAction,
+} from "./jarvis-context";
+import type {
+  AwarenessActivitySnapshot,
+  AwarenessRecentInput,
+  CommitmentSnapshot,
+  CommitmentsListInput,
+  PieceContextProvider,
+  PieceNotifier,
+  PieceNotifyInput,
+  PieceNotifyResult,
+  VaultEntitySnapshot,
+  VaultSearchInput,
+} from "./types";
 
 class StubLlm implements PieceLlmClient {
   public calls: PieceLlmInput[] = [];
@@ -389,6 +407,125 @@ describe("jarvis-notify: execute", () => {
       "jarvis-tool",
     ]);
     expect(r.resolveAction("jarvis-notify:notify")?.name).toBe("notify");
+  });
+});
+
+// -------------------------------------------------------- jarvis-context
+
+class StubContextProvider implements PieceContextProvider {
+  public vaultSearchCalls: VaultSearchInput[] = [];
+  public awarenessRecentCalls: AwarenessRecentInput[] = [];
+  public commitmentsListCalls: CommitmentsListInput[] = [];
+  public vaultGetEntityCalls: string[] = [];
+
+  constructor(
+    private readonly fixtures: {
+      entities?: VaultEntitySnapshot[];
+      activities?: AwarenessActivitySnapshot[];
+      commitments?: CommitmentSnapshot[];
+      entityById?: Record<string, VaultEntitySnapshot>;
+    } = {},
+  ) {}
+
+  async vaultSearch(input: VaultSearchInput): Promise<VaultEntitySnapshot[]> {
+    this.vaultSearchCalls.push(input);
+    return this.fixtures.entities ?? [];
+  }
+
+  async vaultGetEntity(id: string): Promise<VaultEntitySnapshot | null> {
+    this.vaultGetEntityCalls.push(id);
+    return this.fixtures.entityById?.[id] ?? null;
+  }
+
+  async awarenessRecent(input: AwarenessRecentInput): Promise<AwarenessActivitySnapshot[]> {
+    this.awarenessRecentCalls.push(input);
+    return this.fixtures.activities ?? [];
+  }
+
+  async commitmentsList(input: CommitmentsListInput): Promise<CommitmentSnapshot[]> {
+    this.commitmentsListCalls.push(input);
+    return this.fixtures.commitments ?? [];
+  }
+}
+
+describe("jarvis-context: vault_search", () => {
+  test("strips unset fields and dispatches to the provider", async () => {
+    const provider = new StubContextProvider({
+      entities: [
+        { id: "e1", type: "project", name: "Jarvis", properties: null, createdAt: 1, updatedAt: 1 },
+      ],
+    });
+    const parsed = vaultSearchAction.parseInput({ query: "ja", type: "project", limit: 10 });
+    const out = await vaultSearchAction.execute(parsed, { services: { context: provider } });
+    expect(out).toHaveLength(1);
+    expect(provider.vaultSearchCalls).toEqual([{ query: "ja", type: "project", limit: 10 }]);
+  });
+
+  test("rejects bad type / negative limit", () => {
+    expect(() => vaultSearchAction.parseInput({ type: "alien" })).toThrow();
+    expect(() => vaultSearchAction.parseInput({ limit: -1 })).toThrow();
+    expect(() => vaultSearchAction.parseInput({ query: 5 })).toThrow();
+  });
+
+  test("requires a context provider in the services context", async () => {
+    await expect(
+      vaultSearchAction.execute({ query: "x" }, { services: {} }),
+    ).rejects.toThrow(/context is not configured/);
+  });
+});
+
+describe("jarvis-context: vault_get_entity", () => {
+  test("returns the entity by id", async () => {
+    const ent: VaultEntitySnapshot = {
+      id: "e1",
+      type: "person",
+      name: "Vieri",
+      properties: { role: "user" },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const provider = new StubContextProvider({ entityById: { e1: ent } });
+    const parsed = vaultGetEntityAction.parseInput({ id: "e1" });
+    const got = await vaultGetEntityAction.execute(parsed, { services: { context: provider } });
+    expect(got).toEqual(ent);
+  });
+
+  test("rejects empty id", () => {
+    expect(() => vaultGetEntityAction.parseInput({})).toThrow();
+    expect(() => vaultGetEntityAction.parseInput({ id: "" })).toThrow();
+  });
+});
+
+describe("jarvis-context: awareness_recent", () => {
+  test("supports limit and since cutoffs", async () => {
+    const provider = new StubContextProvider();
+    const parsed = awarenessRecentAction.parseInput({ limit: 5, since: 1_700_000_000_000 });
+    await awarenessRecentAction.execute(parsed, { services: { context: provider } });
+    expect(provider.awarenessRecentCalls).toEqual([{ limit: 5, since: 1_700_000_000_000 }]);
+  });
+});
+
+describe("jarvis-context: commitments_list", () => {
+  test("filters by status when provided; null returns when no provider", async () => {
+    const provider = new StubContextProvider();
+    const parsed = commitmentsListAction.parseInput({ status: "pending", limit: 3 });
+    await commitmentsListAction.execute(parsed, { services: { context: provider } });
+    expect(provider.commitmentsListCalls).toEqual([{ status: "pending", limit: 3 }]);
+  });
+
+  test("rejects bad status", () => {
+    expect(() => commitmentsListAction.parseInput({ status: "later" })).toThrow();
+  });
+});
+
+describe("jarvis-context registration", () => {
+  test("all four actions resolve via the registry", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisContextPiece);
+    expect(r.resolveAction("jarvis-context:vault_search")?.name).toBe("vault_search");
+    expect(r.resolveAction("jarvis-context:vault_get_entity")?.name).toBe("vault_get_entity");
+    expect(r.resolveAction("jarvis-context:awareness_recent")?.name).toBe("awareness_recent");
+    expect(r.resolveAction("jarvis-context:commitments_list")?.name).toBe("commitments_list");
   });
 });
 
