@@ -36,6 +36,10 @@ import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager } from "../sidecar/manager.ts";
+import { initWorkflowDb, closeWorkflowDb } from "../workflows/db/index.ts";
+import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
+import { createRunFlowHandler, NoopFlowExecutor, RUN_FLOW } from "../workflows/runner/handler.ts";
+import { createWorkflowRoutes } from "../workflows/api/routes.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -57,6 +61,7 @@ let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
 let goalService: import('../goals/service.ts').GoalService | null = null;
+let workflowWorker: WorkflowWorker | null = null;
 
 /**
  * Parse command line arguments
@@ -181,9 +186,16 @@ async function handleShutdown(signal: string): Promise<void> {
       await registry.stopAll();
     }
 
-    // Close database
+    // Stop the workflow worker (drains in-flight jobs, then exits the poll loop)
+    if (workflowWorker) {
+      await workflowWorker.stop();
+      workflowWorker = null;
+    }
+
+    // Close databases
     closeDb();
-    console.log('[Daemon] Database closed');
+    closeWorkflowDb();
+    console.log('[Daemon] Databases closed');
 
     console.log('[Daemon] Shutdown complete');
     process.exit(0);
@@ -265,6 +277,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
     logWithTimestamp('Database initialized successfully');
+
+    // 2.1. Initialize workflow database (separate file from the vault).
+    // Holds flow definitions, runs, connections, queue. Will be the backing
+    // store for the new activepieces-based workflow runtime once the engine
+    // executor is wired in. Until then, the worker uses NoopFlowExecutor and
+    // queued runs immediately succeed with empty step output.
+    const workflowsDbPath = path.join(config.dataDir, 'workflows.db');
+    logWithTimestamp(`Initializing workflow database at ${workflowsDbPath}`);
+    initWorkflowDb(workflowsDbPath);
 
     // 2a. Seed webapp templates (upserts, safe to run every startup)
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
@@ -499,7 +520,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager,
     };
     setCorsOrigin(jarvisConfig.daemon.port);
-    const apiRoutes = createApiRoutes(apiContext);
+    // Mount the legacy workflow routes (createApiRoutes) and the new v2 routes
+    // side by side. v2 lives under /api/v2/workflows/* so they don't collide.
+    // At Phase 6 cutover the legacy /api/workflows/* paths get removed and we
+    // can drop the v2 prefix.
+    const apiRoutes = { ...createApiRoutes(apiContext), ...createWorkflowRoutes() };
     wsService.setApiRoutes(apiRoutes);
 
     // Serve dashboard from ui/dist/
@@ -526,6 +551,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 10. Start all services
     await registry.startAll();
+
+    // 10.1. Start the workflow worker. Polls workflow_job, dispatches RUN_FLOW
+    // jobs to the (currently no-op) executor. Concurrency is 1; a single
+    // personal-AI daemon doesn't need more, and serializing keeps the queue
+    // semantics easy to reason about until we benchmark otherwise.
+    workflowWorker = new WorkflowWorker({
+      handlers: {
+        [RUN_FLOW]: createRunFlowHandler({ executor: new NoopFlowExecutor() }),
+      },
+    });
+    workflowWorker.start();
+    logWithTimestamp('Workflow worker started');
 
     // 10a-post. Wire authority components that need running services
     const toolRegistry = orchestrator.getToolRegistry();
