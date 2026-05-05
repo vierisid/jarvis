@@ -62,6 +62,30 @@ static void jarvis_panel_focus(void* gtkwin_ptr) {
     gtk_window_present(w);
 }
 
+static void jarvis_panel_destroy(void* gtkwin_ptr) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    gtk_widget_destroy(GTK_WIDGET(w));
+}
+
+// 0=normal, 1=minimized, 2=maximized — matches platformSetWindowState.
+static void jarvis_panel_set_window_state(void* gtkwin_ptr, int state) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    if (state == 1) {
+        gtk_window_iconify(w);
+    } else if (state == 2) {
+        gtk_window_deiconify(w);
+        gtk_window_maximize(w);
+    } else {
+        gtk_window_deiconify(w);
+        gtk_window_unmaximize(w);
+        gtk_window_present(w);
+    }
+}
+
 static void jarvis_panel_set_click_through(void* gtkwin_ptr, int clickThrough) {
     if (!gtkwin_ptr) return;
     GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
@@ -201,6 +225,33 @@ func platformReassertTopmost(handle unsafe.Pointer) error {
 		return nil
 	}
 	C.jarvis_panel_focus(handle)
+	return nil
+}
+
+func platformDestroyWindow(handle unsafe.Pointer) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	C.jarvis_panel_destroy(handle)
+	return nil
+}
+
+func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	var s C.int
+	switch state {
+	case PanelWindowMinimized:
+		s = 1
+	case PanelWindowMaximized:
+		s = 2
+	case PanelWindowNormal:
+		s = 0
+	default:
+		return fmt.Errorf("unknown window state: %q", state)
+	}
+	C.jarvis_panel_set_window_state(handle, s)
 	return nil
 }
 

@@ -673,11 +673,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // pipeline (capture done → transcribe → think → speak), not timers.
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
-      // T18 — voice-triggered panel spawning. The daemon checks every
-      // user-text against an "open <room>" / "close <room>" intent before
-      // running it through the LLM. On a hit we spawn (or close) a native
-      // dashboard window via the existing `panel.spawn` RPC and skip the
-      // LLM entirely — saves the 2-7 s round-trip for trivial commands.
+      // T18 / T18b — voice-triggered panel control. The daemon checks
+      // every user-text against a set of intents before running it through
+      // the LLM. On a hit we dispatch the right `panel.*` RPC and skip the
+      // LLM — saves 2–7 s for trivial commands. Intents:
+      //   • open  <room>  — spawn the panel (T18)
+      //   • close <room>  — close it
+      //   • expand|maximize|fullscreen|make it bigger — set last-spawned
+      //     panel to maximized
+      //   • minimize|hide it|put it away — set last-spawned panel minimized
+      //   • restore|shrink|make it smaller|normalize — set normal state
+      //   • focus|where did it go|bring it back — focus last-spawned panel
+      // "It / the window / that" pronouns refer to the most-recently-
+      // spawned panel for this sidecar, tracked in `lastPanelBySidecar`.
       type RoomMeta = { aliases: string[]; title: string; w: number; h: number };
       const ROOMS: Record<string, RoomMeta> = {
         settings:   { aliases: ['settings', 'preferences'],                title: 'Settings',   w: 560, h: 600 },
@@ -712,6 +720,117 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return `http://localhost:${port}/#/_panel_${key}`;
       };
 
+      // Per-sidecar list of currently-open panels (oldest first; LAST is
+      // the most recent). We resolve pronoun commands ("expand it") to
+      // the last entry, and named commands ("expand the workflows
+      // window") by searching back-to-front for a matching key — so
+      // when two of the same room are open, the most-recent one wins.
+      type PanelEntry = { id: string; key: string; title: string };
+      const panelsBySidecar = new Map<string, PanelEntry[]>();
+      const trackPanel = (sidecarId: string, entry: PanelEntry): void => {
+        const list = panelsBySidecar.get(sidecarId) ?? [];
+        list.push(entry);
+        panelsBySidecar.set(sidecarId, list);
+      };
+      const untrackPanel = (sidecarId: string, id: string): void => {
+        const list = panelsBySidecar.get(sidecarId);
+        if (!list) return;
+        const idx = list.findIndex(e => e.id === id);
+        if (idx >= 0) list.splice(idx, 1);
+        if (list.length === 0) panelsBySidecar.delete(sidecarId);
+      };
+      const findPanel = (sidecarId: string, hint?: string): PanelEntry | null => {
+        const list = panelsBySidecar.get(sidecarId);
+        if (!list || list.length === 0) return null;
+        if (!hint) return list[list.length - 1] ?? null; // pronoun → last
+        // Resolve hint to a room key via the alias table.
+        let targetKey: string | null = null;
+        for (const { alias, key } of orderedAliases) {
+          const aliasRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`);
+          if (aliasRe.test(hint)) { targetKey = key; break; }
+        }
+        if (!targetKey) return null;
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i]!.key === targetKey) return list[i]!;
+        }
+        return null;
+      };
+
+      // Try to match a window-management intent (expand / minimize /
+      // restore / close / focus). Returns null when no intent matches.
+      // The `roomHint` captures any explicit room reference in the same
+      // utterance ("expand the workflows window") so we can target a
+      // specific panel when several are open. Without a hint, the caller
+      // resolves to the most-recently-spawned panel.
+      type WindowAction = 'maximized' | 'minimized' | 'normal' | 'close' | 'focus';
+      const tryParseWindowAction = (text: string): { action: WindowAction; roomHint?: string } | null => {
+        const t = text.toLowerCase().trim();
+        // Optional trailing room phrase: "the X window", "the X", "X".
+        // `(?:[^.!?]*?)` is a tail catch-all up to the first sentence-end,
+        // letting the alias matcher inside findPanel pick out the room.
+        const roomTail = '(?:\\s+(?:the\\s+|my\\s+)?([a-z][a-z ]{0,40}?)(?:\\s+(?:window|panel|page|view))?)?';
+
+        const verb = (re: string): { action: WindowAction; roomHint?: string } | null => {
+          const m = new RegExp(`\\b${re}${roomTail}\\b`, 'i').exec(t);
+          if (!m) return null;
+          const hint = (m[1] || '').trim();
+          // Strip pronouns; only return as hint if it might be a real room name.
+          const pronoun = /^(it|that|the window|the panel)$/.test(hint);
+          return { action: 'maximized', roomHint: pronoun ? undefined : (hint || undefined) };
+        };
+
+        // Maximize / expand / fullscreen
+        const maxRes = verb('(?:expand|maximi[sz]e|enlarge|blow it up|go full ?screen|full ?screen)');
+        if (maxRes) return { ...maxRes, action: 'maximized' };
+        // "make it bigger / fullscreen" — different shape; match separately.
+        const makeBig = /\bmake\s+(?:it|that|the window)\s+(?:bigger|big|larger|huge|fullscreen|full ?screen)\b/.exec(t);
+        if (makeBig) return { action: 'maximized' };
+
+        // Minimize
+        const minRes = verb('(?:minimi[sz]e|hide(?: it| that)?|put it away|tuck it away|send it to (?:the )?taskbar)');
+        if (minRes) return { ...minRes, action: 'minimized' };
+
+        // Restore / shrink / normal
+        const restoreRes = verb('(?:restore|shrink|un ?maxim(?:i[sz]e)?|normalize|reset (?:the )?(?:window|size)|normal size)');
+        if (restoreRes) return { ...restoreRes, action: 'normal' };
+        const makeSmall = /\bmake\s+(?:it|that|the window)\s+(?:smaller|small|normal)\b/.exec(t);
+        if (makeSmall) return { action: 'normal' };
+
+        // Close (deictic — pronoun-anchored only). Plain "close <room>"
+        // stays in the open/close room path so the alias matcher there
+        // can drive title-vs-key selection cleanly.
+        if (/\b(close it|close that|close the window|close the panel|dismiss( it)?|shut it|kill it|get rid of it|throw it away)\b/.test(t)) {
+          return { action: 'close' };
+        }
+
+        // Focus / bring back
+        const focusRes = verb('(?:focus|raise|surface|bring it (?:back|forward|to the front)|show me the window)');
+        if (focusRes) return { ...focusRes, action: 'focus' };
+        if (/\bwhere did (?:it|the window) go\b/.test(t)) return { action: 'focus' };
+
+        return null;
+      };
+
+      const speakConfirmation = async (sidecarId: string, text: string, ctrl: { cancelled: boolean }) => {
+        await setState(sidecarId, 'speaking', text);
+        try { wsService.broadcastHeartbeat(text); } catch { /* ignore */ }
+        if (pebbleTTS && !ctrl.cancelled) {
+          try {
+            const audio = await pebbleTTS.synthesize(text);
+            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
+              data: audio.toString('base64'),
+              mime_type: ttsMimeType(jarvisConfig.tts),
+              blocking: false,
+            });
+          } catch (err) {
+            console.warn('[ambient-ui] confirmation TTS failed:', err);
+          }
+        }
+        if (ctrl.cancelled) return;
+        await new Promise<void>(r => setTimeout(r, Math.max(800, text.length * 60)));
+        if (!ctrl.cancelled) await setState(sidecarId, 'idle', '');
+      };
+
       // tryHandlePanelIntent looks for "open|show|launch <room>" or
       // "close|hide|dismiss <room>" anywhere in the user text. On match
       // it dispatches the right panel RPC, speaks a short confirmation
@@ -723,8 +842,53 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         ctrl: { cancelled: boolean },
       ): Promise<boolean> => {
         const lower = userText.toLowerCase();
-        // Cheap pre-filter: bail unless we see a verb that could plausibly
-        // be a panel-control command.
+
+        // T18b — window-management intents. Either pronoun-anchored
+        // ("expand it") or named ("expand the workflows window") — the
+        // parser surfaces an optional `roomHint` we resolve via the
+        // alias table, falling back to the most-recently-spawned panel.
+        const parsed = tryParseWindowAction(lower);
+        if (parsed) {
+          const { action, roomHint } = parsed;
+          const target = findPanel(sidecarId, roomHint);
+          if (!target) {
+            const reason = roomHint
+              ? `I don't see a ${roomHint} window open.`
+              : "There's no window open to do that with.";
+            await speakConfirmation(sidecarId, reason, ctrl);
+            return true;
+          }
+          console.log(`[ambient-ui] window-action intent: ${action} on ${target.title} (id=${target.id}${roomHint ? `, hint="${roomHint}"` : ''})`);
+          try {
+            if (action === 'close') {
+              await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
+              untrackPanel(sidecarId, target.id);
+              await speakConfirmation(sidecarId, `Closed ${target.title}.`, ctrl);
+            } else if (action === 'focus') {
+              await sidecarManager.dispatchRPC(sidecarId, 'panel.focus', { id: target.id });
+              await speakConfirmation(sidecarId, `Here it is.`, ctrl);
+            } else {
+              // maximized / minimized / normal
+              await sidecarManager.dispatchRPC(sidecarId, 'panel.set_window_state', {
+                id: target.id,
+                state: action,
+              });
+              const verb = action === 'maximized' ? 'Expanding' : action === 'minimized' ? 'Minimizing' : 'Restoring';
+              await speakConfirmation(sidecarId, `${verb} ${target.title}.`, ctrl);
+            }
+          } catch (err) {
+            console.warn(`[ambient-ui] window-action ${action} failed:`, err);
+            // The window may have been closed externally — drop our cache
+            // so subsequent commands don't keep trying a dead id.
+            if (action === 'close' || /unknown panel/i.test(String(err))) {
+              untrackPanel(sidecarId, target.id);
+            }
+            await speakConfirmation(sidecarId, "I couldn't do that with the window.", ctrl);
+          }
+          return true;
+        }
+
+        // Cheap pre-filter for the open/close <room> path.
         if (!/(open|show|launch|bring up|close|hide|dismiss|shut)/.test(lower)) {
           return false;
         }
@@ -737,7 +901,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const closeM = closeRe.exec(lower);
         const m = openM || closeM;
         if (!m) return false;
-        const action: 'open' | 'close' = openM ? 'open' : 'close';
+        const roomAction: 'open' | 'close' = openM ? 'open' : 'close';
         const tail = m[2];
         if (!tail) return false;
 
@@ -751,17 +915,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!key) return false;
 
         const meta = ROOMS[key]!;
-        const confirm = action === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
-        console.log(`[ambient-ui] panel intent: ${action} ${key} (matched "${m[0]}")`);
+        const confirm = roomAction === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
+        console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
 
         // Speak the confirmation through the queue-based TTS path so the
         // user hears feedback even before the window finishes spawning.
         await setState(sidecarId, 'thinking', '');
         try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
 
-        if (action === 'open') {
+        if (roomAction === 'open') {
           try {
-            await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
               url: dashboardURL(key),
               title: meta.title,
               bounds: { x: -1, y: -1, w: meta.w, h: meta.h }, // -1 = let the sidecar pick (near cursor)
@@ -769,23 +933,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               always_on_top: false,
               multi_instance: false,
             });
+            // panel.spawn returns { id: "<panel-id>" } — track it so
+            // window-management commands ("expand it", "close the
+            // workflows window") can resolve a target.
+            const id = (result && typeof result === 'object' && 'id' in (result as object))
+              ? String((result as { id?: unknown }).id ?? '')
+              : '';
+            if (id) {
+              trackPanel(sidecarId, { id, key, title: meta.title });
+            }
           } catch (err) {
             console.warn(`[ambient-ui] panel.spawn(${key}) failed:`, err);
           }
         } else {
-          // panel.close needs a panel id — for v1 we don't track ids,
-          // so closing-by-name iterates the panel list. The sidecar
-          // already exposes `panel.list` and `panel.close`.
+          // panel.close — resolve the target by room key against our
+          // tracker. If multiple panels match (e.g. several workflow
+          // windows), close the most recent.
           try {
-            const list = await sidecarManager.dispatchRPC(sidecarId, 'panel.list', {});
-            // panel.list returns { panels: [{ id, title, ... }] } — close
-            // the first match by title (case-insensitive).
-            const panels = (list && typeof list === 'object' && 'panels' in (list as object))
-              ? ((list as { panels: Array<{ id: string; title?: string }> }).panels ?? [])
-              : [];
-            const target = panels.find(p => (p.title || '').toLowerCase() === meta.title.toLowerCase());
+            const target = findPanel(sidecarId, key);
             if (target) {
               await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
+              untrackPanel(sidecarId, target.id);
+            } else {
+              console.log(`[ambient-ui] no tracked panel for key "${key}" — close is a no-op`);
             }
           } catch (err) {
             console.warn(`[ambient-ui] panel.close(${key}) failed:`, err);

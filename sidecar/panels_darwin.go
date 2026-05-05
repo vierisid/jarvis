@@ -58,6 +58,28 @@ static void jarvis_panel_focus(void* nswindow_ptr) {
     [w makeKeyAndOrderFront:nil];
 }
 
+static void jarvis_panel_destroy(void* nswindow_ptr) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    [w close];
+}
+
+// 0=normal, 1=minimized, 2=maximized — matches platformSetWindowState.
+static void jarvis_panel_set_window_state(void* nswindow_ptr, int state) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    if (state == 1) {
+        [w miniaturize:nil];
+    } else if (state == 2) {
+        if ([w isMiniaturized]) [w deminiaturize:nil];
+        if (![w isZoomed]) [w zoom:nil];
+    } else {
+        if ([w isMiniaturized]) [w deminiaturize:nil];
+        if ([w isZoomed]) [w zoom:nil];
+        [w makeKeyAndOrderFront:nil];
+    }
+}
+
 static void jarvis_panel_set_click_through(void* nswindow_ptr, int clickThrough) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
@@ -170,5 +192,32 @@ func platformReassertTopmost(handle unsafe.Pointer) error {
 		return nil
 	}
 	C.jarvis_panel_focus(handle)
+	return nil
+}
+
+func platformDestroyWindow(handle unsafe.Pointer) error {
+	if handle == nil {
+		return fmt.Errorf("nil NSWindow*")
+	}
+	C.jarvis_panel_destroy(handle)
+	return nil
+}
+
+func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error {
+	if handle == nil {
+		return fmt.Errorf("nil NSWindow*")
+	}
+	var s C.int
+	switch state {
+	case PanelWindowMinimized:
+		s = 1
+	case PanelWindowMaximized:
+		s = 2
+	case PanelWindowNormal:
+		s = 0
+	default:
+		return fmt.Errorf("unknown window state: %q", state)
+	}
+	C.jarvis_panel_set_window_state(handle, s)
 	return nil
 }

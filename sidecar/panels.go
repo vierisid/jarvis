@@ -105,8 +105,23 @@ type PanelService interface {
 	// idle = true (cursor passes through), listening = false (bubble
 	// buttons clickable).
 	SetClickThrough(id PanelID, clickThrough bool) error
+	// SetWindowState transitions a panel to one of three OS-level states:
+	// "normal" (restored), "minimized" (taskbar), "maximized" (fullscreen-
+	// like). Used by T18b voice commands ("expand", "minimize", "restore").
+	SetWindowState(id PanelID, state PanelWindowState) error
 	Stop()
 }
+
+// PanelWindowState mirrors the three OS-level window states a panel can
+// take. Maps to ShowWindow on Win32, miniaturize/zoom on Cocoa, and
+// gtk_window_iconify/maximize on GTK.
+type PanelWindowState string
+
+const (
+	PanelWindowNormal    PanelWindowState = "normal"
+	PanelWindowMinimized PanelWindowState = "minimized"
+	PanelWindowMaximized PanelWindowState = "maximized"
+)
 
 // panelRegistry is the cross-platform bookkeeping layer. Platform impls embed
 // this and add a platform-specific window handle per entry.

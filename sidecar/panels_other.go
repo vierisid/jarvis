@@ -42,3 +42,11 @@ func platformGetVirtualScreenOrigin() (int, int) {
 func platformReassertTopmost(handle unsafe.Pointer) error {
 	return nil
 }
+
+func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error {
+	return fmt.Errorf("set window state not supported on this platform")
+}
+
+func platformDestroyWindow(handle unsafe.Pointer) error {
+	return fmt.Errorf("destroy window not supported on this platform")
+}
