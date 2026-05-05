@@ -88,10 +88,8 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // Verify bot token by calling getMe (with timeout so an unreachable
     // api.telegram.org or hung connection doesn't block daemon startup)
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(`${this.baseUrl}/getMe`, { signal: controller.signal });
+      const response = await fetchWithTimeout(`${this.baseUrl}/getMe`, {}, 10_000);
       const data = await response.json() as any;
 
       if (!data.ok) {
@@ -104,8 +102,6 @@ export class TelegramAdapter implements ChannelAdapter {
         ? (error.name === 'AbortError' ? 'getMe request timed out after 10s' : error.message)
         : 'Unknown error';
       throw new Error(`Failed to connect to Telegram: ${msg}`);
-    } finally {
-      clearTimeout(timeout);
     }
 
     this.polling = true;
@@ -122,7 +118,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const chunks = splitText(text, 4096);
     for (const chunk of chunks) {
       try {
-        const response = await fetch(`${this.baseUrl}/sendMessage`, {
+        const response = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -130,18 +126,18 @@ export class TelegramAdapter implements ChannelAdapter {
             text: chunk,
             parse_mode: 'Markdown',
           }),
-        });
+        }, 15_000);
 
         const data = await response.json() as any;
 
         if (!data.ok) {
           // Retry without Markdown if parsing failed
           if (data.description?.includes('parse')) {
-            await fetch(`${this.baseUrl}/sendMessage`, {
+            await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: chatId, text: chunk }),
-            });
+            }, 15_000);
           } else {
             throw new Error(`Telegram API error: ${data.description}`);
           }
@@ -182,7 +178,9 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private async getUpdates(): Promise<TelegramUpdate[]> {
-    const response = await fetch(`${this.baseUrl}/getUpdates`, {
+    // Bound: server long-poll `timeout: 30` + ~5s slack. If the body's
+    // `timeout` value changes, raise this bound to match.
+    const response = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -190,7 +188,7 @@ export class TelegramAdapter implements ChannelAdapter {
         timeout: 30,
         allowed_updates: ['message'],
       }),
-    });
+    }, 35_000);
 
     const data: TelegramGetUpdatesResponse = await response.json() as TelegramGetUpdatesResponse;
 
@@ -280,11 +278,11 @@ export class TelegramAdapter implements ChannelAdapter {
 
   private async downloadFile(fileId: string): Promise<Buffer> {
     // Step 1: Get file path from Telegram
-    const fileResp = await fetch(`${this.baseUrl}/getFile`, {
+    const fileResp = await fetchWithTimeout(`${this.baseUrl}/getFile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_id: fileId }),
-    });
+    }, 10_000);
     const fileData = await fileResp.json() as any;
 
     if (!fileData.ok) {
@@ -294,13 +292,23 @@ export class TelegramAdapter implements ChannelAdapter {
     // Step 2: Download the actual file
     const filePath = fileData.result.file_path;
     const downloadUrl = `https://api.telegram.org/file/bot${this.token}/${filePath}`;
-    const downloadResp = await fetch(downloadUrl);
+    const downloadResp = await fetchWithTimeout(downloadUrl, {}, 60_000);
 
     if (!downloadResp.ok) {
       throw new Error(`Failed to download file: ${downloadResp.status}`);
     }
 
     return Buffer.from(await downloadResp.arrayBuffer());
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
   }
 }
 
