@@ -665,8 +665,14 @@ export class AgentService implements Service, IAgentService {
   buildFullSystemPrompt(channel: string, userMessage?: string): string {
     if (!this.role) return '';
 
-    // Build prompt context with live data + vault knowledge
-    const context = this.buildPromptContext(userMessage);
+    // Build prompt context with live data + vault knowledge.
+    // For latency-sensitive voice channels (pebble), build a slimmer
+    // context: skip observations / content pipeline / commitments since
+    // conversational voice queries rarely benefit from them and the
+    // extra prompt tokens slow first-token-out by hundreds of ms.
+    const context = channel === 'pebble'
+      ? this.buildPromptContext(userMessage, { slim: true })
+      : this.buildPromptContext(userMessage);
 
     // Build base system prompt from role + context
     const rolePrompt = buildSystemPrompt(this.role, context);
@@ -679,7 +685,11 @@ export class AgentService implements Service, IAgentService {
     return `${rolePrompt}\n\n${personalityPrompt}`;
   }
 
-  private buildPromptContext(userMessage?: string): PromptContext {
+  private buildPromptContext(userMessage?: string, opts?: { slim?: boolean }): PromptContext {
+    // Slim mode: voice channels skip the heavyweight context blocks
+    // (observations, content pipeline, commitments) so the LLM has
+    // hundreds fewer prompt tokens to chew through before first response.
+    const slim = opts?.slim === true;
     // Check if any sidecars are enrolled (cheap DB query, controls tool guide content)
     let hasSidecars = false;
     try {
@@ -731,26 +741,28 @@ export class AgentService implements Service, IAgentService {
       }
     }
 
-    // Get due commitments
-    try {
-      const due = getDueCommitments();
-      const upcoming = getUpcoming(5);
-      const allCommitments = [...due, ...upcoming];
+    // Get due commitments — skipped in slim/voice mode.
+    if (!slim) {
+      try {
+        const due = getDueCommitments();
+        const upcoming = getUpcoming(5);
+        const allCommitments = [...due, ...upcoming];
 
-      if (allCommitments.length > 0) {
-        context.activeCommitments = allCommitments.map((c) => {
-          const dueStr = c.when_due
-            ? ` (due: ${new Date(c.when_due).toLocaleString()})`
-            : '';
-          return `[${c.priority}] ${c.what}${dueStr} — ${c.status}`;
-        });
+        if (allCommitments.length > 0) {
+          context.activeCommitments = allCommitments.map((c) => {
+            const dueStr = c.when_due
+              ? ` (due: ${new Date(c.when_due).toLocaleString()})`
+              : '';
+            return `[${c.priority}] ${c.what}${dueStr} — ${c.status}`;
+          });
+        }
+      } catch (err) {
+        console.error('[AgentService] Error loading commitments:', err);
       }
-    } catch (err) {
-      console.error('[AgentService] Error loading commitments:', err);
     }
 
-    // Get active content pipeline items (not published)
-    try {
+    // Get active content pipeline items (not published) — skipped in slim/voice mode.
+    if (!slim) try {
       const activeContent = findContent({}).filter(
         (c) => c.stage !== 'published'
       ).slice(0, 10);
@@ -764,8 +776,8 @@ export class AgentService implements Service, IAgentService {
       console.error('[AgentService] Error loading content pipeline:', err);
     }
 
-    // Get recent observations
-    try {
+    // Get recent observations — skipped in slim/voice mode.
+    if (!slim) try {
       const observations = getRecentObservations(undefined, 10);
       if (observations.length > 0) {
         context.recentObservations = observations.map((o) => {

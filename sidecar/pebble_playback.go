@@ -25,45 +25,122 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gen2brain/malgo"
 	gomp3 "github.com/hajimehoshi/go-mp3"
 )
 
-// AudioPlaybackService owns one malgo playback context shared across all
-// playback sessions. Each Play() spins up a fresh device sized to the
-// decoded clip's sample rate / channels — keeps the playback path stateless
-// from the caller's POV (give it bytes + format, hear sound).
+// playbackJob is a single clip waiting in the queue. The generation number
+// lets Stop() invalidate everything queued before the call without needing
+// to drain the channel atomically.
+type playbackJob struct {
+	audio []byte
+	mime  string
+	gen   int64
+}
+
+// AudioPlaybackService owns one malgo playback context and a single
+// background worker that drains a queue of clips and plays them
+// back-to-back. Streaming TTS (T17e) enqueues one clip per sentence as
+// the LLM streams; the queue model means clips play seamlessly without
+// the daemon having to wait for each clip's playback to finish before
+// dispatching the next.
 type AudioPlaybackService struct {
-	mu      sync.Mutex
-	ctx     *malgo.AllocatedContext
+	mu  sync.Mutex
+	ctx *malgo.AllocatedContext
+
+	queue      chan playbackJob
+	workerOnce sync.Once
+	generation atomic.Int64
+
+	// playing is true whenever the worker is rendering a clip OR has
+	// just finished and not yet idled out (100 ms grace). This is what
+	// the wake-listener suppression hooks observe.
 	playing atomic.Bool
-	// stopReq is set by Stop() to signal an in-flight Play() to abort.
-	// The data callback observes this each frame, fills the output buffer
-	// with silence, and closes the done channel — so playback ends within
-	// one buffer (~10ms) of the request, not at the next clip boundary.
+	// stopReq, when set, makes the data callback feed silence + close
+	// the done channel within ~10 ms. Reset at the start of each new
+	// clip so back-to-back queued clips aren't accidentally aborted.
 	stopReq atomic.Bool
+
+	onPlayStateMu     sync.RWMutex
+	onPlayStateChange func(playing bool)
 }
 
 func NewAudioPlaybackService() *AudioPlaybackService {
-	return &AudioPlaybackService{}
+	return &AudioPlaybackService{
+		queue: make(chan playbackJob, 32),
+	}
 }
 
-// Play decodes the inline audio bytes (MP3 or WAV) and plays them through
-// the default output device. Blocks until playback finishes. Concurrent
-// Play() calls return an error — the caller (daemon) serializes responses
-// per pebble anyway.
-func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
+// Enqueue adds a clip to the playback queue. The queue worker drains
+// clips back-to-back so streaming-TTS sentence chunks play seamlessly.
+// Idempotent and fast — does NOT block on actual playback.
+func (s *AudioPlaybackService) Enqueue(audio []byte, mimeHint string) error {
 	if len(audio) == 0 {
 		return fmt.Errorf("empty audio buffer")
 	}
-	if !s.playing.CompareAndSwap(false, true) {
-		return fmt.Errorf("playback already in progress")
+	s.workerOnce.Do(func() { go s.worker() })
+	job := playbackJob{audio: audio, mime: mimeHint, gen: s.generation.Load()}
+	select {
+	case s.queue <- job:
+		return nil
+	default:
+		return fmt.Errorf("playback queue full")
 	}
-	defer s.playing.Store(false)
-	// Reset any stale stop request from a previous session before we begin.
-	s.stopReq.Store(false)
+}
 
+// Play is a thin alias for Enqueue kept for backwards-compat with the
+// existing pebble.play_audio RPC handler. Returns immediately once the
+// clip is queued.
+func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
+	return s.Enqueue(audio, mimeHint)
+}
+
+// worker drains the playback queue, playing each clip via malgo. Idle
+// timeout debounces the play-state notification so back-to-back clips
+// don't toggle the wake listener's suppression flag for every clip
+// boundary — only when the queue genuinely empties for >100 ms.
+func (s *AudioPlaybackService) worker() {
+	const idleTimeout = 100 * time.Millisecond
+	announced := false
+	for {
+		select {
+		case job, ok := <-s.queue:
+			if !ok {
+				if announced {
+					s.notifyPlayState(false)
+					announced = false
+				}
+				return
+			}
+			// Skip jobs from a generation older than the current one
+			// (Stop() invalidated everything queued before the call).
+			if job.gen != s.generation.Load() {
+				continue
+			}
+			if !announced {
+				s.notifyPlayState(true)
+				announced = true
+			}
+			s.playing.Store(true)
+			s.stopReq.Store(false)
+			if err := s.playOne(job.audio, job.mime); err != nil {
+				log.Printf("[playback] error: %v", err)
+			}
+			s.playing.Store(false)
+		case <-time.After(idleTimeout):
+			if announced {
+				s.notifyPlayState(false)
+				announced = false
+			}
+		}
+	}
+}
+
+// playOne renders a single clip through malgo. Blocks until the clip
+// finishes (or stopReq is asserted by Stop()).
+func (s *AudioPlaybackService) playOne(audio []byte, mimeHint string) error {
 	pcm, sampleRate, channels, err := decodeAudio(audio, mimeHint)
 	if err != nil {
 		return fmt.Errorf("decode: %w", err)
@@ -92,21 +169,14 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 	deviceConfig.SampleRate = uint32(sampleRate)
 	deviceConfig.Alsa.NoMMap = 1
 
-	// done is closed by the data callback when the source is exhausted —
-	// we then Stop+Uninit the device on the calling goroutine so the
-	// callback's own thread doesn't deadlock against malgo's internals.
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDone := func() { doneOnce.Do(func() { close(done) }) }
 
 	cursor := 0
 	onSend := func(output, _ []byte, frameCount uint32) {
-		bytesPerFrame := int(channels) * 2 // s16 mono/stereo
+		bytesPerFrame := int(channels) * 2
 		need := int(frameCount) * bytesPerFrame
-		// Stop request from outside (e.g. user pressed Ctrl+Space mid-
-		// playback to interrupt). Treat exactly like EOF — silence the
-		// output buffer and signal completion. The blocking Play() then
-		// stops + uninits the device on its own goroutine.
 		if s.stopReq.Load() {
 			for i := range output[:need] {
 				output[i] = 0
@@ -115,7 +185,6 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 			return
 		}
 		if cursor >= len(pcm) {
-			// Past EOF — feed silence and signal done.
 			for i := range output[:need] {
 				output[i] = 0
 			}
@@ -127,7 +196,6 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 			end = len(pcm)
 		}
 		n := copy(output[:need], pcm[cursor:end])
-		// Pad remainder with silence if we hit EOF mid-buffer.
 		if n < need {
 			for i := n; i < need; i++ {
 				output[i] = 0
@@ -148,19 +216,47 @@ func (s *AudioPlaybackService) Play(audio []byte, mimeHint string) error {
 		return fmt.Errorf("device.Start: %w", err)
 	}
 	<-done
-	device.Stop() //nolint:errcheck — best-effort; defer will Uninit anyway
+	device.Stop() //nolint:errcheck
 	return nil
 }
 
-// Stop signals an in-flight Play() to abort. Idempotent and safe to call
-// when no playback is active. Returns once the request is registered;
-// the actual device shutdown happens on Play()'s goroutine within the
-// next buffer (~10 ms on default malgo config).
+// Stop bumps the generation counter (so already-queued clips are skipped
+// by the worker) and asserts stopReq (so the currently-playing clip
+// aborts within ~10 ms). Idempotent.
 func (s *AudioPlaybackService) Stop() {
-	if !s.playing.Load() {
-		return
+	s.generation.Add(1)
+	// Drain queue eagerly so the worker doesn't churn through stale
+	// jobs even just to skip them.
+drain:
+	for {
+		select {
+		case <-s.queue:
+		default:
+			break drain
+		}
 	}
-	s.stopReq.Store(true)
+	if s.playing.Load() {
+		s.stopReq.Store(true)
+	}
+}
+
+// SetPlayStateListener registers a callback that fires with true when
+// playback starts and false when it ends. Used by the wake listener to
+// gate captures during TTS so JARVIS's voice through the speakers doesn't
+// trigger a self-wake. Pass nil to clear.
+func (s *AudioPlaybackService) SetPlayStateListener(cb func(playing bool)) {
+	s.onPlayStateMu.Lock()
+	s.onPlayStateChange = cb
+	s.onPlayStateMu.Unlock()
+}
+
+func (s *AudioPlaybackService) notifyPlayState(playing bool) {
+	s.onPlayStateMu.RLock()
+	cb := s.onPlayStateChange
+	s.onPlayStateMu.RUnlock()
+	if cb != nil {
+		cb(playing)
+	}
 }
 
 // decodeAudio dispatches to the right decoder based on the byte stream's
