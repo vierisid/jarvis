@@ -87,14 +87,27 @@ export class CredentialResolver {
 
 // ---------- Built-in Jarvis sources ----------
 
+/** Snapshot of a live Google token. `expiryDate` is epoch ms (matches GoogleAuth.tokens.expiry_date). */
+export interface JarvisGoogleTokenSnapshot {
+  accessToken: string;
+  expiryDate: number;
+}
+
 /**
- * Google OAuth source. Reads the live access token from Jarvis' GoogleAuth
- * (which already handles refresh). Returns an OAUTH2-shaped value compatible
- * with activepieces' OAuth2 connection type.
+ * Google OAuth source. Reads the live access token (with expiry) from Jarvis'
+ * GoogleAuth, which handles refresh internally. Returns an OAUTH2-shaped value
+ * compatible with activepieces' OAuth2 connection type.
  *
  * Accepts externalIds: jarvis:google, jarvis:gmail, jarvis:google-calendar,
  * jarvis:google-drive. All map to the same underlying token because the
  * Jarvis Google integration uses one OAuth client across services.
+ *
+ * Important contract: `refresh_token` is intentionally empty in the resolved
+ * value. Jarvis owns the refresh token and refreshes proactively before
+ * handing out an access token. If we surfaced the refresh token, pieces could
+ * try to refresh independently and race with Jarvis. The empty value signals
+ * to the engine that this token is non-refreshable from its side -- when it
+ * expires, the piece must call us back for a fresh one.
  */
 export class JarvisGoogleSource implements JarvisConnectionSource {
   readonly id = "google";
@@ -105,26 +118,29 @@ export class JarvisGoogleSource implements JarvisConnectionSource {
     `${JARVIS_PREFIX}google-drive`,
   ]);
 
-  constructor(private readonly getAccessToken: () => Promise<string | null>) {}
+  constructor(
+    private readonly getToken: () => Promise<JarvisGoogleTokenSnapshot | null>,
+    private readonly nowMs: () => number = Date.now,
+  ) {}
 
   canResolve(externalId: string): boolean {
     return JarvisGoogleSource.EXTERNAL_IDS.has(externalId);
   }
 
   async resolve(_externalId: string): Promise<ResolvedConnection | null> {
-    const token = await this.getAccessToken();
-    if (!token) return null;
-    // Activepieces' OAUTH2 value shape -- only the fields downstream pieces
-    // actually read at runtime are populated; refresh_token is left empty
-    // because Jarvis owns refresh, not the engine.
+    const snap = await this.getToken();
+    if (!snap) return null;
+    const nowMs = this.nowMs();
+    const nowSec = Math.floor(nowMs / 1000);
+    const expiresIn = Math.max(0, Math.floor((snap.expiryDate - nowMs) / 1000));
     return {
       type: "OAUTH2",
       value: {
-        access_token: token,
+        access_token: snap.accessToken,
         token_type: "Bearer",
         refresh_token: "",
-        expires_in: 0,
-        claimed_at: Math.floor(Date.now() / 1000),
+        expires_in: expiresIn,
+        claimed_at: nowSec,
         scope: "",
         token_url: "https://oauth2.googleapis.com/token",
         client_id: "",

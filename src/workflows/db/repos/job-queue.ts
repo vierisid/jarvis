@@ -245,6 +245,24 @@ export function cancelJob(id: string): void {
   );
 }
 
+/**
+ * Find the active queue entry (QUEUED or RUNNING) for a given run id, if any.
+ * Used by the API layer when canceling a run -- one run typically has one
+ * active job; we return the most recent.
+ */
+export function findActiveJobForRun<P = Record<string, unknown>>(
+  flowRunId: string,
+): Job<P> | null {
+  const row = db()
+    .query<JobRow, [string]>(
+      `SELECT * FROM workflow_job
+       WHERE flow_run_id = ? AND status IN ('QUEUED', 'RUNNING')
+       ORDER BY created DESC LIMIT 1`,
+    )
+    .get(flowRunId);
+  return row ? rowToJob<P>(row) : null;
+}
+
 export interface QueueStats {
   queued: number;
   running: number;

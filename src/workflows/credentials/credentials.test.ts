@@ -33,6 +33,7 @@ describe("CredentialResolver", () => {
   test("returns null when a Jarvis source cannot resolve (not yet authenticated)", async () => {
     const r = new CredentialResolver();
     r.register(new JarvisGoogleSource(async () => null));
+    // ^ source returns null when the user hasn't authenticated yet
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "gmail",
@@ -83,7 +84,12 @@ describe("CredentialResolver", () => {
       value: { access_token: "stale-from-db" },
     });
     const r = new CredentialResolver();
-    r.register(new JarvisGoogleSource(async () => "live-token"));
+    r.register(
+      new JarvisGoogleSource(async () => ({
+        accessToken: "live-token",
+        expiryDate: Date.now() + 60_000,
+      })),
+    );
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "gmail",
@@ -136,7 +142,10 @@ describe("CredentialResolver", () => {
 
 describe("JarvisGoogleSource", () => {
   test("resolves any of the gmail/calendar/drive externalIds to the same token", async () => {
-    const source = new JarvisGoogleSource(async () => "tok");
+    const source = new JarvisGoogleSource(async () => ({
+      accessToken: "tok",
+      expiryDate: Date.now() + 3600_000,
+    }));
     expect(source.canResolve(`${JARVIS_PREFIX}google`)).toBe(true);
     expect(source.canResolve(`${JARVIS_PREFIX}gmail`)).toBe(true);
     expect(source.canResolve(`${JARVIS_PREFIX}google-calendar`)).toBe(true);
@@ -147,7 +156,37 @@ describe("JarvisGoogleSource", () => {
     expect(got?.value).toMatchObject({ access_token: "tok", token_type: "Bearer" });
   });
 
-  test("propagates errors from getAccessToken (do not swallow refresh failures)", async () => {
+  test("computes expires_in honestly from expiryDate and current time", async () => {
+    const fixedNow = 1_700_000_000_000;
+    const source = new JarvisGoogleSource(
+      async () => ({ accessToken: "tok", expiryDate: fixedNow + 1800_000 }),
+      () => fixedNow,
+    );
+    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
+    expect(got?.value.expires_in).toBe(1800);
+    expect(got?.value.claimed_at).toBe(Math.floor(fixedNow / 1000));
+  });
+
+  test("clamps expires_in to 0 for already-expired tokens", async () => {
+    const fixedNow = 1_700_000_000_000;
+    const source = new JarvisGoogleSource(
+      async () => ({ accessToken: "stale", expiryDate: fixedNow - 60_000 }),
+      () => fixedNow,
+    );
+    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
+    expect(got?.value.expires_in).toBe(0);
+  });
+
+  test("refresh_token is intentionally empty (Jarvis owns refresh)", async () => {
+    const source = new JarvisGoogleSource(async () => ({
+      accessToken: "tok",
+      expiryDate: Date.now() + 60_000,
+    }));
+    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
+    expect(got?.value.refresh_token).toBe("");
+  });
+
+  test("propagates errors from getToken (do not swallow refresh failures)", async () => {
     const source = new JarvisGoogleSource(async () => {
       throw new Error("refresh failed");
     });

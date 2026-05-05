@@ -48,7 +48,7 @@ import {
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { cancelJob, enqueue, getJob } from "../db/repos/job-queue";
+import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -318,10 +318,10 @@ export function createWorkflowRoutes(): WorkflowRouteMap {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = getFlowRun(runId);
           if (!run) return err("run not found", 404);
-          // Cancel the queued job (if any) and surface STOPPED on the run row.
-          // Run-row update is intentionally minimal here; the worker will
-          // observe the canceled job and won't pick it up.
-          const job = run.id ? findJobForRun(run.id) : null;
+          // Cancel the queued/running job (if any). The worker observes the
+          // canceled status and stops the run. Run-row state transitions
+          // (e.g. STOPPED) are written by the worker, not here.
+          const job = findActiveJobForRun(run.id);
           if (job) cancelJob(job.id);
           return ok({ ok: true, jobCanceled: !!job });
         }),
@@ -345,20 +345,6 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
     created: row.created,
     updated: row.updated,
   };
-}
-
-/** Best-effort lookup of the queue entry that maps to a run. */
-function findJobForRun(runId: string) {
-  // workflow_job is keyed by its own id; we filter via flow_run_id at the SQL
-  // level by reading rows. For one-flow-run -> one-job (the typical shape) we
-  // can synthesize a query off the indexed column.
-  const { getWorkflowDb } = require("../db/index") as typeof import("../db/index");
-  const row = getWorkflowDb()
-    .query<{ id: string }, [string]>(
-      `SELECT id FROM workflow_job WHERE flow_run_id = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created DESC LIMIT 1`,
-    )
-    .get(runId);
-  return row ? getJob(row.id) : null;
 }
 
 function numParam(raw: string | null): number | null {
