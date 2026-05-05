@@ -6,7 +6,7 @@ afterEach(() => {
 });
 
 describe("workflow db", () => {
-  test("initWorkflowDb creates tables and seeds default tenant", () => {
+  test("initWorkflowDb creates the expected tables", () => {
     const db = initWorkflowDb(":memory:");
 
     const tables = db
@@ -24,35 +24,15 @@ describe("workflow db", () => {
     expect(tables).toContain("store_entry");
     expect(tables).toContain("workflow_file");
     expect(tables).toContain("workflow_job");
-    expect(tables).toContain("workflow_user");
-    expect(tables).toContain("workflow_project");
-
-    const user = db
-      .query<{ id: string }, []>("SELECT id FROM workflow_user")
-      .all();
-    const project = db
-      .query<{ id: string; owner_id: string }, []>("SELECT id, owner_id FROM workflow_project")
-      .all();
-    expect(user).toHaveLength(1);
-    expect(user[0]!.id).toBe(DEFAULT_IDS.user);
-    expect(project).toHaveLength(1);
-    expect(project[0]!.id).toBe(DEFAULT_IDS.project);
-    expect(project[0]!.owner_id).toBe(DEFAULT_IDS.user);
+    // Tenant tables intentionally absent: single-tenant via DEFAULT_IDS constants.
+    expect(tables).not.toContain("workflow_user");
+    expect(tables).not.toContain("workflow_project");
   });
 
-  test("initWorkflowDb is idempotent on a fresh in-memory db", () => {
-    const db1 = initWorkflowDb(":memory:");
-    db1.run(
-      `INSERT INTO flow (id, external_id, project_id, status, created, updated) VALUES (?, ?, ?, ?, ?, ?)`,
-      ["flow1", "ext1", DEFAULT_IDS.project, "ENABLED", Date.now(), Date.now()],
-    );
-    expect(db1.query("SELECT COUNT(*) AS n FROM flow").all()).toEqual([{ n: 1 }]);
-    closeWorkflowDb();
-
-    // Re-init in :memory: gives a fresh db; the test verifies that re-init
-    // doesn't throw on the seed inserts (INSERT OR IGNORE).
-    const db2 = initWorkflowDb(":memory:");
-    expect(db2.query("SELECT COUNT(*) AS n FROM workflow_user").all()).toEqual([{ n: 1 }]);
+  test("DEFAULT_IDS exposes stable user and project constants", () => {
+    initWorkflowDb(":memory:");
+    expect(DEFAULT_IDS.user).toBe("jrv_user_default");
+    expect(DEFAULT_IDS.project).toBe("jrv_proj_default");
   });
 
   test("foreign key cascade: deleting a flow removes its versions and runs", () => {

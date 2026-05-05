@@ -184,6 +184,47 @@ describe("Worker", () => {
     expect(queueStats()).toMatchObject({ failed: 1 });
   });
 
+  test("concurrency: each job is claimed and processed by exactly one loop", async () => {
+    // Property-style: enqueue N jobs, run with concurrency K, expect each
+    // jobId observed exactly once across all loops. If the atomic claim ever
+    // raced and let two loops grab the same row, we'd see a duplicate.
+    const N = 200;
+    const K = 8;
+    const seen = new Map<string, number>();
+    const handler = async (job: { id: string }): Promise<void> => {
+      seen.set(job.id, (seen.get(job.id) ?? 0) + 1);
+      // Tiny await to encourage scheduler interleavings.
+      await new Promise<void>((r) => setImmediate(r));
+    };
+    const ids = new Set<string>();
+    for (let i = 0; i < N; i++) {
+      const j = enqueue({ jobType: "RACE", payload: { i } });
+      ids.add(j.id);
+    }
+    const worker = new Worker({
+      log: silent,
+      pollIntervalMs: 1,
+      handlers: { RACE: handler as (j: { id: string }) => Promise<void> } as unknown as Record<
+        string,
+        (j: { id: string }) => Promise<void>
+      >,
+    });
+    worker.start({ concurrency: K });
+    // Wait for all jobs to terminate. Stats reflect 'succeeded' only when the
+    // queue marks them so; busy-wait is acceptable for a deterministic test.
+    while (queueStats().succeeded < N) {
+      await Bun.sleep(5);
+    }
+    await worker.stop();
+
+    expect(seen.size).toBe(N);
+    let max = 0;
+    for (const v of seen.values()) max = Math.max(max, v);
+    expect(max).toBe(1); // No job seen twice.
+    for (const id of ids) expect(seen.has(id)).toBe(true);
+    expect(queueStats()).toMatchObject({ succeeded: N, queued: 0, running: 0 });
+  });
+
   test("start/stop runs jobs in the background", async () => {
     let resolved: (() => void) | null = null;
     const finished = new Promise<void>((r) => { resolved = r; });

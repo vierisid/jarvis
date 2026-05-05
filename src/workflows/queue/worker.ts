@@ -75,9 +75,12 @@ export class Worker {
   }
 
   /**
-   * Drain mode for tests: process every ready job once and return. Does NOT
-   * sleep between claims; returns when claimNextJob returns null. Caller must
-   * not have called start() (or must have stopped it).
+   * Drain mode for tests / one-shot processing: process every ready job once
+   * and return. Returns when claimNextJob returns null. Yields to the event
+   * loop between iterations so a synchronous handler doesn't pin the
+   * interpreter.
+   *
+   * Caller must not have called start() (or must have stopped it).
    */
   async drain(): Promise<number> {
     let processed = 0;
@@ -86,6 +89,9 @@ export class Worker {
       if (!job) return processed;
       await this.handle(job);
       processed++;
+      // Yield to the event loop. If `handle` was synchronous (handler awaited
+      // nothing), we'd otherwise tight-loop and starve other tasks.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
 

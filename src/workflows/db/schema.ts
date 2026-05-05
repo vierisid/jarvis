@@ -6,45 +6,26 @@
  * for SQLite: JSON blobs in TEXT columns, integer epoch-ms timestamps, foreign
  * keys with ON DELETE CASCADE where ownership is clear.
  *
- * Single-tenant: a default user and project are seeded on first init (per the
- * Phase 0 design decision -- single-user, single-project, hidden in UI). The
- * project_id columns are kept to match upstream's shape so vendored code that
- * filters by project_id keeps working without modification.
+ * Single-tenant: there is one user and one project, hardcoded as constants in
+ * `DEFAULT_IDS`. We keep `project_id` columns on `flow`, `flow_run`,
+ * `app_connection`, etc. so vendored activepieces code that filters by
+ * `project_id` keeps working without modification, but those columns reference
+ * a constant value rather than a row in a tenant table.
  */
 
 import type { Database } from "bun:sqlite";
 
-const DEFAULT_USER_ID = "jrv_user_default";
-const DEFAULT_PROJECT_ID = "jrv_proj_default";
-
 export const DEFAULT_IDS = {
-  user: DEFAULT_USER_ID,
-  project: DEFAULT_PROJECT_ID,
+  user: "jrv_user_default",
+  project: "jrv_proj_default",
 } as const;
 
 const STATEMENTS: string[] = [
-  // --- Tenant: one user, one project. Hidden in the UI; tracked for parity with upstream. ---
-  `CREATE TABLE IF NOT EXISTS workflow_user (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    created INTEGER NOT NULL,
-    updated INTEGER NOT NULL
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS workflow_project (
-    id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    owner_id TEXT NOT NULL REFERENCES workflow_user(id),
-    created INTEGER NOT NULL,
-    updated INTEGER NOT NULL
-  )`,
-
   // --- Flow definitions ---
   `CREATE TABLE IF NOT EXISTS flow (
     id TEXT PRIMARY KEY,
     external_id TEXT NOT NULL,
-    project_id TEXT NOT NULL REFERENCES workflow_project(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
     owner_id TEXT,
     folder_id TEXT,
     status TEXT NOT NULL CHECK(status IN ('ENABLED', 'DISABLED')),
@@ -121,7 +102,7 @@ const STATEMENTS: string[] = [
     status TEXT NOT NULL CHECK(status IN ('ACTIVE', 'MISSING', 'ERROR')),
     piece_name TEXT NOT NULL,
     piece_version TEXT NOT NULL,
-    project_id TEXT NOT NULL REFERENCES workflow_project(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
     owner_id TEXT,
     value TEXT NOT NULL,
     metadata TEXT,
@@ -200,19 +181,4 @@ export function createSchema(db: Database): void {
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   for (const stmt of STATEMENTS) db.exec(stmt);
-  seedDefaults(db);
-}
-
-function seedDefaults(db: Database): void {
-  const now = Date.now();
-  db.run(
-    `INSERT OR IGNORE INTO workflow_user (id, email, display_name, created, updated)
-     VALUES (?, ?, ?, ?, ?)`,
-    [DEFAULT_USER_ID, "user@local", "Default User", now, now],
-  );
-  db.run(
-    `INSERT OR IGNORE INTO workflow_project (id, display_name, owner_id, created, updated)
-     VALUES (?, ?, ?, ?, ?)`,
-    [DEFAULT_PROJECT_ID, "Default", DEFAULT_USER_ID, now, now],
-  );
 }

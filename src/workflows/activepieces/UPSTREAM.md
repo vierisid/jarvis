@@ -34,6 +34,15 @@ We also intentionally do not vendor:
 - `packages/server/api` -- NestJS HTTP server. Replaced by integration into the Jarvis daemon's HTTP surface (Phase 2).
 - Anything depending on Postgres or Redis. Replaced by `bun:sqlite` and an in-process queue (Phase 2).
 
+## Post-copy patches
+
+The sync script applies the following modifications after copy. These keep diff vs upstream small while removing dependencies we don't want at runtime.
+
+- **Stubbed:** `packages/server/engine/src/lib/core/code/v8-isolate-code-sandbox.ts`. The original imports `isolated-vm` (a Node N-API native addon). We never use V8 isolate sandboxing -- the engine runs in `SANDBOX_PROCESS` mode (see `SPIKE-SANDBOXING.md`). The stub preserves the import path and throws a clear error if `AP_EXECUTION_MODE` is ever set to `SANDBOX_CODE_ONLY` or `SANDBOX_CODE_AND_PROCESS`.
+- **Scrubbed:** `isolated-vm` removed from `packages/server/engine/package.json` `dependencies`.
+
+Both are driven by `STUB_FILES` and `SCRUB_DEPS` constants in `scripts/sync-activepieces.ts`. To extend, add entries there and re-run the sync.
+
 ## Curated pieces
 
 Initial bundled pieces (Phase 1):

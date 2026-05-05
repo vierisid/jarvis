@@ -155,6 +155,52 @@ const TEST_DIR_NAMES = new Set(["test", "tests", "__tests__"]);
 const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx)$/;
 
 /**
+ * Files we overwrite with a Jarvis-specific stub after copy. The original
+ * file's import path is preserved so vendored loaders that conditionally
+ * import these paths still resolve, but the stub yells loudly if reached.
+ *
+ * Why we stub `v8-isolate-code-sandbox.ts`: the file is the only place in the
+ * engine that reaches for `isolated-vm` (a Node N-API native addon). We run
+ * the engine in `SANDBOX_PROCESS` mode (see SPIKE-SANDBOXING.md) which never
+ * imports this file. Stubbing it removes our transitive dependency on the
+ * native addon while keeping the import path resolvable.
+ */
+const STUB_FILES: Record<string, string> = {
+  "packages/server/engine/src/lib/core/code/v8-isolate-code-sandbox.ts": `// THIS FILE IS A JARVIS STUB.
+// The upstream activepieces engine uses \`isolated-vm\` (a Node N-API native
+// addon) to run user code in a V8 isolate. Jarvis runs the engine exclusively
+// in SANDBOX_PROCESS mode (see src/workflows/activepieces/SPIKE-SANDBOXING.md),
+// which never reaches this file. The original implementation has been removed
+// to drop the transitive native-addon dependency.
+//
+// If this stub is ever reached, AP_EXECUTION_MODE is set to SANDBOX_CODE_ONLY
+// or SANDBOX_CODE_AND_PROCESS -- neither of which Jarvis supports. Reset
+// AP_EXECUTION_MODE to SANDBOX_PROCESS.
+
+import type { CodeSandbox } from '../../core/code/code-sandbox-common'
+
+const message = 'v8-isolate-code-sandbox is not available in Jarvis. Use AP_EXECUTION_MODE=SANDBOX_PROCESS.'
+
+export const v8IsolateCodeSandbox: CodeSandbox = {
+    async runCodeModule() {
+        throw new Error(message)
+    },
+    async runScript() {
+        throw new Error(message)
+    },
+}
+`,
+};
+
+/**
+ * Dependencies to remove from vendored `package.json` files post-copy. The
+ * file is rewritten in place; the rest of the package.json is preserved.
+ */
+const SCRUB_DEPS: Record<string, string[]> = {
+  "packages/server/engine/package.json": ["isolated-vm"],
+};
+
+/**
  * Recursive copy that skips:
  *   1. Any path whose relative segment matches `/ee/` (Activepieces Enterprise-licensed,
  *      or any MIT subdirectory named `ee` that we don't vendor on principle).
@@ -190,15 +236,45 @@ for (const p of VENDOR_PATHS) {
   info(`copied ${p} (${n} files)`);
 }
 
-// 7. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through
+// 7. Apply Jarvis-specific stubs and dependency scrubs.
+for (const [relPath, contents] of Object.entries(STUB_FILES)) {
+  const dst = join(VENDOR_DIR, relPath);
+  if (!existsSync(dst)) {
+    fail(`stub target missing: ${relPath} -- did upstream rename or move it?`);
+  }
+  writeFileSync(dst, contents);
+  info(`stubbed ${relPath}`);
+}
+for (const [relPath, depNames] of Object.entries(SCRUB_DEPS)) {
+  const dst = join(VENDOR_DIR, relPath);
+  if (!existsSync(dst)) {
+    fail(`scrub target missing: ${relPath}`);
+  }
+  const pkg = JSON.parse(readFileSync(dst, "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  let removed = 0;
+  if (pkg.dependencies) {
+    for (const dep of depNames) {
+      if (dep in pkg.dependencies) {
+        delete pkg.dependencies[dep];
+        removed++;
+      }
+    }
+  }
+  writeFileSync(dst, JSON.stringify(pkg, null, 2) + "\n");
+  info(`scrubbed ${removed} dep(s) from ${relPath}: [${depNames.join(", ")}]`);
+}
+
+// 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through
 assertNoEePaths(VENDOR_DIR);
 
-// 8. Write the LICENSE alongside UPSTREAM.md
+// 9. Write the LICENSE alongside UPSTREAM.md
 const licensePath = join(VENDOR_DIR, "LICENSE.activepieces");
 writeFileSync(licensePath, upstreamLicenseText);
 info(`wrote ${relative(REPO_ROOT, licensePath)}`);
 
-// 9. Cleanup temp dir
+// 10. Cleanup temp dir
 rmSync(work, { recursive: true, force: true });
 
 info(`Done. Vendored ${totalFiles} files into ${relative(REPO_ROOT, VENDOR_DIR)}/.`);
