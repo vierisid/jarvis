@@ -38,8 +38,16 @@ import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager } from "../sidecar/manager.ts";
 import { initWorkflowDb, closeWorkflowDb } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
-import { createRunFlowHandler, NoopFlowExecutor, RUN_FLOW } from "../workflows/runner/handler.ts";
+import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
+import { JarvisPiecesFlowExecutor } from "../workflows/runner/executor.ts";
 import { createWorkflowRoutes } from "../workflows/api/routes.ts";
+import { JarvisPieceRegistry } from "../workflows/jarvis-pieces/types.ts";
+import { jarvisAskPiece } from "../workflows/jarvis-pieces/jarvis-ask.ts";
+import { jarvisToolPiece } from "../workflows/jarvis-pieces/jarvis-tool.ts";
+import { jarvisNotifyPiece } from "../workflows/jarvis-pieces/jarvis-notify.ts";
+import { jarvisContextPiece } from "../workflows/jarvis-pieces/jarvis-context.ts";
+import { jarvisAgentPiece } from "../workflows/jarvis-pieces/jarvis-agent.ts";
+import { jarvisTriggerPiece } from "../workflows/jarvis-pieces/jarvis-trigger.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -553,16 +561,37 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     await registry.startAll();
 
     // 10.1. Start the workflow worker. Polls workflow_job, dispatches RUN_FLOW
-    // jobs to the (currently no-op) executor. Concurrency is 1; a single
-    // personal-AI daemon doesn't need more, and serializing keeps the queue
-    // semantics easy to reason about until we benchmark otherwise.
-    workflowWorker = new WorkflowWorker({
-      handlers: {
-        [RUN_FLOW]: createRunFlowHandler({ executor: new NoopFlowExecutor() }),
+    // jobs to the JarvisPiecesFlowExecutor. The executor walks each flow's
+    // trigger->nextAction chain and runs Jarvis-native pieces (ask, tool,
+    // notify, context, agent, trigger). Non-Jarvis pieces (gmail, slack,
+    // etc.) error out until the engine subprocess is wired in.
+    //
+    // Service population is intentionally minimal here: only services that
+    // are easy to build from current daemon state are passed. Pieces whose
+    // services aren't configured throw at runtime with a clear message.
+    const pieceRegistry = new JarvisPieceRegistry();
+    pieceRegistry.register(jarvisAskPiece);
+    pieceRegistry.register(jarvisToolPiece);
+    pieceRegistry.register(jarvisNotifyPiece);
+    pieceRegistry.register(jarvisContextPiece);
+    pieceRegistry.register(jarvisAgentPiece);
+    pieceRegistry.register(jarvisTriggerPiece);
+    const flowExecutor = new JarvisPiecesFlowExecutor({
+      registry: pieceRegistry,
+      services: {
+        // TODO(phase 3.1): adapt LLMManager -> PieceLlmClient
+        // TODO(phase 3.1): adapt ToolRegistry -> PieceToolRegistry
+        // TODO(phase 3.1): adapt ChannelService -> PieceNotifier
+        // TODO(phase 3.1): adapt vault/awareness/commitments -> PieceContextProvider
+        // TODO(phase 3.1): adapt M7 -> PieceAgentDelegator
+        // TODO(phase 3.1): adapt EventReactor -> PieceEventBus, workflow API -> PieceWorkflowRunner
       },
     });
+    workflowWorker = new WorkflowWorker({
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor }) },
+    });
     workflowWorker.start();
-    logWithTimestamp('Workflow worker started');
+    logWithTimestamp(`Workflow worker started with ${pieceRegistry.list().length} Jarvis pieces`);
 
     // 10a-post. Wire authority components that need running services
     const toolRegistry = orchestrator.getToolRegistry();
