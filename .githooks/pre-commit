@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+echo "[pre-commit] Checking for Activepieces EE-licensed code..."
+bun run scripts/check-no-ee-imports.ts
+
 echo "[pre-commit] Running tests..."
 bun test --bail
 

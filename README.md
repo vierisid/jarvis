@@ -454,4 +454,6 @@ If you discover a security vulnerability, please report it privately by emailing
 
 ## 📄 License
 
-[Jarvis Source Available License 2.0](LICENSE) (based on RSALv2)
+Jarvis is distributed under the [Jarvis Source Available License 2.0](LICENSE) (based on RSALv2).
+
+The Jarvis codebase incorporates third-party components under their own licenses. Those components retain their original licenses for any party who extracts them as a standalone work; the combined Jarvis distribution is governed by the Jarvis Source Available License. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the full list and per-component license text.
