@@ -48,6 +48,7 @@ import { jarvisNotifyPiece } from "../workflows/jarvis-pieces/jarvis-notify.ts";
 import { jarvisContextPiece } from "../workflows/jarvis-pieces/jarvis-context.ts";
 import { jarvisAgentPiece } from "../workflows/jarvis-pieces/jarvis-agent.ts";
 import { jarvisTriggerPiece } from "../workflows/jarvis-pieces/jarvis-trigger.ts";
+import { buildPieceServices } from "../workflows/adapters/index.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -560,39 +561,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 10. Start all services
     await registry.startAll();
 
-    // 10.1. Start the workflow worker. Polls workflow_job, dispatches RUN_FLOW
-    // jobs to the JarvisPiecesFlowExecutor. The executor walks each flow's
-    // trigger->nextAction chain and runs Jarvis-native pieces (ask, tool,
-    // notify, context, agent, trigger). Non-Jarvis pieces (gmail, slack,
-    // etc.) error out until the engine subprocess is wired in.
-    //
-    // Service population is intentionally minimal here: only services that
-    // are easy to build from current daemon state are passed. Pieces whose
-    // services aren't configured throw at runtime with a clear message.
-    const pieceRegistry = new JarvisPieceRegistry();
-    pieceRegistry.register(jarvisAskPiece);
-    pieceRegistry.register(jarvisToolPiece);
-    pieceRegistry.register(jarvisNotifyPiece);
-    pieceRegistry.register(jarvisContextPiece);
-    pieceRegistry.register(jarvisAgentPiece);
-    pieceRegistry.register(jarvisTriggerPiece);
-    const flowExecutor = new JarvisPiecesFlowExecutor({
-      registry: pieceRegistry,
-      services: {
-        // TODO(phase 3.1): adapt LLMManager -> PieceLlmClient
-        // TODO(phase 3.1): adapt ToolRegistry -> PieceToolRegistry
-        // TODO(phase 3.1): adapt ChannelService -> PieceNotifier
-        // TODO(phase 3.1): adapt vault/awareness/commitments -> PieceContextProvider
-        // TODO(phase 3.1): adapt M7 -> PieceAgentDelegator
-        // TODO(phase 3.1): adapt EventReactor -> PieceEventBus, workflow API -> PieceWorkflowRunner
-      },
-    });
-    workflowWorker = new WorkflowWorker({
-      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor }) },
-    });
-    workflowWorker.start();
-    logWithTimestamp(`Workflow worker started with ${pieceRegistry.list().length} Jarvis pieces`);
-
     // 10a-post. Wire authority components that need running services
     const toolRegistry = orchestrator.getToolRegistry();
     if (toolRegistry) {
@@ -626,6 +594,64 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const text = `[EXECUTED] ${request.tool_name}: ${result.slice(0, 200)}`;
       wsService.broadcastNotification(text, 'normal');
     });
+
+    // 10.1. Workflow runtime: register Jarvis-native pieces, wrap daemon
+    // services into the piece-side adapter surface, start the worker that
+    // drains workflow_job and drives the JarvisPiecesFlowExecutor.
+    //
+    // What is wired today:
+    //   - LLM (LLMManager)                         -> jarvis-ask, jarvis-agent (LLM-only)
+    //   - Tool registry                            -> jarvis-tool
+    //   - Notifier (channels + dashboard + desktop) -> jarvis-notify
+    //   - Vault entities/awareness/commitments     -> jarvis-context (always on)
+    //   - Workflow runner                          -> jarvis-trigger:run_workflow
+    //   - In-process event bus                     -> jarvis-trigger:on_event
+    //
+    // Limitations:
+    //   - Notifier broadcasts via channelService.broadcastToAll for any
+    //     non-dashboard channel; per-channel routing (telegram-only etc.) is
+    //     a follow-up. The piece's "delivered" array conservatively reports
+    //     each requested channel as delivered when broadcastToAll succeeds.
+    //   - Voice channel is reported as not-yet-wired in the result.
+    //   - jarvis-agent uses an LLM-only delegator (no M7 tool loop yet).
+    const pieceRegistry = new JarvisPieceRegistry();
+    pieceRegistry.register(jarvisAskPiece);
+    pieceRegistry.register(jarvisToolPiece);
+    pieceRegistry.register(jarvisNotifyPiece);
+    pieceRegistry.register(jarvisContextPiece);
+    pieceRegistry.register(jarvisAgentPiece);
+    pieceRegistry.register(jarvisTriggerPiece);
+    const pieceServices = buildPieceServices({
+      llmManager: agentService.getLLMManager(),
+      toolRegistry: toolRegistry ?? undefined,
+      notifier: {
+        broadcastToDashboard: (text, priority) => wsService.broadcastNotification(text, priority),
+        broadcastToChannels: async (channels, text) => {
+          // Conservative: broadcastToAll is M8's only fan-out today. Treat each
+          // requested channel as delivered if the call succeeds, failed if not.
+          // Per-channel routing comes when ChannelService exposes it.
+          try {
+            await channelService.broadcastToAll(text);
+            return { delivered: channels, failed: [] };
+          } catch (e) {
+            const error = e instanceof Error ? e.message : String(e);
+            return { delivered: [], failed: channels.map((channel) => ({ channel, error })) };
+          }
+        },
+        sendDesktop: async (title, body) => {
+          sendDesktopNotification(title, body, { urgency: 'normal' });
+        },
+      },
+    });
+    const flowExecutor = new JarvisPiecesFlowExecutor({
+      registry: pieceRegistry,
+      services: pieceServices,
+    });
+    workflowWorker = new WorkflowWorker({
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor }) },
+    });
+    workflowWorker.start();
+    logWithTimestamp(`Workflow worker started with ${pieceRegistry.list().length} Jarvis pieces`);
 
     // Phase A — onboarding setup-mode guard for LLM-dependent services.
     // While `setup_completed_at === null` the user hasn't saved an LLM
