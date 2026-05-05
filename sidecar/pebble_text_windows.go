@@ -253,3 +253,39 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 		uintptr(uint32(dtLeft|dtWordBreak|dtEndEllipsis|dtEditControl)),
 	)
 }
+
+// repairBubbleTextAlpha clamps the alpha channel back to 255 across the
+// bubble's text region. Win32 GDI DrawText into a 32-bit ARGB DIB
+// corrupts the alpha byte on glyph pixels (and AA edges) — the bubble
+// fill below set alpha=255, but DrawText leaves alpha=0 on the glyphs,
+// so the text becomes transparent to the desktop under the layered
+// window. We force alpha=255 across the bubble interior (well inside
+// the rounded corners) to restore opacity. RGB is left untouched, so
+// the glyph colour DrawText wrote stays correct.
+//
+// Trade-off: subpixel AA in the very edges of the text gets clobbered
+// (alpha=255 means hard-edged glyphs), but text becomes visible — which
+// is the bigger win.
+func repairBubbleTextAlpha(pixels []uint32, bubbleY1 int32) {
+	// Insets larger than the corner radius (6 px) so we don't accidentally
+	// turn the transparent rounded-corner pixels opaque. Top inset starts
+	// just above the eyebrow row (62) so the JARVIS label is repaired too.
+	const (
+		x0 = 20
+		x1 = 332
+		y0 = 56
+	)
+	y1 := int(bubbleY1) - 8
+	if y1 <= y0 {
+		return
+	}
+	if x1 > pebbleWindowW {
+		return
+	}
+	for y := y0; y < y1; y++ {
+		row := y * pebbleWindowW
+		for x := x0; x < x1; x++ {
+			pixels[row+x] |= 0xFF000000
+		}
+	}
+}

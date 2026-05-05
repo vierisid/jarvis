@@ -475,10 +475,13 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	bubbleY1 := s.computeBubbleBottom(memDC, state)
 	s.drawState(pixels, state, bubbleY1)
 	// GDI text rendering on top of the bubble's fully-opaque (alpha=255)
-	// pixels. DrawText writes RGB without touching alpha, so the result
-	// remains pre-multiplied-ARGB-correct for UpdateLayeredWindow.
+	// pixels. DrawText writes RGB *and corrupts* alpha on the glyph
+	// pixels — repairBubbleTextAlpha clamps alpha back to 255 across the
+	// text region so the bubble doesn't end up "see-through" wherever
+	// glyphs were drawn.
 	if state == PebbleListening || state == PebbleSpeaking {
 		s.drawBubbleText(memDC, state, bubbleY1)
+		repairBubbleTextAlpha(pixels, bubbleY1)
 	}
 
 	// UpdateLayeredWindow — moves AND repaints the window in one call.
