@@ -304,7 +304,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     agentService.setResearchQueue(researchQueue);
     const observerService = config.noLocalTools
       ? null
-      : new ObserverService(reactor, coalescer, googleAuth ?? undefined);
+      : new ObserverService(reactor, coalescer, googleAuth ?? undefined, config.dataDir);
     const wsService = new WebSocketService(config.port, agentService);
 
     // 5b. Create channel service for external comms (Telegram, Discord)

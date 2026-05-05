@@ -68,12 +68,19 @@ export class ObserverService implements Service {
   private reactor: EventReactor | null;
   private coalescer: EventCoalescer | null;
   private googleAuth: GoogleAuth | null;
+  private dataDir: string;
 
-  constructor(reactor?: EventReactor, coalescer?: EventCoalescer, googleAuth?: GoogleAuth) {
+  constructor(
+    reactor?: EventReactor,
+    coalescer?: EventCoalescer,
+    googleAuth?: GoogleAuth,
+    dataDir?: string,
+  ) {
     this.manager = new ObserverManager();
     this.reactor = reactor ?? null;
     this.coalescer = coalescer ?? null;
     this.googleAuth = googleAuth ?? null;
+    this.dataDir = dataDir ?? `${homedir()}/.jarvis`;
   }
 
   async start(): Promise<void> {
@@ -81,7 +88,7 @@ export class ObserverService implements Service {
 
     try {
       // Register core observers
-      this.manager.register(new FileWatcher([homedir()]));
+      this.manager.register(new FileWatcher([homedir()], [this.dataDir]));
       this.manager.register(new ClipboardMonitor());
       this.manager.register(new ProcessMonitor());
 

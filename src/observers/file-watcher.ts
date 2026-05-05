@@ -6,6 +6,7 @@
  */
 
 import { watch, type FSWatcher } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import type { Observer, ObserverEvent, ObserverEventHandler } from './index';
 
 type DebounceEntry = {
@@ -17,13 +18,15 @@ export class FileWatcher implements Observer {
   name = 'file-watcher';
   private watchers: FSWatcher[] = [];
   private paths: string[];
+  private excludedPrefixes: string[];
   private handler: ObserverEventHandler | null = null;
   private running = false;
   private recentChanges: Map<string, number> = new Map();
   private debounceMs = 100; // Ignore duplicate events within 100ms
 
-  constructor(paths: string[]) {
+  constructor(paths: string[], excludePaths: string[] = []) {
     this.paths = paths;
+    this.excludedPrefixes = excludePaths.map((p) => resolve(p) + sep);
   }
 
   async start(): Promise<void> {
@@ -88,6 +91,18 @@ export class FileWatcher implements Observer {
     }
 
     const fullPath = `${basePath}/${filename}`;
+
+    // Drop events from excluded subtrees (e.g. the daemon's own data dir).
+    // Watching ~/.jarvis recursively while the daemon writes to it creates an
+    // inotify -> SQLite -> inotify loop that can starve Bun's microtask queue
+    // and deadlock async file I/O on the brain side. See issue #128.
+    const resolvedPath = resolve(fullPath) + sep;
+    for (const prefix of this.excludedPrefixes) {
+      if (resolvedPath.startsWith(prefix)) {
+        return;
+      }
+    }
+
     const now = Date.now();
 
     // Debounce: skip if same file changed within debounceMs
