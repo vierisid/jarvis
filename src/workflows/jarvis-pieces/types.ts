@@ -45,6 +45,63 @@ export interface JarvisPieceServices {
   notifier?: PieceNotifier;
   context?: PieceContextProvider;
   agentDelegator?: PieceAgentDelegator;
+  eventBus?: PieceEventBus;
+  workflowRunner?: PieceWorkflowRunner;
+}
+
+/**
+ * Subscribe-style event bus exposed to triggers. The daemon's implementation
+ * adapts the Jarvis event reactor (M5/M13) to this surface.
+ *
+ * Event types are free-form strings -- the daemon publishes its catalog
+ * (e.g. "awareness.context_changed", "commitment.due", "voice.intent",
+ * "tool.executed"). `listEventTypes()` lets the UI render a dropdown.
+ */
+export interface PieceEventBus {
+  subscribe(
+    eventType: string,
+    handler: (payload: Record<string, unknown>) => void,
+  ): () => void;
+  listEventTypes(): string[];
+}
+
+/** Run a saved workflow by id or name. The runner enqueues a job and returns the run id. */
+export interface PieceWorkflowRunner {
+  start(input: PieceWorkflowStartInput): Promise<PieceWorkflowStartResult>;
+}
+
+export interface PieceWorkflowStartInput {
+  flowId?: string;
+  flowName?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface PieceWorkflowStartResult {
+  runId: string;
+}
+
+/**
+ * Trigger definition. Unlike actions, triggers are not invoked once -- they
+ * are subscribed when the parent workflow is enabled and unsubscribed on
+ * disable. The trigger fires by calling `onFire(payload)`; the runtime turns
+ * each fire into a flow run.
+ */
+export interface JarvisTrigger<I = unknown> {
+  name: string;
+  displayName: string;
+  description: string;
+  parseInput: (raw: unknown) => I;
+  /** Called when the parent workflow is enabled. Returns an unsubscribe fn. */
+  subscribe: (input: I, ctx: JarvisTriggerContext) => Promise<TriggerSubscription>;
+}
+
+export interface JarvisTriggerContext extends JarvisPieceContext {
+  /** Called by the trigger to fire a flow run. Payload is forwarded to RUN_FLOW. */
+  onFire: (payload: Record<string, unknown>) => Promise<void>;
+}
+
+export interface TriggerSubscription {
+  unsubscribe: () => Promise<void>;
 }
 
 /**
@@ -247,6 +304,7 @@ export interface JarvisPiece {
   displayName: string;
   description: string;
   actions: Record<string, JarvisAction>;
+  triggers?: Record<string, JarvisTrigger>;
 }
 
 /**
@@ -280,6 +338,17 @@ export class JarvisPieceRegistry {
     const piece = this.pieces.get(pieceName);
     if (!piece) return null;
     return piece.actions[actionName] ?? null;
+  }
+
+  /** Resolve "<piece>:<trigger>" to its definition. Returns null if either side is missing. */
+  resolveTrigger(reference: string): JarvisTrigger | null {
+    const colon = reference.indexOf(":");
+    if (colon < 0) return null;
+    const pieceName = reference.slice(0, colon);
+    const triggerName = reference.slice(colon + 1);
+    const piece = this.pieces.get(pieceName);
+    if (!piece || !piece.triggers) return null;
+    return piece.triggers[triggerName] ?? null;
   }
 }
 

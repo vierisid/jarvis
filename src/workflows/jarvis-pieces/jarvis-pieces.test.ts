@@ -22,7 +22,17 @@ import {
   vaultSearchAction,
 } from "./jarvis-context";
 import { delegateAction, jarvisAgentPiece } from "./jarvis-agent";
+import {
+  jarvisTriggerPiece,
+  onEventTrigger,
+  runWorkflowAction,
+} from "./jarvis-trigger";
 import type {
+  JarvisTriggerContext,
+  PieceEventBus,
+  PieceWorkflowRunner,
+  PieceWorkflowStartInput,
+  PieceWorkflowStartResult,
   PieceAgentDelegateInput,
   PieceAgentDelegateResult,
   PieceAgentDelegator,
@@ -620,6 +630,172 @@ describe("jarvis-agent: execute", () => {
       "jarvis-tool",
     ]);
     expect(r.resolveAction("jarvis-agent:delegate")?.name).toBe("delegate");
+  });
+});
+
+// -------------------------------------------------------- jarvis-trigger
+
+class StubEventBus implements PieceEventBus {
+  private subs: Map<string, Set<(p: Record<string, unknown>) => void>> = new Map();
+  subscribe(eventType: string, handler: (p: Record<string, unknown>) => void) {
+    if (!this.subs.has(eventType)) this.subs.set(eventType, new Set());
+    this.subs.get(eventType)!.add(handler);
+    return () => this.subs.get(eventType)?.delete(handler);
+  }
+  listEventTypes(): string[] {
+    return Array.from(this.subs.keys());
+  }
+  publish(eventType: string, payload: Record<string, unknown>): void {
+    for (const h of this.subs.get(eventType) ?? new Set()) h(payload);
+  }
+  subscribersOf(eventType: string): number {
+    return this.subs.get(eventType)?.size ?? 0;
+  }
+}
+
+class StubWorkflowRunner implements PieceWorkflowRunner {
+  public calls: PieceWorkflowStartInput[] = [];
+  constructor(private readonly result: PieceWorkflowStartResult = { runId: "run_stub" }) {}
+  async start(input: PieceWorkflowStartInput): Promise<PieceWorkflowStartResult> {
+    this.calls.push(input);
+    return this.result;
+  }
+}
+
+function makeTriggerCtx(
+  bus: PieceEventBus,
+  onFire: (p: Record<string, unknown>) => Promise<void>,
+): JarvisTriggerContext {
+  return { services: { eventBus: bus }, onFire };
+}
+
+describe("jarvis-trigger.on_event: parseInput", () => {
+  test("requires eventType; supports optional filter", () => {
+    expect(onEventTrigger.parseInput({ eventType: "awareness.context_changed" })).toEqual({
+      eventType: "awareness.context_changed",
+    });
+    expect(
+      onEventTrigger.parseInput({ eventType: "x", filter: { app: "VS Code" } }),
+    ).toEqual({ eventType: "x", filter: { app: "VS Code" } });
+  });
+
+  test("rejects bad inputs", () => {
+    expect(() => onEventTrigger.parseInput({})).toThrow();
+    expect(() => onEventTrigger.parseInput({ eventType: "" })).toThrow();
+    expect(() => onEventTrigger.parseInput({ eventType: "x", filter: 5 })).toThrow();
+    expect(() => onEventTrigger.parseInput({ eventType: "x", filter: [] })).toThrow();
+  });
+});
+
+describe("jarvis-trigger.on_event: subscribe + fire", () => {
+  test("subscribes on the bus and fires on matching events", async () => {
+    const bus = new StubEventBus();
+    const fires: Record<string, unknown>[] = [];
+    const onFire = async (p: Record<string, unknown>) => { fires.push(p); };
+    const sub = await onEventTrigger.subscribe(
+      { eventType: "awareness.context_changed" },
+      makeTriggerCtx(bus, onFire),
+    );
+    expect(bus.subscribersOf("awareness.context_changed")).toBe(1);
+    bus.publish("awareness.context_changed", { app: "VS Code" });
+    bus.publish("awareness.context_changed", { app: "Slack" });
+    bus.publish("commitment.due", { id: "c1" });
+    expect(fires).toEqual([{ app: "VS Code" }, { app: "Slack" }]);
+    await sub.unsubscribe();
+    expect(bus.subscribersOf("awareness.context_changed")).toBe(0);
+  });
+
+  test("filter narrows which events fire the workflow", async () => {
+    const bus = new StubEventBus();
+    const fires: Record<string, unknown>[] = [];
+    const onFire = async (p: Record<string, unknown>) => { fires.push(p); };
+    const sub = await onEventTrigger.subscribe(
+      { eventType: "tool.executed", filter: { name: "vault_search" } },
+      makeTriggerCtx(bus, onFire),
+    );
+    bus.publish("tool.executed", { name: "vault_search", ms: 5 });
+    bus.publish("tool.executed", { name: "browser_screenshot" });
+    bus.publish("tool.executed", { name: "vault_search", ms: 7 });
+    expect(fires).toEqual([
+      { name: "vault_search", ms: 5 },
+      { name: "vault_search", ms: 7 },
+    ]);
+    await sub.unsubscribe();
+  });
+
+  test("subscribe throws when the event bus is missing", async () => {
+    const onFire = async () => { /* noop */ };
+    await expect(
+      onEventTrigger.subscribe(
+        { eventType: "x" },
+        { services: {}, onFire },
+      ),
+    ).rejects.toThrow(/eventBus is not configured/);
+  });
+});
+
+describe("jarvis-trigger.run_workflow: parseInput", () => {
+  test("requires flowId or flowName", () => {
+    expect(() => runWorkflowAction.parseInput({})).toThrow(/requires flowId or flowName/);
+    expect(runWorkflowAction.parseInput({ flowId: "f1" })).toEqual({ flowId: "f1" });
+    expect(runWorkflowAction.parseInput({ flowName: "Morning briefing" })).toEqual({
+      flowName: "Morning briefing",
+    });
+  });
+
+  test("rejects empty strings and bad payload types", () => {
+    expect(() => runWorkflowAction.parseInput({ flowId: "" })).toThrow();
+    expect(() => runWorkflowAction.parseInput({ flowName: "" })).toThrow();
+    expect(() => runWorkflowAction.parseInput({ flowId: "f", payload: 5 })).toThrow();
+    expect(() => runWorkflowAction.parseInput({ flowId: "f", payload: [] })).toThrow();
+  });
+});
+
+describe("jarvis-trigger.run_workflow: execute", () => {
+  test("dispatches to the workflow runner and returns the run id", async () => {
+    const runner = new StubWorkflowRunner({ runId: "run_started" });
+    const out = await runWorkflowAction.execute(
+      { flowName: "morning", payload: { tone: "brief" } },
+      { services: { workflowRunner: runner } },
+    );
+    expect(out).toEqual({ runId: "run_started" });
+    expect(runner.calls).toEqual([{ flowName: "morning", payload: { tone: "brief" } }]);
+  });
+
+  test("throws when the workflowRunner service is missing", async () => {
+    await expect(
+      runWorkflowAction.execute({ flowId: "f" }, { services: {} }),
+    ).rejects.toThrow(/workflowRunner is not configured/);
+  });
+});
+
+describe("jarvis-trigger registration", () => {
+  test("piece exposes the action AND the trigger; registry resolves both", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisTriggerPiece);
+    expect(r.resolveAction("jarvis-trigger:run_workflow")?.name).toBe("run_workflow");
+    expect(r.resolveTrigger("jarvis-trigger:on_event")?.name).toBe("on_event");
+    // Negative cases:
+    expect(r.resolveTrigger("jarvis-trigger:run_workflow")).toBeNull();
+    expect(r.resolveAction("jarvis-trigger:on_event")).toBeNull();
+  });
+
+  test("all six Jarvis pieces register cleanly together", () => {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisAskPiece);
+    r.register(jarvisToolPiece);
+    r.register(jarvisNotifyPiece);
+    r.register(jarvisContextPiece);
+    r.register(jarvisAgentPiece);
+    r.register(jarvisTriggerPiece);
+    expect(r.list().map((p) => p.name).sort()).toEqual([
+      "jarvis-agent",
+      "jarvis-ask",
+      "jarvis-context",
+      "jarvis-notify",
+      "jarvis-tool",
+      "jarvis-trigger",
+    ]);
   });
 });
 
