@@ -4,6 +4,7 @@ import { AppShell } from "./shell/AppShell";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider } from "./rooms/useRoomActionBus";
+import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import "./v2.css";
@@ -34,6 +35,21 @@ export function AppShellV2() {
       /* helper logs and strips the param on failure */
     });
   }, []);
+
+  // Panel mode: the sidecar spawned this dashboard URL as a standalone
+  // native window (T18). Render JUST the room body — no AppShell, no
+  // Thread/Rail/Composer chrome, no voice handlers — so the pebble's
+  // sidecar-side voice loop stays the only voice surface.
+  if (route.kind === "panel") {
+    const Body = getRoomBody(route.key);
+    return (
+      <div className="jarvis-v2-root jarvis-v2-panel-mode">
+        <RoomActionBusProvider>
+          <Body mode="expanded" />
+        </RoomActionBusProvider>
+      </div>
+    );
+  }
 
   return (
     <div className="jarvis-v2-root">

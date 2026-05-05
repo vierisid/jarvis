@@ -673,6 +673,149 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // pipeline (capture done → transcribe → think → speak), not timers.
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
+      // T18 — voice-triggered panel spawning. The daemon checks every
+      // user-text against an "open <room>" / "close <room>" intent before
+      // running it through the LLM. On a hit we spawn (or close) a native
+      // dashboard window via the existing `panel.spawn` RPC and skip the
+      // LLM entirely — saves the 2-7 s round-trip for trivial commands.
+      type RoomMeta = { aliases: string[]; title: string; w: number; h: number };
+      const ROOMS: Record<string, RoomMeta> = {
+        settings:   { aliases: ['settings', 'preferences'],                title: 'Settings',   w: 560, h: 600 },
+        workflows:  { aliases: ['workflows', 'workflow', 'flows'],         title: 'Workflows',  w: 900, h: 600 },
+        memory:     { aliases: ['memory', 'vault', 'knowledge'],           title: 'Memory',     w: 480, h: 700 },
+        tools:      { aliases: ['tools', 'tool catalog', 'tool catalogue'],title: 'Tools',      w: 560, h: 600 },
+        agents:     { aliases: ['agents', 'agent monitor'],                title: 'Agents',     w: 600, h: 600 },
+        authority:  { aliases: ['authority', 'approvals', 'permissions'],  title: 'Authority',  w: 480, h: 600 },
+        logs:       { aliases: ['logs', 'log stream', 'log'],              title: 'Logs',       w: 800, h: 500 },
+        calendar:   { aliases: ['calendar', 'schedule'],                   title: 'Calendar',   w: 720, h: 600 },
+        goals:      { aliases: ['goals', 'okrs', 'goal'],                  title: 'Goals',      w: 600, h: 600 },
+        tasks:      { aliases: ['tasks', 'todos', 'task list', 'task'],    title: 'Tasks',      w: 500, h: 600 },
+        content:    { aliases: ['content', 'content pipeline', 'notes'],   title: 'Content',    w: 800, h: 600 },
+        workspaces: { aliases: ['workspaces', 'workspace', 'sites'],       title: 'Workspaces', w: 800, h: 600 },
+      };
+
+      // Match aliases longest-first so "tool catalog" wins over "tools" when
+      // both appear in the input.
+      const orderedAliases: { alias: string; key: string }[] = [];
+      for (const [key, meta] of Object.entries(ROOMS)) {
+        for (const alias of meta.aliases) orderedAliases.push({ alias, key });
+      }
+      orderedAliases.sort((a, b) => b.alias.length - a.alias.length);
+
+      const dashboardURL = (key: string): string => {
+        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
+        // _panel_<key> renders ONLY the RoomBody inside the spawned native
+        // window (no AppShell, no voice handlers) so the pebble's sidecar-
+        // side voice loop is the single voice surface — no double voice.
+        // Use _room_<key> in the dashboard SPA when the user wants the full
+        // takeover with thread + rail context.
+        return `http://localhost:${port}/#/_panel_${key}`;
+      };
+
+      // tryHandlePanelIntent looks for "open|show|launch <room>" or
+      // "close|hide|dismiss <room>" anywhere in the user text. On match
+      // it dispatches the right panel RPC, speaks a short confirmation
+      // through the same TTS pipeline, and returns true so the caller
+      // skips the LLM. Returns false when no intent is recognized.
+      const tryHandlePanelIntent = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        const lower = userText.toLowerCase();
+        // Cheap pre-filter: bail unless we see a verb that could plausibly
+        // be a panel-control command.
+        if (!/(open|show|launch|bring up|close|hide|dismiss|shut)/.test(lower)) {
+          return false;
+        }
+
+        // Find the (verb, room) pair. Only match a room alias that follows
+        // the verb so "the tools are useful" doesn't open Tools.
+        const openRe  = /\b(open|show|launch|bring up|let me see)\s+(?:the\s+|my\s+)?([a-z][a-z ]{0,40})/i;
+        const closeRe = /\b(close|hide|dismiss|shut)\s+(?:the\s+|my\s+)?([a-z][a-z ]{0,40})/i;
+        const openM = openRe.exec(lower);
+        const closeM = closeRe.exec(lower);
+        const m = openM || closeM;
+        if (!m) return false;
+        const action: 'open' | 'close' = openM ? 'open' : 'close';
+        const tail = m[2];
+        if (!tail) return false;
+
+        let key: string | null = null;
+        for (const { alias, key: roomKey } of orderedAliases) {
+          // Word-boundary match against the captured tail so "open settings page"
+          // matches "settings" cleanly without grabbing the trailing words.
+          const aliasRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`);
+          if (aliasRe.test(tail)) { key = roomKey; break; }
+        }
+        if (!key) return false;
+
+        const meta = ROOMS[key]!;
+        const confirm = action === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
+        console.log(`[ambient-ui] panel intent: ${action} ${key} (matched "${m[0]}")`);
+
+        // Speak the confirmation through the queue-based TTS path so the
+        // user hears feedback even before the window finishes spawning.
+        await setState(sidecarId, 'thinking', '');
+        try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
+
+        if (action === 'open') {
+          try {
+            await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+              url: dashboardURL(key),
+              title: meta.title,
+              bounds: { x: -1, y: -1, w: meta.w, h: meta.h }, // -1 = let the sidecar pick (near cursor)
+              resizable: true,
+              always_on_top: false,
+              multi_instance: false,
+            });
+          } catch (err) {
+            console.warn(`[ambient-ui] panel.spawn(${key}) failed:`, err);
+          }
+        } else {
+          // panel.close needs a panel id — for v1 we don't track ids,
+          // so closing-by-name iterates the panel list. The sidecar
+          // already exposes `panel.list` and `panel.close`.
+          try {
+            const list = await sidecarManager.dispatchRPC(sidecarId, 'panel.list', {});
+            // panel.list returns { panels: [{ id, title, ... }] } — close
+            // the first match by title (case-insensitive).
+            const panels = (list && typeof list === 'object' && 'panels' in (list as object))
+              ? ((list as { panels: Array<{ id: string; title?: string }> }).panels ?? [])
+              : [];
+            const target = panels.find(p => (p.title || '').toLowerCase() === meta.title.toLowerCase());
+            if (target) {
+              await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
+            }
+          } catch (err) {
+            console.warn(`[ambient-ui] panel.close(${key}) failed:`, err);
+          }
+        }
+
+        if (ctrl.cancelled) return true;
+
+        // Speak the confirmation (single sentence, fits in one TTS clip).
+        if (pebbleTTS) {
+          try {
+            const audio = await pebbleTTS.synthesize(confirm);
+            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
+              data: audio.toString('base64'),
+              mime_type: ttsMimeType(jarvisConfig.tts),
+              blocking: false,
+            });
+          } catch (err) {
+            console.warn('[ambient-ui] panel-intent TTS failed:', err);
+          }
+        }
+        await setState(sidecarId, 'speaking', confirm);
+        // Hold speaking just long enough for the short confirmation to play.
+        const holdMs = Math.max(800, confirm.length * 60);
+        await new Promise<void>(r => setTimeout(r, holdMs));
+        if (ctrl.cancelled) return true;
+        await setState(sidecarId, 'idle', '');
+        return true;
+      };
+
       // extractCompleteSentences pulls full sentences off the head of
       // `buffer` and returns them, leaving any in-progress trailing
       // fragment in `remainder`. A "sentence" here is text terminated by
@@ -710,6 +853,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         ctrl: { cancelled: boolean },
       ): Promise<void> => {
         const cycleStart = Date.now();
+
+        // Fast path: if the user said "open <room>" or "close <room>",
+        // handle it directly without invoking the LLM. Big latency win for
+        // simple navigation commands.
+        if (await tryHandlePanelIntent(sidecarId, userText, ctrl)) {
+          console.log(`[ambient-ui] panel-intent fast path took ${Date.now() - cycleStart}ms`);
+          return;
+        }
+
         await setState(sidecarId, 'thinking', '');
 
         let firstTokenAt = 0;

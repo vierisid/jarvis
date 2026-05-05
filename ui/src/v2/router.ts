@@ -1,14 +1,21 @@
 import { useEffect, useState } from "react";
 
 /**
- * v2 route union. `home` mounts the AppShell (Thread + Rail + Composer).
- * `primitives` mounts the Phase 1 showcase. `room` is the Phase 6 fullscreen
- * Room overlay; the `key` discriminates which Room.
+ * v2 route union.
+ *  - `home` mounts the AppShell (Thread + Rail + Composer).
+ *  - `primitives` mounts the Phase 1 showcase.
+ *  - `room` is the Phase 6 fullscreen Room overlay (used inside the dashboard
+ *    when the user navigates within the SPA).
+ *  - `panel` is the bare-room mode used when the sidecar spawns a Room as a
+ *    standalone native window (T18 — "Jarvis open settings"). Renders ONLY
+ *    the RoomBody, no AppShell, no voice handlers — so the pebble's sidecar-
+ *    side voice loop is the single source of voice input (no double-voice).
  *
  * Hash format:
  *   #/                — home
  *   #/_primitives     — primitives showcase
- *   #/_room_<key>     — Room takeover, key one of RoomKey
+ *   #/_room_<key>     — Room takeover (within AppShell)
+ *   #/_panel_<key>    — Room as a standalone panel (no AppShell, no voice)
  */
 export type RoomKey =
   | "workflows"
@@ -28,7 +35,8 @@ export type RoomKey =
 export type V2Route =
   | { kind: "home" }
   | { kind: "primitives" }
-  | { kind: "room"; key: RoomKey };
+  | { kind: "room"; key: RoomKey }
+  | { kind: "panel"; key: RoomKey };
 
 const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "workflows",
@@ -56,6 +64,12 @@ export function getV2Route(): V2Route {
       return { kind: "room", key: key as RoomKey };
     }
   }
+  if (hash.startsWith("_panel_")) {
+    const key = hash.slice("_panel_".length);
+    if (ROOM_KEYS.has(key as RoomKey)) {
+      return { kind: "panel", key: key as RoomKey };
+    }
+  }
   return { kind: "home" };
 }
 
@@ -75,6 +89,7 @@ export function navigateV2(route: V2Route): void {
   let hash = "#/";
   if (route.kind === "primitives") hash = "#/_primitives";
   else if (route.kind === "room") hash = `#/_room_${route.key}`;
+  else if (route.kind === "panel") hash = `#/_panel_${route.key}`;
   if (window.location.hash !== hash) {
     window.location.hash = hash;
   }
