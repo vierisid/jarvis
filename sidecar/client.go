@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -270,11 +271,91 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// pointing). Pebble itself is purely visual.
 	if c.pebble != nil {
 		audioSvc := NewAudioCaptureService()
+
+		// Sidecar-native wake-word listener (T16). Always on whenever the
+		// pebble is — no separate config gate, since the pebble is the
+		// whole reason wake-word matters. Emits one `audio.wake_segment`
+		// per VAD-detected utterance to the daemon, which transcribes +
+		// regex-matches "jarvis". Pauses around Ctrl+Space session
+		// captures so it doesn't fight for the mic device.
+		wakeListener := NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
+		if err := wakeListener.Start(ctx); err != nil {
+			log.Printf("[wake] failed to start: %v", err)
+			wakeListener = nil
+		}
+
+		// Suppress wake captures while TTS is playing so JARVIS's own
+		// voice through the speakers doesn't trigger a self-wake. Hooked
+		// via the playback service's state-change callback.
+		if wakeListener != nil && c.playback != nil {
+			c.playback.SetPlayStateListener(func(playing bool) {
+				wakeListener.Suppress(playing)
+			})
+		}
+
+		// runSessionCapture handles one summon→capture→stream cycle. Used
+		// by both the Ctrl+Space hotkey path and the wake-word follow-up
+		// path (when the daemon dispatches `pebble.start_listening` after
+		// matching a wake phrase that had no trailing command).
+		var sessionInFlight atomic.Bool
+		runSessionCapture := func(sessionID string) {
+			if !sessionInFlight.CompareAndSwap(false, true) {
+				log.Printf("[audio] session %s skipped — capture already in flight", sessionID)
+				return
+			}
+			defer sessionInFlight.Store(false)
+
+			startEvt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "audio.session_start",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload: map[string]any{
+					"session_id":  sessionID,
+					"sample_rate": pebbleAudioSampleRate,
+					"channels":    pebbleAudioChannels,
+					"format":      "pcm_s16le",
+				},
+			}
+			_ = sendFn(ctx, startEvt, nil)
+
+			if wakeListener != nil {
+				wakeListener.Pause()
+				defer wakeListener.Resume(ctx)
+			}
+			pcm, dur, err := pebbleCaptureWithVAD(audioSvc, sessionID, DefaultVADOpts())
+			if err != nil {
+				log.Printf("[audio] capture failed: %v", err)
+				return
+			}
+
+			endEvt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "audio.session_end",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload: map[string]any{
+					"session_id":  sessionID,
+					"duration_ms": dur.Milliseconds(),
+					"sample_rate": pebbleAudioSampleRate,
+					"channels":    pebbleAudioChannels,
+					"format":      "pcm_s16le",
+				},
+				Binary: BinaryDataInline{
+					Type:     "inline",
+					MimeType: "audio/pcm",
+					Data:     base64.StdEncoding.EncodeToString(pcm),
+				},
+			}
+			if err := sendFn(ctx, endEvt, nil); err != nil {
+				log.Printf("[audio] failed to emit session_end event: %v", err)
+			} else {
+				log.Printf("[audio] streamed session %s to daemon (%d PCM bytes, %.2fs)", sessionID, len(pcm), dur.Seconds())
+			}
+		}
+
 		c.pebble.OnSummon(func() {
 			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
-
-			// 1. Notify the daemon that a summon happened (still fires; the
-			//    daemon's voice cycle uses this to drive pebble state).
 			summonEvt := SidecarEvent{
 				Type:      "sidecar_event",
 				EventType: "pebble.summon",
@@ -285,66 +366,21 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			if err := sendFn(ctx, summonEvt, nil); err != nil {
 				log.Printf("[pebble] failed to emit summon event: %v", err)
 			}
-
-			// 2. W2-T22: capture audio + stream PCM to the daemon. We
-			//    emit `audio.session_start` immediately, then capture
-			//    for a fixed window (5s placeholder until T25 adds VAD-
-			//    driven end-of-speech), then emit `audio.session_end`
-			//    with the full PCM payload as binary. Daemon receives
-			//    both and gets the audio buffer it needs for STT (T23).
-			go func() {
-				startEvt := SidecarEvent{
-					Type:      "sidecar_event",
-					EventType: "audio.session_start",
-					Timestamp: time.Now().UnixMilli(),
-					Priority:  "normal",
-					Payload: map[string]any{
-						"session_id":  sessionID,
-						"sample_rate": pebbleAudioSampleRate,
-						"channels":    pebbleAudioChannels,
-						"format":      "pcm_s16le",
-					},
-				}
-				_ = sendFn(ctx, startEvt, nil)
-
-				// VAD-driven capture (T25): runs until the user stops talking
-				// (silence > SilenceCutoff after speech) or the hard cap fires.
-				// Replaces the fixed 5 s window so short utterances don't
-				// pad with silence and long ones aren't cut off mid-thought.
-				pcm, dur, err := pebbleCaptureWithVAD(audioSvc, sessionID, DefaultVADOpts())
-				if err != nil {
-					log.Printf("[audio] capture failed: %v", err)
-					return
-				}
-
-				// Inline base64 — for 5s @ 16 kHz s16 mono, ~213 KB
-				// encoded. Well under the inline threshold; no need for
-				// a separate binary frame ref.
-				endEvt := SidecarEvent{
-					Type:      "sidecar_event",
-					EventType: "audio.session_end",
-					Timestamp: time.Now().UnixMilli(),
-					Priority:  "normal",
-					Payload: map[string]any{
-						"session_id":  sessionID,
-						"duration_ms": dur.Milliseconds(),
-						"sample_rate": pebbleAudioSampleRate,
-						"channels":    pebbleAudioChannels,
-						"format":      "pcm_s16le",
-					},
-					Binary: BinaryDataInline{
-						Type:     "inline",
-						MimeType: "audio/pcm",
-						Data:     base64.StdEncoding.EncodeToString(pcm),
-					},
-				}
-				if err := sendFn(ctx, endEvt, nil); err != nil {
-					log.Printf("[audio] failed to emit session_end event: %v", err)
-				} else {
-					log.Printf("[audio] streamed session %s to daemon (%d PCM bytes, %.2fs)", sessionID, len(pcm), dur.Seconds())
-				}
-			}()
+			go runSessionCapture(sessionID)
 		})
+
+		// pebble.start_listening — daemon-driven session capture (no
+		// pebble.summon event). Used by the wake-word path: when a wake
+		// phrase fires with no trailing command, the daemon transitions
+		// the bubble to listening and calls this so the user's next
+		// utterance gets captured + streamed just like Ctrl+Space.
+		c.mu.Lock()
+		c.handlers["pebble.start_listening"] = func(_ map[string]any) (*RPCResult, error) {
+			sessionID := fmt.Sprintf("listen-%d", time.Now().UnixMilli())
+			go runSessionCapture(sessionID)
+			return &RPCResult{Result: map[string]any{"session_id": sessionID, "started": true}}, nil
+		}
+		c.mu.Unlock()
 	}
 
 	return c.readLoop(ctx)

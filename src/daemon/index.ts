@@ -420,53 +420,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       };
 
-      // runTypewriter reveals `text` in the speaking bubble at a pace that
-      // *outruns* the TTS audio so the user can read ahead while listening.
-      // Reveal ends in ~60% of audioDurationMs (so a 5 s clip fully shows
-      // by 3 s), then the bubble holds at full text until the audio
-      // finishes. 30 ms tick (~33 fps) keeps the reveal smooth. Honours
-      // `ctrl.cancelled` so a second hotkey press aborts cleanly.
-      const runTypewriter = async (
-        sid: string,
-        text: string,
-        durationMs: number,
-        ctrl: { cancelled: boolean },
-      ): Promise<void> => {
-        if (!text) {
-          await new Promise<void>(r => setTimeout(r, durationMs));
-          return;
-        }
-        // Reveal-only window: outpace audio by ~40%, but never finish so
-        // fast it looks like a "paste" (≥600 ms) and never run past the
-        // audio itself (durationMs).
-        const revealMs = Math.max(600, Math.min(durationMs, Math.round(durationMs * 0.6)));
-        const tickMs = 30;
-        const totalTicks = Math.max(1, Math.round(revealMs / tickMs));
-        const charsPerTick = text.length / totalTicks;
-        let lastShown = -1;
-        const start = Date.now();
-        for (let i = 1; i <= totalTicks; i++) {
-          if (ctrl.cancelled) return;
-          const target = Math.min(text.length, Math.ceil(i * charsPerTick));
-          if (target !== lastShown) {
-            lastShown = target;
-            // Fire-and-forget — setState wraps dispatchRPC in try/catch.
-            // Awaiting would make the cadence drift on slow WS RTTs.
-            void setState(sid, 'speaking', text.slice(0, target));
-          }
-          await new Promise<void>(r => setTimeout(r, tickMs));
-        }
-        if (ctrl.cancelled) return;
-        if (lastShown < text.length) {
-          void setState(sid, 'speaking', text);
-        }
-        // Hold at full text until the audio finishes so the bubble doesn't
-        // disappear mid-playback.
-        const elapsed = Date.now() - start;
-        if (elapsed < durationMs) {
-          await new Promise<void>(r => setTimeout(r, durationMs - elapsed));
-        }
-      };
+      // (T17e replaced the artificial typewriter pacing with the LLM's
+      // own token cadence — see runResponseCycle below.)
 
       // estimateAudioDurationMs returns the playback duration of the
       // synthesized clip in milliseconds. WAV: parse `data` chunk against
@@ -623,6 +578,185 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // pipeline (capture done → transcribe → think → speak), not timers.
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
+      // extractCompleteSentences pulls full sentences off the head of
+      // `buffer` and returns them, leaving any in-progress trailing
+      // fragment in `remainder`. A "sentence" here is text terminated by
+      // ., !, or ? followed by whitespace. Decimal numbers ("3.14") are
+      // safe because the regex requires whitespace after the dot.
+      const sentenceBoundary = /([.!?]+)(\s+|$)/g;
+      const extractCompleteSentences = (buffer: string): { sentences: string[]; remainder: string } => {
+        const sentences: string[] = [];
+        let lastEnd = 0;
+        sentenceBoundary.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = sentenceBoundary.exec(buffer)) !== null) {
+          // Don't treat end-of-buffer match (\s+|$ matched $) as complete
+          // — that's an in-progress fragment to keep buffering.
+          const matchEnd = m.index + m[0].length;
+          if (matchEnd >= buffer.length && m[2] === '') break;
+          const chunk = buffer.slice(lastEnd, matchEnd).trim();
+          if (chunk) sentences.push(chunk);
+          lastEnd = matchEnd;
+        }
+        return { sentences, remainder: buffer.slice(lastEnd) };
+      };
+
+      // runResponseCycle — streams the LLM response token-by-token.
+      // Each completed sentence is synthesized and queued on the sidecar
+      // immediately so playback starts within ~1 s of the LLM's first
+      // sentence (rather than waiting for the entire response). Bubble
+      // text grows live with the stream — the typewriter is now the
+      // LLM's natural cadence. Sidecar's playback queue plays clips
+      // back-to-back; we track estimated end-of-playback so we know
+      // when to flip to idle.
+      const runResponseCycle = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<void> => {
+        const cycleStart = Date.now();
+        await setState(sidecarId, 'thinking', '');
+
+        let firstTokenAt = 0;
+        let firstAudioDispatchAt = 0;
+        let visibleText = '';
+        let unsynth = '';
+        let speakingStarted = false;
+        let speakingFlipPending: Promise<void> | null = null;
+        let lastPlaybackEnd = Date.now();
+        let totalAudioMs = 0;
+        const pendingTTS: Promise<unknown>[] = [];
+
+        const flipToSpeaking = async () => {
+          if (speakingStarted) return;
+          speakingStarted = true;
+          await setState(sidecarId, 'speaking', '');
+        };
+
+        const enqueueSentence = (sentence: string): void => {
+          if (!pebbleTTS || !sentence.trim()) return;
+          const job = (async () => {
+            const ttsStart = Date.now();
+            try {
+              const audio = await pebbleTTS!.synthesize(sentence);
+              if (ctrl.cancelled) return;
+              const clipMs = estimateAudioDurationMs(audio) ?? sentence.length * 60;
+              totalAudioMs += clipMs;
+              const now = Date.now();
+              // Estimate when this clip will finish playing on the sidecar:
+              // if the queue is empty (last clip already done) it starts now;
+              // otherwise it queues behind the previous clip.
+              if (now > lastPlaybackEnd) lastPlaybackEnd = now + clipMs;
+              else lastPlaybackEnd += clipMs;
+
+              await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
+                data: audio.toString('base64'),
+                mime_type: ttsMimeType(jarvisConfig.tts),
+                blocking: false,
+              });
+              if (firstAudioDispatchAt === 0) {
+                firstAudioDispatchAt = Date.now();
+                console.log(
+                  `[ambient-ui] first audio dispatched at +${firstAudioDispatchAt - cycleStart}ms ` +
+                  `(tts=${Date.now() - ttsStart}ms, sentence="${sentence.slice(0, 60)}${sentence.length > 60 ? '…' : ''}")`,
+                );
+              }
+            } catch (err) {
+              console.warn('[ambient-ui] sentence TTS failed:', err);
+            }
+          })();
+          pendingTTS.push(job);
+        };
+
+        let fullText = '';
+        const llmStart = Date.now();
+        let llmDone = false;
+        try {
+          const { stream, onComplete } = agentService.streamMessage(userText, 'pebble');
+          for await (const event of stream) {
+            if (ctrl.cancelled) {
+              // User dismissed mid-stream. Stop sidecar playback + drain queue.
+              try {
+                await sidecarManager.dispatchRPC(sidecarId, 'pebble.stop_audio', {});
+              } catch { /* ignore */ }
+              return;
+            }
+            if (event.type === 'text' && event.text) {
+              if (firstTokenAt === 0) firstTokenAt = Date.now();
+              visibleText += event.text;
+              unsynth += event.text;
+              fullText += event.text;
+
+              // Flip to speaking on first token so the bubble starts
+              // showing live text immediately. Don't await every chunk's
+              // setState — fire-and-forget keeps the stream loop tight.
+              if (!speakingStarted) {
+                speakingFlipPending = flipToSpeaking();
+              }
+              void setState(sidecarId, 'speaking', visibleText);
+
+              // Emit any complete sentences for synthesis.
+              const { sentences, remainder } = extractCompleteSentences(unsynth);
+              for (const s of sentences) enqueueSentence(s);
+              unsynth = remainder;
+            } else if (event.type === 'done') {
+              llmDone = true;
+              break;
+            } else if (event.type === 'error') {
+              console.warn('[ambient-ui] stream error:', event.error);
+              if (!fullText) fullText = "I had trouble with that — say it again?";
+              llmDone = true;
+              break;
+            }
+          }
+
+          // Flush any tail fragment as the last sentence.
+          const tail = unsynth.trim();
+          if (tail) enqueueSentence(tail);
+          unsynth = '';
+
+          // Fire-and-forget extraction + learning.
+          void onComplete(fullText);
+        } catch (err) {
+          console.warn('[ambient-ui] stream cycle error:', err);
+          if (!fullText) fullText = "I had trouble with that — say it again?";
+        }
+        const llmMs = Date.now() - llmStart;
+        if (ctrl.cancelled) return;
+        if (speakingFlipPending) await speakingFlipPending;
+        // Make sure the bubble shows the final text (in case the last
+        // setState lost a race).
+        await setState(sidecarId, 'speaking', fullText);
+        try { wsService.broadcastHeartbeat(fullText); } catch { /* dashboard may not be open */ }
+
+        // Wait for all pending TTS synths to settle so totalAudioMs is final.
+        await Promise.allSettled(pendingTTS);
+
+        const firstTokenMs = firstTokenAt > 0 ? firstTokenAt - llmStart : 0;
+        const firstAudioMs = firstAudioDispatchAt > 0 ? firstAudioDispatchAt - llmStart : 0;
+        console.log(
+          `[ambient-ui] JARVIS (${llmMs}ms LLM, ${firstTokenMs}ms to first token, ${firstAudioMs}ms to first audio) → ` +
+          `"${fullText.slice(0, 200)}${fullText.length > 200 ? '…' : ''}"`,
+        );
+        console.log(
+          `[ambient-ui] timings: llm=${llmMs}ms total_audio≈${totalAudioMs}ms ` +
+          `total_pre_first_audio=${firstAudioMs || llmMs}ms`,
+        );
+
+        // Hold speaking state until the last queued clip finishes. The
+        // sidecar's queue worker plays clips back-to-back; lastPlaybackEnd
+        // tracks our best estimate of when the last clip's audio ends.
+        const remainingMs = Math.max(0, lastPlaybackEnd - Date.now());
+        if (remainingMs > 0) {
+          await new Promise<void>(r => setTimeout(r, remainingMs));
+        }
+        if (ctrl.cancelled) return;
+
+        await setState(sidecarId, 'idle', '');
+        // Suppress unused-var warning if linting cared.
+        void llmDone;
+      };
+
       audioSessions.onComplete(async (session) => {
         const ctrl = pendingSummons.get(session.sidecarId);
         if (!ctrl || ctrl.cancelled) return; // user dismissed mid-capture
@@ -633,14 +767,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         );
 
         try {
-          // 1. THINKING — STT first, then LLM. Both happen during this state.
           await setState(session.sidecarId, 'thinking', '');
 
           let transcript = '';
           if (pebbleSTT) {
             const wav = pcmToWav(session.pcm, session.sampleRate, session.channels);
+            const sttStart = Date.now();
             try {
               transcript = (await pebbleSTT.transcribe(wav)).trim();
+              console.log(`[ambient-ui] STT (${Date.now() - sttStart}ms): "${transcript}"`);
             } catch (err) {
               console.warn('[ambient-ui] STT error:', err);
             }
@@ -657,67 +792,110 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
           console.log(`[ambient-ui] user said: "${transcript}"`);
 
-          // 2. LLM call with the real transcript.
-          let response = '';
-          try {
-            response = await agentService.handleMessage(transcript, 'pebble');
-          } catch (err) {
-            console.warn('[ambient-ui] LLM call failed:', err);
-            response = "I had trouble with that — say it again?";
-          }
-          if (ctrl.cancelled) return;
-          console.log(`[ambient-ui] JARVIS → "${response.slice(0, 200)}${response.length > 200 ? '…' : ''}"`);
-
-          // 3. SPEAKING — synthesize TTS first so we know the real audio
-          //    duration, then start the typewriter reveal in lockstep with
-          //    playback. The bubble enters speaking state with empty text,
-          //    grows char-by-char, and lands on the full response right as
-          //    the audio finishes. Dashboard heartbeat stays as fallback for
-          //    dashboard-driven TTS so existing flows don't regress.
-          try { wsService.broadcastHeartbeat(response); } catch { /* dashboard may not be open */ }
-
-          let speakingMs = Math.min(15000, Math.max(2000, response.length * 60));
-          let audioDispatched = false;
-          if (pebbleTTS) {
-            try {
-              const audio = await pebbleTTS.synthesize(response);
-              // Estimate playback duration so the typewriter pace can align
-              // with the audio. MP3 from edge-tts/ElevenLabs hits ~16 KB/s
-              // at default bitrate; PCM WAV maps directly. Falls back to
-              // the chars-based heuristic if the bitrate is unknown.
-              speakingMs = estimateAudioDurationMs(audio) ?? speakingMs;
-              await sidecarManager.dispatchRPC(session.sidecarId, 'pebble.play_audio', {
-                data: audio.toString('base64'),
-                mime_type: ttsMimeType(jarvisConfig.tts),
-                blocking: false,
-              });
-              audioDispatched = true;
-            } catch (err) {
-              console.warn('[ambient-ui] sidecar TTS playback failed (falling back to dashboard):', err);
-            }
-          }
-          if (ctrl.cancelled) return;
-
-          // Typewriter reveal — paced over speakingMs so the last character
-          // lands as the audio ends. Without TTS, falls back to the chars-
-          // based ETA so the timing still looks intentional. Updates fire
-          // through the regular setState path; the sidecar's bubble repaints
-          // on every text change.
-          await setState(session.sidecarId, 'speaking', '');
-          // Typewriter runs ~60 % of the audio length so the reader gets
-          // the full text well before the audio ends — exactly the
-          // "read along while listening" feel we want.
-          await runTypewriter(session.sidecarId, response, speakingMs, ctrl);
-          if (ctrl.cancelled) return;
-
-          // 4. IDLE — clear the response text so the next listening cycle
-          //    starts with the placeholder hint, not the previous answer.
-          await setState(session.sidecarId, 'idle', '');
+          await runResponseCycle(session.sidecarId, transcript, ctrl);
           pendingSummons.delete(session.sidecarId);
         } catch (err) {
           console.warn('[ambient-ui] voice cycle error:', err);
           await setState(session.sidecarId, 'idle', '');
           pendingSummons.delete(session.sidecarId);
+        }
+      });
+
+      // T16 — sidecar wake-word path. The sidecar's WakeListenerService
+      // emits one `audio.wake_segment` per VAD-detected utterance. We
+      // transcribe and word-search for "jarvis"; on a hit, we either
+      //   - run the LLM directly with the trailing command (single-shot,
+      //     "Jarvis play music" works without saying it twice), or
+      //   - if only "jarvis" alone, fire a normal listening summon so the
+      //     user can speak the command after the bubble pops up.
+      // Suppressed when a summon cycle is already running so the
+      // continuous wake stream doesn't fight with the active turn.
+      const wakePhrase = /\bjarvis\b/i;
+      const stripWakePrefix = (text: string): string => {
+        // Pull out the segment after the LAST occurrence of "jarvis" so
+        // "I'm at home, Jarvis play music" → "play music". Trailing
+        // punctuation/whitespace removed; if nothing follows, returns "".
+        const re = /\bjarvis\b[\s,.\-—:]*/gi;
+        let last: RegExpExecArray | null = null;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          last = m;
+        }
+        if (!last) return '';
+        return text.slice(last.index + last[0].length).trim();
+      };
+
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'audio.wake_segment') return;
+        // Suppress while an active summon is in flight — the user already
+        // got JARVIS's attention via Ctrl+Space (or a prior wake).
+        if (pendingSummons.has(sidecarId)) return;
+        if (!pebbleSTT) return;
+
+        const payload = (event.payload as Record<string, unknown> | undefined) ?? {};
+        const binary = (event.binary as { type?: string; data?: string } | undefined);
+        if (!binary || binary.type !== 'inline' || typeof binary.data !== 'string') return;
+
+        let pcm: Buffer;
+        try {
+          pcm = Buffer.from(binary.data, 'base64');
+        } catch {
+          return;
+        }
+        const sampleRate = Number(payload.sample_rate ?? 16000);
+        const channels = Number(payload.channels ?? 1);
+
+        let transcript = '';
+        const sttStart = Date.now();
+        try {
+          const wav = pcmToWav(pcm, sampleRate, channels);
+          transcript = (await pebbleSTT.transcribe(wav)).trim();
+        } catch (err) {
+          console.warn('[ambient-ui] wake-segment STT error:', err);
+          return;
+        }
+        const sttMs = Date.now() - sttStart;
+        if (!transcript) return;
+        if (!wakePhrase.test(transcript)) {
+          // Most segments — user talking about other things. Quietly drop.
+          return;
+        }
+        console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT): "${transcript}"`);
+
+        const command = stripWakePrefix(transcript);
+        // Claim the summon slot so the rest of this cycle owns it.
+        const ctrl = { cancelled: false };
+        pendingSummons.set(sidecarId, ctrl);
+
+        if (!command) {
+          // Just "Jarvis" alone — flip to listening and trigger a fresh
+          // session capture on the sidecar so the user's next utterance
+          // gets transcribed + run through the LLM. The session_end
+          // event will land in `audioSessions.onComplete` above, which
+          // sees the pendingSummons we just set and runs the response
+          // cycle. No need for a separate timeout here — the session
+          // capture's own VAD hard-cap bounds the wait.
+          await setState(sidecarId, 'listening', '');
+          try {
+            await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {});
+            console.log(`[ambient-ui] wake → listening (capture started)`);
+          } catch (err) {
+            console.warn('[ambient-ui] wake → start_listening failed:', err);
+            ctrl.cancelled = true;
+            pendingSummons.delete(sidecarId);
+            await setState(sidecarId, 'idle', '');
+          }
+          return;
+        }
+
+        try {
+          console.log(`[ambient-ui] wake → command: "${command}"`);
+          await runResponseCycle(sidecarId, command, ctrl);
+        } catch (err) {
+          console.warn('[ambient-ui] wake voice cycle error:', err);
+          await setState(sidecarId, 'idle', '');
+        } finally {
+          pendingSummons.delete(sidecarId);
         }
       });
 
