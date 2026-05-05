@@ -8,9 +8,17 @@ import type {
   LLMToolCall,
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
+type GroqContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  // Groq's chat API mirrors OpenAI; vision-capable models (e.g.
+  // llama-3.2-90b-vision, llava-v1.5-7b) accept user-message
+  // content as an array of text/image_url parts. Plain text users
+  // and non-user roles stay string for compat.
+  content: string | GroqContentPart[] | null;
   tool_calls?: GroqToolCall[];
   tool_call_id?: string;
 };
@@ -372,13 +380,25 @@ export class GroqProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
-        ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      let content: string | GroqContentPart[];
+      if (typeof m.content === 'string') {
+        content = m.content;
+      } else if (m.role === 'user' && m.content.some(b => b.type === 'image')) {
+        content = m.content.map<GroqContentPart>((b) => {
+          if (b.type === 'text') return { type: 'text', text: b.text };
+          return {
+            type: 'image_url',
+            image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` },
+          };
+        });
+      } else {
+        content = m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+      }
       const hasToolCalls = !!(m.tool_calls && m.tool_calls.length > 0);
+      const trimmed = typeof content === 'string' ? content.trim() : '<parts>';
       const msg: GroqMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
-        content: hasToolCalls && text.trim().length === 0 ? null : text,
+        content: hasToolCalls && trimmed.length === 0 ? null : content,
       };
       if (m.tool_calls && m.tool_calls.length > 0) {
         msg.tool_calls = m.tool_calls.map(tc => ({

@@ -116,7 +116,7 @@ export class AgentInstance {
     this.agent.current_task = null;
   }
 
-  addMessage(role: 'user' | 'assistant' | 'system', content: string): void {
+  addMessage(role: 'user' | 'assistant' | 'system', content: string | import('../llm/provider.ts').ContentBlock[]): void {
     this.messageHistory.push({ role, content });
   }
 
