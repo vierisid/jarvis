@@ -3,7 +3,7 @@ import { useV2Route } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
-import { RoomActionBusProvider } from "./rooms/useRoomActionBus";
+import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomActionBus";
 import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
@@ -39,12 +39,17 @@ export function AppShellV2() {
   // Panel mode: the sidecar spawned this dashboard URL as a standalone
   // native window (T18). Render JUST the room body — no AppShell, no
   // Thread/Rail/Composer chrome, no voice handlers — so the pebble's
-  // sidecar-side voice loop stays the only voice surface.
+  // sidecar-side voice loop stays the only voice surface. The
+  // PanelRoomActionBridge wires this panel's RoomActionBus to the
+  // daemon's WS so voice-driven actions ("switch to editor tab") can
+  // reach the room's handler — the same path AppShell uses, minus the
+  // chrome.
   if (route.kind === "panel") {
     const Body = getRoomBody(route.key);
     return (
       <div className="jarvis-v2-root jarvis-v2-panel-mode">
         <RoomActionBusProvider>
+          <PanelRoomActionBridge />
           <Body mode="expanded" />
         </RoomActionBusProvider>
       </div>
@@ -53,6 +58,7 @@ export function AppShellV2() {
 
   return (
     <div className="jarvis-v2-root">
+      {/* Panel mode body sits above this guard. */}
       {route.kind === "primitives" ? (
         <PrimitivesPage />
       ) : (
@@ -65,4 +71,58 @@ export function AppShellV2() {
       )}
     </div>
   );
+}
+
+/**
+ * T20c — Panel-mode WS bridge. Opens a WebSocket to the daemon and
+ * forwards every `room_action` notification into the panel's
+ * RoomActionBus, so voice commands like "switch to the editor tab"
+ * reach the room's `useRoomActions` handler the same way they do in
+ * the full dashboard. Only mounted inside the panel-mode branch above,
+ * so the regular dashboard's WS plumbing isn't doubled up.
+ */
+function PanelRoomActionBridge() {
+  const { dispatch } = useRoomActionDispatcher();
+  useEffect(() => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${proto}//${window.location.host}/ws`;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const connect = () => {
+      ws = new WebSocket(url);
+      ws.addEventListener("message", (e) => {
+        let msg: unknown;
+        try { msg = JSON.parse(typeof e.data === "string" ? e.data : ""); }
+        catch { return; }
+        if (!msg || typeof msg !== "object") return;
+        const m = msg as { type?: string; payload?: { source?: string; room?: string; action?: string; args?: Record<string, unknown> } };
+        if (m.type !== "notification" || m.payload?.source !== "room_action") return;
+        if (!m.payload.room || !m.payload.action) return;
+        dispatch({
+          room: m.payload.room,
+          action: m.payload.action,
+          args: m.payload.args ?? {},
+          ts: Date.now(),
+        });
+      });
+      ws.addEventListener("close", () => {
+        if (closed) return;
+        // Auto-reconnect with a small backoff so the panel keeps
+        // listening after a daemon restart.
+        reconnectTimer = setTimeout(connect, 1500);
+      });
+      ws.addEventListener("error", () => { /* let close handle reconnect */ });
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, [dispatch]);
+  return null;
 }

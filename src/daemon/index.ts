@@ -673,6 +673,204 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // pipeline (capture done → transcribe → think → speak), not timers.
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
+      // T20 — voice-driven settings mutation. Patches `jarvisConfig`,
+      // persists via `saveConfig`, and rebuilds the live providers so
+      // the next response uses the new setting without a daemon
+      // restart. The user explicitly hit this with "turn off TTS in
+      // the settings" — the panel opened but the toggle didn't flip
+      // because no handler was wired to the request. This closes that
+      // gap. New providers added to `jarvisConfig` (e.g. Groq STT)
+      // become voice-switchable too.
+      const applyTTSEnabled = async (enabled: boolean): Promise<void> => {
+        const { loadConfig, saveConfig } = await import('../config/loader.ts');
+        const fresh = await loadConfig();
+        if (!fresh.tts) fresh.tts = { enabled, provider: 'edge' };
+        else fresh.tts.enabled = enabled;
+        await saveConfig(fresh);
+        jarvisConfig.tts = fresh.tts;
+        // Rebuild the pebble's TTS provider so the next response cycle
+        // either uses the new provider or skips TTS entirely.
+        if (enabled) {
+          try {
+            const { createTTSProvider } = await import('../comms/voice.ts');
+            pebbleTTS = createTTSProvider(fresh.tts);
+            if (pebbleTTS) console.log('[ambient-ui] TTS re-enabled via voice command');
+          } catch (err) {
+            console.warn('[ambient-ui] failed to re-init TTS provider:', err);
+            pebbleTTS = null;
+          }
+        } else {
+          pebbleTTS = null;
+          console.log('[ambient-ui] TTS disabled via voice command');
+        }
+        // Hot-reload dashboard TTS too so the WSService stays in sync.
+        if (wsService && fresh.tts) {
+          try {
+            const { createTTSProvider } = await import('../comms/voice.ts');
+            const provider = createTTSProvider(fresh.tts);
+            if (provider && enabled) wsService.setTTSProvider(provider);
+          } catch { /* dashboard fallback */ }
+        }
+      };
+
+      const applySTTProvider = async (provider: 'openai' | 'groq' | 'sarvam' | 'local'): Promise<boolean> => {
+        const { loadConfig, saveConfig } = await import('../config/loader.ts');
+        const fresh = await loadConfig();
+        if (!fresh.stt) fresh.stt = { provider };
+        // Refuse the switch if the target provider has no API key
+        // configured — we don't want to silently break STT.
+        const hasKey = (() => {
+          if (provider === 'local') return !!fresh.stt.local?.endpoint;
+          const sub = (fresh.stt as unknown as Record<string, { api_key?: string } | undefined>)[provider];
+          return !!sub?.api_key;
+        })();
+        if (!hasKey) return false;
+        fresh.stt.provider = provider;
+        await saveConfig(fresh);
+        jarvisConfig.stt = fresh.stt;
+        try {
+          const { createSTTProvider } = await import('../comms/voice.ts');
+          pebbleSTT = createSTTProvider(fresh.stt);
+          console.log(`[ambient-ui] STT provider switched to ${provider} via voice command`);
+        } catch (err) {
+          console.warn('[ambient-ui] failed to re-init STT provider:', err);
+        }
+        return true;
+      };
+
+      // T20c — voice-driven in-panel navigation. The dashboard's
+      // RoomActionBus already supports `switch_tab` and similar actions
+      // for most rooms (workflows, goals, settings, authority, etc.);
+      // we broadcast a `room_action` over WS and the panel-mode bridge
+      // (PanelRoomActionBridge in AppShellV2) forwards it to whichever
+      // room's handler is mounted. Rooms internally validate the tab
+      // name and silently reject unknown tabs, so we can be liberal
+      // about matching.
+      const tryHandleInPanelAction = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        const t = userText.toLowerCase();
+        // Verbs that mean "navigate inside the current panel". Distinct
+        // from "open <room>" (that spawns a new window). The match
+        // optionally captures a trailing room hint so "switch to the
+        // editor tab in workflows" routes to the workflows panel even
+        // when it isn't the most-recent.
+        const re = /\b(?:switch to|go to|jump to|open|click on|select|show me)\s+(?:the\s+)?([a-z][a-z0-9 \-_]{0,30}?)\s+(?:tab|view|section|page)\b(?:\s+(?:in|of)\s+(?:the\s+)?([a-z][a-z ]{0,30}?)(?:\s+(?:window|panel|page))?)?/i;
+        const m = re.exec(t);
+        if (!m) return false;
+
+        const tabRaw = (m[1] || '').trim();
+        const roomHint = (m[2] || '').trim() || undefined;
+        if (!tabRaw) return false;
+
+        const target = findPanel(sidecarId, roomHint);
+        if (!target) {
+          await speakConfirmation(
+            sidecarId,
+            roomHint
+              ? `I don't see a ${roomHint} window open.`
+              : "There's no panel open to navigate inside.",
+            ctrl,
+          );
+          return true;
+        }
+
+        // Normalize the tab name. The dashboard rooms accept short keys
+        // like "list" / "editor" / "builder" — we map a few common
+        // synonyms here, otherwise pass through and let the room's
+        // handler decide.
+        const tabSyn: Record<string, string> = {
+          editor: 'editor',
+          'edit': 'editor',
+          'edit view': 'editor',
+          builder: 'builder',
+          'agent builder': 'agent_builder',
+          list: 'list',
+          all: 'list',
+          logs: 'logs',
+          history: 'logs',
+          settings: 'settings',
+          general: 'general',
+          tts: 'tts',
+          stt: 'stt',
+          voice: 'voice',
+          llm: 'llm',
+          tools: 'tools',
+          channels: 'channels',
+        };
+        const tab = (tabSyn[tabRaw] ?? tabRaw.replace(/\s+/g, '_'));
+
+        console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title} (id=${target.id}${roomHint ? `, hint="${roomHint}"` : ''})`);
+        try {
+          // The bus broadcasts to all dashboard clients (including all
+          // open panels). useRoomActions is keyed on `room`, so only
+          // the matching room's handler fires.
+          wsService.broadcastRoomAction({
+            room: target.key,
+            action: 'switch_tab',
+            args: { tab },
+          });
+          await speakConfirmation(sidecarId, `Switched ${target.title} to ${tabRaw}.`, ctrl);
+        } catch (err) {
+          console.warn('[ambient-ui] in-panel action failed:', err);
+          await speakConfirmation(sidecarId, "I couldn't navigate the panel.", ctrl);
+        }
+        return true;
+      };
+
+      // tryHandleSettingsIntent — settings-mutation voice commands.
+      // Returns true when the intent was handled (caller skips the LLM).
+      const tryHandleSettingsIntent = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        const t = userText.toLowerCase();
+
+        // TTS on / off. Match leniently so "turn off text to speech in
+        // the settings" hits too — extra trailing words don't break.
+        const ttsOff = /\b(turn off|disable|switch off|deactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
+        const ttsOn  = /\b(turn on|enable|switch on|activate|reactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
+        if (ttsOff) {
+          await applyTTSEnabled(false);
+          // Speak the confirmation BEFORE shutting TTS down — temp
+          // restore a one-shot provider so the user hears acknowledgment.
+          await speakConfirmation(sidecarId, "Text-to-speech turned off.", ctrl);
+          return true;
+        }
+        if (ttsOn) {
+          await applyTTSEnabled(true);
+          await speakConfirmation(sidecarId, "Text-to-speech turned on.", ctrl);
+          return true;
+        }
+
+        // STT provider switch.
+        const sttMatch =
+          /\b(switch|change)\s+(?:the\s+)?(stt|speech[- ]to[- ]text|transcription|speech recognition|listening)\s+(?:to|provider to)\s+(openai|whisper|groq|sarvam|local)\b/.exec(t) ||
+          /\buse\s+(openai|whisper|groq|sarvam|local)\s+(?:for\s+(?:stt|speech[- ]to[- ]text|transcription|speech recognition|listening|hearing))\b/.exec(t);
+        if (sttMatch) {
+          let target = (sttMatch[2] === 'whisper' ? 'openai' : sttMatch[2]) as 'openai' | 'groq' | 'sarvam' | 'local';
+          // The first capture group depends on which alternative matched.
+          const candidate = (sttMatch[3] || sttMatch[1]) as string;
+          if (candidate && /^(openai|whisper|groq|sarvam|local)$/.test(candidate)) {
+            target = (candidate === 'whisper' ? 'openai' : candidate) as typeof target;
+          }
+          const ok = await applySTTProvider(target);
+          await speakConfirmation(
+            sidecarId,
+            ok
+              ? `Switched transcription to ${target}.`
+              : `I can't switch to ${target} — it doesn't have an API key configured.`,
+            ctrl,
+          );
+          return true;
+        }
+
+        return false;
+      };
+
       // T18 / T18b — voice-triggered panel control. The daemon checks
       // every user-text against a set of intents before running it through
       // the LLM. On a hit we dispatch the right `panel.*` RPC and skip the
@@ -739,6 +937,31 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (idx >= 0) list.splice(idx, 1);
         if (list.length === 0) panelsBySidecar.delete(sidecarId);
       };
+      // T20b — render the open-panels inventory as a system-prompt
+      // fragment for the LLM. Without this the agent gets the user text
+      // but no idea what windows exist, so "switch to the editor tab in
+      // workflows" reads as nonsense. With it the LLM can reason about
+      // which panel the user means and respond intelligibly. The "most
+      // recent" panel is flagged so deictic references ("this", "the
+      // window") have a default referent.
+      const buildPanelContext = (sidecarId: string): string => {
+        const list = panelsBySidecar.get(sidecarId);
+        if (!list || list.length === 0) return '';
+        const lines = list.map((p, i) => {
+          const recency = i === list.length - 1 ? '  [most recent / likely focus]' : '';
+          return `  - ${p.title} (room_key="${p.key}", id="${p.id}")${recency}`;
+        });
+        return [
+          '# JARVIS dashboard panels currently open as native windows',
+          'The user has these dashboard panels visible on their desktop:',
+          ...lines,
+          '',
+          'Treat short or pronoun-laden references ("the workflows", "this panel", "the editor tab", "the settings", "that window") as pointing at one of these panels — usually the most recent one unless context says otherwise. Each panel contains the SAME UI the dashboard\'s matching room would: e.g. workflows has List/Editor/Logs sub-views, memory has the vault tree, settings has TTS/STT toggles. The user can interact with them like any normal app window.',
+          '',
+          'You CAN: spawn, expand, minimize, restore, focus, and close panels via voice — the user already knows these commands. You CANNOT (yet) click specific buttons or switch tabs inside a panel via voice — if the user asks for that ("switch to the editor tab"), tell them concisely how to click it themselves and offer to do it once that capability is wired.',
+        ].join('\n');
+      };
+
       const findPanel = (sidecarId: string, hint?: string): PanelEntry | null => {
         const list = panelsBySidecar.get(sidecarId);
         if (!list || list.length === 0) return null;
@@ -1024,9 +1247,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ): Promise<void> => {
         const cycleStart = Date.now();
 
-        // Fast path: if the user said "open <room>" or "close <room>",
-        // handle it directly without invoking the LLM. Big latency win for
-        // simple navigation commands.
+        // Fast paths (skip the LLM entirely):
+        //   1. Settings mutations ("turn off TTS", "switch STT to groq")
+        //   2. In-panel actions ("switch to editor tab", "go to logs")
+        //   3. Window controls ("open settings", "expand it", "close that")
+        // Order matters: in-panel ("switch to editor tab") must beat
+        // panel-spawn ("switch to editor"), and settings must beat
+        // panel ("turn off TTS in settings").
+        if (await tryHandleSettingsIntent(sidecarId, userText, ctrl)) {
+          console.log(`[ambient-ui] settings-intent fast path took ${Date.now() - cycleStart}ms`);
+          return;
+        }
+        if (await tryHandleInPanelAction(sidecarId, userText, ctrl)) {
+          console.log(`[ambient-ui] in-panel-action fast path took ${Date.now() - cycleStart}ms`);
+          return;
+        }
         if (await tryHandlePanelIntent(sidecarId, userText, ctrl)) {
           console.log(`[ambient-ui] panel-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
@@ -1089,7 +1324,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const llmStart = Date.now();
         let llmDone = false;
         try {
-          const { stream, onComplete } = agentService.streamMessage(userText, 'pebble');
+          // Inject the open-panel inventory so the LLM knows what
+          // windows the user might be referring to. Empty when no
+          // panels are open — saves the prompt tokens.
+          const panelCtx = buildPanelContext(sidecarId);
+          const { stream, onComplete } = agentService.streamMessage(
+            userText,
+            'pebble',
+            panelCtx || undefined,
+          );
           for await (const event of stream) {
             if (ctrl.cancelled) {
               // User dismissed mid-stream. Stop sidecar playback + drain queue.
