@@ -481,6 +481,13 @@ func (s *pebbleServiceDarwin) SetText(text string) error {
 	return nil
 }
 
+// PointAt — T8 stub on macOS. The Cocoa pebble does its own paint
+// loop in C; the override-target plumbing isn't ported yet (T8b).
+// Returning nil so the daemon's voice flow doesn't error out.
+func (s *pebbleServiceDarwin) PointAt(_, _ int, _ string, _ int) error {
+	return nil
+}
+
 func (s *pebbleServiceDarwin) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil

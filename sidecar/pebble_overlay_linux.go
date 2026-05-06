@@ -469,6 +469,12 @@ func (s *pebbleServiceLinux) SetText(text string) error {
 	return nil
 }
 
+// PointAt — T8 stub on Linux. The GTK pebble does its own paint loop;
+// the override-target plumbing isn't ported yet (T8b).
+func (s *pebbleServiceLinux) PointAt(_, _ int, _ string, _ int) error {
+	return nil
+}
+
 func (s *pebbleServiceLinux) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil

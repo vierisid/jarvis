@@ -124,6 +124,33 @@ func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 	}
 }
 
+// pebble.point_at — animate the pebble to (x, y) on screen with a
+// label callout. Used by T8's `[POINT:x,y:label]` LLM tags.
+// Params: { "x": int, "y": int, "label": string, "duration_ms": int (optional, default 3000) }
+func makePebblePointAtHandler(svc PebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		xRaw, ok := params["x"]
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: x")
+		}
+		yRaw, ok := params["y"]
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: y")
+		}
+		xF, _ := xRaw.(float64)
+		yF, _ := yRaw.(float64)
+		label, _ := params["label"].(string)
+		durMs := 3000
+		if d, ok := params["duration_ms"].(float64); ok && d > 0 {
+			durMs = int(d)
+		}
+		if err := svc.PointAt(int(xF), int(yF), label, durMs); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"pointed": true}}, nil
+	}
+}
+
 // pebble.stop_audio — interrupt the currently playing TTS clip. Used
 // when the user dismisses the pebble mid-speech (e.g. second hotkey
 // press during the speaking state). No-op when nothing is playing.

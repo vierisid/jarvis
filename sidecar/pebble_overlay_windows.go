@@ -141,6 +141,17 @@ type pebbleServiceWindows struct {
 	doneCh     chan struct{}
 	spawned    atomic.Bool
 
+	// T8 — element pointing. While `pointing` is true and now < pointUntilMs,
+	// paint() overrides the cursor-follow target with (pointX, pointY) so the
+	// pebble eases to a fixed screen coordinate. Previous state + bubble text
+	// are stashed and restored when the duration elapses.
+	pointing     atomic.Bool
+	pointX       atomic.Int32
+	pointY       atomic.Int32
+	pointUntilMs atomic.Int64
+	prevState    atomic.Value // PebbleState
+	prevText     atomic.Value // string
+
 	// Eased rendered position — matches the mock's 0.18 follow factor.
 	// `current` chases `target = cursor + offset` each frame.
 	curX float64
@@ -236,6 +247,39 @@ func (s *pebbleServiceWindows) SetState(state PebbleState) error {
 
 func (s *pebbleServiceWindows) SetText(text string) error {
 	s.bubbleText.Store(text)
+	return nil
+}
+
+// PointAt animates the pebble to (x, y) and shows `label` in the bubble
+// for `durationMs` milliseconds. Eased physics in paint() handle the
+// actual movement; this just sets the override target + restoration
+// state. Calling PointAt while a previous point is still active resets
+// the timer and target — multiple points in a row "walk" through them.
+func (s *pebbleServiceWindows) PointAt(x, y int, label string, durationMs int) error {
+	if !s.spawned.Load() {
+		return fmt.Errorf("pebble not spawned")
+	}
+	if durationMs <= 0 {
+		durationMs = 3000
+	}
+	// Snapshot the pre-point state ONLY if we're not already pointing.
+	// Re-entrant points (LLM emitted multiple tags) shouldn't keep
+	// re-snapshotting an intermediate "speaking + label" state as the
+	// thing to restore later.
+	if s.pointing.CompareAndSwap(false, true) {
+		ps, _ := s.state.Load().(PebbleState)
+		pt, _ := s.bubbleText.Load().(string)
+		s.prevState.Store(ps)
+		s.prevText.Store(pt)
+	}
+	s.pointX.Store(int32(x))
+	s.pointY.Store(int32(y))
+	s.pointUntilMs.Store(time.Now().Add(time.Duration(durationMs) * time.Millisecond).UnixMilli())
+	// Force the bubble to show with the label as body text. Listening
+	// state has the paper card variant which reads cleanly against any
+	// desktop and matches the riso "calling attention" feel.
+	s.state.Store(PebbleListening)
+	s.bubbleText.Store(label)
 	return nil
 }
 
@@ -421,9 +465,29 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	if err != nil {
 		return err
 	}
-	const followFactor = 0.18
+	followFactor := 0.18
 	tgtX := float64(cx + s.spec.CursorOffsetX)
 	tgtY := float64(cy + s.spec.CursorOffsetY)
+	// T8 — element-pointing override. While active, the pebble eases to
+	// the fixed point instead of the cursor. We bump the follow factor
+	// so the pebble snaps to the target in ~150 ms instead of the ~500 ms
+	// the cursor-follow factor produces — gives the user more visible
+	// "stay time" at the target before the duration expires.
+	if s.pointing.Load() {
+		if time.Now().UnixMilli() >= s.pointUntilMs.Load() {
+			s.pointing.Store(false)
+			if ps, ok := s.prevState.Load().(PebbleState); ok {
+				s.state.Store(ps)
+			}
+			if pt, ok := s.prevText.Load().(string); ok {
+				s.bubbleText.Store(pt)
+			}
+		} else {
+			tgtX = float64(s.pointX.Load())
+			tgtY = float64(s.pointY.Load())
+			followFactor = 0.42
+		}
+	}
 	s.curX += (tgtX - s.curX) * followFactor
 	s.curY += (tgtY - s.curY) * followFactor
 	s.frameTick++

@@ -698,8 +698,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // from "open <room>" (that spawns a new window). The match
         // optionally captures a trailing room hint so "switch to the
         // editor tab in workflows" routes to the workflows panel even
-        // when it isn't the most-recent.
-        const re = /\b(?:switch to|go to|jump to|open|click on|select|show me)\s+(?:the\s+)?([a-z][a-z0-9 \-_]{0,30}?)\s+(?:tab|view|section|page)\b(?:\s+(?:in|of)\s+(?:the\s+)?([a-z][a-z ]{0,30}?)(?:\s+(?:window|panel|page))?)?/i;
+        // when it isn't the most-recent. **Imperative only** — we
+        // explicitly reject interrogative phrasings ("show me where the
+        // editor tab is"), which should fall through to the LLM with
+        // pointer guidance instead of being parsed as a tab-switch.
+        if (/\b(where|how|when|which|why|what)\b.*\b(tab|view|section)\b/i.test(t)) {
+          return false;
+        }
+        const re = /\b(?:switch to|go to|jump to|open|click on|select)\s+(?:the\s+)?([a-z][a-z0-9 \-_]{0,30}?)\s+(?:tab|view|section|page)\b(?:\s+(?:in|of)\s+(?:the\s+)?([a-z][a-z ]{0,30}?)(?:\s+(?:window|panel|page))?)?/i;
         const m = re.exec(t);
         if (!m) return false;
 
@@ -886,22 +892,152 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // which panel the user means and respond intelligibly. The "most
       // recent" panel is flagged so deictic references ("this", "the
       // window") have a default referent.
-      const buildPanelContext = (sidecarId: string): string => {
+      // T9 — capture the user's current screen so the LLM can SEE it
+      // when they ask "where is X?" / "show me Y" / "point to Z". Without
+      // this the LLM is guessing coordinates from app conventions; with
+      // it, it can pick the actual pixel location of the button. Returns
+      // null on timeout/failure (best-effort).
+      const NEEDS_SCREENSHOT = /\b(where|show me|show where|point (?:to|at)|guide (?:me )?to|find (?:me )?(?:the )?|highlight|locate|tell me where|how (?:do I|to)\s+(?:open|get to|find|see|access|click|reach|use|run|do|start|enable|disable|turn on|turn off))\b/i;
+      type ScreenshotInfo = {
+        base64: string;
+        mediaType: string;
+        // Scale factors: pixels-on-actual-screen ÷ pixels-in-sent-image.
+        // The LLM picks coordinates in the (downscaled) image; we
+        // multiply its (x, y) by these before dispatching pebble.point_at
+        // so the pebble lands at the real-screen position. =1 when the
+        // image wasn't resized.
+        scaleX: number;
+        scaleY: number;
+        origWidth: number;
+        origHeight: number;
+        sentWidth: number;
+        sentHeight: number;
+      };
+      const fetchScreenshot = async (sidecarId: string): Promise<ScreenshotInfo | null> => {
+        try {
+          const result = await Promise.race<unknown>([
+            // compact: true → sidecar downscales to ≤1600 wide and
+            // re-encodes as JPEG (q=80). Keeps the round-trip well under
+            // the 16 MB WS limit and within vision-LLM-friendly sizes
+            // while still resolving button text legibly.
+            sidecarManager.dispatchRPC(sidecarId, 'capture_screen', { compact: true, max_width: 1600, jpeg_quality: 80 }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+          ]);
+          const obj = result as Record<string, unknown> | undefined;
+          const binary = obj?._binary as { data?: string; mime_type?: string } | undefined;
+          if (!binary?.data) return null;
+          const sentWidth = Number(obj?.width ?? 0) || 0;
+          const sentHeight = Number(obj?.height ?? 0) || 0;
+          const origWidth = Number(obj?.orig_width ?? 0) || sentWidth;
+          const origHeight = Number(obj?.orig_height ?? 0) || sentHeight;
+          const scaleX = sentWidth > 0 ? origWidth / sentWidth : 1;
+          const scaleY = sentHeight > 0 ? origHeight / sentHeight : 1;
+          return {
+            base64: binary.data,
+            mediaType: binary.mime_type || 'image/jpeg',
+            scaleX,
+            scaleY,
+            origWidth,
+            origHeight,
+            sentWidth,
+            sentHeight,
+          };
+        } catch (err) {
+          console.warn('[ambient-ui] capture_screen failed:', err);
+          return null;
+        }
+      };
+
+      // T20b — query the sidecar for the currently focused OS window
+      // (Chrome tab, VSCode, CapCut, etc.) so the LLM can answer
+      // "where do I click for X?" without the user having to specify
+      // the app. Returns null on any failure — best-effort context.
+      const fetchForegroundApp = async (sidecarId: string): Promise<{ title: string; processName?: string } | null> => {
+        try {
+          const result = await Promise.race<unknown>([
+            sidecarManager.dispatchRPC(sidecarId, 'list_windows', {}),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 800)),
+          ]);
+          const arr = Array.isArray(result) ? result : (result as { windows?: unknown }).windows;
+          if (!Array.isArray(arr)) return null;
+          for (const w of arr) {
+            const ww = w as Record<string, unknown>;
+            if (ww.is_foreground) {
+              const title = String(ww.title ?? '').trim();
+              const processName = ww.process_name ? String(ww.process_name) : undefined;
+              if (!title && !processName) return null;
+              return { title, processName };
+            }
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      };
+
+      const buildPanelContext = async (sidecarId: string): Promise<string> => {
         const list = panelsBySidecar.get(sidecarId);
-        if (!list || list.length === 0) return '';
-        const lines = list.map((p, i) => {
-          const recency = i === list.length - 1 ? '  [most recent / likely focus]' : '';
+        const lines = (list ?? []).map((p, i) => {
+          const recency = i === (list ?? []).length - 1 ? '  [most recent / likely focus]' : '';
           return `  - ${p.title} (room_key="${p.key}", id="${p.id}")${recency}`;
         });
-        return [
-          '# JARVIS dashboard panels currently open as native windows',
-          'The user has these dashboard panels visible on their desktop:',
-          ...lines,
+        const hasPanels = (list ?? []).length > 0;
+        const foreground = await fetchForegroundApp(sidecarId);
+        // Always emit the [POINT:..] guidance when the pebble channel is
+        // active — it's a capability available regardless of whether
+        // panels are open. Keep token cost low by only listing panels
+        // when there are some.
+        const sections: string[] = [];
+        if (foreground) {
+          sections.push(
+            '# Foreground app on the user\'s screen',
+            `The user is currently looking at: **${foreground.title || foreground.processName || 'unknown'}**` +
+              (foreground.processName ? ` (process: ${foreground.processName})` : ''),
+            '',
+            'When they say "this", "here", "the window", "this app" without naming a JARVIS panel, they likely mean THIS foreground window. If they ask "where do I click for X?" or "show me Y", reason from this app\'s typical UI: e.g. Chrome\'s close button is in the top-right, VSCode\'s file explorer is the leftmost icon in the activity bar, CapCut\'s timeline is along the bottom. Emit a `[POINT:x,y:label]` tag with your best estimate based on the app and the user\'s screen layout. If the request is ambiguous between the foreground app and a JARVIS panel, prefer the foreground app unless they reference a JARVIS room by name.',
+            '',
+          );
+        }
+        if (hasPanels) {
+          sections.push(
+            '# JARVIS dashboard panels currently open as native windows',
+            'The user has these dashboard panels visible on their desktop:',
+            ...lines,
+            '',
+            "Treat short or pronoun-laden references (\"the workflows\", \"this panel\", \"the editor tab\", \"the settings\", \"that window\") as pointing at one of these panels — usually the most recent one unless context says otherwise. Each panel contains the SAME UI the dashboard's matching room would: e.g. workflows has List/Editor/Logs sub-views, memory has the vault tree, settings has TTS/STT toggles. The user can interact with them like any normal app window.",
+            '',
+            "You CAN: spawn, expand, minimize, restore, focus, and close panels via voice — the user already knows these commands. You CAN switch tabs inside a panel by voice (the user can say \"switch to the editor tab\") — that's already wired.",
+            '',
+          );
+        }
+        sections.push(
+          '# Pointing at things on the user\'s screen — REQUIRED for "where" / "show me" requests',
+          'Emit a tag of the form `[POINT:<x>,<y>:<short label>]` anywhere in your reply to fly the pebble to that screen coordinate. The daemon strips these tags before display + TTS, dispatches a pebble.point_at RPC, and the pebble eases to the position with the label shown in its bubble for ~3.5 seconds. Coordinates are virtual-screen pixels.',
           '',
-          'Treat short or pronoun-laden references ("the workflows", "this panel", "the editor tab", "the settings", "that window") as pointing at one of these panels — usually the most recent one unless context says otherwise. Each panel contains the SAME UI the dashboard\'s matching room would: e.g. workflows has List/Editor/Logs sub-views, memory has the vault tree, settings has TTS/STT toggles. The user can interact with them like any normal app window.',
+          '**When the user asks a spatial question, the daemon attaches a screenshot of their current screen as the FIRST content block of the user message.** Use the actual pixels in that image to pick coordinates — read button labels, identify positions, find the exact target the user is asking about. Do NOT fall back to remembered coordinates from prior turns; ground every estimate in the current screenshot.',
           '',
-          'You CAN: spawn, expand, minimize, restore, focus, and close panels via voice — the user already knows these commands. You CANNOT (yet) click specific buttons or switch tabs inside a panel via voice — if the user asks for that ("switch to the editor tab"), tell them concisely how to click it themselves and offer to do it once that capability is wired.',
-        ].join('\n');
+          '**Coordinate space — read it off the grid.** The attached screenshot has a labelled coordinate grid overlay — light vermilion hairlines every 100 px and labelled major lines every 200 px ("x=200", "y=400" …). Pick coordinates in the *image* coordinate space using the grid as your reference frame. Do NOT eyeball pixel positions — find the gridlines that bracket the target element, then interpolate. For a button sitting just left of the "x=1500" gridline at roughly half the distance to "x=1400", you write `x=1450`. Use the same approach for y. The daemon scales your image-space coords back to real-screen pixels before dispatching the pebble, so if you see the close button just left of the "x=1580, y=10" intersection, emit `[POINT:1578,12:close]`.',
+          '',
+          '**Common coordinate mistakes to avoid:**',
+          '- Outputting "real screen" coordinates (e.g. (3792, 29) for a 4K screen) — the LLM sees the SHRUNK image, so coordinates must be in shrunk-image space. The daemon does the upscale.',
+          '- Putting coordinates near the centre of the image when the user asked about a corner element. Read the grid: top-right means high x AND low y.',
+          '- Reusing example coordinates from these instructions verbatim instead of measuring from the actual screenshot.',
+          '',
+          '**Required for any request matching:** "where is X", "where do I click for X", "show me X", "point to X", "guide me to X". A reply without the tag for these is wrong — describing the location verbally is not enough; the pebble must actually move.',
+          '',
+          '**Emit ONE point per request, not a multi-step walkthrough** — unless the user explicitly asks for steps ("walk me through", "show me each step"). If the user asks "how to open a terminal" you point at ONE primary control (the Terminal menu), not three sequential ones.',
+          '',
+          '**Each request is independent.** Do NOT carry over coordinates or labels from earlier turns; pick fresh ones based on what the user is asking about RIGHT NOW.',
+          '',
+          'Estimating coordinates: use the foreground-app context above and your knowledge of typical UIs. The user\'s desktop coordinate space starts at (0, 0) top-left. A maximized window on a 1920×1080 screen has its close button near (1895, 8). Browser tab close ≈ right edge of the active tab. Editors typically have their main menu bar around y=10–30. When in doubt, your best guess is fine — the user can re-ask.',
+          '',
+          'Examples (do not reuse these coordinates verbatim — they\'re illustrative):',
+          '  user: "where do I click to publish?" → "Top-right of the workflows panel. [POINT:<x>,<y>:publish]"',
+          '  user: "show me where to close this window" → "Top-right of the title bar. [POINT:<x>,<y>:close]"',
+          '',
+          'Replace `<x>,<y>` with your actual estimate. The text is spoken; the [POINT:..] tag is consumed by the daemon and never shown.',
+        );
+        return sections.join('\n');
       };
 
       const findPanel = (sidecarId: string, hint?: string): PanelEntry | null => {
@@ -1151,6 +1287,31 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // T8 — element-pointing tags. The LLM can emit `[POINT:x,y:label]`
+      // anywhere in its response. We strip every CLOSED tag from the
+      // streamed text before it reaches the bubble or TTS, and dispatch
+      // a `pebble.point_at` RPC for each new tag so the pebble flies to
+      // the screen position with a label callout. Tags arriving across
+      // chunk boundaries are handled because we only match closed tags
+      // (the `]` terminator must be present).
+      const POINT_TAG_RE = /\[POINT:(-?\d+),(-?\d+):([^\]]+)\]/g;
+      const stripPointTags = (
+        text: string,
+        seen: Set<string>,
+        onPoint: (x: number, y: number, label: string) => void,
+      ): string => {
+        return text.replace(POINT_TAG_RE, (full, x, y, label) => {
+          // Only dispatch tags we haven't fired yet this cycle. Match
+          // signature is the literal tag text — collisions on identical
+          // [POINT:..] in one cycle are harmless (LLM rarely repeats).
+          if (!seen.has(full)) {
+            seen.add(full);
+            onPoint(Number(x), Number(y), String(label).trim());
+          }
+          return '';
+        });
+      };
+
       // extractCompleteSentences pulls full sentences off the head of
       // `buffer` and returns them, leaving any in-progress trailing
       // fragment in `remainder`. A "sentence" here is text terminated by
@@ -1269,17 +1430,39 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const llmStart = Date.now();
         let llmDone = false;
         try {
-          // Inject the open-panel inventory so the LLM knows what
-          // windows the user might be referring to. Empty when no
-          // panels are open — saves the prompt tokens.
-          const panelCtx = buildPanelContext(sidecarId);
-          // Multi-modal path (T19) — user shared a screenshot via region
-          // selection. Otherwise the regular text stream.
-          const handle = opts?.image
+          // T9 — auto-screenshot for spatial queries. If the user is
+          // asking "where is X" / "show me Y" / "how to open Z" and no
+          // image is already attached (T19 region capture), grab the
+          // current screen so the LLM can pick coordinates from actual
+          // pixels instead of guessing from app conventions. Run in
+          // parallel with the panel-context build to overlap the latency.
+          const wantScreenshot = !opts?.image && NEEDS_SCREENSHOT.test(userText);
+          const [panelCtx, autoShot] = await Promise.all([
+            buildPanelContext(sidecarId),
+            wantScreenshot ? fetchScreenshot(sidecarId) : Promise.resolve(null),
+          ]);
+          if (autoShot) {
+            console.log(
+              `[ambient-ui] auto-screenshot attached: ` +
+              `${autoShot.sentWidth}x${autoShot.sentHeight} sent, ` +
+              `${autoShot.origWidth}x${autoShot.origHeight} actual, ` +
+              `scale ${autoShot.scaleX.toFixed(2)}x — ${autoShot.base64.length} base64 chars`,
+            );
+          }
+          // POINT coordinates emitted by the LLM are in the SENT-image
+          // coordinate space (the downscaled JPEG). Scale them up to
+          // the actual virtual-screen pixels before dispatching to the
+          // sidecar so the pebble lands at the real button.
+          const pointScaleX = autoShot?.scaleX ?? 1;
+          const pointScaleY = autoShot?.scaleY ?? 1;
+          const imageInput = opts?.image ?? autoShot;
+          // Multi-modal path — image either explicitly supplied (T19
+          // region capture) or auto-captured (T9). Else regular text.
+          const handle = imageInput
             ? agentService.streamMessageWithImage(
                 userText,
-                opts.image.base64,
-                opts.image.mediaType,
+                imageInput.base64,
+                imageInput.mediaType,
                 'pebble',
                 panelCtx || undefined,
               )
@@ -1289,6 +1472,40 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 panelCtx || undefined,
               );
           const { stream, onComplete } = handle;
+          // T8 — track which [POINT:..] tags we've already dispatched
+          // so a tag straddling chunk boundaries isn't double-fired
+          // when later chunks complete it. `tagBuffer` holds back any
+          // trailing partial `[POINT:` so we never leak tag fragments
+          // into the bubble or TTS.
+          const dispatchedPoints = new Set<string>();
+          let tagBuffer = '';
+          // Match a partial [POINT:...] prefix anchored at end of string
+          // — used to detect when the buffer ends mid-tag.
+          const PARTIAL_POINT_RE = /\[(P(O(I(N(T(:[^\]]*)?)?)?)?)?)?$/;
+          // Stagger multiple points so the pebble visibly walks rather
+          // than instantly jumps to the last one. 3.5 s hold per point
+          // — long enough to see it, short enough not to feel sluggish.
+          // Snappier ease (followFactor=0.42 in the sidecar) means most
+          // of those 3.5 s are spent at the target, not animating.
+          let pointDelayMs = 0;
+          const onPoint = (rawX: number, rawY: number, label: string) => {
+            // Scale image-space coords back to virtual-screen pixels.
+            const x = Math.round(rawX * pointScaleX);
+            const y = Math.round(rawY * pointScaleY);
+            const delay = pointDelayMs;
+            pointDelayMs += 4000; // 3.5 s hold + small overlap
+            setTimeout(() => {
+              sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
+                x, y, label, duration_ms: 3500,
+              }).catch((err) => {
+                console.warn(`[ambient-ui] pebble.point_at(${x},${y}) failed:`, err);
+              });
+            }, delay);
+            const scaledNote = (pointScaleX !== 1 || pointScaleY !== 1)
+              ? ` (raw ${rawX},${rawY} × scale ${pointScaleX.toFixed(2)},${pointScaleY.toFixed(2)})`
+              : '';
+            console.log(`[ambient-ui] point @ (${x},${y}) label="${label}" delay=${delay}ms${scaledNote}`);
+          };
           for await (const event of stream) {
             if (ctrl.cancelled) {
               // User dismissed mid-stream. Stop sidecar playback + drain queue.
@@ -1299,9 +1516,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
             if (event.type === 'text' && event.text) {
               if (firstTokenAt === 0) firstTokenAt = Date.now();
-              visibleText += event.text;
-              unsynth += event.text;
-              fullText += event.text;
+              // Append to the holdback buffer, strip every closed tag
+              // (firing an onPoint for each new one), then split off any
+              // trailing partial `[POINT:` so we don't leak it.
+              tagBuffer += event.text;
+              tagBuffer = stripPointTags(tagBuffer, dispatchedPoints, onPoint);
+              const partial = PARTIAL_POINT_RE.exec(tagBuffer);
+              let cleanChunk: string;
+              if (partial) {
+                cleanChunk = tagBuffer.slice(0, partial.index);
+                tagBuffer = tagBuffer.slice(partial.index);
+              } else {
+                cleanChunk = tagBuffer;
+                tagBuffer = '';
+              }
+              visibleText += cleanChunk;
+              unsynth += cleanChunk;
+              fullText += cleanChunk;
 
               // Flip to speaking on first token so the bubble starts
               // showing live text immediately. Don't await every chunk's
@@ -1326,6 +1557,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
           }
 
+          // Drain the tag holdback. If the LLM left a `[POINT:` open at
+          // end-of-stream the partial is just text — emit it so we don't
+          // silently drop content.
+          if (tagBuffer) {
+            visibleText += tagBuffer;
+            unsynth += tagBuffer;
+            fullText += tagBuffer;
+            tagBuffer = '';
+          }
           // Flush any tail fragment as the last sentence.
           const tail = unsynth.trim();
           if (tail) enqueueSentence(tail);
