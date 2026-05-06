@@ -7,7 +7,11 @@
 import type { SidecarEvent, EventPriority } from './protocol.ts';
 
 // Size limits
-export const MAX_JSON_SIZE = 1 * 1024 * 1024;       // 1 MB
+// 16 MB so a base64-encoded screenshot (typically 0.5–4 MB raw → ~0.7–5.5 MB
+// after base64) fits in a single rpc_result payload. Below this and the
+// vision-LLM pipeline (T9 auto-screenshot, T19 region capture) silently
+// drops images.
+export const MAX_JSON_SIZE = 16 * 1024 * 1024;       // 16 MB
 export const MAX_BINARY_SIZE = 50 * 1024 * 1024;     // 50 MB
 export const BINARY_INLINE_THRESHOLD = 256 * 1024;   // 256 KB
 export const BINARY_REF_ID_LENGTH = 36;               // UUID length

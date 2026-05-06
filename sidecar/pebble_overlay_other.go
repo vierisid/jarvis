@@ -25,6 +25,10 @@ func (s *pebbleServiceStub) SetText(text string) error {
 	return nil
 }
 
+func (s *pebbleServiceStub) PointAt(_, _ int, _ string, _ int) error {
+	return nil
+}
+
 func (s *pebbleServiceStub) Close() error {
 	return nil
 }

@@ -55,6 +55,13 @@ type PebbleService interface {
 	// copy. Safe to call before Spawn — value is just stashed until paint.
 	SetText(text string) error
 
+	// PointAt animates the pebble to a fixed virtual-screen position
+	// for `durationMs` milliseconds, showing `label` in the bubble. After
+	// the duration expires the previous state + text are restored and
+	// the pebble resumes cursor-follow. Used by T8's `[POINT:x,y:label]`
+	// LLM tags — Clicky-style "click here" UX.
+	PointAt(x, y int, label string, durationMs int) error
+
 	// Close hides + destroys the overlay. Idempotent.
 	Close() error
 

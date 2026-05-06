@@ -1,6 +1,6 @@
 module github.com/jarvis/sidecar
 
-go 1.23
+go 1.25.0
 
 require (
 	github.com/go-ole/go-ole v1.3.0
@@ -13,5 +13,6 @@ require (
 require (
 	github.com/gen2brain/malgo v0.11.24 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
+	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/sys v0.1.0 // indirect
 )

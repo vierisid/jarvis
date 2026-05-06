@@ -1,15 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/png" // register PNG decoder for image.Decode
+	"image/jpeg"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func()) map[string]RPCHandler {
@@ -76,6 +83,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["pebble.spawn"] = makePebbleSpawnHandler(pebble)
 		registry["pebble.close"] = makePebbleCloseHandler(pebble)
 		registry["pebble.set_state"] = makePebbleSetStateHandler(pebble)
+		registry["pebble.point_at"] = makePebblePointAtHandler(pebble)
 		if playback != nil {
 			registry["pebble.play_audio"] = makePebblePlayAudioHandler(playback)
 			registry["pebble.stop_audio"] = makePebbleStopAudioHandler(playback)
@@ -310,11 +318,60 @@ func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
 		return nil, err
 	}
 
+	// `compact: true` (T9 auto-screenshot path) downsizes + re-encodes
+	// the PNG as JPEG so it fits comfortably under the WS message limit
+	// while still being readable enough for vision LLMs to pick out
+	// button text. Without it, raw PNG screenshots on a 4K monitor can
+	// hit 5+ MB and get dropped before the LLM sees them.
+	compact := false
+	if v, ok := params["compact"].(bool); ok {
+		compact = v
+	}
+	maxW := 1600
+	if v, ok := params["max_width"].(float64); ok && v > 0 {
+		maxW = int(v)
+	}
+	jpegQ := 80
+	if v, ok := params["jpeg_quality"].(float64); ok && v > 0 {
+		jpegQ = int(v)
+	}
+	// Always decode once to pull the original dimensions — the daemon
+	// uses them to scale POINT coordinates back into real-screen space
+	// when the user's monitor is bigger than the resized image.
+	origW, origH, _ := readImageSize(data)
+	mime := "image/png"
+	dstW, dstH := origW, origH
+	// Whether to overlay a coordinate grid so the vision LLM can read
+	// coordinates off labelled gridlines rather than guess pixel
+	// positions (vision models are notoriously bad at unaided
+	// localization). Default ON when compact is requested — that's the
+	// pebble flow that needs accuracy.
+	grid := compact
+	if v, ok := params["grid"].(bool); ok {
+		grid = v
+	}
+	if compact {
+		shrunk, sw, sh, err := shrinkScreenshotWithGrid(data, maxW, jpegQ, grid)
+		if err == nil && len(shrunk) > 0 && len(shrunk) < len(data) {
+			data = shrunk
+			mime = "image/jpeg"
+			dstW, dstH = sw, sh
+		}
+	}
+
 	return &RPCResult{
-		Result: map[string]any{"captured": true},
+		Result: map[string]any{
+			"captured":    true,
+			"bytes":       len(data),
+			"mime":        mime,
+			"width":       dstW,
+			"height":      dstH,
+			"orig_width":  origW,
+			"orig_height": origH,
+		},
 		Binary: BinaryDataInline{
 			Type:     "inline",
-			MimeType: "image/png",
+			MimeType: mime,
 			Data:     base64.StdEncoding.EncodeToString(data),
 		},
 	}, nil
@@ -437,6 +494,238 @@ func makeCleanupCapturesHandler(cfg *SidecarConfig) RPCHandler {
 			"files_deleted": filesDeleted,
 			"dirs_removed":  dirsRemoved,
 		}}, nil
+	}
+}
+
+// readImageSize decodes only the image config (header) so we can
+// surface dimensions cheaply without a full decode.
+func readImageSize(buf []byte) (int, int, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(buf))
+	if err != nil {
+		return 0, 0, err
+	}
+	return cfg.Width, cfg.Height, nil
+}
+
+// shrinkScreenshotWithGrid downscales + JPEG-encodes a screenshot,
+// optionally overlaying a coordinate grid before encoding. The grid
+// gives vision LLMs a visual reference frame: every 100 px a faint
+// hairline, every 200 px a labelled gridline ("x=200", "y=400" …) so
+// the model can READ coordinates off nearby labels instead of
+// guessing pixel positions.
+func shrinkScreenshotWithGrid(pngBytes []byte, maxW, jpegQ int, drawGrid bool) ([]byte, int, int, error) {
+	src, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	srcW := src.Bounds().Dx()
+	srcH := src.Bounds().Dy()
+	dstW := srcW
+	dstH := srcH
+	if srcW > maxW {
+		dstW = maxW
+		dstH = srcH * maxW / srcW
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	if dstW != srcW || dstH != srcH {
+		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), xdraw.Over, nil)
+	} else {
+		xdraw.Draw(dst, dst.Bounds(), src, image.Point{}, xdraw.Src)
+	}
+	if drawGrid {
+		drawCoordinateGrid(dst)
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: jpegQ}); err != nil {
+		return nil, 0, 0, err
+	}
+	return buf.Bytes(), dstW, dstH, nil
+}
+
+// drawCoordinateGrid paints a labelled grid over the image so the
+// vision LLM can read pixel coordinates from gridline labels. Light
+// alpha so UI underneath stays visible; semi-transparent label boxes
+// so labels never sit unreadably on noisy backgrounds.
+func drawCoordinateGrid(img *image.RGBA) {
+	w := img.Bounds().Dx()
+	h := img.Bounds().Dy()
+	// Hairline (faint) every 100 px.
+	hair := color.RGBA{R: 200, G: 60, B: 50, A: 70}
+	// Major gridline (slightly stronger) every 200 px.
+	major := color.RGBA{R: 200, G: 60, B: 50, A: 130}
+	// Vertical lines.
+	for x := 100; x < w; x += 100 {
+		col := hair
+		if x%200 == 0 {
+			col = major
+		}
+		drawVLine(img, x, 0, h, col)
+	}
+	for y := 100; y < h; y += 100 {
+		col := hair
+		if y%200 == 0 {
+			col = major
+		}
+		drawHLine(img, 0, w, y, col)
+	}
+	// Labels every 200 px. Painted with a tiny inline pixel font.
+	labelBg := color.RGBA{R: 0, G: 0, B: 0, A: 200}
+	labelFg := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	for x := 200; x < w; x += 200 {
+		drawLabel(img, fmt.Sprintf("x=%d", x), x+2, 2, labelBg, labelFg)
+	}
+	for y := 200; y < h; y += 200 {
+		drawLabel(img, fmt.Sprintf("y=%d", y), 2, y+2, labelBg, labelFg)
+	}
+}
+
+func drawVLine(img *image.RGBA, x, y0, y1 int, c color.RGBA) {
+	for y := y0; y < y1; y++ {
+		blendPixel(img, x, y, c)
+	}
+}
+func drawHLine(img *image.RGBA, x0, x1, y int, c color.RGBA) {
+	for x := x0; x < x1; x++ {
+		blendPixel(img, x, y, c)
+	}
+}
+func blendPixel(img *image.RGBA, x, y int, c color.RGBA) {
+	if x < 0 || y < 0 || x >= img.Bounds().Dx() || y >= img.Bounds().Dy() {
+		return
+	}
+	off := y*img.Stride + x*4
+	a := int(c.A)
+	inv := 255 - a
+	img.Pix[off+0] = uint8((int(img.Pix[off+0])*inv + int(c.R)*a) / 255)
+	img.Pix[off+1] = uint8((int(img.Pix[off+1])*inv + int(c.G)*a) / 255)
+	img.Pix[off+2] = uint8((int(img.Pix[off+2])*inv + int(c.B)*a) / 255)
+}
+
+// 5×7 pixel font for the digits we need. Each glyph is encoded as a
+// flat slice of 35 bools (5×7), row-major. Covers 0–9, =, x, y. Tiny
+// but readable at the size vision LLMs receive screenshots.
+var pixelFont = map[rune][35]bool{
+	'0': {false, true, true, true, false,
+		true, false, false, false, true,
+		true, false, false, true, true,
+		true, false, true, false, true,
+		true, true, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, false},
+	'1': {false, false, true, false, false,
+		false, true, true, false, false,
+		true, false, true, false, false,
+		false, false, true, false, false,
+		false, false, true, false, false,
+		false, false, true, false, false,
+		true, true, true, true, true},
+	'2': {false, true, true, true, false,
+		true, false, false, false, true,
+		false, false, false, false, true,
+		false, false, true, true, false,
+		false, true, false, false, false,
+		true, false, false, false, false,
+		true, true, true, true, true},
+	'3': {true, true, true, true, false,
+		false, false, false, false, true,
+		false, false, false, false, true,
+		false, true, true, true, false,
+		false, false, false, false, true,
+		false, false, false, false, true,
+		true, true, true, true, false},
+	'4': {false, false, false, true, false,
+		false, false, true, true, false,
+		false, true, false, true, false,
+		true, false, false, true, false,
+		true, true, true, true, true,
+		false, false, false, true, false,
+		false, false, false, true, false},
+	'5': {true, true, true, true, true,
+		true, false, false, false, false,
+		true, true, true, true, false,
+		false, false, false, false, true,
+		false, false, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, false},
+	'6': {false, false, true, true, false,
+		false, true, false, false, false,
+		true, false, false, false, false,
+		true, true, true, true, false,
+		true, false, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, false},
+	'7': {true, true, true, true, true,
+		false, false, false, false, true,
+		false, false, false, true, false,
+		false, false, true, false, false,
+		false, true, false, false, false,
+		false, true, false, false, false,
+		false, true, false, false, false},
+	'8': {false, true, true, true, false,
+		true, false, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, false,
+		true, false, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, false},
+	'9': {false, true, true, true, false,
+		true, false, false, false, true,
+		true, false, false, false, true,
+		false, true, true, true, true,
+		false, false, false, false, true,
+		false, false, false, true, false,
+		false, true, true, false, false},
+	'=': {false, false, false, false, false,
+		false, false, false, false, false,
+		true, true, true, true, true,
+		false, false, false, false, false,
+		true, true, true, true, true,
+		false, false, false, false, false,
+		false, false, false, false, false},
+	'x': {false, false, false, false, false,
+		false, false, false, false, false,
+		true, false, false, false, true,
+		false, true, false, true, false,
+		false, false, true, false, false,
+		false, true, false, true, false,
+		true, false, false, false, true},
+	'y': {false, false, false, false, false,
+		false, false, false, false, false,
+		true, false, false, false, true,
+		false, true, false, true, false,
+		false, false, true, false, false,
+		false, false, true, false, false,
+		true, true, false, false, false},
+}
+
+func drawLabel(img *image.RGBA, text string, x, y int, bg, fg color.RGBA) {
+	const charW = 6 // 5 px glyph + 1 px spacing
+	const charH = 7
+	const padX = 1
+	const padY = 1
+	bgW := len(text)*charW - 1 + padX*2
+	bgH := charH + padY*2
+	for dy := 0; dy < bgH; dy++ {
+		for dx := 0; dx < bgW; dx++ {
+			blendPixel(img, x+dx, y+dy, bg)
+		}
+	}
+	cx := x + padX
+	cy := y + padY
+	for _, r := range text {
+		glyph, ok := pixelFont[r]
+		if !ok {
+			cx += charW
+			continue
+		}
+		for row := 0; row < charH; row++ {
+			for col := 0; col < 5; col++ {
+				if glyph[row*5+col] {
+					blendPixel(img, cx+col, cy+row, fg)
+				}
+			}
+		}
+		cx += charW
 	}
 }
 
