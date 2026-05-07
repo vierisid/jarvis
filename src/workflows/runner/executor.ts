@@ -44,33 +44,11 @@ import {
 } from "../jarvis-pieces/types";
 import { resolveTemplate, TemplateError, type StepOutputs } from "./templating";
 import { evaluateConditionGroups, type BranchCondition, type BranchConditionGroups } from "./conditions";
+import type { FlowRouterBranch, FlowTriggerNode } from "../db/repos/flow-version";
 
-interface FlowStepNode {
-  name: string;
-  displayName?: string;
-  type: string;
-  settings?: {
-    pieceName?: string;
-    actionName?: string;
-    triggerName?: string;
-    input?: Record<string, unknown>;
-    /** LOOP_ON_ITEMS: template that resolves to an array. */
-    items?: string;
-    /** ROUTER: branches definition. */
-    branches?: Array<RouterBranch>;
-    /** ROUTER: which matched branches to run. */
-    executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
-  };
-  nextAction?: FlowStepNode;
-  /** LOOP_ON_ITEMS: head of the inner subgraph. */
-  firstLoopAction?: FlowStepNode;
-  /** ROUTER: per-branch subgraph head, indexed by branches[i]. May contain null for empty branches. */
-  children?: Array<FlowStepNode | null>;
-}
-
-type RouterBranch =
-  | { branchType: "CONDITION"; branchName: string; conditions: BranchConditionGroups }
-  | { branchType: "FALLBACK"; branchName: string };
+/** Local alias for the executor's working node type. Identical shape to
+ *  `FlowTriggerNode` from the version repo; aliased so call-sites stay short. */
+type FlowStepNode = FlowTriggerNode;
 
 interface RunStepOutput {
   input: Record<string, unknown>;
@@ -102,7 +80,7 @@ export class JarvisPiecesFlowExecutor implements FlowExecutor {
   }
 
   async execute(ctx: FlowExecutorContext): Promise<FlowExecutorResult> {
-    const trigger = ctx.version.trigger as unknown as FlowStepNode | null;
+    const trigger: FlowStepNode | null = ctx.version.trigger ?? null;
     if (!trigger || typeof trigger !== "object") {
       throw new FlowExecutionError("flow has no trigger", { name: "<trigger>", displayName: "Trigger" });
     }
@@ -231,17 +209,45 @@ export class JarvisPiecesFlowExecutor implements FlowExecutor {
       );
     }
 
-    const iterations: Array<Record<string, unknown>> = [];
+    // Snapshot the keys present on ctx.outputs before the body runs so we
+    // can drop any keys the body added (so post-loop steps can't reference
+    // body step outputs whose semantics are ambiguous after iteration).
+    const outputKeysBefore = new Set(Object.keys(ctx.outputs));
+
+    // `index` is 1-based to match activepieces' convention -- the first
+    // iteration is `loop.index === 1`. After the loop completes, the
+    // zero-based array index k of `iterations[k]` and `iterations[k].index`
+    // differ by one (iterations[0].index === 1).
+    const iterations: Array<{ item: unknown; index: number; steps: Record<string, RunStepOutput> }> = [];
     for (let i = 0; i < items.length; i++) {
-      // Per-iteration loop context, accessible inside the body as
-      // {{<loopName>.item}} / {{<loopName>.index}}.
       ctx.outputs[node.name] = { item: items[i], index: i + 1 };
-      await this.walk(node.firstLoopAction, ctx);
-      iterations.push({ item: items[i], index: i + 1 });
+
+      // Per-iteration steps go into a sub-scope. After all iterations, body
+      // step outputs do NOT pollute ctx.steps -- the loop's iterations array
+      // is the only persisted record. Counter is shared so maxSteps still
+      // counts cumulatively.
+      const iterSteps: Record<string, RunStepOutput> = {};
+      const subCtx: WalkContext = {
+        outputs: ctx.outputs,
+        steps: iterSteps,
+        counter: ctx.counter,
+      };
+      await this.walk(node.firstLoopAction, subCtx);
+
+      iterations.push({ item: items[i], index: i + 1, steps: iterSteps });
+    }
+
+    // Drop body-added keys from ctx.outputs so {{step_X.field}} references
+    // after the loop don't resolve to last-iteration leftovers.
+    for (const key of Object.keys(ctx.outputs)) {
+      if (key !== node.name && !outputKeysBefore.has(key)) {
+        delete ctx.outputs[key];
+      }
     }
 
     // Replace the per-iteration scratch value with a stable summary; flows
-    // referencing {{<loopName>.iterations[k].item}} after the loop work.
+    // can reference {{<loopName>.iterations[k].steps.<stepName>.output.X}}
+    // to access a specific iteration's body output.
     ctx.outputs[node.name] = { iterations, count: items.length };
     ctx.steps[node.name] = {
       input: { items: itemsExpr },
@@ -250,13 +256,12 @@ export class JarvisPiecesFlowExecutor implements FlowExecutor {
   }
 
   private async executeRouter(node: FlowStepNode, ctx: WalkContext): Promise<void> {
-    const stepLabel = { name: node.name, displayName: node.displayName ?? node.name };
     const branches = node.settings?.branches ?? [];
     const children = node.children ?? [];
     const executionType = node.settings?.executionType ?? "EXECUTE_FIRST_MATCH";
 
     if (branches.length === 0) {
-      // Empty router: skip but record so the run shows we visited.
+      // Empty router: record the visit but don't touch anything else.
       ctx.steps[node.name] = { input: { branches: [] }, output: { matched: [] } };
       ctx.outputs[node.name] = { matched: [] };
       return;
@@ -282,7 +287,20 @@ export class JarvisPiecesFlowExecutor implements FlowExecutor {
       matchedIndices.push(fallbackIndex);
     }
 
-    // Run each selected branch's subgraph.
+    // Warn (once per run) when nothing matched and no FALLBACK was authored.
+    // This typically means the router conditions are misconfigured -- the run
+    // continues to nextAction with `matched: []` so downstream nodes can
+    // detect via `{{<routerName>.matched[0]}}` being absent.
+    if (matchedIndices.length === 0) {
+      console.warn(
+        `[workflow-executor] router "${node.name}": no branch matched and no FALLBACK declared; continuing to nextAction`,
+      );
+    }
+
+    // EXECUTE_ALL_MATCH: branches run sequentially in declaration order;
+    // each branch's subgraph reads any ctx.outputs mutations made by earlier
+    // branches in this same router. This is intentional (matches upstream)
+    // but worth being aware of when authoring side-effecting branches.
     for (const idx of matchedIndices) {
       const subgraph = children[idx] ?? undefined;
       if (subgraph) await this.walk(subgraph, ctx);
@@ -294,13 +312,8 @@ export class JarvisPiecesFlowExecutor implements FlowExecutor {
       output: { matched: matchedNames },
     };
     ctx.outputs[node.name] = { matched: matchedNames };
-
-    // Helpful for downstream lints: if no branch matched and no fallback was
-    // declared, we silently move on. That's correct behavior; downstream
-    // conditions can detect via {{<routerName>.matched[0]}} being absent.
-    void stepLabel;
   }
 }
 
 /** Re-exported for tests / external composers. */
-export type { BranchCondition, BranchConditionGroups, RouterBranch };
+export type { BranchCondition, BranchConditionGroups, FlowRouterBranch as RouterBranch };

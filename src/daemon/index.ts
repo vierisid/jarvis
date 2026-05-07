@@ -722,8 +722,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // observer event becomes `observer.<observer_type>` (where the observer's
     // raw `type` is normalized to snake_case via mapObserverEventType).
     if (observerService) {
+      const warnedRawTypes = new Set<string>();
       observerService.setForwardCallback((event) => {
-        const canonical = OBSERVER_EVENT_TYPE_MAP[event.type] ?? `observer.${event.type}`;
+        const mapped = OBSERVER_EVENT_TYPE_MAP[event.type];
+        const canonical = mapped ?? `observer.${event.type}`;
+        if (!mapped && !warnedRawTypes.has(event.type)) {
+          warnedRawTypes.add(event.type);
+          console.warn(
+            `[Daemon] Observer emitted unknown raw type "${event.type}" — publishing as "${canonical}" but it is not in WORKFLOW_EVENT_TYPES; add a mapping in src/workflows/runtime/event-types.ts so the composer surfaces it.`,
+          );
+        }
         sharedEventBus.publish(canonical, { ...event.data, _timestamp: event.timestamp });
       });
     }

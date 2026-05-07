@@ -90,20 +90,20 @@ describe("flow-version repo", () => {
     const draft = createDraftVersion({
       flowId: flow.id,
       displayName: "v1",
-      trigger: { type: "EMPTY" },
+      trigger: { name: "trigger", type: "EMPTY" },
     });
     expect(draft.state).toBe("DRAFT");
     expect(draft.valid).toBe(false);
-    expect(draft.trigger).toEqual({ type: "EMPTY" });
+    expect(draft.trigger).toEqual({ name: "trigger", type: "EMPTY" });
 
     const updated = updateDraftVersion(draft.id, {
-      trigger: { type: "PIECE_TRIGGER", pieceName: "schedule" },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule" } },
       valid: true,
       connectionIds: ["conn1", "conn2"],
     });
     expect(updated.valid).toBe(true);
     expect(updated.connectionIds).toEqual(["conn1", "conn2"]);
-    expect(updated.trigger).toEqual({ type: "PIECE_TRIGGER", pieceName: "schedule" });
+    expect(updated.trigger).toEqual({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule" } });
 
     const locked = lockVersion(draft.id);
     expect(locked.state).toBe("LOCKED");

@@ -596,6 +596,163 @@ describe("JarvisPiecesFlowExecutor: end-to-end via handler + worker", () => {
     expect(notifier.calls.map((x) => x.message)).toEqual(["default"]);
   });
 
+  test("LOOP_ON_ITEMS captures per-iteration body step outputs in iterations[]", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "loop-steps" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "loop1",
+          type: "LOOP_ON_ITEMS",
+          settings: { items: "{{trigger.list}}" },
+          firstLoopAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-tool",
+              actionName: "invoke",
+              input: { toolName: "echo", params: { msg: "{{loop1.item}}" } },
+            },
+          },
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const tools = new FakeToolRegistry(
+      { echo: { name: "echo", description: "", category: "demo", parameters: {} } },
+      async (_n, params) => `echo:${(params as { msg: string }).msg}`,
+    );
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { toolRegistry: tools },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { list: ["a", "b"] } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+
+    const after = getFlowRun(run.id);
+    expect(after?.status).toBe("SUCCEEDED");
+    const steps = after?.steps as Record<string, { output: { iterations: Array<{ steps: Record<string, { output: unknown }> }> } }>;
+    // Body steps are NOT in the outer steps map.
+    expect("step_1" in steps).toBe(false);
+    // Each iteration carries its own body steps.
+    expect(steps.loop1?.output.iterations).toHaveLength(2);
+    expect(steps.loop1?.output.iterations[0]?.steps?.step_1?.output).toMatchObject({
+      result: "echo:a",
+    });
+    expect(steps.loop1?.output.iterations[1]?.steps?.step_1?.output).toMatchObject({
+      result: "echo:b",
+    });
+  });
+
+  test("post-loop steps cannot reference body outputs (drop body keys from outputs)", async () => {
+    // After a loop, references like {{step_1.field}} should not resolve to
+    // the last iteration's body output. Authoring such a flow surfaces a
+    // template error at the post-loop step.
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "post-loop-leak" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "loop1",
+          type: "LOOP_ON_ITEMS",
+          settings: { items: "{{trigger.list}}" },
+          firstLoopAction: {
+            name: "body_step",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "x" } },
+          },
+          nextAction: {
+            name: "after",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-notify",
+              actionName: "notify",
+              input: { message: "should fail: {{body_step.text}}" },
+            },
+          },
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { llm: new FakeLlm({ text: "ok" }), notifier: new FakeNotifier() },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { list: ["a"] } },
+      flowRunId: run.id,
+      maxAttempts: 1,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    const after = getFlowRun(run.id);
+    expect(after?.status).toBe("FAILED");
+    expect(after?.failedStep?.name).toBe("after");
+  });
+
+  test("ROUTER with mismatched children length skips undefined branches gracefully", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "router-short" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "router1",
+          type: "ROUTER",
+          settings: {
+            executionType: "EXECUTE_ALL_MATCH",
+            branches: [
+              { branchName: "a", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.flag}}", operator: "BOOLEAN_IS_TRUE" }]] },
+              { branchName: "b", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.flag}}", operator: "BOOLEAN_IS_TRUE" }]] },
+            ],
+            // children only has one entry; branch index 1 has no subgraph.
+          },
+          children: [
+            { name: "ran", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "ok" } } },
+          ],
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { flag: true } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
+    // Both branches matched; only branch 0 had a subgraph.
+    expect(notifier.calls.map((c) => c.message)).toEqual(["ok"]);
+    const steps = getFlowRun(run.id)?.steps as Record<string, { output: { matched: string[] } }>;
+    expect(steps.router1?.output.matched).toEqual(["a", "b"]);
+  });
+
   test("LOOP and ROUTER nest cleanly: router inside loop body fires per iteration", async () => {
     const flow = createFlow();
     const version = createDraftVersion({ flowId: flow.id, displayName: "nested" });

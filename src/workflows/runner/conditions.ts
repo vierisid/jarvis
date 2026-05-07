@@ -93,8 +93,20 @@ export function evaluateCondition(c: BranchCondition, outputs: StepOutputs): boo
     default:
       // Unknown operator: behave as false. Safer than throwing because
       // a single unsupported branch shouldn't kill the whole router run.
+      // Warn once per unique operator string so the maintainer can either
+      // implement the operator or fix a typo'd one.
+      warnUnknownOperator(c.operator);
       return false;
   }
+}
+
+const warnedOperators = new Set<string>();
+function warnUnknownOperator(op: string): void {
+  if (warnedOperators.has(op)) return;
+  warnedOperators.add(op);
+  console.warn(
+    `[workflow-conditions] unknown branch operator "${op}" — branch evaluated as false. Add support in conditions.ts or fix the typo.`,
+  );
 }
 
 function toStr(v: unknown): string {

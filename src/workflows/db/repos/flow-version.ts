@@ -35,7 +35,7 @@ export interface FlowVersion {
   id: string;
   flowId: string;
   displayName: string;
-  trigger: Record<string, unknown>;
+  trigger: FlowTriggerNode;
   state: FlowVersionState;
   valid: boolean;
   schemaVersion: string | null;
@@ -54,6 +54,10 @@ export interface FlowVersion {
  * dispatch on `type`. Kept loose intentionally so callers (composer, editor,
  * worker handler) share one nominal type without wrapping every value in
  * `Record<string, unknown>` casts.
+ *
+ * Includes the executor's control-flow shapes (LOOP_ON_ITEMS subgraph head,
+ * ROUTER branch children) so the version repo, composer, editor, and
+ * executor all agree on one node type.
  */
 export interface FlowTriggerNode {
   name: string;
@@ -64,9 +68,32 @@ export interface FlowTriggerNode {
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
+    /** LOOP_ON_ITEMS: template that resolves to an array. */
+    items?: string;
+    /** ROUTER: branch definitions; one per index in `children`. */
+    branches?: Array<FlowRouterBranch>;
+    /** ROUTER: which matched branches to run. */
+    executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
   };
   nextAction?: FlowTriggerNode;
+  /** LOOP_ON_ITEMS: head of the inner subgraph executed once per iteration. */
+  firstLoopAction?: FlowTriggerNode;
+  /** ROUTER: per-branch subgraph head. May contain null for empty branches. */
+  children?: Array<FlowTriggerNode | null>;
 }
+
+export type FlowRouterBranch =
+  | {
+      branchType: "CONDITION";
+      branchName: string;
+      conditions: ReadonlyArray<ReadonlyArray<{
+        firstValue: string;
+        operator: string;
+        secondValue?: string;
+        caseSensitive?: boolean;
+      }>>;
+    }
+  | { branchType: "FALLBACK"; branchName: string };
 
 export interface CreateDraftVersionInput {
   flowId: string;
@@ -102,7 +129,7 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
     id: row.id,
     flowId: row.flow_id,
     displayName: row.display_name,
-    trigger: JSON.parse(row.trigger) as Record<string, unknown>,
+    trigger: JSON.parse(row.trigger) as FlowTriggerNode,
     state: row.state,
     valid: row.valid !== 0,
     schemaVersion: row.schema_version,

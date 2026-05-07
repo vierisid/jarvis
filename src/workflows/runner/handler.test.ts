@@ -101,7 +101,7 @@ describe("RUN_FLOW handler with custom executor", () => {
     const version = createDraftVersion({
       flowId: flow.id,
       displayName: "v1",
-      trigger: { type: "PIECE_TRIGGER" },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER" },
     });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
     enqueue({
@@ -125,7 +125,7 @@ describe("RUN_FLOW handler with custom executor", () => {
     const ctx = captured as unknown as FlowExecutorContext;
     expect(ctx.run.id).toBe(run.id);
     expect(ctx.version.id).toBe(version.id);
-    expect(ctx.version.trigger).toEqual({ type: "PIECE_TRIGGER" });
+    expect(ctx.version.trigger).toEqual({ name: "trigger", type: "PIECE_TRIGGER" });
     expect(ctx.payload).toEqual({ foo: "bar" });
   });
 
