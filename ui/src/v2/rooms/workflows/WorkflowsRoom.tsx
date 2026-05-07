@@ -1,28 +1,380 @@
 /**
- * Stub for the workflows room.
+ * Workflows room (Phase 4 stage 1).
  *
- * The legacy in-house workflow builder has been removed. The new workflow
- * system (activepieces-based) builder lands in Phase 4. Until then this room
- * is a placeholder so the dashboard nav slot stays available; the v2 API
- * (`/api/workflows/*`) is fully functional and can be exercised via curl or
- * the assistant once the new workflow tools land.
+ * Shows the user's saved workflows with status + last-run summary, and a
+ * detail panel for the selected flow with its run history. Runs can be
+ * triggered manually; flows can be enabled/disabled, published, or deleted.
+ *
+ * Limitations of this stage (intentional):
+ *   - No visual builder. Flow creation happens via the API or assistant.
+ *   - No NL-create chip. That lands when the assistant tools for workflows
+ *     ship in Phase 5.
+ *   - Step outputs are rendered as JSON. A pretty per-piece renderer is
+ *     deferred until pieces have stable output shapes.
  */
 
-import React from "react";
+import React, { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Pause,
+  Play,
+  RefreshCw,
+  Trash2,
+  Upload,
+  X,
+  XCircle,
+} from "lucide-react";
+import { Button, Chip, Icon } from "../../ui";
+import { RoomShell } from "../RoomShell";
+import {
+  useWorkflowsData,
+  type Flow,
+  type FlowRun,
+  type FlowRunStatus,
+  type FlowStatus,
+} from "./useWorkflowsData";
+import "./WorkflowsRoom.css";
+
+const STATUS_TONE: Record<FlowStatus, "ok" | "neutral"> = {
+  ENABLED: "ok",
+  DISABLED: "neutral",
+};
+
+const RUN_STATUS_TONE: Record<FlowRunStatus, "ok" | "neutral" | "warn" | "accent"> = {
+  QUEUED: "neutral",
+  RUNNING: "warn",
+  SUCCEEDED: "ok",
+  FAILED: "accent",
+  PAUSED: "neutral",
+  TIMEOUT: "accent",
+  INTERNAL_ERROR: "accent",
+  QUOTA_EXCEEDED: "accent",
+  STOPPED: "neutral",
+  MEMORY_LIMIT_EXCEEDED: "accent",
+  SCHEDULE_FAILURE: "accent",
+};
+
+const TERMINAL_STATUSES = new Set<FlowRunStatus>([
+  "SUCCEEDED",
+  "FAILED",
+  "STOPPED",
+  "TIMEOUT",
+  "INTERNAL_ERROR",
+  "QUOTA_EXCEEDED",
+  "MEMORY_LIMIT_EXCEEDED",
+  "SCHEDULE_FAILURE",
+]);
 
 export function WorkflowsRoomBody(): React.ReactElement {
+  const data = useWorkflowsData();
+  const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+
+  const handleAction = async (label: string, fn: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
+    const result = await fn();
+    setActionMessage({
+      tone: result.ok ? "ok" : "warn",
+      text: result.ok ? `${label}: ${result.message}` : `${label} failed: ${result.message}`,
+    });
+    window.setTimeout(() => setActionMessage(null), 3000);
+  };
+
   return (
-    <div style={{ padding: "1rem", color: "#94a3b8" }}>
-      <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Workflows</h2>
-      <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", lineHeight: 1.5 }}>
-        The visual builder is being rebuilt on top of the new workflow runtime.
-        Until then, manage workflows via the <code>/api/workflows</code> API or
-        wait for the next dashboard release.
-      </p>
+    <div className="wf-room">
+      <header className="wf-room__header">
+        <div>
+          <p className="wf-room__count">
+            {data.loading ? "…" : `${data.flows.length} workflow${data.flows.length === 1 ? "" : "s"}`}
+            {data.error ? ` · ${data.error}` : null}
+          </p>
+        </div>
+        <div className="wf-room__actions">
+          <Button variant="ghost" size="sm" onClick={() => void data.refresh()} title="Refresh">
+            <Icon icon={RefreshCw} size={14} /> Refresh
+          </Button>
+        </div>
+      </header>
+
+      {actionMessage ? (
+        <div className={`wf-toast wf-toast--${actionMessage.tone}`}>{actionMessage.text}</div>
+      ) : null}
+
+      <div className="wf-room__layout">
+        <section className="wf-room__list" aria-label="Workflow list">
+          {data.flows.length === 0 && !data.loading ? (
+            <EmptyState />
+          ) : (
+            <ul className="wf-list">
+              {data.flows.map((flow) => (
+                <FlowRow
+                  key={flow.id}
+                  flow={flow}
+                  selected={data.selectedFlowId === flow.id}
+                  onSelect={() => data.setSelectedFlowId(flow.id)}
+                  onRun={() => handleAction("Run", () => data.runFlow(flow.id))}
+                  onToggle={() =>
+                    handleAction(
+                      flow.status === "ENABLED" ? "Disable" : "Enable",
+                      () => data.setStatus(flow.id, flow.status === "ENABLED" ? "DISABLED" : "ENABLED"),
+                    )
+                  }
+                  onPublish={() => handleAction("Publish", () => data.publishFlow(flow.id))}
+                  onDelete={() => {
+                    if (window.confirm(`Delete "${flow.displayName ?? flow.id}"? This is permanent.`)) {
+                      void handleAction("Delete", () => data.deleteFlow(flow.id));
+                    }
+                  }}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="wf-room__detail" aria-label="Selected flow detail">
+          {data.selectedFlow ? (
+            <FlowDetail
+              flow={data.selectedFlow}
+              runs={data.selectedRuns}
+              onRefreshRuns={() => void data.refreshRuns(data.selectedFlow!.id)}
+              onCancelRun={(runId) => handleAction("Cancel", () => data.cancelRun(runId))}
+              onClose={() => data.setSelectedFlowId(null)}
+            />
+          ) : (
+            <DetailPlaceholder />
+          )}
+        </section>
+      </div>
     </div>
   );
 }
 
 export function WorkflowsRoom(): React.ReactElement {
-  return <WorkflowsRoomBody />;
+  return (
+    <RoomShell title="Workflows" subtitle="Saved automations · run history · status" breadcrumb={["Workflows"]}>
+      <WorkflowsRoomBody />
+    </RoomShell>
+  );
+}
+
+/* --------------------------------------------------------------------- rows */
+
+interface FlowRowProps {
+  flow: Flow;
+  selected: boolean;
+  onSelect: () => void;
+  onRun: () => void;
+  onToggle: () => void;
+  onPublish: () => void;
+  onDelete: () => void;
+}
+
+function FlowRow({ flow, selected, onSelect, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
+  const stop = (e: React.MouseEvent): void => e.stopPropagation();
+  return (
+    <li
+      className={`wf-list__row ${selected ? "wf-list__row--selected" : ""}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="wf-list__main">
+        <div className="wf-list__title">{flow.displayName ?? flow.id}</div>
+        <div className="wf-list__meta">
+          <Chip tone={STATUS_TONE[flow.status]}>{flow.status === "ENABLED" ? "Enabled" : "Disabled"}</Chip>
+          {flow.publishedVersionId ? (
+            <Chip tone="ok" dot={false}>Published</Chip>
+          ) : (
+            <Chip tone="warn" dot={false}>Draft only</Chip>
+          )}
+          <span className="wf-list__hint">updated {fmtRelative(flow.updated)}</span>
+        </div>
+      </div>
+      <div className="wf-list__buttons" onClick={stop}>
+        <Button variant="primary" size="sm" onClick={onRun} title="Run now">
+          <Icon icon={Play} size={14} /> Run
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onToggle} title={flow.status === "ENABLED" ? "Disable" : "Enable"}>
+          {flow.status === "ENABLED" ? <Icon icon={Pause} size={14} /> : <Icon icon={Play} size={14} />}
+        </Button>
+        {!flow.publishedVersionId ? (
+          <Button variant="ghost" size="sm" onClick={onPublish} title="Publish latest draft">
+            <Icon icon={Upload} size={14} />
+          </Button>
+        ) : null}
+        <Button variant="danger" size="sm" onClick={onDelete} title="Delete">
+          <Icon icon={Trash2} size={14} />
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/* ------------------------------------------------------------------ detail */
+
+interface FlowDetailProps {
+  flow: Flow;
+  runs: FlowRun[];
+  onRefreshRuns: () => void;
+  onCancelRun: (runId: string) => void;
+  onClose: () => void;
+}
+
+function FlowDetail({ flow, runs, onRefreshRuns, onCancelRun, onClose }: FlowDetailProps): React.ReactElement {
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const succeeded = useMemo(() => runs.filter((r) => r.status === "SUCCEEDED").length, [runs]);
+  const failed = useMemo(() => runs.filter((r) => r.status === "FAILED" || r.status === "INTERNAL_ERROR").length, [runs]);
+  return (
+    <div className="wf-detail">
+      <header className="wf-detail__header">
+        <div className="wf-detail__title">
+          <h3>{flow.displayName ?? flow.id}</h3>
+          <p>
+            <code>{flow.id}</code>
+          </p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close detail">
+          <Icon icon={X} size={14} />
+        </Button>
+      </header>
+
+      <div className="wf-detail__stats">
+        <Stat label="Runs" value={String(runs.length)} />
+        <Stat label="Succeeded" value={String(succeeded)} tone="ok" />
+        <Stat label="Failed" value={String(failed)} tone={failed > 0 ? "accent" : "neutral"} />
+      </div>
+
+      <div className="wf-detail__runs-header">
+        <h4>Run history</h4>
+        <Button variant="ghost" size="sm" onClick={onRefreshRuns}>
+          <Icon icon={RefreshCw} size={12} />
+        </Button>
+      </div>
+
+      {runs.length === 0 ? (
+        <p className="wf-detail__empty">No runs yet. Hit "Run" on the flow to trigger one.</p>
+      ) : (
+        <ul className="wf-runs">
+          {runs.map((run) => (
+            <RunRow
+              key={run.id}
+              run={run}
+              expanded={expandedRunId === run.id}
+              onToggle={() => setExpandedRunId(expandedRunId === run.id ? null : run.id)}
+              onCancel={() => onCancelRun(run.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------------- run */
+
+interface RunRowProps {
+  run: FlowRun;
+  expanded: boolean;
+  onToggle: () => void;
+  onCancel: () => void;
+}
+
+function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.ReactElement {
+  const isTerminal = TERMINAL_STATUSES.has(run.status);
+  const duration = run.startTime && run.finishTime ? `${(run.finishTime - run.startTime) / 1000}s` : "—";
+  return (
+    <li className="wf-runs__row">
+      <button type="button" className="wf-runs__head" onClick={onToggle}>
+        <div className="wf-runs__head-left">
+          <RunStatusIcon status={run.status} />
+          <Chip tone={RUN_STATUS_TONE[run.status]} dot={false}>{run.status}</Chip>
+          {run.failedStep ? <span className="wf-runs__failed-step">@ {run.failedStep.displayName}</span> : null}
+        </div>
+        <div className="wf-runs__head-right">
+          <span className="wf-runs__time">{run.startTime ? fmtClock(run.startTime) : "—"}</span>
+          <span className="wf-runs__duration">{duration}</span>
+        </div>
+      </button>
+      {expanded ? (
+        <div className="wf-runs__body">
+          <dl className="wf-runs__kv">
+            <dt>Run id</dt>
+            <dd><code>{run.id}</code></dd>
+            <dt>Steps</dt>
+            <dd>{run.stepsCount ?? 0}</dd>
+            <dt>Triggered by</dt>
+            <dd>{run.triggeredBy ?? "manual"}</dd>
+          </dl>
+          {run.steps && Object.keys(run.steps).length > 0 ? (
+            <details className="wf-runs__steps">
+              <summary>Step output JSON</summary>
+              <pre>{JSON.stringify(run.steps, null, 2)}</pre>
+            </details>
+          ) : null}
+          {!isTerminal ? (
+            <Button variant="danger" size="sm" onClick={onCancel}>
+              <Icon icon={X} size={12} /> Cancel run
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElement {
+  if (status === "SUCCEEDED") return <Icon icon={CheckCircle2} size={14} />;
+  if (status === "FAILED" || status === "INTERNAL_ERROR" || status === "TIMEOUT") return <Icon icon={XCircle} size={14} />;
+  if (status === "RUNNING" || status === "QUEUED") return <Icon icon={Clock} size={14} />;
+  return <Icon icon={AlertTriangle} size={14} />;
+}
+
+/* ------------------------------------------------------------- placeholders */
+
+function EmptyState(): React.ReactElement {
+  return (
+    <div className="wf-empty">
+      <p>No workflows yet.</p>
+      <p className="wf-empty__hint">
+        Create one via <code>POST /api/workflows</code> or wait for the assistant tools to ship.
+      </p>
+    </div>
+  );
+}
+
+function DetailPlaceholder(): React.ReactElement {
+  return (
+    <div className="wf-detail-placeholder">
+      <p>Select a workflow to see its run history.</p>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "ok" | "neutral" | "accent" }): React.ReactElement {
+  return (
+    <div className={`wf-stat wf-stat--${tone ?? "neutral"}`}>
+      <div className="wf-stat__value">{value}</div>
+      <div className="wf-stat__label">{label}</div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ format */
+
+function fmtRelative(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function fmtClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
