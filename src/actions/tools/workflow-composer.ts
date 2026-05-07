@@ -9,30 +9,31 @@
  */
 
 import type {
-  JarvisPiece,
   JarvisPieceRegistry,
   PieceInputField,
   PieceInputSchema,
   PieceLlmClient,
 } from "../../workflows/jarvis-pieces/types.ts";
+import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 
 export interface ComposedFlow {
   displayName: string;
-  trigger: ComposedStep;
+  trigger: FlowTriggerNode;
 }
 
-export interface ComposedStep {
-  name: string;
+/**
+ * Composer-side step shape. Identical to `FlowTriggerNode` (the persistence
+ * shape) but with the type union narrowed to the three values the composer
+ * understands today. Kept as a separate name so call sites that work strictly
+ * with composer output get tighter type narrowing in switches.
+ */
+export interface ComposedStep extends FlowTriggerNode {
   type: "EMPTY" | "PIECE_TRIGGER" | "PIECE";
-  displayName?: string;
-  settings?: {
-    pieceName?: string;
-    triggerName?: string;
-    actionName?: string;
-    input?: Record<string, unknown>;
-  };
   nextAction?: ComposedStep;
 }
+
+/** Activepieces' step-name regex. Identifier-style. */
+const STEP_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 export interface ComposeRequest {
   /** Display name for the new flow. */
@@ -61,6 +62,13 @@ export type ComposeResult = ComposeOk | ComposeFail;
 export interface ComposeDeps {
   llm: PieceLlmClient;
   pieceRegistry: JarvisPieceRegistry;
+  /**
+   * Optional list of registered Jarvis tool names. When present, surfaced in
+   * the planner prompt so the LLM can wire `jarvis-tool { toolName: '...' }`
+   * for asks like "send a Gmail" without us having to declare every external
+   * service as a piece.
+   */
+  toolNames?: string[];
 }
 
 /** Build + validate a draft flow from a description. */
@@ -72,7 +80,8 @@ export async function composeFlow(
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
 
   const catalogText = renderCatalog(deps.pieceRegistry);
-  const system = buildSystemPrompt(catalogText);
+  const toolsText = renderToolNames(deps.toolNames);
+  const system = buildSystemPrompt(catalogText, toolsText);
   const prompt = `User description: ${req.description.trim()}\n\nReturn ONLY the JSON object. No prose, no markdown fences.`;
 
   let raw: string;
@@ -98,7 +107,7 @@ export async function composeFlow(
 
 /* ---------------------------------------------------------- system prompt */
 
-function buildSystemPrompt(catalog: string): string {
+function buildSystemPrompt(catalog: string, toolsText: string): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
     "",
@@ -114,6 +123,7 @@ function buildSystemPrompt(catalog: string): string {
     "",
     "Rules:",
     "  - The first node is named 'trigger'. Action steps are named 'step_1', 'step_2', etc.",
+    "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
     "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily).",
     "  - For webhook triggers: pieceName='webhook', input.secret optional.",
@@ -121,10 +131,22 @@ function buildSystemPrompt(catalog: string): string {
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
     "  - Every required input field MUST be present.",
+    "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
+    "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
     "  - Output ONLY the JSON. No markdown. No explanation.",
     "",
     "Available pieces:",
     catalog,
+    toolsText ? "" : "",
+    toolsText,
+  ].filter((s) => s !== "").join("\n");
+}
+
+function renderToolNames(toolNames: string[] | undefined): string {
+  if (!toolNames || toolNames.length === 0) return "";
+  return [
+    "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
+    ...toolNames.map((n) => `  - ${n}`),
   ].join("\n");
 }
 
@@ -223,6 +245,12 @@ function validateStep(
     errors.push(isTrigger ? "trigger missing name" : "action step missing name");
     return null;
   }
+  if (!STEP_NAME_REGEX.test(name)) {
+    errors.push(
+      `step name "${name}" must match identifier pattern /^[a-zA-Z_][a-zA-Z0-9_]*$/ (no spaces, dashes, etc.)`,
+    );
+    return null;
+  }
   if (knownNames.has(name)) {
     errors.push(`duplicate step name: ${name}`);
     return null;
@@ -312,6 +340,3 @@ function stripJsonFence(text: string): string {
   if (m && typeof m[1] === "string") return m[1].trim();
   return trimmed;
 }
-
-// Mark unused import as used to keep the symbol referenced for type narrowing.
-type _Piece = JarvisPiece;

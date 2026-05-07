@@ -193,6 +193,51 @@ describe("composeFlow", () => {
     expect(llm.calls).toHaveLength(0);
   });
 
+  test("rejects step names that violate STEP_NAME_REGEX", async () => {
+    const reply = JSON.stringify({
+      displayName: "X",
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        nextAction: {
+          name: "Step 1",
+          type: "PIECE",
+          settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "hi" } },
+        },
+      },
+    });
+    const result = await composeFlow(
+      { llm: new StubLlm(reply), pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => /must match identifier pattern/.test(e))).toBe(true);
+    }
+  });
+
+  test("system prompt includes tool names when provided", async () => {
+    const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+    await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), toolNames: ["gmail_send", "vault_search"] },
+      { name: "X", description: "x" },
+    );
+    const sys = llm.calls[0]?.system ?? "";
+    expect(sys).toContain("gmail_send");
+    expect(sys).toContain("vault_search");
+    expect(sys).toContain("Available Jarvis tools");
+  });
+
+  test("system prompt mentions the DISABLED-default contract", async () => {
+    const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+    await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    const sys = llm.calls[0]?.system ?? "";
+    expect(sys).toMatch(/DISABLED/);
+  });
+
   test("LLM error is surfaced", async () => {
     const llm: PieceLlmClient = {
       async chat() {

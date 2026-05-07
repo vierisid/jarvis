@@ -625,7 +625,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // earlier in step 10.1) is in scope and refreshes happen on enable /
       // disable / publish / delete.
       const { createManageWorkflowTool } = await import('../actions/tools/manage-workflow.ts');
-      const { JarvisLlmClient } = await import('../workflows/adapters/index.ts');
+      const { JarvisLlmClient, JarvisToolRegistryAdapter } = await import('../workflows/adapters/index.ts');
       // Build a piece-side LLM client here so the compose action can use it.
       // Same shape as the one buildPieceServices constructs for the worker;
       // both wrap LLMManager and produce identical behavior.
@@ -634,6 +634,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         triggerManager: triggerManager ?? undefined,
         llm: composeLlm,
         pieceRegistry: sharedPieceRegistry,
+        // Surface tool names to the composer so the LLM can compose flows
+        // that integrate with services that aren't first-class pieces (e.g.,
+        // Gmail/Calendar via Jarvis tools).
+        ...(toolRegistry ? { toolRegistry: new JarvisToolRegistryAdapter(toolRegistry) } : {}),
       });
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);

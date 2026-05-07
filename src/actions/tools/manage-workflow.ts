@@ -22,7 +22,7 @@
 
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
-import type { JarvisPieceRegistry, PieceLlmClient } from "../../workflows/jarvis-pieces/types.ts";
+import type { JarvisPieceRegistry, PieceLlmClient, PieceToolRegistry } from "../../workflows/jarvis-pieces/types.ts";
 import {
   createFlow,
   deleteFlow,
@@ -43,6 +43,7 @@ import {
   createFlowRun,
   getFlowRun,
   listRuns,
+  type FlowRun,
 } from "../../workflows/db/repos/flow-run.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
@@ -55,6 +56,12 @@ export interface ManageWorkflowDeps {
   llm?: PieceLlmClient;
   /** Required for the `compose` action: catalog of pieces the LLM can pick from. */
   pieceRegistry?: JarvisPieceRegistry;
+  /**
+   * Optional. When provided, the composer surfaces the names of registered
+   * Jarvis tools so the LLM can wire `jarvis-tool { toolName: '...' }` correctly
+   * for asks like "send a Gmail" or "search the vault".
+   */
+  toolRegistry?: PieceToolRegistry;
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -288,6 +295,8 @@ function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unkn
   return { id: flow.id, deleted: true };
 }
 
+const RAW_RESPONSE_CAP = 4096;
+
 async function actCompose(
   name: string,
   description: string,
@@ -299,32 +308,68 @@ async function actCompose(
   if (!deps.pieceRegistry) {
     throw new Error("compose: piece registry is not configured for this build");
   }
-  const result = await composeFlow(
-    { llm: deps.llm, pieceRegistry: deps.pieceRegistry },
-    { name, description },
-  );
+
+  // Reject up-front when a flow with the same display name already exists.
+  // Auto-suffixing silently ("My Flow (2)") is more annoying than helpful;
+  // the assistant can rename and call again.
+  const collision = findFlowByDisplayName(name);
+  if (collision) {
+    return {
+      ok: false,
+      errors: [`a workflow named "${name}" already exists (id=${collision.id}); pick a different name`],
+      rawResponse: null,
+    };
+  }
+
+  const composeDeps: Parameters<typeof composeFlow>[0] = {
+    llm: deps.llm,
+    pieceRegistry: deps.pieceRegistry,
+  };
+  if (deps.toolRegistry) {
+    composeDeps.toolNames = deps.toolRegistry.listNames();
+  }
+  const result = await composeFlow(composeDeps, { name, description });
+
   if (!result.ok) {
     return {
       ok: false,
       errors: result.errors,
-      // Surface the raw LLM output so the assistant can iterate.
-      rawResponse: result.rawResponse,
+      rawResponse: capRawResponse(result.rawResponse),
     };
   }
 
-  // Persist as a fresh flow + draft version. The user can then edit / publish.
+  // Persist as a fresh flow + draft version. The flow is created DISABLED;
+  // the user must publish + enable explicitly.
   const flow = createFlow();
   const flowName = result.flow.displayName.trim() || name;
   const version = createDraftVersion({
     flowId: flow.id,
     displayName: flowName,
-    trigger: result.flow.trigger as unknown as Record<string, unknown>,
+    trigger: result.flow.trigger,
   });
   return {
     ok: true,
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
   };
+}
+
+function findFlowByDisplayName(name: string): FlowRow | null {
+  const target = name.trim().toLowerCase();
+  if (!target) return null;
+  for (const flow of listFlows(undefined, { limit: 1000 })) {
+    const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+    if (!versionId) continue;
+    const version = getFlowVersion(versionId);
+    if (version && version.displayName.toLowerCase() === target) return flow;
+  }
+  return null;
+}
+
+function capRawResponse(raw: string | null): string | null {
+  if (raw === null) return null;
+  if (raw.length <= RAW_RESPONSE_CAP) return raw;
+  return raw.slice(0, RAW_RESPONSE_CAP) + `\n... (truncated, ${raw.length - RAW_RESPONSE_CAP} more chars)`;
 }
 
 /** Re-export for tests so they can inspect the parser output without going through the LLM. */
@@ -343,7 +388,7 @@ function actGetRun(runId: string): Record<string, unknown> {
   return summarizeRun(run, true);
 }
 
-function summarizeRun(run: ReturnType<typeof getFlowRun> & object, includeSteps = false): Record<string, unknown> {
+function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {
   return {
     id: run.id,
     flow_id: run.flowId,

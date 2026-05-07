@@ -48,17 +48,37 @@ export interface FlowVersion {
   updated: number;
 }
 
+/**
+ * Structural shape of a trigger node persisted on a flow_version. The
+ * `trigger` column stores this as JSON; readers narrow further when they
+ * dispatch on `type`. Kept loose intentionally so callers (composer, editor,
+ * worker handler) share one nominal type without wrapping every value in
+ * `Record<string, unknown>` casts.
+ */
+export interface FlowTriggerNode {
+  name: string;
+  type: string;
+  displayName?: string;
+  settings?: {
+    pieceName?: string;
+    triggerName?: string;
+    actionName?: string;
+    input?: Record<string, unknown>;
+  };
+  nextAction?: FlowTriggerNode;
+}
+
 export interface CreateDraftVersionInput {
   flowId: string;
   displayName: string;
-  trigger?: Record<string, unknown>;
+  trigger?: FlowTriggerNode | Record<string, unknown>;
   schemaVersion?: string;
   updatedBy?: string | null;
 }
 
 export interface UpdateDraftVersionInput {
   displayName?: string;
-  trigger?: Record<string, unknown>;
+  trigger?: FlowTriggerNode | Record<string, unknown>;
   valid?: boolean;
   agentIds?: string[];
   connectionIds?: string[];

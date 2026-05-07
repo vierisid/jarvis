@@ -177,7 +177,10 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('Use `compose { name, description }` to build a draft flow from a plain-English description');
   lines.push('— the action calls the LLM under the hood, validates the result against the piece catalog,');
   lines.push('and surfaces validation errors when the description is too vague or references unknown pieces.');
-  lines.push('After compose, the user can edit in the dashboard or call `publish` to enable.');
+  lines.push('On failure, `compose` returns `{ ok: false, errors, rawResponse }`. Treat this as iterative:');
+  lines.push('read the errors, refine the description with concrete piece/tool names from the messages,');
+  lines.push('and call `compose` again. Do not surface the raw error JSON to the user — translate it.');
+  lines.push('Composed flows are created DISABLED. After compose, the user reviews and calls `publish` to enable.');
   lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');

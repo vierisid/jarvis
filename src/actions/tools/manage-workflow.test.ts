@@ -205,4 +205,35 @@ describe("manage_workflow: compose", () => {
       t.execute({ action: "compose", name: "X", description: "x" }),
     ).rejects.toThrow(/piece registry is not configured/);
   });
+
+  test("compose rejects a name that collides with an existing flow", async () => {
+    const llm = new StubLlm(
+      JSON.stringify({
+        displayName: "Inbox",
+        trigger: { name: "trigger", type: "EMPTY" },
+      }),
+    );
+    const t = createManageWorkflowTool({ llm, pieceRegistry: makeReg() });
+    // First compose succeeds.
+    const ok = JSON.parse((await t.execute({ action: "compose", name: "Inbox", description: "x" })) as string);
+    expect(ok.ok).toBe(true);
+    // Second with same name fails.
+    const dup = JSON.parse(
+      (await t.execute({ action: "compose", name: "Inbox", description: "y" })) as string,
+    ) as { ok: boolean; errors: string[] };
+    expect(dup.ok).toBe(false);
+    expect(dup.errors.some((e: string) => /already exists/.test(e))).toBe(true);
+  });
+
+  test("compose caps oversized rawResponse with a truncation marker", async () => {
+    const huge = "x".repeat(8000);
+    const llm = new StubLlm(huge); // not JSON; will fail JSON parse
+    const t = createManageWorkflowTool({ llm, pieceRegistry: makeReg() });
+    const out = JSON.parse(
+      (await t.execute({ action: "compose", name: "trunc", description: "x" })) as string,
+    ) as { ok: boolean; rawResponse: string };
+    expect(out.ok).toBe(false);
+    expect(out.rawResponse.length).toBeLessThan(huge.length);
+    expect(out.rawResponse).toContain("truncated");
+  });
 });
