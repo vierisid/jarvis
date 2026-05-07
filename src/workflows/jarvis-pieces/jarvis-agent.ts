@@ -36,6 +36,32 @@ export const delegateAction: JarvisAction<DelegateInput, DelegateOutput> = {
   description:
     "Spawn a sub-agent (M7) with a goal and let it plan + call tools to reach it. Use for multi-step tasks where the LLM should pick what to do. Returns the agent's final message and the full tool-call trace.",
 
+  inputSchema: {
+    fields: [
+      {
+        name: "goal",
+        label: "Goal",
+        type: "long_text",
+        required: true,
+        placeholder: "Plain-English description of what the agent should do.",
+      },
+      {
+        name: "role",
+        label: "Specialist role",
+        type: "string",
+        required: false,
+        description: "Optional. M7 specialist role id (researcher, planner, ...).",
+      },
+      {
+        name: "maxIterations",
+        label: "Max iterations",
+        type: "number",
+        required: false,
+        description: "Caps the agent's tool-use loop. Defaults to the daemon's setting.",
+      },
+    ],
+  },
+
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {
       throw new JarvisActionInputError("input must be an object");

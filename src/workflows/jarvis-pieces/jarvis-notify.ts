@@ -49,6 +49,46 @@ export const notifyAction: JarvisAction<NotifyInput, NotifyOutput> = {
   description:
     "Deliver a message through the user's configured channels (Telegram/Discord/voice/dashboard/desktop). Use 'auto' to let Jarvis pick a sensible default for the current priority.",
 
+  inputSchema: {
+    fields: [
+      {
+        name: "message",
+        label: "Message",
+        type: "long_text",
+        required: true,
+        description: "Body of the notification. Supports {{stepName.field}} templates.",
+      },
+      {
+        name: "channels",
+        label: "Channels",
+        type: "multi_enum",
+        required: false,
+        default: ["auto"],
+        description: "Empty / [auto] lets Jarvis pick a default fan-out.",
+        options: [
+          { value: "auto", label: "Auto (recommended)" },
+          { value: "dashboard", label: "Dashboard" },
+          { value: "telegram", label: "Telegram" },
+          { value: "discord", label: "Discord" },
+          { value: "voice", label: "Voice (TTS)" },
+          { value: "desktop", label: "Desktop notification" },
+        ],
+      },
+      {
+        name: "priority",
+        label: "Priority",
+        type: "enum",
+        required: false,
+        default: "normal",
+        options: [
+          { value: "low", label: "Low" },
+          { value: "normal", label: "Normal" },
+          { value: "high", label: "High (urgent)" },
+        ],
+      },
+    ],
+  },
+
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {
       throw new JarvisActionInputError("input must be an object");

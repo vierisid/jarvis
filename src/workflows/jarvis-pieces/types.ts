@@ -90,6 +90,7 @@ export interface JarvisTrigger<I = unknown> {
   name: string;
   displayName: string;
   description: string;
+  inputSchema?: PieceInputSchema;
   parseInput: (raw: unknown) => I;
   /** Called when the parent workflow is enabled. Returns an unsubscribe fn. */
   subscribe: (input: I, ctx: JarvisTriggerContext) => Promise<TriggerSubscription>;
@@ -286,14 +287,56 @@ export interface PieceLlmResponse {
 }
 
 /**
+ * Type of a single input field on a piece action or trigger. Drives the
+ * typed widget the dashboard renders (text input, dropdown, toggle, etc.).
+ *
+ * Keep this set small and Jarvis-native rather than mirroring activepieces'
+ * full Property API -- our UI only needs to discriminate widget kinds, not
+ * preserve every upstream affordance.
+ */
+export type PieceInputType =
+  | "string"      // single-line text input
+  | "long_text"   // multi-line textarea
+  | "number"      // numeric input
+  | "boolean"     // toggle / checkbox
+  | "enum"        // single-select dropdown
+  | "multi_enum"  // multi-select chip list
+  | "json";       // raw JSON textarea
+
+export interface PieceInputField {
+  /** Stable key used in `settings.input`. Match to `parseInput` field names. */
+  name: string;
+  /** Display label for the panel. */
+  label: string;
+  type: PieceInputType;
+  required: boolean;
+  /** Optional inline help text below the widget. */
+  description?: string;
+  /** Optional placeholder for text/number widgets. */
+  placeholder?: string;
+  /** Choices for enum / multi_enum. Order is rendering order. */
+  options?: ReadonlyArray<{ value: string; label: string; description?: string }>;
+  /** Suggested default. Used by the UI when the field is first revealed. */
+  default?: unknown;
+}
+
+export interface PieceInputSchema {
+  fields: ReadonlyArray<PieceInputField>;
+}
+
+/**
  * A single action exported by a piece. `execute` runs the action; `name` is
  * the stable id used in flow definitions; the schema fields are descriptive
  * (consumed by the UI / NL builder).
+ *
+ * `inputSchema` is optional — pieces that don't declare it fall back to a
+ * freeform key/value editor in the dashboard.
  */
 export interface JarvisAction<I = unknown, O = unknown> {
   name: string;
   displayName: string;
   description: string;
+  inputSchema?: PieceInputSchema;
   /** Returns the validated/normalized input or throws. */
   parseInput: (raw: unknown) => I;
   execute: (input: I, ctx: JarvisPieceContext) => Promise<O>;

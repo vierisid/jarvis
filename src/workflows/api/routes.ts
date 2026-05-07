@@ -133,12 +133,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               name: a.name,
               displayName: a.displayName,
               description: a.description,
+              inputSchema: a.inputSchema ?? null,
             })),
             triggers: p.triggers
               ? Object.values(p.triggers).map((t) => ({
                   name: t.name,
                   displayName: t.displayName,
                   description: t.description,
+                  inputSchema: t.inputSchema ?? null,
                 }))
               : [],
           }));

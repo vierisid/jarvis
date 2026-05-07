@@ -22,7 +22,9 @@ import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
   type FlowStepNode,
+  type PieceCatalogActionOrTrigger,
   type PieceCatalogEntry,
+  type PieceInputField,
 } from "./useWorkflowEditor";
 import "./WorkflowEditor.css";
 
@@ -317,6 +319,13 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
   const subActions = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
 
+  // Find the selected sub-action's metadata. If it has an inputSchema we
+  // render typed widgets; otherwise the freeform key/value editor stays as
+  // the fallback (pieces without a declared schema still work).
+  const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
+  const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subActions.find((s) => s.name === subName);
+  const schema = selectedSubAction?.inputSchema ?? null;
+
   const [newKey, setNewKey] = useState("");
 
   const onPieceChange = useCallback(
@@ -438,63 +447,23 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         <div className="wf-props__inputs-head">
           <h4>Inputs</h4>
         </div>
-        <p className="wf-props__hint">
-          Values are stored as strings. Use <code>{`{{step_1.field}}`}</code> templates to pass typed
-          data from previous steps; literal objects/numbers via the dashboard get the schema-aware
-          editor in stage 4.
-        </p>
-        {inputEntries.length === 0 ? (
-          <p className="wf-props__hint">No inputs yet. Add one below.</p>
-        ) : (
-          <ul className="wf-props__input-list">
-            {inputEntries.map(([key, value]) => (
-              <li key={key} className="wf-props__input-row">
-                <label>
-                  <span className="wf-props__input-key">{key}</span>
-                  <textarea
-                    rows={typeof value === "string" && value.length > 60 ? 3 : 1}
-                    value={stringifyValue(value)}
-                    onChange={(e) => onSetInput(key, e.target.value)}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="wf-props__input-remove"
-                  onClick={() => onRemoveInputKey(key)}
-                  aria-label={`Remove ${key}`}
-                  title={`Remove ${key}`}
-                >
-                  <Icon icon={Trash2} size={12} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="wf-props__add-row">
-          <input
-            type="text"
-            placeholder="new field name"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && newKey.trim()) {
-                onAddInputKey(newKey.trim());
-                setNewKey("");
-              }
-            }}
+
+        {schema ? (
+          <SchemaInputs
+            schema={schema}
+            input={(step.settings?.input ?? {}) as Record<string, unknown>}
+            onSetInput={onSetInput}
           />
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!newKey.trim()}
-            onClick={() => {
-              onAddInputKey(newKey.trim());
-              setNewKey("");
-            }}
-          >
-            <Icon icon={Plus} size={12} /> Add field
-          </Button>
-        </div>
+        ) : (
+          <FreeformInputs
+            inputEntries={inputEntries}
+            newKey={newKey}
+            setNewKey={setNewKey}
+            onSetInput={onSetInput}
+            onAddInputKey={onAddInputKey}
+            onRemoveInputKey={onRemoveInputKey}
+          />
+        )}
       </div>
 
       <div className="wf-props__divider" />
@@ -519,6 +488,307 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="wf-props__field-label">{label}</span>
       {children}
     </label>
+  );
+}
+
+/* ---------------------------------------------- schema-aware input forms */
+
+function SchemaInputs({
+  schema,
+  input,
+  onSetInput,
+}: {
+  schema: { fields: PieceInputField[] };
+  input: Record<string, unknown>;
+  onSetInput: (key: string, value: unknown) => void;
+}): React.ReactElement {
+  return (
+    <ul className="wf-props__input-list">
+      {schema.fields.map((field) => (
+        <li key={field.name} className="wf-props__schema-row">
+          <TypedField field={field} value={input[field.name]} onChange={(v) => onSetInput(field.name, v)} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+interface TypedFieldProps {
+  field: PieceInputField;
+  value: unknown;
+  onChange: (next: unknown) => void;
+}
+
+function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactElement {
+  const isEmpty = value === undefined || value === null || value === "";
+  const isMissing = field.required && isEmpty;
+
+  const labelEl = (
+    <span className={`wf-props__field-label ${isMissing ? "wf-props__field-label--missing" : ""}`}>
+      {field.label}
+      {field.required ? <span className="wf-props__req" aria-label="required"> *</span> : null}
+    </span>
+  );
+
+  if (field.type === "boolean") {
+    return (
+      <label className={`wf-props__field wf-props__field--inline ${isMissing ? "wf-props__field--missing" : ""}`}>
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {labelEl}
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </label>
+    );
+  }
+
+  if (field.type === "enum") {
+    return (
+      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+        {labelEl}
+        <select
+          value={typeof value === "string" ? value : ""}
+          onChange={(e) => onChange(e.target.value || undefined)}
+        >
+          <option value="">{field.required ? "— select —" : "— (none)"}</option>
+          {(field.options ?? []).map((o) => (
+            <option key={o.value} value={o.value} title={o.description}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </label>
+    );
+  }
+
+  if (field.type === "multi_enum") {
+    const selected = new Set(Array.isArray(value) ? value.map(String) : []);
+    return (
+      <div className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+        {labelEl}
+        <div className="wf-props__chips">
+          {(field.options ?? []).map((o) => {
+            const on = selected.has(o.value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                className={`wf-props__chip ${on ? "wf-props__chip--on" : ""}`}
+                onClick={() => {
+                  const next = new Set(selected);
+                  if (on) next.delete(o.value); else next.add(o.value);
+                  onChange(Array.from(next));
+                }}
+                title={o.description}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </div>
+    );
+  }
+
+  if (field.type === "number") {
+    return (
+      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+        {labelEl}
+        <input
+          type="number"
+          value={typeof value === "number" ? value : ""}
+          placeholder={field.placeholder}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "") onChange(undefined);
+            else {
+              const n = Number(v);
+              onChange(Number.isFinite(n) ? n : v);
+            }
+          }}
+        />
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </label>
+    );
+  }
+
+  if (field.type === "json") {
+    return <JsonField field={field} value={value} onChange={onChange} labelEl={labelEl} />;
+  }
+
+  if (field.type === "long_text") {
+    return (
+      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+        {labelEl}
+        <textarea
+          rows={3}
+          value={typeof value === "string" ? value : ""}
+          placeholder={field.placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </label>
+    );
+  }
+
+  // default: string
+  return (
+    <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+      {labelEl}
+      <input
+        type="text"
+        value={typeof value === "string" ? value : ""}
+        placeholder={field.placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+    </label>
+  );
+}
+
+/**
+ * JSON field: holds the raw text in local state so the user can type
+ * intermediate (un-parseable) states. On valid JSON, propagates the parsed
+ * object up. On invalid JSON, holds the text and shows an error chip.
+ */
+function JsonField({
+  field,
+  value,
+  onChange,
+  labelEl,
+}: {
+  field: PieceInputField;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  labelEl: React.ReactNode;
+}): React.ReactElement {
+  const initial = useMemo(() => {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+  }, [value]);
+  const [text, setText] = useState(initial);
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  // Only sync down if `value` truly diverged (e.g., user reset / loaded fresh).
+  useEffect(() => {
+    setText(initial);
+    setParseError(null);
+  }, [initial]);
+
+  return (
+    <label className="wf-props__field">
+      {labelEl}
+      <textarea
+        rows={4}
+        value={text}
+        placeholder={field.placeholder ?? "{}"}
+        onChange={(e) => {
+          const next = e.target.value;
+          setText(next);
+          if (next.trim() === "") {
+            setParseError(null);
+            onChange(undefined);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(next);
+            setParseError(null);
+            onChange(parsed);
+          } catch (err) {
+            setParseError((err as Error).message);
+          }
+        }}
+      />
+      {parseError ? (
+        <span className="wf-props__field-help wf-props__field-help--error">JSON parse: {parseError}</span>
+      ) : field.description ? (
+        <span className="wf-props__field-help">{field.description}</span>
+      ) : null}
+    </label>
+  );
+}
+
+/* ---------------------------------------------------- freeform fallback */
+
+function FreeformInputs({
+  inputEntries,
+  newKey,
+  setNewKey,
+  onSetInput,
+  onAddInputKey,
+  onRemoveInputKey,
+}: {
+  inputEntries: Array<[string, unknown]>;
+  newKey: string;
+  setNewKey: (s: string) => void;
+  onSetInput: (key: string, value: unknown) => void;
+  onAddInputKey: (key: string) => void;
+  onRemoveInputKey: (key: string) => void;
+}): React.ReactElement {
+  return (
+    <>
+      <p className="wf-props__hint">
+        This piece doesn't declare an input schema. Values are stored as strings; use{" "}
+        <code>{`{{step_1.field}}`}</code> templates for typed references.
+      </p>
+      {inputEntries.length === 0 ? (
+        <p className="wf-props__hint">No inputs yet. Add one below.</p>
+      ) : (
+        <ul className="wf-props__input-list">
+          {inputEntries.map(([key, value]) => (
+            <li key={key} className="wf-props__input-row">
+              <label>
+                <span className="wf-props__input-key">{key}</span>
+                <textarea
+                  rows={typeof value === "string" && value.length > 60 ? 3 : 1}
+                  value={stringifyValue(value)}
+                  onChange={(e) => onSetInput(key, e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="wf-props__input-remove"
+                onClick={() => onRemoveInputKey(key)}
+                aria-label={`Remove ${key}`}
+                title={`Remove ${key}`}
+              >
+                <Icon icon={Trash2} size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="wf-props__add-row">
+        <input
+          type="text"
+          placeholder="new field name"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && newKey.trim()) {
+              onAddInputKey(newKey.trim());
+              setNewKey("");
+            }
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!newKey.trim()}
+          onClick={() => {
+            onAddInputKey(newKey.trim());
+            setNewKey("");
+          }}
+        >
+          <Icon icon={Plus} size={12} /> Add field
+        </Button>
+      </div>
+    </>
   );
 }
 

@@ -38,6 +38,26 @@ export const invokeAction: JarvisAction<InvokeInput, InvokeOutput> = {
   description:
     "Call a registered Jarvis tool by name with the given parameters. Returns the tool's raw result. For tasks where the LLM should pick a tool, use jarvis-agent instead.",
 
+  inputSchema: {
+    fields: [
+      {
+        name: "toolName",
+        label: "Tool name",
+        type: "string",
+        required: true,
+        description: "Exact id of the registered Jarvis tool (e.g. run_command, vault_search).",
+      },
+      {
+        name: "params",
+        label: "Parameters",
+        type: "json",
+        required: false,
+        default: {},
+        description: "JSON object passed verbatim to the tool's execute() function.",
+      },
+    ],
+  },
+
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {
       throw new JarvisActionInputError("input must be an object");

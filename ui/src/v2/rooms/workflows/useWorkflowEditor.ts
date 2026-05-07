@@ -45,12 +45,43 @@ export interface FlowVersion {
   updated: number;
 }
 
+export type PieceInputType =
+  | "string"
+  | "long_text"
+  | "number"
+  | "boolean"
+  | "enum"
+  | "multi_enum"
+  | "json";
+
+export interface PieceInputField {
+  name: string;
+  label: string;
+  type: PieceInputType;
+  required: boolean;
+  description?: string;
+  placeholder?: string;
+  options?: Array<{ value: string; label: string; description?: string }>;
+  default?: unknown;
+}
+
+export interface PieceInputSchema {
+  fields: PieceInputField[];
+}
+
+export interface PieceCatalogActionOrTrigger {
+  name: string;
+  displayName: string;
+  description: string;
+  inputSchema: PieceInputSchema | null;
+}
+
 export interface PieceCatalogEntry {
   name: string;
   displayName: string;
   description: string;
-  actions: Array<{ name: string; displayName: string; description: string }>;
-  triggers: Array<{ name: string; displayName: string; description: string }>;
+  actions: PieceCatalogActionOrTrigger[];
+  triggers: PieceCatalogActionOrTrigger[];
 }
 
 interface ActionResult {

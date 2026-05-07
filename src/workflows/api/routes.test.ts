@@ -63,6 +63,26 @@ describe("workflow API: piece catalog", () => {
     expect(body).toEqual([]);
   });
 
+  test("surfaces inputSchema on actions and triggers when declared", async () => {
+    const reg = new JarvisPieceRegistry();
+    reg.register(jarvisAskPiece);
+    reg.register(jarvisTriggerPiece);
+    const r = createWorkflowRoutes({ pieceRegistry: reg });
+    const get = r["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+
+    const ask = (body as Array<{ name: string; actions: Array<{ name: string; inputSchema: { fields: Array<{ name: string; required: boolean }> } | null }> }>)
+      .find((p) => p.name === "jarvis-ask");
+    const askSchema = ask?.actions[0]?.inputSchema;
+    expect(askSchema).not.toBeNull();
+    expect(askSchema?.fields.find((f) => f.name === "prompt")?.required).toBe(true);
+    expect(askSchema?.fields.find((f) => f.name === "system")?.required).toBe(false);
+
+    const trig = (body as Array<{ name: string; triggers: Array<{ name: string; inputSchema: { fields: Array<{ name: string }> } | null }> }>)
+      .find((p) => p.name === "jarvis-trigger");
+    expect(trig?.triggers[0]?.inputSchema?.fields.some((f) => f.name === "eventType")).toBe(true);
+  });
+
   test("returns registered pieces with actions and triggers", async () => {
     const reg = new JarvisPieceRegistry();
     reg.register(jarvisAskPiece);

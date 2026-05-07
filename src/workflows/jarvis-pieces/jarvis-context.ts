@@ -70,11 +70,34 @@ function readOptionalInt(r: Record<string, unknown>, key: string, label: string)
 
 // -------------------------------------------------------- vault_search
 
+const VAULT_TYPE_OPTIONS = [
+  { value: "person", label: "Person" },
+  { value: "project", label: "Project" },
+  { value: "tool", label: "Tool" },
+  { value: "place", label: "Place" },
+  { value: "concept", label: "Concept" },
+  { value: "event", label: "Event" },
+];
+
 export const vaultSearchAction: JarvisAction<VaultSearchInput, VaultEntitySnapshot[]> = {
   name: "vault_search",
   displayName: "Vault: search entities",
   description:
     "Find vault entities by name fragment and/or type. Returns up to `limit` entities ordered by recency.",
+
+  inputSchema: {
+    fields: [
+      {
+        name: "query",
+        label: "Name contains",
+        type: "string",
+        required: false,
+        placeholder: "fragment to match (case-insensitive)",
+      },
+      { name: "type", label: "Entity type", type: "enum", required: false, options: VAULT_TYPE_OPTIONS },
+      { name: "limit", label: "Limit", type: "number", required: false, default: 25 },
+    ],
+  },
 
   parseInput: (raw) => {
     const r = asObject(raw, "vault_search");
@@ -114,6 +137,10 @@ export const vaultGetEntityAction: JarvisAction<VaultGetInput, VaultEntitySnapsh
   displayName: "Vault: get entity by id",
   description: "Fetch a single vault entity by id. Returns null if not found.",
 
+  inputSchema: {
+    fields: [{ name: "id", label: "Entity id", type: "string", required: true }],
+  },
+
   parseInput: (raw) => {
     const r = asObject(raw, "vault_get_entity");
     if (typeof r.id !== "string" || r.id.length === 0) {
@@ -134,6 +161,19 @@ export const awarenessRecentAction: JarvisAction<AwarenessRecentInput, Awareness
   displayName: "Awareness: recent activity",
   description:
     "Return recent awareness activities (foreground app, window title, URL, optional summary), most recent first.",
+
+  inputSchema: {
+    fields: [
+      { name: "limit", label: "Limit", type: "number", required: false, default: 25 },
+      {
+        name: "since",
+        label: "Since (epoch ms)",
+        type: "number",
+        required: false,
+        description: "Optional cutoff. Only items after this timestamp are returned.",
+      },
+    ],
+  },
 
   parseInput: (raw) => {
     const r = asObject(raw, "awareness_recent");
@@ -156,6 +196,25 @@ export const commitmentsListAction: JarvisAction<CommitmentsListInput, Commitmen
   name: "commitments_list",
   displayName: "Commitments: list",
   description: "List commitments, optionally filtered by status.",
+
+  inputSchema: {
+    fields: [
+      {
+        name: "status",
+        label: "Status",
+        type: "enum",
+        required: false,
+        options: [
+          { value: "pending", label: "Pending" },
+          { value: "scheduled", label: "Scheduled" },
+          { value: "in_progress", label: "In progress" },
+          { value: "completed", label: "Completed" },
+          { value: "failed", label: "Failed" },
+        ],
+      },
+      { name: "limit", label: "Limit", type: "number", required: false, default: 25 },
+    ],
+  },
 
   parseInput: (raw) => {
     const r = asObject(raw, "commitments_list");

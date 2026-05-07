@@ -44,6 +44,25 @@ export const onEventTrigger: JarvisTrigger<OnEventInput> = {
   description:
     "Fire the workflow when a Jarvis event of the given type is published. Use the daemon's event-type catalog (awareness.*, commitment.*, voice.*, tool.*) to pick a value.",
 
+  inputSchema: {
+    fields: [
+      {
+        name: "eventType",
+        label: "Event type",
+        type: "string",
+        required: true,
+        placeholder: "awareness.context_changed",
+      },
+      {
+        name: "filter",
+        label: "Filter",
+        type: "json",
+        required: false,
+        description: "Optional. Shallow-equality filter; each field must match the event payload.",
+      },
+    ],
+  },
+
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {
       throw new JarvisActionInputError("input must be an object");
@@ -118,6 +137,26 @@ export const runWorkflowAction: JarvisAction<RunWorkflowInput, RunWorkflowOutput
   displayName: "Run another workflow",
   description:
     "Trigger a saved workflow by id or name. Returns the started run id. Fire-and-forget; the called workflow runs asynchronously.",
+
+  inputSchema: {
+    fields: [
+      {
+        name: "flowId",
+        label: "Flow id",
+        type: "string",
+        required: false,
+        description: "Provide either flowId or flowName.",
+      },
+      { name: "flowName", label: "Flow name", type: "string", required: false },
+      {
+        name: "payload",
+        label: "Payload",
+        type: "json",
+        required: false,
+        description: "Optional JSON object passed as the trigger payload of the called flow.",
+      },
+    ],
+  },
 
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {

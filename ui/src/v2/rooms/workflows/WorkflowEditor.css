@@ -318,3 +318,77 @@
   gap: var(--s-2);
   flex-wrap: wrap;
 }
+
+/* ── Schema-aware fields ── */
+
+.wf-props__schema-row {
+  list-style: none;
+}
+
+.wf-props__field--inline {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--s-2);
+}
+.wf-props__field--inline input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.wf-props__field--missing input,
+.wf-props__field--missing textarea,
+.wf-props__field--missing select {
+  border-color: var(--accent-warn, #fbbf24);
+}
+.wf-props__field-label--missing { color: var(--accent-warn, #fbbf24); }
+
+.wf-props__req {
+  color: var(--accent-warn, #fbbf24);
+  font-weight: 500;
+}
+
+.wf-props__field-help {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.wf-props__field-help--error { color: var(--accent-warn, #fbbf24); }
+
+.wf-props__field input[type="number"],
+.wf-props__field textarea {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.wf-props__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.wf-props__chip {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.wf-props__chip:hover { color: var(--ink-1); }
+.wf-props__chip--on {
+  background: var(--paper-1, #0a0e14);
+  color: var(--ink-1);
+  border-color: var(--accent-1, #5eead4);
+}

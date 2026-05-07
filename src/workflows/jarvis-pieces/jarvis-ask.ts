@@ -46,6 +46,54 @@ export const askAction: JarvisAction<AskInput, AskOutput> = {
   description:
     "Run a prompt against the configured Jarvis LLM and return the response. Optionally parse the response as JSON.",
 
+  inputSchema: {
+    fields: [
+      {
+        name: "prompt",
+        label: "Prompt",
+        type: "long_text",
+        required: true,
+        description:
+          "The user message. Templates like {{step_1.text}} reference earlier step outputs.",
+        placeholder: "Summarize the inbox: {{trigger.subject}}",
+      },
+      {
+        name: "system",
+        label: "System prompt",
+        type: "long_text",
+        required: false,
+        description: "Optional. Sets the assistant's role or constraints.",
+        placeholder: "You are concise. Reply in plain text.",
+      },
+      {
+        name: "model",
+        label: "Model override",
+        type: "string",
+        required: false,
+        description: "Optional. Provider-specific model id; defaults to the configured one.",
+        placeholder: "claude-haiku-4-5",
+      },
+      {
+        name: "temperature",
+        label: "Temperature",
+        type: "number",
+        required: false,
+        description: "0 = deterministic, 1 = creative. Provider default if blank.",
+      },
+      {
+        name: "outputSchema",
+        label: "Parse output as",
+        type: "enum",
+        required: false,
+        default: "text",
+        options: [
+          { value: "text", label: "Text" },
+          { value: "json", label: "JSON (parsed)" },
+        ],
+      },
+    ],
+  },
+
   parseInput: (raw) => {
     if (typeof raw !== "object" || raw === null) {
       throw new JarvisActionInputError("input must be an object");
