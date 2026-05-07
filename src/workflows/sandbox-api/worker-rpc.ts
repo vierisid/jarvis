@@ -87,8 +87,10 @@ export class WorkerRpcServer {
   async start(): Promise<void> {
     if (this.io) return;
     this.io = new Server({
-      // Keep transports lean -- the engine never asks for long-polling.
-      transports: ["websocket"],
+      // Engine clients negotiate via polling-then-upgrade by default; allow
+      // both transports so the upstream client connects without a config
+      // override on its side.
+      transports: ["polling", "websocket"],
       path: "/worker/ws",
       // Auth check happens in the connection handler below; the middleware
       // form rejects with a generic error, which is harder to debug.

@@ -36,20 +36,44 @@ function isRpcErrorEnvelope(value: unknown): value is { __rpcError: string } {
   return typeof value === "object" && value !== null && "__rpcError" in value;
 }
 
+/**
+ * Properties the Promise machinery (and frequently `inspect`/`util.inspect`)
+ * probes when checking whether an arbitrary value is a thenable. If our proxy
+ * returns a function for any of these, the Promise resolver treats the proxy
+ * itself as a thenable, calls `.then(resolve, reject)`, and the daemon ends up
+ * making a bogus `RPC [then]` call to the engine. Returning `undefined` keeps
+ * the proxy plain-object-shaped from the runtime's perspective.
+ */
+const NON_RPC_KEYS: ReadonlySet<string | symbol> = new Set<string | symbol>([
+  "then",
+  "catch",
+  "finally",
+  "constructor",
+  "toString",
+  "toJSON",
+  "valueOf",
+  Symbol.toPrimitive,
+  Symbol.toStringTag,
+  Symbol.iterator,
+  Symbol.asyncIterator,
+]);
+
 export function createRpcClient<T extends Contract>(socket: RpcSocket, timeoutMs: number): T {
   return new Proxy({} as T, {
-    get(_target, method: string) {
+    get(_target, method) {
+      if (NON_RPC_KEYS.has(method)) return undefined;
+      const name = typeof method === "symbol" ? method.description ?? "" : method;
       return async (payload: unknown) => {
         try {
-          const result = await socket.timeout(timeoutMs).emitWithAck(RPC_EVENT, { method, payload });
+          const result = await socket.timeout(timeoutMs).emitWithAck(RPC_EVENT, { method: name, payload });
           if (isRpcErrorEnvelope(result)) {
-            throw new Error(`RPC [${method}] handler threw: ${result.__rpcError}`);
+            throw new Error(`RPC [${name}] handler threw: ${result.__rpcError}`);
           }
           return result;
         } catch (error) {
           if (error instanceof Error && error.message.startsWith("RPC [")) throw error;
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`RPC [${method}] failed (timeout: ${timeoutMs}ms): ${message}`);
+          throw new Error(`RPC [${name}] failed (timeout: ${timeoutMs}ms): ${message}`);
         }
       };
     },
@@ -95,8 +119,10 @@ export function createNotifyServer<T extends Contract>(socket: RpcSocket, handle
 /** Useful for tests when we need a client with the same wire format. */
 export function createNotifyClient<T extends Contract>(socket: RpcSocket): T {
   return new Proxy({} as T, {
-    get(_target, method: string) {
-      return (payload: unknown) => socket.emit(NOTIFY_EVENT, { method, payload });
+    get(_target, method) {
+      if (NON_RPC_KEYS.has(method)) return undefined;
+      const name = typeof method === "symbol" ? method.description ?? "" : method;
+      return (payload: unknown) => socket.emit(NOTIFY_EVENT, { method: name, payload });
     },
   });
 }

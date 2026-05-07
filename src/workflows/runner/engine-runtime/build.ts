@@ -200,3 +200,17 @@ export const ENGINE_BUILD_PATHS = {
   STAGING_DIR,
   BUNDLE_ROOT,
 } as const;
+
+/**
+ * Locate an already-built engine bundle for the current source state.
+ * Returns null if no matching bundle is on disk -- callers can either
+ * `buildEngineBundle()` (slow on cold start) or skip the work entirely.
+ */
+export function findCachedBundle(): { bundlePath: string; hash: string } | null {
+  // Recompute the hash from current sources; if the staging dir doesn't
+  // exist yet, we have no cached bundle to find.
+  if (!existsSync(resolve(STAGING_DIR, "package.json"))) return null;
+  const hash = bundleHash();
+  const bundlePath = resolve(BUNDLE_ROOT, hash, "main.js");
+  return existsSync(bundlePath) ? { bundlePath, hash } : null;
+}
