@@ -270,18 +270,28 @@ export function useWorkflowEditor(flowId: string | null) {
       if (!prev) return prev;
       const next = cloneTrigger(prev);
       const target = findStep(next, stepName);
-      if (target) {
-        target.settings = {
-          ...(target.settings ?? {}),
-          pieceName,
-          actionName,
-          input: target.settings?.input ?? {},
-        };
-      }
+      if (!target) return next;
+
+      const isTrigger = target.type === "PIECE_TRIGGER" || target.type === "EMPTY";
+      // Look up the chosen sub-action's schema to seed defaults.
+      const piece = catalog.find((p) => p.name === pieceName);
+      const sub = isTrigger
+        ? piece?.triggers.find((t) => t.name === actionName)
+        : piece?.actions.find((a) => a.name === actionName);
+      const seed = applySchemaDefaults(target.settings?.input ?? {}, sub?.inputSchema ?? null);
+
+      const settings: NonNullable<FlowStepNode["settings"]> = {
+        ...(target.settings ?? {}),
+        pieceName,
+        input: seed,
+      };
+      if (isTrigger) settings.triggerName = actionName;
+      else settings.actionName = actionName;
+      target.settings = settings;
       return next;
     });
     setDirty(true);
-  }, []);
+  }, [catalog]);
 
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {
@@ -332,6 +342,16 @@ export function useWorkflowEditor(flowId: string | null) {
     [draftTrigger],
   );
 
+  /**
+   * Walk every step and collect required-but-empty inputs (according to the
+   * piece's declared schema). The dashboard uses this for a save-time
+   * confirm; the executor's `parseInput` is the real gate.
+   */
+  const validationGaps = useMemo<EditorValidationGap[]>(
+    () => collectValidationGaps(allSteps, catalog),
+    [allSteps, catalog],
+  );
+
   return {
     catalog,
     version,
@@ -340,6 +360,7 @@ export function useWorkflowEditor(flowId: string | null) {
     error,
     loading,
     dirty,
+    validationGaps,
     reload,
     updateStep,
     updateStepInput,
@@ -350,6 +371,56 @@ export function useWorkflowEditor(flowId: string | null) {
     save,
     reset,
   };
+}
+
+export interface EditorValidationGap {
+  stepName: string;
+  stepDisplayName: string;
+  fieldName: string;
+  fieldLabel: string;
+}
+
+function collectValidationGaps(steps: FlowStepNode[], catalog: PieceCatalogEntry[]): EditorValidationGap[] {
+  const gaps: EditorValidationGap[] = [];
+  for (const step of steps) {
+    const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
+    if (step.type === "EMPTY") continue; // manual triggers carry no inputs
+    const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
+    if (!step.settings?.pieceName || !subName) {
+      gaps.push({
+        stepName: step.name,
+        stepDisplayName: step.displayName ?? step.name,
+        fieldName: "<piece>",
+        fieldLabel: isTrigger ? "Trigger / action not selected" : "Action not selected",
+      });
+      continue;
+    }
+    const piece = catalog.find((p) => p.name === step.settings?.pieceName);
+    const sub = isTrigger
+      ? piece?.triggers.find((t) => t.name === subName)
+      : piece?.actions.find((a) => a.name === subName);
+    const schema = sub?.inputSchema;
+    if (!schema) continue;
+    const input = (step.settings.input ?? {}) as Record<string, unknown>;
+    for (const field of schema.fields) {
+      if (!field.required) continue;
+      const v = input[field.name];
+      const empty =
+        v === undefined ||
+        v === null ||
+        v === "" ||
+        (Array.isArray(v) && v.length === 0);
+      if (empty) {
+        gaps.push({
+          stepName: step.name,
+          stepDisplayName: step.displayName ?? step.name,
+          fieldName: field.name,
+          fieldLabel: field.label,
+        });
+      }
+    }
+  }
+  return gaps;
 }
 
 /* ----------------------------------------------------------------- helpers */
@@ -371,6 +442,29 @@ function findStep(root: FlowStepNode, name: string): FlowStepNode | null {
     cursor = cursor.nextAction;
   }
   return null;
+}
+
+/**
+ * Seed the step's input from a schema's declared defaults. Existing keys win
+ * (user-set values are never overwritten); missing keys with a `default` get
+ * filled in. Returns a fresh object suitable for assignment.
+ */
+function applySchemaDefaults(
+  current: Record<string, unknown>,
+  schema: PieceInputSchema | null,
+): Record<string, unknown> {
+  if (!schema) return { ...current };
+  const next: Record<string, unknown> = { ...current };
+  for (const field of schema.fields) {
+    if (field.default === undefined) continue;
+    if (Object.prototype.hasOwnProperty.call(next, field.name)) continue;
+    // Clone the default if it's an object/array so successive applies stay independent.
+    next[field.name] =
+      typeof field.default === "object" && field.default !== null
+        ? JSON.parse(JSON.stringify(field.default))
+        : field.default;
+  }
+  return next;
 }
 
 /**

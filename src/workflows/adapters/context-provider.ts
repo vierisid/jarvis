@@ -11,6 +11,11 @@
  * row into an `AwarenessActivitySnapshot` using its `app_name`, `window_title`,
  * `url`, and `timestamp` as start_time. `endTime` is unknown for individual
  * captures (sessions roll up); set to null.
+ *
+ * "scheduled" was previously an accepted piece-side status (mapped to vault
+ * "pending"); removed because the vault has no such state and surfacing it
+ * to the UI was misleading. Direct piece statuses now: pending, in_progress,
+ * completed, failed.
  */
 
 import type {
@@ -100,7 +105,6 @@ function commitmentToSnapshot(c: Commitment): CommitmentSnapshot {
 function pieceToVaultStatus(s: PieceCommitmentStatus | undefined): VaultCommitmentStatus | undefined {
   if (s === undefined) return undefined;
   if (s === "in_progress") return "active";
-  if (s === "scheduled") return "pending";
   // pending / completed / failed pass through
   return s as VaultCommitmentStatus;
 }

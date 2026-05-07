@@ -39,7 +39,6 @@ const VAULT_TYPES = new Set<VaultEntityType>([
 
 const COMMITMENT_STATUSES = new Set<CommitmentStatus>([
   "pending",
-  "scheduled",
   "in_progress",
   "completed",
   "failed",
@@ -206,7 +205,6 @@ export const commitmentsListAction: JarvisAction<CommitmentsListInput, Commitmen
         required: false,
         options: [
           { value: "pending", label: "Pending" },
-          { value: "scheduled", label: "Scheduled" },
           { value: "in_progress", label: "In progress" },
           { value: "completed", label: "Completed" },
           { value: "failed", label: "Failed" },

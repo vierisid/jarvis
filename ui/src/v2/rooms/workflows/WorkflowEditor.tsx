@@ -14,7 +14,7 @@
  * Stage 3 lights all of those up.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, Background, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Save, RotateCcw, X, Plus, Trash2 } from "lucide-react";
@@ -73,6 +73,17 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   }, [editorDirty, onClose]);
 
   const onSave = async (): Promise<void> => {
+    if (editor.validationGaps.length > 0) {
+      const summary = editor.validationGaps
+        .slice(0, 6)
+        .map((g) => `  - ${g.stepDisplayName}: ${g.fieldLabel}`)
+        .join("\n");
+      const more = editor.validationGaps.length > 6 ? `\n  ...and ${editor.validationGaps.length - 6} more` : "";
+      const proceed = window.confirm(
+        `${editor.validationGaps.length} required field${editor.validationGaps.length === 1 ? "" : "s"} empty:\n\n${summary}${more}\n\nSave anyway? Runs will fail at the missing step.`,
+      );
+      if (!proceed) return;
+    }
     const result = await editor.save();
     setActionMessage({ tone: result.ok ? "ok" : "warn", text: result.message });
     window.setTimeout(() => setActionMessage(null), 2500);
@@ -552,7 +563,7 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value || undefined)}
         >
-          <option value="">{field.required ? "— select —" : "— (none)"}</option>
+          <option value="">{field.required ? "— select —" : "— none —"}</option>
           {(field.options ?? []).map((o) => (
             <option key={o.value} value={o.value} title={o.description}>
               {o.label}
@@ -595,25 +606,7 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
   }
 
   if (field.type === "number") {
-    return (
-      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
-        {labelEl}
-        <input
-          type="number"
-          value={typeof value === "number" ? value : ""}
-          placeholder={field.placeholder}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === "") onChange(undefined);
-            else {
-              const n = Number(v);
-              onChange(Number.isFinite(n) ? n : v);
-            }
-          }}
-        />
-        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
-      </label>
-    );
+    return <NumberField field={field} value={value} onChange={onChange} labelEl={labelEl} isMissing={isMissing} />;
   }
 
   if (field.type === "json") {
@@ -651,9 +644,83 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
 }
 
 /**
+ * Number field: holds the user's raw text so partial states like "3." or "3e"
+ * survive across renders. Propagates a parsed `number` upward when the text
+ * parses cleanly; clears (`undefined`) on empty input. If `value` changes
+ * from outside (load, reset, schema default) we sync local text from it; we
+ * skip the sync when the change was driven by our own `onChange`.
+ */
+function NumberField({
+  field,
+  value,
+  onChange,
+  labelEl,
+  isMissing,
+}: {
+  field: PieceInputField;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  labelEl: React.ReactNode;
+  isMissing: boolean;
+}): React.ReactElement {
+  const [text, setText] = useState(numberValueToText(value));
+  const lastPropagatedRef = useRef<unknown>(value);
+
+  useEffect(() => {
+    if (value === lastPropagatedRef.current) return; // self-induced; keep local text
+    setText(numberValueToText(value));
+    lastPropagatedRef.current = value;
+  }, [value]);
+
+  return (
+    <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+      {labelEl}
+      <input
+        type="text"
+        inputMode="decimal"
+        value={text}
+        placeholder={field.placeholder}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setText(raw);
+          if (raw.trim() === "") {
+            lastPropagatedRef.current = undefined;
+            onChange(undefined);
+            return;
+          }
+          // Tolerant parse: allow "-", "3.", "3e" while typing — propagate
+          // only when Number(raw) yields a finite value AND the string isn't
+          // an obvious in-progress fragment.
+          if (/^-?\d+(\.\d+)?(e-?\d+)?$/.test(raw)) {
+            const n = Number(raw);
+            if (Number.isFinite(n)) {
+              lastPropagatedRef.current = n;
+              onChange(n);
+            }
+          }
+        }}
+      />
+      {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+    </label>
+  );
+}
+
+function numberValueToText(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string") return value;
+  return "";
+}
+
+/**
  * JSON field: holds the raw text in local state so the user can type
  * intermediate (un-parseable) states. On valid JSON, propagates the parsed
  * object up. On invalid JSON, holds the text and shows an error chip.
+ *
+ * Critically, we track our last self-propagated value via a ref so that
+ * round-trips like (user types `{"a":1}` → we propagate `{a:1}` → parent
+ * re-renders with the new value → memoized `initial` becomes `{\n  "a": 1\n}`)
+ * do NOT clobber the user's whitespace. We only re-sync `text` when `value`
+ * differs from what we last sent up (i.e., an external change: load, reset).
  */
 function JsonField({
   field,
@@ -666,19 +733,16 @@ function JsonField({
   onChange: (next: unknown) => void;
   labelEl: React.ReactNode;
 }): React.ReactElement {
-  const initial = useMemo(() => {
-    if (value === undefined || value === null) return "";
-    if (typeof value === "string") return value;
-    try { return JSON.stringify(value, null, 2); } catch { return String(value); }
-  }, [value]);
-  const [text, setText] = useState(initial);
+  const [text, setText] = useState(() => jsonValueToText(value));
   const [parseError, setParseError] = useState<string | null>(null);
+  const lastPropagatedRef = useRef<unknown>(value);
 
-  // Only sync down if `value` truly diverged (e.g., user reset / loaded fresh).
   useEffect(() => {
-    setText(initial);
+    if (value === lastPropagatedRef.current) return; // self-induced; keep local text/whitespace
+    setText(jsonValueToText(value));
     setParseError(null);
-  }, [initial]);
+    lastPropagatedRef.current = value;
+  }, [value]);
 
   return (
     <label className="wf-props__field">
@@ -692,12 +756,14 @@ function JsonField({
           setText(next);
           if (next.trim() === "") {
             setParseError(null);
+            lastPropagatedRef.current = undefined;
             onChange(undefined);
             return;
           }
           try {
             const parsed = JSON.parse(next);
             setParseError(null);
+            lastPropagatedRef.current = parsed;
             onChange(parsed);
           } catch (err) {
             setParseError((err as Error).message);
@@ -711,6 +777,12 @@ function JsonField({
       ) : null}
     </label>
   );
+}
+
+function jsonValueToText(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
 /* ---------------------------------------------------- freeform fallback */

@@ -193,7 +193,7 @@ export interface AwarenessActivitySnapshot {
   summary: string | null;
 }
 
-export type CommitmentStatus = "pending" | "scheduled" | "in_progress" | "completed" | "failed";
+export type CommitmentStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface CommitmentsListInput {
   status?: CommitmentStatus;
@@ -361,6 +361,7 @@ export class JarvisPieceRegistry {
     if (this.pieces.has(piece.name)) {
       throw new Error(`piece already registered: ${piece.name}`);
     }
+    validatePiece(piece);
     this.pieces.set(piece.name, piece);
   }
 
@@ -398,4 +399,48 @@ export class JarvisPieceRegistry {
 /** Convenience: error thrown by `parseInput` impls when input is malformed. */
 export class JarvisActionInputError extends Error {
   override readonly name = "JarvisActionInputError";
+}
+
+/**
+ * Registration-time sanity checks on a piece's schemas. Catches author
+ * mistakes that would otherwise produce silently-broken UI (empty enum
+ * dropdowns, colliding field keys, etc.).
+ */
+function validatePiece(piece: JarvisPiece): void {
+  for (const [key, action] of Object.entries(piece.actions)) {
+    if (action.inputSchema) {
+      validateSchema(`${piece.name}:${key}`, action.inputSchema);
+    }
+  }
+  if (piece.triggers) {
+    for (const [key, trigger] of Object.entries(piece.triggers)) {
+      if (trigger.inputSchema) {
+        validateSchema(`${piece.name}:${key}`, trigger.inputSchema);
+      }
+    }
+  }
+}
+
+function validateSchema(label: string, schema: PieceInputSchema): void {
+  const seen = new Set<string>();
+  for (const field of schema.fields) {
+    if (seen.has(field.name)) {
+      throw new Error(`piece schema ${label}: duplicate field name "${field.name}"`);
+    }
+    seen.add(field.name);
+    if (field.type === "enum" || field.type === "multi_enum") {
+      if (!field.options || field.options.length === 0) {
+        throw new Error(`piece schema ${label}: field "${field.name}" of type ${field.type} requires options`);
+      }
+      const values = new Set<string>();
+      for (const opt of field.options) {
+        if (values.has(opt.value)) {
+          throw new Error(
+            `piece schema ${label}: field "${field.name}" has duplicate option value "${opt.value}"`,
+          );
+        }
+        values.add(opt.value);
+      }
+    }
+  }
 }

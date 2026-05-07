@@ -105,6 +105,86 @@ describe("JarvisPieceRegistry", () => {
     expect(() => r.register(jarvisAskPiece)).toThrow(/already registered/);
   });
 
+  test("rejects piece with duplicate field names in a schema", () => {
+    const r = new JarvisPieceRegistry();
+    const piece: JarvisPiece = {
+      name: "bad",
+      displayName: "Bad",
+      description: "",
+      actions: {
+        broken: {
+          name: "broken",
+          displayName: "Broken",
+          description: "",
+          inputSchema: {
+            fields: [
+              { name: "x", label: "X", type: "string", required: false },
+              { name: "x", label: "X again", type: "string", required: false },
+            ],
+          },
+          parseInput: () => ({}),
+          execute: async () => ({}),
+        },
+      },
+    };
+    expect(() => r.register(piece)).toThrow(/duplicate field name "x"/);
+  });
+
+  test("rejects enum field with no options", () => {
+    const r = new JarvisPieceRegistry();
+    const piece: JarvisPiece = {
+      name: "bad-enum",
+      displayName: "Bad enum",
+      description: "",
+      actions: {
+        a: {
+          name: "a",
+          displayName: "A",
+          description: "",
+          inputSchema: {
+            fields: [{ name: "f", label: "F", type: "enum", required: false }],
+          },
+          parseInput: () => ({}),
+          execute: async () => ({}),
+        },
+      },
+    };
+    expect(() => r.register(piece)).toThrow(/requires options/);
+  });
+
+  test("rejects enum with duplicate option values", () => {
+    const r = new JarvisPieceRegistry();
+    const piece: JarvisPiece = {
+      name: "dup-opt",
+      displayName: "Dup",
+      description: "",
+      actions: {
+        a: {
+          name: "a",
+          displayName: "A",
+          description: "",
+          inputSchema: {
+            fields: [
+              {
+                name: "f",
+                label: "F",
+                type: "enum",
+                required: false,
+                options: [
+                  { value: "x", label: "X1" },
+                  { value: "x", label: "X2" },
+                ],
+              },
+            ],
+          },
+          parseInput: () => ({}),
+          execute: async () => ({}),
+        },
+      },
+    };
+    expect(() => r.register(piece)).toThrow(/duplicate option value "x"/);
+  });
+
   test("resolveAction parses 'piece:action' references", () => {
     const r = new JarvisPieceRegistry();
     r.register(jarvisAskPiece);
