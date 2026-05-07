@@ -337,30 +337,60 @@ func (s *pebbleServiceWindows) drawThinking(pixels []uint32) {
 	}
 }
 
-// drawWorking — paper pill with a pulsing amber dot.
+// drawWorking — wider amber-bordered pill with a sweeping progress
+// bar travelling left-to-right and back. T26 makes JARVIS-driven
+// actions visually distinct from listening / thinking states; the
+// sweep reads as "I'm doing something autonomously" at a glance.
 func (s *pebbleServiceWindows) drawWorking(pixels []uint32) {
 	cx := float64(pebbleAnchorX)
 	cy := float64(pebbleAnchorY)
-	pillW := 18.0
-	pillH := 7.0
+	pillW := 24.0
+	pillH := 8.0
 	const shadowOffset = 2.0
 
+	// Hard offset shadow.
 	fillRoundedRect(pixels, cx-pillW+shadowOffset, cy-pillH+shadowOffset,
 		cx+pillW+shadowOffset, cy+pillH+shadowOffset, pillH,
-		premultiply(26, pebbleInkR, pebbleInkG, pebbleInkB))
+		premultiply(31, pebbleInkR, pebbleInkG, pebbleInkB))
 
+	// Paper fill.
 	fillRoundedRect(pixels, cx-pillW, cy-pillH, cx+pillW, cy+pillH, pillH,
 		premultiply(255, pebblePaperR, pebblePaperG, pebblePaperB))
 
+	// Amber-tinted hairline border — distinct from the paper-coloured
+	// rule that listening / thinking use, so the user knows at a glance
+	// that this isn't a normal voice cycle.
 	strokeRoundedRect(pixels, cx-pillW, cy-pillH, cx+pillW, cy+pillH, pillH, 1.0,
-		premultiply(255, pebbleRuleR, pebbleRuleG, pebbleRuleB))
-
-	// Amber dot pulses scale.
-	phase := float64(s.frameTick%96) / 96.0
-	pulse := 0.85 + 0.15*math.Sin(phase*2*math.Pi)
-	dotR := 2.5 * pulse
-	fillCircle(pixels, cx-pillW+5, cy, dotR,
 		premultiply(255, pebbleWarmR, pebbleWarmG, pebbleWarmB))
+
+	// Sweeping bar — travels left↔right inside the pill on a sine.
+	// Period ≈ 1.6 s @ 60 fps so each sweep is leisurely but readable.
+	phase := float64(s.frameTick%96) / 96.0
+	t := math.Sin(phase * 2 * math.Pi) // -1..1
+	sweepCenter := cx + t*(pillW-7)
+	const sweepHalfW = 4.0
+	const sweepHalfH = 3.0
+	// Solid amber rounded rect for the sweep head.
+	fillRoundedRect(pixels,
+		sweepCenter-sweepHalfW, cy-sweepHalfH,
+		sweepCenter+sweepHalfW, cy+sweepHalfH,
+		sweepHalfH,
+		premultiply(255, pebbleWarmR, pebbleWarmG, pebbleWarmB))
+	// Trailing fade on the side opposite to motion direction. dT/dphase
+	// gives the velocity sign — positive = moving right, fade to the left.
+	vel := math.Cos(phase * 2 * math.Pi)
+	for i := 1; i <= 3; i++ {
+		offset := float64(i) * 4.0
+		alpha := uint8(120 - i*30)
+		var x float64
+		if vel > 0 {
+			x = sweepCenter - offset
+		} else {
+			x = sweepCenter + offset
+		}
+		fillCircle(pixels, x, cy, 1.6,
+			premultiply(alpha, pebbleWarmR, pebbleWarmG, pebbleWarmB))
+	}
 }
 
 // fillRoundedRect — filled rounded rectangle from (x0,y0) to (x1,y1) with
