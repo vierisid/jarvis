@@ -148,6 +148,76 @@ export function useWorkflowEditor(flowId: string | null) {
     setDirty(true);
   }, []);
 
+  /**
+   * Insert a new PIECE step immediately after `predecessorName`. The new step
+   * starts unconfigured (no piece picked); the user picks one in the panel.
+   * Returns the new step's name so the caller can select it.
+   */
+  const insertStepAfter = useCallback((predecessorName: string): string | null => {
+    let createdName: string | null = null;
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      const next = cloneTrigger(prev);
+      const predecessor = findStep(next, predecessorName);
+      if (!predecessor) return prev;
+      const usedNames = new Set(walkSteps(next).map((s) => s.name));
+      const newName = nextStepName(usedNames);
+      createdName = newName;
+      const newStep: FlowStepNode = {
+        name: newName,
+        type: "PIECE",
+        displayName: "New step",
+        settings: { input: {} },
+        nextAction: predecessor.nextAction,
+      };
+      predecessor.nextAction = newStep;
+      return next;
+    });
+    if (createdName) setDirty(true);
+    return createdName;
+  }, []);
+
+  /**
+   * Remove a step from the chain by name. The trigger cannot be deleted.
+   * The deleted step's `nextAction` becomes its predecessor's `nextAction`.
+   */
+  const deleteStep = useCallback((stepName: string): void => {
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      if (prev.name === stepName) return prev; // trigger is undeletable
+      const next = cloneTrigger(prev);
+      let cursor: FlowStepNode = next;
+      while (cursor.nextAction) {
+        if (cursor.nextAction.name === stepName) {
+          cursor.nextAction = cursor.nextAction.nextAction;
+          return next;
+        }
+        cursor = cursor.nextAction;
+      }
+      return prev;
+    });
+    setDirty(true);
+  }, []);
+
+  /**
+   * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
+   * EMPTY clears the trigger's settings but preserves nextAction.
+   */
+  const setTriggerType = useCallback((type: "EMPTY" | "PIECE_TRIGGER"): void => {
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      const next = cloneTrigger(prev);
+      next.type = type;
+      if (type === "EMPTY") {
+        next.settings = {};
+      } else if (!next.settings || !next.settings.pieceName) {
+        next.settings = { input: {} };
+      }
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
   const setStepPiece = useCallback((stepName: string, pieceName: string, actionName: string): void => {
     setDraftTrigger((prev) => {
       if (!prev) return prev;
@@ -227,6 +297,9 @@ export function useWorkflowEditor(flowId: string | null) {
     updateStep,
     updateStepInput,
     setStepPiece,
+    setTriggerType,
+    insertStepAfter,
+    deleteStep,
     save,
     reset,
   };
@@ -245,6 +318,20 @@ function findStep(root: FlowStepNode, name: string): FlowStepNode | null {
     cursor = cursor.nextAction;
   }
   return null;
+}
+
+/**
+ * Generate the lowest unused `step_<n>` name. Activepieces' step name regex
+ * accepts identifier-style names; we keep the convention upstream uses for
+ * generated steps.
+ */
+function nextStepName(used: Set<string>): string {
+  for (let i = 1; i < 10000; i++) {
+    const candidate = `step_${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  // Fallback to a timestamp suffix if (somehow) we exhaust 10k slots.
+  return `step_${Date.now()}`;
 }
 
 function walkSteps(root: FlowStepNode): FlowStepNode[] {

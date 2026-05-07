@@ -140,8 +140,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           {selectedStep ? (
             <PropertiesPanel
               step={selectedStep}
+              isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
+              hasNextAction={!!selectedStep.nextAction}
               catalog={editor.catalog}
               onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
+              onSetTriggerType={(type) => editor.setTriggerType(type)}
               onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
               onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
               onRemoveInputKey={(key) => {
@@ -150,7 +153,36 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
                 delete input[key];
                 editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
               }}
+              onSetDisplayName={(displayName) => editor.updateStep(selectedStep.name, { displayName })}
+              onAddStepAfter={() => {
+                const created = editor.insertStepAfter(selectedStep.name);
+                if (created) setSelectedStepName(created);
+              }}
+              onDelete={() => {
+                if (window.confirm(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+                  editor.deleteStep(selectedStep.name);
+                  setSelectedStepName(null);
+                }
+              }}
             />
+          ) : editor.draftTrigger && !editor.draftTrigger.nextAction ? (
+            <div className="wf-editor__panel-empty">
+              <p>This flow has no actions yet.</p>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  if (!editor.draftTrigger) return;
+                  const created = editor.insertStepAfter(editor.draftTrigger.name);
+                  if (created) setSelectedStepName(created);
+                }}
+              >
+                <Icon icon={Plus} size={12} /> Add first action
+              </Button>
+              <p className="wf-editor__hint">
+                Or click the trigger node to configure when the flow fires.
+              </p>
+            </div>
           ) : (
             <div className="wf-editor__panel-empty">
               <p>Click a node to edit its piece, action, and inputs.</p>
@@ -235,15 +267,34 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 
 interface PropertiesPanelProps {
   step: FlowStepNode;
+  isTriggerStep: boolean;
+  hasNextAction: boolean;
   catalog: PieceCatalogEntry[];
   onSetPiece: (pieceName: string, actionName: string) => void;
+  onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
   onSetInput: (key: string, value: unknown) => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
+  onSetDisplayName: (displayName: string) => void;
+  onAddStepAfter: () => void;
+  onDelete: () => void;
 }
 
 function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
-  const { step, catalog, onSetPiece, onSetInput, onAddInputKey, onRemoveInputKey } = props;
+  const {
+    step,
+    isTriggerStep,
+    hasNextAction,
+    catalog,
+    onSetPiece,
+    onSetTriggerType,
+    onSetInput,
+    onAddInputKey,
+    onRemoveInputKey,
+    onSetDisplayName,
+    onAddStepAfter,
+    onDelete,
+  } = props;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
   const isManual = step.type === "EMPTY";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
@@ -279,14 +330,48 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       <header className="wf-props__header">
         <h3>{step.displayName ?? step.name}</h3>
         <p>
-          <code>{step.name}</code>
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : "Action"}
         </p>
       </header>
 
+      <Field label="Display name">
+        <input
+          type="text"
+          value={step.displayName ?? ""}
+          placeholder={step.name}
+          onChange={(e) => onSetDisplayName(e.target.value)}
+        />
+      </Field>
+
+      {isTriggerStep ? (
+        <Field label="Trigger mode">
+          <div className="wf-props__segmented" role="radiogroup">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={step.type === "EMPTY"}
+              className={`wf-props__seg ${step.type === "EMPTY" ? "wf-props__seg--on" : ""}`}
+              onClick={() => onSetTriggerType("EMPTY")}
+            >
+              Manual
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={step.type === "PIECE_TRIGGER"}
+              className={`wf-props__seg ${step.type === "PIECE_TRIGGER" ? "wf-props__seg--on" : ""}`}
+              onClick={() => onSetTriggerType("PIECE_TRIGGER")}
+            >
+              Schedule / webhook / event
+            </button>
+          </div>
+        </Field>
+      ) : null}
+
       {isManual ? (
         <p className="wf-props__hint">
-          Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. To run on a schedule
-          or webhook, change the trigger piece below.
+          Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. Switch to
+          "Schedule / webhook / event" above to fire automatically.
         </p>
       ) : null}
 
@@ -388,6 +473,19 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
             <Icon icon={Plus} size={12} /> Add field
           </Button>
         </div>
+      </div>
+
+      <div className="wf-props__divider" />
+
+      <div className="wf-props__step-actions">
+        <Button variant="ghost" size="sm" onClick={onAddStepAfter} title="Insert a new action after this step">
+          <Icon icon={Plus} size={12} /> {hasNextAction ? "Insert step after" : "Add next step"}
+        </Button>
+        {!isTriggerStep ? (
+          <Button variant="danger" size="sm" onClick={onDelete} title="Remove this step from the chain">
+            <Icon icon={Trash2} size={12} /> Delete step
+          </Button>
+        ) : null}
       </div>
     </div>
   );

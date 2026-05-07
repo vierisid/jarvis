@@ -275,7 +275,8 @@
   border-top: 1px dashed var(--rule-soft);
   padding-top: var(--s-2);
 }
-.wf-props__add-row input {
+.wf-props__add-row input,
+.wf-props__field input[type="text"] {
   flex: 1;
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
@@ -283,4 +284,37 @@
   color: var(--ink-1);
   padding: 6px 8px;
   font-size: 0.82rem;
+}
+
+.wf-props__field input[type="text"] { width: 100%; box-sizing: border-box; }
+
+.wf-props__segmented {
+  display: flex;
+  gap: 4px;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  padding: 3px;
+}
+.wf-props__seg {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--r-2) - 2px);
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.wf-props__seg:hover { color: var(--ink-1); }
+.wf-props__seg--on {
+  background: var(--paper-1, #0a0e14);
+  color: var(--ink-1);
+  box-shadow: inset 0 0 0 1px var(--accent-1, #5eead4);
+}
+
+.wf-props__step-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
 }
