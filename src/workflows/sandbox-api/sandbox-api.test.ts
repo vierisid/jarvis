@@ -5,11 +5,16 @@
  * endpoints land.
  */
 
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll, beforeEach } from "bun:test";
 import { EngineTokenSigner } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
 import { SandboxApi } from "./server";
+import { CredentialResolver } from "../credentials/adapter";
 import { DEFAULT_IDS } from "../db/schema";
+import { closeWorkflowDb, initWorkflowDb } from "../db";
+import { _clearStoreForTests } from "../db/repos/store-entry";
+import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
+import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
 
 const sampleIdentity = () => ({
   sandboxId: SandboxRegistry.newSandboxId(),
@@ -132,7 +137,11 @@ describe("SandboxApi server", () => {
   beforeAll(() => {
     signer = new EngineTokenSigner();
     registry = new SandboxRegistry();
-    api = new SandboxApi({ signer, registry });
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: { credentialResolver: new CredentialResolver() },
+    });
     api.start({ port: 0 });
   });
 
@@ -220,5 +229,147 @@ describe("SandboxApi server", () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(r.status).toBe(404);
+  });
+});
+
+describe("SandboxApi routes (B2: connections, store, flows)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+  let resolver: CredentialResolver;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(() => {
+    initWorkflowDb(":memory:");
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    resolver = new CredentialResolver();
+    // Stub Jarvis source so jarvis:test resolves to a fake OAuth2 connection.
+    resolver.register({
+      id: "test",
+      canResolve: (e) => e === "jarvis:test",
+      resolve: async () => ({
+        type: "OAUTH2",
+        value: { access_token: "tok", refresh_token: "" },
+      }),
+    });
+    api = new SandboxApi({ signer, registry, services: { credentialResolver: resolver } });
+    api.start({ port: 0 });
+  });
+
+  afterAll(() => {
+    api.stop();
+    closeWorkflowDb();
+  });
+
+  beforeEach(() => {
+    _clearStoreForTests();
+  });
+
+  test("GET /v1/worker/app-connections/:externalId resolves a Jarvis source", async () => {
+    const r = await authedFetch("/v1/worker/app-connections/jarvis%3Atest");
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { externalId: string; status: string; value: { type?: string; access_token?: string } };
+    expect(body.externalId).toBe("jarvis:test");
+    expect(body.status).toBe("ACTIVE");
+    expect(body.value.type).toBe("OAUTH2");
+    expect(body.value.access_token).toBe("tok");
+  });
+
+  test("GET /v1/worker/app-connections returns 404 for unknown id", async () => {
+    const r = await authedFetch("/v1/worker/app-connections/unknown-id");
+    expect(r.status).toBe(404);
+  });
+
+  test("POST /v1/store-entries upserts and GET reads", async () => {
+    const put = await authedFetch("/v1/store-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "k1", value: { hello: "world" } }),
+    });
+    expect(put.status).toBe(201);
+    const get = await authedFetch("/v1/store-entries?key=k1");
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { key: string; value: { hello: string } };
+    expect(body.key).toBe("k1");
+    expect(body.value.hello).toBe("world");
+  });
+
+  test("GET /v1/store-entries returns 404 when missing", async () => {
+    const r = await authedFetch("/v1/store-entries?key=missing");
+    expect(r.status).toBe(404);
+  });
+
+  test("DELETE /v1/store-entries removes the entry", async () => {
+    await authedFetch("/v1/store-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "to-del", value: 1 }),
+    });
+    const del = await authedFetch("/v1/store-entries?key=to-del", { method: "DELETE" });
+    expect(del.status).toBe(200);
+    const get = await authedFetch("/v1/store-entries?key=to-del");
+    expect(get.status).toBe(404);
+  });
+
+  test("POST /v1/store-entries 400 on missing key", async () => {
+    const r = await authedFetch("/v1/store-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: 1 }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/store-entries 413 on oversized value", async () => {
+    const big = "x".repeat(600 * 1024);
+    const r = await authedFetch("/v1/store-entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "big", value: big }),
+    });
+    expect(r.status).toBe(413);
+  });
+
+  test("GET /v1/engine/populated-flows returns published flows in SeekPage shape", async () => {
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "Hello",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    setPublishedVersion(flow.id, v.id);
+    updateFlowStatus(flow.id, "ENABLED");
+
+    const r = await authedFetch(`/v1/engine/populated-flows?externalIds=${flow.external_id}`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { data: Array<{ id: string; externalId: string; version?: { id: string } }> };
+    expect(body.data.length).toBe(1);
+    expect(body.data[0]?.id).toBe(flow.id);
+    expect(body.data[0]?.externalId).toBe(flow.external_id);
+    expect(body.data[0]?.version?.id).toBe(v.id);
+  });
+
+  test("GET /v1/engine/populated-flows skips flows without a published version", async () => {
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const r = await authedFetch(`/v1/engine/populated-flows?externalIds=${flow.external_id}`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { data: unknown[] };
+    expect(body.data.length).toBe(0);
   });
 });

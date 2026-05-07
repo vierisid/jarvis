@@ -26,7 +26,20 @@ type ServerNoData = Server<unknown>;
 import { EngineTokenSigner } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
 import type { EngineTokenClaims } from "./types";
+import type { CredentialResolver } from "../credentials/adapter";
 import { DEFAULT_IDS } from "../db/schema";
+import { createConnectionsRoute } from "./routes/connections";
+import {
+  deleteStoreEntryRoute,
+  getStoreEntryRoute,
+  putStoreEntryRoute,
+} from "./routes/store";
+import { populatedFlowsRoute } from "./routes/flows";
+import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
+
+export interface SandboxApiServices {
+  credentialResolver: CredentialResolver;
+}
 
 export interface SandboxApiOptions {
   /** Bind host. Default 127.0.0.1 -- the engine subprocess always runs locally. */
@@ -37,13 +50,11 @@ export interface SandboxApiOptions {
   signer?: EngineTokenSigner;
   /** Optional shared registry for tests; otherwise a fresh empty registry is used. */
   registry?: SandboxRegistry;
+  /** Service bag used by route handlers. */
+  services: SandboxApiServices;
 }
 
-export interface AuthenticatedRequest extends Request {
-  claims: EngineTokenClaims;
-}
-
-type RouteHandler = (req: AuthenticatedRequest) => Response | Promise<Response>;
+export type AuthenticatedRequest = RouteContext;
 
 interface RouteEntry {
   /** Path with optional `:param` segments. Matched in order against the request URL. */
@@ -51,15 +62,6 @@ interface RouteEntry {
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   handler: RouteHandler;
 }
-
-const json = (data: unknown, status = 200): Response =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-
-const err = (message: string, status = 400): Response =>
-  json({ error: message }, status);
 
 /** Match `/v1/worker/app-connections/:externalId` against `/v1/worker/app-connections/foo`. */
 function matchPath(pattern: string, actual: string): Record<string, string> | null {
@@ -82,30 +84,38 @@ function matchPath(pattern: string, actual: string): Record<string, string> | nu
 export class SandboxApi {
   readonly signer: EngineTokenSigner;
   readonly registry: SandboxRegistry;
+  readonly services: SandboxApiServices;
   private server: ServerNoData | null = null;
   private readonly routes: RouteEntry[] = [];
 
-  constructor(opts: SandboxApiOptions = {}) {
+  constructor(opts: SandboxApiOptions) {
     this.signer = opts.signer ?? new EngineTokenSigner();
     this.registry = opts.registry ?? new SandboxRegistry();
+    this.services = opts.services;
     this.registerRoutes();
   }
 
   private registerRoutes(): void {
-    // Real route handlers land in subsequent commits (B2-B3). For now we ship
-    // one auth-protected stub so the server skeleton can be exercised end-to-
-    // end in tests.
-    this.routes.push({
-      path: "/v1/worker/project",
-      method: "GET",
-      handler: async (req) => {
+    this.routes.push(
+      {
+        path: "/v1/worker/project",
+        method: "GET",
         // Single-tenant: every request resolves to the daemon's default project.
-        return json({
-          id: DEFAULT_IDS.project,
-          externalId: req.claims.projectId,
-        });
+        handler: async (req) =>
+          json({ id: DEFAULT_IDS.project, externalId: req.claims.projectId }),
       },
-    });
+      {
+        path: "/v1/worker/app-connections/:externalId",
+        method: "GET",
+        handler: createConnectionsRoute({
+          credentialResolver: this.services.credentialResolver,
+        }),
+      },
+      { path: "/v1/store-entries", method: "GET", handler: getStoreEntryRoute },
+      { path: "/v1/store-entries", method: "POST", handler: putStoreEntryRoute },
+      { path: "/v1/store-entries", method: "DELETE", handler: deleteStoreEntryRoute },
+      { path: "/v1/engine/populated-flows", method: "GET", handler: populatedFlowsRoute },
+    );
   }
 
   start(opts: { host?: string; port?: number } = {}): void {
