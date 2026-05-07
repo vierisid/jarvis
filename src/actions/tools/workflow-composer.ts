@@ -15,6 +15,7 @@ import type {
   PieceLlmClient,
 } from "../../workflows/jarvis-pieces/types.ts";
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
+import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 
 export interface ComposedFlow {
   displayName: string;
@@ -169,6 +170,16 @@ function renderCatalog(registry: JarvisPieceRegistry): string {
   lines.push("Built-in trigger primitives (no piece registration needed):");
   lines.push("- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.");
   lines.push("- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.");
+
+  // Workflow event-type catalog (used by jarvis-trigger:on_event flows).
+  lines.push("");
+  lines.push("Available event types for jarvis-trigger:on_event (settings.input.eventType):");
+  for (const meta of WORKFLOW_EVENT_TYPES) {
+    lines.push(`- ${meta.type}: ${meta.description}`);
+    if (meta.payloadExample) {
+      lines.push(`    payload example: ${JSON.stringify(meta.payloadExample)}`);
+    }
+  }
   return lines.join("\n");
 }
 

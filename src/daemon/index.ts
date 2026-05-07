@@ -50,6 +50,7 @@ import { jarvisAgentPiece } from "../workflows/jarvis-pieces/jarvis-agent.ts";
 import { jarvisTriggerPiece } from "../workflows/jarvis-pieces/jarvis-trigger.ts";
 import { buildPieceServices } from "../workflows/adapters/index.ts";
 import { TriggerManager } from "../workflows/runner/triggers/manager.ts";
+import { OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -715,6 +716,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     triggerManager.start();
     logWithTimestamp(`Trigger manager started with ${triggerManager.list().length} active subscription(s)`);
 
+    // 10.2. Republish observer events onto the workflow event bus so flows
+    // with `on_event` triggers can fire. Event-type strings follow the
+    // canonical taxonomy in src/workflows/runtime/event-types.ts: each
+    // observer event becomes `observer.<observer_type>` (where the observer's
+    // raw `type` is normalized to snake_case via mapObserverEventType).
+    if (observerService) {
+      observerService.setForwardCallback((event) => {
+        const canonical = OBSERVER_EVENT_TYPE_MAP[event.type] ?? `observer.${event.type}`;
+        sharedEventBus.publish(canonical, { ...event.data, _timestamp: event.timestamp });
+      });
+    }
+
     // Phase A — onboarding setup-mode guard for LLM-dependent services.
     // While `setup_completed_at === null` the user hasn't saved an LLM
     // provider/key/model yet, so the heartbeat-driven background agent,
@@ -1215,6 +1228,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             );
           } else {
             coalescer.addEvent(evt);
+          }
+          // Republish to the workflow event bus so flows with `on_event`
+          // triggers can react. Map the legacy ObserverEvent.type to the
+          // canonical taxonomy.
+          if (evt.event.type === 'commitment_overdue') {
+            sharedEventBus.publish('commitment.overdue', evt.event.data);
+          } else if (evt.event.type === 'commitment_due_soon') {
+            sharedEventBus.publish('commitment.due_soon', evt.event.data);
           }
         }
 

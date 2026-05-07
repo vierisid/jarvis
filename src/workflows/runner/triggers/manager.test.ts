@@ -229,6 +229,58 @@ describe("TriggerManager: webhook", () => {
   });
 });
 
+describe("TriggerManager: integration with canonical event taxonomy", () => {
+  test("flow subscribed to observer.clipboard_changed fires when published", async () => {
+    publishFlowWithTrigger("clipboard listener", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "observer.clipboard_changed" },
+      },
+    });
+    const bus = new JarvisEventBusAdapter();
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: bus,
+      log: silent,
+    });
+    tm.start();
+    bus.publish("observer.clipboard_changed", { content: "hi", contentType: "text" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(queueStats().queued).toBe(1);
+  });
+
+  test("flow with eventType filter fires only on matching commitment.overdue payload", async () => {
+    publishFlowWithTrigger("overdue payments", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: {
+          eventType: "commitment.overdue",
+          filter: { tag: "payment" },
+        },
+      },
+    });
+    const bus = new JarvisEventBusAdapter();
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: bus,
+      log: silent,
+    });
+    tm.start();
+    bus.publish("commitment.overdue", { id: "c1", tag: "social" });
+    bus.publish("commitment.overdue", { id: "c2", tag: "payment" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(queueStats().queued).toBe(1);
+  });
+});
+
 describe("TriggerManager: schedule", () => {
   test("registers cron when expression is present (any of the three keys)", () => {
     publishFlowWithTrigger("cron a", {

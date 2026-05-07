@@ -69,6 +69,13 @@ export class ObserverService implements Service {
   private coalescer: EventCoalescer | null;
   private googleAuth: GoogleAuth | null;
   private dataDir: string;
+  /**
+   * Optional fan-out callback fired on every observer event AFTER the vault
+   * write and reactor/coalescer routing. Used by the workflow runtime to
+   * republish events onto its bus so `on_event` triggers can fire. Errors in
+   * the callback are caught and logged so the main pipeline never breaks.
+   */
+  private forwardCallback: ((event: ObserverEvent) => void) | null = null;
 
   constructor(
     reactor?: EventReactor,
@@ -81,6 +88,14 @@ export class ObserverService implements Service {
     this.coalescer = coalescer ?? null;
     this.googleAuth = googleAuth ?? null;
     this.dataDir = dataDir ?? `${homedir()}/.jarvis`;
+  }
+
+  /**
+   * Register a side-channel handler called after the standard reactor /
+   * coalescer routing. Replaces any previously-set forward callback.
+   */
+  setForwardCallback(cb: (event: ObserverEvent) => void): void {
+    this.forwardCallback = cb;
   }
 
   async start(): Promise<void> {
@@ -130,6 +145,16 @@ export class ObserverService implements Service {
           }
         } catch (err) {
           console.error('[ObserverService] Error classifying event:', err);
+        }
+
+        // 3. Forward to any side-channel consumers (workflow event bus, etc.).
+        //    Catch errors so a broken consumer doesn't take down the observer pipeline.
+        if (this.forwardCallback) {
+          try {
+            this.forwardCallback(event);
+          } catch (err) {
+            console.error('[ObserverService] forwardCallback error:', err);
+          }
         }
       });
 

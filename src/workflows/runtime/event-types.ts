@@ -1,0 +1,126 @@
+/**
+ * Canonical event-type taxonomy for the workflow event bus.
+ *
+ * `on_event` triggers subscribe to one of these strings. Daemon services
+ * (awareness, observers, commitments, channels, etc.) publish onto the bus
+ * using the same strings. Keeping the catalog centralized here prevents drift
+ * between subscribers and publishers and lets the composer's planner surface
+ * the taxonomy to the LLM.
+ *
+ * Naming convention: `<source>.<verb_phrase>` in snake_case. Sources match
+ * the daemon module (awareness, commitment, observer, channel, tool, voice).
+ *
+ * Adding a new event type:
+ *   1. Add to `WORKFLOW_EVENT_TYPES` below with a one-line description.
+ *   2. Wire a publisher at the source (call `eventBus.publish(type, payload)`).
+ *   3. The composer's catalog auto-surfaces it; no other UI changes needed.
+ */
+
+export interface WorkflowEventTypeMeta {
+  type: string;
+  description: string;
+  /** Example payload shape, used in the composer prompt to help the LLM filter. */
+  payloadExample?: Record<string, unknown>;
+}
+
+export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
+  // ── observer.* ── unified stream from ObserverManager ───────────────────
+  {
+    type: "observer.clipboard_changed",
+    description: "User copied something. Use to react to URLs, emails, code snippets, etc.",
+    payloadExample: { content: "https://example.com", contentType: "url", length: 19 },
+  },
+  {
+    type: "observer.file_changed",
+    description: "A watched file or directory changed (created / modified / deleted).",
+    payloadExample: { path: "/tmp/a.txt", change: "modified" },
+  },
+  {
+    type: "observer.email_received",
+    description: "New Gmail message arrived (requires Google auth). Payload includes subject + sender.",
+    payloadExample: { subject: "Re: launch", from: "alice@example.com", id: "msg_abc" },
+  },
+  {
+    type: "observer.calendar_event_starting",
+    description: "A Google Calendar event is about to start.",
+    payloadExample: { summary: "Standup", start: "2026-05-07T15:00:00Z" },
+  },
+  {
+    type: "observer.process_started",
+    description: "A new process appeared in the process list.",
+    payloadExample: { pid: 1234, name: "node" },
+  },
+  {
+    type: "observer.process_stopped",
+    description: "A previously-running process exited.",
+    payloadExample: { pid: 1234, name: "node" },
+  },
+  {
+    type: "observer.notification_received",
+    description: "A D-Bus / native desktop notification was shown.",
+    payloadExample: { app: "Slack", summary: "Message from Alice" },
+  },
+
+  // ── commitment.* ── heartbeat sweep over the vault commitments table ─
+  {
+    type: "commitment.due_soon",
+    description: "A commitment is about to come due (typically within the next 30 min).",
+    payloadExample: { id: "c_abc", what: "Follow up with vendor", when_due: 1710000000000 },
+  },
+  {
+    type: "commitment.overdue",
+    description: "A commitment passed its due time without being completed.",
+    payloadExample: { id: "c_abc", what: "Follow up with vendor", when_due: 1710000000000 },
+  },
+
+  // ── awareness.* ── from the awareness service (M13) ─────────────────────
+  // Publishers for these are not yet wired (see todos); listed so flows can
+  // be authored against the contract and start firing automatically once the
+  // awareness service publishes.
+  {
+    type: "awareness.context_changed",
+    description: "[publisher pending] User switched between meaningful contexts (project / app / task).",
+    payloadExample: { app: "VS Code", project: "jarvis" },
+  },
+  {
+    type: "awareness.error_detected",
+    description: "[publisher pending] User is hitting an error / repeated undo / stuck pattern.",
+    payloadExample: { app: "Terminal", excerpt: "fatal: not a git repository" },
+  },
+];
+
+/**
+ * Map from raw ObserverEvent.type to canonical workflow event type. Anything
+ * not listed here gets a fallback `observer.<rawType>` at the publisher.
+ *
+ * Keep these aligned with WORKFLOW_EVENT_TYPES so the composer's catalog and
+ * the actual runtime publishers agree.
+ */
+export const OBSERVER_EVENT_TYPE_MAP: Readonly<Record<string, string>> = {
+  clipboard: "observer.clipboard_changed",
+  file_change: "observer.file_changed",
+  email: "observer.email_received",
+  calendar: "observer.calendar_event_starting",
+  process_started: "observer.process_started",
+  process_stopped: "observer.process_stopped",
+  notification: "observer.notification_received",
+};
+
+/** O(1) check that a string is a known workflow event type. */
+export function isWorkflowEventType(s: string): boolean {
+  if (!_indexBuilt) buildIndex();
+  return _index.has(s);
+}
+
+/** Get metadata for a known type (or null if not in the catalog). */
+export function getWorkflowEventTypeMeta(s: string): WorkflowEventTypeMeta | null {
+  if (!_indexBuilt) buildIndex();
+  return _index.get(s) ?? null;
+}
+
+let _index: Map<string, WorkflowEventTypeMeta> = new Map();
+let _indexBuilt = false;
+function buildIndex(): void {
+  _index = new Map(WORKFLOW_EVENT_TYPES.map((m) => [m.type, m]));
+  _indexBuilt = true;
+}
