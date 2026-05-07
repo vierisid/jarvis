@@ -215,9 +215,11 @@ describe("JarvisPiecesFlowExecutor: end-to-end via handler + worker", () => {
         type: "EMPTY",
         settings: {},
         nextAction: {
-          name: "loopy",
-          type: "LOOP_ON_ITEMS",
-          settings: { items: "{{trigger.list}}" },
+          // CODE is intentionally not supported by the Jarvis-pieces executor
+          // (it would require an isolated runner). Any unrecognized type fails.
+          name: "snippet",
+          type: "CODE",
+          settings: { sourceCode: { code: "return 1", packageJson: "{}" }, input: {} },
         },
       } as unknown as Record<string, unknown>,
     });
@@ -236,7 +238,7 @@ describe("JarvisPiecesFlowExecutor: end-to-end via handler + worker", () => {
 
     const after = getFlowRun(run.id);
     expect(after?.status).toBe("FAILED");
-    expect(after?.failedStep?.name).toBe("loopy");
+    expect(after?.failedStep?.name).toBe("snippet");
   });
 
   test("references to unregistered pieces fail with a clear error", async () => {
@@ -369,6 +371,281 @@ describe("JarvisPiecesFlowExecutor: end-to-end via handler + worker", () => {
     const after = getFlowRun(run.id);
     expect(after?.status).toBe("FAILED");
     expect(after?.failedStep?.name).toBe("ask_unknown_step");
+  });
+
+  test("LOOP_ON_ITEMS iterates body once per item, exposes {{loop.item}}", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "loopy" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "loop1",
+          type: "LOOP_ON_ITEMS",
+          settings: { items: "{{trigger.list}}" },
+          firstLoopAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-notify",
+              actionName: "notify",
+              input: { message: "hello {{loop1.item}}" },
+            },
+          },
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { list: ["a", "b", "c"] } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+
+    const after = getFlowRun(run.id);
+    expect(after?.status).toBe("SUCCEEDED");
+    expect(notifier.calls.map((x) => x.message)).toEqual(["hello a", "hello b", "hello c"]);
+    const steps = after?.steps as Record<string, { input: unknown; output: { iterations?: unknown[]; count?: number } }>;
+    expect(steps.loop1?.output.count).toBe(3);
+  });
+
+  test("LOOP_ON_ITEMS with non-array items fails the run with the loop step name", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "bad-loop" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "loop1",
+          type: "LOOP_ON_ITEMS",
+          settings: { items: "{{trigger.notArray}}" },
+          firstLoopAction: { name: "step_1", type: "PIECE", settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "x" } } },
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { llm: new FakeLlm({ text: "ok" }) },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { notArray: "scalar" } },
+      flowRunId: run.id,
+      maxAttempts: 1,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    const after = getFlowRun(run.id);
+    expect(after?.status).toBe("FAILED");
+    expect(after?.failedStep?.name).toBe("loop1");
+  });
+
+  test("ROUTER EXECUTE_FIRST_MATCH runs the first satisfied branch only", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "router-first" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "router1",
+          type: "ROUTER",
+          settings: {
+            executionType: "EXECUTE_FIRST_MATCH",
+            branches: [
+              {
+                branchName: "low",
+                branchType: "CONDITION",
+                conditions: [[{ firstValue: "{{trigger.n}}", operator: "NUMBER_IS_LESS_THAN", secondValue: "10" }]],
+              },
+              {
+                branchName: "high",
+                branchType: "CONDITION",
+                conditions: [[{ firstValue: "{{trigger.n}}", operator: "NUMBER_IS_GREATER_THAN", secondValue: "0" }]],
+              },
+            ],
+          },
+          children: [
+            { name: "low_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "low!" } } },
+            { name: "high_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "high!" } } },
+          ],
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { n: 3 } }, // matches "low" first
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
+    expect(notifier.calls.map((x) => x.message)).toEqual(["low!"]);
+  });
+
+  test("ROUTER EXECUTE_ALL_MATCH runs every matching branch in order", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "router-all" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "router1",
+          type: "ROUTER",
+          settings: {
+            executionType: "EXECUTE_ALL_MATCH",
+            branches: [
+              { branchName: "a", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.n}}", operator: "NUMBER_IS_GREATER_THAN", secondValue: "0" }]] },
+              { branchName: "b", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.n}}", operator: "NUMBER_IS_LESS_THAN", secondValue: "100" }]] },
+            ],
+          },
+          children: [
+            { name: "a_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "A" } } },
+            { name: "b_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "B" } } },
+          ],
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { n: 7 } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
+    expect(notifier.calls.map((x) => x.message)).toEqual(["A", "B"]);
+  });
+
+  test("ROUTER falls back when no CONDITION branch matches", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "router-fb" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "router1",
+          type: "ROUTER",
+          settings: {
+            executionType: "EXECUTE_FIRST_MATCH",
+            branches: [
+              { branchName: "match-nothing", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.n}}", operator: "NUMBER_IS_GREATER_THAN", secondValue: "999" }]] },
+              { branchName: "fallback", branchType: "FALLBACK" },
+            ],
+          },
+          children: [
+            { name: "never", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "should not run" } } },
+            { name: "fallback_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "default" } } },
+          ],
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { n: 5 } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
+    expect(notifier.calls.map((x) => x.message)).toEqual(["default"]);
+  });
+
+  test("LOOP and ROUTER nest cleanly: router inside loop body fires per iteration", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "nested" });
+    updateDraftVersion(version.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        settings: {},
+        nextAction: {
+          name: "loop1",
+          type: "LOOP_ON_ITEMS",
+          settings: { items: "{{trigger.items}}" },
+          firstLoopAction: {
+            name: "router1",
+            type: "ROUTER",
+            settings: {
+              executionType: "EXECUTE_FIRST_MATCH",
+              branches: [
+                { branchName: "even", branchType: "CONDITION", conditions: [[{ firstValue: "{{loop1.item}}", operator: "NUMBER_IS_EQUAL_TO", secondValue: "2" }]] },
+                { branchName: "odd", branchType: "FALLBACK" },
+              ],
+            },
+            children: [
+              { name: "even_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "two" } } },
+              // Inline-template forces stringification (whole-template would
+              // pass through a number, which jarvis-notify rejects).
+              { name: "odd_step", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "got {{loop1.item}}" } } },
+            ],
+          },
+        },
+      } as unknown as Record<string, unknown>,
+    });
+    const notifier = new FakeNotifier();
+    const executor = new JarvisPiecesFlowExecutor({
+      registry: makeRegistry(),
+      services: { notifier },
+    });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: run.id, payload: { items: [1, 2, 3] } },
+      flowRunId: run.id,
+    });
+    await new Worker({
+      log: silent,
+      handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
+    }).drain();
+    const finalRun = getFlowRun(run.id);
+    expect(finalRun?.status).toBe("SUCCEEDED");
+    expect(notifier.calls.map((x) => x.message)).toEqual(["got 1", "two", "got 3"]);
   });
 
   test("maxSteps cap stops a runaway chain", async () => {

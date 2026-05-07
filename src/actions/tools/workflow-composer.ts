@@ -24,13 +24,15 @@ export interface ComposedFlow {
 
 /**
  * Composer-side step shape. Identical to `FlowTriggerNode` (the persistence
- * shape) but with the type union narrowed to the three values the composer
+ * shape) but with the type union narrowed to the values the composer
  * understands today. Kept as a separate name so call sites that work strictly
  * with composer output get tighter type narrowing in switches.
  */
 export interface ComposedStep extends FlowTriggerNode {
-  type: "EMPTY" | "PIECE_TRIGGER" | "PIECE";
+  type: "EMPTY" | "PIECE_TRIGGER" | "PIECE" | "LOOP_ON_ITEMS" | "ROUTER";
   nextAction?: ComposedStep;
+  firstLoopAction?: ComposedStep;
+  children?: Array<ComposedStep | null>;
 }
 
 /** Activepieces' step-name regex. Identifier-style. */
@@ -130,6 +132,18 @@ function buildSystemPrompt(catalog: string, toolsText: string): string {
     "  - For webhook triggers: pieceName='webhook', input.secret optional.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
+    "  - To iterate over a list, emit a LOOP_ON_ITEMS step:",
+    '      { "name": "loop_1", "type": "LOOP_ON_ITEMS", "settings": { "items": "{{step_1.list}}" }, "firstLoopAction": { ...body chain... }, "nextAction": { ...post-loop... } }',
+    "    Inside the body, reference {{loop_1.item}} and {{loop_1.index}}.",
+    "  - To branch on a condition, emit a ROUTER step:",
+    '      { "name": "router_1", "type": "ROUTER",',
+    '        "settings": { "executionType": "EXECUTE_FIRST_MATCH",',
+    '          "branches": [',
+    '            { "branchName": "high", "branchType": "CONDITION", "conditions": [[{ "firstValue": "{{step_1.score}}", "operator": "NUMBER_IS_GREATER_THAN", "secondValue": "0.7" }]] },',
+    '            { "branchName": "fallback", "branchType": "FALLBACK" }',
+    '          ] },',
+    '        "children": [ { ...subgraph for high... }, { ...subgraph for fallback... } ] }',
+    "    Conditions are 2D: outer array = OR, inner = AND. Operators include TEXT_CONTAINS, TEXT_EXACTLY_MATCHES, NUMBER_IS_GREATER_THAN, NUMBER_IS_LESS_THAN, NUMBER_IS_EQUAL_TO, BOOLEAN_IS_TRUE, BOOLEAN_IS_FALSE, EXISTS, DOES_NOT_EXIST, LIST_IS_EMPTY, LIST_IS_NOT_EMPTY, LIST_CONTAINS.",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
@@ -274,8 +288,8 @@ function validateStep(
       errors.push(`trigger.type must be EMPTY or PIECE_TRIGGER (got ${String(type)})`);
       return null;
     }
-  } else if (type !== "PIECE") {
-    errors.push(`action step "${name}" must have type='PIECE' (got ${String(type)})`);
+  } else if (type !== "PIECE" && type !== "LOOP_ON_ITEMS" && type !== "ROUTER") {
+    errors.push(`action step "${name}" type must be PIECE | LOOP_ON_ITEMS | ROUTER (got ${String(type)})`);
     return null;
   }
 
@@ -295,6 +309,40 @@ function validateStep(
   }
 
   if (type === "EMPTY") return step; // manual trigger is always valid
+
+  // LOOP_ON_ITEMS: validate items expression + recurse into firstLoopAction.
+  if (type === "LOOP_ON_ITEMS") {
+    const settings = step.settings as { items?: unknown } | undefined;
+    if (!settings || typeof settings.items !== "string" || settings.items.length === 0) {
+      errors.push(`loop "${name}" missing settings.items`);
+    }
+    const inner = (raw.firstLoopAction as Record<string, unknown> | undefined) ?? null;
+    if (inner) walkInnerChain(inner, errors, knownNames, registry);
+    return step;
+  }
+
+  // ROUTER: validate branches + recurse into each child subgraph.
+  if (type === "ROUTER") {
+    const settings = step.settings as
+      | { branches?: Array<Record<string, unknown>>; executionType?: unknown }
+      | undefined;
+    if (!settings || !Array.isArray(settings.branches) || settings.branches.length === 0) {
+      errors.push(`router "${name}" missing settings.branches`);
+      return step;
+    }
+    const childCount = Array.isArray(raw.children) ? (raw.children as unknown[]).length : 0;
+    if (childCount !== settings.branches.length) {
+      errors.push(`router "${name}" children count (${childCount}) does not match branches count (${settings.branches.length})`);
+    }
+    if (Array.isArray(raw.children)) {
+      for (const child of raw.children as Array<unknown>) {
+        if (child && typeof child === "object") {
+          walkInnerChain(child as Record<string, unknown>, errors, knownNames, registry);
+        }
+      }
+    }
+    return step;
+  }
 
   const settings = step.settings ?? {};
   const pieceName = typeof settings.pieceName === "string" ? settings.pieceName : null;
@@ -343,6 +391,30 @@ function validateStep(
     }
   }
   return step;
+}
+
+/**
+ * Recursively validate an inner chain reachable from a LOOP body or a ROUTER
+ * branch. Same logic as the top-level walk but without the trigger-specific
+ * checks. Errors are appended to the shared list; the chain link is built
+ * up as a side effect via the same `validateStep` machinery.
+ */
+function walkInnerChain(
+  head: Record<string, unknown>,
+  errors: string[],
+  knownNames: Set<string>,
+  registry: JarvisPieceRegistry,
+): void {
+  let cursor: Record<string, unknown> | null = head;
+  let depth = 0;
+  while (cursor) {
+    if (++depth > 100) {
+      errors.push("inner subgraph exceeds 100 steps");
+      return;
+    }
+    validateStep(cursor, errors, knownNames, false, registry);
+    cursor = cursor.nextAction ? (cursor.nextAction as Record<string, unknown>) : null;
+  }
 }
 
 function stripJsonFence(text: string): string {
