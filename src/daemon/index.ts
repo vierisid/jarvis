@@ -1287,6 +1287,47 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // T26 — action narration. Tools that perform visible actions on
+      // the user's machine (clicks, types, navigations, file ops) get a
+      // pebble narration when the LLM emits the call; read-only or
+      // introspection tools (read_file, list_*, snapshots, vault
+      // queries) are skipped — narrating those would just be noise.
+      // Tool names match the canonical names in src/actions/tools/*.ts.
+      const NARRATE_TOOLS = /^(browser_(?:click|type|navigate|scroll|evaluate|upload_file)|desktop_(?:click|type|press_keys|launch_app|focus_window)|run_command|write_file|set_clipboard|create_document|delegate_task|manage_workflow|manage_goals|manage_agents)$/;
+
+      const describeToolCall = (name: string, args: Record<string, unknown>): string => {
+        const trim = (s: unknown, n = 40) => {
+          const str = typeof s === 'string' ? s : String(s ?? '');
+          return str.length > n ? str.slice(0, n - 1) + '…' : str;
+        };
+        switch (name) {
+          // Browser
+          case 'browser_navigate':    return `Opening ${trim(args.url, 60)}`;
+          case 'browser_click':       return `Clicking ${trim(args.text || args.selector || 'element', 50)}`;
+          case 'browser_type':        return `Typing into ${trim(args.selector || 'field', 30)}`;
+          case 'browser_scroll':      return 'Scrolling';
+          case 'browser_evaluate':    return 'Running JS';
+          case 'browser_upload_file': return `Uploading ${trim(args.path, 40)}`;
+          // Desktop (Win32 UIA)
+          case 'desktop_click':        return `Clicking ${trim(args.element_id || args.label || 'element', 50)}`;
+          case 'desktop_type':         return `Typing "${trim(args.text, 50)}"`;
+          case 'desktop_press_keys':   return `Pressing ${trim(args.keys || args.key, 20)}`;
+          case 'desktop_launch_app':   return `Launching ${trim(args.name || args.app || args.path, 40)}`;
+          case 'desktop_focus_window': return `Focusing ${trim(args.title || args.window, 40)}`;
+          // Filesystem / shell
+          case 'run_command':          return `Running ${trim(args.command, 50)}`;
+          case 'write_file':           return `Writing ${trim(args.path, 50)}`;
+          case 'set_clipboard':        return `Copying to clipboard`;
+          case 'create_document':      return `Creating ${trim(args.title || args.path, 40)}`;
+          // Agents / workflows / goals
+          case 'delegate_task':        return `Delegating to ${trim(args.specialist || args.role, 30)}`;
+          case 'manage_workflow':      return `Workflow: ${trim(args.action, 20)}`;
+          case 'manage_goals':         return `Goal: ${trim(args.action, 20)}`;
+          case 'manage_agents':        return `Agent: ${trim(args.action, 20)}`;
+          default:                     return name.replace(/_/g, ' ');
+        }
+      };
+
       // T8 — element-pointing tags. The LLM can emit `[POINT:x,y:label]`
       // anywhere in its response. We strip every CLOSED tag from the
       // streamed text before it reaches the bubble or TTS, and dispatch
@@ -1546,6 +1587,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               const { sentences, remainder } = extractCompleteSentences(unsynth);
               for (const s of sentences) enqueueSentence(s);
               unsynth = remainder;
+            } else if (event.type === 'tool_call') {
+              // T26 — action narration. When the LLM calls a tool that
+              // performs a visible action (browser click, desktop click,
+              // launching apps, sending mail, etc.), flip the pebble to
+              // `working` with a human-readable label of what it's about
+              // to do. Read-only / introspection tools (read_file, list_*)
+              // are skipped — narrating those would just be noise.
+              const tcName = event.tool_call.name;
+              if (NARRATE_TOOLS.test(tcName)) {
+                const label = describeToolCall(tcName, event.tool_call.arguments as Record<string, unknown>);
+                console.log(`[ambient-ui] narrating tool: ${tcName} → "${label}"`);
+                void setState(sidecarId, 'working', label);
+              }
             } else if (event.type === 'done') {
               llmDone = true;
               break;
