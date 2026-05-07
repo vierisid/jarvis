@@ -6,4 +6,4 @@ export * from './piece';
 export * from './piece-metadata';
 export * from './i18n'
 export * from './context/versioning'
-export * from './test'
+// './test' re-export stripped by sync-activepieces.ts (test dirs filtered)

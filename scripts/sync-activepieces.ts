@@ -201,6 +201,22 @@ const SCRUB_DEPS: Record<string, string[]> = {
 };
 
 /**
+ * Strip dangling `export * from '<path>'` lines from barrel files where the
+ * referenced path was filtered out by the EE / test-dir filters above. Without
+ * this pass the engine bundle build fails to resolve the missing modules.
+ *
+ * Each entry is a regex of full lines to remove. Anchored to start-of-line and
+ * tolerant of leading whitespace. The barrel file must remain valid TS after
+ * removal (i.e., other exports must still be present).
+ */
+const STRIP_EXPORT_LINES: Record<string, RegExp[]> = {
+  // EE re-exports of paths we never copy.
+  "packages/shared/src/index.ts": [/^\s*export \* from ['"]\.\/lib\/ee\//],
+  // Test-only re-exports of dirs filtered by TEST_DIR_NAMES.
+  "packages/pieces/framework/src/lib/index.ts": [/^\s*export \* from ['"]\.\/test['"];?\s*$/],
+};
+
+/**
  * Recursive copy that skips:
  *   1. Any path whose relative segment matches `/ee/` (Activepieces Enterprise-licensed,
  *      or any MIT subdirectory named `ee` that we don't vendor on principle).
@@ -264,6 +280,21 @@ for (const [relPath, depNames] of Object.entries(SCRUB_DEPS)) {
   }
   writeFileSync(dst, JSON.stringify(pkg, null, 2) + "\n");
   info(`scrubbed ${removed} dep(s) from ${relPath}: [${depNames.join(", ")}]`);
+}
+for (const [relPath, patterns] of Object.entries(STRIP_EXPORT_LINES)) {
+  const dst = join(VENDOR_DIR, relPath);
+  if (!existsSync(dst)) {
+    fail(`strip-exports target missing: ${relPath}`);
+  }
+  const original = readFileSync(dst, "utf8");
+  const lines = original.split("\n");
+  const kept = lines.filter((line) => !patterns.some((re) => re.test(line)));
+  const removed = lines.length - kept.length;
+  if (removed === 0) {
+    fail(`strip-exports matched 0 lines in ${relPath} -- did upstream restructure the barrel?`);
+  }
+  writeFileSync(dst, kept.join("\n"));
+  info(`stripped ${removed} export line(s) from ${relPath}`);
 }
 
 // 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through
