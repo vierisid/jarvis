@@ -112,10 +112,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     [editor.allSteps, selectedStepName],
   );
 
-  const selectedDepth = useMemo(
-    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName)?.depth ?? 0,
+  const selectedFlat = useMemo(
+    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName) ?? null,
     [editor.allSteps, selectedStepName],
   );
+  const selectedDepth = selectedFlat?.depth ?? 0;
 
   // Build the canonical graph from the chain. `baseNodes` reflects the
   // chain's authoritative order; React Flow needs an internal mutable copy
@@ -134,14 +135,39 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
 
   const triggerName = editor.draftTrigger?.name ?? null;
 
-  // Drag-rearrange: when the user drops a node, sort nodes by Y and propagate
-  // the new top-level chain order. Trigger stays pinned at the top.
+  // Drag-rearrange: when a node is dropped, identify its chain (top-level /
+  // LOOP body / ROUTER branch) from its FlatStep entry, gather siblings in
+  // the SAME chain, sort by Y, and propagate. Cross-chain moves are not
+  // supported -- React Flow allows them visually, but we ignore the move.
   const onNodeDragStop = useCallback(
-    (_e: React.MouseEvent | TouchEvent | MouseEvent, _draggedNode: Node<StepNodeData>) => {
+    (_e: React.MouseEvent | TouchEvent | MouseEvent, draggedNode: Node<StepNodeData>) => {
       if (!triggerName) return;
-      const sorted = [...nodes].sort((a, b) => a.position.y - b.position.y);
-      const newOrder = sorted.filter((n) => n.id !== triggerName).map((n) => n.id);
-      editor.reorderActionNodes(newOrder);
+      const draggedFlat = editor.allSteps.find((fs) => fs.step.name === draggedNode.id);
+      if (!draggedFlat) return;
+      // Build scope from the dragged node's container info.
+      let scope: { kind: "top" } | { kind: "loop"; parentName: string } | { kind: "branch"; parentName: string; branchName: string };
+      if (draggedFlat.depth === 0) {
+        scope = { kind: "top" };
+      } else if (draggedFlat.containerKind === "loop" && draggedFlat.parentName) {
+        scope = { kind: "loop", parentName: draggedFlat.parentName };
+      } else if (draggedFlat.containerKind === "router" && draggedFlat.parentName && draggedFlat.branchName) {
+        scope = { kind: "branch", parentName: draggedFlat.parentName, branchName: draggedFlat.branchName };
+      } else {
+        return; // unknown scope; refuse to act
+      }
+      // Sibling FlatSteps share parentName + branchName + containerKind.
+      const siblings = editor.allSteps.filter(
+        (fs) =>
+          fs.parentName === draggedFlat.parentName &&
+          fs.branchName === draggedFlat.branchName &&
+          fs.containerKind === draggedFlat.containerKind,
+      );
+      const siblingNames = new Set(siblings.map((s) => s.step.name));
+      const sorted = nodes
+        .filter((n) => siblingNames.has(n.id) && n.id !== triggerName)
+        .sort((a, b) => a.position.y - b.position.y);
+      const newOrder = sorted.map((n) => n.id);
+      editor.reorderChain(scope, newOrder);
     },
     [nodes, triggerName, editor],
   );
@@ -218,6 +244,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
               hasNextAction={!!selectedStep.nextAction}
               isTopLevel={selectedDepth === 0}
+              containerKind={selectedFlat?.containerKind}
               catalog={editor.catalog}
               onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
               onSetTriggerType={(type) => editor.setTriggerType(type)}
@@ -290,10 +317,9 @@ function buildGraph(
       type: "stepNode",
       position: { x: NODE_X + entry.depth * INDENT_PX, y: i * NODE_Y_STEP },
       data: { step, selected: selected === step.name, catalog, depth: entry.depth, branchName: entry.branchName },
-      // Trigger is always pinned. Sub-graph nodes (depth > 0) are also
-      // non-draggable for now -- top-level reorder is the only supported
-      // drag operation.
-      draggable: !isTrigger && entry.depth === 0,
+      // Trigger is always pinned. Every other node is draggable; the chain
+      // it belongs to is inferred at drop time from its FlatStep entry.
+      draggable: !isTrigger,
     };
   });
 
@@ -405,6 +431,7 @@ interface PropertiesPanelProps {
   isTriggerStep: boolean;
   hasNextAction: boolean;
   isTopLevel: boolean;
+  containerKind?: "loop" | "router";
   catalog: PieceCatalogEntry[];
   onSetPiece: (pieceName: string, actionName: string) => void;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
@@ -587,22 +614,19 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       <div className="wf-props__divider" />
 
       <div className="wf-props__step-actions">
-        {isTopLevel ? (
-          <>
-            <Button variant="ghost" size="sm" onClick={onAddStepAfter} title="Insert a new action after this step">
-              <Icon icon={Plus} size={12} /> {hasNextAction ? "Insert step after" : "Add next step"}
-            </Button>
-            {!isTriggerStep ? (
-              <Button variant="danger" size="sm" onClick={onDelete} title="Remove this step from the chain">
-                <Icon icon={Trash2} size={12} /> Delete step
-              </Button>
-            ) : null}
-          </>
-        ) : (
+        <Button variant="ghost" size="sm" onClick={onAddStepAfter} title="Insert a new action after this step">
+          <Icon icon={Plus} size={12} /> {hasNextAction ? "Insert step after" : "Add next step"}
+        </Button>
+        {!isTriggerStep ? (
+          <Button variant="danger" size="sm" onClick={onDelete} title="Remove this step from the chain">
+            <Icon icon={Trash2} size={12} /> Delete step
+          </Button>
+        ) : null}
+        {!isTopLevel ? (
           <p className="wf-props__hint">
-            Sub-graph editing is read-only. Add / remove steps inside loops and router branches arrives in a follow-up.
+            Inside a {scopeLabel(props.containerKind)}. New steps insert next to this one in the same sub-chain.
           </p>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -987,4 +1011,10 @@ function stringifyValue(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function scopeLabel(kind: "loop" | "router" | undefined): string {
+  if (kind === "loop") return "loop body";
+  if (kind === "router") return "router branch";
+  return "sub-chain";
 }
