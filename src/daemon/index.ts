@@ -551,12 +551,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: sharedEventBus,
     });
 
+    // Build the piece registry early too -- the dashboard editor needs it
+    // for the piece catalog endpoint, and the worker handler reuses the
+    // same instance once execution starts.
+    const sharedPieceRegistry = new JarvisPieceRegistry();
+    sharedPieceRegistry.register(jarvisAskPiece);
+    sharedPieceRegistry.register(jarvisToolPiece);
+    sharedPieceRegistry.register(jarvisNotifyPiece);
+    sharedPieceRegistry.register(jarvisContextPiece);
+    sharedPieceRegistry.register(jarvisAgentPiece);
+    sharedPieceRegistry.register(jarvisTriggerPiece);
+
     // Mount the daemon's existing routes plus the workflow runtime's routes.
     // The legacy in-house workflow routes that lived at /api/workflows/* were
     // removed in the Phase 6 cutover; the new runtime now owns those paths.
     const apiRoutes = {
       ...createApiRoutes(apiContext),
-      ...createWorkflowRoutes({ triggerManager }),
+      ...createWorkflowRoutes({ triggerManager, pieceRegistry: sharedPieceRegistry }),
     };
     wsService.setApiRoutes(apiRoutes);
 
@@ -638,13 +649,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     //     each requested channel as delivered when broadcastToAll succeeds.
     //   - Voice channel is reported as not-yet-wired in the result.
     //   - jarvis-agent uses an LLM-only delegator (no M7 tool loop yet).
-    const pieceRegistry = new JarvisPieceRegistry();
-    pieceRegistry.register(jarvisAskPiece);
-    pieceRegistry.register(jarvisToolPiece);
-    pieceRegistry.register(jarvisNotifyPiece);
-    pieceRegistry.register(jarvisContextPiece);
-    pieceRegistry.register(jarvisAgentPiece);
-    pieceRegistry.register(jarvisTriggerPiece);
+    const pieceRegistry = sharedPieceRegistry;
     const pieceServices = buildPieceServices({
       llmManager: agentService.getLLMManager(),
       toolRegistry: toolRegistry ?? undefined,

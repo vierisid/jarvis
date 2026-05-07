@@ -250,6 +250,9 @@ export function useWorkflowsData() {
     [runs, selectedFlowId],
   );
 
+  // Editor state -- when set, the dashboard mounts the visual editor for this flow.
+  const [editingFlowId, setEditingFlowId] = useState<string | null>(null);
+
   return {
     flows,
     loading,
@@ -265,6 +268,8 @@ export function useWorkflowsData() {
     publishFlow,
     deleteFlow,
     cancelRun,
+    editingFlowId,
+    setEditingFlowId,
   };
 }
 

@@ -1,0 +1,286 @@
+/* WorkflowEditor — full-screen overlay with @xyflow canvas + properties panel. */
+
+.wf-editor {
+  position: fixed;
+  inset: 0;
+  background: var(--paper-1, #0a0e14);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+}
+
+.wf-editor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  flex-shrink: 0;
+}
+
+.wf-editor__title h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink-1);
+}
+.wf-editor__title p {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.wf-editor__title code {
+  background: var(--paper-3);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.wf-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.wf-editor__toast {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: var(--r-2);
+  border: 1px solid var(--rule-soft);
+  background: var(--paper-3);
+}
+.wf-editor__toast--ok { color: var(--accent-ok, #5eead4); border-color: var(--accent-ok-soft, #134e4a); }
+.wf-editor__toast--warn { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn-soft, #713f12); }
+
+.wf-editor__layout {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: 0;
+}
+
+@media (max-width: 880px) {
+  .wf-editor__layout { grid-template-columns: 1fr; }
+  .wf-editor__panel { display: none; }
+}
+
+.wf-editor__canvas {
+  position: relative;
+  background: var(--paper-1, #0a0e14);
+  overflow: hidden;
+}
+
+.wf-editor__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ink-3);
+  font-size: 0.9rem;
+}
+.wf-editor__placeholder--error { color: var(--accent-warn, #fbbf24); }
+
+.wf-editor__panel {
+  border-left: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.wf-editor__panel-empty {
+  color: var(--ink-3);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.wf-editor__panel-empty p { margin: var(--s-2) 0; }
+.wf-editor__panel-empty code,
+.wf-editor__hint code {
+  background: var(--paper-3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+/* ── React Flow surface tweaks ── */
+
+.wf-editor__canvas .react-flow__renderer { background: var(--paper-1, #0a0e14); }
+.wf-editor__canvas .react-flow__background { color: var(--rule-soft); }
+.wf-editor__canvas .react-flow__edge-path { stroke: var(--ink-3); stroke-width: 1.5px; }
+.wf-editor__canvas .react-flow__controls {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+}
+.wf-editor__canvas .react-flow__controls-button {
+  background: transparent;
+  border-bottom: 1px solid var(--rule-soft);
+  color: var(--ink-2);
+}
+
+/* ── Custom node ── */
+
+.wf-node {
+  min-width: 220px;
+  max-width: 260px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  padding: var(--s-2) var(--s-3);
+  font-size: 0.85rem;
+  color: var(--ink-1);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.wf-node:hover { border-color: var(--ink-3); }
+.wf-node--selected { border-color: var(--accent-1, #5eead4); }
+.wf-node--unconfigured { border-color: var(--accent-warn, #fbbf24); }
+
+.wf-node__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: 4px;
+}
+.wf-node__name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-node__body {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-node__sep { color: var(--ink-3); }
+.wf-node__action { color: var(--ink-1); }
+.wf-node__piece--missing { color: var(--accent-warn, #fbbf24); font-style: italic; }
+
+/* ── Properties panel ── */
+
+.wf-props__header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink-1);
+}
+.wf-props__header p {
+  margin: 2px 0 var(--s-3);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+.wf-props__header code {
+  background: var(--paper-3);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.wf-props__divider {
+  height: 1px;
+  background: var(--rule-soft);
+  margin: var(--s-3) 0;
+}
+
+.wf-props__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--s-3);
+}
+.wf-props__field-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.wf-props__field select {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+
+.wf-props__inputs h4 {
+  margin: 0 0 var(--s-2);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+
+.wf-props__hint {
+  margin: var(--s-1) 0;
+  color: var(--ink-3);
+  font-size: 0.8rem;
+}
+
+.wf-props__input-list {
+  list-style: none;
+  margin: 0 0 var(--s-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.wf-props__input-row {
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+}
+.wf-props__input-row label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wf-props__input-key {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.wf-props__input-row textarea {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  resize: vertical;
+}
+
+.wf-props__input-remove {
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-3);
+  padding: 4px;
+  cursor: pointer;
+  margin-top: 18px;
+}
+.wf-props__input-remove:hover { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn, #fbbf24); }
+
+.wf-props__add-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  border-top: 1px dashed var(--rule-soft);
+  padding-top: var(--s-2);
+}
+.wf-props__add-row input {
+  flex: 1;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  padding: 6px 8px;
+  font-size: 0.82rem;
+}

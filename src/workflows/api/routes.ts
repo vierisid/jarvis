@@ -48,6 +48,7 @@ import {
 } from "../db/repos/flow-run";
 import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
 import type { TriggerManager } from "../runner/triggers/manager";
+import type { JarvisPieceRegistry } from "../jarvis-pieces/types";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -95,6 +96,13 @@ export interface CreateWorkflowRoutesOptions {
    * still persisted but triggers won't fire (manual `/run` still works).
    */
   triggerManager?: TriggerManager;
+  /**
+   * Optional Jarvis piece registry. When provided, `GET /api/workflows/pieces`
+   * returns the list of registered Jarvis-native pieces (and their actions
+   * and triggers) so the dashboard editor can render a piece picker. Without
+   * it, the catalog endpoint returns an empty list.
+   */
+  pieceRegistry?: JarvisPieceRegistry;
 }
 
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
@@ -112,6 +120,32 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     }
   };
   return {
+    // ----------------------------------------------------- piece catalog
+    "/api/workflows/pieces": {
+      GET: () =>
+        trapErrors(() => {
+          if (!opts.pieceRegistry) return ok([]);
+          const list = opts.pieceRegistry.list().map((p) => ({
+            name: p.name,
+            displayName: p.displayName,
+            description: p.description,
+            actions: Object.values(p.actions).map((a) => ({
+              name: a.name,
+              displayName: a.displayName,
+              description: a.description,
+            })),
+            triggers: p.triggers
+              ? Object.values(p.triggers).map((t) => ({
+                  name: t.name,
+                  displayName: t.displayName,
+                  description: t.description,
+                }))
+              : [],
+          }));
+          return ok(list);
+        }),
+    },
+
     // ------------------------------------------------------------------ flows
     "/api/workflows": {
       GET: (req) =>

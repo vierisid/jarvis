@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Clock,
   Pause,
+  Pencil,
   Play,
   RefreshCw,
   Trash2,
@@ -26,6 +27,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { WorkflowEditor } from "./WorkflowEditor";
 import { Button, Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import {
@@ -82,6 +84,9 @@ export function WorkflowsRoomBody(): React.ReactElement {
 
   return (
     <div className="wf-room">
+      {data.editingFlowId ? (
+        <WorkflowEditor flowId={data.editingFlowId} onClose={() => data.setEditingFlowId(null)} />
+      ) : null}
       <header className="wf-room__header">
         <div>
           <p className="wf-room__count">
@@ -112,6 +117,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
                   flow={flow}
                   selected={data.selectedFlowId === flow.id}
                   onSelect={() => data.setSelectedFlowId(flow.id)}
+                  onEdit={() => data.setEditingFlowId(flow.id)}
                   onRun={() => handleAction("Run", () => data.runFlow(flow.id))}
                   onToggle={() =>
                     handleAction(
@@ -163,13 +169,14 @@ interface FlowRowProps {
   flow: Flow;
   selected: boolean;
   onSelect: () => void;
+  onEdit: () => void;
   onRun: () => void;
   onToggle: () => void;
   onPublish: () => void;
   onDelete: () => void;
 }
 
-function FlowRow({ flow, selected, onSelect, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
+function FlowRow({ flow, selected, onSelect, onEdit, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
   const stop = (e: React.MouseEvent): void => e.stopPropagation();
   return (
     <li
@@ -197,6 +204,9 @@ function FlowRow({ flow, selected, onSelect, onRun, onToggle, onPublish, onDelet
         </div>
       </div>
       <div className="wf-list__buttons" onClick={stop}>
+        <Button variant="ghost" size="sm" onClick={onEdit} title="Open visual editor">
+          <Icon icon={Pencil} size={14} /> Edit
+        </Button>
         <Button variant="primary" size="sm" onClick={onRun} title="Run now">
           <Icon icon={Play} size={14} /> Run
         </Button>
