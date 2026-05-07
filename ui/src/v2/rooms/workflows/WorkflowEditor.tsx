@@ -15,7 +15,15 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ReactFlow, Background, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  useNodesState,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Save, RotateCcw, X, Plus, Trash2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
@@ -100,9 +108,33 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     [editor.allSteps, selectedStepName],
   );
 
-  const { nodes, edges } = useMemo(
+  // Build the canonical graph from the chain. `baseNodes` reflects the
+  // chain's authoritative order; React Flow needs an internal mutable copy
+  // so dragged positions update visually without losing reactivity.
+  const { nodes: baseNodes, edges } = useMemo(
     () => buildGraph(editor.allSteps, selectedStepName, editor.catalog),
     [editor.allSteps, selectedStepName, editor.catalog],
+  );
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
+  // Sync incoming chain order changes back into React Flow's internal state.
+  // Comparing by id+position keeps drag-induced renders from clobbering the
+  // user's in-flight dragged position.
+  useEffect(() => {
+    setNodes(baseNodes);
+  }, [baseNodes, setNodes]);
+
+  const triggerName = editor.draftTrigger?.name ?? null;
+
+  // Drag-rearrange: when the user drops a node, sort nodes by Y and propagate
+  // the new top-level chain order. Trigger stays pinned at the top.
+  const onNodeDragStop = useCallback(
+    (_e: React.MouseEvent | TouchEvent | MouseEvent, _draggedNode: Node<StepNodeData>) => {
+      if (!triggerName) return;
+      const sorted = [...nodes].sort((a, b) => a.position.y - b.position.y);
+      const newOrder = sorted.filter((n) => n.id !== triggerName).map((n) => n.id);
+      editor.reorderActionNodes(newOrder);
+    },
+    [nodes, triggerName, editor],
   );
 
   return (
@@ -149,12 +181,16 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             <ReactFlow
               nodes={nodes}
               edges={edges}
+              onNodesChange={onNodesChange}
               nodeTypes={NODE_TYPES}
               onNodeClick={(_, n) => setSelectedStepName(n.id)}
               onPaneClick={() => setSelectedStepName(null)}
+              onNodeDragStop={onNodeDragStop}
               fitView
               fitViewOptions={{ padding: 0.2 }}
-              nodesDraggable={false}
+              // Per-node `draggable` flag (set to false for the trigger in
+              // buildGraph) overrides this. Nodes default to draggable.
+              nodesDraggable
               nodesConnectable={false}
               elementsSelectable
               panOnDrag
@@ -236,12 +272,18 @@ function buildGraph(
   selected: string | null,
   catalog: PieceCatalogEntry[],
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
-  const nodes: Node<StepNodeData>[] = steps.map((step, i) => ({
-    id: step.name,
-    type: "stepNode",
-    position: { x: NODE_X, y: i * NODE_Y_STEP },
-    data: { step, selected: selected === step.name, catalog },
-  }));
+  const nodes: Node<StepNodeData>[] = steps.map((step, i) => {
+    const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
+    return {
+      id: step.name,
+      type: "stepNode",
+      position: { x: NODE_X, y: i * NODE_Y_STEP },
+      data: { step, selected: selected === step.name, catalog },
+      // Trigger is always pinned to the top; users can morph its type via
+      // the panel but cannot drag it within the chain.
+      draggable: !isTrigger,
+    };
+  });
   const edges: Edge[] = [];
   for (let i = 0; i < steps.length - 1; i++) {
     const from = steps[i]!;

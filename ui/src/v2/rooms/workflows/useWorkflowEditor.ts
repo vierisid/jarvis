@@ -214,6 +214,56 @@ export function useWorkflowEditor(flowId: string | null) {
   }, []);
 
   /**
+   * Re-link the top-level chain so that action steps appear in the order
+   * given by `orderedNames`. The trigger always stays at the head; the input
+   * must list every CURRENT action step's name exactly once (no additions,
+   * no removals — those have their own methods). Out-of-band names are
+   * ignored, missing names cause the call to no-op so a stale UI invocation
+   * can't corrupt the chain.
+   *
+   * Scope: top-level chain only. Reordering inside a LOOP_ON_ITEMS body or
+   * ROUTER branch requires a different operation (sub-chains aren't drawn
+   * on the canvas yet).
+   */
+  const reorderActionNodes = useCallback((orderedNames: string[]): void => {
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      const next = cloneTrigger(prev);
+      // Walk current top-level action steps (everything below the trigger).
+      const currentSteps: FlowStepNode[] = [];
+      let cursor: FlowStepNode | undefined = next.nextAction;
+      while (cursor) {
+        currentSteps.push(cursor);
+        cursor = cursor.nextAction;
+      }
+      const currentNames = new Set(currentSteps.map((s) => s.name));
+      // Validate inputs: identical name set, no duplicates.
+      if (orderedNames.length !== currentSteps.length) return prev;
+      const seen = new Set<string>();
+      for (const name of orderedNames) {
+        if (seen.has(name) || !currentNames.has(name)) return prev;
+        seen.add(name);
+      }
+      // No-op if order is unchanged.
+      const same = currentSteps.every((s, i) => s.name === orderedNames[i]);
+      if (same) return prev;
+
+      // Re-link. Each step keeps its own subtree (firstLoopAction, children,
+      // settings) -- we only swap nextAction pointers.
+      const byName = new Map(currentSteps.map((s) => [s.name, s]));
+      const ordered = orderedNames.map((n) => byName.get(n)!).filter((s): s is FlowStepNode => !!s);
+      next.nextAction = ordered[0];
+      for (let i = 0; i < ordered.length; i++) {
+        const step = ordered[i];
+        if (!step) continue;
+        step.nextAction = ordered[i + 1];
+      }
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  /**
    * Remove a step from the chain by name. The trigger cannot be deleted.
    * The deleted step's `nextAction` becomes its predecessor's `nextAction`.
    */
@@ -368,6 +418,7 @@ export function useWorkflowEditor(flowId: string | null) {
     setTriggerType,
     insertStepAfter,
     deleteStep,
+    reorderActionNodes,
     save,
     reset,
   };
