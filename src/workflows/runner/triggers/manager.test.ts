@@ -253,6 +253,29 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
     expect(queueStats().queued).toBe(1);
   });
 
+  test("flow subscribed to awareness.context_changed fires when published", async () => {
+    publishFlowWithTrigger("awareness listener", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "awareness.context_changed" },
+      },
+    });
+    const bus = new JarvisEventBusAdapter();
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: bus,
+      log: silent,
+    });
+    tm.start();
+    bus.publish("awareness.context_changed", { app: "VS Code", project: "jarvis" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(queueStats().queued).toBe(1);
+  });
+
   test("flow with eventType filter fires only on matching commitment.overdue payload", async () => {
     publishFlowWithTrigger("overdue payments", {
       name: "trigger",

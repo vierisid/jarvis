@@ -50,7 +50,7 @@ import { jarvisAgentPiece } from "../workflows/jarvis-pieces/jarvis-agent.ts";
 import { jarvisTriggerPiece } from "../workflows/jarvis-pieces/jarvis-trigger.ts";
 import { buildPieceServices } from "../workflows/adapters/index.ts";
 import { TriggerManager } from "../workflows/runner/triggers/manager.ts";
-import { OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
+import { AWARENESS_EVENT_TYPE_MAP, OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -789,6 +789,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (awarenessService) return;
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
+        const awarenessWarnedTypes = new Set<string>();
         const svc = new AwarenessService(
           jarvisConfig,
           agentService.getLLMManager(),
@@ -808,6 +809,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
             // Broadcast to WebSocket clients
             wsService.broadcastAwarenessEvent(event);
+
+            // Republish onto the workflow event bus so flows with `on_event`
+            // triggers (awareness.context_changed, awareness.suggestion_ready, etc.)
+            // can fire on real awareness state. Unknown raw types warn once + fall
+            // back to `awareness.<rawType>` so the bus side never drops events.
+            const mapped = AWARENESS_EVENT_TYPE_MAP[event.type];
+            const canonical = mapped ?? `awareness.${event.type}`;
+            if (!mapped && !awarenessWarnedTypes.has(event.type)) {
+              awarenessWarnedTypes.add(event.type);
+              console.warn(
+                `[Daemon] AwarenessService emitted unknown raw type "${event.type}" — publishing as "${canonical}" but it is not in WORKFLOW_EVENT_TYPES; add a mapping in src/workflows/runtime/event-types.ts so the composer surfaces it.`,
+              );
+            }
+            sharedEventBus.publish(canonical, { ...event.data, _timestamp: event.timestamp });
 
             // Push suggestions as chat notifications + voice + desktop
             if (event.type === 'suggestion_ready') {

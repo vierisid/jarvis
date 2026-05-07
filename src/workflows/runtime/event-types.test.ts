@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AWARENESS_EVENT_TYPE_MAP,
   OBSERVER_EVENT_TYPE_MAP,
   WORKFLOW_EVENT_TYPES,
   getWorkflowEventTypeMeta,
@@ -19,6 +20,23 @@ describe("workflow event types", () => {
       expect(meta).not.toBeNull();
       expect(meta?.type).toBe(canonical);
       void rawType;
+    }
+  });
+
+  test("every awareness mapping points at a registered workflow type", () => {
+    for (const [rawType, canonical] of Object.entries(AWARENESS_EVENT_TYPE_MAP)) {
+      expect(isWorkflowEventType(canonical)).toBe(true);
+      const meta = getWorkflowEventTypeMeta(canonical);
+      expect(meta).not.toBeNull();
+      expect(meta?.type).toBe(canonical);
+      void rawType;
+    }
+  });
+
+  test("awareness + observer maps cover disjoint canonical names", () => {
+    const obs = new Set(Object.values(OBSERVER_EVENT_TYPE_MAP));
+    for (const v of Object.values(AWARENESS_EVENT_TYPE_MAP)) {
+      expect(obs.has(v)).toBe(false);
     }
   });
 

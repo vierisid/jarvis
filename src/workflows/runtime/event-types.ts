@@ -74,18 +74,40 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   },
 
   // ── awareness.* ── from the awareness service (M13) ─────────────────────
-  // Publishers for these are not yet wired (see todos); listed so flows can
-  // be authored against the contract and start firing automatically once the
-  // awareness service publishes.
   {
     type: "awareness.context_changed",
-    description: "[publisher pending] User switched between meaningful contexts (project / app / task).",
+    description: "User switched between meaningful contexts (project / app / task).",
     payloadExample: { app: "VS Code", project: "jarvis" },
   },
   {
     type: "awareness.error_detected",
-    description: "[publisher pending] User is hitting an error / repeated undo / stuck pattern.",
+    description: "User is hitting an error pattern detected by the awareness service.",
     payloadExample: { app: "Terminal", excerpt: "fatal: not a git repository" },
+  },
+  {
+    type: "awareness.stuck_detected",
+    description: "User has been on the same window for too long with little change.",
+    payloadExample: { app: "VS Code", windowTitle: "config.ts", durationMs: 600000 },
+  },
+  {
+    type: "awareness.struggle_detected",
+    description: "User is undoing repeatedly or otherwise showing struggle signals.",
+    payloadExample: { app: "VS Code", signal: "repeated_undo" },
+  },
+  {
+    type: "awareness.session_started",
+    description: "A new awareness session began (focus on a project or task).",
+    payloadExample: { sessionId: "sess_abc", topic: null },
+  },
+  {
+    type: "awareness.session_ended",
+    description: "An awareness session ended; payload includes its inferred topic + duration.",
+    payloadExample: { sessionId: "sess_abc", topic: "jarvis workflows", durationMs: 1800000 },
+  },
+  {
+    type: "awareness.suggestion_ready",
+    description: "Awareness intelligence produced a proactive suggestion for the user.",
+    payloadExample: { title: "Stuck on this error?", body: "Try X." },
   },
 ];
 
@@ -104,6 +126,22 @@ export const OBSERVER_EVENT_TYPE_MAP: Readonly<Record<string, string>> = {
   process_started: "observer.process_started",
   process_stopped: "observer.process_stopped",
   notification: "observer.notification_received",
+};
+
+/**
+ * Map from raw AwarenessEvent.type to canonical workflow event type. The
+ * awareness service emits typed events through its eventCallback; we
+ * republish onto the bus using these names. Same fallback rule as the
+ * observer map applies (`awareness.<rawType>` for unmapped entries).
+ */
+export const AWARENESS_EVENT_TYPE_MAP: Readonly<Record<string, string>> = {
+  context_changed: "awareness.context_changed",
+  error_detected: "awareness.error_detected",
+  stuck_detected: "awareness.stuck_detected",
+  struggle_detected: "awareness.struggle_detected",
+  session_started: "awareness.session_started",
+  session_ended: "awareness.session_ended",
+  suggestion_ready: "awareness.suggestion_ready",
 };
 
 /** O(1) check that a string is a known workflow event type. */
