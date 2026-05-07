@@ -43,6 +43,10 @@ import {
 } from "./routes/files";
 import { createWaitpointsRoute } from "./routes/waitpoints";
 import { logsUploadRoute } from "./routes/logs";
+import {
+  createJarvisLlmChatRoute,
+  type LlmChatFn,
+} from "./routes/jarvis-llm";
 import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
 
 export interface SandboxApiServices {
@@ -66,6 +70,11 @@ export interface SandboxApiServices {
   ) => void;
   /** Optional structured-log sink for per-sandbox stdout/stderr. */
   onLogLine?: (entry: import("./worker-handlers").LogLine) => void;
+  /**
+   * LLM chat backend for the `jarvis-ask` piece. If unset, the endpoint
+   * returns 503; the daemon wires this in at startup with the LLMManager.
+   */
+  llmChat?: LlmChatFn;
 }
 
 export interface SandboxApiOptions {
@@ -164,6 +173,11 @@ export class SandboxApi {
         }),
       },
       { path: "/v1/logs/:runId", method: "PUT", handler: logsUploadRoute },
+      {
+        path: "/v1/jarvis/llm/chat",
+        method: "POST",
+        handler: createJarvisLlmChatRoute({ llmChat: this.services.llmChat }),
+      },
     );
   }
 

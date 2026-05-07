@@ -49,8 +49,17 @@ export interface EngineRuntimeOptions {
    * `~/.jarvis/workflow-codes`. The engine appends `${flowVersionId}/${stepName}/index.js`.
    */
   baseCodeDir?: string;
+  /**
+   * Working directory for the spawned engine. The piece-loader's dev-pieces
+   * mode resolves `packages/pieces` relative to CWD, so we default to the
+   * vendored activepieces dir which has the right layout for finding
+   * `packages/pieces/jarvis/<name>/dist/package.json`.
+   */
+  cwd?: string;
   /** Search roots for vendored pieces. Default: vendored `packages/pieces` tree. */
   customPiecesPaths?: string[];
+  /** CSV of dev-piece names exposed via AP_DEV_PIECES. Default: jarvis pieces. */
+  devPieces?: string[];
   /** Engine WS handshake deadline. Default 10s. */
   handshakeTimeoutMs?: number;
   /** Graceful kill deadline before SIGKILL. Default 2s. */
@@ -193,6 +202,8 @@ export class EngineRuntime {
   private readonly killGraceMs: number;
   private readonly spawnEnvOverride: Record<string, string | undefined> | undefined;
   private readonly runtime: string | undefined;
+  private readonly cwd: string;
+  private readonly devPieces: string[];
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
@@ -207,6 +218,13 @@ export class EngineRuntime {
     this.killGraceMs = opts.killGraceMs ?? 2_000;
     this.spawnEnvOverride = opts.spawnEnvOverride;
     this.runtime = opts.runtime;
+    // Default to the vendored activepieces dir so dev-pieces resolution finds
+    // packages/pieces/jarvis/*/dist/package.json without further env setup.
+    this.cwd = opts.cwd ?? resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "..");
+    // Accept piece names with or without the `piece-` prefix; the engine's
+    // `getPieceNameFromAlias` normalizes by stripping `piece-` so we match
+    // its own behaviour.
+    this.devPieces = opts.devPieces ?? ["jarvis-test", "jarvis-ask"];
   }
 
   /** Expose for callers that need to resolve files into the same baseCodeDir. */
@@ -237,6 +255,8 @@ export class EngineRuntime {
       sandboxWsPort: this.api.sandboxWsPort,
       baseCodeDir: this.baseCodeDir,
       customPiecesPaths: this.customPiecesPaths,
+      devPieces: this.devPieces,
+      cwd: this.cwd,
       env: this.spawnEnvOverride,
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;

@@ -47,6 +47,12 @@ export interface SpawnEngineOptions {
   runtime?: string;
   /** Extra env merged on top of the defaults. */
   env?: Record<string, string | undefined>;
+  /**
+   * Working directory for the spawned engine. The piece-loader's dev-pieces
+   * mode resolves `packages/pieces` relative to CWD, so this should point at
+   * a directory where `packages/pieces/<piece>/dist/package.json` exists.
+   */
+  cwd?: string;
 }
 
 export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
@@ -79,6 +85,7 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   const runtime = opts.runtime ?? process.execPath;
   const child = spawn(runtime, [opts.bundlePath], {
     env,
+    cwd: opts.cwd,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

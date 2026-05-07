@@ -6,6 +6,9 @@ out
 dist
 *.tgz
 
+# Built Jarvis piece artifacts (created by scripts/build-pieces.ts)
+src/workflows/activepieces/packages/pieces/jarvis/*/dist/
+
 # code coverage
 coverage
 *.lcov
