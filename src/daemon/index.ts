@@ -619,6 +619,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         toolRegistry.register(requestApprovalTool);
         console.log('[Daemon] Registered request_approval intent-gate tool');
       }
+
+      // Register manage_workflow so the primary agent can list / run / create
+      // workflows from chat. Wired here so the trigger manager (constructed
+      // earlier in step 10.1) is in scope and refreshes happen on enable /
+      // disable / publish / delete.
+      const { createManageWorkflowTool } = await import('../actions/tools/manage-workflow.ts');
+      const manageWorkflowTool = createManageWorkflowTool({ triggerManager: triggerManager ?? undefined });
+      if (!toolRegistry.has('manage_workflow')) {
+        toolRegistry.register(manageWorkflowTool);
+        console.log('[Daemon] Registered manage_workflow tool');
+      }
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
