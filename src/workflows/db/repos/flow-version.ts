@@ -65,6 +65,7 @@ export interface FlowTriggerNode {
   displayName?: string;
   settings?: {
     pieceName?: string;
+    pieceVersion?: string;
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
@@ -74,6 +75,10 @@ export interface FlowTriggerNode {
     branches?: Array<FlowRouterBranch>;
     /** ROUTER: which matched branches to run. */
     executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
+    /** CODE: source bundle stored verbatim; engine materializes to disk. */
+    sourceCode?: { packageJson: string; code: string };
+    /** CODE / PIECE: per-step propertySettings (mostly empty for our pieces). */
+    propertySettings?: Record<string, unknown>;
   };
   nextAction?: FlowTriggerNode;
   /** LOOP_ON_ITEMS: head of the inner subgraph executed once per iteration. */
