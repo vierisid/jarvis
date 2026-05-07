@@ -35,10 +35,24 @@ import {
   putStoreEntryRoute,
 } from "./routes/store";
 import { populatedFlowsRoute } from "./routes/flows";
+import {
+  stepFilesUploadRoute,
+  stepFilesDownloadRoute,
+} from "./routes/files";
+import { createWaitpointsRoute } from "./routes/waitpoints";
+import { logsUploadRoute } from "./routes/logs";
 import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
 
 export interface SandboxApiServices {
   credentialResolver: CredentialResolver;
+  /**
+   * URL prefix used to mint resumeUrl values for waitpoints. Engine pieces
+   * embed this URL in step output; external callers POST to it to wake the
+   * paused flow. Should be a public URL (the daemon's user-facing API), not
+   * the sandbox-api's loopback URL. Default: empty string -- callers must
+   * supply a real prefix once the resume webhook lands.
+   */
+  resumeUrlPrefix?: string;
 }
 
 export interface SandboxApiOptions {
@@ -115,6 +129,16 @@ export class SandboxApi {
       { path: "/v1/store-entries", method: "POST", handler: putStoreEntryRoute },
       { path: "/v1/store-entries", method: "DELETE", handler: deleteStoreEntryRoute },
       { path: "/v1/engine/populated-flows", method: "GET", handler: populatedFlowsRoute },
+      { path: "/v1/step-files", method: "POST", handler: stepFilesUploadRoute },
+      { path: "/v1/step-files/:id", method: "GET", handler: stepFilesDownloadRoute },
+      {
+        path: "/v1/waitpoints",
+        method: "POST",
+        handler: createWaitpointsRoute({
+          resumeUrlPrefix: this.services.resumeUrlPrefix ?? "/api/webhooks/waitpoints",
+        }),
+      },
+      { path: "/v1/logs/:runId", method: "PUT", handler: logsUploadRoute },
     );
   }
 

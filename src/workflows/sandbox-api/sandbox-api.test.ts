@@ -373,3 +373,148 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     expect(body.data.length).toBe(0);
   });
 });
+
+describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+  let testRunId: string;
+
+  async function authedFetchForRun(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = { ...sampleIdentity(), runId: testRunId };
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    process.env.JARVIS_WORKFLOW_DATA_DIR = `/tmp/jarvis-sandbox-test-${Math.random().toString(36).slice(2, 10)}`;
+    initWorkflowDb(":memory:");
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: {
+        credentialResolver: new CredentialResolver(),
+        resumeUrlPrefix: "https://daemon.local/api/webhooks/waitpoints",
+      },
+    });
+    api.start({ port: 0 });
+
+    // A real flow_run row is needed for the waitpoint FK.
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "f" });
+    lockVersion(v.id);
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    testRunId = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: v.id,
+      environment: "TESTING",
+    }).id;
+  });
+
+  afterAll(() => {
+    api.stop();
+    closeWorkflowDb();
+    delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+  });
+
+  test("POST /v1/step-files stores blob and returns a /v1/step-files/<id> URL", async () => {
+    const form = new FormData();
+    form.set("stepName", "step_1");
+    form.set("flowId", "flow_xx");
+    form.set("fileName", "hello.txt");
+    form.set("file", new Blob(["hello world"], { type: "text/plain" }), "hello.txt");
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { url: string };
+    expect(body.url).toMatch(/^\/v1\/step-files\//);
+
+    // GET round-trip
+    const get = await authedFetchForRun(body.url);
+    expect(get.status).toBe(200);
+    const text = await get.text();
+    expect(text).toBe("hello world");
+  });
+
+  test("POST /v1/step-files rejects non-multipart bodies", async () => {
+    const r = await authedFetchForRun("/v1/step-files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/waitpoints persists row and returns resumeUrl", async () => {
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flowRunId: testRunId,
+        projectId: DEFAULT_IDS.project,
+        stepName: "step_pause",
+        type: "WEBHOOK",
+        version: "V1",
+      }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { waitpointId: string; resumeUrl: string };
+    expect(body.waitpointId).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(body.resumeUrl).toBe(
+      `https://daemon.local/api/webhooks/waitpoints/${body.waitpointId}`,
+    );
+  });
+
+  test("POST /v1/waitpoints rejects flowRunId mismatch", async () => {
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flowRunId: "some-other-run",
+        stepName: "x",
+        type: "TIMER",
+      }),
+    });
+    expect(r.status).toBe(403);
+  });
+
+  test("POST /v1/waitpoints rejects unsupported type", async () => {
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowRunId: testRunId, stepName: "x", type: "QUANTUM" }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("PUT /v1/logs/:runId persists body to disk", async () => {
+    const r = await authedFetchForRun(`/v1/logs/${testRunId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Uint8Array([1, 2, 3, 4, 5]),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; bytes: number };
+    expect(body.ok).toBe(true);
+    expect(body.bytes).toBe(5);
+  });
+
+  test("PUT /v1/logs/:runId rejects mismatched runId", async () => {
+    const r = await authedFetchForRun("/v1/logs/some-other-run", {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Uint8Array([0]),
+    });
+    expect(r.status).toBe(403);
+  });
+});

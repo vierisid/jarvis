@@ -153,6 +153,25 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_workflow_file_project ON workflow_file(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_file_flow ON workflow_file(flow_id)`,
 
+  // --- Async pause for flows that called context.run.createWaitpoint(). The
+  // engine returns the resumeUrl; when something hits that URL (timer or
+  // webhook), we resume the run via RUN_FLOW(executionType=RESUME). ---
+  `CREATE TABLE IF NOT EXISTS waitpoint (
+    id TEXT PRIMARY KEY,
+    flow_run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    step_name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT 'V1',
+    resume_date_time TEXT,
+    response_to_send TEXT,
+    worker_handler_id TEXT,
+    http_request_id TEXT,
+    created INTEGER NOT NULL,
+    resumed_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_waitpoint_run_step ON waitpoint(flow_run_id, step_name)`,
+
   // --- In-process job queue (replaces BullMQ/Redis). Workers claim rows by
   // atomic UPDATE WHERE status='QUEUED' AND scheduled_at <= now. ---
   `CREATE TABLE IF NOT EXISTS workflow_job (
