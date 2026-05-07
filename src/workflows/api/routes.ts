@@ -1,10 +1,8 @@
 /**
- * HTTP routes for the new workflow runtime (Phase 2 step 13).
+ * HTTP routes for the workflow runtime.
  *
- * Mounted under `/api/v2/workflows/*` so they coexist with the legacy
- * `/api/workflows/*` routes during the build-out. The legacy engine and its
- * routes are deleted at Phase 6 (cutover); at that point we can rename the v2
- * paths to drop the prefix.
+ * Mounted under `/api/workflows/*` and `/api/webhooks/:flowId`. The previous
+ * in-house engine that owned these paths was deleted in the Phase 6 cutover.
  *
  * Route map shape matches the rest of the daemon (`Record<string, { GET?, POST?, ... }>`)
  * so it can be spread into `createApiRoutes()` without touching its internals.
@@ -115,7 +113,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   };
   return {
     // ------------------------------------------------------------------ flows
-    "/api/v2/workflows": {
+    "/api/workflows": {
       GET: (req) =>
         trapErrors(() => {
           const params = new URL(req.url).searchParams;
@@ -152,7 +150,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflows/:id": {
+    "/api/workflows/:id": {
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
@@ -192,7 +190,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
 
     // ----------------------------------------------------------------- versions
-    "/api/v2/workflows/:id/versions": {
+    "/api/workflows/:id/versions": {
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
@@ -215,7 +213,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflows/:id/versions/:versionId": {
+    "/api/workflows/:id/versions/:versionId": {
       GET: (req) =>
         trapErrors(() => {
           const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
@@ -237,7 +235,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflows/:id/versions/:versionId/lock": {
+    "/api/workflows/:id/versions/:versionId/lock": {
       POST: (req) =>
         trapErrors(() => {
           const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
@@ -245,7 +243,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflows/:id/publish": {
+    "/api/workflows/:id/publish": {
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
@@ -270,7 +268,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
 
     // -------------------------------------------------------------------- runs
-    "/api/v2/workflows/:id/run": {
+    "/api/workflows/:id/run": {
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
@@ -311,7 +309,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflows/:id/runs": {
+    "/api/workflows/:id/runs": {
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
@@ -329,7 +327,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflow-runs/:runId": {
+    "/api/workflow-runs/:runId": {
       GET: (req) =>
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
@@ -338,10 +336,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    // Webhook ingress. Path is /api/v2/webhooks/:flowId; we deliberately keep
-    // the v2 prefix so the legacy /webhooks/:flowId routes (still served by
-    // the legacy engine until Phase 6) don't collide.
-    "/api/v2/webhooks/:flowId": {
+    // Webhook ingress. Path is /api/webhooks/:flowId.
+    "/api/webhooks/:flowId": {
       POST: (req) =>
         trapErrors(async () => {
           if (!opts.triggerManager) return err("webhooks are not enabled in this build", 503);
@@ -358,7 +354,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    "/api/v2/workflow-runs/:runId/cancel": {
+    "/api/workflow-runs/:runId/cancel": {
       POST: (req) =>
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;

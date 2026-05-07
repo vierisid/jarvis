@@ -169,9 +169,6 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('### manage_goals');
   lines.push('OKR-style goal management (create, list, score, decompose, morning plan, evening review).');
   lines.push('');
-  lines.push('### manage_workflow');
-  lines.push('Create and run automation workflows from natural language.');
-  lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');
   lines.push('');

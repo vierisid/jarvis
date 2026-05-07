@@ -551,10 +551,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: sharedEventBus,
     });
 
-    // Mount the legacy workflow routes (createApiRoutes) and the new v2 routes
-    // side by side. v2 lives under /api/v2/workflows/* so they don't collide.
-    // At Phase 6 cutover the legacy /api/workflows/* paths get removed and we
-    // can drop the v2 prefix.
+    // Mount the daemon's existing routes plus the workflow runtime's routes.
+    // The legacy in-house workflow routes that lived at /api/workflows/* were
+    // removed in the Phase 6 cutover; the new runtime now owns those paths.
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({ triggerManager }),
@@ -1044,70 +1043,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     }
 
-    // 10b. Workflow Automation Engine (M14)
-    const workflowConfig = jarvisConfig.workflows;
-    if (workflowConfig?.enabled !== false) {
-      try {
-        const { NodeRegistry } = await import('../workflows/nodes/registry.ts');
-        const { registerBuiltinNodes } = await import('../workflows/nodes/builtin.ts');
-        const { WorkflowEngine } = await import('../workflows/engine.ts');
-        const { TriggerManager } = await import('../workflows/triggers/manager.ts');
-        const { NLWorkflowBuilder } = await import('../workflows/nl-builder.ts');
-        const { WorkflowAutoSuggest } = await import('../workflows/auto-suggest.ts');
-
-        // Create node registry and register all built-in nodes
-        const nodeRegistry = new NodeRegistry();
-        registerBuiltinNodes(nodeRegistry);
-        console.log(`[Daemon] Node registry: ${nodeRegistry.count()} nodes registered`);
-
-        // Create and start workflow engine
-        const wfToolRegistry = orchestrator.getToolRegistry();
-        const workflowEngine = new WorkflowEngine(
-          nodeRegistry,
-          wfToolRegistry ?? new (await import('../actions/tools/registry.ts')).ToolRegistry(),
-          agentService.getLLMManager(),
-        );
-        workflowEngine.setEventCallback((event) => {
-          wsService.broadcastWorkflowEvent(event);
-        });
-        await workflowEngine.start();
-
-        // Create and start trigger manager
-        const triggerManager = new TriggerManager(workflowEngine);
-        await triggerManager.start();
-
-        // Create NL builder and auto-suggest
-        const nlBuilder = new NLWorkflowBuilder(nodeRegistry, agentService.getLLMManager());
-        const autoSuggest = new WorkflowAutoSuggest(nodeRegistry, agentService.getLLMManager());
-
-        // Wire awareness events into auto-suggest
-        if (awarenessService) {
-          // The awareness service emits events that can feed pattern detection
-          console.log('[Daemon] Workflow auto-suggest wired to awareness events');
-        }
-
-        // Register manage_workflow tool so primary agent can create/run workflows from chat
-        const { createManageWorkflowTool } = await import('../actions/tools/workflows.ts');
-        const manageWorkflowTool = createManageWorkflowTool({ workflowEngine, nlBuilder, triggerManager });
-        if (wfToolRegistry) {
-          wfToolRegistry.register(manageWorkflowTool);
-          console.log('[Daemon] manage_workflow tool registered for chat agent');
-        }
-
-        // Wire into API context
-        (apiContext as any).workflowEngine = workflowEngine;
-        (apiContext as any).triggerManager = triggerManager;
-        (apiContext as any).webhookManager = triggerManager.getWebhookManager();
-        (apiContext as any).nodeRegistry = nodeRegistry;
-        (apiContext as any).nlBuilder = nlBuilder;
-        (apiContext as any).autoSuggest = autoSuggest;
-
-        console.log('[Daemon] Workflow engine started (engine + triggers + NL builder + auto-suggest)');
-      } catch (err) {
-        console.error('[Daemon] Workflow engine failed to start:', err instanceof Error ? err.message : err);
-        // Non-fatal — daemon continues without workflows
-      }
-    }
+    // 10b. (legacy workflow engine deleted; the new runtime initialized above
+    //       in step 10.1 owns all workflow execution.)
 
     // 10f. Goal Service (M16)
     const goalsConfig = jarvisConfig.goals;
@@ -1130,23 +1067,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         goalService = goalSvc;
         apiContext.goalService = goalSvc;
 
-        // Wire workflow bridge for daily rhythm
-        try {
-          const { generateRhythmWorkflows, registerGoalWorkflows } = await import('../goals/workflow-bridge.ts');
-          const effectiveConfig = goalsConfig ?? {
-            enabled: true,
-            morning_window: { start: 7, end: 9 },
-            evening_window: { start: 20, end: 22 },
-            accountability_style: 'drill_sergeant' as const,
-            escalation_weeks: { pressure: 1, root_cause: 3, suggest_kill: 4 },
-            auto_decompose: true,
-            calendar_ownership: false,
-          };
-          const rhythmWorkflows = generateRhythmWorkflows(effectiveConfig);
-          if (apiContext.triggerManager) {
-            registerGoalWorkflows(rhythmWorkflows, apiContext.triggerManager as any);
-          }
-        } catch { /* workflow bridge is optional */ }
+        // (Goal -> workflow bridge for daily rhythm has been removed alongside
+        // the legacy engine. Re-add as native flows in the new system if the
+        // morning-plan / evening-review crons are still desired.)
 
         // Register manage_goals tool for chat agent
         try {

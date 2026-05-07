@@ -51,12 +51,12 @@ async function callJson(handler: unknown, req: Request | (Request & { params: Re
 }
 
 describe("workflow API: flows", () => {
-  test("POST /api/v2/workflows creates a flow + initial draft version", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("POST /api/workflows creates a flow + initial draft version", async () => {
+    const post = routes["/api/workflows"]?.POST;
     expect(post).toBeDefined();
     const { status, body } = await callJson(
       post,
-      plainReq("POST", "http://x/api/v2/workflows", { displayName: "Morning briefing" }),
+      plainReq("POST", "http://x/api/workflows", { displayName: "Morning briefing" }),
     );
     expect(status).toBe(201);
     expect(body).toMatchObject({
@@ -65,43 +65,43 @@ describe("workflow API: flows", () => {
     });
   });
 
-  test("POST /api/v2/workflows requires displayName", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("POST /api/workflows requires displayName", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const { status, body } = await callJson(
       post,
-      plainReq("POST", "http://x/api/v2/workflows", {}),
+      plainReq("POST", "http://x/api/workflows", {}),
     );
     expect(status).toBe(400);
     expect(body.error).toMatch(/displayName/);
   });
 
-  test("GET /api/v2/workflows lists flows; status filter narrows", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("GET /api/workflows lists flows; status filter narrows", async () => {
+    const post = routes["/api/workflows"]?.POST;
     await callJson(post, plainReq("POST", "http://x", { displayName: "a" }));
     await callJson(post, plainReq("POST", "http://x", { displayName: "b" }));
 
-    const get = routes["/api/v2/workflows"]?.GET;
-    const all = await callJson(get, plainReq("GET", "http://x/api/v2/workflows"));
+    const get = routes["/api/workflows"]?.GET;
+    const all = await callJson(get, plainReq("GET", "http://x/api/workflows"));
     expect(all.status).toBe(200);
     expect(Array.isArray(all.body)).toBe(true);
     expect(all.body.length).toBe(2);
 
-    const enabled = await callJson(get, plainReq("GET", "http://x/api/v2/workflows?status=ENABLED"));
+    const enabled = await callJson(get, plainReq("GET", "http://x/api/workflows?status=ENABLED"));
     expect(enabled.body).toEqual([]);
   });
 
-  test("GET /api/v2/workflows/:id returns flow with latest draft", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("GET /api/workflows/:id returns flow with latest draft", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(
       post,
       plainReq("POST", "http://x", { displayName: "x" }),
     );
     const flowId = created.body.flow.id;
 
-    const get = routes["/api/v2/workflows/:id"]?.GET;
+    const get = routes["/api/workflows/:id"]?.GET;
     const { status, body } = await callJson(
       get,
-      reqWithParams("GET", `http://x/api/v2/workflows/${flowId}`, { id: flowId }),
+      reqWithParams("GET", `http://x/api/workflows/${flowId}`, { id: flowId }),
     );
     expect(status).toBe(200);
     expect(body.flow.id).toBe(flowId);
@@ -109,26 +109,26 @@ describe("workflow API: flows", () => {
     expect(body.published).toBeNull();
   });
 
-  test("GET /api/v2/workflows/:id 404s for unknown id", async () => {
-    const get = routes["/api/v2/workflows/:id"]?.GET;
+  test("GET /api/workflows/:id 404s for unknown id", async () => {
+    const get = routes["/api/workflows/:id"]?.GET;
     const { status } = await callJson(
       get,
-      reqWithParams("GET", "http://x/api/v2/workflows/nope", { id: "nope" }),
+      reqWithParams("GET", "http://x/api/workflows/nope", { id: "nope" }),
     );
     expect(status).toBe(404);
   });
 
-  test("PATCH /api/v2/workflows/:id toggles status and metadata", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("PATCH /api/workflows/:id toggles status and metadata", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
 
-    const patch = routes["/api/v2/workflows/:id"]?.PATCH;
+    const patch = routes["/api/workflows/:id"]?.PATCH;
     const { status, body } = await callJson(
       patch,
       reqWithParams(
         "PATCH",
-        `http://x/api/v2/workflows/${flowId}`,
+        `http://x/api/workflows/${flowId}`,
         { id: flowId },
         { status: "ENABLED", metadata: { tag: "morning" } },
       ),
@@ -137,22 +137,22 @@ describe("workflow API: flows", () => {
     expect(body).toMatchObject({ status: "ENABLED", metadata: { tag: "morning" } });
   });
 
-  test("DELETE /api/v2/workflows/:id removes the flow and cascades versions", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("DELETE /api/workflows/:id removes the flow and cascades versions", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
 
-    const del = routes["/api/v2/workflows/:id"]?.DELETE;
+    const del = routes["/api/workflows/:id"]?.DELETE;
     const { status } = await callJson(
       del,
-      reqWithParams("DELETE", `http://x/api/v2/workflows/${flowId}`, { id: flowId }),
+      reqWithParams("DELETE", `http://x/api/workflows/${flowId}`, { id: flowId }),
     );
     expect(status).toBe(200);
 
-    const get = routes["/api/v2/workflows/:id"]?.GET;
+    const get = routes["/api/workflows/:id"]?.GET;
     const after = await callJson(
       get,
-      reqWithParams("GET", `http://x/api/v2/workflows/${flowId}`, { id: flowId }),
+      reqWithParams("GET", `http://x/api/workflows/${flowId}`, { id: flowId }),
     );
     expect(after.status).toBe(404);
   });
@@ -160,17 +160,17 @@ describe("workflow API: flows", () => {
 
 describe("workflow API: versions", () => {
   test("PATCH a draft version updates trigger + valid", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const { id: flowId } = created.body.flow;
     const versionId = created.body.version.id;
 
-    const patch = routes["/api/v2/workflows/:id/versions/:versionId"]?.PATCH;
+    const patch = routes["/api/workflows/:id/versions/:versionId"]?.PATCH;
     const { status, body } = await callJson(
       patch,
       reqWithParams(
         "PATCH",
-        `http://x/api/v2/workflows/${flowId}/versions/${versionId}`,
+        `http://x/api/workflows/${flowId}/versions/${versionId}`,
         { id: flowId, versionId },
         {
           trigger: { type: "PIECE_TRIGGER", pieceName: "schedule" },
@@ -186,17 +186,17 @@ describe("workflow API: versions", () => {
   });
 
   test("POST .../lock locks a draft", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const { id: flowId } = created.body.flow;
     const versionId = created.body.version.id;
 
-    const lock = routes["/api/v2/workflows/:id/versions/:versionId/lock"]?.POST;
+    const lock = routes["/api/workflows/:id/versions/:versionId/lock"]?.POST;
     const { body } = await callJson(
       lock,
       reqWithParams(
         "POST",
-        `http://x/api/v2/workflows/${flowId}/versions/${versionId}/lock`,
+        `http://x/api/workflows/${flowId}/versions/${versionId}/lock`,
         { id: flowId, versionId },
       ),
     );
@@ -204,17 +204,17 @@ describe("workflow API: versions", () => {
   });
 
   test("POST .../publish locks the draft, ENABLES the flow, sets published_version_id", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
     const versionId = created.body.version.id;
 
-    const publish = routes["/api/v2/workflows/:id/publish"]?.POST;
+    const publish = routes["/api/workflows/:id/publish"]?.POST;
     const { status, body } = await callJson(
       publish,
       reqWithParams(
         "POST",
-        `http://x/api/v2/workflows/${flowId}/publish`,
+        `http://x/api/workflows/${flowId}/publish`,
         { id: flowId },
       ),
     );
@@ -227,16 +227,16 @@ describe("workflow API: versions", () => {
 
 describe("workflow API: runs", () => {
   test("POST /:id/run creates a flow_run and enqueues a RUN_FLOW job", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
 
-    const run = routes["/api/v2/workflows/:id/run"]?.POST;
+    const run = routes["/api/workflows/:id/run"]?.POST;
     const { status, body } = await callJson(
       run,
       reqWithParams(
         "POST",
-        `http://x/api/v2/workflows/${flowId}/run`,
+        `http://x/api/workflows/${flowId}/run`,
         { id: flowId },
         { triggeredBy: "test" },
       ),
@@ -252,12 +252,12 @@ describe("workflow API: runs", () => {
     // Build a flow row directly (no draft) to reproduce the edge case.
     const { createFlow } = await import("../db/repos/flow");
     const flow = createFlow();
-    const run = routes["/api/v2/workflows/:id/run"]?.POST;
+    const run = routes["/api/workflows/:id/run"]?.POST;
     const { status, body } = await callJson(
       run,
       reqWithParams(
         "POST",
-        `http://x/api/v2/workflows/${flow.id}/run`,
+        `http://x/api/workflows/${flow.id}/run`,
         { id: flow.id },
       ),
     );
@@ -266,62 +266,62 @@ describe("workflow API: runs", () => {
   });
 
   test("GET /:id/runs lists runs for a flow", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
-    const runHandler = routes["/api/v2/workflows/:id/run"]?.POST;
+    const runHandler = routes["/api/workflows/:id/run"]?.POST;
     await callJson(
       runHandler,
-      reqWithParams("POST", `http://x/api/v2/workflows/${flowId}/run`, { id: flowId }, {}),
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}),
     );
     await callJson(
       runHandler,
-      reqWithParams("POST", `http://x/api/v2/workflows/${flowId}/run`, { id: flowId }, {}),
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}),
     );
 
-    const list = routes["/api/v2/workflows/:id/runs"]?.GET;
+    const list = routes["/api/workflows/:id/runs"]?.GET;
     const { status, body } = await callJson(
       list,
-      reqWithParams("GET", `http://x/api/v2/workflows/${flowId}/runs`, { id: flowId }),
+      reqWithParams("GET", `http://x/api/workflows/${flowId}/runs`, { id: flowId }),
     );
     expect(status).toBe(200);
     expect(body.length).toBe(2);
   });
 
-  test("POST /api/v2/workflow-runs/:runId/cancel cancels the queued job", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
     const run = await callJson(
-      routes["/api/v2/workflows/:id/run"]?.POST,
-      reqWithParams("POST", `http://x/api/v2/workflows/${flowId}/run`, { id: flowId }, {}),
+      routes["/api/workflows/:id/run"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}),
     );
     const runId: string = run.body.id;
 
-    const cancel = routes["/api/v2/workflow-runs/:runId/cancel"]?.POST;
+    const cancel = routes["/api/workflow-runs/:runId/cancel"]?.POST;
     const { status, body } = await callJson(
       cancel,
-      reqWithParams("POST", `http://x/api/v2/workflow-runs/${runId}/cancel`, { runId }),
+      reqWithParams("POST", `http://x/api/workflow-runs/${runId}/cancel`, { runId }),
     );
     expect(status).toBe(200);
     expect(body.jobCanceled).toBe(true);
     expect(queueStats().canceled).toBe(1);
   });
 
-  test("GET /api/v2/workflow-runs/:runId returns the run", async () => {
-    const post = routes["/api/v2/workflows"]?.POST;
+  test("GET /api/workflow-runs/:runId returns the run", async () => {
+    const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
     const run = await callJson(
-      routes["/api/v2/workflows/:id/run"]?.POST,
-      reqWithParams("POST", `http://x/api/v2/workflows/${flowId}/run`, { id: flowId }, {}),
+      routes["/api/workflows/:id/run"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}),
     );
     const runId: string = run.body.id;
 
-    const get = routes["/api/v2/workflow-runs/:runId"]?.GET;
+    const get = routes["/api/workflow-runs/:runId"]?.GET;
     const { status, body } = await callJson(
       get,
-      reqWithParams("GET", `http://x/api/v2/workflow-runs/${runId}`, { runId }),
+      reqWithParams("GET", `http://x/api/workflow-runs/${runId}`, { runId }),
     );
     expect(status).toBe(200);
     expect(body.id).toBe(runId);

@@ -31,8 +31,8 @@
  * rest of the legacy workflow tree.
  */
 
-import { CronScheduler } from "../../triggers/cron";
-import { WebhookManager } from "../../triggers/webhook";
+import { CronScheduler } from "./cron";
+import { WebhookManager } from "./webhook";
 import type { JarvisEventBusAdapter } from "../../adapters/event-bus";
 import type { JarvisWorkflowRunnerAdapter } from "../../adapters/workflow-runner";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
