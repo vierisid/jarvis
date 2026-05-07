@@ -134,6 +134,24 @@
 .wf-node:hover { border-color: var(--ink-3); }
 .wf-node--selected { border-color: var(--accent-1, #5eead4); }
 .wf-node--unconfigured { border-color: var(--accent-warn, #fbbf24); }
+.wf-node--nested {
+  background: var(--paper-3);
+  border-style: dashed;
+}
+
+.wf-node__branch-label {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--paper-1, #0a0e14);
+  padding: 0 4px;
+  border-radius: 2px;
+}
+.wf-node { position: relative; }
 
 .wf-node__head {
   display: flex;

@@ -16,17 +16,35 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
+export type FlowRouterBranch =
+  | {
+      branchType: "CONDITION";
+      branchName: string;
+      conditions: Array<Array<{ firstValue: string; operator: string; secondValue?: string; caseSensitive?: boolean }>>;
+    }
+  | { branchType: "FALLBACK"; branchName: string };
+
 export interface FlowStepNode {
   name: string;
-  type: "PIECE_TRIGGER" | "EMPTY" | "PIECE";
+  type: "PIECE_TRIGGER" | "EMPTY" | "PIECE" | "LOOP_ON_ITEMS" | "ROUTER";
   displayName?: string;
   settings?: {
     pieceName?: string;
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
+    /** LOOP_ON_ITEMS: template that resolves to an array. */
+    items?: string;
+    /** ROUTER: branches definition. */
+    branches?: FlowRouterBranch[];
+    /** ROUTER: which matched branches to run. */
+    executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
   };
   nextAction?: FlowStepNode;
+  /** LOOP_ON_ITEMS: head of the inner subgraph executed once per iteration. */
+  firstLoopAction?: FlowStepNode;
+  /** ROUTER: per-branch subgraph head. May contain null for empty branches. */
+  children?: Array<FlowStepNode | null>;
 }
 
 export interface FlowVersion {
@@ -387,8 +405,11 @@ export function useWorkflowEditor(flowId: string | null) {
     }
   }, [version]);
 
+  /** Depth-recursive flatten that includes LOOP body + ROUTER branch children.
+   *  Top-level entries have depth=0; sub-graph entries carry their parent's
+   *  step name + (for routers) the branch label. */
   const allSteps = useMemo(
-    () => (draftTrigger ? walkSteps(draftTrigger) : []),
+    () => (draftTrigger ? flattenSteps(draftTrigger) : []),
     [draftTrigger],
   );
 
@@ -431,9 +452,10 @@ export interface EditorValidationGap {
   fieldLabel: string;
 }
 
-function collectValidationGaps(steps: FlowStepNode[], catalog: PieceCatalogEntry[]): EditorValidationGap[] {
+function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEntry[]): EditorValidationGap[] {
   const gaps: EditorValidationGap[] = [];
-  for (const step of steps) {
+  for (const entry of steps) {
+    const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
     if (step.type === "EMPTY") continue; // manual triggers carry no inputs
     const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
@@ -544,6 +566,65 @@ function walkSteps(root: FlowStepNode): FlowStepNode[] {
     cursor = cursor.nextAction;
   }
   return list;
+}
+
+/**
+ * Depth-recursive flatten. Visits the top-level chain, then for each
+ * LOOP_ON_ITEMS recurses into its `firstLoopAction` chain at depth+1, and
+ * for each ROUTER recurses into each non-null `children[i]` chain at
+ * depth+1 (carrying the branch's name as a label).
+ *
+ * Order is depth-first preorder: a parent is visited before its sub-graphs,
+ * sub-graphs are visited in order, then the parent's `nextAction` is
+ * visited. This matches the visual top-to-bottom indentation users expect.
+ */
+export function flattenSteps(root: FlowStepNode): FlatStep[] {
+  const out: FlatStep[] = [];
+
+  const walk = (
+    start: FlowStepNode | undefined,
+    depth: number,
+    parentName: string | undefined,
+    branchName: string | undefined,
+    containerKind: "loop" | "router" | undefined,
+  ): void => {
+    let cursor: FlowStepNode | undefined = start;
+    while (cursor) {
+      const entry: FlatStep = { step: cursor, depth };
+      if (parentName !== undefined) entry.parentName = parentName;
+      if (branchName !== undefined) entry.branchName = branchName;
+      if (containerKind !== undefined) entry.containerKind = containerKind;
+      out.push(entry);
+
+      if (cursor.type === "LOOP_ON_ITEMS" && cursor.firstLoopAction) {
+        walk(cursor.firstLoopAction, depth + 1, cursor.name, undefined, "loop");
+      } else if (cursor.type === "ROUTER" && Array.isArray(cursor.children)) {
+        const branches = cursor.settings?.branches ?? [];
+        for (let i = 0; i < cursor.children.length; i++) {
+          const child = cursor.children[i];
+          if (!child) continue;
+          const bName = branches[i]?.branchName ?? `branch_${i}`;
+          walk(child, depth + 1, cursor.name, bName, "router");
+        }
+      }
+
+      cursor = cursor.nextAction;
+    }
+  };
+
+  walk(root, 0, undefined, undefined, undefined);
+  return out;
+}
+
+/** A single entry in `allSteps`. `step` is the live node; `depth` is the
+ *  rendering indent level (0 = top). `parentName` / `branchName` are present
+ *  for nodes that live inside a LOOP body (parent only) or ROUTER branch. */
+export interface FlatStep {
+  step: FlowStepNode;
+  depth: number;
+  parentName?: string;
+  branchName?: string;
+  containerKind?: "loop" | "router";
 }
 
 async function safeJson(res: Response): Promise<{ error?: string } | null> {

@@ -29,6 +29,7 @@ import { Save, RotateCcw, X, Plus, Trash2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
+  type FlatStep,
   type FlowStepNode,
   type PieceCatalogActionOrTrigger,
   type PieceCatalogEntry,
@@ -38,6 +39,7 @@ import "./WorkflowEditor.css";
 
 const NODE_X = 0;
 const NODE_Y_STEP = 130;
+const INDENT_PX = 64;
 
 interface WorkflowEditorProps {
   flowId: string;
@@ -48,6 +50,8 @@ interface StepNodeData extends Record<string, unknown> {
   step: FlowStepNode;
   selected: boolean;
   catalog: PieceCatalogEntry[];
+  depth: number;
+  branchName?: string;
 }
 
 export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
@@ -58,7 +62,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // Keep selection valid: when steps shift, drop the selection if it doesn't exist.
   useEffect(() => {
     if (!selectedStepName) return;
-    const found = editor.allSteps.some((s) => s.name === selectedStepName);
+    const found = editor.allSteps.some((fs) => fs.step.name === selectedStepName);
     if (!found) setSelectedStepName(null);
   }, [editor.allSteps, selectedStepName]);
 
@@ -104,7 +108,12 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   };
 
   const selectedStep = useMemo(
-    () => editor.allSteps.find((s) => s.name === selectedStepName) ?? null,
+    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName)?.step ?? null,
+    [editor.allSteps, selectedStepName],
+  );
+
+  const selectedDepth = useMemo(
+    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName)?.depth ?? 0,
     [editor.allSteps, selectedStepName],
   );
 
@@ -208,6 +217,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               step={selectedStep}
               isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
               hasNextAction={!!selectedStep.nextAction}
+              isTopLevel={selectedDepth === 0}
               catalog={editor.catalog}
               onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
               onSetTriggerType={(type) => editor.setTriggerType(type)}
@@ -268,39 +278,76 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
 const NODE_TYPES = { stepNode: StepNode };
 
 function buildGraph(
-  steps: FlowStepNode[],
+  steps: FlatStep[],
   selected: string | null,
   catalog: PieceCatalogEntry[],
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
-  const nodes: Node<StepNodeData>[] = steps.map((step, i) => {
+  const nodes: Node<StepNodeData>[] = steps.map((entry, i) => {
+    const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
     return {
       id: step.name,
       type: "stepNode",
-      position: { x: NODE_X, y: i * NODE_Y_STEP },
-      data: { step, selected: selected === step.name, catalog },
-      // Trigger is always pinned to the top; users can morph its type via
-      // the panel but cannot drag it within the chain.
-      draggable: !isTrigger,
+      position: { x: NODE_X + entry.depth * INDENT_PX, y: i * NODE_Y_STEP },
+      data: { step, selected: selected === step.name, catalog, depth: entry.depth, branchName: entry.branchName },
+      // Trigger is always pinned. Sub-graph nodes (depth > 0) are also
+      // non-draggable for now -- top-level reorder is the only supported
+      // drag operation.
+      draggable: !isTrigger && entry.depth === 0,
     };
   });
+
+  // Edges: each step's structural pointers become an edge.
+  //   - nextAction (sequential continuation, same depth)
+  //   - LOOP_ON_ITEMS firstLoopAction (parent -> body head, label "iterates")
+  //   - ROUTER children[i] (parent -> branch head, label = branchName)
   const edges: Edge[] = [];
-  for (let i = 0; i < steps.length - 1; i++) {
-    const from = steps[i]!;
-    const to = steps[i + 1]!;
-    edges.push({
-      id: `${from.name}->${to.name}`,
-      source: from.name,
-      target: to.name,
-      type: "smoothstep",
-    });
+  const knownNames = new Set(steps.map((s) => s.step.name));
+  for (const entry of steps) {
+    const step = entry.step;
+    if (step.nextAction && knownNames.has(step.nextAction.name)) {
+      edges.push({
+        id: `${step.name}->${step.nextAction.name}`,
+        source: step.name,
+        target: step.nextAction.name,
+        type: "smoothstep",
+      });
+    }
+    if (step.type === "LOOP_ON_ITEMS" && step.firstLoopAction && knownNames.has(step.firstLoopAction.name)) {
+      edges.push({
+        id: `${step.name}->loop->${step.firstLoopAction.name}`,
+        source: step.name,
+        target: step.firstLoopAction.name,
+        type: "smoothstep",
+        label: "iterates",
+        style: { strokeDasharray: "4 3" },
+      });
+    }
+    if (step.type === "ROUTER" && Array.isArray(step.children)) {
+      const branches = step.settings?.branches ?? [];
+      for (let i = 0; i < step.children.length; i++) {
+        const child = step.children[i];
+        if (!child || !knownNames.has(child.name)) continue;
+        const bName = branches[i]?.branchName ?? `branch_${i}`;
+        edges.push({
+          id: `${step.name}->router_${i}->${child.name}`,
+          source: step.name,
+          target: child.name,
+          type: "smoothstep",
+          label: bName,
+          style: { strokeDasharray: "4 3" },
+        });
+      }
+    }
   }
   return { nodes, edges };
 }
 
 function StepNode({ data }: NodeProps): React.ReactElement {
-  const { step, selected, catalog } = data as StepNodeData;
+  const { step, selected, catalog, depth, branchName } = data as StepNodeData;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
+  const isLoop = step.type === "LOOP_ON_ITEMS";
+  const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
   const subAction = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
   const subDisplayName = piece
@@ -310,16 +357,32 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
 
+  let kindLabel: string;
+  let kindTone: "accent" | "neutral" | "warn" | "ok" = "neutral";
+  if (step.type === "EMPTY") { kindLabel = "Manual"; kindTone = "accent"; }
+  else if (isTrigger) { kindLabel = "Trigger"; kindTone = "accent"; }
+  else if (isLoop) { kindLabel = "Loop"; kindTone = "warn"; }
+  else if (isRouter) { kindLabel = "Router"; kindTone = "warn"; }
+  else { kindLabel = "Action"; }
+
   return (
-    <div className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""}`}>
+    <div
+      className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""}`}
+    >
+      {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
-        <Chip tone={isTrigger ? "accent" : "neutral"} dot={false}>
-          {step.type === "EMPTY" ? "Manual" : isTrigger ? "Trigger" : "Action"}
-        </Chip>
+        <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
         <span className="wf-node__name">{step.displayName ?? step.name}</span>
       </div>
       <div className="wf-node__body">
-        {step.settings?.pieceName ? (
+        {isLoop ? (
+          <span className="wf-node__piece">over <code>{String(step.settings?.items ?? "?")}</code></span>
+        ) : isRouter ? (
+          <span className="wf-node__piece">
+            {(step.settings?.branches?.length ?? 0)} branch{(step.settings?.branches?.length ?? 0) === 1 ? "" : "es"} ·{" "}
+            {step.settings?.executionType === "EXECUTE_ALL_MATCH" ? "all match" : "first match"}
+          </span>
+        ) : step.settings?.pieceName ? (
           <>
             <span className="wf-node__piece">{piece?.displayName ?? step.settings.pieceName}</span>
             {subDisplayName ? <span className="wf-node__sep">·</span> : null}
@@ -341,6 +404,7 @@ interface PropertiesPanelProps {
   step: FlowStepNode;
   isTriggerStep: boolean;
   hasNextAction: boolean;
+  isTopLevel: boolean;
   catalog: PieceCatalogEntry[];
   onSetPiece: (pieceName: string, actionName: string) => void;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
@@ -357,6 +421,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     step,
     isTriggerStep,
     hasNextAction,
+    isTopLevel,
     catalog,
     onSetPiece,
     onSetTriggerType,
@@ -522,14 +587,22 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       <div className="wf-props__divider" />
 
       <div className="wf-props__step-actions">
-        <Button variant="ghost" size="sm" onClick={onAddStepAfter} title="Insert a new action after this step">
-          <Icon icon={Plus} size={12} /> {hasNextAction ? "Insert step after" : "Add next step"}
-        </Button>
-        {!isTriggerStep ? (
-          <Button variant="danger" size="sm" onClick={onDelete} title="Remove this step from the chain">
-            <Icon icon={Trash2} size={12} /> Delete step
-          </Button>
-        ) : null}
+        {isTopLevel ? (
+          <>
+            <Button variant="ghost" size="sm" onClick={onAddStepAfter} title="Insert a new action after this step">
+              <Icon icon={Plus} size={12} /> {hasNextAction ? "Insert step after" : "Add next step"}
+            </Button>
+            {!isTriggerStep ? (
+              <Button variant="danger" size="sm" onClick={onDelete} title="Remove this step from the chain">
+                <Icon icon={Trash2} size={12} /> Delete step
+              </Button>
+            ) : null}
+          </>
+        ) : (
+          <p className="wf-props__hint">
+            Sub-graph editing is read-only. Add / remove steps inside loops and router branches arrives in a follow-up.
+          </p>
+        )}
       </div>
     </div>
   );
