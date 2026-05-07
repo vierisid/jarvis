@@ -134,7 +134,7 @@ describe("SandboxApi server", () => {
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     signer = new EngineTokenSigner();
     registry = new SandboxRegistry();
     api = new SandboxApi({
@@ -142,11 +142,11 @@ describe("SandboxApi server", () => {
       registry,
       services: { credentialResolver: new CredentialResolver() },
     });
-    api.start({ port: 0 });
+    await api.start({ port: 0 });
   });
 
-  afterAll(() => {
-    api.stop();
+  afterAll(async () => {
+    await api.stop();
   });
 
   test("server binds to 127.0.0.1 with an OS-assigned port", () => {
@@ -253,7 +253,7 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     });
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     initWorkflowDb(":memory:");
     signer = new EngineTokenSigner();
     registry = new SandboxRegistry();
@@ -268,11 +268,11 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
       }),
     });
     api = new SandboxApi({ signer, registry, services: { credentialResolver: resolver } });
-    api.start({ port: 0 });
+    await api.start({ port: 0 });
   });
 
-  afterAll(() => {
-    api.stop();
+  afterAll(async () => {
+    await api.stop();
     closeWorkflowDb();
   });
 
@@ -408,7 +408,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
         resumeUrlPrefix: "https://daemon.local/api/webhooks/waitpoints",
       },
     });
-    api.start({ port: 0 });
+    await api.start({ port: 0 });
 
     // A real flow_run row is needed for the waitpoint FK.
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
@@ -422,8 +422,8 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     }).id;
   });
 
-  afterAll(() => {
-    api.stop();
+  afterAll(async () => {
+    await api.stop();
     closeWorkflowDb();
     delete process.env.JARVIS_WORKFLOW_DATA_DIR;
   });

@@ -27,6 +27,8 @@ import { EngineTokenSigner } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
 import type { EngineTokenClaims } from "./types";
 import type { CredentialResolver } from "../credentials/adapter";
+import { WorkerRpcServer } from "./worker-rpc";
+import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
 import {
@@ -53,6 +55,17 @@ export interface SandboxApiServices {
    * supply a real prefix once the resume webhook lands.
    */
   resumeUrlPrefix?: string;
+  /**
+   * Optional callback fired when a piece's `run.respond()` reaches a flow
+   * with a webhook trigger. The handler is responsible for delivering the
+   * response back to the original HTTP request.
+   */
+  onFlowResponse?: (
+    sandboxId: string,
+    req: import("./contracts").SendFlowResponseRequest,
+  ) => void;
+  /** Optional structured-log sink for per-sandbox stdout/stderr. */
+  onLogLine?: (entry: import("./worker-handlers").LogLine) => void;
 }
 
 export interface SandboxApiOptions {
@@ -99,6 +112,8 @@ export class SandboxApi {
   readonly signer: EngineTokenSigner;
   readonly registry: SandboxRegistry;
   readonly services: SandboxApiServices;
+  readonly workerHandlers: DefaultWorkerHandlers;
+  readonly workerRpc: WorkerRpcServer;
   private server: ServerNoData | null = null;
   private readonly routes: RouteEntry[] = [];
 
@@ -106,6 +121,16 @@ export class SandboxApi {
     this.signer = opts.signer ?? new EngineTokenSigner();
     this.registry = opts.registry ?? new SandboxRegistry();
     this.services = opts.services;
+    this.workerHandlers = new DefaultWorkerHandlers({
+      registry: this.registry,
+      onFlowResponse: this.services.onFlowResponse,
+      onLogLine: this.services.onLogLine,
+    });
+    this.workerRpc = new WorkerRpcServer({
+      registry: this.registry,
+      workerHandlers: this.workerHandlers,
+      notifyHandlers: this.workerHandlers,
+    });
     this.registerRoutes();
   }
 
@@ -142,7 +167,7 @@ export class SandboxApi {
     );
   }
 
-  start(opts: { host?: string; port?: number } = {}): void {
+  async start(opts: { host?: string; port?: number } = {}): Promise<void> {
     if (this.server) return;
     const host = opts.host ?? "127.0.0.1";
     const port = opts.port ?? 0;
@@ -152,12 +177,20 @@ export class SandboxApi {
       port,
       fetch: (req) => this.dispatch(req),
     });
+
+    await this.workerRpc.start();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.server) return;
     this.server.stop(true);
     this.server = null;
+    await this.workerRpc.stop();
+  }
+
+  /** TCP port the engine subprocess should connect to (AP_SANDBOX_WS_PORT). */
+  get sandboxWsPort(): number {
+    return this.workerRpc.getPort();
   }
 
   get port(): number {

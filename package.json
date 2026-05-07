@@ -71,11 +71,14 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.34.5",
+    "socket.io": "^4.8.3",
     "tailwindcss": "^4.2.1",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "socket.io-client": "^4.8.3"
   },
   "peerDependencies": {
     "typescript": "^5"
