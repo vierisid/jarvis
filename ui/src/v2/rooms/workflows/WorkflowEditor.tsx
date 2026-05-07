@@ -52,6 +52,24 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     if (!found) setSelectedStepName(null);
   }, [editor.allSteps, selectedStepName]);
 
+  // Esc closes the editor. If there are unsaved changes, confirm first so a
+  // stray keystroke doesn't lose work.
+  const editorDirty = editor.dirty;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      // Don't hijack Esc when the user is typing in an input/textarea/select
+      // -- React Flow listens too, and form fields commonly use Esc to revert.
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (editorDirty && !window.confirm("Discard unsaved changes?")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editorDirty, onClose]);
+
   const onSave = async (): Promise<void> => {
     const result = await editor.save();
     setActionMessage({ tone: result.ok ? "ok" : "warn", text: result.message });
@@ -123,7 +141,6 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               onPaneClick={() => setSelectedStepName(null)}
               fitView
               fitViewOptions={{ padding: 0.2 }}
-              proOptions={{ hideAttribution: true }}
               nodesDraggable={false}
               nodesConnectable={false}
               elementsSelectable
@@ -421,6 +438,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         <div className="wf-props__inputs-head">
           <h4>Inputs</h4>
         </div>
+        <p className="wf-props__hint">
+          Values are stored as strings. Use <code>{`{{step_1.field}}`}</code> templates to pass typed
+          data from previous steps; literal objects/numbers via the dashboard get the schema-aware
+          editor in stage 4.
+        </p>
         {inputEntries.length === 0 ? (
           <p className="wf-props__hint">No inputs yet. Add one below.</p>
         ) : (

@@ -69,6 +69,11 @@ export function useWorkflowEditor(flowId: string | null) {
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
   const ignoreNextLoadRef = useRef(false);
 
+  // Stash for trigger settings while the user is in EMPTY (manual) mode.
+  // Switching back to PIECE_TRIGGER restores the prior piece + input so a
+  // morph round-trip doesn't lose work.
+  const triggerSettingsStashRef = useRef<FlowStepNode["settings"] | null>(null);
+
   /** Load (or reload) the catalog + version. */
   const reload = useCallback(async (): Promise<void> => {
     if (!flowId) return;
@@ -201,17 +206,28 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /**
    * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
-   * EMPTY clears the trigger's settings but preserves nextAction.
+   * EMPTY stashes the prior settings; switching back restores them so the
+   * round-trip doesn't discard the user's piece + input.
    */
   const setTriggerType = useCallback((type: "EMPTY" | "PIECE_TRIGGER"): void => {
     setDraftTrigger((prev) => {
       if (!prev) return prev;
       const next = cloneTrigger(prev);
-      next.type = type;
       if (type === "EMPTY") {
+        // Stash anything non-trivial so we can restore on the way back.
+        if (next.settings && (next.settings.pieceName || Object.keys(next.settings.input ?? {}).length > 0)) {
+          triggerSettingsStashRef.current = JSON.parse(JSON.stringify(next.settings));
+        }
+        next.type = "EMPTY";
         next.settings = {};
-      } else if (!next.settings || !next.settings.pieceName) {
-        next.settings = { input: {} };
+      } else {
+        next.type = "PIECE_TRIGGER";
+        if (triggerSettingsStashRef.current) {
+          next.settings = JSON.parse(JSON.stringify(triggerSettingsStashRef.current));
+          triggerSettingsStashRef.current = null;
+        } else if (!next.settings || !next.settings.pieceName) {
+          next.settings = { input: {} };
+        }
       }
       return next;
     });
@@ -307,6 +323,12 @@ export function useWorkflowEditor(flowId: string | null) {
 
 /* ----------------------------------------------------------------- helpers */
 
+/**
+ * Deep clone a trigger tree. Uses JSON round-trip because the trigger shape is
+ * deliberately JSON-serializable (it's persisted as TEXT in SQLite). Drops
+ * Dates / Maps / Sets / `undefined` fields — none of which the trigger format
+ * permits — so the loss is intentional.
+ */
 function cloneTrigger(node: FlowStepNode): FlowStepNode {
   return JSON.parse(JSON.stringify(node)) as FlowStepNode;
 }
@@ -321,17 +343,21 @@ function findStep(root: FlowStepNode, name: string): FlowStepNode | null {
 }
 
 /**
- * Generate the lowest unused `step_<n>` name. Activepieces' step name regex
- * accepts identifier-style names; we keep the convention upstream uses for
- * generated steps.
+ * Generate the next `step_<n>` name. Always picks `max(existing-numeric-suffix) + 1`,
+ * never reuses a freed slot. Reusing names within the same flow risks template
+ * references like `{{step_2.foo}}` silently re-binding to a fresh node, so we
+ * burn through the namespace monotonically instead.
  */
 function nextStepName(used: Set<string>): string {
-  for (let i = 1; i < 10000; i++) {
-    const candidate = `step_${i}`;
-    if (!used.has(candidate)) return candidate;
+  let max = 0;
+  for (const name of used) {
+    const m = /^step_(\d+)$/.exec(name);
+    if (m && typeof m[1] === "string") {
+      const n = Number.parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
   }
-  // Fallback to a timestamp suffix if (somehow) we exhaust 10k slots.
-  return `step_${Date.now()}`;
+  return `step_${max + 1}`;
 }
 
 function walkSteps(root: FlowStepNode): FlowStepNode[] {
