@@ -13,6 +13,20 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  addStepToHead as treeAddStepToHead,
+  addRouterBranch as treeAddRouterBranch,
+  applySchemaDefaults,
+  cloneTrigger,
+  findStep,
+  flattenSteps,
+  insertStepAfter as treeInsertStepAfter,
+  removeRouterBranch as treeRemoveRouterBranch,
+  removeStep,
+  reorderChain as treeReorderChain,
+  setLoopItems as treeSetLoopItems,
+  setRouterExecutionType as treeSetRouterExecutionType,
+} from "./tree";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -211,21 +225,25 @@ export function useWorkflowEditor(flowId: string | null) {
     let createdName: string | null = null;
     setDraftTrigger((prev) => {
       if (!prev) return prev;
-      const next = cloneTrigger(prev);
-      const predecessor = findStep(next, predecessorName);
-      if (!predecessor) return prev;
-      const usedNames = new Set(walkSteps(next).map((s) => s.name));
-      const newName = nextStepName(usedNames);
-      createdName = newName;
-      const newStep: FlowStepNode = {
-        name: newName,
-        type: "PIECE",
-        displayName: "New step",
-        settings: { input: {} },
-        nextAction: predecessor.nextAction,
-      };
-      predecessor.nextAction = newStep;
-      return next;
+      const result = treeInsertStepAfter(prev, predecessorName);
+      if (!result) return prev;
+      createdName = result.newName;
+      return result.tree;
+    });
+    if (createdName) setDirty(true);
+    return createdName;
+  }, []);
+
+  /** Seed a new PIECE step at the head of a chain. Used when LOOP body or
+   *  ROUTER branch is empty (no node to insert after). */
+  const addStepToHead = useCallback((scope: ChainScope): string | null => {
+    let createdName: string | null = null;
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      const result = treeAddStepToHead(prev, scope);
+      if (!result) return prev;
+      createdName = result.newName;
+      return result.tree;
     });
     if (createdName) setDirty(true);
     return createdName;
@@ -242,61 +260,30 @@ export function useWorkflowEditor(flowId: string | null) {
    * tree.
    */
   const reorderChain = useCallback((scope: ChainScope, orderedNames: string[]): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const next = cloneTrigger(prev);
+    setDraftTrigger((prev) => (prev ? treeReorderChain(prev, scope, orderedNames) : prev));
+    setDirty(true);
+  }, []);
 
-      // Resolve the head pointer the chain hangs off.
-      let head: FlowStepNode | undefined;
-      let writeHead: (h: FlowStepNode | undefined) => void;
-      if (scope.kind === "top") {
-        head = next.nextAction;
-        writeHead = (h) => { next.nextAction = h; };
-      } else if (scope.kind === "loop") {
-        const parent = findStep(next, scope.parentName);
-        if (!parent || parent.type !== "LOOP_ON_ITEMS") return prev;
-        head = parent.firstLoopAction;
-        writeHead = (h) => { parent.firstLoopAction = h; };
-      } else {
-        const parent = findStep(next, scope.parentName);
-        if (!parent || parent.type !== "ROUTER" || !Array.isArray(parent.children)) return prev;
-        const branches = parent.settings?.branches ?? [];
-        const branchIndex = branches.findIndex((b) => b?.branchName === scope.branchName);
-        if (branchIndex < 0 || branchIndex >= parent.children.length) return prev;
-        const child = parent.children[branchIndex];
-        head = child ?? undefined;
-        writeHead = (h) => {
-          if (Array.isArray(parent.children)) parent.children[branchIndex] = h ?? null;
-        };
-      }
+  const setLoopItems = useCallback((stepName: string, items: string): void => {
+    setDraftTrigger((prev) => (prev ? treeSetLoopItems(prev, stepName, items) : prev));
+    setDirty(true);
+  }, []);
 
-      // Walk current chain.
-      const currentSteps: FlowStepNode[] = [];
-      let cursor: FlowStepNode | undefined = head;
-      while (cursor) {
-        currentSteps.push(cursor);
-        cursor = cursor.nextAction;
-      }
-      if (orderedNames.length !== currentSteps.length) return prev;
-      const currentNames = new Set(currentSteps.map((s) => s.name));
-      const seen = new Set<string>();
-      for (const name of orderedNames) {
-        if (seen.has(name) || !currentNames.has(name)) return prev;
-        seen.add(name);
-      }
-      const same = currentSteps.every((s, i) => s.name === orderedNames[i]);
-      if (same) return prev;
+  const setRouterExecutionType = useCallback(
+    (stepName: string, type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH"): void => {
+      setDraftTrigger((prev) => (prev ? treeSetRouterExecutionType(prev, stepName, type) : prev));
+      setDirty(true);
+    },
+    [],
+  );
 
-      const byName = new Map(currentSteps.map((s) => [s.name, s]));
-      const ordered = orderedNames.map((n) => byName.get(n)!).filter((s): s is FlowStepNode => !!s);
-      writeHead(ordered[0]);
-      for (let i = 0; i < ordered.length; i++) {
-        const step = ordered[i];
-        if (!step) continue;
-        step.nextAction = ordered[i + 1];
-      }
-      return next;
-    });
+  const addRouterBranch = useCallback((stepName: string, branchName: string): void => {
+    setDraftTrigger((prev) => (prev ? treeAddRouterBranch(prev, stepName, branchName) : prev));
+    setDirty(true);
+  }, []);
+
+  const removeRouterBranch = useCallback((stepName: string, branchIndex: number): void => {
+    setDraftTrigger((prev) => (prev ? treeRemoveRouterBranch(prev, stepName, branchIndex) : prev));
     setDirty(true);
   }, []);
 
@@ -308,31 +295,7 @@ export function useWorkflowEditor(flowId: string | null) {
    * deleted step was a sub-chain head.
    */
   const deleteStep = useCallback((stepName: string): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      if (prev.name === stepName) return prev; // trigger is undeletable
-      const next = cloneTrigger(prev);
-      const loc = findStepLocation(next, stepName);
-      if (!loc || loc.kind === "trigger") return prev;
-      const target = findStep(next, stepName);
-      if (!target) return prev;
-      const successor = target.nextAction;
-      switch (loc.kind) {
-        case "chain":
-          loc.predecessor.nextAction = successor;
-          break;
-        case "loop_head":
-          loc.parent.firstLoopAction = successor;
-          break;
-        case "branch_head": {
-          if (Array.isArray(loc.parent.children)) {
-            loc.parent.children[loc.branchIndex] = successor ?? null;
-          }
-          break;
-        }
-      }
-      return next;
-    });
+    setDraftTrigger((prev) => (prev ? removeStep(prev, stepName) : prev));
     setDirty(true);
   }, []);
 
@@ -471,8 +434,13 @@ export function useWorkflowEditor(flowId: string | null) {
     setStepPiece,
     setTriggerType,
     insertStepAfter,
+    addStepToHead,
     deleteStep,
     reorderChain,
+    setLoopItems,
+    setRouterExecutionType,
+    addRouterBranch,
+    removeRouterBranch,
     save,
     reset,
   };
@@ -537,168 +505,10 @@ function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEntry[]):
  * Dates / Maps / Sets / `undefined` fields — none of which the trigger format
  * permits — so the loss is intentional.
  */
-function cloneTrigger(node: FlowStepNode): FlowStepNode {
-  return JSON.parse(JSON.stringify(node)) as FlowStepNode;
-}
-
-/**
- * Recursive lookup for a step anywhere in the trigger tree -- top-level
- * chain, LOOP body, or any ROUTER branch. Returns the live node so callers
- * can mutate it in place.
- */
-function findStep(root: FlowStepNode, name: string): FlowStepNode | null {
-  if (root.name === name) return root;
-  if (root.nextAction) {
-    const r = findStep(root.nextAction, name);
-    if (r) return r;
-  }
-  if (root.firstLoopAction) {
-    const r = findStep(root.firstLoopAction, name);
-    if (r) return r;
-  }
-  if (Array.isArray(root.children)) {
-    for (const child of root.children) {
-      if (!child) continue;
-      const r = findStep(child, name);
-      if (r) return r;
-    }
-  }
-  return null;
-}
-
-/** Where a step sits relative to its parent / predecessor. Drives delete + reorder. */
-type StepLocation =
-  | { kind: "trigger" }
-  | { kind: "chain"; predecessor: FlowStepNode }
-  | { kind: "loop_head"; parent: FlowStepNode }
-  | { kind: "branch_head"; parent: FlowStepNode; branchIndex: number };
-
-function findStepLocation(root: FlowStepNode, name: string): StepLocation | null {
-  if (root.name === name) return { kind: "trigger" };
-  return findInChain(root, name);
-}
-
-function findInChain(head: FlowStepNode, name: string): StepLocation | null {
-  let cursor: FlowStepNode | undefined = head;
-  while (cursor) {
-    if (cursor.nextAction?.name === name) return { kind: "chain", predecessor: cursor };
-    if (cursor.firstLoopAction) {
-      if (cursor.firstLoopAction.name === name) return { kind: "loop_head", parent: cursor };
-      const sub = findInChain(cursor.firstLoopAction, name);
-      if (sub) return sub;
-    }
-    if (Array.isArray(cursor.children)) {
-      for (let i = 0; i < cursor.children.length; i++) {
-        const child = cursor.children[i];
-        if (!child) continue;
-        if (child.name === name) return { kind: "branch_head", parent: cursor, branchIndex: i };
-        const sub = findInChain(child, name);
-        if (sub) return sub;
-      }
-    }
-    cursor = cursor.nextAction;
-  }
-  return null;
-}
-
-/**
- * Seed the step's input from a schema's declared defaults. Existing keys win
- * (user-set values are never overwritten); missing keys with a `default` get
- * filled in. Returns a fresh object suitable for assignment.
- */
-function applySchemaDefaults(
-  current: Record<string, unknown>,
-  schema: PieceInputSchema | null,
-): Record<string, unknown> {
-  if (!schema) return { ...current };
-  const next: Record<string, unknown> = { ...current };
-  for (const field of schema.fields) {
-    if (field.default === undefined) continue;
-    if (Object.prototype.hasOwnProperty.call(next, field.name)) continue;
-    // Clone the default if it's an object/array so successive applies stay independent.
-    next[field.name] =
-      typeof field.default === "object" && field.default !== null
-        ? JSON.parse(JSON.stringify(field.default))
-        : field.default;
-  }
-  return next;
-}
-
-/**
- * Generate the next `step_<n>` name. Always picks `max(existing-numeric-suffix) + 1`,
- * never reuses a freed slot. Reusing names within the same flow risks template
- * references like `{{step_2.foo}}` silently re-binding to a fresh node, so we
- * burn through the namespace monotonically instead.
- */
-function nextStepName(used: Set<string>): string {
-  let max = 0;
-  for (const name of used) {
-    const m = /^step_(\d+)$/.exec(name);
-    if (m && typeof m[1] === "string") {
-      const n = Number.parseInt(m[1], 10);
-      if (Number.isFinite(n) && n > max) max = n;
-    }
-  }
-  return `step_${max + 1}`;
-}
-
-function walkSteps(root: FlowStepNode): FlowStepNode[] {
-  const list: FlowStepNode[] = [];
-  let cursor: FlowStepNode | undefined = root;
-  while (cursor) {
-    list.push(cursor);
-    cursor = cursor.nextAction;
-  }
-  return list;
-}
-
-/**
- * Depth-recursive flatten. Visits the top-level chain, then for each
- * LOOP_ON_ITEMS recurses into its `firstLoopAction` chain at depth+1, and
- * for each ROUTER recurses into each non-null `children[i]` chain at
- * depth+1 (carrying the branch's name as a label).
- *
- * Order is depth-first preorder: a parent is visited before its sub-graphs,
- * sub-graphs are visited in order, then the parent's `nextAction` is
- * visited. This matches the visual top-to-bottom indentation users expect.
- */
-export function flattenSteps(root: FlowStepNode): FlatStep[] {
-  const out: FlatStep[] = [];
-
-  const walk = (
-    start: FlowStepNode | undefined,
-    depth: number,
-    parentName: string | undefined,
-    branchName: string | undefined,
-    containerKind: "loop" | "router" | undefined,
-  ): void => {
-    let cursor: FlowStepNode | undefined = start;
-    while (cursor) {
-      const entry: FlatStep = { step: cursor, depth };
-      if (parentName !== undefined) entry.parentName = parentName;
-      if (branchName !== undefined) entry.branchName = branchName;
-      if (containerKind !== undefined) entry.containerKind = containerKind;
-      out.push(entry);
-
-      if (cursor.type === "LOOP_ON_ITEMS" && cursor.firstLoopAction) {
-        walk(cursor.firstLoopAction, depth + 1, cursor.name, undefined, "loop");
-      } else if (cursor.type === "ROUTER" && Array.isArray(cursor.children)) {
-        const branches = cursor.settings?.branches ?? [];
-        for (let i = 0; i < cursor.children.length; i++) {
-          const child = cursor.children[i];
-          if (!child) continue;
-          const bName = branches[i]?.branchName ?? `branch_${i}`;
-          walk(child, depth + 1, cursor.name, bName, "router");
-        }
-      }
-
-      cursor = cursor.nextAction;
-    }
-  };
-
-  walk(root, 0, undefined, undefined, undefined);
-  return out;
-}
+// Pure tree-manipulation helpers (cloneTrigger, findStep, flattenSteps,
+// applySchemaDefaults, nextStepName, etc.) live in `./tree.ts` so they can
+// be unit-tested without React. The hook delegates each mutator into that
+// module via the imports at the top of this file.
 
 /** A single entry in `allSteps`. `step` is the live node; `depth` is the
  *  rendering indent level (0 = top). `parentName` / `branchName` are present

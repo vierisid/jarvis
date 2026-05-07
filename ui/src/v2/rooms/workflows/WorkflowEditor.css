@@ -150,8 +150,53 @@
   background: var(--paper-1, #0a0e14);
   padding: 0 4px;
   border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
 }
 .wf-node { position: relative; }
+
+/* ── Router branch list (panel) ── */
+
+.wf-props__branch-list {
+  list-style: none;
+  margin: 0 0 var(--s-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wf-props__branch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 4px 6px;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+}
+.wf-props__branch-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--ink-1);
+}
+.wf-props__branch-tag {
+  background: var(--paper-1, #0a0e14);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--rule-soft);
+}
+.wf-props__branch-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .wf-node__head {
   display: flex;

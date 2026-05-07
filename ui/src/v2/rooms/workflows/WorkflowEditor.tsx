@@ -107,15 +107,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     window.setTimeout(() => setActionMessage(null), 2000);
   };
 
-  const selectedStep = useMemo(
-    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName)?.step ?? null,
-    [editor.allSteps, selectedStepName],
-  );
-
+  // Single lookup for the selected step's FlatStep entry; downstream `step`
+  // and `depth` derive from it without a second pass over allSteps.
   const selectedFlat = useMemo(
     () => editor.allSteps.find((fs) => fs.step.name === selectedStepName) ?? null,
     [editor.allSteps, selectedStepName],
   );
+  const selectedStep = selectedFlat?.step ?? null;
   const selectedDepth = selectedFlat?.depth ?? 0;
 
   // Build the canonical graph from the chain. `baseNodes` reflects the
@@ -266,6 +264,20 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
                   editor.deleteStep(selectedStep.name);
                   setSelectedStepName(null);
                 }
+              }}
+              // LOOP-specific
+              onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
+              onAddStepToLoopBody={() => {
+                const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
+                if (created) setSelectedStepName(created);
+              }}
+              // ROUTER-specific
+              onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
+              onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
+              onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
+              onAddStepToBranch={(branchName) => {
+                const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
+                if (created) setSelectedStepName(created);
               }}
             />
           ) : editor.draftTrigger && !editor.draftTrigger.nextAction ? (
@@ -441,6 +453,12 @@ interface PropertiesPanelProps {
   onSetDisplayName: (displayName: string) => void;
   onAddStepAfter: () => void;
   onDelete: () => void;
+  onSetLoopItems: (items: string) => void;
+  onAddStepToLoopBody: () => void;
+  onSetRouterExecutionType: (type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH") => void;
+  onAddRouterBranch: (branchName: string) => void;
+  onRemoveRouterBranch: (branchIndex: number) => void;
+  onAddStepToBranch: (branchName: string) => void;
 }
 
 function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
@@ -458,9 +476,17 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     onSetDisplayName,
     onAddStepAfter,
     onDelete,
+    onSetLoopItems,
+    onAddStepToLoopBody,
+    onSetRouterExecutionType,
+    onAddRouterBranch,
+    onRemoveRouterBranch,
+    onAddStepToBranch,
   } = props;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
   const isManual = step.type === "EMPTY";
+  const isLoop = step.type === "LOOP_ON_ITEMS";
+  const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
   const subActions = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
 
@@ -546,7 +572,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </p>
       ) : null}
 
-      {!isManual ? (
+      {!isManual && !isLoop && !isRouter ? (
         <>
           <Field label={isTrigger ? "Trigger piece" : "Action piece"}>
             <select
@@ -586,30 +612,46 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </>
       ) : null}
 
+      {isLoop ? (
+        <LoopEditor step={step} onSetLoopItems={onSetLoopItems} onAddStepToLoopBody={onAddStepToLoopBody} />
+      ) : null}
+
+      {isRouter ? (
+        <RouterEditor
+          step={step}
+          onSetRouterExecutionType={onSetRouterExecutionType}
+          onAddRouterBranch={onAddRouterBranch}
+          onRemoveRouterBranch={onRemoveRouterBranch}
+          onAddStepToBranch={onAddStepToBranch}
+        />
+      ) : null}
+
       <div className="wf-props__divider" />
 
-      <div className="wf-props__inputs">
-        <div className="wf-props__inputs-head">
-          <h4>Inputs</h4>
-        </div>
+      {!isLoop && !isRouter ? (
+        <div className="wf-props__inputs">
+          <div className="wf-props__inputs-head">
+            <h4>Inputs</h4>
+          </div>
 
-        {schema ? (
-          <SchemaInputs
-            schema={schema}
-            input={(step.settings?.input ?? {}) as Record<string, unknown>}
-            onSetInput={onSetInput}
-          />
-        ) : (
-          <FreeformInputs
-            inputEntries={inputEntries}
-            newKey={newKey}
-            setNewKey={setNewKey}
-            onSetInput={onSetInput}
-            onAddInputKey={onAddInputKey}
-            onRemoveInputKey={onRemoveInputKey}
-          />
-        )}
-      </div>
+          {schema ? (
+            <SchemaInputs
+              schema={schema}
+              input={(step.settings?.input ?? {}) as Record<string, unknown>}
+              onSetInput={onSetInput}
+            />
+          ) : (
+            <FreeformInputs
+              inputEntries={inputEntries}
+              newKey={newKey}
+              setNewKey={setNewKey}
+              onSetInput={onSetInput}
+              onAddInputKey={onAddInputKey}
+              onRemoveInputKey={onRemoveInputKey}
+            />
+          )}
+        </div>
+      ) : null}
 
       <div className="wf-props__divider" />
 
@@ -1011,6 +1053,159 @@ function stringifyValue(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/* ----------------------------------------------- LOOP / ROUTER editors */
+
+function LoopEditor({
+  step,
+  onSetLoopItems,
+  onAddStepToLoopBody,
+}: {
+  step: FlowStepNode;
+  onSetLoopItems: (items: string) => void;
+  onAddStepToLoopBody: () => void;
+}): React.ReactElement {
+  const items = step.settings?.items ?? "";
+  const hasBody = !!step.firstLoopAction;
+  return (
+    <>
+      <Field label="Items expression">
+        <input
+          type="text"
+          value={items}
+          placeholder="{{trigger.list}}"
+          onChange={(e) => onSetLoopItems(e.target.value)}
+        />
+        <span className="wf-props__field-help">
+          Must resolve to an array. Inside the body, reference <code>{`{{${step.name}.item}}`}</code> and{" "}
+          <code>{`{{${step.name}.index}}`}</code>.
+        </span>
+      </Field>
+      {!hasBody ? (
+        <div className="wf-props__step-actions">
+          <Button variant="primary" size="sm" onClick={onAddStepToLoopBody}>
+            <Icon icon={Plus} size={12} /> Add first step in body
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function RouterEditor({
+  step,
+  onSetRouterExecutionType,
+  onAddRouterBranch,
+  onRemoveRouterBranch,
+  onAddStepToBranch,
+}: {
+  step: FlowStepNode;
+  onSetRouterExecutionType: (type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH") => void;
+  onAddRouterBranch: (branchName: string) => void;
+  onRemoveRouterBranch: (branchIndex: number) => void;
+  onAddStepToBranch: (branchName: string) => void;
+}): React.ReactElement {
+  const branches = step.settings?.branches ?? [];
+  const children = step.children ?? [];
+  const executionType = step.settings?.executionType ?? "EXECUTE_FIRST_MATCH";
+  const [newBranchName, setNewBranchName] = useState("");
+
+  return (
+    <>
+      <Field label="Execution mode">
+        <div className="wf-props__segmented" role="radiogroup">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={executionType === "EXECUTE_FIRST_MATCH"}
+            className={`wf-props__seg ${executionType === "EXECUTE_FIRST_MATCH" ? "wf-props__seg--on" : ""}`}
+            onClick={() => onSetRouterExecutionType("EXECUTE_FIRST_MATCH")}
+          >
+            First match
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={executionType === "EXECUTE_ALL_MATCH"}
+            className={`wf-props__seg ${executionType === "EXECUTE_ALL_MATCH" ? "wf-props__seg--on" : ""}`}
+            onClick={() => onSetRouterExecutionType("EXECUTE_ALL_MATCH")}
+          >
+            All matches
+          </button>
+        </div>
+      </Field>
+
+      <div className="wf-props__inputs">
+        <div className="wf-props__inputs-head">
+          <h4>Branches</h4>
+        </div>
+        <p className="wf-props__hint">
+          Branch conditions are not editable in the panel yet. Use{" "}
+          <code>manage_workflow compose</code> for new flows, or hand-edit the JSON via{" "}
+          <code>PATCH /api/workflows/.../versions/...</code>.
+        </p>
+        <ul className="wf-props__branch-list">
+          {branches.map((b, idx) => {
+            const child = children[idx];
+            const isFallback = b?.branchType === "FALLBACK";
+            return (
+              <li key={`${idx}_${b?.branchName ?? ""}`} className="wf-props__branch-row">
+                <div className="wf-props__branch-name">
+                  <span>{b?.branchName ?? `(branch ${idx})`}</span>
+                  {isFallback ? <span className="wf-props__branch-tag">fallback</span> : null}
+                </div>
+                <div className="wf-props__branch-actions">
+                  {!child && b?.branchName && !isFallback ? (
+                    <Button variant="ghost" size="sm" onClick={() => onAddStepToBranch(b.branchName)}>
+                      <Icon icon={Plus} size={12} /> Add step
+                    </Button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="wf-props__input-remove"
+                    onClick={() => {
+                      if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
+                        onRemoveRouterBranch(idx);
+                      }
+                    }}
+                    title="Remove branch"
+                  >
+                    <Icon icon={Trash2} size={12} />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="wf-props__add-row">
+          <input
+            type="text"
+            placeholder="new branch name"
+            value={newBranchName}
+            onChange={(e) => setNewBranchName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newBranchName.trim()) {
+                onAddRouterBranch(newBranchName.trim());
+                setNewBranchName("");
+              }
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!newBranchName.trim()}
+            onClick={() => {
+              onAddRouterBranch(newBranchName.trim());
+              setNewBranchName("");
+            }}
+          >
+            <Icon icon={Plus} size={12} /> Add branch
+          </Button>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function scopeLabel(kind: "loop" | "router" | undefined): string {
