@@ -2,6 +2,25 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { createManageWorkflowTool } from "./manage-workflow.ts";
+import {
+  JarvisPieceRegistry,
+  type PieceLlmClient,
+  type PieceLlmInput,
+  type PieceLlmResponse,
+} from "../../workflows/jarvis-pieces/types.ts";
+import { jarvisAskPiece } from "../../workflows/jarvis-pieces/jarvis-ask.ts";
+import { jarvisNotifyPiece } from "../../workflows/jarvis-pieces/jarvis-notify.ts";
+import { jarvisTriggerPiece } from "../../workflows/jarvis-pieces/jarvis-trigger.ts";
+
+class StubLlm implements PieceLlmClient {
+  public calls: PieceLlmInput[] = [];
+  constructor(private reply: string) {}
+  setReply(s: string) { this.reply = s; }
+  async chat(input: PieceLlmInput): Promise<PieceLlmResponse> {
+    this.calls.push(input);
+    return { text: this.reply };
+  }
+}
 
 beforeEach(() => {
   initWorkflowDb(":memory:");
@@ -104,5 +123,86 @@ describe("manage_workflow tool", () => {
 
   test("unknown action throws", async () => {
     await expect(call("nope")).rejects.toThrow(/unknown action "nope"/);
+  });
+});
+
+describe("manage_workflow: compose", () => {
+  function makeReg(): JarvisPieceRegistry {
+    const r = new JarvisPieceRegistry();
+    r.register(jarvisAskPiece);
+    r.register(jarvisNotifyPiece);
+    r.register(jarvisTriggerPiece);
+    return r;
+  }
+
+  test("compose creates a flow when the LLM returns a valid JSON tree", async () => {
+    const llm = new StubLlm(
+      JSON.stringify({
+        displayName: "Inbox summary",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-ask",
+              actionName: "ask",
+              input: { prompt: "hi" },
+            },
+          },
+        },
+      }),
+    );
+    const t = createManageWorkflowTool({ llm, pieceRegistry: makeReg() });
+    const out = JSON.parse(
+      (await t.execute({
+        action: "compose",
+        name: "Inbox summary",
+        description: "summarize my inbox manually",
+      })) as string,
+    ) as { ok: boolean; flow: { id: string; name: string }; versionId: string };
+    expect(out.ok).toBe(true);
+    expect(out.flow.name).toBe("Inbox summary");
+    expect(typeof out.versionId).toBe("string");
+  });
+
+  test("compose returns errors + raw response on validation failure", async () => {
+    const llm = new StubLlm(
+      JSON.stringify({
+        displayName: "X",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "ghost", actionName: "doit" },
+          },
+        },
+      }),
+    );
+    const t = createManageWorkflowTool({ llm, pieceRegistry: makeReg() });
+    const out = JSON.parse(
+      (await t.execute({ action: "compose", name: "X", description: "anything" })) as string,
+    ) as { ok: boolean; errors: string[]; rawResponse: string };
+    expect(out.ok).toBe(false);
+    expect(out.errors.some((e) => /unknown piece "ghost"/.test(e))).toBe(true);
+    expect(typeof out.rawResponse).toBe("string");
+  });
+
+  test("compose without llm dep throws a clear error", async () => {
+    const t = createManageWorkflowTool({ pieceRegistry: makeReg() });
+    await expect(
+      t.execute({ action: "compose", name: "X", description: "x" }),
+    ).rejects.toThrow(/LLM client is not configured/);
+  });
+
+  test("compose without piece registry throws a clear error", async () => {
+    const llm = new StubLlm("{}");
+    const t = createManageWorkflowTool({ llm });
+    await expect(
+      t.execute({ action: "compose", name: "X", description: "x" }),
+    ).rejects.toThrow(/piece registry is not configured/);
   });
 });

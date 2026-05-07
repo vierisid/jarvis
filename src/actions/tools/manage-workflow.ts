@@ -22,6 +22,7 @@
 
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
+import type { JarvisPieceRegistry, PieceLlmClient } from "../../workflows/jarvis-pieces/types.ts";
 import {
   createFlow,
   deleteFlow,
@@ -45,10 +46,15 @@ import {
 } from "../../workflows/db/repos/flow-run.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
+import { composeFlow, type ComposedFlow } from "./workflow-composer.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
   triggerManager?: TriggerManager;
+  /** Required for the `compose` action: lets the LLM build a draft flow from a description. */
+  llm?: PieceLlmClient;
+  /** Required for the `compose` action: catalog of pieces the LLM can pick from. */
+  pieceRegistry?: JarvisPieceRegistry;
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -71,6 +77,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "  delete { flow }                     — permanently remove",
       "  list_runs { flow?, limit? }         — recent runs (per flow or across all)",
       "  get_run { run_id }                  — full run detail with step outputs",
+      "  compose { name, description }       — build a draft flow from a plain-English description (uses the LLM)",
     ].join("\n"),
     category: "automation",
     parameters: {
@@ -98,6 +105,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       run_id: {
         type: "string",
         description: 'Run id (for "get_run").',
+        required: false,
+      },
+      description: {
+        type: "string",
+        description: 'Plain-English description (for "compose").',
         required: false,
       },
       limit: {
@@ -129,6 +141,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return JSON.stringify(actListRuns(params.flow as string | undefined, asLimit(params.limit)));
         case "get_run":
           return JSON.stringify(actGetRun(requireString(params, "run_id")));
+        case "compose":
+          return JSON.stringify(
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps),
+          );
         default:
           throw new Error(`unknown action "${action}"`);
       }
@@ -271,6 +287,48 @@ function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unkn
   deps.triggerManager?.refresh(flow.id);
   return { id: flow.id, deleted: true };
 }
+
+async function actCompose(
+  name: string,
+  description: string,
+  deps: ManageWorkflowDeps,
+): Promise<Record<string, unknown>> {
+  if (!deps.llm) {
+    throw new Error("compose: an LLM client is not configured for this build");
+  }
+  if (!deps.pieceRegistry) {
+    throw new Error("compose: piece registry is not configured for this build");
+  }
+  const result = await composeFlow(
+    { llm: deps.llm, pieceRegistry: deps.pieceRegistry },
+    { name, description },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      errors: result.errors,
+      // Surface the raw LLM output so the assistant can iterate.
+      rawResponse: result.rawResponse,
+    };
+  }
+
+  // Persist as a fresh flow + draft version. The user can then edit / publish.
+  const flow = createFlow();
+  const flowName = result.flow.displayName.trim() || name;
+  const version = createDraftVersion({
+    flowId: flow.id,
+    displayName: flowName,
+    trigger: result.flow.trigger as unknown as Record<string, unknown>,
+  });
+  return {
+    ok: true,
+    flow: summarizeFlow(getFlow(flow.id) ?? flow),
+    versionId: version.id,
+  };
+}
+
+/** Re-export for tests so they can inspect the parser output without going through the LLM. */
+export type { ComposedFlow };
 
 function actListRuns(flowRef: string | undefined, limit: number): Array<Record<string, unknown>> {
   const flow = flowRef ? resolveFlow(flowRef) : null;

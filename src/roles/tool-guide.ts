@@ -170,10 +170,14 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('OKR-style goal management (create, list, score, decompose, morning plan, evening review).');
   lines.push('');
   lines.push('### manage_workflow');
-  lines.push('List, inspect, run, create, enable/disable, publish, and delete Jarvis workflows.');
+  lines.push('List, inspect, run, create, enable/disable, publish, delete, and compose Jarvis workflows.');
   lines.push('Use the `flow` parameter (display name or id) to target a specific one;');
   lines.push('use the `payload` object to pass trigger inputs into a manual run.');
-  lines.push('Sub-actions: list / get / run / create / enable / disable / publish / delete / list_runs / get_run.');
+  lines.push('Sub-actions: list / get / run / create / enable / disable / publish / delete / list_runs / get_run / compose.');
+  lines.push('Use `compose { name, description }` to build a draft flow from a plain-English description');
+  lines.push('— the action calls the LLM under the hood, validates the result against the piece catalog,');
+  lines.push('and surfaces validation errors when the description is too vague or references unknown pieces.');
+  lines.push('After compose, the user can edit in the dashboard or call `publish` to enable.');
   lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');
