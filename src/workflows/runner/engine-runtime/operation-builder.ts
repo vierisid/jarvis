@@ -60,7 +60,7 @@ export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOpera
     platformId: opts.platformId,
     engineToken: opts.engineToken,
     internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
-    publicApiUrl: ensureTrailingSlash(opts.publicApiUrl ?? opts.internalApiUrl),
+    publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
     timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
     runEnvironment: opts.runEnvironment ?? "TESTING",
     streamStepProgress: opts.streamStepProgress ?? "NONE",
@@ -101,7 +101,7 @@ export function buildExtractPieceMetadataOperation(
       platformId: opts.platformId,
       engineToken: opts.engineToken,
       internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
-      publicApiUrl: ensureTrailingSlash(opts.publicApiUrl ?? opts.internalApiUrl),
+      publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
       timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
     },
   };
@@ -109,4 +109,14 @@ export function buildExtractPieceMetadataOperation(
 
 function ensureTrailingSlash(url: string): string {
   return url.endsWith("/") ? url : url + "/";
+}
+
+/**
+ * The engine validates publicApiUrl with `endsWith('/api/')` (despite the
+ * error message claiming "must end with a slash"). Fold that into the URL we
+ * send so the engine accepts it.
+ */
+function ensureApiSuffix(url: string): string {
+  const slashed = ensureTrailingSlash(url);
+  return slashed.endsWith("/api/") ? slashed : slashed + "api/";
 }

@@ -28,6 +28,17 @@ import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
 import { workflowLogsBase } from "../../sandbox-api/config";
 import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spawn";
 import { ENGINE_BUILD_PATHS } from "./build";
+import { materializeCodeActions } from "./code-materialize";
+import {
+  buildExecuteFlowOperation,
+  type ExecuteFlowOptions,
+} from "./operation-builder";
+import {
+  toUpstreamFlowVersion,
+  type UpstreamFlowVersion,
+} from "./flow-version-adapter";
+import type { FlowVersion as JarvisFlowVersion } from "../../db/repos/flow-version";
+import { getFlowRun, type FlowRun } from "../../db/repos/flow-run";
 
 export interface EngineRuntimeOptions {
   api: SandboxApi;
@@ -57,6 +68,21 @@ export interface AcquireOptions {
   tokenTtlSeconds?: number;
 }
 
+export interface ExecuteFlowOnHandleOptions {
+  /** Either our DB-shaped FlowVersion, or a pre-adapted upstream FlowVersion. */
+  flowVersion: JarvisFlowVersion | UpstreamFlowVersion;
+  /** Trigger payload (webhook body, manual run input). Default: empty object. */
+  triggerPayload?: unknown;
+  /** When true, the engine first invokes the trigger's `run` hook. Default: false. */
+  executeTrigger?: boolean;
+  runEnvironment?: ExecuteFlowOptions["runEnvironment"];
+  streamStepProgress?: ExecuteFlowOptions["streamStepProgress"];
+  timeoutInSeconds?: number;
+  stepNameToTest?: string | null;
+  /** Override the platformId the engine sees -- defaults to projectId. */
+  platformId?: string;
+}
+
 export class EngineHandle {
   constructor(
     public readonly sandboxId: string,
@@ -67,6 +93,8 @@ export class EngineHandle {
     private readonly proc: SpawnedEngine,
     private readonly registry: SandboxRegistry,
     private readonly killGraceMs: number,
+    private readonly api: SandboxApi,
+    private readonly baseCodeDir: string,
   ) {}
 
   /** Inspect the spawned process without exposing the full child handle. */
@@ -80,6 +108,57 @@ export class EngineHandle {
 
   get stderr(): NodeJS.ReadableStream | null {
     return this.proc.stderr;
+  }
+
+  /**
+   * Run a flow end-to-end through this engine: materialize CODE-action source
+   * to disk, send EXECUTE_FLOW, wait for the engine's flow-executor to settle.
+   *
+   * Activepieces' EXECUTE_FLOW returns void; the run state lands via
+   * WorkerContract.uploadRunLog before executeOperation resolves (upstream
+   * runs `await runProgressService.shutdown()` after the flow-executor is
+   * done). After this method resolves, the flow_run row reflects the run's
+   * terminal state.
+   *
+   * Throws if executeOperation itself errors (e.g., engine validation
+   * rejection, IPC failure, sandbox terminated mid-call). Run-level failures
+   * (FAILED / INTERNAL_ERROR / TIMEOUT) succeed at this level and are visible
+   * via the returned FlowRun row.
+   */
+  async executeFlow(opts: ExecuteFlowOnHandleOptions): Promise<FlowRun> {
+    const upstream = isUpstreamFlowVersion(opts.flowVersion)
+      ? opts.flowVersion
+      : toUpstreamFlowVersion(opts.flowVersion);
+    materializeCodeActions(upstream, this.baseCodeDir);
+
+    const baseExecuteFlowOptions: ExecuteFlowOptions = {
+      flowVersion: upstream,
+      flowRunId: this.runId,
+      projectId: this.projectId,
+      platformId: opts.platformId ?? this.projectId,
+      engineToken: this.engineToken,
+      internalApiUrl: this.api.baseUrl,
+      // The engine's run-progress backup PUTs zstd to this URL without auth
+      // headers (upstream uses S3 presigned URLs). We bake the engineToken
+      // into the query string so our auth middleware accepts the call.
+      logsUploadUrl:
+        `${this.api.baseUrl}/v1/logs/${encodeURIComponent(this.runId)}` +
+        `?token=${encodeURIComponent(this.engineToken)}`,
+      logsFileId: `logs_${this.runId}`,
+    };
+    if (opts.triggerPayload !== undefined) baseExecuteFlowOptions.triggerPayload = opts.triggerPayload;
+    if (opts.executeTrigger !== undefined) baseExecuteFlowOptions.executeTrigger = opts.executeTrigger;
+    if (opts.runEnvironment !== undefined) baseExecuteFlowOptions.runEnvironment = opts.runEnvironment;
+    if (opts.streamStepProgress !== undefined) baseExecuteFlowOptions.streamStepProgress = opts.streamStepProgress;
+    if (opts.timeoutInSeconds !== undefined) baseExecuteFlowOptions.timeoutInSeconds = opts.timeoutInSeconds;
+    if (opts.stepNameToTest !== undefined) baseExecuteFlowOptions.stepNameToTest = opts.stepNameToTest;
+
+    const operation = buildExecuteFlowOperation(baseExecuteFlowOptions);
+    await this.engineClient.executeOperation(operation);
+
+    const run = getFlowRun(this.runId);
+    if (!run) throw new Error(`flow_run ${this.runId} disappeared after executeFlow`);
+    return run;
   }
 
   /**
@@ -130,6 +209,11 @@ export class EngineRuntime {
     this.runtime = opts.runtime;
   }
 
+  /** Expose for callers that need to resolve files into the same baseCodeDir. */
+  get codeBaseDir(): string {
+    return this.baseCodeDir;
+  }
+
   async acquire(opts: AcquireOptions): Promise<EngineHandle> {
     const sandboxId = SandboxRegistry.newSandboxId();
     const { token, expiresAt } = await this.api.signer.mint(
@@ -177,6 +261,8 @@ export class EngineRuntime {
         proc,
         this.api.registry,
         this.killGraceMs,
+        this.api,
+        this.baseCodeDir,
       );
     } catch (e) {
       // Make sure the subprocess is gone before bubbling. If it already exited,
@@ -192,4 +278,10 @@ export class EngineRuntime {
       void earlyExitWatcher;
     }
   }
+}
+
+function isUpstreamFlowVersion(
+  v: JarvisFlowVersion | UpstreamFlowVersion,
+): v is UpstreamFlowVersion {
+  return typeof (v as UpstreamFlowVersion).created === "string";
 }

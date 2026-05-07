@@ -224,14 +224,26 @@ export class SandboxApi {
       return json({ ok: true, sandboxes: this.registry.liveCount() });
     }
 
-    // Authenticate every other request via Authorization: Bearer <engineToken>.
+    // Authenticate via either:
+    //   - Authorization: Bearer <engineToken>  (default; what the engine uses
+    //     for HTTP RPC calls)
+    //   - ?token=<engineToken> in the URL      (fallback for engine endpoints
+    //     that the upstream client doesn't decorate with auth headers --
+    //     specifically the logs upload PUT, which expects a presigned URL)
+    let token: string | null = null;
     const auth = req.headers.get("authorization") ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
-    if (!m) return err("missing bearer token", 401);
+    if (m) {
+      token = m[1]!;
+    } else {
+      const qp = url.searchParams.get("token");
+      if (qp) token = qp;
+    }
+    if (!token) return err("missing bearer token", 401);
 
     let claims: EngineTokenClaims;
     try {
-      claims = await this.signer.verify(m[1]!);
+      claims = await this.signer.verify(token);
     } catch {
       return err("invalid engine token", 401);
     }
