@@ -14,7 +14,7 @@ import { TerminalExecutor } from '../terminal/executor.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
-import { routeToSidecar } from './sidecar-route.ts';
+import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 
@@ -85,7 +85,7 @@ export const runCommandTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability('terminal');
     if (target) {
       return routeToSidecar(target, 'run_command', {
         command: params.command,
@@ -134,7 +134,7 @@ export const readFileTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
     }
@@ -186,7 +186,7 @@ export const writeFileTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'write_file', { path: params.path, content: params.content }, 'filesystem');
     }
@@ -220,7 +220,7 @@ export const listDirectoryTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');
     }
@@ -339,7 +339,8 @@ export const getClipboardTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) return routeToSidecar(target, 'get_clipboard', {}, 'clipboard');
+    const auto = target || autoTargetForCapability('clipboard');
+    if (auto) return routeToSidecar(auto, 'get_clipboard', {}, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const content = localClipboardRead();
@@ -368,7 +369,8 @@ export const setClipboardTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) return routeToSidecar(target, 'set_clipboard', { content: params.content }, 'clipboard');
+    const auto = target || autoTargetForCapability('clipboard');
+    if (auto) return routeToSidecar(auto, 'set_clipboard', { content: params.content }, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       localClipboardWrite(params.content as string);
@@ -392,7 +394,8 @@ export const captureScreenTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) return routeToSidecar(target, 'capture_screen', {}, 'screenshot');
+    const auto = target || autoTargetForCapability('screenshot');
+    if (auto) return routeToSidecar(auto, 'capture_screen', {}, 'screenshot');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const base64 = localCaptureScreen();
@@ -416,7 +419,8 @@ export const getSystemInfoTool: ToolDefinition = {
   },
   execute: async (params) => {
     const target = params.target as string | undefined;
-    if (target) return routeToSidecar(target, 'get_system_info', {}, 'system_info');
+    const auto = target || autoTargetForCapability('system_info');
+    if (auto) return routeToSidecar(auto, 'get_system_info', {}, 'system_info');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     return JSON.stringify(localSystemInfo(), null, 2);
   },
@@ -550,7 +554,7 @@ export const browserNavigateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_navigate', { url: params.url }, 'browser');
     }
@@ -576,7 +580,7 @@ export const browserSnapshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_snapshot', {}, 'browser');
     }
@@ -607,7 +611,7 @@ export const browserClickTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_click', { element_id: params.element_id }, 'browser');
     }
@@ -647,7 +651,7 @@ export const browserTypeTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_type', {
         element_id: params.element_id,
@@ -680,7 +684,7 @@ export const browserScreenshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
@@ -750,7 +754,7 @@ export const browserScrollTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_scroll', {
         direction: params.direction,
@@ -785,7 +789,7 @@ export const browserEvaluateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }

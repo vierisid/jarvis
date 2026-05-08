@@ -725,10 +725,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           return true;
         }
 
-        // Normalize the tab name. The dashboard rooms accept short keys
-        // like "list" / "editor" / "builder" — we map a few common
-        // synonyms here, otherwise pass through and let the room's
-        // handler decide.
+        // Recognized tab synonyms across the dashboard rooms. Match is
+        // STRICT — if the captured tab name isn't in this list, fall
+        // through to the LLM. Without this, phrases like "open Gmail on
+        // a new Chrome tab window" would be parsed as `switch_tab` with
+        // tab="gmail_on_a_new_chrome" because the regex captures
+        // anything that ends with "… tab".
         const tabSyn: Record<string, string> = {
           editor: 'editor',
           'edit': 'editor',
@@ -748,7 +750,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           tools: 'tools',
           channels: 'channels',
         };
-        const tab = (tabSyn[tabRaw] ?? tabRaw.replace(/\s+/g, '_'));
+        // Disqualify common false-positive contexts: anything mentioning
+        // a real browser/window/app makes "tab" almost certainly the
+        // browser-tab sense, not a JARVIS panel sub-tab.
+        const browserContext = /\b(chrome|firefox|edge|safari|browser|gmail|google|mail|youtube|github|window)\b/i;
+        if (browserContext.test(t)) return false;
+        const known = tabSyn[tabRaw];
+        if (!known) {
+          // Captured tab name isn't a known panel sub-tab — fall through
+          // to the LLM rather than dispatch a bogus switch_tab.
+          return false;
+        }
+        const tab = known;
 
         console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title} (id=${target.id}${roomHint ? `, hint="${roomHint}"` : ''})`);
         try {
@@ -988,6 +1001,36 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // panels are open. Keep token cost low by only listing panels
         // when there are some.
         const sections: string[] = [];
+
+        // Action-execution directives. Every cycle through here is a
+        // voice command — the user already authorized whatever they
+        // asked for by saying it out loud. The model has been observed
+        // adding extra "may I?" rounds and giving up halfway through
+        // multi-step desktop actions; these directives short-circuit
+        // both failure modes.
+        sections.push(
+          '# Acting on the user\'s machine — execute, don\'t ask',
+          '',
+          'A spoken request IS the authorization. When the user says "click X", "open Y", "send Z", "type ...", just DO it. Do not reply with "I need your permission first" / "shall I go ahead?" / "do you want me to ...?" — the user already said yes by speaking the request. The only exception is genuinely irreversible operations (deleting files, sending money, posting publicly to recipients) — for those, ask once. Clicking icons, opening apps, focusing windows, switching tabs, taking screenshots, navigating URLs are NOT in that category.',
+          '',
+          '**Prefer the efficient automation path — never click via the OS cursor when there\'s a structured alternative.**',
+          '',
+          '  - **Web apps** (Gmail, Notion, GitHub, the JARVIS dashboard, anything in a browser): use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type`. These dispatch DOM events through CDP — no OS cursor involved, very reliable, very fast. The user can keep using their mouse for other things while you operate the page.',
+          '',
+          '  - **Native Windows apps** (Notepad, File Explorer, settings, dialogs, menus): `desktop_snapshot` to enumerate UI elements, then `desktop_click({element_id})`. Win32 UIA invokes the element directly via COM patterns where possible — no cursor move when the widget supports the Invoke pattern.',
+          '',
+          '  - **Open an app**: `desktop_launch_app({name: "Chrome"})` is faster and more reliable than clicking a desktop icon. Only fall back to clicking icons if launch_app doesn\'t resolve the app.',
+          '',
+          'The pebble is a *visual narrator only* — it flies to the action target so the user can see what JARVIS is doing, but it does NOT control the user\'s cursor. The user keeps full mouse freedom while you operate apps through the structured paths above.',
+          '',
+          'When the user asks for something that genuinely requires a click on a non-UIA surface (desktop icon, system tray, popup), prefer asking them to do it themselves rather than wrestling with coordinate clicks — coordinate clicks move the OS cursor and steal control from the user.',
+          '',
+          '**Sidecar is primary.** The Go sidecar is connected and exposes desktop / browser / filesystem / clipboard / system_info / screenshot capabilities. Tools auto-route to it — you never need to specify a `target` parameter unless you want to override. If a tool returns "Sidecar not running" / "Desktop bridge not found", that\'s the legacy local-only path leaking through; mention it in your reply but try the same call again — the auto-route should pick up the connected sidecar on the second attempt.',
+          '',
+          'When you finish a multi-step task, give a short verbal confirmation ("Done — Chrome is up.") rather than re-narrating each step. The pebble already showed each step visually.',
+          '',
+        );
+
         if (foreground) {
           sections.push(
             '# Foreground app on the user\'s screen',
@@ -1287,6 +1330,100 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // T26b — resolve coordinates for action-class tools and fly the
+      // pebble to the target before the click fires. The orchestrator
+      // executes tools AFTER the LLM finishes streaming the message,
+      // so dispatching point_at right when we see the tool_call event
+      // gives the pebble ~50-300 ms head-start on the actual action —
+      // enough for the user to see it land at the button.
+      const flyPebbleToToolTarget = async (
+        sidecarId: string,
+        toolName: string,
+        args: Record<string, unknown>,
+        label: string,
+      ): Promise<void> => {
+        try {
+          if (toolName === 'desktop_click') {
+            const id = Number(args.element_id);
+            if (!Number.isFinite(id)) return;
+            const { getCachedElementBounds } = await import('../actions/tools/desktop.ts');
+            const bounds = getCachedElementBounds(id);
+            if (!bounds) return; // not in cache → label-only narration
+            const cx = Math.round(bounds.x + bounds.width / 2);
+            const cy = Math.round(bounds.y + bounds.height / 2);
+            console.log(`[ambient-ui] fly pebble to desktop element [${id}] @ (${cx},${cy})`);
+            await sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
+              x: cx, y: cy, label, duration_ms: 2500,
+            });
+          } else if (toolName === 'browser_click' || toolName === 'browser_type') {
+            // T26c — fly the pebble to the rendered element in the
+            // browser viewport. We bounce a Runtime.evaluate through the
+            // sidecar's browser capability to read the element's
+            // getBoundingClientRect + window.screenX/Y; the result is
+            // already in screen-pixel space so no extra scale step.
+            const id = Number(args.element_id);
+            if (!Number.isFinite(id)) return;
+            const script = `
+(function(){
+  try {
+    var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
+    var el = els[${Math.floor(id)}];
+    if (!el) return JSON.stringify({error: 'not found'});
+    var r = el.getBoundingClientRect();
+    return JSON.stringify({
+      x: Math.round(r.x + (window.screenX || 0)),
+      y: Math.round(r.y + (window.screenY || 0)),
+      w: Math.round(r.width),
+      h: Math.round(r.height)
+    });
+  } catch (e) { return JSON.stringify({error: String(e)}); }
+})()`;
+            try {
+              const evalResult = await Promise.race<unknown>([
+                sidecarManager.dispatchRPC(sidecarId, 'browser_evaluate', { expression: script }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 1500)),
+              ]);
+              // Result shape varies by sidecar — try to dig the JSON
+              // string out of common locations.
+              let raw: string | null = null;
+              if (typeof evalResult === 'string') raw = evalResult;
+              else if (evalResult && typeof evalResult === 'object') {
+                const r = evalResult as Record<string, unknown>;
+                if (typeof r.value === 'string') raw = r.value;
+                else if (typeof r.result === 'string') raw = r.result;
+                else if (r.result && typeof r.result === 'object') {
+                  const rr = r.result as Record<string, unknown>;
+                  if (typeof rr.value === 'string') raw = rr.value;
+                }
+              }
+              if (!raw) return;
+              let rawStr: string = raw;
+              // Sometimes the inner JSON is wrapped in a CDP shape
+              // {"type":"string","value":"..."} — try one more peel.
+              try {
+                const parsed = JSON.parse(rawStr);
+                if (parsed && typeof parsed === 'object' && typeof parsed.value === 'string') rawStr = parsed.value;
+              } catch { /* not nested */ }
+              const bounds = JSON.parse(rawStr) as { x?: number; y?: number; w?: number; h?: number; error?: string };
+              if (bounds.error || typeof bounds.x !== 'number' || typeof bounds.y !== 'number') return;
+              const cx = Math.round(bounds.x + (bounds.w ?? 0) / 2);
+              const cy = Math.round(bounds.y + (bounds.h ?? 0) / 2);
+              console.log(`[ambient-ui] fly pebble to browser element [${id}] @ (${cx},${cy})`);
+              await sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
+                x: cx, y: cy, label, duration_ms: 2500,
+              });
+            } catch (err) {
+              console.warn('[ambient-ui] browser bounds fetch failed:', err);
+            }
+          }
+          // browser_click / browser_type / launch_app etc.: no cached
+          // bounds → fall through to v1 label-only narration. Browser
+          // selector → coords resolution lands in T26c (CDP DOM.getBoxModel).
+        } catch (err) {
+          console.warn('[ambient-ui] flyPebbleToToolTarget error:', err);
+        }
+      };
+
       // T26 — action narration. Tools that perform visible actions on
       // the user's machine (clicks, types, navigations, file ops) get a
       // pebble narration when the LLM emits the call; read-only or
@@ -1313,7 +1450,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'desktop_type':         return `Typing "${trim(args.text, 50)}"`;
           case 'desktop_press_keys':   return `Pressing ${trim(args.keys || args.key, 20)}`;
           case 'desktop_launch_app':   return `Launching ${trim(args.name || args.app || args.path, 40)}`;
-          case 'desktop_focus_window': return `Focusing ${trim(args.title || args.window, 40)}`;
+          case 'desktop_focus_window': return `Focusing ${trim(args.title || args.window || (args.pid ? `PID ${args.pid}` : 'window'), 40)}`;
           // Filesystem / shell
           case 'run_command':          return `Running ${trim(args.command, 50)}`;
           case 'write_file':           return `Writing ${trim(args.path, 50)}`;
@@ -1595,10 +1732,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               // to do. Read-only / introspection tools (read_file, list_*)
               // are skipped — narrating those would just be noise.
               const tcName = event.tool_call.name;
+              const tcArgs = event.tool_call.arguments as Record<string, unknown>;
               if (NARRATE_TOOLS.test(tcName)) {
-                const label = describeToolCall(tcName, event.tool_call.arguments as Record<string, unknown>);
+                const label = describeToolCall(tcName, tcArgs);
                 console.log(`[ambient-ui] narrating tool: ${tcName} → "${label}"`);
                 void setState(sidecarId, 'working', label);
+
+                // T26b — fly the pebble to the actual click target so
+                // the user SEES JARVIS reach for the button before it
+                // clicks. Only for tools where we can resolve coords
+                // before execution; everything else stays label-only.
+                void flyPebbleToToolTarget(sidecarId, tcName, tcArgs, label);
               }
             } else if (event.type === 'done') {
               llmDone = true;
