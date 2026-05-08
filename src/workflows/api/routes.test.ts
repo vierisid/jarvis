@@ -7,9 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { queueStats } from "../db/repos/job-queue";
 import { createWorkflowRoutes, type WorkflowRouteMap } from "./routes";
-import { JarvisPieceRegistry } from "../jarvis-pieces/types";
-import { jarvisAskPiece } from "../jarvis-pieces/jarvis-ask";
-import { jarvisTriggerPiece } from "../jarvis-pieces/jarvis-trigger";
+import { sampleCatalog } from "../runtime/test-fixtures";
 
 let routes: WorkflowRouteMap;
 
@@ -64,9 +62,7 @@ describe("workflow API: piece catalog", () => {
   });
 
   test("surfaces inputSchema on actions and triggers when declared", async () => {
-    const reg = new JarvisPieceRegistry();
-    reg.register(jarvisAskPiece);
-    reg.register(jarvisTriggerPiece);
+    const reg = sampleCatalog();
     const r = createWorkflowRoutes({ pieceRegistry: reg });
     const get = r["/api/workflows/pieces"]?.GET;
     const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
@@ -84,15 +80,13 @@ describe("workflow API: piece catalog", () => {
   });
 
   test("returns registered pieces with actions and triggers", async () => {
-    const reg = new JarvisPieceRegistry();
-    reg.register(jarvisAskPiece);
-    reg.register(jarvisTriggerPiece);
+    const reg = sampleCatalog();
     const r = createWorkflowRoutes({ pieceRegistry: reg });
     const get = r["/api/workflows/pieces"]?.GET;
     const { status, body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
     expect(status).toBe(200);
     const names = (body as Array<{ name: string }>).map((p) => p.name).sort();
-    expect(names).toEqual(["jarvis-ask", "jarvis-trigger"]);
+    expect(names).toEqual(["jarvis-ask", "jarvis-notify", "jarvis-trigger"]);
     const trigger = (body as Array<{ name: string; triggers: Array<{ name: string }> }>).find((p) => p.name === "jarvis-trigger");
     expect(trigger?.triggers.map((t) => t.name)).toEqual(["on_event"]);
     const ask = (body as Array<{ name: string; actions: Array<{ name: string }> }>).find((p) => p.name === "jarvis-ask");

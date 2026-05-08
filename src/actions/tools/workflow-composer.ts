@@ -11,9 +11,19 @@
 import type {
   PieceInputField,
   PieceInputSchema,
-  PieceLlmClient,
-} from "../../workflows/jarvis-pieces/types.ts";
+} from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
+
+/**
+ * Minimal LLM-client shape the composer needs. Single-shot
+ * prompt -> `{ text }`. The daemon supplies an instance backed by
+ * `LLMManager`; tests inject a stub. Kept inline (instead of importing the
+ * legacy `PieceLlmClient` type) so the composer doesn't depend on the
+ * deleted jarvis-pieces tree.
+ */
+export interface ComposerLlmClient {
+  chat(input: { prompt: string; system?: string }): Promise<{ text: string }>;
+}
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 
@@ -63,7 +73,7 @@ export interface ComposeFail {
 export type ComposeResult = ComposeOk | ComposeFail;
 
 export interface ComposeDeps {
-  llm: PieceLlmClient;
+  llm: ComposerLlmClient;
   pieceRegistry: PieceLookup;
   /**
    * Optional list of registered Jarvis tool names. When present, surfaced in

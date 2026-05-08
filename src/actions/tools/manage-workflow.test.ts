@@ -2,21 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { createManageWorkflowTool } from "./manage-workflow.ts";
-import {
-  JarvisPieceRegistry,
-  type PieceLlmClient,
-  type PieceLlmInput,
-  type PieceLlmResponse,
-} from "../../workflows/jarvis-pieces/types.ts";
-import { jarvisAskPiece } from "../../workflows/jarvis-pieces/jarvis-ask.ts";
-import { jarvisNotifyPiece } from "../../workflows/jarvis-pieces/jarvis-notify.ts";
-import { jarvisTriggerPiece } from "../../workflows/jarvis-pieces/jarvis-trigger.ts";
+import { sampleCatalog } from "../../workflows/runtime/test-fixtures.ts";
+import type { ComposerLlmClient } from "./workflow-composer.ts";
 
-class StubLlm implements PieceLlmClient {
-  public calls: PieceLlmInput[] = [];
+class StubLlm implements ComposerLlmClient {
+  public calls: Array<{ prompt: string; system?: string }> = [];
   constructor(private reply: string) {}
   setReply(s: string) { this.reply = s; }
-  async chat(input: PieceLlmInput): Promise<PieceLlmResponse> {
+  async chat(input: { prompt: string; system?: string }): Promise<{ text: string }> {
     this.calls.push(input);
     return { text: this.reply };
   }
@@ -127,13 +120,7 @@ describe("manage_workflow tool", () => {
 });
 
 describe("manage_workflow: compose", () => {
-  function makeReg(): JarvisPieceRegistry {
-    const r = new JarvisPieceRegistry();
-    r.register(jarvisAskPiece);
-    r.register(jarvisNotifyPiece);
-    r.register(jarvisTriggerPiece);
-    return r;
-  }
+  const makeReg = () => sampleCatalog();
 
   test("compose creates a flow when the LLM returns a valid JSON tree", async () => {
     const llm = new StubLlm(

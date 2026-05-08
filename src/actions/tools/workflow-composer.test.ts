@@ -1,26 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
-import { JarvisPieceRegistry, type PieceLlmClient, type PieceLlmInput, type PieceLlmResponse } from "../../workflows/jarvis-pieces/types";
-import { jarvisAskPiece } from "../../workflows/jarvis-pieces/jarvis-ask";
-import { jarvisNotifyPiece } from "../../workflows/jarvis-pieces/jarvis-notify";
-import { jarvisTriggerPiece } from "../../workflows/jarvis-pieces/jarvis-trigger";
+import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
+import type { ComposerLlmClient } from "./workflow-composer";
 
-class StubLlm implements PieceLlmClient {
-  public calls: PieceLlmInput[] = [];
+class StubLlm implements ComposerLlmClient {
+  public calls: Array<{ prompt: string; system?: string }> = [];
   constructor(private readonly reply: string) {}
-  async chat(input: PieceLlmInput): Promise<PieceLlmResponse> {
+  async chat(input: { prompt: string; system?: string }): Promise<{ text: string }> {
     this.calls.push(input);
     return { text: this.reply };
   }
 }
 
-function makeRegistry(): JarvisPieceRegistry {
-  const r = new JarvisPieceRegistry();
-  r.register(jarvisAskPiece);
-  r.register(jarvisNotifyPiece);
-  r.register(jarvisTriggerPiece);
-  return r;
-}
+const makeRegistry = () => sampleCatalog();
 
 describe("composeFlow", () => {
   test("happy path: parses + validates an inbox-summary flow", async () => {
@@ -239,7 +231,7 @@ describe("composeFlow", () => {
   });
 
   test("LLM error is surfaced", async () => {
-    const llm: PieceLlmClient = {
+    const llm: ComposerLlmClient = {
       async chat() {
         throw new Error("provider unavailable");
       },

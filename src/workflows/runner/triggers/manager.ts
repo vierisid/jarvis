@@ -35,8 +35,7 @@
 
 import { CronScheduler } from "./cron";
 import { WebhookManager } from "./webhook";
-import type { JarvisEventBusAdapter } from "../../adapters/event-bus";
-import type { JarvisWorkflowRunnerAdapter } from "../../adapters/workflow-runner";
+import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
 import {
   getFlowVersion,
@@ -79,8 +78,13 @@ type ActiveSub = {
 };
 
 export interface TriggerManagerDeps {
-  workflowRunner: JarvisWorkflowRunnerAdapter;
-  eventBus: JarvisEventBusAdapter;
+  /**
+   * In-process event bus. Used by the legacy `jarvis-trigger:on_event`
+   * direct-subscribe path -- only exercised when `engineRuntime` is unset.
+   * With an engine runtime in scope, the engine-managed polling trigger
+   * handles event delivery via the daemon's event buffer.
+   */
+  eventBus: WorkflowEventBus;
   cronScheduler?: CronScheduler;
   webhookManager?: WebhookManager;
   /**
@@ -96,8 +100,7 @@ export interface TriggerManagerDeps {
 }
 
 export class TriggerManager {
-  private readonly runner: JarvisWorkflowRunnerAdapter;
-  private readonly bus: JarvisEventBusAdapter;
+  private readonly bus: WorkflowEventBus;
   private readonly cron: CronScheduler;
   private readonly webhooks: WebhookManager;
   private readonly engineRuntime: EngineRuntime | undefined;
@@ -113,7 +116,6 @@ export class TriggerManager {
   private readonly inFlight: Map<string, Promise<void>> = new Map();
 
   constructor(deps: TriggerManagerDeps) {
-    this.runner = deps.workflowRunner;
     this.bus = deps.eventBus;
     this.cron = deps.cronScheduler ?? new CronScheduler();
     this.webhooks = deps.webhookManager ?? new WebhookManager();

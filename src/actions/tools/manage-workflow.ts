@@ -22,8 +22,17 @@
 
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
-import type { PieceLlmClient, PieceToolRegistry } from "../../workflows/jarvis-pieces/types.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
+import type { ComposerLlmClient } from "./workflow-composer.ts";
+
+/**
+ * Minimal tool-registry shape the composer surfaces in its planner prompt.
+ * Lists names + tool descriptions; doesn't drive execution. Kept inline
+ * instead of importing the deleted legacy `PieceToolRegistry` type.
+ */
+export interface ComposerToolRegistry {
+  listNames(category?: string): string[];
+}
 import {
   createFlow,
   deleteFlow,
@@ -54,7 +63,7 @@ export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
   triggerManager?: TriggerManager;
   /** Required for the `compose` action: lets the LLM build a draft flow from a description. */
-  llm?: PieceLlmClient;
+  llm?: ComposerLlmClient;
   /** Required for the `compose` action: catalog of pieces the LLM can pick from. */
   pieceRegistry?: PieceLookup;
   /**
@@ -62,7 +71,7 @@ export interface ManageWorkflowDeps {
    * Jarvis tools so the LLM can wire `jarvis-tool { toolName: '...' }` correctly
    * for asks like "send a Gmail" or "search the vault".
    */
-  toolRegistry?: PieceToolRegistry;
+  toolRegistry?: ComposerToolRegistry;
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {

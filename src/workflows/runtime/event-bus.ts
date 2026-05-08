@@ -1,23 +1,19 @@
 /**
- * Adapter: PieceEventBus.
+ * In-process pub/sub bus. Lives at the runtime level so the daemon can
+ * publish observer events / commitment events into it; subscribers are the
+ * legacy `jarvis-trigger:on_event` direct-subscribe path inside
+ * `TriggerManager` (kept as a fallback when no engine runtime is wired) and
+ * the workflow event buffer mirror used by `/v1/jarvis/events/poll`.
  *
- * Status: in-process pub/sub only. The Jarvis EventReactor (M5/M13) is
- * classification-driven and does not yet expose a generic subscribe API.
- * Wiring this through requires extending the reactor with a typed event
- * stream, which is its own piece of work. For now this adapter offers an
- * in-process bus that anyone in the daemon can publish into; the Jarvis
- * services can be connected to it incrementally (`bus.publish("awareness.context_changed", ...)`).
- *
- * When the Jarvis side is ready, the bus can be re-implemented to subscribe
- * to the reactor without changing the piece-side surface.
+ * Replaces the previous `JarvisEventBusAdapter` in `adapters/` (deleted with
+ * the rest of the legacy adapter tree); behaviour is identical.
  */
-
-import type { PieceEventBus } from "../jarvis-pieces/types";
 
 type Handler = (payload: Record<string, unknown>) => void;
 
-export class JarvisEventBusAdapter implements PieceEventBus {
+export class WorkflowEventBus {
   private readonly handlers: Map<string, Set<Handler>> = new Map();
+  private onPublish: ((eventType: string, payload: Record<string, unknown>) => void) | null = null;
 
   subscribe(eventType: string, handler: Handler): () => void {
     let set = this.handlers.get(eventType);
@@ -36,13 +32,11 @@ export class JarvisEventBusAdapter implements PieceEventBus {
   }
 
   /**
-   * Optional observer invoked on every publish. Daemon hooks this to
-   * mirror events into the polling buffer that backs `/v1/jarvis/events/poll`,
-   * so engine-managed `on_event` triggers see the same stream as legacy
-   * direct subscribers.
+   * Optional observer invoked on every publish. The daemon hooks this to
+   * mirror events into the `WorkflowEventBuffer` that backs
+   * `/v1/jarvis/events/poll`, so engine-managed `on_event` triggers see the
+   * same stream as legacy direct subscribers.
    */
-  private onPublish: ((eventType: string, payload: Record<string, unknown>) => void) | null = null;
-
   setObserver(fn: (eventType: string, payload: Record<string, unknown>) => void): void {
     this.onPublish = fn;
   }

@@ -36,7 +36,9 @@ import type {
   PieceInputField,
   PieceInputSchema,
   PieceInputType,
-} from "../jarvis-pieces/types";
+} from "./piece-input";
+
+export type { PieceInputField, PieceInputSchema, PieceInputType } from "./piece-input";
 
 export interface PieceCatalogAction {
   name: string;

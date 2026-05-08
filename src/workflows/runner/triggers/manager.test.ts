@@ -7,8 +7,7 @@ import {
 } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
 import { queueStats } from "../../db/repos/job-queue";
-import { JarvisEventBusAdapter } from "../../adapters/event-bus";
-import { JarvisWorkflowRunnerAdapter } from "../../adapters/workflow-runner";
+import { WorkflowEventBus } from "../../runtime/event-bus";
 import { TriggerManager } from "./manager";
 
 const silent = () => undefined;
@@ -42,9 +41,8 @@ describe("TriggerManager: lifecycle", () => {
         input: { eventType: "test.evt" },
       },
     });
-    const bus = new JarvisEventBusAdapter();
-    const runner = new JarvisWorkflowRunnerAdapter();
-    const tm = new TriggerManager({ workflowRunner: runner, eventBus: bus, log: silent });
+    const bus = new WorkflowEventBus();
+    const tm = new TriggerManager({ eventBus: bus, log: silent });
 
     await tm.start();
     expect(tm.list()).toEqual([{ flowId, kind: "event" }]);
@@ -64,8 +62,7 @@ describe("TriggerManager: lifecycle", () => {
   test("EMPTY trigger: nothing registered", async () => {
     publishFlowWithTrigger("manual flow", { name: "trigger", type: "EMPTY", settings: {} });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -79,8 +76,7 @@ describe("TriggerManager: lifecycle", () => {
       settings: { pieceName: "webhook", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -103,9 +99,8 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
         input: { eventType: "awareness.app_changed" },
       },
     });
-    const bus = new JarvisEventBusAdapter();
-    const runner = new JarvisWorkflowRunnerAdapter();
-    const tm = new TriggerManager({ workflowRunner: runner, eventBus: bus, log: silent });
+    const bus = new WorkflowEventBus();
+    const tm = new TriggerManager({ eventBus: bus, log: silent });
     await tm.start();
     bus.publish("awareness.app_changed", { app: "VS Code" });
     bus.publish("awareness.app_changed", { app: "Slack" });
@@ -127,9 +122,8 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
         input: { eventType: "awareness.app_changed", filter: { app: "VS Code" } },
       },
     });
-    const bus = new JarvisEventBusAdapter();
+    const bus = new WorkflowEventBus();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
       eventBus: bus,
       log: silent,
     });
@@ -149,8 +143,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
       settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -164,8 +157,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
       settings: { pieceName: "jarvis-trigger", triggerName: "polling", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -181,8 +173,7 @@ describe("TriggerManager: webhook", () => {
       settings: { pieceName: "webhook", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -210,8 +201,7 @@ describe("TriggerManager: webhook", () => {
       settings: { pieceName: "webhook", input: { secret: "topsecret" } },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -240,9 +230,8 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
         input: { eventType: "observer.clipboard_changed" },
       },
     });
-    const bus = new JarvisEventBusAdapter();
+    const bus = new WorkflowEventBus();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
       eventBus: bus,
       log: silent,
     });
@@ -263,9 +252,8 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
         input: { eventType: "awareness.context_changed" },
       },
     });
-    const bus = new JarvisEventBusAdapter();
+    const bus = new WorkflowEventBus();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
       eventBus: bus,
       log: silent,
     });
@@ -289,9 +277,8 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
         },
       },
     });
-    const bus = new JarvisEventBusAdapter();
+    const bus = new WorkflowEventBus();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
       eventBus: bus,
       log: silent,
     });
@@ -322,8 +309,7 @@ describe("TriggerManager: schedule", () => {
       settings: { pieceName: "schedule", input: { expression: "*/5 * * * *" } },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -338,8 +324,7 @@ describe("TriggerManager: schedule", () => {
       settings: { pieceName: "schedule", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -358,8 +343,7 @@ describe("TriggerManager: schedule", () => {
       settings: { pieceName: "schedule", input: { cron_expression: "0 * * * *" } },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -377,8 +361,7 @@ describe("TriggerManager: unknown trigger kinds", () => {
       settings: { pieceName: "gmail", triggerName: "new_email", input: {} },
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -392,8 +375,7 @@ describe("TriggerManager: unknown trigger kinds", () => {
       settings: {},
     });
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       log: silent,
     });
     await tm.start();
@@ -455,8 +437,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     const fakeCron = new FakeCronScheduler();
 
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: silent,
@@ -511,8 +492,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     const fakeCron = new FakeCronScheduler();
 
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: silent,
@@ -559,8 +539,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
 
     const logs: string[] = [];
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: (line) => logs.push(line),
@@ -630,8 +609,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     const fakeCron = new FakeCronScheduler();
 
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: silent,
@@ -669,8 +647,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
     const fakeCron = new FakeCronScheduler();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: silent,
@@ -720,8 +697,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
     const fakeCron = new FakeCronScheduler();
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
       log: silent,
@@ -763,8 +739,7 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
 
     const logs: string[] = [];
     const tm = new TriggerManager({
-      workflowRunner: new JarvisWorkflowRunnerAdapter(),
-      eventBus: new JarvisEventBusAdapter(),
+      eventBus: new WorkflowEventBus(),
       engineRuntime: fakeEngine,
       cronScheduler: new FakeCronScheduler() as unknown as import("./cron").CronScheduler,
       log: (line) => logs.push(line),
