@@ -74,6 +74,7 @@ let awarenessService: import('../awareness/service.ts').AwarenessService | null 
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
+let workflowEngineShutdown: (() => Promise<void>) | null = null;
 
 /**
  * Parse command line arguments
@@ -209,6 +210,15 @@ async function handleShutdown(signal: string): Promise<void> {
     if (workflowWorker) {
       await workflowWorker.stop();
       workflowWorker = null;
+    }
+
+    // Stop the engine SandboxApi server (after the worker has drained, since
+    // an in-flight engine subprocess may still be calling back to it).
+    if (workflowEngineShutdown) {
+      try { await workflowEngineShutdown(); } catch (e) {
+        console.warn(`[Daemon] Workflow engine shutdown failed: ${(e as Error).message}`);
+      }
+      workflowEngineShutdown = null;
     }
 
     // Close databases
@@ -563,12 +573,45 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sharedPieceRegistry.register(jarvisAgentPiece);
     sharedPieceRegistry.register(jarvisTriggerPiece);
 
+    // Bootstrap the workflow engine: locate / build the bundle, ensure each
+    // Jarvis piece is compiled, start the loopback SandboxApi, build an
+    // EngineRuntime, and extract the canonical PieceCatalog. The catalog
+    // becomes the source of truth for the dashboard's `/api/workflows/pieces`
+    // endpoint and for the NL composer; the legacy in-process registry stays
+    // as a fallback while K2 swaps the executor.
+    //
+    // Failure here is non-fatal: the daemon can still run flows manually and
+    // serve the legacy piece list, but engine-managed triggers (Phase J) and
+    // piece extraction will be unavailable.
+    let workflowPieceCatalog: import("../workflows/runtime/piece-catalog.ts").PieceLookup =
+      sharedPieceRegistry;
+    try {
+      const { bootstrapWorkflowEngine } = await import("../workflows/runtime/engine-bootstrap.ts");
+      const engineBoot = await bootstrapWorkflowEngine({
+        services: {
+          credentialResolver: new (await import("../workflows/credentials/adapter.ts")).CredentialResolver(),
+          // K2 wires real backends (llmChat, toolsInvoke, notify, context,
+          // agentDelegate, eventsPoll, workflowsStart). Until then each
+          // /v1/jarvis/* route returns 503 -- only the metadata extraction
+          // path and the engine-managed trigger lifecycle exercise the api.
+        },
+        log: (line) => console.log(`[Daemon] ${line}`),
+      });
+      workflowEngineShutdown = engineBoot.shutdown;
+      workflowPieceCatalog = engineBoot.catalog;
+      logWithTimestamp(
+        `Workflow engine bootstrap: ${engineBoot.catalog.list().length} piece(s) catalog'd, ${engineBoot.failures.length} failure(s)`,
+      );
+    } catch (e) {
+      console.warn(`[Daemon] Workflow engine bootstrap failed: ${(e as Error).message}; falling back to legacy piece registry`);
+    }
+
     // Mount the daemon's existing routes plus the workflow runtime's routes.
     // The legacy in-house workflow routes that lived at /api/workflows/* were
     // removed in the Phase 6 cutover; the new runtime now owns those paths.
     const apiRoutes = {
       ...createApiRoutes(apiContext),
-      ...createWorkflowRoutes({ triggerManager, pieceRegistry: sharedPieceRegistry }),
+      ...createWorkflowRoutes({ triggerManager, pieceRegistry: workflowPieceCatalog }),
     };
     wsService.setApiRoutes(apiRoutes);
 
@@ -634,7 +677,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const manageWorkflowTool = createManageWorkflowTool({
         triggerManager: triggerManager ?? undefined,
         llm: composeLlm,
-        pieceRegistry: sharedPieceRegistry,
+        pieceRegistry: workflowPieceCatalog,
         // Surface tool names to the composer so the LLM can compose flows
         // that integrate with services that aren't first-class pieces (e.g.,
         // Gmail/Calendar via Jarvis tools).
