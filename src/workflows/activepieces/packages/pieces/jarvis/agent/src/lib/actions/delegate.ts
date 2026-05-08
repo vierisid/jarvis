@@ -1,0 +1,81 @@
+/**
+ * `delegate` action -- POST `{ goal, role?, maxIterations? }` to
+ * `/v1/jarvis/agent/delegate` and surface the agent's final message + tool-call
+ * trace + status. Sub-agent execution lives entirely in the daemon.
+ */
+
+import { createAction, Property } from "@activepieces/pieces-framework";
+
+interface DelegateResponse {
+  finalMessage: string;
+  toolCalls: Array<{
+    name: string;
+    args?: string;
+    result?: string;
+    error?: string;
+  }>;
+  status: "completed" | "max_iterations" | "error" | "canceled";
+  error?: string;
+}
+
+export const delegateAction = createAction({
+  name: "delegate",
+  displayName: "Delegate to a Jarvis sub-agent",
+  description:
+    "Spawn a sub-agent with a goal and let it plan + call tools to reach it. Returns the agent's final message and the full tool-call trace.",
+  props: {
+    goal: Property.LongText({
+      displayName: "Goal",
+      description: "Plain-English description of what the agent should accomplish.",
+      required: true,
+    }),
+    role: Property.ShortText({
+      displayName: "Specialist role",
+      description: "Optional. M7 specialist role id (researcher, planner, ...).",
+      required: false,
+    }),
+    maxIterations: Property.Number({
+      displayName: "Max iterations",
+      description: "Caps the agent's tool-use loop. Defaults to the daemon's setting.",
+      required: false,
+    }),
+  },
+  async run(context) {
+    const url = trimSlash(context.server.apiUrl) + "/v1/jarvis/agent/delegate";
+    const goal = context.propsValue["goal"];
+    if (typeof goal !== "string" || goal.length === 0) {
+      throw new Error("jarvis-agent: goal is required and must be a non-empty string");
+    }
+    const body: Record<string, unknown> = { goal };
+    const role = context.propsValue["role"];
+    const maxIterations = context.propsValue["maxIterations"];
+    if (typeof role === "string" && role.length > 0) body["role"] = role;
+    if (
+      typeof maxIterations === "number" &&
+      Number.isFinite(maxIterations) &&
+      maxIterations > 0 &&
+      Math.floor(maxIterations) === maxIterations
+    ) {
+      body["maxIterations"] = maxIterations;
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${context.server.token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `jarvis-agent: daemon responded ${response.status}: ${text.slice(0, 500)}`,
+      );
+    }
+    return (await response.json()) as DelegateResponse;
+  },
+});
+
+function trimSlash(url: string): string {
+  return url.endsWith("/") ? url.slice(0, -1) : url;
+}

@@ -62,6 +62,18 @@ import {
   createJarvisContextCommitmentsListRoute,
   type JarvisContextProvider,
 } from "./routes/jarvis-context";
+import {
+  createJarvisAgentDelegateRoute,
+  type AgentDelegateFn,
+} from "./routes/jarvis-agent";
+import {
+  createJarvisEventsPollRoute,
+  type EventsPollFn,
+} from "./routes/jarvis-events";
+import {
+  createJarvisWorkflowsStartRoute,
+  type WorkflowsStartFn,
+} from "./routes/jarvis-workflows";
 import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
 
 export interface SandboxApiServices {
@@ -104,6 +116,21 @@ export interface SandboxApiServices {
    * each context route returns 503.
    */
   contextProvider?: JarvisContextProvider;
+  /**
+   * Sub-agent delegation backend for the `jarvis-agent` piece. If unset, the
+   * endpoint returns 503.
+   */
+  agentDelegate?: AgentDelegateFn;
+  /**
+   * Recent-events poll backend for the `jarvis-trigger` `on_event` trigger.
+   * If unset, returns 503.
+   */
+  eventsPoll?: EventsPollFn;
+  /**
+   * Workflow start backend for the `jarvis-trigger` `run_workflow` action.
+   * If unset, returns 503.
+   */
+  workflowsStart?: WorkflowsStartFn;
 }
 
 export interface SandboxApiOptions {
@@ -245,6 +272,27 @@ export class SandboxApi {
         method: "POST",
         handler: createJarvisContextCommitmentsListRoute({
           contextProvider: this.services.contextProvider,
+        }),
+      },
+      {
+        path: "/v1/jarvis/agent/delegate",
+        method: "POST",
+        handler: createJarvisAgentDelegateRoute({
+          agentDelegate: this.services.agentDelegate,
+        }),
+      },
+      {
+        path: "/v1/jarvis/events/poll",
+        method: "POST",
+        handler: createJarvisEventsPollRoute({
+          eventsPoll: this.services.eventsPoll,
+        }),
+      },
+      {
+        path: "/v1/jarvis/workflows/start",
+        method: "POST",
+        handler: createJarvisWorkflowsStartRoute({
+          workflowsStart: this.services.workflowsStart,
         }),
       },
     );

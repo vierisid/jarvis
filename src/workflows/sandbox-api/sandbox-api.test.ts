@@ -800,3 +800,248 @@ describe("SandboxApi routes (G unconfigured -> 503)", () => {
     }
   });
 });
+
+describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+  let agentCalls: Array<{ goal: string; role?: string; maxIterations?: number }>;
+  let pollCalls: Array<{ eventType: string; since: number; filter?: Record<string, unknown> }>;
+  let startCalls: Array<{ flowId?: string; flowName?: string; payload?: Record<string, unknown> }>;
+  let pollReply: {
+    events: Array<{
+      id: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      timestamp: number;
+    }>;
+    cursor: number;
+  };
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    agentCalls = [];
+    pollCalls = [];
+    startCalls = [];
+    pollReply = { events: [], cursor: 0 };
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: {
+        credentialResolver: new CredentialResolver(),
+        agentDelegate: async (req) => {
+          agentCalls.push(req);
+          return { finalMessage: `done: ${req.goal}`, toolCalls: [], status: "completed" };
+        },
+        eventsPoll: async (req) => {
+          pollCalls.push(req);
+          return pollReply;
+        },
+        workflowsStart: async (req) => {
+          startCalls.push(req);
+          return { runId: "run_xyz" };
+        },
+      },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  beforeEach(() => {
+    agentCalls = [];
+    pollCalls = [];
+    startCalls = [];
+    pollReply = { events: [], cursor: 0 };
+  });
+
+  test("POST /v1/jarvis/agent/delegate forwards goal/role/maxIterations", async () => {
+    const r = await authedFetch("/v1/jarvis/agent/delegate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: "summarize inbox", role: "researcher", maxIterations: 5 }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { finalMessage: string; status: string };
+    expect(body.status).toBe("completed");
+    expect(body.finalMessage).toContain("summarize inbox");
+    expect(agentCalls.length).toBe(1);
+    expect(agentCalls[0]).toEqual({ goal: "summarize inbox", role: "researcher", maxIterations: 5 });
+  });
+
+  test("POST /v1/jarvis/agent/delegate 400 on missing goal", async () => {
+    const r = await authedFetch("/v1/jarvis/agent/delegate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "x" }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/agent/delegate 400 on non-integer maxIterations", async () => {
+    const r = await authedFetch("/v1/jarvis/agent/delegate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: "x", maxIterations: 1.5 }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/events/poll forwards eventType+filter+since", async () => {
+    pollReply = {
+      events: [
+        { id: "e1", eventType: "awareness.context_changed", payload: { app: "vscode" }, timestamp: 100 },
+      ],
+      cursor: 100,
+    };
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "awareness.context_changed",
+        filter: { app: "vscode" },
+        since: 0,
+      }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { events: unknown[]; cursor: number };
+    expect(body.cursor).toBe(100);
+    expect(body.events.length).toBe(1);
+    expect(pollCalls.length).toBe(1);
+    expect(pollCalls[0]?.eventType).toBe("awareness.context_changed");
+    expect(pollCalls[0]?.since).toBe(0);
+    expect(pollCalls[0]?.filter).toEqual({ app: "vscode" });
+  });
+
+  test("POST /v1/jarvis/events/poll 400 on missing eventType", async () => {
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ since: 0 }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/events/poll 400 on negative since", async () => {
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventType: "x", since: -1 }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/workflows/start dispatches with flowId and payload", async () => {
+    const r = await authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: "flow_abc", payload: { x: 1 } }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { runId: string };
+    expect(body.runId).toBe("run_xyz");
+    expect(startCalls.length).toBe(1);
+    expect(startCalls[0]?.flowId).toBe("flow_abc");
+    expect(startCalls[0]?.payload).toEqual({ x: 1 });
+  });
+
+  test("POST /v1/jarvis/workflows/start accepts flowName instead of flowId", async () => {
+    const r = await authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowName: "morning-briefing" }),
+    });
+    expect(r.status).toBe(200);
+    expect(startCalls[0]?.flowName).toBe("morning-briefing");
+  });
+
+  test("POST /v1/jarvis/workflows/start 400 when neither flowId nor flowName given", async () => {
+    const r = await authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: {} }),
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
+describe("SandboxApi routes (H unconfigured -> 503)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: { credentialResolver: new CredentialResolver() },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  test("agent.delegate without fn returns 503", async () => {
+    const r = await authedFetch("/v1/jarvis/agent/delegate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: "x" }),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  test("events.poll without fn returns 503", async () => {
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventType: "x", since: 0 }),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  test("workflows.start without fn returns 503", async () => {
+    const r = await authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: "x" }),
+    });
+    expect(r.status).toBe(503);
+  });
+});
