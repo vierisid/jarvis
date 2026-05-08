@@ -31,6 +31,7 @@ import { ENGINE_BUILD_PATHS } from "./build";
 import { materializeCodeActions } from "./code-materialize";
 import {
   buildExecuteFlowOperation,
+  buildExtractPieceMetadataOperation,
   type ExecuteFlowOptions,
 } from "./operation-builder";
 import {
@@ -168,6 +169,41 @@ export class EngineHandle {
     const run = getFlowRun(this.runId);
     if (!run) throw new Error(`flow_run ${this.runId} disappeared after executeFlow`);
     return run;
+  }
+
+  /**
+   * Send EXTRACT_PIECE_METADATA for a single piece and return the full
+   * upstream `PieceMetadata` payload. Multiple pieces can be extracted on the
+   * same handle in sequence (the engine subprocess handles operations one at
+   * a time over the same socket).
+   *
+   * Throws if the engine reports a non-OK status (treats USER_FAILURE /
+   * INTERNAL_ERROR / TIMEOUT as fatal -- callers should surface to the user).
+   */
+  async extractPieceMetadata(opts: {
+    pieceName: string;
+    pieceVersion: string;
+    timeoutInSeconds?: number;
+  }): Promise<unknown> {
+    const baseOpts: Parameters<typeof buildExtractPieceMetadataOperation>[0] = {
+      pieceName: opts.pieceName,
+      pieceVersion: opts.pieceVersion,
+      projectId: this.projectId,
+      platformId: this.projectId,
+      engineToken: this.engineToken,
+      internalApiUrl: this.api.baseUrl,
+    };
+    if (opts.timeoutInSeconds !== undefined) {
+      baseOpts.timeoutInSeconds = opts.timeoutInSeconds;
+    }
+    const op = buildExtractPieceMetadataOperation(baseOpts);
+    const reply = await this.engineClient.executeOperation(op);
+    if (reply.status !== "OK") {
+      throw new Error(
+        `extractPieceMetadata(${opts.pieceName}@${opts.pieceVersion}) -> ${reply.status}`,
+      );
+    }
+    return reply.response;
   }
 
   /**

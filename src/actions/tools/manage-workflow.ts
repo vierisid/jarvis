@@ -22,7 +22,8 @@
 
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
-import type { JarvisPieceRegistry, PieceLlmClient, PieceToolRegistry } from "../../workflows/jarvis-pieces/types.ts";
+import type { PieceLlmClient, PieceToolRegistry } from "../../workflows/jarvis-pieces/types.ts";
+import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import {
   createFlow,
   deleteFlow,
@@ -55,7 +56,7 @@ export interface ManageWorkflowDeps {
   /** Required for the `compose` action: lets the LLM build a draft flow from a description. */
   llm?: PieceLlmClient;
   /** Required for the `compose` action: catalog of pieces the LLM can pick from. */
-  pieceRegistry?: JarvisPieceRegistry;
+  pieceRegistry?: PieceLookup;
   /**
    * Optional. When provided, the composer surfaces the names of registered
    * Jarvis tools so the LLM can wire `jarvis-tool { toolName: '...' }` correctly

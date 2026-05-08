@@ -48,7 +48,7 @@ import {
 } from "../db/repos/flow-run";
 import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
 import type { TriggerManager } from "../runner/triggers/manager";
-import type { JarvisPieceRegistry } from "../jarvis-pieces/types";
+import type { PieceLookup } from "../runtime/piece-catalog";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -97,12 +97,13 @@ export interface CreateWorkflowRoutesOptions {
    */
   triggerManager?: TriggerManager;
   /**
-   * Optional Jarvis piece registry. When provided, `GET /api/workflows/pieces`
-   * returns the list of registered Jarvis-native pieces (and their actions
-   * and triggers) so the dashboard editor can render a piece picker. Without
-   * it, the catalog endpoint returns an empty list.
+   * Optional piece catalog. Either the legacy `JarvisPieceRegistry` (during
+   * the F-K transition) or an engine-extracted `PieceCatalog`. When
+   * provided, `GET /api/workflows/pieces` returns the list of pieces (and
+   * their actions and triggers) so the dashboard editor can render a piece
+   * picker. Without it, the catalog endpoint returns an empty list.
    */
-  pieceRegistry?: JarvisPieceRegistry;
+  pieceRegistry?: PieceLookup;
 }
 
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */

@@ -9,11 +9,11 @@
  */
 
 import type {
-  JarvisPieceRegistry,
   PieceInputField,
   PieceInputSchema,
   PieceLlmClient,
 } from "../../workflows/jarvis-pieces/types.ts";
+import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 
@@ -64,7 +64,7 @@ export type ComposeResult = ComposeOk | ComposeFail;
 
 export interface ComposeDeps {
   llm: PieceLlmClient;
-  pieceRegistry: JarvisPieceRegistry;
+  pieceRegistry: PieceLookup;
   /**
    * Optional list of registered Jarvis tool names. When present, surfaced in
    * the planner prompt so the LLM can wire `jarvis-tool { toolName: '...' }`
@@ -165,7 +165,7 @@ function renderToolNames(toolNames: string[] | undefined): string {
   ].join("\n");
 }
 
-function renderCatalog(registry: JarvisPieceRegistry): string {
+function renderCatalog(registry: PieceLookup): string {
   const lines: string[] = [];
   for (const piece of registry.list()) {
     lines.push(`- ${piece.name} (${piece.displayName}): ${piece.description}`);
@@ -179,7 +179,7 @@ function renderCatalog(registry: JarvisPieceRegistry): string {
     }
   }
   // Surface the schedule and webhook primitives the trigger manager understands
-  // even though they aren't in the JarvisPieceRegistry today.
+  // even though they aren't in the piece catalog today.
   lines.push("");
   lines.push("Built-in trigger primitives (no piece registration needed):");
   lines.push("- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.");
@@ -219,7 +219,7 @@ interface ValidationFail { ok: false; errors: string[] }
 
 function validateComposedFlow(
   raw: unknown,
-  registry: JarvisPieceRegistry,
+  registry: PieceLookup,
   fallbackName: string,
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
@@ -263,7 +263,7 @@ function validateStep(
   errors: string[],
   knownNames: Set<string>,
   isTrigger: boolean,
-  registry: JarvisPieceRegistry,
+  registry: PieceLookup,
 ): ComposedStep | null {
   const name = typeof raw.name === "string" ? raw.name : null;
   if (!name) {
@@ -403,7 +403,7 @@ function walkInnerChain(
   head: Record<string, unknown>,
   errors: string[],
   knownNames: Set<string>,
-  registry: JarvisPieceRegistry,
+  registry: PieceLookup,
 ): void {
   let cursor: Record<string, unknown> | null = head;
   let depth = 0;
