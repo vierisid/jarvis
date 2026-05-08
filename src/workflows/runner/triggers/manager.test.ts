@@ -32,7 +32,7 @@ function publishFlowWithTrigger(displayName: string, trigger: Record<string, unk
 }
 
 describe("TriggerManager: lifecycle", () => {
-  test("start scans ENABLED flows; refresh reconciles status changes", () => {
+  test("start scans ENABLED flows; refresh reconciles status changes", async () => {
     const { flowId } = publishFlowWithTrigger("on event flow", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -46,33 +46,33 @@ describe("TriggerManager: lifecycle", () => {
     const runner = new JarvisWorkflowRunnerAdapter();
     const tm = new TriggerManager({ workflowRunner: runner, eventBus: bus, log: silent });
 
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([{ flowId, kind: "event" }]);
 
     updateFlowStatus(flowId, "DISABLED");
-    tm.refresh(flowId);
+    await tm.refresh(flowId);
     expect(tm.list()).toEqual([]);
 
     updateFlowStatus(flowId, "ENABLED");
-    tm.refresh(flowId);
+    await tm.refresh(flowId);
     expect(tm.list()).toEqual([{ flowId, kind: "event" }]);
 
-    tm.stop();
+    await tm.stop();
     expect(tm.list()).toEqual([]);
   });
 
-  test("EMPTY trigger: nothing registered", () => {
+  test("EMPTY trigger: nothing registered", async () => {
     publishFlowWithTrigger("manual flow", { name: "trigger", type: "EMPTY", settings: {} });
     const tm = new TriggerManager({
       workflowRunner: new JarvisWorkflowRunnerAdapter(),
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
   });
 
-  test("refresh on a deleted flow tears down without throwing", () => {
+  test("refresh on a deleted flow tears down without throwing", async () => {
     const { flowId } = publishFlowWithTrigger("doomed", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -83,11 +83,11 @@ describe("TriggerManager: lifecycle", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toHaveLength(1);
     // Delete is just status -> not enabled; refresh should unregister.
     updateFlowStatus(flowId, "DISABLED");
-    tm.refresh(flowId);
+    await tm.refresh(flowId);
     expect(tm.list()).toEqual([]);
   });
 });
@@ -106,7 +106,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
     const bus = new JarvisEventBusAdapter();
     const runner = new JarvisWorkflowRunnerAdapter();
     const tm = new TriggerManager({ workflowRunner: runner, eventBus: bus, log: silent });
-    tm.start();
+    await tm.start();
     bus.publish("awareness.app_changed", { app: "VS Code" });
     bus.publish("awareness.app_changed", { app: "Slack" });
     bus.publish("commitment.due", { id: "c1" }); // unrelated; should not fire
@@ -133,7 +133,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
       eventBus: bus,
       log: silent,
     });
-    tm.start();
+    await tm.start();
     bus.publish("awareness.app_changed", { app: "Slack" });
     bus.publish("awareness.app_changed", { app: "VS Code" });
     bus.publish("awareness.app_changed", { app: "VS Code" });
@@ -142,7 +142,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
     expect(queueStats().queued).toBe(2);
   });
 
-  test("malformed eventType is logged and skipped (no throw, no sub)", () => {
+  test("malformed eventType is logged and skipped (no throw, no sub)", async () => {
     publishFlowWithTrigger("bad event", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -153,11 +153,11 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
   });
 
-  test("non-on_event triggerName is skipped", () => {
+  test("non-on_event triggerName is skipped", async () => {
     publishFlowWithTrigger("wrong name", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -168,7 +168,7 @@ describe("TriggerManager: jarvis-trigger on_event", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
   });
 });
@@ -185,7 +185,7 @@ describe("TriggerManager: webhook", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([{ flowId, kind: "webhook" }]);
 
     const wm = tm.webhookManager();
@@ -214,7 +214,7 @@ describe("TriggerManager: webhook", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
 
     const res = await tm.webhookManager().handleRequest(
       flowId,
@@ -246,7 +246,7 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
       eventBus: bus,
       log: silent,
     });
-    tm.start();
+    await tm.start();
     bus.publish("observer.clipboard_changed", { content: "hi", contentType: "text" });
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -269,7 +269,7 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
       eventBus: bus,
       log: silent,
     });
-    tm.start();
+    await tm.start();
     bus.publish("awareness.context_changed", { app: "VS Code", project: "jarvis" });
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -295,7 +295,7 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
       eventBus: bus,
       log: silent,
     });
-    tm.start();
+    await tm.start();
     bus.publish("commitment.overdue", { id: "c1", tag: "social" });
     bus.publish("commitment.overdue", { id: "c2", tag: "payment" });
     await new Promise((r) => setImmediate(r));
@@ -305,7 +305,7 @@ describe("TriggerManager: integration with canonical event taxonomy", () => {
 });
 
 describe("TriggerManager: schedule", () => {
-  test("registers cron when expression is present (any of the three keys)", () => {
+  test("registers cron when expression is present (any of the three keys)", async () => {
     publishFlowWithTrigger("cron a", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -326,12 +326,12 @@ describe("TriggerManager: schedule", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list().filter((s) => s.kind === "cron")).toHaveLength(3);
-    tm.stop();
+    await tm.stop();
   });
 
-  test("missing cron expression is logged and skipped", () => {
+  test("missing cron expression is logged and skipped", async () => {
     publishFlowWithTrigger("no cron", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -342,11 +342,11 @@ describe("TriggerManager: schedule", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
   });
 
-  test("invalid cron expression is logged but does not destabilize start()", () => {
+  test("invalid cron expression is logged but does not destabilize start()", async () => {
     publishFlowWithTrigger("bad cron", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -362,15 +362,15 @@ describe("TriggerManager: schedule", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     // Only the good one registers
     expect(tm.list().filter((s) => s.kind === "cron")).toHaveLength(1);
-    tm.stop();
+    await tm.stop();
   });
 });
 
 describe("TriggerManager: unknown trigger kinds", () => {
-  test("PIECE_TRIGGER with unknown pieceName is skipped", () => {
+  test("PIECE_TRIGGER with unknown pieceName is skipped", async () => {
     publishFlowWithTrigger("unknown piece", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -381,11 +381,11 @@ describe("TriggerManager: unknown trigger kinds", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
   });
 
-  test("unknown trigger.type is skipped", () => {
+  test("unknown trigger.type is skipped", async () => {
     publishFlowWithTrigger("alien type", {
       name: "trigger",
       type: "ALIEN",
@@ -396,7 +396,171 @@ describe("TriggerManager: unknown trigger kinds", () => {
       eventBus: new JarvisEventBusAdapter(),
       log: silent,
     });
-    tm.start();
+    await tm.start();
     expect(tm.list()).toEqual([]);
+  });
+});
+
+/**
+ * Minimal CronScheduler-shaped stub: captures registered callbacks so tests
+ * can fire them deterministically without waiting for real cron ticks.
+ */
+class FakeCronScheduler {
+  private readonly jobs: Map<string, () => void> = new Map();
+  schedule(id: string, _expression: string, callback: () => void): void {
+    this.jobs.set(id, callback);
+  }
+  cancel(id: string): void {
+    this.jobs.delete(id);
+  }
+  cancelAll(): void {
+    this.jobs.clear();
+  }
+  fire(id: string): void {
+    const cb = this.jobs.get(id);
+    if (!cb) throw new Error(`no cron job registered for ${id}`);
+    cb();
+  }
+  has(id: string): boolean {
+    return this.jobs.has(id);
+  }
+}
+
+describe("TriggerManager: engine-managed triggers (Phase J)", () => {
+  test("ON_ENABLE: calls engine, persists schedule, registers cron, RUN_FLOW carries executeTrigger=true", async () => {
+    const { flowId, versionId } = publishFlowWithTrigger("engine-managed", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "awareness.context_changed" },
+      },
+    });
+
+    const calls: Array<{ hookType: string }> = [];
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        calls.push({ hookType });
+        if (hookType === "ON_ENABLE") {
+          return { listeners: [], scheduleOptions: { cronExpression: "*/2 * * * *" } };
+        }
+        return {};
+      },
+      async release() { /* noop */ },
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+
+    await tm.start();
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.hookType).toBe("ON_ENABLE");
+    expect(tm.list()).toEqual([{ flowId, kind: "engine" }]);
+    expect(fakeCron.has(`flow:${flowId}`)).toBe(true);
+
+    const queueBefore = queueStats();
+    fakeCron.fire(`flow:${flowId}`);
+    const queueAfter = queueStats();
+    expect(queueAfter.queued).toBe(queueBefore.queued + 1);
+
+    const persisted = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
+    expect(persisted.engineSchedule?.cronExpression).toBe("*/2 * * * *");
+    expect(persisted.engineListeners).toEqual([]);
+
+    await tm.stop();
+    expect(calls.some((c) => c.hookType === "ON_DISABLE")).toBe(true);
+    const cleared = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
+    expect(cleared.engineSchedule).toBeNull();
+  });
+
+  test("ON_ENABLE is idempotent: persisted schedule is reused, no re-call to engine", async () => {
+    const { flowId, versionId } = publishFlowWithTrigger("engine-idempotent", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+
+    let enableCalls = 0;
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          enableCalls++;
+          return { listeners: [], scheduleOptions: { cronExpression: "0 * * * *" } };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+    await tm.start();
+    expect(enableCalls).toBe(1);
+
+    (tm as unknown as { subs: Map<string, unknown> }).subs.clear();
+    await tm.refresh(flowId);
+    expect(enableCalls).toBe(1);
+    expect(tm.list()).toEqual([{ flowId, kind: "engine" }]);
+
+    const v = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
+    expect(v.engineSchedule?.cronExpression).toBe("0 * * * *");
+  });
+
+  test("engine ON_ENABLE failure is logged; flow stays manually runnable, no crash", async () => {
+    publishFlowWithTrigger("engine-fail", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+
+    const fakeHandle = {
+      async executeTriggerHook() {
+        throw new Error("engine down");
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+
+    const logs: string[] = [];
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: new FakeCronScheduler() as unknown as import("./cron").CronScheduler,
+      log: (line) => logs.push(line),
+    });
+
+    await tm.start();
+    expect(tm.list()).toEqual([]);
+    expect(logs.some((l) => l.includes("engine ON_ENABLE failed"))).toBe(true);
   });
 });

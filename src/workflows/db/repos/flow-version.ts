@@ -27,8 +27,22 @@ export interface FlowVersionRow {
   connection_ids: string;
   notes: string;
   backup_files: string | null;
+  engine_listeners: string | null;
+  engine_schedule: string | null;
   created: number;
   updated: number;
+}
+
+/** Webhook listener registered by a piece's `app.createListeners`. */
+export interface AppEventListener {
+  events: string[];
+  identifierValue: string;
+}
+
+/** Polling-trigger schedule set by a piece's `setSchedule`. */
+export interface EngineScheduleOptions {
+  cronExpression: string;
+  timezone?: string;
 }
 
 export interface FlowVersion {
@@ -44,6 +58,18 @@ export interface FlowVersion {
   connectionIds: string[];
   notes: unknown[];
   backupFiles: Record<string, string> | null;
+  /**
+   * Webhook listeners returned by EXECUTE_TRIGGER_HOOK(ON_ENABLE) for
+   * webhook-strategy triggers. Empty / null when the trigger is polling-only
+   * or hasn't been enabled yet.
+   */
+  engineListeners: AppEventListener[] | null;
+  /**
+   * Polling-trigger schedule set by upstream's `setSchedule(...)` during
+   * EXECUTE_TRIGGER_HOOK(ON_ENABLE). Null when the trigger is webhook-only or
+   * hasn't been enabled yet.
+   */
+  engineSchedule: EngineScheduleOptions | null;
   created: number;
   updated: number;
 }
@@ -144,6 +170,12 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
     notes: JSON.parse(row.notes) as unknown[],
     backupFiles: row.backup_files
       ? (JSON.parse(row.backup_files) as Record<string, string>)
+      : null,
+    engineListeners: row.engine_listeners
+      ? (JSON.parse(row.engine_listeners) as AppEventListener[])
+      : null,
+    engineSchedule: row.engine_schedule
+      ? (JSON.parse(row.engine_schedule) as EngineScheduleOptions)
       : null,
     created: row.created,
     updated: row.updated,
@@ -248,6 +280,41 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     ],
   );
   return rowToFlowVersion(next);
+}
+
+/**
+ * Persist the engine-managed trigger state returned by EXECUTE_TRIGGER_HOOK
+ * (ON_ENABLE / ON_DISABLE). Bypasses the LOCKED-version check because this
+ * is daemon-side bookkeeping, not user-edited content -- a published flow
+ * has its trigger state populated on enable and cleared on disable. Both
+ * fields can be null to clear.
+ */
+export function setEngineTriggerState(
+  id: string,
+  patch: { engineListeners?: AppEventListener[] | null; engineSchedule?: EngineScheduleOptions | null },
+): FlowVersion {
+  const existing = getFlowVersionRow(id);
+  if (!existing) throw new Error(`setEngineTriggerState: not found (id=${id})`);
+  const listenersJson =
+    patch.engineListeners === undefined
+      ? existing.engine_listeners
+      : patch.engineListeners
+        ? JSON.stringify(patch.engineListeners)
+        : null;
+  const scheduleJson =
+    patch.engineSchedule === undefined
+      ? existing.engine_schedule
+      : patch.engineSchedule
+        ? JSON.stringify(patch.engineSchedule)
+        : null;
+  const updated = now();
+  db().run(
+    `UPDATE flow_version SET engine_listeners = ?, engine_schedule = ?, updated = ? WHERE id = ?`,
+    [listenersJson, scheduleJson, updated, id],
+  );
+  const row = getFlowVersionRow(id);
+  if (!row) throw new Error(`setEngineTriggerState: row missing after update (id=${id})`);
+  return rowToFlowVersion(row);
 }
 
 export function lockVersion(id: string): FlowVersion {

@@ -268,7 +268,7 @@ function actSetStatus(
   deps: ManageWorkflowDeps,
 ): Record<string, unknown> {
   updateFlowStatus(flow.id, status);
-  deps.triggerManager?.refresh(flow.id);
+  void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
   return updated ? summarizeFlow(updated) : { error: "flow vanished after update" };
 }
@@ -285,14 +285,14 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   if (target.state !== "LOCKED") target = lockVersion(target.id);
   setPublishedVersion(flow.id, target.id);
   updateFlowStatus(flow.id, "ENABLED");
-  deps.triggerManager?.refresh(flow.id);
+  void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
   return updated ? summarizeFlow(updated) : { error: "flow vanished after publish" };
 }
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
   deleteFlow(flow.id);
-  deps.triggerManager?.refresh(flow.id);
+  void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   return { id: flow.id, deleted: true };
 }
 

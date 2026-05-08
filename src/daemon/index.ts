@@ -201,7 +201,7 @@ async function handleShutdown(signal: string): Promise<void> {
     // Stop the trigger manager first so no new RUN_FLOW jobs get enqueued
     // while the worker drains.
     if (triggerManager) {
-      triggerManager.stop();
+      await triggerManager.stop();
       triggerManager = null;
     }
 
@@ -713,7 +713,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // webhook / on_event subscriptions. From this point on, any flow whose
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
-    triggerManager.start();
+    await triggerManager.start();
     logWithTimestamp(`Trigger manager started with ${triggerManager.list().length} active subscription(s)`);
 
     // 10.2. Republish observer events onto the workflow event bus so flows

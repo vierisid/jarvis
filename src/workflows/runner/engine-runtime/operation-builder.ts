@@ -107,6 +107,60 @@ export function buildExtractPieceMetadataOperation(
   };
 }
 
+export type TriggerHookType =
+  | "ON_ENABLE"
+  | "ON_DISABLE"
+  | "RUN"
+  | "TEST"
+  | "HANDSHAKE"
+  | "RENEW";
+
+export interface ExecuteTriggerHookOptions {
+  hookType: TriggerHookType;
+  flowVersion: UpstreamFlowVersion;
+  flowRunId: string;
+  projectId: string;
+  platformId: string;
+  engineToken: string;
+  internalApiUrl: string;
+  publicApiUrl?: string;
+  /**
+   * Public-facing webhook URL surfaced to the trigger via context.webhookUrl.
+   * Used by webhook-strategy triggers that register external watches against
+   * a publicly reachable URL (e.g. Gmail watch). Default: a placeholder so
+   * non-webhook triggers (most jarvis triggers) still validate.
+   */
+  webhookUrl?: string;
+  /** Whether to invoke the trigger's `test` path instead of `run`. */
+  test?: boolean;
+  triggerPayload?: unknown;
+  appWebhookUrl?: string;
+  webhookSecret?: string | Record<string, string>;
+  timeoutInSeconds?: number;
+}
+
+export function buildExecuteTriggerHookOperation(
+  opts: ExecuteTriggerHookOptions,
+): EngineOperationEnvelope {
+  const op: Record<string, unknown> = {
+    hookType: opts.hookType,
+    test: opts.test ?? false,
+    flowVersion: opts.flowVersion,
+    flowRunId: opts.flowRunId,
+    projectId: opts.projectId,
+    platformId: opts.platformId,
+    engineToken: opts.engineToken,
+    internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
+    publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
+    timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
+    webhookUrl: opts.webhookUrl ?? "",
+  };
+  if (opts.triggerPayload !== undefined) op.triggerPayload = opts.triggerPayload;
+  if (opts.appWebhookUrl !== undefined) op.appWebhookUrl = opts.appWebhookUrl;
+  if (opts.webhookSecret !== undefined) op.webhookSecret = opts.webhookSecret;
+  return { operationType: "EXECUTE_TRIGGER_HOOK", operation: op };
+}
+
 function ensureTrailingSlash(url: string): string {
   return url.endsWith("/") ? url : url + "/";
 }

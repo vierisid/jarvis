@@ -109,16 +109,15 @@ export interface CreateWorkflowRoutesOptions {
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
 export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): WorkflowRouteMap {
   const refreshTrigger = (flowId: string): void => {
-    if (opts.triggerManager) {
-      try {
-        opts.triggerManager.refresh(flowId);
-      } catch (e) {
-        // Trigger management must never destabilize the API. Log and move on.
-        console.warn(
-          `[workflow-api] triggerManager.refresh(${flowId}) failed: ${(e as Error).message}`,
-        );
-      }
-    }
+    if (!opts.triggerManager) return;
+    // Fire-and-forget: API responses must not block on engine round-trips
+    // that ON_ENABLE may now perform. Catch + log so an enable failure
+    // doesn't escape as an unhandled rejection.
+    void opts.triggerManager.refresh(flowId).catch((e) => {
+      console.warn(
+        `[workflow-api] triggerManager.refresh(${flowId}) failed: ${(e as Error).message}`,
+      );
+    });
   };
   return {
     // ----------------------------------------------------- piece catalog

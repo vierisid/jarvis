@@ -42,6 +42,13 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_flow_status ON flow(status)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_external ON flow(project_id, external_id)`,
 
+  // Engine-managed trigger state lives in `engine_listeners` (JSON array of
+  // AppEventListener `{ events, identifierValue }`, returned by upstream's
+  // EXECUTE_TRIGGER_HOOK(ON_ENABLE) for webhook-strategy triggers) and
+  // `engine_schedule` (JSON `{ cronExpression, timezone? }` set by polling
+  // triggers via `setSchedule`). TriggerManager reads these to wire the
+  // CronScheduler / WebhookManager without re-running the engine on every
+  // refresh.
   `CREATE TABLE IF NOT EXISTS flow_version (
     id TEXT PRIMARY KEY,
     flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
@@ -55,6 +62,8 @@ const STATEMENTS: string[] = [
     connection_ids TEXT NOT NULL DEFAULT '[]',
     notes TEXT NOT NULL DEFAULT '[]',
     backup_files TEXT,
+    engine_listeners TEXT,
+    engine_schedule TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -200,4 +209,25 @@ export function createSchema(db: Database): void {
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   for (const stmt of STATEMENTS) db.exec(stmt);
+  applyAdditiveColumnMigrations(db);
+}
+
+/**
+ * Add columns that were introduced after the initial CREATE TABLE definition
+ * for tables that already exist on disk. SQLite has no `ALTER TABLE ADD
+ * COLUMN IF NOT EXISTS`, so we shell-check via `PRAGMA table_info` and only
+ * issue the ALTER when the column is missing. Each entry is idempotent and
+ * safe on fresh databases (where the column already exists from CREATE).
+ */
+function applyAdditiveColumnMigrations(db: Database): void {
+  type ColMigration = { table: string; column: string; ddl: string };
+  const migrations: ColMigration[] = [
+    { table: "flow_version", column: "engine_listeners", ddl: "ALTER TABLE flow_version ADD COLUMN engine_listeners TEXT" },
+    { table: "flow_version", column: "engine_schedule", ddl: "ALTER TABLE flow_version ADD COLUMN engine_schedule TEXT" },
+  ];
+  for (const m of migrations) {
+    const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;
+    if (cols.some((c) => c.name === m.column)) continue;
+    db.exec(m.ddl);
+  }
 }

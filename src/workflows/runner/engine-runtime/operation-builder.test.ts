@@ -36,6 +36,8 @@ function makeJarvisVersion(overrides: Partial<FlowVersion> = {}): FlowVersion {
     connectionIds: [],
     notes: [],
     backupFiles: null,
+    engineListeners: null,
+    engineSchedule: null,
     created: 1000,
     updated: 2000,
     ...overrides,

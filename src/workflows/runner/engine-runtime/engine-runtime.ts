@@ -31,8 +31,11 @@ import { ENGINE_BUILD_PATHS } from "./build";
 import { materializeCodeActions } from "./code-materialize";
 import {
   buildExecuteFlowOperation,
+  buildExecuteTriggerHookOperation,
   buildExtractPieceMetadataOperation,
   type ExecuteFlowOptions,
+  type ExecuteTriggerHookOptions,
+  type TriggerHookType,
 } from "./operation-builder";
 import {
   toUpstreamFlowVersion,
@@ -169,6 +172,64 @@ export class EngineHandle {
     const run = getFlowRun(this.runId);
     if (!run) throw new Error(`flow_run ${this.runId} disappeared after executeFlow`);
     return run;
+  }
+
+  /**
+   * Send EXECUTE_TRIGGER_HOOK for one of the trigger lifecycle hooks
+   * (`ON_ENABLE` / `ON_DISABLE` / `RUN` / `TEST` / `RENEW`).
+   *
+   * Response shapes (per upstream `ExecuteTriggerResponse<H>`):
+   *   - ON_ENABLE  -> `{ listeners: AppEventListener[], scheduleOptions?: { cronExpression, timezone? } }`
+   *   - ON_DISABLE -> `{}`
+   *   - RUN / TEST -> `{ output: unknown[], message? }`
+   *   - RENEW      -> `{}`
+   *
+   * Caller is responsible for adapting the supplied flow version to the
+   * upstream shape and persisting the response (engine_listeners +
+   * engine_schedule columns on flow_version, in the case of ON_ENABLE).
+   *
+   * Throws on non-OK engine status; returns the typed-as-unknown response on
+   * success.
+   */
+  async executeTriggerHook(
+    hookType: TriggerHookType,
+    opts: Omit<
+      ExecuteTriggerHookOptions,
+      | "hookType"
+      | "engineToken"
+      | "internalApiUrl"
+      | "projectId"
+      | "platformId"
+      | "flowRunId"
+    > & {
+      flowRunId?: string;
+      projectId?: string;
+      platformId?: string;
+    },
+  ): Promise<unknown> {
+    const merged: ExecuteTriggerHookOptions = {
+      hookType,
+      flowVersion: opts.flowVersion,
+      flowRunId: opts.flowRunId ?? this.runId,
+      projectId: opts.projectId ?? this.projectId,
+      platformId: opts.platformId ?? this.projectId,
+      engineToken: this.engineToken,
+      internalApiUrl: this.api.baseUrl,
+    };
+    if (opts.publicApiUrl !== undefined) merged.publicApiUrl = opts.publicApiUrl;
+    if (opts.webhookUrl !== undefined) merged.webhookUrl = opts.webhookUrl;
+    if (opts.test !== undefined) merged.test = opts.test;
+    if (opts.triggerPayload !== undefined) merged.triggerPayload = opts.triggerPayload;
+    if (opts.appWebhookUrl !== undefined) merged.appWebhookUrl = opts.appWebhookUrl;
+    if (opts.webhookSecret !== undefined) merged.webhookSecret = opts.webhookSecret;
+    if (opts.timeoutInSeconds !== undefined) merged.timeoutInSeconds = opts.timeoutInSeconds;
+
+    const op = buildExecuteTriggerHookOperation(merged);
+    const reply = await this.engineClient.executeOperation(op);
+    if (reply.status !== "OK") {
+      throw new Error(`executeTriggerHook(${hookType}) -> ${reply.status}`);
+    }
+    return reply.response;
   }
 
   /**

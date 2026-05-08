@@ -25,6 +25,13 @@ export interface RunFlowJobPayload {
   runId: string;
   /** Trigger payload / external input. Empty object for manual runs without a payload. */
   payload?: Record<string, unknown>;
+  /**
+   * When true, the engine first invokes the trigger's `run()` hook and
+   * dispatches one flow run per item it returns. Used by engine-managed
+   * triggers (e.g. polling triggers fired from cron). The legacy executor
+   * ignores this flag; it's honored by the engine-backed executor.
+   */
+  executeTrigger?: boolean;
 }
 
 export interface FlowExecutorContext {
