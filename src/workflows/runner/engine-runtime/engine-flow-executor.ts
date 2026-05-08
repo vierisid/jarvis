@@ -65,11 +65,19 @@ export interface EngineFlowExecutorOptions {
   terminalTimeoutMs?: number;
   /** Polling interval (ms) for the terminal-status wait. Default 25ms. */
   terminalPollIntervalMs?: number;
+  /**
+   * Override the directory the RESUME path reads zstd-compressed
+   * execution-state backups from. Defaults to `workflowLogsBase()`
+   * (`~/.jarvis/workflow-logs/`). Tests pass a per-test temp dir to avoid
+   * mutating `process.env.JARVIS_WORKFLOW_DATA_DIR`.
+   */
+  loaderBaseDir?: string;
 }
 
 export class EngineFlowExecutor implements FlowExecutor {
   private readonly terminalTimeoutMs: number;
   private readonly terminalPollIntervalMs: number;
+  private readonly loaderBaseDir: string | undefined;
 
   constructor(
     private readonly runtime: EngineRuntime,
@@ -78,6 +86,7 @@ export class EngineFlowExecutor implements FlowExecutor {
     this.terminalTimeoutMs = opts.terminalTimeoutMs ?? DEFAULT_TERMINAL_TIMEOUT_MS;
     this.terminalPollIntervalMs =
       opts.terminalPollIntervalMs ?? DEFAULT_TERMINAL_POLL_INTERVAL_MS;
+    this.loaderBaseDir = opts.loaderBaseDir;
   }
 
   async execute(ctx: FlowExecutorContext): Promise<FlowExecutorResult> {
@@ -177,7 +186,8 @@ export class EngineFlowExecutor implements FlowExecutor {
     runId: string,
     persistedSteps: Record<string, unknown> | null | undefined,
   ): Promise<{ steps: Record<string, unknown>; tags: string[] }> {
-    const restored = await loadExecutionStateFromLog(runId);
+    const loaderOpts = this.loaderBaseDir ? { baseDir: this.loaderBaseDir } : {};
+    const restored = await loadExecutionStateFromLog(runId, loaderOpts);
     if (restored) return restored;
     return { steps: unwrapStepEnvelopes(persistedSteps), tags: [] };
   }

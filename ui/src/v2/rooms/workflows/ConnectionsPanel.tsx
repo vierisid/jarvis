@@ -218,7 +218,11 @@ function EditConnectionForm({
       <div className="wf-conn__form-row">
         <label>
           Display name
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="leave blank to keep current"
+          />
         </label>
         <label>
           Status

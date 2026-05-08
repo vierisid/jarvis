@@ -41,15 +41,34 @@ export interface LoadExecutionStateOptions {
 }
 
 /**
+ * Run ids minted by `apId()` are alphanumeric, 21 chars. Defense-in-depth:
+ * refuse to read a runId-derived path that doesn't match the expected shape,
+ * so a future code path that lets external input reach a runId can't escape
+ * the workflow-logs directory via `..` segments.
+ */
+const RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
  * Read + decompress + parse `~/.jarvis/workflow-logs/<runId>.bin`. Returns
  * `null` when the file is missing (engine never produced a backup); throws
  * when the file exists but is unreadable / corrupt -- we'd rather surface
  * decompression / parse errors than silently lose iteration state on RESUME.
+ *
+ * Tolerance vs. strictness: the inner `tags` array is allowed to be missing
+ * (older engine builds; flows that don't use tags) and defaults to `[]`.
+ * The outer `executionState` *object* must be present -- a payload that
+ * parses to JSON but lacks it indicates a malformed backup, and silently
+ * substituting `{ steps: {} }` would have the executor re-run completed
+ * LOOP iterations from scratch. Throw instead so the caller's RESUME
+ * request fails loudly rather than producing duplicate work.
  */
 export async function loadExecutionStateFromLog(
   runId: string,
   opts: LoadExecutionStateOptions = {},
 ): Promise<RestoredExecutionState | null> {
+  if (!RUN_ID_PATTERN.test(runId)) {
+    throw new Error(`refusing to load execution-state log for invalid runId ${JSON.stringify(runId)}`);
+  }
   const dir = opts.baseDir ?? workflowLogsBase();
   const path = resolve(dir, `${runId}.bin`);
   let compressed: Buffer;
@@ -76,16 +95,19 @@ export async function loadExecutionStateFromLog(
     );
   }
   // Upstream's ExecutioOutputFile shape: { executionState: { steps, tags } }.
-  // Tolerate missing inner keys -- a partial file shouldn't crash RESUME.
-  const exec =
-    (parsed as { executionState?: { steps?: unknown; tags?: unknown } } | null)
-      ?.executionState ?? {};
+  const exec = (parsed as { executionState?: unknown } | null)?.executionState;
+  if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
+    throw new Error(
+      `execution-state log for run ${runId} is malformed (missing or invalid 'executionState' object)`,
+    );
+  }
+  const execShape = exec as { steps?: unknown; tags?: unknown };
   const steps =
-    exec.steps && typeof exec.steps === "object" && !Array.isArray(exec.steps)
-      ? (exec.steps as Record<string, unknown>)
+    execShape.steps && typeof execShape.steps === "object" && !Array.isArray(execShape.steps)
+      ? (execShape.steps as Record<string, unknown>)
       : {};
-  const tags = Array.isArray(exec.tags)
-    ? (exec.tags as unknown[]).filter((t): t is string => typeof t === "string")
+  const tags = Array.isArray(execShape.tags)
+    ? (execShape.tags as unknown[]).filter((t): t is string => typeof t === "string")
     : [];
   return { steps, tags };
 }

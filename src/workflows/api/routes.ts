@@ -300,6 +300,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err("displayName must be a non-empty string if provided");
           }
+          // Apply the same per-type schema check POST runs. Type can't change
+          // via PATCH (rotation, not re-creation), so we use existing.type.
+          // Without this, a rotation could save an OAUTH2 connection with no
+          // access_token that POST would have rejected.
+          if (body.value !== undefined) {
+            const schemaError = validateConnectionValueShape(existing.type, body.value);
+            if (schemaError) return err(schemaError);
+          }
           const merged = upsertConnection({
             externalId: existing.externalId,
             displayName: body.displayName ?? existing.displayName,

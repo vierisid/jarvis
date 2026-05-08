@@ -578,6 +578,38 @@ describe("workflow API: connections", () => {
     const fresh = getConnection(conn.id);
     expect((fresh?.value as Record<string, string> | undefined)?.["access_token"]).toBe("new");
   });
+
+  test("PATCH rejects a value that would fail the per-type schema check (e.g., OAUTH2 without access_token)", async () => {
+    // POST has the same check; PATCH must apply it too, otherwise rotation
+    // is a back-door for storing values the create path would reject.
+    const { upsertConnection, getConnection } = await import(
+      "../db/repos/app-connection"
+    );
+    const conn = upsertConnection({
+      externalId: "schema-check",
+      displayName: "Schema",
+      type: "OAUTH2",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { access_token: "valid" },
+    });
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/connections/:id"]?.PATCH;
+    const { status, body } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/connections/${conn.id}`,
+        { id: conn.id },
+        { value: { refresh_token: "rt-only-no-access-token" } },
+      ),
+    );
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/access_token/);
+    // Existing value untouched.
+    const fresh = getConnection(conn.id);
+    expect((fresh?.value as Record<string, string> | undefined)?.["access_token"]).toBe("valid");
+  });
 });
 
 describe("workflow API: waitpoints surface", () => {

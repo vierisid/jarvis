@@ -252,18 +252,16 @@ describe("EngineFlowExecutor", () => {
   });
 
   test("RESUME prefers the engine's zstd log backup over flow_run.steps", async () => {
-    // Backup file present at `<JARVIS_WORKFLOW_DATA_DIR>/workflow-logs/<runId>.bin`
-    // -> executor must use the recursive steps + tags from the backup, not the
-    // partial accumulator state in `flow_run.steps`.
-    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    // Backup file present in the per-test loaderBaseDir -> executor must use
+    // the recursive steps + tags from the backup, not the partial accumulator
+    // state in `flow_run.steps`.
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join, resolve: pathResolve } = await import("node:path");
     const { promisify } = await import("node:util");
     const { zstdCompress: zstdCompressCb } = await import("node:zlib");
     const zstdCompress = promisify(zstdCompressCb);
-    const root = mkdtempSync(join(tmpdir(), "jarvis-resume-restore-"));
-    const prevEnv = process.env.JARVIS_WORKFLOW_DATA_DIR;
-    process.env.JARVIS_WORKFLOW_DATA_DIR = root;
+    const loaderBaseDir = mkdtempSync(join(tmpdir(), "jarvis-resume-restore-"));
     try {
       const { runId, ctx } = setupRun();
       // The DB-side `flow_run.steps` only carries the outer (incomplete) shape.
@@ -298,9 +296,7 @@ describe("EngineFlowExecutor", () => {
         },
       };
       const compressed = (await zstdCompress(Buffer.from(JSON.stringify(backupPayload)))) as Buffer;
-      const logsDir = pathResolve(root, "workflow-logs");
-      mkdirSync(logsDir, { recursive: true });
-      writeFileSync(pathResolve(logsDir, `${runId}.bin`), compressed);
+      writeFileSync(pathResolve(loaderBaseDir, `${runId}.bin`), compressed);
 
       (ctx.job as unknown as { payload: { runId: string; executionType?: string; resumePayload?: Record<string, unknown> } }).payload = {
         runId,
@@ -322,6 +318,7 @@ describe("EngineFlowExecutor", () => {
       const exec = new EngineFlowExecutor(fakeRuntime, {
         terminalTimeoutMs: 1_000,
         terminalPollIntervalMs: 10,
+        loaderBaseDir,
       });
       await exec.execute(ctx);
 
@@ -337,9 +334,7 @@ describe("EngineFlowExecutor", () => {
       expect(loop.output.iterations[0]!.inner!.output).toBe(7);
       expect(loop.output.iterations[1]!.inner!.status).toBe("PAUSED");
     } finally {
-      if (prevEnv === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
-      else process.env.JARVIS_WORKFLOW_DATA_DIR = prevEnv;
-      rmSync(root, { recursive: true, force: true });
+      rmSync(loaderBaseDir, { recursive: true, force: true });
     }
   });
 
@@ -349,9 +344,7 @@ describe("EngineFlowExecutor", () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const root = mkdtempSync(join(tmpdir(), "jarvis-resume-fallback-"));
-    const prevEnv = process.env.JARVIS_WORKFLOW_DATA_DIR;
-    process.env.JARVIS_WORKFLOW_DATA_DIR = root;
+    const loaderBaseDir = mkdtempSync(join(tmpdir(), "jarvis-resume-fallback-"));
     try {
       const { runId, ctx } = setupRun();
       updateRun(runId, {
@@ -381,6 +374,7 @@ describe("EngineFlowExecutor", () => {
       const exec = new EngineFlowExecutor(fakeRuntime, {
         terminalTimeoutMs: 1_000,
         terminalPollIntervalMs: 10,
+        loaderBaseDir,
       });
       await exec.execute(ctx);
 
@@ -390,9 +384,7 @@ describe("EngineFlowExecutor", () => {
       // Unwrapped (the worker-handler envelope's `output` field is stripped).
       expect(state.steps["step_a"]).toEqual({ type: "PIECE", status: "SUCCEEDED", input: {}, output: { x: 1 } });
     } finally {
-      if (prevEnv === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
-      else process.env.JARVIS_WORKFLOW_DATA_DIR = prevEnv;
-      rmSync(root, { recursive: true, force: true });
+      rmSync(loaderBaseDir, { recursive: true, force: true });
     }
   });
 });

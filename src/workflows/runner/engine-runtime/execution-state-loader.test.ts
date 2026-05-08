@@ -70,7 +70,7 @@ describe("loadExecutionStateFromLog", () => {
     expect(loop.output.iterations[1]!.inner_a!.status).toBe("PAUSED");
   });
 
-  test("tolerates a partial payload (missing tags / missing executionState)", async () => {
+  test("tolerates a partial payload that's missing tags (defaults to [])", async () => {
     const runId = "run-partial";
     const compressed = (await zstdCompress(
       Buffer.from(JSON.stringify({ executionState: { steps: { a: { v: 1 } } } })),
@@ -78,6 +78,24 @@ describe("loadExecutionStateFromLog", () => {
     writeFileSync(resolve(tempRoot, `${runId}.bin`), compressed);
     const got = await loadExecutionStateFromLog(runId, { baseDir: tempRoot });
     expect(got).toEqual({ steps: { a: { v: 1 } }, tags: [] });
+  });
+
+  test("throws when the parsed payload is missing the executionState key", async () => {
+    // A backup that decompresses + parses but doesn't carry the expected
+    // outer key is malformed; silently substituting `{ steps: {} }` would
+    // have the executor re-run completed LOOP iterations on RESUME.
+    const runId = "run-no-exec";
+    const compressed = (await zstdCompress(Buffer.from(JSON.stringify({ wrong: "shape" })))) as Buffer;
+    writeFileSync(resolve(tempRoot, `${runId}.bin`), compressed);
+    await expect(
+      loadExecutionStateFromLog(runId, { baseDir: tempRoot }),
+    ).rejects.toThrow(/missing or invalid 'executionState'/);
+  });
+
+  test("rejects path-traversal-shaped runIds before touching the filesystem", async () => {
+    await expect(
+      loadExecutionStateFromLog("../../etc/passwd", { baseDir: tempRoot }),
+    ).rejects.toThrow(/invalid runId/);
   });
 
   test("throws when the file exists but is not valid zstd", async () => {
