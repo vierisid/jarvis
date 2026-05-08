@@ -9,6 +9,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, existsSync } from 'node:fs';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -62,7 +63,11 @@ export class GoogleAuth {
    */
   async saveTokens(tokens: GoogleTokens): Promise<void> {
     this.tokens = tokens;
-    await Bun.write(this.tokensPath, JSON.stringify(tokens, null, 2));
+    const tokensDir = path.dirname(this.tokensPath);
+    await mkdir(tokensDir, { recursive: true, mode: 0o700 });
+    await chmod(tokensDir, 0o700);
+    await writeFile(this.tokensPath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+    await chmod(this.tokensPath, 0o600);
   }
 
   /**

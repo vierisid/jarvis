@@ -7,9 +7,9 @@
  *  1. Explicit:  /api/sites/:id/proxy/*  → sets __proj cookie, proxies to dev server
  *  2. Catch-all: any unmatched path      → reads __proj cookie, proxies to dev server
  *
- * Because the iframe uses allow-same-origin, absolute paths emitted by
- * frameworks (e.g. /src/main.tsx) naturally hit the main server. The
- * catch-all picks them up via the cookie — zero URL rewriting needed.
+ * Absolute paths emitted by frameworks (e.g. /src/main.tsx) naturally hit the
+ * main server. The catch-all picks them up via the project cookie — zero URL
+ * rewriting needed.
  */
 
 import type { DevServerManager } from './dev-server-manager.ts';

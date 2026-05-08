@@ -46,9 +46,10 @@ export function SitePreview({ project }: Props) {
   // which hit the main server's catch-all and get routed via the cookie.
   const previewUrl = `/api/sites/${project.id}/proxy/`;
 
-  // allow-same-origin is required so that cookies, ES modules, and
-  // framework features (HMR WebSockets, fetch) work correctly.
-  const sandboxValue = "allow-scripts allow-forms allow-same-origin allow-popups";
+  // Keep generated/project code in an opaque sandbox origin. Forms and popups
+  // are useful preview capabilities; allow-same-origin is intentionally omitted
+  // because project JS is proxied from the daemon origin.
+  const sandboxValue = "allow-scripts allow-forms allow-popups";
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }}>

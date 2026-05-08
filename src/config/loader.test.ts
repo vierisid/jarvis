@@ -1,18 +1,20 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { loadConfig, saveConfig } from './loader.ts';
 import { DEFAULT_CONFIG } from './types.ts';
-import { existsSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
+import { dirname, join, isAbsolute } from 'node:path';
 
-const TEST_CONFIG_PATH = '/tmp/jarvis-test-config.yaml';
+const TEST_CONFIG_DIR = '/tmp/jarvis-test-config';
+const TEST_CONFIG_PATH = join(TEST_CONFIG_DIR, 'config.yaml');
 
 describe('Config Loader', () => {
+  beforeEach(async () => {
+    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+  });
+
   afterEach(async () => {
-    // Clean up test config file
-    if (existsSync(TEST_CONFIG_PATH)) {
-      await unlink(TEST_CONFIG_PATH);
-    }
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
   });
 
   test('returns default config when file does not exist', async () => {
@@ -38,6 +40,13 @@ describe('Config Loader', () => {
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.port).toBe(9999);
     expect(loaded.llm.primary).toBe('openai');
+  });
+
+  test('saves config with owner-only permissions', async () => {
+    await saveConfig(DEFAULT_CONFIG, TEST_CONFIG_PATH);
+
+    expect(statSync(dirname(TEST_CONFIG_PATH)).mode & 0o777).toBe(0o700);
+    expect(statSync(TEST_CONFIG_PATH).mode & 0o777).toBe(0o600);
   });
 
   test('deep merges partial config with defaults', async () => {
@@ -264,10 +273,12 @@ describe('Default Config', () => {
 });
 
 describe('Config Parse Errors', () => {
+  beforeEach(async () => {
+    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+  });
+
   afterEach(async () => {
-    if (existsSync(TEST_CONFIG_PATH)) {
-      await unlink(TEST_CONFIG_PATH);
-    }
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
   });
 
   test('throws on malformed YAML when file exists', async () => {
@@ -306,11 +317,13 @@ daemon:
 });
 
 describe('Voice Config', () => {
+  beforeEach(async () => {
+    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+  });
+
   afterEach(async () => {
     delete process.env.JARVIS_WAKE_ENGINE;
-    if (existsSync(TEST_CONFIG_PATH)) {
-      await unlink(TEST_CONFIG_PATH);
-    }
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
   });
 
   test('defaults wake_engine to openwakeword (privacy-preserving local path)', async () => {
