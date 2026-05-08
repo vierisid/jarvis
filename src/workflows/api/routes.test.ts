@@ -371,3 +371,85 @@ describe("workflow API: runs", () => {
     expect(body.id).toBe(runId);
   });
 });
+
+describe("workflow API: waitpoint resume", () => {
+  test("POST /api/webhooks/waitpoints/:id enqueues RUN_FLOW(executionType=RESUME) and marks waitpoint resumed", async () => {
+    const { createFlow, setPublishedVersion, updateFlowStatus } = await import(
+      "../db/repos/flow"
+    );
+    const { createDraftVersion, lockVersion } = await import(
+      "../db/repos/flow-version"
+    );
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint, getWaitpoint } = await import(
+      "../db/repos/waitpoint"
+    );
+    const { claimNextJob, queueStats } = await import("../db/repos/job-queue");
+    const { DEFAULT_IDS } = await import("../db/schema");
+
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "paused flow",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    setPublishedVersion(flow.id, v.id);
+    updateFlowStatus(flow.id, "ENABLED");
+    const run = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: v.id,
+      environment: "TESTING",
+    });
+    const wp = createWaitpoint({
+      flowRunId: run.id,
+      projectId: DEFAULT_IDS.project,
+      stepName: "step_pause",
+      type: "WEBHOOK",
+    });
+
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const before = queueStats().queued;
+    const { status, body } = await callJson(
+      post,
+      reqWithParams("POST", `http://x/api/webhooks/waitpoints/${wp.id}`, { id: wp.id }, {
+        externalSignal: "wake-up",
+      }),
+    );
+    expect(status).toBe(202);
+    expect(body.runId).toBe(run.id);
+    expect(body.resumed).toBe(true);
+    expect(queueStats().queued).toBe(before + 1);
+
+    // Claim the enqueued job and verify the resume payload survived the
+    // queue round-trip + the execution type is RESUME.
+    const job = claimNextJob<{
+      runId: string;
+      executionType?: string;
+      resumePayload?: Record<string, unknown>;
+    }>();
+    expect(job?.payload.runId).toBe(run.id);
+    expect(job?.payload.executionType).toBe("RESUME");
+    expect(job?.payload.resumePayload).toEqual({ externalSignal: "wake-up" });
+
+    // Waitpoint marked resumed -> a second hit returns 410.
+    const persisted = getWaitpoint(wp.id);
+    expect(persisted?.resumedAt).not.toBeNull();
+    const secondHit = await callJson(
+      post,
+      reqWithParams("POST", `http://x/api/webhooks/waitpoints/${wp.id}`, { id: wp.id }, {}),
+    );
+    expect(secondHit.status).toBe(410);
+  });
+
+  test("POST /api/webhooks/waitpoints/:id 404s on unknown waitpoint", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { status } = await callJson(
+      post,
+      reqWithParams("POST", "http://x/api/webhooks/waitpoints/missing", { id: "missing" }, {}),
+    );
+    expect(status).toBe(404);
+  });
+});

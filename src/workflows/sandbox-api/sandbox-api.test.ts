@@ -127,6 +127,48 @@ describe("SandboxRegistry", () => {
     const id = SandboxRegistry.newSandboxId();
     expect(id).toMatch(/^[0-9a-f]{24}$/);
   });
+
+  test("rebind: updates runId/projectId/engineToken without changing sandboxId", () => {
+    const reg = new SandboxRegistry();
+    const id = sampleIdentity();
+    reg.register({
+      ...id,
+      engineToken: "tok-v1",
+      expiresAt: 100,
+      terminatedAt: null,
+    });
+    reg.rebind(id.sandboxId, {
+      runId: "run_v2",
+      projectId: id.projectId,
+      engineToken: "tok-v2",
+      expiresAt: 200,
+    });
+    const record = reg.get(id.sandboxId);
+    expect(record?.runId).toBe("run_v2");
+    expect(record?.engineToken).toBe("tok-v2");
+    expect(record?.expiresAt).toBe(200);
+    expect(reg.byRunId("run_v2")?.sandboxId).toBe(id.sandboxId);
+    // Old run no longer maps.
+    expect(reg.byRunId(id.runId)).toBeNull();
+  });
+
+  test("rebind: throws on unknown or terminated sandboxId", () => {
+    const reg = new SandboxRegistry();
+    expect(() =>
+      reg.rebind("missing", { runId: "x", projectId: "y", engineToken: "t", expiresAt: 0 }),
+    ).toThrow();
+    const id = sampleIdentity();
+    reg.register({
+      ...id,
+      engineToken: "t",
+      expiresAt: 0,
+      terminatedAt: null,
+    });
+    reg.terminate(id.sandboxId);
+    expect(() =>
+      reg.rebind(id.sandboxId, { runId: "x", projectId: "y", engineToken: "t", expiresAt: 0 }),
+    ).toThrow();
+  });
 });
 
 describe("SandboxApi server", () => {

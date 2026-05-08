@@ -14,16 +14,17 @@
  *   run       -- poll, advance cursor, return events with DEDUPE_KEY_PROPERTY.
  *   test      -- single sample.
  *
- * Latency note: the polling cadence is hard-coded to once per minute, which
- * means events can take up to ~60s to fire a workflow run. That's adequate
- * for most automation (morning briefings, hourly digests, low-frequency
- * commitments) but feels sluggish for interactive use cases (voice intents,
- * notifications-on-arrival). Two improvement paths when needed:
- *   1. Sub-minute cron precision (already on the followup list in
- *      BRANCH_SUMMARY) plus a faster default here.
- *   2. Bypass the polling-trigger machinery for `on_event` and have the
- *      daemon push events directly into RUN_FLOW jobs. Bigger lift -- needs
- *      an engine-side patch -- but eliminates the poll-loop entirely.
+ * Latency: the polling cadence defaults to `@every 10s` (sub-minute syntax
+ * accepted by Jarvis's CronScheduler). Events surface within ~10 seconds
+ * of being published to the daemon's event buffer. To trade latency for
+ * fewer engine spawns, configure a slower expression at the trigger
+ * settings level (the current value is hardcoded here as a piece-side
+ * default; per-flow overrides are a follow-up).
+ *
+ * If even 10s is too slow for a use case (voice intents, sub-second
+ * reactions), the alternative is bypassing the polling-trigger machinery
+ * entirely and having the daemon push events directly into RUN_FLOW jobs --
+ * bigger lift, requires an engine-side patch.
  */
 
 import {
@@ -34,7 +35,7 @@ import {
 } from "@activepieces/pieces-framework";
 
 const CURSOR_KEY = "jarvis-trigger:on-event:since";
-const POLL_CADENCE_CRON = "* * * * *";
+const POLL_CADENCE_CRON = "@every 10s";
 
 interface PollResponse {
   events: Array<{

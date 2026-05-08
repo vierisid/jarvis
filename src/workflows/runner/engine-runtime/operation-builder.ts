@@ -48,11 +48,29 @@ export interface ExecuteFlowOptions {
   stepNameToTest?: string | null;
   workerHandlerId?: string | null;
   httpRequestId?: string | null;
+  /**
+   * `BEGIN` (default) starts a new run from the trigger. `RESUME` wakes a
+   * paused run from a stored execution state -- supply `resumePayload`
+   * (and the prior `executionState`) so the engine knows where to pick up.
+   */
+  executionType?: "BEGIN" | "RESUME";
+  /**
+   * Payload delivered to the paused step when `executionType === "RESUME"`.
+   * Typically the body of the webhook that hit the resume URL.
+   */
+  resumePayload?: Record<string, unknown>;
+  /**
+   * Prior execution state restored on RESUME. The daemon reads this from
+   * the run's logs file (the engine's zstd-encoded backup) before
+   * re-issuing EXECUTE_FLOW. For a fresh BEGIN it stays empty.
+   */
+  executionState?: { steps: Record<string, unknown> };
 }
 
 const DEFAULT_TIMEOUT_S = 600;
 
 export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOperationEnvelope {
+  const executionType = opts.executionType ?? "BEGIN";
   const op: Record<string, unknown> = {
     flowVersion: opts.flowVersion,
     flowRunId: opts.flowRunId,
@@ -64,10 +82,8 @@ export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOpera
     timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
     runEnvironment: opts.runEnvironment ?? "TESTING",
     streamStepProgress: opts.streamStepProgress ?? "NONE",
-    executionType: "BEGIN",
-    triggerPayload: opts.triggerPayload ?? {},
-    executeTrigger: opts.executeTrigger ?? false,
-    executionState: { steps: {} },
+    executionType,
+    executionState: opts.executionState ?? { steps: {} },
     stepNameToTest: opts.stepNameToTest ?? null,
     workerHandlerId: opts.workerHandlerId ?? null,
     httpRequestId: opts.httpRequestId ?? null,
@@ -75,6 +91,12 @@ export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOpera
     logsFileId: opts.logsFileId,
     sampleData: opts.sampleData ?? {},
   };
+  if (executionType === "RESUME") {
+    op.resumePayload = opts.resumePayload ?? {};
+  } else {
+    op.triggerPayload = opts.triggerPayload ?? {};
+    op.executeTrigger = opts.executeTrigger ?? false;
+  }
   return { operationType: "EXECUTE_FLOW", operation: op };
 }
 

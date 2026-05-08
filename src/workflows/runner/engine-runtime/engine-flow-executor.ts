@@ -92,12 +92,33 @@ export class EngineFlowExecutor implements FlowExecutor {
       // per-step results. `NONE` (the default in operation-builder) means
       // status-only updates -- adequate for production-only metrics but the
       // run row's `steps` would stay empty.
-      await handle.executeFlow({
+      const flowOpts: Parameters<typeof handle.executeFlow>[0] = {
         flowVersion: ctx.version,
-        triggerPayload: ctx.payload,
-        executeTrigger: ctx.job.payload.executeTrigger ?? false,
         streamStepProgress: "WEBSOCKET",
-      });
+      };
+      const executionType = ctx.job.payload.executionType ?? "BEGIN";
+      if (executionType === "RESUME") {
+        // Resume a paused run: the engine picks up at the waitpointed step,
+        // delivers `resumePayload` to it, and resumes walking the chain.
+        // The prior execution state is restored from the run's persisted
+        // steps record (the dashboard's run-history view of what already
+        // happened).
+        flowOpts.executionType = "RESUME";
+        flowOpts.resumePayload = ctx.job.payload.resumePayload ?? {};
+        const priorSteps = (ctx.run.steps ?? {}) as Record<string, unknown>;
+        flowOpts.executionState = { steps: priorSteps };
+      } else {
+        flowOpts.triggerPayload = ctx.payload;
+        flowOpts.executeTrigger = ctx.job.payload.executeTrigger ?? false;
+        // Per-step preview: when stepNameToTest is set, engine runs only that
+        // step + records its output. The run still terminates SUCCEEDED on
+        // success; the dashboard reads `flow_run.steps[stepNameToTest]` for
+        // the result.
+        if (ctx.job.payload.stepNameToTest) {
+          flowOpts.stepNameToTest = ctx.job.payload.stepNameToTest;
+        }
+      }
+      await handle.executeFlow(flowOpts);
     } finally {
       await handle.release();
     }

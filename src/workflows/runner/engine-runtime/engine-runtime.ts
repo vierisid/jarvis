@@ -49,6 +49,19 @@ export interface EngineRuntimeOptions {
   /** Absolute path to the built engine bundle (`main.js`). */
   bundlePath: string;
   /**
+   * When true, `release()` returns the engine to a single-slot warm pool
+   * instead of killing it. The next `acquire()` reuses the same process,
+   * mints a fresh engineToken, and rebinds the registry sandbox to the new
+   * (runId, projectId). Saves the ~1.5-3s cold-spawn cost on every cron
+   * tick / webhook fire. Defaults to `false` -- per-job spawn behaviour
+   * matches what tests expect.
+   *
+   * Concurrency = 1: a second concurrent `acquire()` while the warm engine
+   * is in use spawns a fresh one and that one is killed on release (the
+   * pool only holds the most-recently-released idle engine).
+   */
+  pool?: boolean;
+  /**
    * Where the engine materializes CODE-action source files. Defaults to
    * `~/.jarvis/workflow-codes`. The engine appends `${flowVersionId}/${stepName}/index.js`.
    */
@@ -94,9 +107,23 @@ export interface ExecuteFlowOnHandleOptions {
   stepNameToTest?: string | null;
   /** Override the platformId the engine sees -- defaults to projectId. */
   platformId?: string;
+  /** `BEGIN` for a fresh start, `RESUME` to wake a paused run. Default `BEGIN`. */
+  executionType?: "BEGIN" | "RESUME";
+  /** Payload delivered to the paused step on RESUME. */
+  resumePayload?: Record<string, unknown>;
+  /** Prior execution state to restore on RESUME (engine reads steps from it). */
+  executionState?: { steps: Record<string, unknown> };
 }
 
 export class EngineHandle {
+  /**
+   * Strategy invoked by `release()`. Defaults to the kill-and-terminate path
+   * (legacy behaviour). When the runtime acquires from the warm pool, it
+   * supplies a different strategy that returns the engine to the idle slot
+   * without killing it. The handle itself doesn't care which.
+   */
+  private readonly releaseImpl: () => Promise<void>;
+
   constructor(
     public readonly sandboxId: string,
     public readonly runId: string,
@@ -108,7 +135,10 @@ export class EngineHandle {
     private readonly killGraceMs: number,
     private readonly api: SandboxApi,
     private readonly baseCodeDir: string,
-  ) {}
+    releaseImpl?: () => Promise<void>,
+  ) {
+    this.releaseImpl = releaseImpl ?? (() => this.killAndTerminate());
+  }
 
   /** Inspect the spawned process without exposing the full child handle. */
   get pid(): number {
@@ -165,6 +195,9 @@ export class EngineHandle {
     if (opts.streamStepProgress !== undefined) baseExecuteFlowOptions.streamStepProgress = opts.streamStepProgress;
     if (opts.timeoutInSeconds !== undefined) baseExecuteFlowOptions.timeoutInSeconds = opts.timeoutInSeconds;
     if (opts.stepNameToTest !== undefined) baseExecuteFlowOptions.stepNameToTest = opts.stepNameToTest;
+    if (opts.executionType !== undefined) baseExecuteFlowOptions.executionType = opts.executionType;
+    if (opts.resumePayload !== undefined) baseExecuteFlowOptions.resumePayload = opts.resumePayload;
+    if (opts.executionState !== undefined) baseExecuteFlowOptions.executionState = opts.executionState;
 
     const operation = buildExecuteFlowOperation(baseExecuteFlowOptions);
     await this.engineClient.executeOperation(operation);
@@ -273,11 +306,20 @@ export class EngineHandle {
   }
 
   /**
-   * Stop the engine subprocess. SIGTERM first; SIGKILL after `killGraceMs`
-   * if it hasn't exited. Always deregisters the sandbox so subsequent API
-   * calls from a zombie engine are rejected.
+   * Per-acquire teardown. Default: kill the subprocess and terminate the
+   * sandbox in the registry so subsequent calls from a zombie engine are
+   * rejected. When the runtime is pooled, the runtime supplies a different
+   * strategy that returns the engine to the idle slot.
    */
   async release(): Promise<void> {
+    return this.releaseImpl();
+  }
+
+  /**
+   * The default kill-and-terminate strategy, exposed so the runtime's pool
+   * code can call it for forced shutdown of an idle engine.
+   */
+  async killAndTerminate(): Promise<void> {
     this.proc.kill("SIGTERM");
     const settled = await Promise.race([
       this.proc.exited.then(() => "exited" as const),
@@ -293,6 +335,17 @@ export class EngineHandle {
     }
     this.registry.terminate(this.sandboxId);
   }
+
+  /** Internal: pool reuse needs the spawned engine + RPC client; expose to runtime only. */
+  _internals(): { proc: SpawnedEngine; engineClient: EngineContract } {
+    return { proc: this.proc, engineClient: this.engineClient };
+  }
+}
+
+interface WarmEngine {
+  sandboxId: string;
+  proc: SpawnedEngine;
+  engineClient: EngineContract;
 }
 
 export class EngineRuntime {
@@ -306,10 +359,19 @@ export class EngineRuntime {
   private readonly runtime: string | undefined;
   private readonly cwd: string;
   private readonly devPieces: string[];
+  private readonly poolEnabled: boolean;
+  /**
+   * Single-slot warm pool. When pooling is enabled, `release()` parks the
+   * engine here instead of killing it, and the next `acquire()` reuses it.
+   * Only one engine fits -- a second concurrent acquire spawns a fresh one
+   * and that one is killed on its release.
+   */
+  private idleEngine: WarmEngine | null = null;
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
     this.bundlePath = opts.bundlePath;
+    this.poolEnabled = opts.pool ?? false;
     this.baseCodeDir =
       opts.baseCodeDir ?? resolve(workflowLogsBase(), "..", "workflow-codes");
     this.customPiecesPaths =
@@ -344,6 +406,48 @@ export class EngineRuntime {
   }
 
   async acquire(opts: AcquireOptions): Promise<EngineHandle> {
+    // Warm path: reuse the idle engine if pooling is on and one is parked.
+    // Mint a fresh engineToken bound to the new (runId, projectId) and
+    // rebind the registry sandbox; the engine's own SANDBOX_ID env was
+    // fixed at spawn time and stays the same across runs.
+    if (this.poolEnabled && this.idleEngine) {
+      const warm = this.idleEngine;
+      this.idleEngine = null;
+      const { token, expiresAt } = await this.api.signer.mint(
+        { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
+        opts.tokenTtlSeconds,
+      );
+      try {
+        this.api.registry.rebind(warm.sandboxId, {
+          runId: opts.runId,
+          projectId: opts.projectId,
+          engineToken: token,
+          expiresAt,
+        });
+      } catch (e) {
+        // Sandbox was unexpectedly terminated (e.g. proc died and registry
+        // was cleaned up out-of-band). Fall through to a fresh spawn.
+        warm.proc.kill("SIGKILL");
+        return this.spawnFresh(opts);
+      }
+      return new EngineHandle(
+        warm.sandboxId,
+        opts.runId,
+        opts.projectId,
+        warm.engineClient,
+        token,
+        warm.proc,
+        this.api.registry,
+        this.killGraceMs,
+        this.api,
+        this.baseCodeDir,
+        () => this.returnToPoolOrKill(warm),
+      );
+    }
+    return this.spawnFresh(opts);
+  }
+
+  private async spawnFresh(opts: AcquireOptions): Promise<EngineHandle> {
     const sandboxId = SandboxRegistry.newSandboxId();
     const { token, expiresAt } = await this.api.signer.mint(
       { sandboxId, runId: opts.runId, projectId: opts.projectId },
@@ -383,6 +487,10 @@ export class EngineRuntime {
         sandboxId,
         this.handshakeTimeoutMs,
       );
+      const warm: WarmEngine = { sandboxId, proc, engineClient };
+      const releaseImpl = this.poolEnabled
+        ? () => this.returnToPoolOrKill(warm)
+        : undefined;
       return new EngineHandle(
         sandboxId,
         opts.runId,
@@ -394,6 +502,7 @@ export class EngineRuntime {
         this.killGraceMs,
         this.api,
         this.baseCodeDir,
+        releaseImpl,
       );
     } catch (e) {
       // Make sure the subprocess is gone before bubbling. If it already exited,
@@ -408,6 +517,50 @@ export class EngineRuntime {
       // Don't leak the watcher Promise.
       void earlyExitWatcher;
     }
+  }
+
+  /**
+   * Pool release strategy: park the engine in the idle slot so the next
+   * `acquire()` can reuse it. If a different engine is already parked
+   * (e.g. concurrent acquire spawned a duplicate), kill this one rather
+   * than overwriting; the slot holds at most one warm engine.
+   */
+  private async returnToPoolOrKill(engine: WarmEngine): Promise<void> {
+    // If the proc died while running, don't pool a corpse.
+    const exited = await Promise.race([
+      engine.proc.exited.then(() => true),
+      Promise.resolve(false),
+    ]);
+    if (exited) {
+      this.api.registry.terminate(engine.sandboxId);
+      return;
+    }
+    if (this.idleEngine === null) {
+      this.idleEngine = engine;
+      return;
+    }
+    // Slot full -- kill the duplicate.
+    engine.proc.kill("SIGTERM");
+    setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+    this.api.registry.terminate(engine.sandboxId);
+  }
+
+  /**
+   * Tear down the warm pool. Called by the daemon's shutdown path after
+   * the worker has stopped accepting jobs. Safe to call when pooling is
+   * disabled (no-op).
+   */
+  async shutdown(): Promise<void> {
+    if (!this.idleEngine) return;
+    const engine = this.idleEngine;
+    this.idleEngine = null;
+    engine.proc.kill("SIGTERM");
+    await Promise.race([
+      engine.proc.exited,
+      new Promise<void>((res) => setTimeout(res, this.killGraceMs)),
+    ]);
+    engine.proc.kill("SIGKILL");
+    this.api.registry.terminate(engine.sandboxId);
   }
 }
 

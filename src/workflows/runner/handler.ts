@@ -32,6 +32,27 @@ export interface RunFlowJobPayload {
    * ignores this flag; it's honored by the engine-backed executor.
    */
   executeTrigger?: boolean;
+  /**
+   * "Run from here" / per-step preview: when set, the engine executes only
+   * the named step (with step inputs resolved from prior step outputs in
+   * `executionState`, which the engine assembles from a sample run if
+   * available, else uses the step's `sampleData`). The action's output is
+   * captured on `flow_run.steps[stepName]` and the run terminates without
+   * walking the rest of the chain. Used by the dashboard's "test step" UI.
+   */
+  stepNameToTest?: string;
+  /**
+   * `RESUME` wakes a paused run -- the worker handler skips run-row
+   * recreation and the executor sends EXECUTE_FLOW with executionType=RESUME
+   * + resumePayload + the prior executionState restored from the run's
+   * logs file. `BEGIN` (default) starts fresh from the trigger.
+   */
+  executionType?: "BEGIN" | "RESUME";
+  /**
+   * Payload delivered to the paused step. Typically the body of the webhook
+   * that hit the resume URL, or a timer-fire metadata blob.
+   */
+  resumePayload?: Record<string, unknown>;
 }
 
 export interface FlowExecutorContext {

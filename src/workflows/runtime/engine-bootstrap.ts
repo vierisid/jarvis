@@ -102,9 +102,16 @@ export async function bootstrapWorkflowEngine(
   log(`sandbox api listening on ${api.baseUrl}`);
 
   // 4. Build the EngineRuntime against the bundle. One runtime is shared
-  // across all RUN_FLOW jobs + trigger hook calls; per-acquire spawn is the
-  // unit of isolation.
-  const runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+  // across all RUN_FLOW jobs + trigger hook calls. Pooling is enabled so
+  // cron-fired runs / fast event-bus polls reuse the warm engine rather
+  // than paying the ~3s cold-spawn cost on every fire. The first call
+  // through still spawns; subsequent acquires after release rebind to the
+  // same process.
+  const runtime = new EngineRuntime({
+    api,
+    bundlePath: cached.bundlePath,
+    pool: true,
+  });
 
   // 5. Extract piece metadata. Cached to disk keyed by the engine bundle's
   // content hash plus each piece's compiled bundle content; mismatch forces
@@ -142,6 +149,9 @@ export async function bootstrapWorkflowEngine(
     catalog,
     failures,
     shutdown: async () => {
+      // Kill any pooled idle engine before stopping the SandboxApi -- the
+      // engine's HTTP/WS callbacks would otherwise spin against a dead server.
+      await runtime.shutdown();
       await api.stop();
     },
   };

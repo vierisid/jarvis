@@ -43,6 +43,26 @@ export class SandboxRegistry {
     return null;
   }
 
+  /**
+   * Re-point an existing sandbox at a new run. Used by the engine pool: a
+   * warm engine keeps its `sandboxId` (the engine's socket.io auth value
+   * is fixed at spawn time) but each acquire mints a new engineToken bound
+   * to a new (runId, projectId). Throws if the sandbox is unknown or
+   * already terminated.
+   */
+  rebind(
+    sandboxId: string,
+    patch: { runId: string; projectId: string; engineToken: string; expiresAt: number },
+  ): void {
+    const record = this.sandboxes.get(sandboxId);
+    if (!record) throw new Error(`rebind: sandboxId ${sandboxId} not registered`);
+    if (record.terminatedAt !== null) throw new Error(`rebind: sandboxId ${sandboxId} terminated`);
+    record.runId = patch.runId;
+    record.projectId = patch.projectId;
+    record.engineToken = patch.engineToken;
+    record.expiresAt = patch.expiresAt;
+  }
+
   /** Mark the sandbox as terminated; subsequent get/byRunId will return null. */
   terminate(sandboxId: string, now = Date.now()): void {
     const record = this.sandboxes.get(sandboxId);

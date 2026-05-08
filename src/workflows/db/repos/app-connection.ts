@@ -10,6 +10,7 @@
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
+import { decryptJson, encryptJson } from "../encryption";
 
 export type AppConnectionType =
   | "OAUTH2"
@@ -94,7 +95,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     pieceVersion: row.piece_version,
     projectId: row.project_id,
     ownerId: row.owner_id,
-    value: JSON.parse(row.value) as Record<string, unknown>,
+    value: decryptJson(row.value) as Record<string, unknown>,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     preSelectForNewProjects: row.pre_select_for_new_projects !== 0,
     created: row.created,
@@ -121,7 +122,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
         input.displayName,
         input.type,
         input.status ?? existing.status,
-        JSON.stringify(input.value),
+        encryptJson(input.value),
         input.metadata ? JSON.stringify(input.metadata) : null,
         input.pieceVersion,
         input.ownerId !== undefined ? input.ownerId : existing.ownerId,

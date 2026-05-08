@@ -1,8 +1,16 @@
 /**
  * CronScheduler — lightweight cron expression parser and scheduler
  *
- * Supports standard 5-field cron: minute hour dayOfMonth month dayOfWeek
- * Special characters: * / - and comma-separated lists
+ * Standard cron (5-field, minute resolution):
+ *   "minute hour dayOfMonth month dayOfWeek" with `*`, `/`, `-`, and CSVs
+ *
+ * Sub-minute extension:
+ *   "@every <duration>" where <duration> is `<n>(s|m|h)` -- e.g. `@every 10s`,
+ *   `@every 30s`, `@every 5m`. Bounds: minimum 1s, maximum 24h. Implemented
+ *   with `setInterval(durationMs)` rather than the per-minute matcher loop,
+ *   so triggers like `jarvis-trigger:on_event` can poll faster than once a
+ *   minute.
+ *
  * No external dependencies.
  */
 
@@ -23,6 +31,38 @@ export type CronJobInfo = {
   lastRun: number | null;
   nextRun: number;
 };
+
+/**
+ * Parse the sub-minute `@every <n>(s|m|h)` syntax. Returns the interval in
+ * milliseconds, or `null` if the expression isn't using this syntax.
+ * Throws if the syntax is recognised but malformed or out of bounds.
+ */
+const EVERY_RE = /^@every\s+(\d+)(s|m|h)$/i;
+const MIN_INTERVAL_MS = 1_000;
+const MAX_INTERVAL_MS = 24 * 60 * 60_000;
+
+export function parseEveryExpression(expression: string): number | null {
+  const m = EVERY_RE.exec(expression.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2]!.toLowerCase();
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`Invalid @every duration in "${expression}": amount must be a positive integer`);
+  }
+  const ms =
+    unit === "s" ? n * 1_000 : unit === "m" ? n * 60_000 : n * 60 * 60_000;
+  if (ms < MIN_INTERVAL_MS) {
+    throw new Error(
+      `@every duration "${expression}" is below the 1s minimum (got ${ms}ms)`,
+    );
+  }
+  if (ms > MAX_INTERVAL_MS) {
+    throw new Error(
+      `@every duration "${expression}" exceeds the 24h maximum (got ${ms}ms)`,
+    );
+  }
+  return ms;
+}
 
 // ── Parser helpers ──
 
@@ -229,7 +269,39 @@ export class CronScheduler {
       this.cancel(id);
     }
 
-    // Validate expression eagerly
+    // Sub-minute path: `@every <n>(s|m|h)`. Use setInterval directly so the
+    // trigger fires at the requested cadence instead of being clamped to the
+    // 1-minute granularity of the standard cron loop.
+    const everyMs = parseEveryExpression(expression);
+    if (everyMs !== null) {
+      const fireAt = Date.now() + everyMs;
+      const handle = setInterval(() => {
+        const job = this.jobs.get(id);
+        if (job) {
+          job.lastRun = Date.now();
+          job.nextRun = Date.now() + everyMs;
+        }
+        try {
+          callback();
+        } catch (err) {
+          console.error(`[CronScheduler] Job "${id}" threw an error:`, err);
+        }
+      }, everyMs);
+      this.jobs.set(id, {
+        id,
+        expression,
+        callback,
+        lastRun: null,
+        nextRun: fireAt,
+        handle,
+      });
+      console.log(
+        `[CronScheduler] Scheduled job "${id}" (${expression}, ${everyMs}ms interval), first run at: ${new Date(fireAt).toISOString()}`,
+      );
+      return;
+    }
+
+    // Standard 5-field cron path.
     parseExpression(expression);
 
     const nextRun = CronScheduler.nextRun(expression);

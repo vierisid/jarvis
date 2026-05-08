@@ -47,6 +47,10 @@ import {
   type RunEnvironment,
 } from "../db/repos/flow-run";
 import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
+import {
+  getWaitpoint,
+  markWaitpointResumed,
+} from "../db/repos/waitpoint";
 import type { TriggerManager } from "../runner/triggers/manager";
 import type { PieceLookup } from "../runtime/piece-catalog";
 
@@ -145,6 +149,48 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               : [],
           }));
           return ok(list);
+        }),
+    },
+
+    // ------------------------------------------------------------- waitpoint resume
+    // Public webhook URL for resuming a paused flow. The `resumeUrl` minted
+    // by `POST /v1/waitpoints` (called by piece actions via
+    // `context.run.createWaitpoint`) routes here. Hits enqueue
+    // RUN_FLOW(executionType=RESUME) with the request body as resumePayload;
+    // the engine wakes the paused run from the persisted execution state.
+    //
+    // Idempotent: a second hit with the same waitpoint id returns 410, so
+    // a flaky external service that retries doesn't re-fire the run.
+    "/api/webhooks/waitpoints/:id": {
+      POST: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const wp = getWaitpoint(id);
+          if (!wp) return err("waitpoint not found", 404);
+          if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
+          // Body is the resumePayload delivered to the paused step. Tolerate
+          // empty bodies and non-JSON payloads (some webhook senders POST
+          // form-encoded or empty); fall back to {}.
+          let resumePayload: Record<string, unknown> = {};
+          try {
+            const raw = await req.json();
+            if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+              resumePayload = raw as Record<string, unknown>;
+            }
+          } catch {
+            // Non-JSON or empty body -- use {} as the payload.
+          }
+          markWaitpointResumed(id);
+          enqueue({
+            jobType: "RUN_FLOW",
+            payload: {
+              runId: wp.flowRunId,
+              executionType: "RESUME",
+              resumePayload,
+            },
+            flowRunId: wp.flowRunId,
+          });
+          return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
         }),
     },
 
@@ -336,7 +382,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // job; the job carries enough context for the worker to dispatch.
           enqueue({
             jobType: "RUN_FLOW",
-            payload: { runId: run.id, payload: body.payload ?? {} },
+            payload: {
+              runId: run.id,
+              payload: body.payload ?? {},
+              ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
+            },
             flowRunId: run.id,
             flowId: id,
             flowVersionId: versionId,
