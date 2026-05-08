@@ -39,8 +39,10 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
       // still run.
       return null;
     }
+    // Trigger refresh-if-expired before reading the snapshot so the
+    // returned access_token + expiry_date are consistent.
     const accessToken = await this.googleAuth.getAccessToken();
-    const tokens = (this.googleAuth as unknown as { tokens: import("../../integrations/google-auth").GoogleTokens | null }).tokens;
+    const tokens = this.googleAuth.getTokens();
     return {
       type: "OAUTH2",
       value: {

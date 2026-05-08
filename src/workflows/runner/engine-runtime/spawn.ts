@@ -31,6 +31,13 @@ export interface SpawnedEngine {
   stderr: NodeJS.ReadableStream | null;
   /** The underlying child handle, for callers that need the raw streams. */
   child: ChildProcess;
+  /**
+   * Synchronously-checkable liveness flag. `true` from spawn until the
+   * `close` event fires; `false` thereafter. Engine pool uses this to
+   * decide whether to park or discard a released engine without racing
+   * against `exited` (which only resolves on the next microtask).
+   */
+  alive(): boolean;
 }
 
 export interface SpawnEngineOptions {
@@ -89,9 +96,13 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  let isAlive = true;
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (res) => {
-      child.on("close", (code, signal) => res({ code, signal }));
+      child.on("close", (code, signal) => {
+        isAlive = false;
+        res({ code, signal });
+      });
     },
   );
 
@@ -102,5 +113,6 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     child,
     exited,
     kill: (signal = "SIGTERM") => child.kill(signal),
+    alive: () => isAlive,
   };
 }

@@ -13,7 +13,7 @@
  *     deferred until pieces have stable output shapes.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -350,16 +350,7 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             <dt>Triggered by</dt>
             <dd>{run.triggeredBy ?? "manual"}</dd>
           </dl>
-          {run.status === "PAUSED" ? (
-            <div className="wf-runs__paused">
-              <strong>Paused:</strong> waiting for an external signal. The
-              piece that paused this run minted a webhook URL of the form
-              <code>/api/webhooks/waitpoints/&lt;id&gt;</code>; a POST to that
-              URL wakes the run with the request body as the resume payload.
-              See the run's <code>steps</code> JSON below for the exact
-              waitpoint id this run is parked on.
-            </div>
-          ) : null}
+          {run.status === "PAUSED" ? <PausedRunCallout runId={run.id} /> : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (
             <details className="wf-runs__steps">
               <summary>Step output JSON</summary>
@@ -382,6 +373,67 @@ function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElemen
   if (status === "FAILED" || status === "INTERNAL_ERROR" || status === "TIMEOUT") return <Icon icon={XCircle} size={14} />;
   if (status === "RUNNING" || status === "QUEUED") return <Icon icon={Clock} size={14} />;
   return <Icon icon={AlertTriangle} size={14} />;
+}
+
+/**
+ * Paused-run callout: fetches active waitpoints for this run and renders the
+ * resume URL(s) so the user can copy/paste into curl or hit from a webhook
+ * sender. Loads on mount; no re-fetch (the panel is short-lived per
+ * expand). Falls back to a generic message if the run has no active
+ * waitpoint -- which can happen briefly while the engine is between
+ * uploadRunLog calls, or if the run was paused via a non-webhook path.
+ */
+function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
+  const [waitpoints, setWaitpoints] = useState<
+    Array<{ id: string; stepName: string; type: string; resumeUrl: string }> | null
+  >(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/workflow-runs/${runId}/waitpoints`);
+        if (!r.ok) {
+          setError(`HTTP ${r.status}`);
+          return;
+        }
+        const body = (await r.json()) as {
+          waitpoints: Array<{ id: string; stepName: string; type: string; resumeUrl: string }>;
+        };
+        if (!cancelled) setWaitpoints(body.waitpoints);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+  return (
+    <div className="wf-runs__paused">
+      <strong>Paused:</strong> waiting for an external signal.{" "}
+      {error ? (
+        <span className="wf-runs__paused-err">Couldn't load waitpoints: {error}</span>
+      ) : waitpoints === null ? (
+        <span>Loading waitpoints…</span>
+      ) : waitpoints.length === 0 ? (
+        <span>
+          No active waitpoints for this run -- it may be parked on a non-webhook
+          pause (TIMER, MANUAL) or transitioning.
+        </span>
+      ) : (
+        <ul className="wf-runs__paused-list">
+          {waitpoints.map((wp) => (
+            <li key={wp.id}>
+              <span className="wf-runs__paused-step">step <code>{wp.stepName}</code></span>{" "}
+              ({wp.type}) -- POST any JSON body to{" "}
+              <code>{wp.resumeUrl}</code> to resume.
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------- placeholders */

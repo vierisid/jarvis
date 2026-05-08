@@ -178,6 +178,53 @@ describe("EngineFlowExecutor", () => {
     expect(result.stepsCount).toBe(0);
   });
 
+  test("RESUME: passes resumePayload + unwrapped executionState.steps to engine", async () => {
+    const { runId, ctx } = setupRun();
+    // Seed prior step output in the wrapped envelope shape that
+    // worker-handler accumulates into `flow_run.steps`.
+    updateRun(runId, {
+      status: "PAUSED",
+      steps: {
+        step_a: { output: { type: "PIECE", status: "SUCCEEDED", input: {}, output: { x: 1 } } },
+        step_b: { output: { type: "PIECE", status: "PAUSED", input: {}, output: {} } },
+      },
+    });
+    ctx.run = getFlowRun(runId)!;
+    (ctx.job as unknown as { payload: { runId: string; executionType?: string; resumePayload?: Record<string, unknown> } }).payload = {
+      runId,
+      executionType: "RESUME",
+      resumePayload: { wokeWith: "external-signal" },
+    };
+
+    let capturedFlowOpts: Record<string, unknown> | null = null;
+    const handle = {
+      async executeFlow(opts: Record<string, unknown>) {
+        capturedFlowOpts = opts;
+        // Land terminal status so the executor returns cleanly.
+        updateRun(runId, { status: "SUCCEEDED" });
+      },
+      async release() {},
+    };
+    const fakeRuntime = {
+      acquire: async () => handle,
+    } as unknown as import("./engine-runtime").EngineRuntime;
+    const exec = new EngineFlowExecutor(fakeRuntime, {
+      terminalTimeoutMs: 1_000,
+      terminalPollIntervalMs: 10,
+    });
+    await exec.execute(ctx);
+
+    expect(capturedFlowOpts).not.toBeNull();
+    const opts = capturedFlowOpts as unknown as Record<string, unknown>;
+    expect(opts["executionType"]).toBe("RESUME");
+    expect(opts["resumePayload"]).toEqual({ wokeWith: "external-signal" });
+    // The executionState.steps should be UNWRAPPED -- engine expects raw
+    // StepOutput, not our `{ output: <...> }` envelope.
+    const state = opts["executionState"] as { steps: Record<string, unknown> };
+    expect(state.steps["step_a"]).toEqual({ type: "PIECE", status: "SUCCEEDED", input: {}, output: { x: 1 } });
+    expect(state.steps["step_b"]).toEqual({ type: "PIECE", status: "PAUSED", input: {}, output: {} });
+  });
+
   test("includes failed step but no errorMessage suffix when engine didn't supply one", async () => {
     const { ctx } = setupRun();
     const runtime = scriptedRuntime({

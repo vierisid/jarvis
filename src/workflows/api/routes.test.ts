@@ -499,3 +499,132 @@ describe("workflow API: waitpoint resume", () => {
     expect(body.error).toMatch(/PAUSED/);
   });
 });
+
+describe("workflow API: connections", () => {
+  test("POST rejects OAUTH2 without access_token", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/workflows/connections"]?.POST;
+    const { status, body } = await callJson(
+      post,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "x",
+        displayName: "X",
+        type: "OAUTH2",
+        pieceName: "@activepieces/piece-gmail",
+        value: { refresh_token: "rt" },
+      }),
+    );
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/access_token/);
+  });
+
+  test("POST rejects BASIC_AUTH without username + password", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/workflows/connections"]?.POST;
+    const { status, body } = await callJson(
+      post,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "x",
+        displayName: "X",
+        type: "BASIC_AUTH",
+        pieceName: "@activepieces/piece-foo",
+        value: { username: "alice" },
+      }),
+    );
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/password/);
+  });
+
+  test("POST accepts CUSTOM_AUTH with arbitrary value", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/workflows/connections"]?.POST;
+    const { status } = await callJson(
+      post,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "custom-1",
+        displayName: "Custom",
+        type: "CUSTOM_AUTH",
+        pieceName: "@activepieces/piece-foo",
+        value: { whatever: "fine", nested: { ok: true } },
+      }),
+    );
+    expect(status).toBe(201);
+  });
+
+  test("PATCH rotates value without delete-then-recreate", async () => {
+    const { upsertConnection, getConnection } = await import(
+      "../db/repos/app-connection"
+    );
+    const conn = upsertConnection({
+      externalId: "rotate-me",
+      displayName: "Rotating",
+      type: "OAUTH2",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { access_token: "old", refresh_token: "old-rt" },
+    });
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/connections/:id"]?.PATCH;
+    const { status } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/connections/${conn.id}`,
+        { id: conn.id },
+        { value: { access_token: "new", refresh_token: "new-rt" } },
+      ),
+    );
+    expect(status).toBe(200);
+    const fresh = getConnection(conn.id);
+    expect((fresh?.value as Record<string, string> | undefined)?.["access_token"]).toBe("new");
+  });
+});
+
+describe("workflow API: waitpoints surface", () => {
+  test("GET /api/workflow-runs/:runId/waitpoints lists active waitpoints with resume URLs", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import(
+      "../db/repos/flow-version"
+    );
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const { DEFAULT_IDS } = await import("../db/schema");
+
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "wp-surface",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    const run = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: v.id,
+      environment: "TESTING",
+    });
+    updateRun(run.id, { status: "PAUSED" });
+    const wp = createWaitpoint({
+      flowRunId: run.id,
+      projectId: DEFAULT_IDS.project,
+      stepName: "step_pause",
+      type: "WEBHOOK",
+    });
+
+    const r = createWorkflowRoutes();
+    const get = r["/api/workflow-runs/:runId/waitpoints"]?.GET;
+    const { status, body } = await callJson(
+      get,
+      reqWithParams(
+        "GET",
+        `http://x/api/workflow-runs/${run.id}/waitpoints`,
+        { runId: run.id },
+      ),
+    );
+    expect(status).toBe(200);
+    expect(body.runId).toBe(run.id);
+    expect(body.waitpoints).toHaveLength(1);
+    expect(body.waitpoints[0].id).toBe(wp.id);
+    expect(body.waitpoints[0].stepName).toBe("step_pause");
+    expect(body.waitpoints[0].resumeUrl).toBe(`/api/webhooks/waitpoints/${wp.id}`);
+  });
+});

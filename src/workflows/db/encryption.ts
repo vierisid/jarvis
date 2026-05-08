@@ -101,25 +101,45 @@ export function encryptJson(value: unknown): string {
 /**
  * Decrypts an `enc1:`-prefixed blob, or pass-through for legacy plain JSON.
  * Throws on malformed encrypted blobs (corruption / wrong key).
+ *
+ * `context` is woven into thrown error messages so production debugging
+ * (which connection / file is corrupt?) doesn't have to guess. Callers
+ * supply the relevant identifier; defaults to a generic "stored value".
  */
-export function decryptJson(stored: string): unknown {
+export function decryptJson(stored: string, context = "stored value"): unknown {
   if (!stored.startsWith(PREFIX)) {
-    // Legacy plaintext row (or a fresh in-memory test value). Parse as JSON
-    // directly. If it's not valid JSON, the caller should treat it as opaque
-    // and we let JSON.parse throw.
-    return JSON.parse(stored);
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      throw new Error(
+        `${context}: legacy plaintext is not valid JSON: ${(e as Error).message}`,
+      );
+    }
   }
   const buf = Buffer.from(stored.slice(PREFIX.length), "base64");
   if (buf.length < IV_BYTES + 16) {
-    throw new Error("encrypted blob is shorter than iv+authTag");
+    throw new Error(`${context}: encrypted blob is shorter than iv+authTag`);
   }
   const iv = buf.subarray(0, IV_BYTES);
   const authTag = buf.subarray(IV_BYTES, IV_BYTES + 16);
   const ciphertext = buf.subarray(IV_BYTES + 16);
   const decipher = createDecipheriv(ALGO, getKey(), iv) as DecipherGCM;
   decipher.setAuthTag(authTag);
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return JSON.parse(plaintext.toString("utf8"));
+  let plaintext: Buffer;
+  try {
+    plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch (e) {
+    throw new Error(
+      `${context}: decryption failed (likely wrong key or tampered ciphertext): ${(e as Error).message}`,
+    );
+  }
+  try {
+    return JSON.parse(plaintext.toString("utf8"));
+  } catch (e) {
+    throw new Error(
+      `${context}: decrypted blob is not valid JSON: ${(e as Error).message}`,
+    );
+  }
 }
 
 /** Predicate exposed for tests + migration scripts. */

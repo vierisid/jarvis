@@ -124,6 +124,31 @@ export function getWaitpoint(id: string): Waitpoint | null {
   return row ? rowToWaitpoint(row) : null;
 }
 
+/**
+ * Return all waitpoints for a flow run, newest first. The dashboard's
+ * paused-run callout reads from this so it can surface the actual resume
+ * URL(s) to the user instead of pointing them to the steps JSON. `resumed`
+ * flag controls filtering: `false` = only active (resumed_at IS NULL),
+ * `true` = only resumed, `undefined` = both.
+ */
+export function listWaitpointsByFlowRun(
+  flowRunId: string,
+  resumed?: boolean,
+): Waitpoint[] {
+  const filter =
+    resumed === undefined
+      ? ""
+      : resumed
+        ? " AND resumed_at IS NOT NULL"
+        : " AND resumed_at IS NULL";
+  return db()
+    .prepare<WaitpointRow, [string]>(
+      `SELECT * FROM waitpoint WHERE flow_run_id = ?${filter} ORDER BY created DESC`,
+    )
+    .all(flowRunId)
+    .map(rowToWaitpoint);
+}
+
 export function markWaitpointResumed(id: string, now = Date.now()): boolean {
   const r = db()
     .prepare(`UPDATE waitpoint SET resumed_at = ? WHERE id = ? AND resumed_at IS NULL`)

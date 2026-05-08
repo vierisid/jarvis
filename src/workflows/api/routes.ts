@@ -49,6 +49,7 @@ import {
 import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
 import {
   getWaitpoint,
+  listWaitpointsByFlowRun,
   markWaitpointResumed,
 } from "../db/repos/waitpoint";
 import {
@@ -235,6 +236,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) {
             return err("value must be an object");
           }
+          // Soft schema check per type. Catches the common mistake of saving
+          // an OAUTH2 connection with no `access_token` (the piece would
+          // later fail with a confusing "auth missing" at run time).
+          const schemaError = validateConnectionValueShape(body.type, body.value);
+          if (schemaError) return err(schemaError);
           const conn = upsertConnection({
             externalId: body.externalId,
             displayName: body.displayName,
@@ -266,6 +272,52 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!existing) return err("connection not found", 404);
           deleteConnection(id);
           return ok({ id, deleted: true });
+        }),
+      // Update an existing connection in place. Used to rotate OAuth tokens
+      // / API keys without the delete-then-recreate gap (during which any
+      // in-flight run resolving the externalId would 404). Body accepts a
+      // partial: `displayName`, `value` (full replacement), `status`. The
+      // encrypted-at-rest layer wraps the updated `value` automatically.
+      PATCH: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const existing = getConnection(id);
+          if (!existing) return err("connection not found", 404);
+          const body = (await req.json().catch(() => ({}))) as {
+            displayName?: string;
+            value?: Record<string, unknown>;
+            status?: "ACTIVE" | "MISSING" | "ERROR";
+          };
+          if (
+            body.value !== undefined &&
+            (body.value === null || typeof body.value !== "object" || Array.isArray(body.value))
+          ) {
+            return err("value must be an object if provided");
+          }
+          if (
+            body.displayName !== undefined &&
+            (typeof body.displayName !== "string" || body.displayName.length === 0)
+          ) {
+            return err("displayName must be a non-empty string if provided");
+          }
+          const merged = upsertConnection({
+            externalId: existing.externalId,
+            displayName: body.displayName ?? existing.displayName,
+            type: existing.type,
+            pieceName: existing.pieceName,
+            pieceVersion: existing.pieceVersion,
+            value: body.value ?? existing.value,
+            ...(body.status ? { status: body.status } : {}),
+          });
+          return ok({
+            id: merged.id,
+            externalId: merged.externalId,
+            displayName: merged.displayName,
+            type: merged.type,
+            pieceName: merged.pieceName,
+            status: merged.status,
+            updated: merged.updated,
+          });
         }),
     },
 
@@ -584,6 +636,27 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           return ok({ ok: true, jobCanceled: !!job });
         }),
     },
+
+    // Active waitpoints for a flow run. Used by the dashboard's paused-run
+    // callout so it can surface real resume URLs ("POST to
+    // /api/webhooks/waitpoints/<id>") instead of pointing at the steps JSON.
+    "/api/workflow-runs/:runId/waitpoints": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+          const run = getFlowRun(runId);
+          if (!run) return err("run not found", 404);
+          const waitpoints = listWaitpointsByFlowRun(runId, /* resumed */ false).map((wp) => ({
+            id: wp.id,
+            stepName: wp.stepName,
+            type: wp.type,
+            resumeDateTime: wp.resumeDateTime,
+            created: wp.created,
+            resumeUrl: `/api/webhooks/waitpoints/${wp.id}`,
+          }));
+          return ok({ runId, waitpoints });
+        }),
+    },
   };
 }
 
@@ -609,4 +682,43 @@ function numParam(raw: string | null): number | null {
   if (raw === null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Soft validation: connection `value` must contain the fields a piece will
+ * read for the given `type`. Returns an error message string on mismatch,
+ * or null if the shape looks plausible. Catches user mistakes at the API
+ * boundary instead of at flow-run time.
+ *
+ * `CUSTOM_AUTH` is intentionally permissive (per-piece schema; the engine
+ * validates against the piece's auth.props at run time).
+ */
+function validateConnectionValueShape(
+  type: AppConnectionType,
+  value: Record<string, unknown>,
+): string | null {
+  const has = (key: string): boolean =>
+    typeof value[key] === "string" && (value[key] as string).length > 0;
+  switch (type) {
+    case "OAUTH2":
+    case "PLATFORM_OAUTH2":
+    case "CLOUD_OAUTH2":
+      if (!has("access_token")) return `${type}: value.access_token is required`;
+      return null;
+    case "BASIC_AUTH":
+      if (!has("username") || !has("password"))
+        return "BASIC_AUTH: value.username + value.password are required";
+      return null;
+    case "SECRET_TEXT":
+      // Engine reads either `secret` or `value` depending on the piece;
+      // accept both. Reject obvious empties.
+      if (!has("secret") && !has("value"))
+        return "SECRET_TEXT: value.secret (or value.value) is required";
+      return null;
+    case "CUSTOM_AUTH":
+    case "NO_AUTH":
+      return null;
+    default:
+      return null;
+  }
 }

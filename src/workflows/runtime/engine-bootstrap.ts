@@ -86,18 +86,30 @@ export async function bootstrapWorkflowEngine(
   // On warm starts (cached bundle, dist/ exists) the long pole is the
   // SandboxApi's socket.io spinup; on cold starts it's the bundle build
   // (~700ms). Either way overlapping shaves the slowest path.
+  //
+  // Each arm's failure is labelled with which phase blew up so the operator
+  // doesn't have to guess. Promise.all rejects on the first failure; we
+  // wrap so the rejection identifies the responsible phase.
   const api = new SandboxApi({ services: opts.services });
+  const labelled = <T>(phase: string, p: Promise<T>): Promise<T> =>
+    p.catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`workflow-engine bootstrap phase '${phase}' failed: ${msg}`);
+    });
   const [cached] = await Promise.all([
-    (async () => {
-      let c = findCachedBundle();
-      if (!c) {
-        log("engine bundle not in cache; building (one-time cost ~700ms)");
-        c = await buildEngineBundle();
-      }
-      return c;
-    })(),
-    buildAllJarvisPieces(),
-    api.start({ host: opts.host ?? "127.0.0.1", port: 0 }),
+    labelled(
+      "bundle-build",
+      (async () => {
+        let c = findCachedBundle();
+        if (!c) {
+          log("engine bundle not in cache; building (one-time cost ~700ms)");
+          c = await buildEngineBundle();
+        }
+        return c;
+      })(),
+    ),
+    labelled("piece-compile", buildAllJarvisPieces()),
+    labelled("sandbox-api-start", api.start({ host: opts.host ?? "127.0.0.1", port: 0 })),
   ]);
   log(`bundle + pieces + sandbox api ready in ${Date.now() - t0}ms (${api.baseUrl})`);
 

@@ -95,7 +95,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     pieceVersion: row.piece_version,
     projectId: row.project_id,
     ownerId: row.owner_id,
-    value: decryptJson(row.value) as Record<string, unknown>,
+    value: decryptJson(row.value, `app_connection ${row.id}`) as Record<string, unknown>,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     preSelectForNewProjects: row.pre_select_for_new_projects !== 0,
     created: row.created,

@@ -410,6 +410,14 @@ export class EngineRuntime {
     // Mint a fresh engineToken bound to the new (runId, projectId) and
     // rebind the registry sandbox; the engine's own SANDBOX_ID env was
     // fixed at spawn time and stays the same across runs.
+    //
+    // Defensive: if the parked engine died while idle (OOM, manual kill,
+    // upstream bug), skip it and fall through to a fresh spawn. The
+    // synchronous `alive()` check avoids racing against `proc.exited`.
+    if (this.poolEnabled && this.idleEngine && !this.idleEngine.proc.alive()) {
+      this.api.registry.terminate(this.idleEngine.sandboxId);
+      this.idleEngine = null;
+    }
     if (this.poolEnabled && this.idleEngine) {
       const warm = this.idleEngine;
       this.idleEngine = null;
@@ -521,17 +529,14 @@ export class EngineRuntime {
 
   /**
    * Pool release strategy: park the engine in the idle slot so the next
-   * `acquire()` can reuse it. If a different engine is already parked
-   * (e.g. concurrent acquire spawned a duplicate), kill this one rather
-   * than overwriting; the slot holds at most one warm engine.
+   * `acquire()` can reuse it. If the proc died mid-run we'd otherwise pool
+   * a corpse and the next acquire would rebind to a dead pid; check the
+   * synchronous `alive()` flag so the decision doesn't race against
+   * `proc.exited`. If a different engine is already parked, kill this one
+   * (slot holds at most one warm engine).
    */
   private async returnToPoolOrKill(engine: WarmEngine): Promise<void> {
-    // If the proc died while running, don't pool a corpse.
-    const exited = await Promise.race([
-      engine.proc.exited.then(() => true),
-      Promise.resolve(false),
-    ]);
-    if (exited) {
+    if (!engine.proc.alive()) {
       this.api.registry.terminate(engine.sandboxId);
       return;
     }

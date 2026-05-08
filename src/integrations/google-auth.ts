@@ -75,6 +75,16 @@ export class GoogleAuth {
   }
 
   /**
+   * Snapshot of the current token set, or `null` if not authenticated.
+   * Returned by value (caller can't mutate the internal cache). Used by
+   * `JarvisGoogleConnectionSource` to surface the full OAuth2-shaped value
+   * (access_token + refresh_token + expiry_date) to pieces.
+   */
+  getTokens(): GoogleTokens | null {
+    return this.tokens ? { ...this.tokens } : null;
+  }
+
+  /**
    * Get a valid access token. Auto-refreshes if expired.
    */
   async getAccessToken(): Promise<string> {

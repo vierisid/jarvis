@@ -278,6 +278,10 @@
   border-radius: 3px;
   font-size: 0.78rem;
 }
+.wf-runs__paused-err { color: var(--accent-1, #f87171); }
+.wf-runs__paused-list { list-style: disc inside; margin: 6px 0 0; padding: 0; }
+.wf-runs__paused-list li { margin: 2px 0; }
+.wf-runs__paused-step { font-weight: 600; color: var(--ink-1); }
 
 .wf-runs__body {
   padding: var(--s-2) var(--s-3) var(--s-3);

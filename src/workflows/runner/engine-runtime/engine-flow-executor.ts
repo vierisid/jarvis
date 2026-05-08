@@ -86,27 +86,37 @@ export class EngineFlowExecutor implements FlowExecutor {
     });
     try {
       // streamStepProgress: WEBSOCKET makes the engine emit per-step
-      // `updateRunProgress({ step })` calls to the daemon. The daemon's
+      // `updateRunProgress({ step })` calls to the daemon -- the
       // worker-handler accumulates each step's output onto `flow_run.steps`
-      // so the dashboard run-history panel + downstream consumers can see
-      // per-step results. `NONE` (the default in operation-builder) means
-      // status-only updates -- adequate for production-only metrics but the
-      // run row's `steps` would stay empty.
+      // so the dashboard run-history panel can see per-step results.
+      // Cost: one socket.io message + one DB update per step. For
+      // `TESTING` runs (manual `/run`, run-from-here previews) that's a
+      // good trade. For `PRODUCTION` runs (cron/webhook/event-fired,
+      // potentially every 10s for sub-minute polling triggers) we default
+      // to `NONE` -- only the final `uploadRunLog` writes the run state,
+      // which is enough for the dashboard summary view.
+      const env: "PRODUCTION" | "TESTING" =
+        ctx.run.environment === "TESTING" ? "TESTING" : "PRODUCTION";
       const flowOpts: Parameters<typeof handle.executeFlow>[0] = {
         flowVersion: ctx.version,
-        streamStepProgress: "WEBSOCKET",
+        runEnvironment: env,
+        streamStepProgress: env === "TESTING" ? "WEBSOCKET" : "NONE",
       };
       const executionType = ctx.job.payload.executionType ?? "BEGIN";
       if (executionType === "RESUME") {
-        // Resume a paused run: the engine picks up at the waitpointed step,
+        // Resume a paused run: engine picks up at the waitpointed step,
         // delivers `resumePayload` to it, and resumes walking the chain.
-        // The prior execution state is restored from the run's persisted
-        // steps record (the dashboard's run-history view of what already
-        // happened).
+        //
+        // Reconstruct executionState.steps from the run's persisted steps.
+        // The worker-handler wraps each engine StepOutput as
+        // `{ output: <StepOutput> }` when accumulating; upstream's
+        // `executionState.steps` expects the raw `Record<name, StepOutput>`,
+        // so unwrap here. Caveat: only step outputs round-trip --
+        // LOOP/ROUTER iteration + branch state lives in the engine's zstd
+        // logs file (followup).
         flowOpts.executionType = "RESUME";
         flowOpts.resumePayload = ctx.job.payload.resumePayload ?? {};
-        const priorSteps = (ctx.run.steps ?? {}) as Record<string, unknown>;
-        flowOpts.executionState = { steps: priorSteps };
+        flowOpts.executionState = { steps: unwrapStepEnvelopes(ctx.run.steps) };
       } else {
         flowOpts.triggerPayload = ctx.payload;
         flowOpts.executeTrigger = ctx.job.payload.executeTrigger ?? false;
@@ -175,4 +185,34 @@ export class EngineFlowExecutor implements FlowExecutor {
       {},
     );
   }
+}
+
+/**
+ * Strip the `{ output: <StepOutput> }` wrapper that the worker-handler adds
+ * when accumulating step output (per K2 + Phase L), so the resulting shape
+ * matches upstream's `executionState.steps` (`Record<stepName, StepOutput>`).
+ * Tolerates already-unwrapped entries (defensive: schema changes / manual
+ * DB edits) by returning them as-is.
+ */
+function unwrapStepEnvelopes(
+  steps: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!steps) return {};
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(steps)) {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "output" in (value as Record<string, unknown>) &&
+      typeof (value as { type?: unknown }).type !== "string"
+    ) {
+      // Wrapped: pull the inner StepOutput.
+      out[name] = (value as { output: unknown }).output;
+    } else {
+      // Already a StepOutput (has `type` field) or some other shape.
+      out[name] = value;
+    }
+  }
+  return out;
 }
