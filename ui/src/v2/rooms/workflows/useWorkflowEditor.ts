@@ -84,6 +84,7 @@ export type PieceInputType =
   | "boolean"
   | "enum"
   | "multi_enum"
+  | "datetime"
   | "json";
 
 export interface PieceInputField {

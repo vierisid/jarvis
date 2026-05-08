@@ -301,6 +301,7 @@ export type PieceInputType =
   | "boolean"     // toggle / checkbox
   | "enum"        // single-select dropdown
   | "multi_enum"  // multi-select chip list
+  | "datetime"    // ISO-8601 date / datetime picker
   | "json";       // raw JSON textarea
 
 export interface PieceInputField {

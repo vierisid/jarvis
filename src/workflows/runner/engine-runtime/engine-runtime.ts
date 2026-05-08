@@ -172,10 +172,15 @@ export class EngineHandle {
   }
 
   /**
-   * Send EXTRACT_PIECE_METADATA for a single piece and return the full
-   * upstream `PieceMetadata` payload. Multiple pieces can be extracted on the
-   * same handle in sequence (the engine subprocess handles operations one at
-   * a time over the same socket).
+   * Send EXTRACT_PIECE_METADATA for a single piece and return the upstream
+   * piece metadata. Multiple pieces can be extracted on the same handle in
+   * sequence (the engine subprocess handles operations one at a time over
+   * the same socket).
+   *
+   * Return type is the loose `RawPieceMetadata` shape (`{ name, displayName,
+   * description, actions, triggers }` with `props` per action/trigger).
+   * Callers that need stricter validation parse further; the catalog layer
+   * is the only consumer today.
    *
    * Throws if the engine reports a non-OK status (treats USER_FAILURE /
    * INTERNAL_ERROR / TIMEOUT as fatal -- callers should surface to the user).
@@ -184,7 +189,7 @@ export class EngineHandle {
     pieceName: string;
     pieceVersion: string;
     timeoutInSeconds?: number;
-  }): Promise<unknown> {
+  }): Promise<import("../../runtime/piece-catalog").RawPieceMetadata> {
     const baseOpts: Parameters<typeof buildExtractPieceMetadataOperation>[0] = {
       pieceName: opts.pieceName,
       pieceVersion: opts.pieceVersion,
@@ -203,7 +208,7 @@ export class EngineHandle {
         `extractPieceMetadata(${opts.pieceName}@${opts.pieceVersion}) -> ${reply.status}`,
       );
     }
-    return reply.response;
+    return reply.response as import("../../runtime/piece-catalog").RawPieceMetadata;
   }
 
   /**

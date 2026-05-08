@@ -809,6 +809,20 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
     );
   }
 
+  if (field.type === "datetime") {
+    return (
+      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+        {labelEl}
+        <input
+          type="datetime-local"
+          value={normalizeDatetimeLocalValue(value)}
+          onChange={(e) => onChange(e.target.value ? new Date(e.target.value).toISOString() : "")}
+        />
+        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      </label>
+    );
+  }
+
   // default: string
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
@@ -821,6 +835,23 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
       />
       {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
     </label>
+  );
+}
+
+/**
+ * Convert a stored datetime value (ISO-8601 or empty) to the
+ * `datetime-local`-compatible "YYYY-MM-DDTHH:mm" form. Tolerates whatever
+ * the field happened to receive (legacy strings, undefined) without throwing.
+ */
+function normalizeDatetimeLocalValue(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  // Strip the timezone + seconds suffix to fit datetime-local's expected shape.
+  const pad = (n: number): string => n.toString().padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
   );
 }
 
