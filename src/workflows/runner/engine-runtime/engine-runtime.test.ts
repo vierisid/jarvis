@@ -180,15 +180,22 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
       });
       try {
         // The engine completes the operation even when the flow itself fails
-        // validation; the run row reflects the failure.
+        // validation; the run row reflects the engine's bookkeeping.
+        //
+        // The terminal status this test sees depends on a race between
+        // `executeOperation`'s reply and the engine's `uploadRunLog` call
+        // (a separate socket.io message from engine -> daemon). All four of
+        // these prove the engine processed the operation; the strong signal
+        // is `liveCount() === 1` below. We accept any non-success state:
+        //   - FAILED         : uploadRunLog landed with a terminal failure status
+        //   - INTERNAL_ERROR : engine surfaced an internal error
+        //   - QUEUED         : engine returned before uploadRunLog reached us
+        //   - RUNNING        : engine transitioned to running but didn't reach
+        //                      a terminal status before executeOperation replied
+        //                      (observed under `bun test --bail` parallelism)
         await handle.executeFlow({ flowVersion: versionFromDb! });
         const persisted = getFlowRun(run.id);
-        // The engine reports the failure either via an explicit FAILED status
-        // (if it caught the validation error inside the run) or the run stays
-        // at QUEUED if uploadRunLog never reached a terminal state. Both
-        // outcomes prove the operation reached the engine and was processed;
-        // accept either.
-        expect(["FAILED", "QUEUED", "INTERNAL_ERROR"]).toContain(persisted!.status);
+        expect(["FAILED", "INTERNAL_ERROR", "QUEUED", "RUNNING"]).toContain(persisted!.status);
         // The engine connected successfully and we exchanged at least one
         // operation; that's what this test is asserting.
         expect(api.registry.liveCount()).toBe(1);

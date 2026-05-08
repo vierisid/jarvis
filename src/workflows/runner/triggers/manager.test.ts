@@ -529,6 +529,204 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     expect(v.engineSchedule?.cronExpression).toBe("0 * * * *");
   });
 
+  test("ON_ENABLE returning webhook listeners (no schedule) surfaces a warning on tm.list()", async () => {
+    const { flowId, versionId } = publishFlowWithTrigger("engine-webhook", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "vendored-webhook",
+        triggerName: "on_message",
+        input: { app: "gmail" },
+      },
+    });
+
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          return {
+            listeners: [{ events: ["new_message"], identifierValue: "watch-id-123" }],
+            // No scheduleOptions -- webhook-strategy trigger.
+          };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+
+    const logs: string[] = [];
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: (line) => logs.push(line),
+    });
+    await tm.start();
+
+    const list = tm.list() as Array<{ flowId: string; kind: string; warning?: string }>;
+    expect(list.length).toBe(1);
+    expect(list[0]?.flowId).toBe(flowId);
+    expect(list[0]?.kind).toBe("engine");
+    expect(list[0]?.warning).toBeDefined();
+    expect(list[0]?.warning).toContain("webhook listeners");
+    expect(list[0]?.warning).toContain("Phase K");
+    // No cron registered for webhook-only triggers.
+    expect(fakeCron.has(`flow:${flowId}`)).toBe(false);
+    // Listeners persisted on the version.
+    const persisted = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
+    expect(persisted.engineListeners?.length).toBe(1);
+    expect(persisted.engineListeners?.[0]?.identifierValue).toBe("watch-id-123");
+    expect(persisted.engineSchedule).toBeNull();
+    // Warning also written to the log stream.
+    expect(logs.some((l) => l.includes("WARNING") && l.includes("webhook listeners"))).toBe(true);
+
+    await tm.stop();
+  });
+
+  test("concurrent refresh on the same flow serializes -- engine ON_ENABLE called exactly once", async () => {
+    const { flowId } = publishFlowWithTrigger("engine-concurrent", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+
+    let enableCalls = 0;
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          enableCalls++;
+          // Tiny delay to widen the race window.
+          await new Promise((r) => setTimeout(r, 25));
+          return { listeners: [], scheduleOptions: { cronExpression: "*/3 * * * *" } };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+
+    // Fire three refreshes back-to-back; the second + third should observe
+    // persisted state and skip the engine round-trip.
+    await Promise.all([tm.refresh(flowId), tm.refresh(flowId), tm.refresh(flowId)]);
+    expect(enableCalls).toBe(1);
+    expect(tm.list()).toEqual([{ flowId, kind: "engine" }]);
+  });
+
+  test("triggeredBy follows `trigger:<kind>` for both legacy and engine fires", async () => {
+    // Engine trigger -> `trigger:engine`.
+    const { flowId: engineFlowId, versionId: engineVersionId } = publishFlowWithTrigger("triggeredby-engine", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          return { listeners: [], scheduleOptions: { cronExpression: "*/5 * * * *" } };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+    await tm.start();
+    fakeCron.fire(`flow:${engineFlowId}`);
+
+    // Legacy schedule trigger -> `trigger:cron`.
+    const { flowId: cronFlowId } = publishFlowWithTrigger("triggeredby-cron", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", input: { cron_expression: "0 9 * * *" } },
+    });
+    await tm.refresh(cronFlowId);
+    fakeCron.fire(`flow:${cronFlowId}`);
+
+    const runs = (await import("../../db/repos/flow-run")).listRuns({ limit: 50 });
+    const engineRun = runs.find((r) => r.flowId === engineFlowId);
+    const cronRun = runs.find((r) => r.flowId === cronFlowId);
+    expect(engineRun?.triggeredBy).toBe("trigger:engine");
+    expect(cronRun?.triggeredBy).toBe("trigger:cron");
+    // Engine run carries executeTrigger=true on its job payload; legacy doesn't.
+    void engineVersionId;
+  });
+
+  test("RUN_FLOW payload's executeTrigger flag round-trips through the queue", async () => {
+    const { flowId } = publishFlowWithTrigger("executetrigger-roundtrip", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          return { listeners: [], scheduleOptions: { cronExpression: "*/7 * * * *" } };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+    const tm = new TriggerManager({
+      workflowRunner: new JarvisWorkflowRunnerAdapter(),
+      eventBus: new JarvisEventBusAdapter(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+    await tm.start();
+    fakeCron.fire(`flow:${flowId}`);
+
+    const { claimNextJob } = await import("../../db/repos/job-queue");
+    const job = claimNextJob<{
+      runId: string;
+      payload?: Record<string, unknown>;
+      executeTrigger?: boolean;
+    }>();
+    expect(job).not.toBeNull();
+    expect(job!.payload.executeTrigger).toBe(true);
+    expect(job!.flowId).toBe(flowId);
+  });
+
   test("engine ON_ENABLE failure is logged; flow stays manually runnable, no crash", async () => {
     publishFlowWithTrigger("engine-fail", {
       name: "trigger",

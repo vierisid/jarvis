@@ -68,6 +68,13 @@ type ActiveSub = {
   flowId: string;
   versionId: string;
   kind: SubscriptionKind;
+  /**
+   * Optional human-readable warning surfaced by `list()`. Set when the
+   * subscription is partially active -- e.g. an engine trigger that returned
+   * webhook listeners but no cron schedule (listener routing is not wired
+   * until Phase K, so the flow is enabled-but-non-firing).
+   */
+  warning?: string;
   teardown: () => Promise<void> | void;
 };
 
@@ -96,6 +103,14 @@ export class TriggerManager {
   private readonly engineRuntime: EngineRuntime | undefined;
   private readonly log: (line: string) => void;
   private readonly subs: Map<string, ActiveSub> = new Map();
+  /**
+   * Per-flow serialization queue. Two concurrent `refresh(sameFlow)` calls
+   * (e.g., racing API requests) would otherwise both spawn engines, both
+   * call ON_ENABLE, both write `setEngineTriggerState`, and end up with
+   * duplicate cron jobs. Each flow's operations chain off the prior one's
+   * settlement so register/unregister/refresh are observed in order.
+   */
+  private readonly inFlight: Map<string, Promise<void>> = new Map();
 
   constructor(deps: TriggerManagerDeps) {
     this.runner = deps.workflowRunner;
@@ -141,13 +156,62 @@ export class TriggerManager {
   /**
    * Re-read the flow and reconcile its subscription. Called by the API after
    * status changes, version publish, or delete.
+   *
+   * Serialized per `flowId` -- if a refresh is already mid-flight for the
+   * same flow, this call queues behind it. Cross-flow refreshes still run
+   * concurrently.
    */
   async refresh(flowId: string): Promise<void> {
-    await this.unregister(flowId);
-    const flow = getFlow(flowId);
-    if (!flow) return;
-    if (flow.status !== "ENABLED") return;
-    await this.register(flow);
+    return this.withFlowLock(flowId, async () => {
+      const flow = getFlow(flowId);
+      const existing = this.subs.get(flowId);
+
+      // Flow gone or disabled -> tear down whatever's active.
+      if (!flow || flow.status !== "ENABLED") {
+        await this.unregister(flowId);
+        return;
+      }
+
+      const desiredVersionId =
+        flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+
+      // Already registered against the right version -> no-op. This is what
+      // makes concurrent refreshes idempotent: the first one through the lock
+      // does the work; subsequent calls observe the active sub and skip.
+      if (existing && existing.versionId === desiredVersionId) return;
+
+      // Either no sub yet, or a stale sub for a previous version. Tear down
+      // the old one (clears engine state + ON_DISABLE) before registering
+      // against the current version.
+      if (existing) await this.unregister(flowId);
+      await this.register(flow);
+    });
+  }
+
+  /**
+   * Run `fn` exclusively for the given flow id. Concurrent calls for the
+   * same flow chain. Cross-flow calls run in parallel. The map entry is
+   * cleared once the chain settles back to empty.
+   */
+  private async withFlowLock<T>(flowId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.inFlight.get(flowId) ?? Promise.resolve();
+    const next = prior.then(fn, fn);
+    // Track only the side-effect chain so the next caller waits regardless of
+    // whether the previous one resolved or rejected.
+    const tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlight.set(flowId, tail);
+    try {
+      return await next;
+    } finally {
+      // If our tail is still the head of the queue (no one piled on after
+      // us), drop the map entry so it doesn't leak.
+      if (this.inFlight.get(flowId) === tail) {
+        this.inFlight.delete(flowId);
+      }
+    }
   }
 
   // ---------------------------------------------------------------- private
@@ -287,7 +351,7 @@ export class TriggerManager {
       try {
         const handle = await engine.acquire({
           runId: `enable-${flow.id}-${Date.now().toString(36)}`,
-          projectId: flow.project_id ?? DEFAULT_IDS.project,
+          projectId: flow.project_id,
         });
         try {
           const upstreamVersion = toUpstreamFlowVersion(version);
@@ -308,7 +372,7 @@ export class TriggerManager {
         }
       } catch (e) {
         this.log(
-          `flow ${flow.id}: engine ON_ENABLE failed: ${(e as Error).message}; skipping`,
+          `flow ${flow.id}: engine ON_ENABLE failed: ${(e as Error).message} -- skipping registration this cycle; next refresh will retry`,
         );
         return;
       }
@@ -322,6 +386,7 @@ export class TriggerManager {
     }
 
     let cronTearDown: (() => void) | null = null;
+    let warning: string | undefined;
     if (schedule?.cronExpression) {
       try {
         this.cron.schedule(`flow:${flow.id}`, schedule.cronExpression, () => {
@@ -336,19 +401,24 @@ export class TriggerManager {
     }
     if (listeners && listeners.length > 0) {
       // Webhook routing for engine-managed triggers lands in Phase K alongside
-      // the daemon-side WebhookManager wiring. For now we persisted the
-      // listeners; the daemon will read them out and register routes there.
-      this.log(
-        `flow ${flow.id}: engine returned ${listeners.length} webhook listener(s); routing deferred to K`,
-      );
+      // the daemon-side WebhookManager wiring. The listeners are persisted on
+      // flow_version so K can read them out and register routes; until then
+      // we surface a `warning` on the active subscription so the API +
+      // dashboard can flag the flow as "enabled but not firing for webhook
+      // events". Visible to consumers via `tm.list()`.
+      const msg = `webhook listeners (${listeners.length}) registered upstream but route wiring is deferred to Phase K; flow will not fire on webhook events yet`;
+      warning = warning ? `${warning}; ${msg}` : msg;
+      this.log(`flow ${flow.id}: WARNING: ${msg}`);
     }
 
-    this.subs.set(flow.id, {
+    const sub: ActiveSub = {
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown),
-    });
+    };
+    if (warning) sub.warning = warning;
+    this.subs.set(flow.id, sub);
   }
 
   private async teardownEngineTrigger(
@@ -357,6 +427,17 @@ export class TriggerManager {
     cronTearDown: (() => void) | null,
   ): Promise<void> {
     if (cronTearDown) cronTearDown();
+    // Clear our persisted state FIRST so the DB is consistent even if the
+    // engine call below fails mid-flight (engine half-crashes, network blip).
+    // Trade-off: an external resource the trigger registered (e.g. a Gmail
+    // watch) may leak engine-side, but our local state is always trustworthy
+    // -- the next ENABLE will re-issue ON_ENABLE because no persisted state
+    // is present, which gives the trigger a chance to recreate / dedupe the
+    // external resource.
+    setEngineTriggerState(versionId, {
+      engineListeners: null,
+      engineSchedule: null,
+    });
     if (!this.engineRuntime) return;
     const flow = getFlow(flowId);
     const version = getFlowVersion(versionId);
@@ -371,10 +452,6 @@ export class TriggerManager {
         await handle.executeTriggerHook("ON_DISABLE", {
           flowVersion: upstreamVersion,
         });
-        setEngineTriggerState(versionId, {
-          engineListeners: null,
-          engineSchedule: null,
-        });
       } finally {
         await handle.release();
       }
@@ -384,42 +461,91 @@ export class TriggerManager {
   }
 
   /**
-   * Enqueue a RUN_FLOW for an engine-managed trigger. The engine's executor
-   * will invoke the trigger's `run()` (because `executeTrigger=true`) to
-   * produce one or more real payloads, then walk the action chain per
-   * payload.
+   * Enqueue a RUN_FLOW. Used by every trigger fire path so `triggeredBy`
+   * follows one convention -- `trigger:<kind>` -- across cron, webhook,
+   * direct event-bus subscribe, and engine-managed sources.
+   */
+  private enqueueFlowRun(opts: {
+    flowId: string;
+    versionId: string;
+    kind: SubscriptionKind;
+    payload?: Record<string, unknown>;
+    executeTrigger?: boolean;
+  }): void {
+    const run = createFlowRun({
+      flowId: opts.flowId,
+      flowVersionId: opts.versionId,
+      triggeredBy: `trigger:${opts.kind}`,
+      startTime: Date.now(),
+    });
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: {
+        runId: run.id,
+        payload: opts.payload ?? {},
+        ...(opts.executeTrigger ? { executeTrigger: true } : {}),
+      },
+      flowRunId: run.id,
+      flowId: opts.flowId,
+      flowVersionId: opts.versionId,
+    });
+  }
+
+  /**
+   * Engine-managed trigger fire: cron callback enqueues RUN_FLOW with
+   * `executeTrigger=true`. The engine's executor invokes the trigger's
+   * `run()` to produce one or more real payloads, then walks the action
+   * chain per payload.
    */
   private fireEngineTrigger(flowId: string, versionId: string, source: string): void {
     try {
-      const run = createFlowRun({
+      this.enqueueFlowRun({
         flowId,
-        flowVersionId: versionId,
-        triggeredBy: `trigger:engine-${source}`,
-        startTime: Date.now(),
-      });
-      enqueue({
-        jobType: RUN_FLOW,
-        payload: { runId: run.id, payload: {}, executeTrigger: true },
-        flowRunId: run.id,
-        flowId,
-        flowVersionId: versionId,
+        versionId,
+        kind: "engine",
+        payload: {},
+        executeTrigger: true,
       });
     } catch (e) {
       this.log(`flow ${flowId} (engine-${source}) fire failed: ${(e as Error).message}`);
     }
   }
 
-  private async fire(flowId: string, payload: Record<string, unknown>, source: string): Promise<void> {
+  /**
+   * Legacy trigger fire (cron / webhook / direct event-bus subscribe). The
+   * payload is forwarded verbatim; the executor walks the action chain
+   * directly with no trigger-side preprocessing.
+   */
+  private fire(flowId: string, payload: Record<string, unknown>, kind: SubscriptionKind): void {
+    const sub = this.subs.get(flowId);
+    const versionId = sub?.versionId;
+    if (!versionId) {
+      this.log(`flow ${flowId} (${kind}) fire skipped: no active subscription`);
+      return;
+    }
     try {
-      await this.runner.start({ flowId, payload });
+      this.enqueueFlowRun({ flowId, versionId, kind, payload });
     } catch (e) {
-      this.log(`flow ${flowId} (${source}) fire failed: ${(e as Error).message}`);
+      this.log(`flow ${flowId} (${kind}) fire failed: ${(e as Error).message}`);
     }
   }
 
-  /** Snapshot of active subscriptions. Useful for tests and an /admin endpoint. */
-  list(): Array<{ flowId: string; kind: SubscriptionKind }> {
-    return Array.from(this.subs.values()).map(({ flowId, kind }) => ({ flowId, kind }));
+  /**
+   * Snapshot of active subscriptions. Each entry includes the registered
+   * flow id, kind, and an optional `warning` set when the subscription is
+   * partially active (e.g. engine returned webhook listeners but the route
+   * wiring hasn't landed yet, so the flow is enabled-but-non-firing). API
+   * + dashboard consumers should surface the warning to the user.
+   */
+  list(): Array<{ flowId: string; kind: SubscriptionKind; warning?: string }> {
+    return Array.from(this.subs.values()).map((s) => {
+      const out: { flowId: string; kind: SubscriptionKind; warning?: string } = {
+        flowId: s.flowId,
+        kind: s.kind,
+      };
+      if (s.warning) out.warning = s.warning;
+      return out;
+    });
   }
 }
 
