@@ -250,4 +250,149 @@ describe("EngineFlowExecutor", () => {
     expect(fe.message).toContain("step_b");
     expect(fe.message).not.toMatch(/: $/);
   });
+
+  test("RESUME prefers the engine's zstd log backup over flow_run.steps", async () => {
+    // Backup file present at `<JARVIS_WORKFLOW_DATA_DIR>/workflow-logs/<runId>.bin`
+    // -> executor must use the recursive steps + tags from the backup, not the
+    // partial accumulator state in `flow_run.steps`.
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join, resolve: pathResolve } = await import("node:path");
+    const { promisify } = await import("node:util");
+    const { zstdCompress: zstdCompressCb } = await import("node:zlib");
+    const zstdCompress = promisify(zstdCompressCb);
+    const root = mkdtempSync(join(tmpdir(), "jarvis-resume-restore-"));
+    const prevEnv = process.env.JARVIS_WORKFLOW_DATA_DIR;
+    process.env.JARVIS_WORKFLOW_DATA_DIR = root;
+    try {
+      const { runId, ctx } = setupRun();
+      // The DB-side `flow_run.steps` only carries the outer (incomplete) shape.
+      // The backup carries the canonical recursive iteration state -- if the
+      // executor falls through to flow_run.steps, the LOOP iteration tracker
+      // is lost.
+      updateRun(runId, {
+        status: "PAUSED",
+        steps: {
+          loop_a: { output: { type: "LOOP_ON_ITEMS", status: "PAUSED", input: {}, output: { iterations: [] } } },
+        },
+      });
+      ctx.run = getFlowRun(runId)!;
+
+      // Engine-format backup: zstd(JSON.stringify({ executionState: { steps, tags }})).
+      const backupPayload = {
+        executionState: {
+          steps: {
+            loop_a: {
+              type: "LOOP_ON_ITEMS",
+              status: "PAUSED",
+              input: {},
+              output: {
+                iterations: [
+                  { inner: { type: "PIECE", status: "SUCCEEDED", input: {}, output: 7 } },
+                  { inner: { type: "PIECE", status: "PAUSED", input: {}, output: {} } },
+                ],
+              },
+            },
+          },
+          tags: ["important-tag"],
+        },
+      };
+      const compressed = (await zstdCompress(Buffer.from(JSON.stringify(backupPayload)))) as Buffer;
+      const logsDir = pathResolve(root, "workflow-logs");
+      mkdirSync(logsDir, { recursive: true });
+      writeFileSync(pathResolve(logsDir, `${runId}.bin`), compressed);
+
+      (ctx.job as unknown as { payload: { runId: string; executionType?: string; resumePayload?: Record<string, unknown> } }).payload = {
+        runId,
+        executionType: "RESUME",
+        resumePayload: { event: "external" },
+      };
+
+      let captured: Record<string, unknown> | null = null;
+      const handle = {
+        async executeFlow(opts: Record<string, unknown>) {
+          captured = opts;
+          updateRun(runId, { status: "SUCCEEDED" });
+        },
+        async release() {},
+      };
+      const fakeRuntime = {
+        acquire: async () => handle,
+      } as unknown as import("./engine-runtime").EngineRuntime;
+      const exec = new EngineFlowExecutor(fakeRuntime, {
+        terminalTimeoutMs: 1_000,
+        terminalPollIntervalMs: 10,
+      });
+      await exec.execute(ctx);
+
+      expect(captured).not.toBeNull();
+      const opts = captured as unknown as Record<string, unknown>;
+      const state = opts["executionState"] as { steps: Record<string, unknown>; tags: string[] };
+      expect(state.tags).toEqual(["important-tag"]);
+      const loop = state.steps["loop_a"] as {
+        output: { iterations: Array<Record<string, { status: string; output: unknown }>> };
+      };
+      // Iteration state from the backup, not the empty array in flow_run.steps.
+      expect(loop.output.iterations).toHaveLength(2);
+      expect(loop.output.iterations[0]!.inner!.output).toBe(7);
+      expect(loop.output.iterations[1]!.inner!.status).toBe("PAUSED");
+    } finally {
+      if (prevEnv === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+      else process.env.JARVIS_WORKFLOW_DATA_DIR = prevEnv;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("RESUME falls back to flow_run.steps when no backup file exists", async () => {
+    // Point the loader at an empty temp dir so `loadExecutionStateFromLog`
+    // returns null. The executor must then unwrap `flow_run.steps`.
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "jarvis-resume-fallback-"));
+    const prevEnv = process.env.JARVIS_WORKFLOW_DATA_DIR;
+    process.env.JARVIS_WORKFLOW_DATA_DIR = root;
+    try {
+      const { runId, ctx } = setupRun();
+      updateRun(runId, {
+        status: "PAUSED",
+        steps: {
+          step_a: { output: { type: "PIECE", status: "SUCCEEDED", input: {}, output: { x: 1 } } },
+        },
+      });
+      ctx.run = getFlowRun(runId)!;
+      (ctx.job as unknown as { payload: { runId: string; executionType?: string; resumePayload?: Record<string, unknown> } }).payload = {
+        runId,
+        executionType: "RESUME",
+        resumePayload: {},
+      };
+
+      let captured: Record<string, unknown> | null = null;
+      const handle = {
+        async executeFlow(opts: Record<string, unknown>) {
+          captured = opts;
+          updateRun(runId, { status: "SUCCEEDED" });
+        },
+        async release() {},
+      };
+      const fakeRuntime = {
+        acquire: async () => handle,
+      } as unknown as import("./engine-runtime").EngineRuntime;
+      const exec = new EngineFlowExecutor(fakeRuntime, {
+        terminalTimeoutMs: 1_000,
+        terminalPollIntervalMs: 10,
+      });
+      await exec.execute(ctx);
+
+      const opts = captured as unknown as Record<string, unknown>;
+      const state = opts["executionState"] as { steps: Record<string, unknown>; tags: string[] };
+      expect(state.tags).toEqual([]);
+      // Unwrapped (the worker-handler envelope's `output` field is stripped).
+      expect(state.steps["step_a"]).toEqual({ type: "PIECE", status: "SUCCEEDED", input: {}, output: { x: 1 } });
+    } finally {
+      if (prevEnv === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+      else process.env.JARVIS_WORKFLOW_DATA_DIR = prevEnv;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

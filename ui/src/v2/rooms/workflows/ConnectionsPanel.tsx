@@ -9,7 +9,7 @@
 
 import React, { useState } from "react";
 import { Button, Chip, Icon } from "../../ui";
-import { RefreshCw, Trash2, Plus } from "lucide-react";
+import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
 import {
   useConnections,
   type AppConnectionType,
@@ -89,6 +89,14 @@ export function ConnectionsPanel(): React.ReactElement {
                 const r = await conn.remove(c.id);
                 flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"` : `Delete failed: ${r.message}`);
               }}
+              onUpdate={async (patch) => {
+                const r = await conn.update(c.id, patch);
+                flash(
+                  r.ok ? "ok" : "warn",
+                  r.ok ? `Updated "${c.displayName}"` : `Update failed: ${r.message}`,
+                );
+                return r.ok;
+              }}
             />
           ))}
         </ul>
@@ -100,26 +108,151 @@ export function ConnectionsPanel(): React.ReactElement {
 function ConnectionRow({
   connection,
   onDelete,
+  onUpdate,
 }: {
   connection: ConnectionMeta;
   onDelete: () => void;
+  onUpdate: (patch: {
+    displayName?: string;
+    value?: Record<string, unknown>;
+    status?: "ACTIVE" | "MISSING" | "ERROR";
+  }) => Promise<boolean>;
 }): React.ReactElement {
+  const [editing, setEditing] = useState(false);
   return (
     <li className="wf-conn__row">
-      <div className="wf-conn__row-main">
-        <span className="wf-conn__row-name">{connection.displayName}</span>
-        <Chip tone="neutral">{connection.type}</Chip>
-        <Chip tone={connection.status === "ACTIVE" ? "ok" : "warn"}>{connection.status}</Chip>
-        <code className="wf-conn__row-extid">{connection.externalId}</code>
+      <div className="wf-conn__row-summary">
+        <div className="wf-conn__row-main">
+          <span className="wf-conn__row-name">{connection.displayName}</span>
+          <Chip tone="neutral">{connection.type}</Chip>
+          <Chip tone={connection.status === "ACTIVE" ? "ok" : "warn"}>{connection.status}</Chip>
+          <code className="wf-conn__row-extid">{connection.externalId}</code>
+        </div>
+        <div className="wf-conn__row-meta">
+          <span>piece: <code>{connection.pieceName}</code></span>
+          <span>updated: {new Date(connection.updated).toLocaleString()}</span>
+        </div>
+        <div className="wf-conn__row-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setEditing((e) => !e)}
+            title="Rotate secret / edit metadata"
+          >
+            <Icon icon={KeyRound} size={12} /> {editing ? "Cancel" : "Rotate"}
+          </Button>
+          <Button variant="danger" size="sm" onClick={onDelete} title="Delete connection">
+            <Icon icon={Trash2} size={12} /> Delete
+          </Button>
+        </div>
       </div>
-      <div className="wf-conn__row-meta">
-        <span>piece: <code>{connection.pieceName}</code></span>
-        <span>created: {new Date(connection.created).toLocaleString()}</span>
-      </div>
-      <Button variant="danger" size="sm" onClick={onDelete} title="Delete connection">
-        <Icon icon={Trash2} size={12} /> Delete
-      </Button>
+      {editing ? (
+        <EditConnectionForm
+          connection={connection}
+          onSubmit={async (patch) => {
+            const ok = await onUpdate(patch);
+            if (ok) setEditing(false);
+          }}
+        />
+      ) : null}
     </li>
+  );
+}
+
+function EditConnectionForm({
+  connection,
+  onSubmit,
+}: {
+  connection: ConnectionMeta;
+  onSubmit: (patch: {
+    displayName?: string;
+    value?: Record<string, unknown>;
+    status?: "ACTIVE" | "MISSING" | "ERROR";
+  }) => Promise<void>;
+}): React.ReactElement {
+  const [displayName, setDisplayName] = useState<string>(connection.displayName);
+  const [status, setStatus] = useState<ConnectionMeta["status"]>(connection.status);
+  const [valueText, setValueText] = useState<string>("");
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (): Promise<void> => {
+    const patch: {
+      displayName?: string;
+      value?: Record<string, unknown>;
+      status?: ConnectionMeta["status"];
+    } = {};
+    if (displayName.trim() && displayName.trim() !== connection.displayName) {
+      patch.displayName = displayName.trim();
+    }
+    if (status !== connection.status) {
+      patch.status = status;
+    }
+    if (valueText.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(valueText);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("value must be a JSON object");
+        }
+        patch.value = parsed as Record<string, unknown>;
+      } catch (e) {
+        setParseError((e as Error).message);
+        return;
+      }
+    }
+    setParseError(null);
+    if (Object.keys(patch).length === 0) {
+      setParseError("nothing to update");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onSubmit(patch);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="wf-conn__form wf-conn__form--inline">
+      <div className="wf-conn__form-row">
+        <label>
+          Display name
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+        </label>
+        <label>
+          Status
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as ConnectionMeta["status"])}
+          >
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="MISSING">MISSING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </label>
+      </div>
+      <label className="wf-conn__form-value">
+        New value (JSON; leave empty to keep existing)
+        <textarea
+          rows={5}
+          value={valueText}
+          onChange={(e) => setValueText(e.target.value)}
+          placeholder='{"access_token": "...", "refresh_token": "..."}'
+        />
+        {parseError ? <span className="wf-conn__form-err">{parseError}</span> : null}
+      </label>
+      <div className="wf-conn__form-actions">
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void handleSubmit()}
+          disabled={submitting}
+        >
+          {submitting ? "Saving..." : "Save"}
+        </Button>
+      </div>
+    </div>
   );
 }
 

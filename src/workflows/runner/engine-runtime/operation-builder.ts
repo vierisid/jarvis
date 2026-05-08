@@ -63,8 +63,12 @@ export interface ExecuteFlowOptions {
    * Prior execution state restored on RESUME. The daemon reads this from
    * the run's logs file (the engine's zstd-encoded backup) before
    * re-issuing EXECUTE_FLOW. For a fresh BEGIN it stays empty.
+   *
+   * `tags` round-trip the engine's `flowExecutorContext.tags` set; missing
+   * here means RESUME starts with an empty tag set (still correct for flows
+   * that don't use tags, which is most flows today).
    */
-  executionState?: { steps: Record<string, unknown> };
+  executionState?: { steps: Record<string, unknown>; tags?: string[] };
 }
 
 const DEFAULT_TIMEOUT_S = 600;
@@ -83,7 +87,7 @@ export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOpera
     runEnvironment: opts.runEnvironment ?? "TESTING",
     streamStepProgress: opts.streamStepProgress ?? "NONE",
     executionType,
-    executionState: opts.executionState ?? { steps: {} },
+    executionState: normalizeExecutionState(opts.executionState),
     stepNameToTest: opts.stepNameToTest ?? null,
     workerHandlerId: opts.workerHandlerId ?? null,
     httpRequestId: opts.httpRequestId ?? null,
@@ -98,6 +102,19 @@ export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOpera
     op.executeTrigger = opts.executeTrigger ?? false;
   }
   return { operationType: "EXECUTE_FLOW", operation: op };
+}
+
+/**
+ * Coerce an inbound `executionState` to the shape upstream expects. Engine
+ * reads `executionState.steps` and `executionState.tags`; both must be
+ * present on the wire (tags as an array, steps as an object). When the daemon
+ * supplies neither (BEGIN), we send empty defaults.
+ */
+function normalizeExecutionState(
+  input: ExecuteFlowOptions["executionState"],
+): { steps: Record<string, unknown>; tags: string[] } {
+  if (!input) return { steps: {}, tags: [] };
+  return { steps: input.steps ?? {}, tags: input.tags ?? [] };
 }
 
 export interface ExtractPieceMetadataOptions {

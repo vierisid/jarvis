@@ -23,6 +23,7 @@ import { FlowExecutionError } from "../handler";
 import { getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "./engine-runtime";
+import { loadExecutionStateFromLog } from "./execution-state-loader";
 
 /**
  * Statuses where the engine is finished writing the run row and we can
@@ -107,16 +108,15 @@ export class EngineFlowExecutor implements FlowExecutor {
         // Resume a paused run: engine picks up at the waitpointed step,
         // delivers `resumePayload` to it, and resumes walking the chain.
         //
-        // Reconstruct executionState.steps from the run's persisted steps.
-        // The worker-handler wraps each engine StepOutput as
-        // `{ output: <StepOutput> }` when accumulating; upstream's
-        // `executionState.steps` expects the raw `Record<name, StepOutput>`,
-        // so unwrap here. Caveat: only step outputs round-trip --
-        // LOOP/ROUTER iteration + branch state lives in the engine's zstd
-        // logs file (followup).
+        // Prefer the engine's zstd-compressed execution-state backup when
+        // available -- it carries the full recursive `steps` tree + `tags`,
+        // including LOOP iterations and ROUTER branch indices, which are
+        // not preserved by the per-step DB accumulator. Fall back to the
+        // unwrapped `flow_run.steps` only when the backup is missing
+        // (e.g., the run paused before the engine's first 15s flush).
         flowOpts.executionType = "RESUME";
         flowOpts.resumePayload = ctx.job.payload.resumePayload ?? {};
-        flowOpts.executionState = { steps: unwrapStepEnvelopes(ctx.run.steps) };
+        flowOpts.executionState = await this.restoreExecutionState(ctx.run.id, ctx.run.steps);
       } else {
         flowOpts.triggerPayload = ctx.payload;
         flowOpts.executeTrigger = ctx.job.payload.executeTrigger ?? false;
@@ -160,6 +160,26 @@ export class EngineFlowExecutor implements FlowExecutor {
     }
 
     return { steps: stepsRecord, stepsCount };
+  }
+
+  /**
+   * Build the `executionState` to send on RESUME. Reads the engine's zstd
+   * log backup first (recursive steps + tags); falls back to the unwrapped
+   * `flow_run.steps` when no backup exists (early pauses) or when the run
+   * has no recorded steps yet (defensive).
+   *
+   * Errors from the loader (corrupt zstd / unreadable JSON) propagate --
+   * silently falling through to the partial DB-derived state would let a
+   * RESUME walk the LOOP/ROUTER from scratch, re-running already-completed
+   * iterations, which is worse than failing the resume loudly.
+   */
+  private async restoreExecutionState(
+    runId: string,
+    persistedSteps: Record<string, unknown> | null | undefined,
+  ): Promise<{ steps: Record<string, unknown>; tags: string[] }> {
+    const restored = await loadExecutionStateFromLog(runId);
+    if (restored) return restored;
+    return { steps: unwrapStepEnvelopes(persistedSteps), tags: [] };
   }
 
   private async waitForTerminalStatus(

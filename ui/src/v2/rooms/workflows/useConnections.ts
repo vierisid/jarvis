@@ -50,6 +50,21 @@ export interface ConnectionsState {
     pieceVersion?: string;
     value: Record<string, unknown>;
   }) => Promise<{ ok: boolean; message: string }>;
+  /**
+   * In-place update of a stored connection. Used to rotate OAuth tokens / API
+   * keys without the delete-then-recreate gap (during which any in-flight run
+   * resolving the externalId would 404). Any field left undefined is left
+   * untouched server-side. `value`, when provided, fully replaces the stored
+   * secret blob -- the API never returns the prior value to merge against.
+   */
+  update: (
+    id: string,
+    patch: {
+      displayName?: string;
+      value?: Record<string, unknown>;
+      status?: "ACTIVE" | "MISSING" | "ERROR";
+    },
+  ) => Promise<{ ok: boolean; message: string }>;
   remove: (id: string) => Promise<{ ok: boolean; message: string }>;
 }
 
@@ -106,6 +121,27 @@ export function useConnections(): ConnectionsState {
     [refresh],
   );
 
+  const update: ConnectionsState["update"] = useCallback(
+    async (id, patch) => {
+      try {
+        const r = await fetch(`/api/workflows/connections/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          return { ok: false, message: body.error ?? `HTTP ${r.status}` };
+        }
+        await refresh();
+        return { ok: true, message: "updated" };
+      } catch (e) {
+        return { ok: false, message: (e as Error).message };
+      }
+    },
+    [refresh],
+  );
+
   const remove: ConnectionsState["remove"] = useCallback(
     async (id) => {
       try {
@@ -125,5 +161,5 @@ export function useConnections(): ConnectionsState {
     [refresh],
   );
 
-  return { loading, error, connections, jarvisSources, refresh, create, remove };
+  return { loading, error, connections, jarvisSources, refresh, create, update, remove };
 }

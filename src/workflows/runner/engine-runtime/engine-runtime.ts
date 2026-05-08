@@ -111,8 +111,8 @@ export interface ExecuteFlowOnHandleOptions {
   executionType?: "BEGIN" | "RESUME";
   /** Payload delivered to the paused step on RESUME. */
   resumePayload?: Record<string, unknown>;
-  /** Prior execution state to restore on RESUME (engine reads steps from it). */
-  executionState?: { steps: Record<string, unknown> };
+  /** Prior execution state to restore on RESUME (engine reads steps + tags from it). */
+  executionState?: { steps: Record<string, unknown>; tags?: string[] };
 }
 
 export class EngineHandle {
