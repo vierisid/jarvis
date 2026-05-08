@@ -52,6 +52,13 @@ export interface FlowRunRow {
 export interface FailedStep {
   name: string;
   displayName: string;
+  /**
+   * Engine-side error detail. Set by the activepieces engine via
+   * `WorkerContract.uploadRunLog` when a piece action throws or returns a
+   * failure. Surfaced by `EngineFlowExecutor` in `FlowExecutionError`'s
+   * message so the run-history panel can show the actual error string.
+   */
+  errorMessage?: string;
 }
 
 export interface FlowRun {

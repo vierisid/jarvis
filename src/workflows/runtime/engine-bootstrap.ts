@@ -79,17 +79,21 @@ export async function bootstrapWorkflowEngine(
   const log = opts.log ?? ((m) => console.log(`[engine-bootstrap] ${m}`));
 
   // 1. Ensure the engine bundle is built (cache hit on warm starts).
+  const t0 = Date.now();
   let cached = findCachedBundle();
   if (!cached) {
     log("engine bundle not in cache; building (one-time cost ~700ms)");
     cached = await buildEngineBundle();
   }
+  log(`engine bundle ready in ${Date.now() - t0}ms (${cached ? "" : "no-bundle "}path: ${cached?.bundlePath ?? "n/a"})`);
 
   // 2. Ensure each Jarvis piece's `dist/` artifact exists. The piece-loader
   // resolves `dist/package.json` matching by name, so a missing dist means
   // the engine can't load that piece. Cheap to rebuild on every startup
   // (~200ms total for all seven pieces).
+  const t1 = Date.now();
   await buildAllJarvisPieces();
+  log(`pieces compiled in ${Date.now() - t1}ms`);
 
   // 3. Start the SandboxApi server with the service backends supplied by the
   // daemon (LLM, tools, notify, context, agent, events, workflows).
@@ -104,7 +108,8 @@ export async function bootstrapWorkflowEngine(
 
   // 5. Extract piece metadata. Cached to disk keyed by the engine bundle's
   // content hash plus each piece's compiled bundle content; mismatch forces
-  // a fresh extraction.
+  // a fresh extraction. A cache hit is ~instant; a miss spawns the engine
+  // (~3s cold) and runs EXTRACT_PIECE_METADATA per piece.
   const pieceRoots = opts.pieceRoots ?? [
     resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis"),
   ];
@@ -113,6 +118,8 @@ export async function bootstrapWorkflowEngine(
     pieceRoots,
   });
   const cacheFile = opts.cacheFile ?? DEFAULT_CACHE_FILE;
+  const t2 = Date.now();
+  const cacheHitBeforeBuild = existsSync(cacheFile);
   const { catalog, failures } = await buildPieceCatalog({
     runtime,
     pieceRoots,
@@ -120,10 +127,13 @@ export async function bootstrapWorkflowEngine(
     cacheKey,
     reporter: (m) => log(m),
   });
+  const extractMs = Date.now() - t2;
   if (failures.length > 0) {
-    log(`catalog built with ${failures.length} extraction failure(s); pieces still available: ${catalog.list().length}`);
+    log(`catalog built with ${failures.length} extraction failure(s); pieces still available: ${catalog.list().length} (${extractMs}ms)`);
   } else {
-    log(`catalog built (${catalog.list().length} pieces, cache: ${existsSync(cacheFile) ? "hit" : "miss"})`);
+    log(
+      `catalog built (${catalog.list().length} pieces, cache: ${cacheHitBeforeBuild ? "hit" : "miss"}, ${extractMs}ms)`,
+    );
   }
 
   return {
