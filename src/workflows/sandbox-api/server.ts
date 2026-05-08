@@ -47,6 +47,21 @@ import {
   createJarvisLlmChatRoute,
   type LlmChatFn,
 } from "./routes/jarvis-llm";
+import {
+  createJarvisToolsInvokeRoute,
+  type ToolsInvokeFn,
+} from "./routes/jarvis-tools";
+import {
+  createJarvisNotifyRoute,
+  type NotifyFn,
+} from "./routes/jarvis-notify";
+import {
+  createJarvisContextVaultSearchRoute,
+  createJarvisContextVaultGetEntityRoute,
+  createJarvisContextAwarenessRecentRoute,
+  createJarvisContextCommitmentsListRoute,
+  type JarvisContextProvider,
+} from "./routes/jarvis-context";
 import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
 
 export interface SandboxApiServices {
@@ -75,6 +90,20 @@ export interface SandboxApiServices {
    * returns 503; the daemon wires this in at startup with the LLMManager.
    */
   llmChat?: LlmChatFn;
+  /**
+   * Tool invocation backend for the `jarvis-tool` piece. If unset, the
+   * endpoint returns 503. The daemon wires this in with `ToolRegistry`.
+   */
+  toolsInvoke?: ToolsInvokeFn;
+  /**
+   * Notification backend for the `jarvis-notify` piece. If unset, returns 503.
+   */
+  notify?: NotifyFn;
+  /**
+   * Read-only Jarvis state provider for the `jarvis-context` piece. If unset,
+   * each context route returns 503.
+   */
+  contextProvider?: JarvisContextProvider;
 }
 
 export interface SandboxApiOptions {
@@ -177,6 +206,46 @@ export class SandboxApi {
         path: "/v1/jarvis/llm/chat",
         method: "POST",
         handler: createJarvisLlmChatRoute({ llmChat: this.services.llmChat }),
+      },
+      {
+        path: "/v1/jarvis/tools/invoke",
+        method: "POST",
+        handler: createJarvisToolsInvokeRoute({
+          toolsInvoke: this.services.toolsInvoke,
+        }),
+      },
+      {
+        path: "/v1/jarvis/notify",
+        method: "POST",
+        handler: createJarvisNotifyRoute({ notify: this.services.notify }),
+      },
+      {
+        path: "/v1/jarvis/context/vault-search",
+        method: "POST",
+        handler: createJarvisContextVaultSearchRoute({
+          contextProvider: this.services.contextProvider,
+        }),
+      },
+      {
+        path: "/v1/jarvis/context/vault-get-entity",
+        method: "POST",
+        handler: createJarvisContextVaultGetEntityRoute({
+          contextProvider: this.services.contextProvider,
+        }),
+      },
+      {
+        path: "/v1/jarvis/context/awareness-recent",
+        method: "POST",
+        handler: createJarvisContextAwarenessRecentRoute({
+          contextProvider: this.services.contextProvider,
+        }),
+      },
+      {
+        path: "/v1/jarvis/context/commitments-list",
+        method: "POST",
+        handler: createJarvisContextCommitmentsListRoute({
+          contextProvider: this.services.contextProvider,
+        }),
       },
     );
   }

@@ -518,3 +518,285 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+  let toolsCalls: Array<{ toolName: string; params: Record<string, unknown> }>;
+  let notifyCalls: Array<{ message: string; channels: string[]; priority: string }>;
+  let contextCalls: Array<{ method: string; input: unknown }>;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    toolsCalls = [];
+    notifyCalls = [];
+    contextCalls = [];
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: {
+        credentialResolver: new CredentialResolver(),
+        toolsInvoke: async (req) => {
+          toolsCalls.push(req);
+          return { result: { ok: true, params: req.params }, toolName: req.toolName };
+        },
+        notify: async (req) => {
+          notifyCalls.push(req);
+          return { delivered: req.channels, failed: [] };
+        },
+        contextProvider: {
+          vaultSearch: async (input) => {
+            contextCalls.push({ method: "vaultSearch", input });
+            return [];
+          },
+          vaultGetEntity: async (id) => {
+            contextCalls.push({ method: "vaultGetEntity", input: id });
+            return null;
+          },
+          awarenessRecent: async (input) => {
+            contextCalls.push({ method: "awarenessRecent", input });
+            return [];
+          },
+          commitmentsList: async (input) => {
+            contextCalls.push({ method: "commitmentsList", input });
+            return [];
+          },
+        },
+      },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  beforeEach(() => {
+    toolsCalls = [];
+    notifyCalls = [];
+    contextCalls = [];
+  });
+
+  test("POST /v1/jarvis/tools/invoke calls injected fn and returns its reply", async () => {
+    const r = await authedFetch("/v1/jarvis/tools/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolName: "vault_search", params: { query: "x" } }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { result: unknown; toolName: string };
+    expect(body.toolName).toBe("vault_search");
+    expect(toolsCalls.length).toBe(1);
+    expect(toolsCalls[0]?.toolName).toBe("vault_search");
+    expect(toolsCalls[0]?.params).toEqual({ query: "x" });
+  });
+
+  test("POST /v1/jarvis/tools/invoke 400 on missing toolName", async () => {
+    const r = await authedFetch("/v1/jarvis/tools/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ params: {} }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/tools/invoke 400 on non-object params", async () => {
+    const r = await authedFetch("/v1/jarvis/tools/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolName: "x", params: [1, 2] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/notify dispatches and surfaces delivery report", async () => {
+    const r = await authedFetch("/v1/jarvis/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "hi",
+        channels: ["telegram", "discord"],
+        priority: "high",
+      }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { delivered: string[]; failed: unknown[] };
+    expect(body.delivered).toEqual(["telegram", "discord"]);
+    expect(notifyCalls.length).toBe(1);
+    expect(notifyCalls[0]?.priority).toBe("high");
+  });
+
+  test("POST /v1/jarvis/notify defaults channels to ['auto'] and priority to 'normal'", async () => {
+    const r = await authedFetch("/v1/jarvis/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+    expect(r.status).toBe(200);
+    expect(notifyCalls[0]?.channels).toEqual(["auto"]);
+    expect(notifyCalls[0]?.priority).toBe("normal");
+  });
+
+  test("POST /v1/jarvis/notify 400 on unknown channel", async () => {
+    const r = await authedFetch("/v1/jarvis/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "x", channels: ["pagers"] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/context/vault-search forwards filter to provider", async () => {
+    const r = await authedFetch("/v1/jarvis/context/vault-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "alice", type: "person", limit: 10 }),
+    });
+    expect(r.status).toBe(200);
+    expect(contextCalls.length).toBe(1);
+    expect(contextCalls[0]?.method).toBe("vaultSearch");
+    expect(contextCalls[0]?.input).toEqual({
+      query: "alice",
+      type: "person",
+      limit: 10,
+    });
+  });
+
+  test("POST /v1/jarvis/context/vault-search 400 on invalid type", async () => {
+    const r = await authedFetch("/v1/jarvis/context/vault-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "robot" }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/context/vault-get-entity forwards id", async () => {
+    const r = await authedFetch("/v1/jarvis/context/vault-get-entity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "ent_123" }),
+    });
+    expect(r.status).toBe(200);
+    expect(contextCalls[0]?.method).toBe("vaultGetEntity");
+    expect(contextCalls[0]?.input).toBe("ent_123");
+  });
+
+  test("POST /v1/jarvis/context/awareness-recent forwards limit/since", async () => {
+    const r = await authedFetch("/v1/jarvis/context/awareness-recent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 5, since: 1000 }),
+    });
+    expect(r.status).toBe(200);
+    expect(contextCalls[0]?.method).toBe("awarenessRecent");
+    expect(contextCalls[0]?.input).toEqual({ limit: 5, since: 1000 });
+  });
+
+  test("POST /v1/jarvis/context/commitments-list forwards status filter", async () => {
+    const r = await authedFetch("/v1/jarvis/context/commitments-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "in_progress" }),
+    });
+    expect(r.status).toBe(200);
+    expect(contextCalls[0]?.method).toBe("commitmentsList");
+    expect(contextCalls[0]?.input).toEqual({ status: "in_progress" });
+  });
+
+  test("POST /v1/jarvis/context/commitments-list 400 on invalid status", async () => {
+    const r = await authedFetch("/v1/jarvis/context/commitments-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "blocked" }),
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
+describe("SandboxApi routes (G unconfigured -> 503)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: { credentialResolver: new CredentialResolver() },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  test("tools.invoke without toolsInvoke fn returns 503", async () => {
+    const r = await authedFetch("/v1/jarvis/tools/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolName: "x", params: {} }),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  test("notify without notify fn returns 503", async () => {
+    const r = await authedFetch("/v1/jarvis/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "x" }),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  test("context routes without provider return 503", async () => {
+    for (const path of [
+      "/v1/jarvis/context/vault-search",
+      "/v1/jarvis/context/vault-get-entity",
+      "/v1/jarvis/context/awareness-recent",
+      "/v1/jarvis/context/commitments-list",
+    ]) {
+      const r = await authedFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(r.status).toBe(503);
+    }
+  });
+});
