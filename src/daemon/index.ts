@@ -36,7 +36,7 @@ import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager } from "../sidecar/manager.ts";
-import { initWorkflowDb, closeWorkflowDb } from "../workflows/db/index.ts";
+import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
 import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
 import { createWorkflowRoutes } from "../workflows/api/routes.ts";
@@ -222,10 +222,10 @@ async function handleShutdown(signal: string): Promise<void> {
       workflowEngineShutdown = null;
     }
 
-    // Close databases
+    // Close the shared DB. `closeWorkflowDb` aliases `closeDb` since the
+    // workflow tables live in the same file -- one call is enough.
     closeDb();
-    closeWorkflowDb();
-    console.log('[Daemon] Databases closed');
+    console.log('[Daemon] Database closed');
 
     console.log('[Daemon] Shutdown complete');
     process.exit(0);
@@ -308,14 +308,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     initDatabase(config.dbPath);
     logWithTimestamp('Database initialized successfully');
 
-    // 2.1. Initialize workflow database (separate file from the vault).
-    // Holds flow definitions, runs, connections, queue. Will be the backing
-    // store for the new activepieces-based workflow runtime once the engine
-    // executor is wired in. Until then, the worker uses NoopFlowExecutor and
-    // queued runs immediately succeed with empty step output.
-    const workflowsDbPath = path.join(config.dataDir, 'workflows.db');
-    logWithTimestamp(`Initializing workflow database at ${workflowsDbPath}`);
-    initWorkflowDb(workflowsDbPath);
+    // 2.1. Add workflow tables (flow / flow_run / flow_version /
+    // app_connection / waitpoint / store_entry / workflow_file /
+    // workflow_job / trigger_event) to the shared Jarvis DB. Idempotent.
+    // Single file => single backup unit.
+    ensureWorkflowSchema();
+    logWithTimestamp('Workflow schema ready');
 
     // 2a. Seed webapp templates (upserts, safe to run every startup)
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
