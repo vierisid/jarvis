@@ -7,6 +7,7 @@ import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomA
 import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
+import { PalettePage } from "./pages/PalettePage";
 import "./v2.css";
 import "./ui/primitives.css";
 
@@ -52,6 +53,17 @@ export function AppShellV2() {
           <PanelRoomActionBridge />
           <Body mode="expanded" />
         </RoomActionBusProvider>
+      </div>
+    );
+  }
+
+  // Palette mode: cursor-anchored fuzzy room picker spawned by the
+  // sidecar's Ctrl+K hotkey (W4). Renders a minimal, framed palette page
+  // with no AppShell chrome.
+  if (route.kind === "palette") {
+    return (
+      <div className="jarvis-v2-root jarvis-v2-palette-mode">
+        <PalettePage />
       </div>
     );
   }

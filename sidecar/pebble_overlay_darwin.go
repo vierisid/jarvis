@@ -502,3 +502,9 @@ func (s *pebbleServiceDarwin) OnSummon(callback func()) {
 	// hotkeys_darwin.go path which is currently a stub. Wiring it to fire
 	// summonCallback is part of the macOS hotkey ticket.
 }
+
+func (s *pebbleServiceDarwin) OnPalette(callback func()) {
+	// macOS palette hotkey is gated on the NSEvent monitor port (macOS
+	// hotkey ticket) — stubbed for now.
+	_ = callback
+}

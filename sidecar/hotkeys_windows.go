@@ -20,6 +20,7 @@ const (
 
 const (
 	vkSpace = 0x20
+	vkK     = 0x4B
 )
 
 // Win32 message identifiers.
@@ -94,6 +95,7 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 				return
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
+				log.Printf("[hotkeys] WM_HOTKEY received for %s — firing", keyspec)
 				go onFire()
 			}
 		}
@@ -116,6 +118,8 @@ func parseHotkey(spec string) (mods, vk uint32, err error) {
 	switch spec {
 	case "ctrl+space", "Ctrl+Space", "CTRL+SPACE":
 		return modControl, vkSpace, nil
+	case "ctrl+k", "Ctrl+K", "CTRL+K":
+		return modControl, vkK, nil
 	}
 	return 0, 0, &hotkeyParseError{spec: spec}
 }

@@ -489,3 +489,9 @@ func (s *pebbleServiceLinux) OnSummon(callback func()) {
 	// in hotkeys_linux.go (currently stubbed). Wiring it lands in the
 	// Linux hotkey ticket.
 }
+
+func (s *pebbleServiceLinux) OnPalette(callback func()) {
+	// Linux palette hotkey is gated on the X11 hotkey port (T8b/T19b
+	// Linux work) — stubbed for now.
+	_ = callback
+}

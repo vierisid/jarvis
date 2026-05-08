@@ -534,6 +534,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             cursor_offset_x: 22,
             cursor_offset_y: 26,
             summon_hotkey: 'ctrl+space',
+            palette_hotkey: 'ctrl+k',
           });
           console.log(`[ambient-ui] Native pebble spawned on ${sidecar.id}:`, result);
         } catch (err) {
@@ -898,6 +899,156 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (idx >= 0) list.splice(idx, 1);
         if (list.length === 0) panelsBySidecar.delete(sidecarId);
       };
+
+      // W4 — Cmd+K palette: cursor-anchored fuzzy room picker. The
+      // sidecar's Ctrl+K hotkey emits a `pebble.palette` event with the
+      // current cursor position; the daemon spawns a small `_palette`
+      // panel near the cursor (or focuses the existing one). Picks
+      // (room nav / object) come back via HTTP `/api/palette/pick`,
+      // routed through the palette handler registered below.
+      //
+      // We deliberately do NOT toggle close on hotkey re-press. webview_go
+      // becomes unstable under rapid panel close→spawn cycles (segfault
+      // inside webview.Bind on the 3rd–4th panel in quick succession).
+      // Closing happens only via Esc / click-outside / pick — all of
+      // which include user-action latency, giving WebView2 time to
+      // clean up before any new spawn. A small cooldown after close
+      // adds a final safety margin.
+      const palettePanelBySidecar = new Map<string, { id: string; sidecarId: string }>();
+      const lastPaletteCloseAt = new Map<string, number>();
+      const PALETTE_REOPEN_COOLDOWN_MS = 350;
+      const PALETTE_W = 460;
+      const PALETTE_H = 440;
+      const paletteURL = (): string => {
+        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
+        return `http://localhost:${port}/#/_palette`;
+      };
+      const closePalettePanel = async (sidecarId: string): Promise<void> => {
+        const entry = palettePanelBySidecar.get(sidecarId);
+        if (!entry) return;
+        palettePanelBySidecar.delete(sidecarId);
+        lastPaletteCloseAt.set(sidecarId, Date.now());
+        try {
+          await sidecarManager.dispatchRPC(entry.sidecarId, 'panel.close', { id: entry.id });
+        } catch (err) {
+          console.warn(`[palette] panel.close(${entry.id}) failed:`, err);
+        }
+      };
+      const openPalettePanel = async (sidecarId: string, cursorX: number, cursorY: number): Promise<void> => {
+        // Anchor the panel near the cursor with a small offset so the
+        // palette doesn't hide the pointer. -1 sentinels would centre it,
+        // but here we want it cursor-adjacent.
+        const x = Math.max(0, cursorX - 24);
+        const y = Math.max(0, cursorY + 18);
+        try {
+          const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url: paletteURL(),
+            title: 'Palette',
+            bounds: { x, y, w: PALETTE_W, h: PALETTE_H },
+            resizable: false,
+            always_on_top: true,
+            multi_instance: false,
+          });
+          console.log(`[palette] panel.spawn returned`, result);
+          const id = (result && typeof result === 'object' && 'id' in (result as object))
+            ? String((result as { id?: unknown }).id ?? '')
+            : '';
+          if (id) {
+            palettePanelBySidecar.set(sidecarId, { id, sidecarId });
+            console.log(`[palette] tracked panel id=${id}`);
+          } else {
+            console.warn(`[palette] panel.spawn returned no id:`, result);
+          }
+        } catch (err) {
+          console.warn(`[palette] panel.spawn failed:`, err);
+        }
+      };
+
+      // Register the palette handler the api-routes module forwards into
+      // when the dashboard's `_palette` page POSTs a pick / close. The
+      // pick handler reuses the same panel.spawn path that voice "open
+      // workflows" uses, so the room shows up tracked in panelsBySidecar
+      // exactly the same way.
+      const { setPaletteHandler } = await import('./palette-controller.ts');
+      setPaletteHandler({
+        async pick({ kind, key }) {
+          if (kind !== 'room') return; // object picks not yet wired in panel mode
+          const meta = ROOMS[key];
+          if (!meta) {
+            console.warn(`[palette] pick: unknown room "${key}"`);
+            return;
+          }
+          // Pick the sidecar whose palette is currently open. Fall back
+          // to the first sidecar if state is missing (dashboard-only
+          // dev path).
+          let sidecarId: string | null = null;
+          for (const [sid] of palettePanelBySidecar) { sidecarId = sid; break; }
+          if (!sidecarId) {
+            const list = sidecarManager.listSidecars();
+            sidecarId = list.find((s) => s.connected)?.id ?? null;
+          }
+          if (!sidecarId) return;
+          // Close palette before spawning the room so the focus doesn't
+          // bounce. Spawn returns an `id` we track for window-mgmt
+          // commands.
+          await closePalettePanel(sidecarId);
+          try {
+            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+              url: dashboardURL(key),
+              title: meta.title,
+              bounds: { x: -1, y: -1, w: meta.w, h: meta.h },
+              resizable: true,
+              always_on_top: false,
+              multi_instance: false,
+            });
+            const id = (result && typeof result === 'object' && 'id' in (result as object))
+              ? String((result as { id?: unknown }).id ?? '')
+              : '';
+            if (id) trackPanel(sidecarId, { id, key, title: meta.title });
+          } catch (err) {
+            console.warn(`[palette] panel.spawn(${key}) from pick failed:`, err);
+          }
+        },
+        async close() {
+          // Close the palette on whichever sidecar has it open.
+          for (const [sid] of palettePanelBySidecar) {
+            await closePalettePanel(sid);
+          }
+        },
+      });
+
+      // W4 — Ctrl+K opens or refocuses the palette. Closing flows
+      // through user-driven paths (Esc / click / pick → /api/palette/close),
+      // not the hotkey, because rapid hotkey-toggle close→spawn reliably
+      // crashes webview_go's Bind path after the 3rd–4th cycle.
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'pebble.palette') return;
+        console.log(`[palette] received pebble.palette event from ${sidecarId}, payload=`, event.payload);
+        const existing = palettePanelBySidecar.get(sidecarId);
+        if (existing) {
+          console.log(`[palette] already open (panel id=${existing.id}) — focusing instead of toggling`);
+          try {
+            await sidecarManager.dispatchRPC(sidecarId, 'panel.focus', { id: existing.id });
+          } catch (err) {
+            console.warn(`[palette] panel.focus(${existing.id}) failed:`, err);
+          }
+          return;
+        }
+        // Cooldown after a recent close — webview_go needs a moment to
+        // tear down WebView2 controllers before a new instance is safe.
+        const lastClose = lastPaletteCloseAt.get(sidecarId) ?? 0;
+        const sinceClose = Date.now() - lastClose;
+        if (sinceClose < PALETTE_REOPEN_COOLDOWN_MS) {
+          const wait = PALETTE_REOPEN_COOLDOWN_MS - sinceClose;
+          console.log(`[palette] cooldown — waiting ${wait}ms before respawn`);
+          await new Promise((r) => setTimeout(r, wait));
+        }
+        const payload = (event.payload ?? {}) as { cursor_x?: number; cursor_y?: number };
+        const cx = typeof payload.cursor_x === 'number' ? payload.cursor_x : 200;
+        const cy = typeof payload.cursor_y === 'number' ? payload.cursor_y : 200;
+        console.log(`[palette] spawning palette at cursor (${cx},${cy})`);
+        await openPalettePanel(sidecarId, cx, cy);
+      });
       // T20b — render the open-panels inventory as a system-prompt
       // fragment for the LLM. Without this the agent gets the user text
       // but no idea what windows exist, so "switch to the editor tab in

@@ -35,7 +35,8 @@ export type V2Route =
   | { kind: "home" }
   | { kind: "primitives" }
   | { kind: "room"; key: RoomKey }
-  | { kind: "panel"; key: RoomKey };
+  | { kind: "panel"; key: RoomKey }
+  | { kind: "palette" };
 
 const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "workflows",
@@ -56,6 +57,7 @@ export function getV2Route(): V2Route {
   if (typeof window === "undefined") return { kind: "home" };
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash === "_primitives") return { kind: "primitives" };
+  if (hash === "_palette") return { kind: "palette" };
   if (hash.startsWith("_room_")) {
     const key = hash.slice("_room_".length);
     if (ROOM_KEYS.has(key as RoomKey)) {
@@ -86,6 +88,7 @@ export function useV2Route(): V2Route {
 export function navigateV2(route: V2Route): void {
   let hash = "#/";
   if (route.kind === "primitives") hash = "#/_primitives";
+  else if (route.kind === "palette") hash = "#/_palette";
   else if (route.kind === "room") hash = `#/_room_${route.key}`;
   else if (route.kind === "panel") hash = `#/_panel_${route.key}`;
   if (window.location.hash !== hash) {

@@ -375,6 +375,31 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			go runSessionCapture(sessionID)
 		})
 
+		// W4 — palette hotkey (Ctrl+K) emits a "pebble.palette" event with
+		// the current cursor position. The daemon owns the open/close
+		// lifecycle of the palette panel itself; the sidecar's only job is
+		// to surface the keypress + cursor coords.
+		c.pebble.OnPalette(func() {
+			cx, cy := 0, 0
+			if x, y, err := platformGetCursorPos(); err == nil {
+				cx, cy = x, y
+			}
+			log.Printf("[pebble] emitting pebble.palette event (cursor=%d,%d)", cx, cy)
+			paletteEvt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "pebble.palette",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{"cursor_x": cx, "cursor_y": cy},
+			}
+			if err := sendFn(ctx, paletteEvt, nil); err != nil {
+				log.Printf("[pebble] failed to emit palette event: %v", err)
+			} else {
+				log.Printf("[pebble] pebble.palette event sent to daemon")
+			}
+		})
+		log.Printf("[pebble] OnPalette callback registered")
+
 		// pebble.start_listening — daemon-driven session capture (no
 		// pebble.summon event). Used by the wake-word path: when a wake
 		// phrase fires with no trailing command, the daemon transitions
