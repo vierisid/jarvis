@@ -51,6 +51,14 @@ import {
   getWaitpoint,
   markWaitpointResumed,
 } from "../db/repos/waitpoint";
+import {
+  deleteConnection,
+  getConnection,
+  listConnections,
+  upsertConnection,
+  type AppConnectionType,
+} from "../db/repos/app-connection";
+import type { CredentialResolver } from "../credentials/adapter";
 import type { TriggerManager } from "../runner/triggers/manager";
 import type { PieceLookup } from "../runtime/piece-catalog";
 
@@ -108,6 +116,14 @@ export interface CreateWorkflowRoutesOptions {
    * picker. Without it, the catalog endpoint returns an empty list.
    */
   pieceRegistry?: PieceLookup;
+  /**
+   * Optional credential resolver. When provided, the connections route can
+   * report which `JarvisConnectionSource` adapters are registered (e.g.
+   * `jarvis:google` is wired) so the dashboard's piece-side auth picker
+   * can highlight reusable Jarvis-managed credentials. The repo-backed
+   * `app_connection` rows work without it.
+   */
+  credentialResolver?: CredentialResolver;
 }
 
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
@@ -152,6 +168,107 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // ------------------------------------------------------------- trigger subs (admin)
+    // Snapshot of TriggerManager's active subscriptions. Each entry carries
+    // the kind (cron/webhook/event/engine) and an optional `warning` set when
+    // the subscription is partially active (e.g. engine returned webhook
+    // listeners but route routing is half-set-up). The dashboard's run-history
+    // panel surfaces these so users can see which flows are misconfigured
+    // even though their status reads ENABLED.
+    "/api/workflows/triggers": {
+      GET: () =>
+        trapErrors(() => {
+          if (!opts.triggerManager) return ok([]);
+          return ok(opts.triggerManager.list());
+        }),
+    },
+
+    // ------------------------------------------------------------- connections
+    // CRUD over `app_connection` rows + a list of registered Jarvis
+    // connection sources. Connection `value` is encrypted at rest
+    // (AES-256-GCM via `app-connection` repo) and never returned to the
+    // client -- only the metadata (id, externalId, type, displayName,
+    // pieceName, etc.) ships out so the dashboard can show what's wired.
+    "/api/workflows/connections": {
+      GET: () =>
+        trapErrors(() => {
+          const list = listConnections().map((c) => ({
+            id: c.id,
+            externalId: c.externalId,
+            displayName: c.displayName,
+            type: c.type,
+            scope: c.scope,
+            status: c.status,
+            pieceName: c.pieceName,
+            pieceVersion: c.pieceVersion,
+            ownerId: c.ownerId,
+            preSelectForNewProjects: c.preSelectForNewProjects,
+            created: c.created,
+            updated: c.updated,
+            // value intentionally omitted -- secrets stay server-side.
+          }));
+          const sources = (opts.credentialResolver?.list() ?? []).map((s) => ({
+            id: s.id,
+          }));
+          return ok({ connections: list, jarvisSources: sources });
+        }),
+      POST: (req) =>
+        trapErrors(async () => {
+          const body = (await req.json()) as {
+            externalId?: string;
+            displayName?: string;
+            type?: AppConnectionType;
+            pieceName?: string;
+            pieceVersion?: string;
+            value?: Record<string, unknown>;
+          };
+          if (!body.externalId || typeof body.externalId !== "string") {
+            return err("externalId is required");
+          }
+          if (!body.displayName || typeof body.displayName !== "string") {
+            return err("displayName is required");
+          }
+          if (!body.type) return err("type is required");
+          if (!body.pieceName || typeof body.pieceName !== "string") {
+            return err("pieceName is required");
+          }
+          if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) {
+            return err("value must be an object");
+          }
+          const conn = upsertConnection({
+            externalId: body.externalId,
+            displayName: body.displayName,
+            type: body.type,
+            pieceName: body.pieceName,
+            pieceVersion: body.pieceVersion ?? "0.0.0",
+            value: body.value,
+          });
+          return ok(
+            {
+              id: conn.id,
+              externalId: conn.externalId,
+              displayName: conn.displayName,
+              type: conn.type,
+              pieceName: conn.pieceName,
+              status: conn.status,
+              created: conn.created,
+            },
+            201,
+          );
+        }),
+    },
+
+    "/api/workflows/connections/:id": {
+      DELETE: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const existing = getConnection(id);
+          if (!existing) return err("connection not found", 404);
+          deleteConnection(id);
+          return ok({ id, deleted: true });
+        }),
+    },
+
     // ------------------------------------------------------------- waitpoint resume
     // Public webhook URL for resuming a paused flow. The `resumeUrl` minted
     // by `POST /v1/waitpoints` (called by piece actions via
@@ -161,6 +278,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     //
     // Idempotent: a second hit with the same waitpoint id returns 410, so
     // a flaky external service that retries doesn't re-fire the run.
+    //
+    // Status guard: only `PAUSED` runs can be resumed. A waitpoint whose run
+    // subsequently FAILED / TIMEOUT / STOPPED is unrecoverable -- returning
+    // 409 here surfaces that to the resumer instead of letting the engine
+    // reject the operation obscurely.
     "/api/webhooks/waitpoints/:id": {
       POST: (req) =>
         trapErrors(async () => {
@@ -168,6 +290,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const wp = getWaitpoint(id);
           if (!wp) return err("waitpoint not found", 404);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
+          const run = getFlowRun(wp.flowRunId);
+          if (!run) return err("waitpoint references a missing run", 410);
+          if (run.status !== "PAUSED") {
+            return err(
+              `waitpoint cannot be resumed: run status is ${run.status} (expected PAUSED)`,
+              409,
+            );
+          }
           // Body is the resumePayload delivered to the paused step. Tolerate
           // empty bodies and non-JSON payloads (some webhook senders POST
           // form-encoded or empty); fall back to {}.

@@ -580,10 +580,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // services keep running.
     let engineBoot: BootstrapWorkflowEngineResult | null = null;
     const bootstrapStart = Date.now();
+    // Build the credential resolver early so we can register Jarvis-managed
+    // sources (Google OAuth file, etc.) before pieces start asking for
+    // connections. Each `jarvis:<source>` external id dispatches to the
+    // matching source; non-prefixed ids fall through to the `app_connection`
+    // repo (encrypted at rest).
+    const credentialResolver = new CredentialResolver();
+    if (googleAuth) {
+      const { JarvisGoogleConnectionSource } = await import(
+        "../workflows/credentials/google-source.ts"
+      );
+      credentialResolver.register(new JarvisGoogleConnectionSource(googleAuth));
+      logWithTimestamp(
+        "Workflow credential resolver: registered jarvis:google source",
+      );
+    }
     try {
       engineBoot = await bootstrapWorkflowEngine({
         services: {
-          credentialResolver: new CredentialResolver(),
+          credentialResolver,
           // eventsPoll is the only backend safely wireable up front (no
           // dependency on toolRegistry / agentService). The rest land via
           // api.setServices() after registry.startAll().
@@ -642,6 +657,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
         triggerManager,
+        credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),
       }),
     };

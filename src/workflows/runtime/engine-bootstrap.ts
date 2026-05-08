@@ -77,36 +77,37 @@ export async function bootstrapWorkflowEngine(
   opts: BootstrapWorkflowEngineOptions,
 ): Promise<BootstrapWorkflowEngineResult> {
   const log = opts.log ?? ((m) => console.log(`[engine-bootstrap] ${m}`));
-
-  // 1. Ensure the engine bundle is built (cache hit on warm starts).
   const t0 = Date.now();
-  let cached = findCachedBundle();
-  if (!cached) {
-    log("engine bundle not in cache; building (one-time cost ~700ms)");
-    cached = await buildEngineBundle();
-  }
-  log(`engine bundle ready in ${Date.now() - t0}ms (${cached ? "" : "no-bundle "}path: ${cached?.bundlePath ?? "n/a"})`);
 
-  // 2. Ensure each Jarvis piece's `dist/` artifact exists. The piece-loader
-  // resolves `dist/package.json` matching by name, so a missing dist means
-  // the engine can't load that piece. Cheap to rebuild on every startup
-  // (~200ms total for all seven pieces).
-  const t1 = Date.now();
-  await buildAllJarvisPieces();
-  log(`pieces compiled in ${Date.now() - t1}ms`);
-
-  // 3. Start the SandboxApi server with the service backends supplied by the
-  // daemon (LLM, tools, notify, context, agent, events, workflows).
+  // Phases 1-3 run in parallel because none depends on another:
+  //   - bundle build (CPU + disk)
+  //   - piece compile (CPU + disk; uses a different staging dir)
+  //   - SandboxApi server start (network bind + socket.io setup)
+  // On warm starts (cached bundle, dist/ exists) the long pole is the
+  // SandboxApi's socket.io spinup; on cold starts it's the bundle build
+  // (~700ms). Either way overlapping shaves the slowest path.
   const api = new SandboxApi({ services: opts.services });
-  await api.start({ host: opts.host ?? "127.0.0.1", port: 0 });
-  log(`sandbox api listening on ${api.baseUrl}`);
+  const [cached] = await Promise.all([
+    (async () => {
+      let c = findCachedBundle();
+      if (!c) {
+        log("engine bundle not in cache; building (one-time cost ~700ms)");
+        c = await buildEngineBundle();
+      }
+      return c;
+    })(),
+    buildAllJarvisPieces(),
+    api.start({ host: opts.host ?? "127.0.0.1", port: 0 }),
+  ]);
+  log(`bundle + pieces + sandbox api ready in ${Date.now() - t0}ms (${api.baseUrl})`);
 
   // 4. Build the EngineRuntime against the bundle. One runtime is shared
   // across all RUN_FLOW jobs + trigger hook calls. Pooling is enabled so
   // cron-fired runs / fast event-bus polls reuse the warm engine rather
-  // than paying the ~3s cold-spawn cost on every fire. The first call
-  // through still spawns; subsequent acquires after release rebind to the
-  // same process.
+  // than paying the ~3s cold-spawn cost on every fire. The catalog
+  // extraction below acquires + releases an engine; with pool=true the
+  // released engine ends up in the warm slot and is reused by the first
+  // real RUN_FLOW after bootstrap -- effectively "pre-warm for free".
   const runtime = new EngineRuntime({
     api,
     bundlePath: cached.bundlePath,

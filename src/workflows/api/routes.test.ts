@@ -401,6 +401,11 @@ describe("workflow API: waitpoint resume", () => {
       flowVersionId: v.id,
       environment: "TESTING",
     });
+    // The route's status guard requires PAUSED; default createFlowRun
+    // status is QUEUED. Flip to PAUSED to simulate a piece having called
+    // `context.run.createWaitpoint`.
+    const { updateRun } = await import("../db/repos/flow-run");
+    updateRun(run.id, { status: "PAUSED" });
     const wp = createWaitpoint({
       flowRunId: run.id,
       projectId: DEFAULT_IDS.project,
@@ -451,5 +456,46 @@ describe("workflow API: waitpoint resume", () => {
       reqWithParams("POST", "http://x/api/webhooks/waitpoints/missing", { id: "missing" }, {}),
     );
     expect(status).toBe(404);
+  });
+
+  test("POST /api/webhooks/waitpoints/:id 409s when run is no longer PAUSED", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import(
+      "../db/repos/flow-version"
+    );
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const { DEFAULT_IDS } = await import("../db/schema");
+
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "broken flow",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    const run = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: v.id,
+      environment: "TESTING",
+    });
+    // Run failed before the waitpoint resolver fired; resume should be rejected.
+    updateRun(run.id, { status: "FAILED" });
+    const wp = createWaitpoint({
+      flowRunId: run.id,
+      projectId: DEFAULT_IDS.project,
+      stepName: "step_pause",
+      type: "WEBHOOK",
+    });
+
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { status, body } = await callJson(
+      post,
+      reqWithParams("POST", `http://x/api/webhooks/waitpoints/${wp.id}`, { id: wp.id }, {}),
+    );
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/FAILED/);
+    expect(body.error).toMatch(/PAUSED/);
   });
 });

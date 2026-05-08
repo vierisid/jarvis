@@ -38,6 +38,7 @@ import {
   type FlowStatus,
 } from "./useWorkflowsData";
 import "./WorkflowsRoom.css";
+import { ConnectionsPanel } from "./ConnectionsPanel";
 
 const STATUS_TONE: Record<FlowStatus, "ok" | "neutral"> = {
   ENABLED: "ok",
@@ -49,7 +50,10 @@ const RUN_STATUS_TONE: Record<FlowRunStatus, "ok" | "neutral" | "warn" | "accent
   RUNNING: "warn",
   SUCCEEDED: "ok",
   FAILED: "accent",
-  PAUSED: "neutral",
+  // PAUSED is awaiting an external signal (a hit on the resume webhook).
+  // We render with the `warn` tone instead of neutral so it visually stands
+  // out from idle-but-not-running runs.
+  PAUSED: "warn",
   TIMEOUT: "accent",
   INTERNAL_ERROR: "accent",
   QUOTA_EXCEEDED: "accent",
@@ -69,9 +73,12 @@ const TERMINAL_STATUSES = new Set<FlowRunStatus>([
   "SCHEDULE_FAILURE",
 ]);
 
+type RoomTab = "flows" | "connections";
+
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [tab, setTab] = useState<RoomTab>("flows");
 
   const handleAction = async (label: string, fn: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
     const result = await fn();
@@ -88,16 +95,34 @@ export function WorkflowsRoomBody(): React.ReactElement {
         <WorkflowEditor flowId={data.editingFlowId} onClose={() => data.setEditingFlowId(null)} />
       ) : null}
       <header className="wf-room__header">
-        <div>
-          <p className="wf-room__count">
-            {data.loading ? "…" : `${data.flows.length} workflow${data.flows.length === 1 ? "" : "s"}`}
-            {data.error ? ` · ${data.error}` : null}
-          </p>
+        <div className="wf-room__tabs">
+          <button
+            type="button"
+            className={`wf-room__tab ${tab === "flows" ? "wf-room__tab--active" : ""}`}
+            onClick={() => setTab("flows")}
+          >
+            Workflows
+          </button>
+          <button
+            type="button"
+            className={`wf-room__tab ${tab === "connections" ? "wf-room__tab--active" : ""}`}
+            onClick={() => setTab("connections")}
+          >
+            Connections
+          </button>
         </div>
         <div className="wf-room__actions">
-          <Button variant="ghost" size="sm" onClick={() => void data.refresh()} title="Refresh">
-            <Icon icon={RefreshCw} size={14} /> Refresh
-          </Button>
+          {tab === "flows" ? (
+            <>
+              <span className="wf-room__count">
+                {data.loading ? "…" : `${data.flows.length} workflow${data.flows.length === 1 ? "" : "s"}`}
+                {data.error ? ` · ${data.error}` : null}
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => void data.refresh()} title="Refresh">
+                <Icon icon={RefreshCw} size={14} /> Refresh
+              </Button>
+            </>
+          ) : null}
         </div>
       </header>
 
@@ -105,6 +130,9 @@ export function WorkflowsRoomBody(): React.ReactElement {
         <div className={`wf-toast wf-toast--${actionMessage.tone}`}>{actionMessage.text}</div>
       ) : null}
 
+      {tab === "connections" ? <ConnectionsPanel /> : null}
+
+      {tab === "flows" ? (
       <div className="wf-room__layout">
         <section className="wf-room__list" aria-label="Workflow list">
           {data.flows.length === 0 && !data.loading ? (
@@ -151,6 +179,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
           )}
         </section>
       </div>
+      ) : null}
     </div>
   );
 }
@@ -321,6 +350,16 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             <dt>Triggered by</dt>
             <dd>{run.triggeredBy ?? "manual"}</dd>
           </dl>
+          {run.status === "PAUSED" ? (
+            <div className="wf-runs__paused">
+              <strong>Paused:</strong> waiting for an external signal. The
+              piece that paused this run minted a webhook URL of the form
+              <code>/api/webhooks/waitpoints/&lt;id&gt;</code>; a POST to that
+              URL wakes the run with the request body as the resume payload.
+              See the run's <code>steps</code> JSON below for the exact
+              waitpoint id this run is parked on.
+            </div>
+          ) : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (
             <details className="wf-runs__steps">
               <summary>Step output JSON</summary>
