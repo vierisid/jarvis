@@ -199,6 +199,17 @@ export class SandboxApi {
     this.registerRoutes();
   }
 
+  /**
+   * Patch service backends after construction. Each `/v1/jarvis/*` route's
+   * deps object IS `this.services` (passed by reference, not copied), so
+   * route handlers observe these mutations on the next request. Used by the
+   * daemon to wire backends that depend on services not ready at SandboxApi
+   * construction time (e.g. ToolRegistry, available only after startAll).
+   */
+  setServices(patch: Partial<SandboxApiServices>): void {
+    Object.assign(this.services, patch);
+  }
+
   private registerRoutes(): void {
     this.routes.push(
       {
@@ -229,71 +240,60 @@ export class SandboxApi {
         }),
       },
       { path: "/v1/logs/:runId", method: "PUT", handler: logsUploadRoute },
+      // /v1/jarvis/* routes pass `this.services` itself (not a snapshot) so
+      // each handler reads the live backend on every request. This lets the
+      // daemon wire backends after construction via `setServices` -- e.g.
+      // ToolRegistry isn't ready until `registry.startAll()` completes, but
+      // we want the SandboxApi started earlier so catalog extraction can run.
       {
         path: "/v1/jarvis/llm/chat",
         method: "POST",
-        handler: createJarvisLlmChatRoute({ llmChat: this.services.llmChat }),
+        handler: createJarvisLlmChatRoute(this.services),
       },
       {
         path: "/v1/jarvis/tools/invoke",
         method: "POST",
-        handler: createJarvisToolsInvokeRoute({
-          toolsInvoke: this.services.toolsInvoke,
-        }),
+        handler: createJarvisToolsInvokeRoute(this.services),
       },
       {
         path: "/v1/jarvis/notify",
         method: "POST",
-        handler: createJarvisNotifyRoute({ notify: this.services.notify }),
+        handler: createJarvisNotifyRoute(this.services),
       },
       {
         path: "/v1/jarvis/context/vault-search",
         method: "POST",
-        handler: createJarvisContextVaultSearchRoute({
-          contextProvider: this.services.contextProvider,
-        }),
+        handler: createJarvisContextVaultSearchRoute(this.services),
       },
       {
         path: "/v1/jarvis/context/vault-get-entity",
         method: "POST",
-        handler: createJarvisContextVaultGetEntityRoute({
-          contextProvider: this.services.contextProvider,
-        }),
+        handler: createJarvisContextVaultGetEntityRoute(this.services),
       },
       {
         path: "/v1/jarvis/context/awareness-recent",
         method: "POST",
-        handler: createJarvisContextAwarenessRecentRoute({
-          contextProvider: this.services.contextProvider,
-        }),
+        handler: createJarvisContextAwarenessRecentRoute(this.services),
       },
       {
         path: "/v1/jarvis/context/commitments-list",
         method: "POST",
-        handler: createJarvisContextCommitmentsListRoute({
-          contextProvider: this.services.contextProvider,
-        }),
+        handler: createJarvisContextCommitmentsListRoute(this.services),
       },
       {
         path: "/v1/jarvis/agent/delegate",
         method: "POST",
-        handler: createJarvisAgentDelegateRoute({
-          agentDelegate: this.services.agentDelegate,
-        }),
+        handler: createJarvisAgentDelegateRoute(this.services),
       },
       {
         path: "/v1/jarvis/events/poll",
         method: "POST",
-        handler: createJarvisEventsPollRoute({
-          eventsPoll: this.services.eventsPoll,
-        }),
+        handler: createJarvisEventsPollRoute(this.services),
       },
       {
         path: "/v1/jarvis/workflows/start",
         method: "POST",
-        handler: createJarvisWorkflowsStartRoute({
-          workflowsStart: this.services.workflowsStart,
-        }),
+        handler: createJarvisWorkflowsStartRoute(this.services),
       },
     );
   }

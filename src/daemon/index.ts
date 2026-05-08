@@ -557,14 +557,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const { JarvisEventBusAdapter, JarvisWorkflowRunnerAdapter } = await import("../workflows/adapters/index.ts");
     const sharedEventBus = new JarvisEventBusAdapter();
     const sharedWorkflowRunner = new JarvisWorkflowRunnerAdapter();
-    triggerManager = new TriggerManager({
-      workflowRunner: sharedWorkflowRunner,
-      eventBus: sharedEventBus,
-    });
 
-    // Build the piece registry early too -- the dashboard editor needs it
-    // for the piece catalog endpoint, and the worker handler reuses the
-    // same instance once execution starts.
+    // Build the piece registry early too -- a fallback for `/api/workflows/pieces`
+    // when the engine bootstrap fails.
     const sharedPieceRegistry = new JarvisPieceRegistry();
     sharedPieceRegistry.register(jarvisAskPiece);
     sharedPieceRegistry.register(jarvisToolPiece);
@@ -573,38 +568,73 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sharedPieceRegistry.register(jarvisAgentPiece);
     sharedPieceRegistry.register(jarvisTriggerPiece);
 
-    // Bootstrap the workflow engine: locate / build the bundle, ensure each
-    // Jarvis piece is compiled, start the loopback SandboxApi, build an
-    // EngineRuntime, and extract the canonical PieceCatalog. The catalog
-    // becomes the source of truth for the dashboard's `/api/workflows/pieces`
-    // endpoint and for the NL composer; the legacy in-process registry stays
-    // as a fallback while K2 swaps the executor.
+    // Recent-events buffer: the daemon mirrors every workflow-bus publish
+    // into this so the engine-managed `on_event` polling trigger sees the
+    // same stream that legacy direct subscribers do.
+    const { WorkflowEventBuffer } = await import("../workflows/runtime/event-buffer.ts");
+    const workflowEventBuffer = new WorkflowEventBuffer();
+    sharedEventBus.setObserver((eventType, payload) => {
+      workflowEventBuffer.publish(eventType, payload);
+    });
+
+    // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
+    // start the loopback SandboxApi, construct the EngineRuntime, extract the
+    // canonical PieceCatalog. /v1/jarvis/* service backends are wired below
+    // after registry.startAll() so toolRegistry + notifier dependencies are
+    // ready; until then each backend returns 503 (mutation via
+    // api.setServices propagates to live route handlers).
     //
-    // Failure here is non-fatal: the daemon can still run flows manually and
-    // serve the legacy piece list, but engine-managed triggers (Phase J) and
-    // piece extraction will be unavailable.
+    // Failure here is non-fatal: the daemon falls back to the legacy
+    // in-process registry for `/api/workflows/pieces` and skips engine-
+    // managed triggers (TriggerManager constructed without engineRuntime).
     let workflowPieceCatalog: import("../workflows/runtime/piece-catalog.ts").PieceLookup =
       sharedPieceRegistry;
+    let workflowEngineRuntime: import("../workflows/runner/engine-runtime/engine-runtime.ts").EngineRuntime | undefined;
+    let workflowSandboxApi: import("../workflows/sandbox-api/server.ts").SandboxApi | undefined;
     try {
       const { bootstrapWorkflowEngine } = await import("../workflows/runtime/engine-bootstrap.ts");
       const engineBoot = await bootstrapWorkflowEngine({
         services: {
           credentialResolver: new (await import("../workflows/credentials/adapter.ts")).CredentialResolver(),
-          // K2 wires real backends (llmChat, toolsInvoke, notify, context,
-          // agentDelegate, eventsPoll, workflowsStart). Until then each
-          // /v1/jarvis/* route returns 503 -- only the metadata extraction
-          // path and the engine-managed trigger lifecycle exercise the api.
+          // eventsPoll is the only backend safely wireable up front (no
+          // dependency on toolRegistry / agentService). The rest land via
+          // api.setServices() after registry.startAll().
+          eventsPoll: async (req) => {
+            const reply = workflowEventBuffer.poll(req);
+            return {
+              events: reply.events.map((ev) => ({
+                id: String(ev.id),
+                eventType: ev.eventType,
+                payload: ev.payload,
+                timestamp: ev.timestamp,
+              })),
+              cursor: reply.cursor,
+            };
+          },
         },
         log: (line) => console.log(`[Daemon] ${line}`),
       });
       workflowEngineShutdown = engineBoot.shutdown;
       workflowPieceCatalog = engineBoot.catalog;
+      workflowEngineRuntime = engineBoot.runtime;
+      workflowSandboxApi = engineBoot.api;
       logWithTimestamp(
         `Workflow engine bootstrap: ${engineBoot.catalog.list().length} piece(s) catalog'd, ${engineBoot.failures.length} failure(s)`,
       );
     } catch (e) {
       console.warn(`[Daemon] Workflow engine bootstrap failed: ${(e as Error).message}; falling back to legacy piece registry`);
     }
+
+    // Build the trigger manager. When `workflowEngineRuntime` is available,
+    // any `PIECE_TRIGGER` that isn't `schedule` or `webhook` (i.e. the
+    // jarvis-trigger:on_event polling trigger and any future vendored
+    // engine-managed trigger) goes through EXECUTE_TRIGGER_HOOK(ON_ENABLE).
+    const triggerManagerOpts: import("../workflows/runner/triggers/manager.ts").TriggerManagerDeps = {
+      workflowRunner: sharedWorkflowRunner,
+      eventBus: sharedEventBus,
+    };
+    if (workflowEngineRuntime) triggerManagerOpts.engineRuntime = workflowEngineRuntime;
+    triggerManager = new TriggerManager(triggerManagerOpts);
 
     // Mount the daemon's existing routes plus the workflow runtime's routes.
     // The legacy in-house workflow routes that lived at /api/workflows/* were
@@ -717,40 +747,69 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     //     each requested channel as delivered when broadcastToAll succeeds.
     //   - Voice channel is reported as not-yet-wired in the result.
     //   - jarvis-agent uses an LLM-only delegator (no M7 tool loop yet).
-    const pieceRegistry = sharedPieceRegistry;
-    const pieceServices = buildPieceServices({
-      llmManager: agentService.getLLMManager(),
-      toolRegistry: toolRegistry ?? undefined,
-      eventBus: sharedEventBus,
-      workflowRunner: sharedWorkflowRunner,
-      notifier: {
-        broadcastToDashboard: (text, priority) => wsService.broadcastNotification(text, priority),
-        broadcastToChannels: async (channels, text) => {
-          // Conservative: broadcastToAll is M8's only fan-out today. Treat each
-          // requested channel as delivered if the call succeeds, failed if not.
-          // Per-channel routing comes when ChannelService exposes it.
-          try {
-            await channelService.broadcastToAll(text);
-            return { delivered: channels, failed: [] };
-          } catch (e) {
-            const error = e instanceof Error ? e.message : String(e);
-            return { delivered: [], failed: channels.map((channel) => ({ channel, error })) };
-          }
-        },
+    // Wire the /v1/jarvis/* service backends now that toolRegistry and the
+    // rest of the daemon services are up. The SandboxApi route handlers
+    // each read from this.services dynamically, so setServices propagates
+    // immediately to in-flight request handling.
+    if (workflowSandboxApi) {
+      const { buildSandboxServiceBackends } = await import("../workflows/runtime/service-backends.ts");
+      const backends = buildSandboxServiceBackends({
+        credentialResolver: workflowSandboxApi.services.credentialResolver,
+        llmManager: agentService.getLLMManager(),
+        ...(toolRegistry ? { toolRegistry } : {}),
+        channelService,
+        wsService,
+        eventBuffer: workflowEventBuffer,
         sendDesktop: async (title, body) => {
           sendDesktopNotification(title, body, { urgency: 'normal' });
         },
-      },
-    });
-    const flowExecutor = new JarvisPiecesFlowExecutor({
-      registry: pieceRegistry,
-      services: pieceServices,
-    });
+      });
+      workflowSandboxApi.setServices(backends);
+      logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");
+    }
+
+    // Pick the executor: engine-backed when bootstrap succeeded, legacy
+    // JarvisPiecesFlowExecutor as a graceful fallback. Once K3 deletes the
+    // legacy executor, the fallback path becomes a hard error -- daemon
+    // bootstrap failure means the workflow runtime is unavailable.
+    const pieceRegistry = sharedPieceRegistry;
+    let flowExecutor: import("../workflows/runner/handler.ts").FlowExecutor;
+    if (workflowEngineRuntime) {
+      const { EngineFlowExecutor } = await import("../workflows/runner/engine-runtime/engine-flow-executor.ts");
+      flowExecutor = new EngineFlowExecutor(workflowEngineRuntime);
+      logWithTimestamp("Workflow worker using engine-backed executor");
+    } else {
+      const pieceServices = buildPieceServices({
+        llmManager: agentService.getLLMManager(),
+        toolRegistry: toolRegistry ?? undefined,
+        eventBus: sharedEventBus,
+        workflowRunner: sharedWorkflowRunner,
+        notifier: {
+          broadcastToDashboard: (text, priority) => wsService.broadcastNotification(text, priority),
+          broadcastToChannels: async (channels, text) => {
+            try {
+              await channelService.broadcastToAll(text);
+              return { delivered: channels, failed: [] };
+            } catch (e) {
+              const error = e instanceof Error ? e.message : String(e);
+              return { delivered: [], failed: channels.map((channel) => ({ channel, error })) };
+            }
+          },
+          sendDesktop: async (title, body) => {
+            sendDesktopNotification(title, body, { urgency: 'normal' });
+          },
+        },
+      });
+      flowExecutor = new JarvisPiecesFlowExecutor({
+        registry: pieceRegistry,
+        services: pieceServices,
+      });
+      logWithTimestamp("Workflow worker using legacy JarvisPiecesFlowExecutor (engine bootstrap failed)");
+    }
     workflowWorker = new WorkflowWorker({
       handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor }) },
     });
     workflowWorker.start();
-    logWithTimestamp(`Workflow worker started with ${pieceRegistry.list().length} Jarvis pieces`);
 
     // Start the trigger manager: scan ENABLED flows and register cron /
     // webhook / on_event subscriptions. From this point on, any flow whose

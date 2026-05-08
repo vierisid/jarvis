@@ -571,9 +571,6 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     expect(list.length).toBe(1);
     expect(list[0]?.flowId).toBe(flowId);
     expect(list[0]?.kind).toBe("engine");
-    expect(list[0]?.warning).toBeDefined();
-    expect(list[0]?.warning).toContain("webhook listeners");
-    expect(list[0]?.warning).toContain("Phase K");
     // No cron registered for webhook-only triggers.
     expect(fakeCron.has(`flow:${flowId}`)).toBe(false);
     // Listeners persisted on the version.
@@ -581,8 +578,24 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     expect(persisted.engineListeners?.length).toBe(1);
     expect(persisted.engineListeners?.[0]?.identifierValue).toBe("watch-id-123");
     expect(persisted.engineSchedule).toBeNull();
-    // Warning also written to the log stream.
-    expect(logs.some((l) => l.includes("WARNING") && l.includes("webhook listeners"))).toBe(true);
+    // Webhook route is registered for /webhooks/<flowId>.
+    expect(tm.webhookManager().getRoutes().has(flowId)).toBe(true);
+    expect(logs.some((l) => l.includes(`/webhooks/${flowId} active`))).toBe(true);
+
+    // Webhook fire (simulated via a real POST through handleRequest) enqueues
+    // RUN_FLOW with `executeTrigger=true` because the registered sub is
+    // engine-managed.
+    const { queueStats: qs2, claimNextJob: cnj2 } = await import("../../db/repos/job-queue");
+    const queuedBefore = qs2().queued;
+    const fakeReq = new Request(`http://localhost/webhooks/${flowId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ foo: "bar" }),
+    });
+    await tm.webhookManager().handleRequest(flowId, fakeReq);
+    expect(qs2().queued).toBe(queuedBefore + 1);
+    const job = cnj2<{ runId: string; payload?: Record<string, unknown>; executeTrigger?: boolean }>();
+    expect(job?.payload.executeTrigger).toBe(true);
 
     await tm.stop();
   });

@@ -35,8 +35,28 @@ export class JarvisEventBusAdapter implements PieceEventBus {
     return Array.from(this.handlers.keys()).sort();
   }
 
+  /**
+   * Optional observer invoked on every publish. Daemon hooks this to
+   * mirror events into the polling buffer that backs `/v1/jarvis/events/poll`,
+   * so engine-managed `on_event` triggers see the same stream as legacy
+   * direct subscribers.
+   */
+  private onPublish: ((eventType: string, payload: Record<string, unknown>) => void) | null = null;
+
+  setObserver(fn: (eventType: string, payload: Record<string, unknown>) => void): void {
+    this.onPublish = fn;
+  }
+
   /** Publish from Jarvis daemon code. Errors in handlers are swallowed-and-logged. */
   publish(eventType: string, payload: Record<string, unknown>): void {
+    if (this.onPublish) {
+      try {
+        this.onPublish(eventType, payload);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[workflow-event-bus] observer threw: ${msg}`);
+      }
+    }
     const set = this.handlers.get(eventType);
     if (!set) return;
     for (const handler of set) {

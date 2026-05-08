@@ -386,7 +386,7 @@ export class TriggerManager {
     }
 
     let cronTearDown: (() => void) | null = null;
-    let warning: string | undefined;
+    let webhookTearDown: (() => void) | null = null;
     if (schedule?.cronExpression) {
       try {
         this.cron.schedule(`flow:${flow.id}`, schedule.cronExpression, () => {
@@ -400,24 +400,26 @@ export class TriggerManager {
       }
     }
     if (listeners && listeners.length > 0) {
-      // Webhook routing for engine-managed triggers lands in Phase K alongside
-      // the daemon-side WebhookManager wiring. The listeners are persisted on
-      // flow_version so K can read them out and register routes; until then
-      // we surface a `warning` on the active subscription so the API +
-      // dashboard can flag the flow as "enabled but not firing for webhook
-      // events". Visible to consumers via `tm.list()`.
-      const msg = `webhook listeners (${listeners.length}) registered upstream but route wiring is deferred to Phase K; flow will not fire on webhook events yet`;
-      warning = warning ? `${warning}; ${msg}` : msg;
-      this.log(`flow ${flow.id}: WARNING: ${msg}`);
+      // Engine-returned listeners drive webhook routing: register the flow on
+      // the WebhookManager so external POSTs to `/webhooks/<flowId>` enqueue
+      // RUN_FLOW with `executeTrigger=true`, letting the engine's
+      // `trigger.run()` consume the request body as the trigger payload.
+      // Multiple listeners (e.g. Gmail watch + identifier) share one webhook
+      // endpoint per flow; the engine's onEnable already encoded what to
+      // listen for via its external API (Gmail watch, etc.).
+      this.webhooks.register(flow.id);
+      webhookTearDown = () => this.webhooks.unregister(flow.id);
+      this.log(
+        `flow ${flow.id}: engine registered ${listeners.length} listener(s); webhook route /webhooks/${flow.id} active`,
+      );
     }
 
     const sub: ActiveSub = {
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
-      teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown),
+      teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
-    if (warning) sub.warning = warning;
     this.subs.set(flow.id, sub);
   }
 
@@ -425,8 +427,10 @@ export class TriggerManager {
     flowId: string,
     versionId: string,
     cronTearDown: (() => void) | null,
+    webhookTearDown: (() => void) | null = null,
   ): Promise<void> {
     if (cronTearDown) cronTearDown();
+    if (webhookTearDown) webhookTearDown();
     // Clear our persisted state FIRST so the DB is consistent even if the
     // engine call below fails mid-flight (engine half-crashes, network blip).
     // Trade-off: an external resource the trigger registered (e.g. a Gmail
@@ -512,9 +516,13 @@ export class TriggerManager {
   }
 
   /**
-   * Legacy trigger fire (cron / webhook / direct event-bus subscribe). The
-   * payload is forwarded verbatim; the executor walks the action chain
-   * directly with no trigger-side preprocessing.
+   * Trigger fire for cron / webhook / direct event-bus subscribe. The
+   * payload is forwarded as the trigger payload. For engine-managed
+   * subscriptions (`sub.kind === "engine"`) the run is enqueued with
+   * `executeTrigger=true` so the engine's `trigger.run()` consumes the
+   * payload (e.g. webhook body for an engine webhook trigger) to derive the
+   * actual flow-run payload(s); legacy subs run the chain directly with the
+   * payload as initial state.
    */
   private fire(flowId: string, payload: Record<string, unknown>, kind: SubscriptionKind): void {
     const sub = this.subs.get(flowId);
@@ -524,7 +532,13 @@ export class TriggerManager {
       return;
     }
     try {
-      this.enqueueFlowRun({ flowId, versionId, kind, payload });
+      this.enqueueFlowRun({
+        flowId,
+        versionId,
+        kind: sub.kind,
+        payload,
+        ...(sub.kind === "engine" ? { executeTrigger: true } : {}),
+      });
     } catch (e) {
       this.log(`flow ${flowId} (${kind}) fire failed: ${(e as Error).message}`);
     }
