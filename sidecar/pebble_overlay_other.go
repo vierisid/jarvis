@@ -36,3 +36,7 @@ func (s *pebbleServiceStub) Close() error {
 func (s *pebbleServiceStub) OnSummon(callback func()) {
 	// no-op — native pebble is Windows-only for now
 }
+
+func (s *pebbleServiceStub) OnPalette(callback func()) {
+	// no-op — palette hotkey is Windows-only for now
+}

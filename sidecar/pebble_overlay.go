@@ -36,6 +36,11 @@ type PebbleSpec struct {
 	// SummonHotkey, if non-empty, registers a global hotkey that toggles
 	// listening/idle and shows/hides the bubble. Default "ctrl+space".
 	SummonHotkey string `json:"summon_hotkey"`
+
+	// PaletteHotkey, if non-empty, registers a second global hotkey that
+	// fires the OnPalette callback. Used by the Cmd+K / Ctrl+K palette to
+	// open a fuzzy room picker at the cursor. Default "ctrl+k".
+	PaletteHotkey string `json:"palette_hotkey"`
 }
 
 // PebbleService is the platform-agnostic API for the native pebble overlay.
@@ -75,6 +80,11 @@ type PebbleService interface {
 	// via SetState (listening → thinking → speaking → idle, or whatever
 	// the voice/LLM lifecycle dictates).
 	OnSummon(callback func())
+
+	// OnPalette registers a callback fired when the user triggers the
+	// palette hotkey (Ctrl+K). Same threading and non-blocking contract as
+	// OnSummon. The callback drives the daemon's palette open/close flow.
+	OnPalette(callback func())
 }
 
 // NewPebbleService returns the platform-specific implementation. Defined in

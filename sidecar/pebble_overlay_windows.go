@@ -166,10 +166,24 @@ type pebbleServiceWindows struct {
 	// Called when the pebble is closed.
 	hotkeyStop func()
 
+	// paletteHotkeyStop is the cleanup function for the Ctrl+K palette
+	// hotkey, when registered via PaletteHotkey.
+	paletteHotkeyStop func()
+
+	// paletteMouseHookStop is the cleanup function for the global
+	// low-level mouse hook that fires the palette on Ctrl+MMB. Same
+	// callback as the keyboard hotkey, just a different trigger.
+	paletteMouseHookStop func()
+
 	// summonCallback is invoked each time the user fires the summon
 	// hotkey. Set via OnSummon(); the daemon drives state transitions
 	// from there.
 	summonCallback func()
+
+	// paletteCallback is invoked each time the user fires the palette
+	// hotkey (Ctrl+K). Set via OnPalette(); the daemon spawns/dismisses
+	// the palette panel from there.
+	paletteCallback func()
 }
 
 // NewPebbleService returns the Windows-native pebble service.
@@ -219,6 +233,38 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 			log.Printf("[pebble] summon hotkey '%s' registered", s.spec.SummonHotkey)
 		}
 	}
+
+	// Register the palette hotkey (Ctrl+K) — fires OnPalette callback.
+	// Independent of the summon hotkey; daemon spawns/dismisses the palette
+	// panel at the cursor position.
+	if s.spec.PaletteHotkey != "" {
+		stop, err := startHotkeyListener(s.spec.PaletteHotkey, func() {
+			s.onPaletteHotkey()
+		})
+		if err != nil {
+			log.Printf("[pebble] palette hotkey '%s' not registered: %v", s.spec.PaletteHotkey, err)
+		} else {
+			s.paletteHotkeyStop = stop
+			log.Printf("[pebble] palette hotkey '%s' registered", s.spec.PaletteHotkey)
+		}
+	}
+
+	// W4 — Ctrl+Middle-click as a mouse-only palette trigger so the user
+	// can fire the palette one-handed without lifting fingers off the
+	// mouse. Plain MMB still flows through; we only swallow the click
+	// when Ctrl is held. Off when PaletteHotkey is empty (so callers can
+	// opt out of the global mouse hook entirely).
+	if s.spec.PaletteHotkey != "" {
+		stop, err := startMouseHookCtrlMButton(func() {
+			s.onPaletteHotkey()
+		})
+		if err != nil {
+			log.Printf("[pebble] Ctrl+MMB hook not installed: %v", err)
+		} else {
+			s.paletteMouseHookStop = stop
+			log.Printf("[pebble] Ctrl+MMB palette trigger installed")
+		}
+	}
 	return nil
 }
 
@@ -235,6 +281,23 @@ func (s *pebbleServiceWindows) onSummonHotkey() {
 
 func (s *pebbleServiceWindows) OnSummon(callback func()) {
 	s.summonCallback = callback
+}
+
+// onPaletteHotkey fires the user-supplied palette callback. Like the summon
+// callback, this runs on whatever goroutine the hotkey listener used; the
+// daemon owns the open/close lifecycle of the palette panel itself.
+func (s *pebbleServiceWindows) onPaletteHotkey() {
+	cb := s.paletteCallback
+	if cb == nil {
+		log.Printf("[pebble] palette hotkey fired but no callback registered yet — dropping")
+		return
+	}
+	log.Printf("[pebble] palette hotkey fired — invoking callback")
+	go cb()
+}
+
+func (s *pebbleServiceWindows) OnPalette(callback func()) {
+	s.paletteCallback = callback
 }
 
 func (s *pebbleServiceWindows) SetState(state PebbleState) error {
@@ -290,6 +353,14 @@ func (s *pebbleServiceWindows) Close() error {
 	if s.hotkeyStop != nil {
 		s.hotkeyStop()
 		s.hotkeyStop = nil
+	}
+	if s.paletteHotkeyStop != nil {
+		s.paletteHotkeyStop()
+		s.paletteHotkeyStop = nil
+	}
+	if s.paletteMouseHookStop != nil {
+		s.paletteMouseHookStop()
+		s.paletteMouseHookStop = nil
 	}
 	close(s.stopCh)
 	<-s.doneCh

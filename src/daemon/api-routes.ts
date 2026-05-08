@@ -2382,6 +2382,47 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     /**
+     * W4 — palette panel picks. The dashboard's `_palette` panel-mode
+     * page POSTs here when the user picks a Room or hits Esc; the daemon
+     * forwards the call through the registered palette handler so the
+     * room-spawn / panel-close logic stays in `index.ts` where the panel
+     * tracking lives. 204 on success, 503 if no handler registered.
+     */
+    '/api/palette/pick': {
+      POST: async (req: Request) => {
+        const { getPaletteHandler } = await import('./palette-controller.ts');
+        const h = getPaletteHandler();
+        if (!h) return error('Palette handler not registered', 503);
+        const body = (await req.json().catch(() => null)) as
+          | { kind?: string; key?: string; openInRoom?: boolean }
+          | null;
+        if (!body || (body.kind !== 'room' && body.kind !== 'object') || !body.key) {
+          return error('kind ("room"|"object") and key are required', 400);
+        }
+        try {
+          await h.pick({ kind: body.kind, key: body.key, openInRoom: !!body.openInRoom });
+        } catch (err) {
+          return error(`pick failed: ${(err as Error).message}`, 500);
+        }
+        return new Response(null, { status: 204 });
+      },
+    },
+
+    '/api/palette/close': {
+      POST: async () => {
+        const { getPaletteHandler } = await import('./palette-controller.ts');
+        const h = getPaletteHandler();
+        if (!h) return error('Palette handler not registered', 503);
+        try {
+          await h.close();
+        } catch (err) {
+          return error(`close failed: ${(err as Error).message}`, 500);
+        }
+        return new Response(null, { status: 204 });
+      },
+    },
+
+    /**
      * Unified palette search aggregator. Merges all six object types into a
      * single `PaletteResult[]` shape that maps directly to `<InlineCard>`
      * props on the UI side. Each type is bounded so a single overflowing

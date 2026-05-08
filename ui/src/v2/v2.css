@@ -42,6 +42,33 @@
   overflow: auto;
 }
 
+/* W4 — palette-mode root. The panel window itself is the modal, so we
+   collapse the CommandPalette's scrim to a no-op and let the card fill
+   the panel's bounds. The card already has its own border + offset
+   shadow from CommandPalette.css. */
+.jarvis-v2-palette-mode {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  overflow: hidden;
+}
+.jarvis-v2-palette-mode .v2-palette__scrim {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.jarvis-v2-palette-mode .v2-palette {
+  width: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  border: 0;
+}
+
 /* Phase 7 Pass B — visually-hidden utility for screen-reader-only
    announcements (voice state changes, room transitions). Standard
    recipe: takes itself out of the visual tree without `display: none`
