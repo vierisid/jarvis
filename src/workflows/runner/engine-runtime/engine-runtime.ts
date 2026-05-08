@@ -334,6 +334,7 @@ export class EngineRuntime {
       "jarvis-context",
       "jarvis-agent",
       "jarvis-trigger",
+      "jarvis-validate",
     ];
   }
 

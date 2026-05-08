@@ -19,7 +19,7 @@ import type {
   UpdateStepProgressRequest,
   UploadRunLogsRequest,
 } from "./contracts";
-import { updateRun } from "../db/repos/flow-run";
+import { getFlowRun, updateRun } from "../db/repos/flow-run";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
 
@@ -71,9 +71,22 @@ export class DefaultWorkerHandlers
   async updateRunProgress(sandboxId: string, input: UpdateRunProgressRequest): Promise<void> {
     if (!this.requireRunId(sandboxId)) return;
     this.lastProgress.set(sandboxId, input);
-    // We persist the in-flight status; per-step state goes into uploadRunLog.
+    // Persist in-flight status. In TESTING mode the engine also streams per-
+    // step output via `input.step` -- accumulate it onto the run's `steps`
+    // record so callers reading `flow_run.steps[stepName].output` see the
+    // value the action returned. PRODUCTION runs don't include `step`, only
+    // the final uploadRunLog.
     try {
-      updateRun(input.flowRun.id, { status: input.flowRun.status });
+      const patch: Parameters<typeof updateRun>[1] = { status: input.flowRun.status };
+      if (input.step) {
+        const existingRow = getFlowRun(input.flowRun.id);
+        const existingSteps = (existingRow?.steps ?? {}) as Record<string, unknown>;
+        patch.steps = {
+          ...existingSteps,
+          [input.step.name]: { output: input.step.output },
+        };
+      }
+      updateRun(input.flowRun.id, patch);
     } catch {
       // run row might be gone (sandbox was terminated); swallow.
     }

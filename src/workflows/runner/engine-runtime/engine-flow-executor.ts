@@ -85,10 +85,18 @@ export class EngineFlowExecutor implements FlowExecutor {
       projectId: ctx.run.projectId ?? DEFAULT_IDS.project,
     });
     try {
+      // streamStepProgress: WEBSOCKET makes the engine emit per-step
+      // `updateRunProgress({ step })` calls to the daemon. The daemon's
+      // worker-handler accumulates each step's output onto `flow_run.steps`
+      // so the dashboard run-history panel + downstream consumers can see
+      // per-step results. `NONE` (the default in operation-builder) means
+      // status-only updates -- adequate for production-only metrics but the
+      // run row's `steps` would stay empty.
       await handle.executeFlow({
         flowVersion: ctx.version,
         triggerPayload: ctx.payload,
         executeTrigger: ctx.job.payload.executeTrigger ?? false,
+        streamStepProgress: "WEBSOCKET",
       });
     } finally {
       await handle.release();
