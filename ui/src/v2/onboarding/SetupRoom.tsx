@@ -311,9 +311,10 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
               <select
                 id="setup-model"
                 className="v2-setup__select"
-                value={model}
+                value={provider.models.includes(model) ? model : "custom"}
                 onChange={(e) => {
-                  setModel(e.target.value);
+                  const v = e.target.value;
+                  setModel(v === "custom" ? "" : v);
                   setTestResult(null);
                 }}
               >
@@ -322,7 +323,21 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     {m}
                   </option>
                 ))}
+                <option value="custom">Custom…</option>
               </select>
+              {!provider.models.includes(model) && (
+                <input
+                  className="v2-setup__input"
+                  value={model}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setTestResult(null);
+                  }}
+                  placeholder="model id (e.g. your local Ollama model name)"
+                  autoComplete="off"
+                  style={{ marginTop: "var(--s-2)" }}
+                />
+              )}
             </div>
 
             <div className="v2-setup__test-row">
