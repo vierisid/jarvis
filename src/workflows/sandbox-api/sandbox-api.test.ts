@@ -806,7 +806,12 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
   let agentCalls: Array<{ goal: string; role?: string; maxIterations?: number }>;
-  let pollCalls: Array<{ eventType: string; since: number; filter?: Record<string, unknown> }>;
+  let pollCalls: Array<{
+    eventType: string;
+    since?: number;
+    filter?: Record<string, unknown>;
+    headOnly?: boolean;
+  }>;
   let startCalls: Array<{ flowId?: string; flowName?: string; payload?: Record<string, unknown> }>;
   let pollReply: {
     events: Array<{
@@ -1043,5 +1048,130 @@ describe("SandboxApi routes (H unconfigured -> 503)", () => {
       body: JSON.stringify({ flowId: "x" }),
     });
     expect(r.status).toBe(503);
+  });
+});
+
+describe("SandboxApi /v1/jarvis/* envelope hardening (G+H review #7)", () => {
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: {
+        credentialResolver: new CredentialResolver(),
+        // Wire every backend so we exercise the validation layer, not the 503 gate.
+        llmChat: async () => ({ text: "" }),
+        toolsInvoke: async () => ({ result: {}, toolName: "" }),
+        notify: async () => ({ delivered: [], failed: [] }),
+        contextProvider: {
+          vaultSearch: async () => [],
+          vaultGetEntity: async () => null,
+          awarenessRecent: async () => [],
+          commitmentsList: async () => [],
+        },
+        agentDelegate: async () => ({ finalMessage: "", toolCalls: [], status: "completed" }),
+        eventsPoll: async () => ({ events: [], cursor: 7 }),
+        workflowsStart: async () => ({ runId: "" }),
+      },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  const JSON_POST_PATHS = [
+    "/v1/jarvis/llm/chat",
+    "/v1/jarvis/tools/invoke",
+    "/v1/jarvis/notify",
+    "/v1/jarvis/context/vault-search",
+    "/v1/jarvis/context/vault-get-entity",
+    "/v1/jarvis/context/awareness-recent",
+    "/v1/jarvis/context/commitments-list",
+    "/v1/jarvis/agent/delegate",
+    "/v1/jarvis/events/poll",
+    "/v1/jarvis/workflows/start",
+  ] as const;
+
+  test("each /v1/jarvis/* POST returns 400 on malformed JSON", async () => {
+    for (const path of JSON_POST_PATHS) {
+      const r = await authedFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{not-json",
+      });
+      expect(r.status).toBe(400);
+    }
+  });
+
+  test("each /v1/jarvis/* POST returns 400 on a non-object body", async () => {
+    for (const path of JSON_POST_PATHS) {
+      const r = await authedFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify("hello"),
+      });
+      // Parsing succeeds (it's valid JSON), but field validation rejects.
+      expect(r.status).toBe(400);
+    }
+  });
+
+  test("/v1/jarvis/events/poll headOnly mode skips 'since' and returns the head cursor", async () => {
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventType: "x", headOnly: true }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { events: unknown[]; cursor: number };
+    expect(body.cursor).toBe(7);
+    expect(body.events.length).toBe(0);
+  });
+
+  test("/v1/jarvis/events/poll without 'since' and without headOnly returns 400", async () => {
+    const r = await authedFetch("/v1/jarvis/events/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventType: "x" }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("each /v1/jarvis/* POST handles a 256KB+ payload without crashing", async () => {
+    // The store route caps at 500KB; the jarvis routes have no explicit cap
+    // but should still parse and reject on field-validation rather than
+    // crashing the server. We send a fat valid JSON body and assert the
+    // server replies (any 4xx/2xx is fine -- we're not asserting outcome,
+    // just liveness under a realistic body size).
+    const big = "x".repeat(256 * 1024);
+    for (const path of JSON_POST_PATHS) {
+      const r = await authedFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pad: big, message: "x", goal: "x", id: "x", toolName: "x", eventType: "x", since: 0, flowId: "x", prompt: "x" }),
+      });
+      expect(r.status).toBeLessThan(500);
+    }
   });
 });

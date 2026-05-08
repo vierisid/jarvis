@@ -80,6 +80,11 @@ type PollingTriggerHookContext<
   TriggerProps extends InputPropertyMap
 > = BaseContext<PieceAuth, TriggerProps> & {
   setSchedule(schedule: { cronExpression: string; timezone?: string }): void;
+  // Jarvis: the engine runtime (trigger-helper.ts) sets `server` unconditionally
+  // on every trigger context regardless of strategy. Upstream's type omitted it
+  // for POLLING; we surface it here so polling triggers can call back to the
+  // daemon's `/v1/jarvis/*` endpoints with the engineToken without unsafe casts.
+  server: ServerContext;
 };
 
 type WebhookTriggerHookContext<

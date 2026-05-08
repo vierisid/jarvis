@@ -217,6 +217,38 @@ const STRIP_EXPORT_LINES: Record<string, RegExp[]> = {
 };
 
 /**
+ * Jarvis-specific source patches re-applied after each sync. Each entry names
+ * a file in the vendor tree, an `anchor` regex that must match exactly one
+ * line, and an `insert` payload spliced in immediately after the anchor line.
+ *
+ * Use sparingly: every patch here is a maintenance cost on upstream syncs.
+ * Patches must be self-describing (the inserted block carries its own
+ * `// Jarvis: ...` comment) so the rationale survives even without this
+ * script in scope.
+ */
+const PATCH_INSERTIONS: Record<
+  string,
+  Array<{ anchor: RegExp; insert: string }>
+> = {
+  // Polling triggers need `server.{token,apiUrl}` to call back into the
+  // daemon's /v1/jarvis/* endpoints with the engineToken. The engine
+  // runtime sets this unconditionally (trigger-helper.ts:137-141) but
+  // upstream's TS type omitted it for POLLING; we add it here so trigger
+  // code can call back without unsafe casts.
+  "packages/pieces/framework/src/lib/context/index.ts": [
+    {
+      anchor: /^\s*setSchedule\(schedule: \{ cronExpression: string; timezone\?: string \}\): void;\s*$/,
+      insert:
+        "  // Jarvis: the engine runtime (trigger-helper.ts) sets `server` unconditionally\n" +
+        "  // on every trigger context regardless of strategy. Upstream's type omitted it\n" +
+        "  // for POLLING; we surface it here so polling triggers can call back to the\n" +
+        "  // daemon's `/v1/jarvis/*` endpoints with the engineToken without unsafe casts.\n" +
+        "  server: ServerContext;",
+    },
+  ],
+};
+
+/**
  * Recursive copy that skips:
  *   1. Any path whose relative segment matches `/ee/` (Activepieces Enterprise-licensed,
  *      or any MIT subdirectory named `ee` that we don't vendor on principle).
@@ -295,6 +327,34 @@ for (const [relPath, patterns] of Object.entries(STRIP_EXPORT_LINES)) {
   }
   writeFileSync(dst, kept.join("\n"));
   info(`stripped ${removed} export line(s) from ${relPath}`);
+}
+for (const [relPath, patches] of Object.entries(PATCH_INSERTIONS)) {
+  const dst = join(VENDOR_DIR, relPath);
+  if (!existsSync(dst)) {
+    fail(`patch-insertions target missing: ${relPath}`);
+  }
+  const original = readFileSync(dst, "utf8");
+  const lines = original.split("\n");
+  const out: string[] = [];
+  const matched = patches.map(() => 0);
+  for (const line of lines) {
+    out.push(line);
+    for (let i = 0; i < patches.length; i++) {
+      if (patches[i]!.anchor.test(line)) {
+        out.push(patches[i]!.insert);
+        matched[i] = (matched[i] ?? 0) + 1;
+      }
+    }
+  }
+  for (let i = 0; i < patches.length; i++) {
+    if (matched[i] !== 1) {
+      fail(
+        `patch-insertions: anchor #${i} for ${relPath} matched ${matched[i]} time(s); expected 1. Did upstream restructure?`,
+      );
+    }
+  }
+  writeFileSync(dst, out.join("\n"));
+  info(`applied ${patches.length} patch insertion(s) to ${relPath}`);
 }
 
 // 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through

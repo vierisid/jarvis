@@ -7,7 +7,7 @@
  * only validates the envelope and dispatches to an injected `AgentDelegateFn`.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 export interface AgentDelegateRequest {
   goal: string;
@@ -43,12 +43,8 @@ export function createJarvisAgentDelegateRoute(
     if (!deps.agentDelegate) {
       return err("jarvis agent.delegate not configured", 503);
     }
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     if (typeof raw.goal !== "string" || raw.goal.length === 0) {
       return err("goal must be a non-empty string", 400);
     }

@@ -224,7 +224,15 @@ export class EngineRuntime {
     // Accept piece names with or without the `piece-` prefix; the engine's
     // `getPieceNameFromAlias` normalizes by stripping `piece-` so we match
     // its own behaviour.
-    this.devPieces = opts.devPieces ?? ["jarvis-test", "jarvis-ask"];
+    this.devPieces = opts.devPieces ?? [
+      "jarvis-test",
+      "jarvis-ask",
+      "jarvis-tool",
+      "jarvis-notify",
+      "jarvis-context",
+      "jarvis-agent",
+      "jarvis-trigger",
+    ];
   }
 
   /** Expose for callers that need to resolve files into the same baseCodeDir. */

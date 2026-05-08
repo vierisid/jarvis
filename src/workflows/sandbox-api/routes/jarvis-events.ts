@@ -2,16 +2,20 @@
  * `/v1/jarvis/events/poll` -- backs the `jarvis-trigger` `on_event` polling
  * trigger.
  *
- * Stateless poll: the daemon keeps a recent-events buffer; the trigger sends
- * `{ eventType, filter?, since }` and gets back events with timestamp > since
- * matching `eventType` and `filter`. Cursor is the daemon's notion of the
- * head (max id assigned so far), so the trigger persists it and uses it as
- * `since` on the next poll. A magic `since: Number.MAX_SAFE_INTEGER` returns
- * an empty event list with the current head -- used by `onEnable` to seed the
- * initial cursor without delivering historical events.
+ * Two request shapes:
+ *
+ *   1. **Stream poll** -- `{ eventType, filter?, since }`. Returns events with
+ *      timestamp > since matching `eventType` and `filter`. `cursor` is the
+ *      daemon's notion of the head; the trigger persists it as `since` for the
+ *      next poll.
+ *
+ *   2. **Head-only** -- `{ eventType, headOnly: true }` (no `since`). Returns
+ *      `{ events: [], cursor: <current head> }`. Used by `onEnable` to seed
+ *      the cursor without delivering historical events. Distinct from a
+ *      sentinel `since` value so the daemon implementer's intent is explicit.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 export interface JarvisEvent {
   id: string;
@@ -23,7 +27,10 @@ export interface JarvisEvent {
 export interface EventsPollRequest {
   eventType: string;
   filter?: Record<string, unknown>;
-  since: number;
+  /** Cursor from the previous poll. Required unless `headOnly` is true. */
+  since?: number;
+  /** When true, return only the current head cursor with an empty events array. */
+  headOnly?: boolean;
 }
 
 export interface EventsPollResponse {
@@ -47,19 +54,21 @@ export function createJarvisEventsPollRoute(
     if (!deps.eventsPoll) {
       return err("jarvis events.poll not configured", 503);
     }
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     if (typeof raw.eventType !== "string" || raw.eventType.length === 0) {
       return err("eventType must be a non-empty string", 400);
     }
-    if (typeof raw.since !== "number" || !Number.isFinite(raw.since) || raw.since < 0) {
-      return err("since must be a non-negative number", 400);
+    const headOnly = raw.headOnly === true;
+    const out: EventsPollRequest = { eventType: raw.eventType };
+    if (headOnly) {
+      out.headOnly = true;
+    } else {
+      if (typeof raw.since !== "number" || !Number.isFinite(raw.since) || raw.since < 0) {
+        return err("since must be a non-negative number", 400);
+      }
+      out.since = raw.since;
     }
-    const out: EventsPollRequest = { eventType: raw.eventType, since: raw.since };
     if (raw.filter !== undefined) {
       if (typeof raw.filter !== "object" || raw.filter === null || Array.isArray(raw.filter)) {
         return err("filter must be an object if provided", 400);

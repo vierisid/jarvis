@@ -7,7 +7,7 @@
  * job queue). The handler here only validates the envelope.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 export interface WorkflowsStartRequest {
   flowId?: string;
@@ -19,6 +19,20 @@ export interface WorkflowsStartResponse {
   runId: string;
 }
 
+/**
+ * Daemon-side workflow-start backend. Implementations must define:
+ *
+ *   - **flowId resolution**: exact match against `flow.id`. 404 if absent.
+ *   - **flowName resolution**: case-sensitive match against the latest
+ *     locked version's `displayName` for flows in `projectId`. If multiple
+ *     flows share the same name, prefer the most recently updated, surface
+ *     a warning, and document this. Implementations that want strict 1:1
+ *     should reject ambiguous matches with an error.
+ *   - **payload**: passed through to RUN_FLOW as the trigger payload.
+ *   - **return**: the started run's id; the call is fire-and-forget --
+ *     the called workflow runs asynchronously and the caller does not block
+ *     on its completion.
+ */
 export type WorkflowsStartFn = (
   req: WorkflowsStartRequest,
   ctx: { runId: string; projectId: string },
@@ -35,12 +49,8 @@ export function createJarvisWorkflowsStartRoute(
     if (!deps.workflowsStart) {
       return err("jarvis workflows.start not configured", 503);
     }
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     const out: WorkflowsStartRequest = {};
     if (raw.flowId !== undefined) {
       if (typeof raw.flowId !== "string" || raw.flowId.length === 0) {

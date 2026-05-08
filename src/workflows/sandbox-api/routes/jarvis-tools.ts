@@ -8,7 +8,7 @@
  * configured the route returns 503.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 export interface ToolsInvokeRequest {
   toolName: string;
@@ -36,28 +36,24 @@ export function createJarvisToolsInvokeRoute(
     if (!deps.toolsInvoke) {
       return err("jarvis tools.invoke not configured", 503);
     }
-    let body: ToolsInvokeRequest;
-    try {
-      body = (await req.json()) as ToolsInvokeRequest;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
-    if (typeof body.toolName !== "string" || body.toolName.length === 0) {
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
+    if (typeof raw.toolName !== "string" || raw.toolName.length === 0) {
       return err("toolName must be a non-empty string", 400);
     }
     let params: Record<string, unknown> = {};
-    if (body.params !== undefined) {
+    if (raw.params !== undefined) {
       if (
-        typeof body.params !== "object" ||
-        body.params === null ||
-        Array.isArray(body.params)
+        typeof raw.params !== "object" ||
+        raw.params === null ||
+        Array.isArray(raw.params)
       ) {
         return err("params must be an object", 400);
       }
-      params = body.params;
+      params = raw.params as Record<string, unknown>;
     }
     const reply = await deps.toolsInvoke(
-      { toolName: body.toolName, params },
+      { toolName: raw.toolName, params },
       { runId: req.claims.runId, projectId: req.claims.projectId },
     );
     return json(reply);

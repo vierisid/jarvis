@@ -2,15 +2,16 @@
  * `notify` action -- POST `{ message, channels?, priority? }` to
  * `/v1/jarvis/notify` and surface the delivery report.
  *
- * `channels` defaults to `["auto"]` (let the daemon pick reasonable
- * defaults). Pieces never throw on partial-channel failure; the daemon's
- * route returns `{ delivered, failed }` and downstream nodes branch on it.
+ * Channel routing is owned by the daemon-side notifier (`auto` expansion,
+ * fan-out across telegram/discord/dashboard/desktop/voice, partial-failure
+ * reporting). The piece is intentionally thin: it forwards user input
+ * verbatim and delegates validation to the route handler. The
+ * `StaticMultiSelectDropdown`/`StaticDropdown` widgets already restrict
+ * values to the allow-list at compose time, so the piece doesn't duplicate
+ * a runtime allow-list check.
  */
 
 import { createAction, Property } from "@activepieces/pieces-framework";
-
-const VALID_CHANNELS = ["auto", "dashboard", "telegram", "discord", "voice", "desktop"] as const;
-const VALID_PRIORITIES = ["low", "normal", "high"] as const;
 
 interface NotifyResponse {
   delivered: string[];
@@ -67,10 +68,11 @@ export const notifyAction = createAction({
     if (typeof message !== "string" || message.length === 0) {
       throw new Error("jarvis-notify: message is required and must be a non-empty string");
     }
-    const rawChannels = context.propsValue["channels"];
-    const channels = normalizeChannels(rawChannels);
-    const rawPriority = context.propsValue["priority"];
-    const priority = normalizePriority(rawPriority);
+    const body: Record<string, unknown> = { message };
+    const channels = context.propsValue["channels"];
+    if (Array.isArray(channels) && channels.length > 0) body["channels"] = channels;
+    const priority = context.propsValue["priority"];
+    if (typeof priority === "string" && priority.length > 0) body["priority"] = priority;
 
     const response = await fetch(url, {
       method: "POST",
@@ -78,7 +80,7 @@ export const notifyAction = createAction({
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
       },
-      body: JSON.stringify({ message, channels, priority }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
       const text = await response.text();
@@ -89,31 +91,6 @@ export const notifyAction = createAction({
     return (await response.json()) as NotifyResponse;
   },
 });
-
-function normalizeChannels(raw: unknown): string[] {
-  if (raw === undefined || raw === null) return ["auto"];
-  if (!Array.isArray(raw) || raw.length === 0) return ["auto"];
-  const out: string[] = [];
-  for (const c of raw) {
-    if (typeof c !== "string" || !(VALID_CHANNELS as readonly string[]).includes(c)) {
-      throw new Error(
-        `jarvis-notify: channels[] must contain only: ${VALID_CHANNELS.join(", ")}`,
-      );
-    }
-    out.push(c);
-  }
-  return out;
-}
-
-function normalizePriority(raw: unknown): string {
-  if (raw === undefined || raw === null) return "normal";
-  if (typeof raw !== "string" || !(VALID_PRIORITIES as readonly string[]).includes(raw)) {
-    throw new Error(
-      `jarvis-notify: priority must be one of: ${VALID_PRIORITIES.join(", ")}`,
-    );
-  }
-  return raw;
-}
 
 function trimSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url;

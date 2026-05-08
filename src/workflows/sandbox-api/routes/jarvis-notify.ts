@@ -7,7 +7,7 @@
  * injected `NotifyFn`. If no fn is configured the route returns 503.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 const VALID_CHANNELS = new Set([
   "auto",
@@ -47,12 +47,8 @@ export function createJarvisNotifyRoute(
     if (!deps.notify) {
       return err("jarvis notify not configured", 503);
     }
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     if (typeof raw.message !== "string" || raw.message.length === 0) {
       return err("message must be a non-empty string", 400);
     }

@@ -7,17 +7,23 @@
  * `context.store` and asks for events newer than that cursor on each run.
  *
  *   onEnable  -- pick a polling cadence (1 minute by default), seed cursor
- *                with current daemon-side cursor (so the first poll only
+ *                with the daemon's current head (so the first real poll only
  *                returns events that arrive after enable, not history).
  *   onDisable -- nothing to clean up; cursor lives in context.store and dies
  *                with the trigger.
  *   run       -- poll, advance cursor, return events with DEDUPE_KEY_PROPERTY.
  *   test      -- single sample.
  *
- * Polling-trigger contexts in upstream's framework type don't expose `server`,
- * but the engine runtime sets it unconditionally (see
- * packages/server/engine/src/lib/helper/trigger-helper.ts:137-141). We cast
- * at the boundary so trigger code can call back.
+ * Latency note: the polling cadence is hard-coded to once per minute, which
+ * means events can take up to ~60s to fire a workflow run. That's adequate
+ * for most automation (morning briefings, hourly digests, low-frequency
+ * commitments) but feels sluggish for interactive use cases (voice intents,
+ * notifications-on-arrival). Two improvement paths when needed:
+ *   1. Sub-minute cron precision (already on the followup list in
+ *      BRANCH_SUMMARY) plus a faster default here.
+ *   2. Bypass the polling-trigger machinery for `on_event` and have the
+ *      daemon push events directly into RUN_FLOW jobs. Bigger lift -- needs
+ *      an engine-side patch -- but eliminates the poll-loop entirely.
  */
 
 import {
@@ -28,11 +34,7 @@ import {
 } from "@activepieces/pieces-framework";
 
 const CURSOR_KEY = "jarvis-trigger:on-event:since";
-
-interface ServerContext {
-  apiUrl: string;
-  token: string;
-}
+const POLL_CADENCE_CRON = "* * * * *";
 
 interface PollResponse {
   events: Array<{
@@ -44,21 +46,17 @@ interface PollResponse {
   cursor: number;
 }
 
-function readServer(context: { server?: ServerContext } | unknown): ServerContext {
-  const s = (context as { server?: ServerContext }).server;
-  if (!s || typeof s.apiUrl !== "string" || typeof s.token !== "string") {
-    throw new Error("jarvis-trigger.on_event: server context missing on trigger run");
-  }
-  return s;
-}
-
-async function poll(server: ServerContext, body: Record<string, unknown>): Promise<PollResponse> {
-  const url = trimSlash(server.apiUrl) + "/v1/jarvis/events/poll";
+async function poll(
+  apiUrl: string,
+  token: string,
+  body: Record<string, unknown>,
+): Promise<PollResponse> {
+  const url = trimSlash(apiUrl) + "/v1/jarvis/events/poll";
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${server.token}`,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
   });
@@ -75,12 +73,8 @@ function trimSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
-function buildPollBody(eventType: string, filter: unknown, since: number): Record<string, unknown> {
-  const body: Record<string, unknown> = { eventType, since };
-  if (filter && typeof filter === "object" && !Array.isArray(filter)) {
-    body["filter"] = filter;
-  }
-  return body;
+function readSinceFromStore(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
 }
 
 export const onEventTrigger = createTrigger({
@@ -109,26 +103,30 @@ export const onEventTrigger = createTrigger({
     timestamp: 0,
   },
   async onEnable(context) {
-    const server = readServer(context);
-    // Seed cursor with current head so we only deliver events that arrive
-    // after enable, not whatever's already in the daemon's buffer.
     const eventType = context.propsValue["eventType"] as string;
-    const filter = context.propsValue["filter"];
-    const head = await poll(server, buildPollBody(eventType, filter, Number.MAX_SAFE_INTEGER));
+    // Seed cursor with the daemon's current head so the first real poll only
+    // returns events that arrive after enable, not historical ones. The
+    // dedicated `headOnly: true` shape on the route makes this intent
+    // explicit (vs. abusing a sentinel `since` value).
+    const head = await poll(context.server.apiUrl, context.server.token, {
+      eventType,
+      headOnly: true,
+    });
     await context.store.put(CURSOR_KEY, head.cursor);
-    // Default cadence: every minute. Users can override at the workflow level
-    // once flow-version-stored scheduleOptions are surfaced in the UI.
-    context.setSchedule({ cronExpression: "* * * * *" });
+    context.setSchedule({ cronExpression: POLL_CADENCE_CRON });
   },
   async onDisable(_context) {
     // Stateless poll -- nothing daemon-side to release.
   },
   async run(context) {
-    const server = readServer(context);
     const eventType = context.propsValue["eventType"] as string;
     const filter = context.propsValue["filter"];
-    const since = ((await context.store.get(CURSOR_KEY)) as number | undefined) ?? 0;
-    const reply = await poll(server, buildPollBody(eventType, filter, since));
+    const since = readSinceFromStore(await context.store.get(CURSOR_KEY));
+    const body: Record<string, unknown> = { eventType, since };
+    if (filter && typeof filter === "object" && !Array.isArray(filter)) {
+      body["filter"] = filter;
+    }
+    const reply = await poll(context.server.apiUrl, context.server.token, body);
     if (reply.events.length === 0) {
       // Still bump cursor: prevents replaying the same window if the daemon's
       // cursor has advanced past `since` due to buffer eviction.

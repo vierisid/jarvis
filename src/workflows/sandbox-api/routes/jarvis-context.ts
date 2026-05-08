@@ -12,7 +12,7 @@
  *   POST /v1/jarvis/context/commitments-list
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 const VAULT_TYPES = new Set([
   "person",
@@ -102,12 +102,8 @@ export function createJarvisContextVaultSearchRoute(
 ): RouteHandler {
   return async (req: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     const out: VaultSearchRequest = {};
     if (raw.query !== undefined) {
       if (typeof raw.query !== "string") return err("query must be a string", 400);
@@ -134,12 +130,8 @@ export function createJarvisContextVaultGetEntityRoute(
 ): RouteHandler {
   return async (req: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     if (typeof raw.id !== "string" || raw.id.length === 0) {
       return err("id is required", 400);
     }
@@ -152,12 +144,8 @@ export function createJarvisContextAwarenessRecentRoute(
 ): RouteHandler {
   return async (req: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     const out: AwarenessRecentRequest = {};
     const limit = readOptionalNonNegInt(raw, "limit");
     if (limit === "invalid") return err("limit must be a non-negative number", 400);
@@ -174,12 +162,8 @@ export function createJarvisContextCommitmentsListRoute(
 ): RouteHandler {
   return async (req: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await req.json()) as Record<string, unknown>;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
     const out: CommitmentsListRequest = {};
     if (raw.status !== undefined) {
       if (typeof raw.status !== "string" || !COMMITMENT_STATUSES.has(raw.status)) {

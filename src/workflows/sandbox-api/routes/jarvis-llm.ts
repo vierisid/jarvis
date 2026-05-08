@@ -11,7 +11,7 @@
  * It is not exposed externally -- only the engine subprocess hits it.
  */
 
-import { json, err, type RouteContext, type RouteHandler } from "./shared";
+import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 
 export interface LlmChatRequest {
   prompt: string;
@@ -42,15 +42,14 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     if (!deps.llmChat) {
       return err("jarvis llm chat not configured", 503);
     }
-    let body: LlmChatRequest;
-    try {
-      body = (await req.json()) as LlmChatRequest;
-    } catch {
-      return err("invalid JSON body", 400);
-    }
-    if (typeof body.prompt !== "string" || body.prompt.length === 0) {
+    const raw = await parseJsonObject(req);
+    if (raw instanceof Response) return raw;
+    if (typeof raw.prompt !== "string" || raw.prompt.length === 0) {
       return err("prompt must be a non-empty string", 400);
     }
+    const body: LlmChatRequest = { prompt: raw.prompt };
+    if (typeof raw.system === "string") body.system = raw.system;
+    if (raw.parseJson === true) body.parseJson = true;
     const reply = await deps.llmChat(body, {
       runId: req.claims.runId,
       projectId: req.claims.projectId,

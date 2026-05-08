@@ -24,6 +24,11 @@ import { DEFAULT_IDS } from "../../db/schema";
 import { CredentialResolver } from "../../credentials/adapter";
 import { SandboxApi } from "../../sandbox-api/server";
 import type { LlmChatFn } from "../../sandbox-api/routes/jarvis-llm";
+import type { ToolsInvokeFn } from "../../sandbox-api/routes/jarvis-tools";
+import type { NotifyFn } from "../../sandbox-api/routes/jarvis-notify";
+import type { JarvisContextProvider } from "../../sandbox-api/routes/jarvis-context";
+import type { AgentDelegateFn } from "../../sandbox-api/routes/jarvis-agent";
+import type { WorkflowsStartFn } from "../../sandbox-api/routes/jarvis-workflows";
 import { findCachedBundle, buildEngineBundle, ENGINE_BUILD_PATHS } from "./build";
 import { buildAllJarvisPieces } from "./build-pieces";
 import { EngineRuntime } from "./engine-runtime";
@@ -41,6 +46,11 @@ const skipE2eTests = skipBundleTests || (!piecesAlreadyBuilt && !buildOptIn);
 
 const PIECE_TEST_NAME = "@jarvispieces/piece-jarvis-test";
 const PIECE_ASK_NAME = "@jarvispieces/piece-jarvis-ask";
+const PIECE_TOOL_NAME = "@jarvispieces/piece-jarvis-tool";
+const PIECE_NOTIFY_NAME = "@jarvispieces/piece-jarvis-notify";
+const PIECE_CONTEXT_NAME = "@jarvispieces/piece-jarvis-context";
+const PIECE_AGENT_NAME = "@jarvispieces/piece-jarvis-agent";
+const PIECE_TRIGGER_NAME = "@jarvispieces/piece-jarvis-trigger";
 const PIECE_VERSION = "0.0.1";
 
 describe("Engine end-to-end (F gate)", () => {
@@ -199,5 +209,193 @@ describe("Engine end-to-end (F gate)", () => {
       }
     },
     45_000,
+  );
+});
+
+describe("Engine end-to-end (G+H pieces)", () => {
+  let api: SandboxApi;
+  let runtime: EngineRuntime | null = null;
+  const calls: {
+    tool: Array<{ toolName: string; params: Record<string, unknown> }>;
+    notify: Array<{ message: string }>;
+    context: Array<{ method: string }>;
+    agent: Array<{ goal: string }>;
+    workflows: Array<{ flowId?: string; flowName?: string }>;
+  } = { tool: [], notify: [], context: [], agent: [], workflows: [] };
+
+  const toolsInvoke: ToolsInvokeFn = async (req) => {
+    calls.tool.push(req);
+    return { result: { ok: true }, toolName: req.toolName };
+  };
+  const notify: NotifyFn = async (req) => {
+    calls.notify.push({ message: req.message });
+    return { delivered: ["dashboard"], failed: [] };
+  };
+  const contextProvider: JarvisContextProvider = {
+    vaultSearch: async () => {
+      calls.context.push({ method: "vaultSearch" });
+      return [];
+    },
+    vaultGetEntity: async () => null,
+    awarenessRecent: async () => [],
+    commitmentsList: async () => [],
+  };
+  const agentDelegate: AgentDelegateFn = async (req) => {
+    calls.agent.push({ goal: req.goal });
+    return { finalMessage: "ok", toolCalls: [], status: "completed" };
+  };
+  const workflowsStart: WorkflowsStartFn = async (req) => {
+    calls.workflows.push({
+      ...(req.flowId ? { flowId: req.flowId } : {}),
+      ...(req.flowName ? { flowName: req.flowName } : {}),
+    });
+    return { runId: "run_stub" };
+  };
+
+  beforeAll(async () => {
+    initWorkflowDb(":memory:");
+    api = new SandboxApi({
+      services: {
+        credentialResolver: new CredentialResolver(),
+        toolsInvoke,
+        notify,
+        contextProvider,
+        agentDelegate,
+        workflowsStart,
+      },
+    });
+    await api.start({ port: 0 });
+
+    let cached = initialCached;
+    if (!cached && buildOptIn) cached = await buildEngineBundle();
+    if (!cached) return;
+    if (!piecesAlreadyBuilt && buildOptIn) await buildAllJarvisPieces();
+    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+    closeWorkflowDb();
+  });
+
+  test.skipIf(skipE2eTests)(
+    "manual trigger -> tool -> notify -> context -> agent -> trigger.run_workflow chain hits every endpoint",
+    async () => {
+      // Reset trackers in case the suite is rerun.
+      calls.tool.length = 0;
+      calls.notify.length = 0;
+      calls.context.length = 0;
+      calls.agent.length = 0;
+      calls.workflows.length = 0;
+
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const trigger: FlowTriggerNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "Manual",
+        settings: {
+          pieceName: PIECE_TEST_NAME,
+          pieceVersion: PIECE_VERSION,
+          triggerName: "manual",
+          input: { payload: {} },
+        },
+        nextAction: {
+          name: "step_tool",
+          type: "PIECE",
+          displayName: "Tool",
+          settings: {
+            pieceName: PIECE_TOOL_NAME,
+            pieceVersion: PIECE_VERSION,
+            actionName: "invoke",
+            input: { toolName: "vault_search", params: { query: "alice" } },
+          },
+          nextAction: {
+            name: "step_notify",
+            type: "PIECE",
+            displayName: "Notify",
+            settings: {
+              pieceName: PIECE_NOTIFY_NAME,
+              pieceVersion: PIECE_VERSION,
+              actionName: "notify",
+              input: { message: "hello", channels: ["dashboard"], priority: "normal" },
+            },
+            nextAction: {
+              name: "step_context",
+              type: "PIECE",
+              displayName: "Context",
+              settings: {
+                pieceName: PIECE_CONTEXT_NAME,
+                pieceVersion: PIECE_VERSION,
+                actionName: "vault_search",
+                input: { query: "alice" },
+              },
+              nextAction: {
+                name: "step_agent",
+                type: "PIECE",
+                displayName: "Agent",
+                settings: {
+                  pieceName: PIECE_AGENT_NAME,
+                  pieceVersion: PIECE_VERSION,
+                  actionName: "delegate",
+                  input: { goal: "say hi" },
+                },
+                nextAction: {
+                  name: "step_runwf",
+                  type: "PIECE",
+                  displayName: "RunWF",
+                  settings: {
+                    pieceName: PIECE_TRIGGER_NAME,
+                    pieceVersion: PIECE_VERSION,
+                    actionName: "run_workflow",
+                    input: { flowId: "flow_other", payload: {} },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      const v = createDraftVersion({
+        flowId: flow.id,
+        displayName: "G-H-chain",
+        trigger,
+      });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
+
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+      const handle = await runtime!.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      let stderrBuf = "";
+      handle.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
+      try {
+        const finalRun = await handle.executeFlow({
+          flowVersion: getFlowVersion(v.id)!,
+        });
+        if (finalRun.status !== "SUCCEEDED") {
+          console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
+        }
+        expect(finalRun.status).toBe("SUCCEEDED");
+      } finally {
+        await handle.release();
+      }
+      expect(calls.tool.length).toBe(1);
+      expect(calls.tool[0]?.toolName).toBe("vault_search");
+      expect(calls.notify.length).toBe(1);
+      expect(calls.notify[0]?.message).toBe("hello");
+      expect(calls.context.length).toBe(1);
+      expect(calls.context[0]?.method).toBe("vaultSearch");
+      expect(calls.agent.length).toBe(1);
+      expect(calls.agent[0]?.goal).toBe("say hi");
+      expect(calls.workflows.length).toBe(1);
+      expect(calls.workflows[0]?.flowId).toBe("flow_other");
+    },
+    60_000,
   );
 });
