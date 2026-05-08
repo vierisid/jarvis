@@ -77,14 +77,18 @@ func uiaPerformAction(state *uiaState, elementID int, action, value string) (map
 	return result, nil
 }
 
-// actionClick moves the mouse to the element center and performs a left click.
+// actionClick activates an element, preferring the UIA Invoke pattern
+// (a COM call that fires the control's default action without moving
+// the OS cursor). Falls back to the win32Click cursor-move + mouse-event
+// path only when Invoke isn't supported by the widget — keeps the
+// user's actual cursor where they left it for everything that supports
+// the structured COM path (most native Windows controls do).
 func actionClick(elem *ole.IDispatch) error {
+	if err := patternInvoke(elem); err == nil {
+		return nil
+	}
 	x, y, err := elementCenter(elem)
 	if err != nil {
-		// Fallback: try invoke pattern
-		if invokeErr := patternInvoke(elem); invokeErr == nil {
-			return nil
-		}
 		return err
 	}
 	win32Click(x, y)

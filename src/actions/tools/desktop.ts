@@ -12,7 +12,21 @@
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecar } from './sidecar-route.ts';
+import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
+
+/**
+ * Resolve the desktop-tool target. If the LLM passed an explicit
+ * target, use it. Otherwise, default to a connected sidecar that
+ * advertises the `desktop` capability — so the new Go sidecar
+ * handles desktop_* tools transparently without the LLM having to
+ * specify a target every time. Returns null when nothing's connected,
+ * which signals the caller to fall back to the legacy local
+ * controller (rarely useful in practice but kept for parity).
+ */
+function resolveDesktopTarget(explicit?: unknown): string | null {
+  if (typeof explicit === 'string' && explicit.trim()) return explicit;
+  return autoTargetForCapability('desktop');
+}
 import { isNoLocalTools, LOCAL_DISABLED_MSG } from './local-tools-guard.ts';
 
 type FlatSnapshotElement = {
@@ -193,6 +207,17 @@ function formatSnapshot(snapshot: LocalSnapshot): string {
   return lines.join('\n');
 }
 
+/**
+ * T26b — read-only accessor used by the pebble-narration path to fly
+ * the pebble to a clickable element BEFORE desktop_click executes.
+ * Returns null if the cache doesn't have the id yet (caller falls back
+ * to label-only narration).
+ */
+export function getCachedElementBounds(elementId: number): UIElement['bounds'] | null {
+  const el = localElementCache.get(elementId);
+  return el?.bounds ?? null;
+}
+
 function ensureCachedElement(elementId: number): UIElement {
   const element = localElementCache.get(elementId);
   if (!element) {
@@ -277,7 +302,7 @@ export const desktopListWindowsTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'list_windows', params, 'desktop');
     }
@@ -307,7 +332,7 @@ export const desktopSnapshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'get_window_tree', params, 'desktop');
     }
@@ -345,7 +370,7 @@ export const desktopClickTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'click_element', params, 'desktop');
     }
@@ -389,7 +414,7 @@ export const desktopTypeTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'type_text', params, 'desktop');
     }
@@ -427,7 +452,7 @@ export const desktopPressKeysTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'press_keys', params, 'desktop');
     }
@@ -461,7 +486,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'launch_app', params, 'desktop');
     }
@@ -492,7 +517,7 @@ export const desktopScreenshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'capture_screen', params, 'screenshot');
     }
@@ -538,7 +563,7 @@ export const desktopFocusWindowTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'focus_window', params, 'desktop');
     }
@@ -586,7 +611,7 @@ export const desktopFindElementTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = params.target as string | undefined;
+    const target = resolveDesktopTarget(params.target);
     if (target) {
       return routeToSidecar(target, 'find_element', params, 'desktop');
     }

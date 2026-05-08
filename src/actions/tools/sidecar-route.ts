@@ -23,6 +23,23 @@ export function getSidecarManager(): SidecarManager | null {
 }
 
 /**
+ * Pick a default sidecar for tools that didn't get an explicit target.
+ * Returns the first connected sidecar advertising the required capability,
+ * or null when nothing's available. Used by desktop_* / browser_* /
+ * etc. so calls land on the Go sidecar automatically when one is
+ * connected, instead of falling back to legacy local controllers.
+ */
+export function autoTargetForCapability(cap: SidecarCapability): string | null {
+  if (!sidecarManager) return null;
+  for (const s of sidecarManager.listSidecars()) {
+    if (!s.connected) continue;
+    if (s.unavailable_capabilities?.some((u) => u.name === cap)) continue;
+    if (s.capabilities && s.capabilities.includes(cap)) return s.id;
+  }
+  return null;
+}
+
+/**
  * Find a sidecar by name or ID.
  * Priority: exact ID → exact name (case-insensitive) → contains match.
  */
