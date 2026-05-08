@@ -81,6 +81,8 @@ export class AgentTaskManager {
         response: `Task failed: ${err instanceof Error ? err.message : String(err)}`,
         toolsUsed: [],
         tokensUsed: { input: 0, output: 0 },
+        terminationReason: 'error',
+        messages: [],
       };
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       onComplete?.(asyncTask);

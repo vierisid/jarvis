@@ -762,6 +762,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // executor. Skipped entirely when `workflowEngineRuntime` is null (engine
     // bootstrap failed earlier; we logged a structured error there).
     if (workflowSandboxApi && workflowEngineRuntime) {
+      // M7 hookup: pass orchestrator + specialists + authority components so
+      // `jarvis-agent.delegate` runs the full sub-agent loop (LLM + tool
+      // calls + authority gate). Falls back to single-shot LLM mode inside
+      // buildSandboxServiceBackends if any of these are missing.
+      const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
@@ -772,6 +777,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sendDesktop: async (title, body) => {
           sendDesktopNotification(title, body, { urgency: 'normal' });
         },
+        agentOrchestrator: agentService.getOrchestrator(),
+        agentSpecialists,
+        authorityEngine,
+        auditTrail,
+        emergencyController,
       });
       workflowSandboxApi.setServices(backends);
       logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");

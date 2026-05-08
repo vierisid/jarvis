@@ -14,11 +14,17 @@ import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
 import type { ChannelService } from "../../daemon/channel-service";
 import type { WebSocketService } from "../../daemon/ws-service";
+import type { AgentOrchestrator } from "../../agents/orchestrator";
+import type { AuthorityEngine } from "../../authority/engine";
+import type { AuditTrail } from "../../authority/audit";
+import type { EmergencyController } from "../../authority/emergency";
+import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
 import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
+import { M7AgentDelegator } from "../adapters/m7-agent-delegator";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn } from "../sandbox-api/routes/jarvis-llm";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
@@ -50,6 +56,24 @@ export interface BuildServiceBackendsOptions {
    * waitpoint route will mint relative URLs that callers must concatenate.
    */
   resumeUrlPrefix?: string;
+  /**
+   * M7 sub-agent dependencies. When all of these are supplied, `jarvis-agent.delegate`
+   * runs the full LLM + tool loop via `runSubAgent`. When any are missing,
+   * the backend falls back to the single-shot `LlmOnlyAgentDelegator`.
+   *
+   * The fallback exists so:
+   *   - tests that don't care about agent delegation can omit the wiring,
+   *   - the workflow runtime stays usable in early-boot windows before the
+   *     daemon's agent-service has finished initializing.
+   *
+   * Production wiring should always supply all four: orchestrator,
+   * specialists, authorityEngine, auditTrail/emergencyController.
+   */
+  agentOrchestrator?: AgentOrchestrator;
+  agentSpecialists?: Map<string, RoleDefinition>;
+  authorityEngine?: AuthorityEngine;
+  auditTrail?: AuditTrail;
+  emergencyController?: EmergencyController;
 }
 
 export function buildSandboxServiceBackends(
@@ -127,7 +151,21 @@ export function buildSandboxServiceBackends(
       ),
   };
 
-  const agentAdapter = new LlmOnlyAgentDelegator(llmClient);
+  // Prefer the full M7 loop when the daemon supplied an orchestrator +
+  // specialist registry. Fall back to the single-shot LLM delegator
+  // otherwise -- workflow runs still get *some* answer instead of a 503.
+  const m7Ready =
+    opts.agentOrchestrator !== undefined && opts.agentSpecialists !== undefined;
+  const agentAdapter = m7Ready
+    ? new M7AgentDelegator({
+        orchestrator: opts.agentOrchestrator!,
+        llmManager: opts.llmManager,
+        specialists: opts.agentSpecialists!,
+        ...(opts.authorityEngine ? { authorityEngine: opts.authorityEngine } : {}),
+        ...(opts.auditTrail ? { auditTrail: opts.auditTrail } : {}),
+        ...(opts.emergencyController ? { emergencyController: opts.emergencyController } : {}),
+      })
+    : new LlmOnlyAgentDelegator(llmClient);
   const agentDelegate: AgentDelegateFn = async (req) => {
     const result = await agentAdapter.delegate({
       goal: req.goal,
