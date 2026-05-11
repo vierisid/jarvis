@@ -1,0 +1,17 @@
+{
+  "// jarvis": "Stub. Activepieces' upstream `tsconfig.base.json` lives in their repo root, which we don't vendor (we only need select packages). The vendored tsconfigs under packages/* all `extends` this file relative to here; without it, esbuild logs a warning every time a piece is built. This stub satisfies the resolution. Build settings come from the repo's root tsconfig.json + each piece's own compilerOptions, not from here.",
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "lib": ["es2020", "dom"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "importHelpers": true,
+    "baseUrl": "."
+  }
+}

@@ -143,7 +143,15 @@ if (checkOnly) {
 
 // 5. Wipe vendor tree except Jarvis-authored docs
 mkdirSync(VENDOR_DIR, { recursive: true });
-const PRESERVE = new Set(["UPSTREAM.md", "SPIKE-SANDBOXING.md", "LICENSE.activepieces"]);
+const PRESERVE = new Set([
+  "UPSTREAM.md",
+  "SPIKE-SANDBOXING.md",
+  "LICENSE.activepieces",
+  // Jarvis-added stub. Vendored package tsconfigs all `extends` this file
+  // relative to here; upstream's real one lives at their repo root which
+  // we don't vendor. Without it, esbuild warns on every piece rebuild.
+  "tsconfig.base.json",
+]);
 for (const name of readdirSync(VENDOR_DIR)) {
   if (PRESERVE.has(name)) continue;
   rmSync(join(VENDOR_DIR, name), { recursive: true, force: true });

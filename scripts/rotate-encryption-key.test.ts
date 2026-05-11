@@ -76,7 +76,11 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function runScript(opts: { env?: Record<string, string | undefined> } = {}): {
+function runScript(opts: {
+  env?: Record<string, string | undefined>;
+  /** Pass `--allow-running-daemon` to bypass the flock check. Default true. */
+  allowDaemon?: boolean;
+} = {}): {
   status: number;
   stderr: string;
   stdout: string;
@@ -87,11 +91,13 @@ function runScript(opts: { env?: Record<string, string | undefined> } = {}): {
   if (!opts.env || !("JARVIS_WORKFLOW_ENCRYPTION_KEY" in opts.env)) {
     delete env["JARVIS_WORKFLOW_ENCRYPTION_KEY"];
   }
-  const res = spawnSync(
-    "bun",
-    ["run", SCRIPT, "--data-dir", dataDir, "--key-file", keyFile, "--db", dbPath],
-    { env, stdio: "pipe", encoding: "utf8" },
-  );
+  // Default to bypassing the daemon-running check so tests don't fail when
+  // the dev machine happens to have the daemon running. The lock-check
+  // tests opt out of the bypass explicitly.
+  const allowDaemon = opts.allowDaemon ?? true;
+  const args = ["run", SCRIPT, "--data-dir", dataDir, "--key-file", keyFile, "--db", dbPath];
+  if (allowDaemon) args.push("--allow-running-daemon");
+  const res = spawnSync("bun", args, { env, stdio: "pipe", encoding: "utf8" });
   return { status: res.status ?? -1, stderr: res.stderr ?? "", stdout: res.stdout ?? "" };
 }
 
@@ -146,7 +152,7 @@ describe("rotate-encryption-key", () => {
       return;
     }
     try {
-      const res = runScript();
+      const res = runScript({ allowDaemon: false });
       expect(res.status).toBe(1);
       expect(res.stderr).toMatch(/Daemon is running/);
       // Keychain unchanged.
