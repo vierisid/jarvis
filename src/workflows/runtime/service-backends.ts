@@ -113,18 +113,14 @@ export function buildSandboxServiceBackends(
   const notifierDeps: NotifierDeps = {
     broadcastToDashboard: (text, priority) =>
       opts.wsService.broadcastNotification(text, priority),
-    broadcastToChannels: async (channels, text) => {
-      // Per-channel routing isn't exposed yet; broadcastToAll is the only
-      // fan-out. Treat each requested channel as delivered when the call
-      // succeeds.
-      try {
-        await opts.channelService.broadcastToAll(text);
-        return { delivered: channels, failed: [] };
-      } catch (e) {
-        const error = e instanceof Error ? e.message : String(e);
-        return { delivered: [], failed: channels.map((channel) => ({ channel, error })) };
-      }
-    },
+    // Real per-channel routing: tryBroadcastToChannels iterates the requested
+    // names, dispatches each to its adapter, and reports delivered/failed
+    // independently. A flow that says "telegram" only goes to telegram (with
+    // a clear error when the adapter isn't connected or no recipient is
+    // known yet). Replaces the previous broadcastToAll fan-out which sent
+    // every notification to every connected channel.
+    broadcastToChannels: (channels, text) =>
+      opts.channelService.tryBroadcastToChannels(channels, text),
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
   const notifierAdapter = new JarvisNotifierAdapter(notifierDeps);

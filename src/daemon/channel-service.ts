@@ -10,7 +10,7 @@
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import type { ChannelMessage } from '../comms/channels/telegram.ts';
+import type { ChannelAdapter, ChannelMessage } from '../comms/channels/telegram.ts';
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
@@ -161,6 +161,25 @@ export class ChannelService implements Service {
   }
 
   /**
+   * Send a message to a specific set of channels and report per-channel
+   * delivery. Used by the workflow notifier piece so a flow that says
+   * "deliver via telegram only" actually targets telegram, not every
+   * connected adapter.
+   *
+   * See `routePerChannel` (below) for the routing rules; this method just
+   * wires the live manager + recipients into the pure helper.
+   */
+  async tryBroadcastToChannels(
+    channels: string[],
+    text: string,
+  ): Promise<{ delivered: string[]; failed: { channel: string; error: string }[] }> {
+    return routePerChannel(channels, text, {
+      getAdapter: (name) => this.manager.getChannel(name) ?? null,
+      getLastRecipient: (name) => this.lastRecipients.get(name) ?? null,
+    });
+  }
+
+  /**
    * Core message handler: receives from any channel, routes to AgentService,
    * persists to vault (unified history), returns response.
    */
@@ -198,4 +217,62 @@ export class ChannelService implements Service {
 
     return response;
   }
+}
+
+/**
+ * Pure routing helper used by `ChannelService.tryBroadcastToChannels`.
+ * Lifted out so tests can drive it with stub getters without standing up a
+ * real ChannelService + ChannelManager + AgentService.
+ *
+ * Per-channel rules:
+ *   - Adapter missing             -> failed("not configured").
+ *   - Adapter present but offline -> failed("not connected").
+ *   - No known recipient yet      -> failed("no known recipient ...").
+ *   - sendMessage throws          -> failed with the exception message.
+ *   - sendMessage resolves        -> delivered.
+ *
+ * Duplicate entries are de-duped silently; first-occurrence wins.
+ */
+export interface ChannelRouterServices {
+  getAdapter: (name: string) => ChannelAdapter | null;
+  getLastRecipient: (name: string) => string | null;
+}
+
+export async function routePerChannel(
+  channels: string[],
+  text: string,
+  services: ChannelRouterServices,
+): Promise<{ delivered: string[]; failed: { channel: string; error: string }[] }> {
+  const delivered: string[] = [];
+  const failed: { channel: string; error: string }[] = [];
+  const seen = new Set<string>();
+  for (const name of channels) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+
+    const adapter = services.getAdapter(name);
+    if (!adapter) {
+      failed.push({ channel: name, error: `channel "${name}" is not configured` });
+      continue;
+    }
+    if (!adapter.isConnected()) {
+      failed.push({ channel: name, error: `channel "${name}" is not connected` });
+      continue;
+    }
+    const lastRecipient = services.getLastRecipient(name);
+    if (!lastRecipient) {
+      failed.push({
+        channel: name,
+        error: `no known recipient for "${name}" -- message Jarvis from that channel once to seed it`,
+      });
+      continue;
+    }
+    try {
+      await adapter.sendMessage(lastRecipient, text);
+      delivered.push(name);
+    } catch (err) {
+      failed.push({ channel: name, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { delivered, failed };
 }
