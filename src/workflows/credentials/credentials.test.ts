@@ -4,10 +4,8 @@ import { upsertConnection } from "../db/repos/app-connection";
 import {
   CredentialResolver,
   JARVIS_PREFIX,
-  JarvisDiscordSource,
-  JarvisGoogleSource,
-  JarvisTelegramSource,
   type JarvisConnectionSource,
+  type ResolvedConnection,
 } from "./adapter";
 
 beforeEach(() => {
@@ -18,10 +16,27 @@ afterEach(() => {
   closeWorkflowDb();
 });
 
+// Lightweight test stubs. The live sources (`JarvisGoogleConnectionSource`,
+// `JarvisTelegramConnectionSource`) have their own dedicated test files that
+// exercise the per-source contracts. These tests only care that the resolver
+// dispatches correctly to whatever Source it's handed.
+function stubSource(id: string, externalId: string, value: ResolvedConnection | null): JarvisConnectionSource {
+  return {
+    id,
+    canResolve: (eid) => eid === externalId,
+    resolve: async () => value,
+  };
+}
+
 describe("CredentialResolver", () => {
   test("dispatches jarvis:* externalIds to a registered Jarvis source", async () => {
     const r = new CredentialResolver();
-    r.register(new JarvisTelegramSource(() => "live-bot-token"));
+    r.register(
+      stubSource("telegram", `${JARVIS_PREFIX}telegram`, {
+        type: "SECRET_TEXT",
+        value: { secret_text: "live-bot-token" },
+      }),
+    );
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "telegram-bot",
@@ -32,8 +47,7 @@ describe("CredentialResolver", () => {
 
   test("returns null when a Jarvis source cannot resolve (not yet authenticated)", async () => {
     const r = new CredentialResolver();
-    r.register(new JarvisGoogleSource(async () => null));
-    // ^ source returns null when the user hasn't authenticated yet
+    r.register(stubSource("google", `${JARVIS_PREFIX}gmail`, null));
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "gmail",
@@ -85,10 +99,10 @@ describe("CredentialResolver", () => {
     });
     const r = new CredentialResolver();
     r.register(
-      new JarvisGoogleSource(async () => ({
-        accessToken: "live-token",
-        expiryDate: Date.now() + 60_000,
-      })),
+      stubSource("google", `${JARVIS_PREFIX}gmail`, {
+        type: "OAUTH2",
+        value: { access_token: "live-token" },
+      }),
     );
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
@@ -110,7 +124,12 @@ describe("CredentialResolver", () => {
       },
     };
     r.register(dummy);
-    r.register(new JarvisTelegramSource(() => "tg"));
+    r.register(
+      stubSource("telegram", `${JARVIS_PREFIX}telegram`, {
+        type: "SECRET_TEXT",
+        value: { secret_text: "tg" },
+      }),
+    );
     const a = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "x",
@@ -128,68 +147,17 @@ describe("CredentialResolver", () => {
 
   test("unregister removes a source by id", async () => {
     const r = new CredentialResolver();
-    const source = new JarvisDiscordSource(() => "dc");
+    const source = stubSource("discord", `${JARVIS_PREFIX}discord`, {
+      type: "SECRET_TEXT",
+      value: { secret_text: "dc" },
+    });
     r.register(source);
     r.unregister("discord");
     const got = await r.resolve({
       projectId: DEFAULT_IDS.project,
       pieceName: "discord",
-      externalId: JarvisDiscordSource.EXTERNAL_ID,
+      externalId: `${JARVIS_PREFIX}discord`,
     });
     expect(got).toBeNull();
-  });
-});
-
-describe("JarvisGoogleSource", () => {
-  test("resolves any of the gmail/calendar/drive externalIds to the same token", async () => {
-    const source = new JarvisGoogleSource(async () => ({
-      accessToken: "tok",
-      expiryDate: Date.now() + 3600_000,
-    }));
-    expect(source.canResolve(`${JARVIS_PREFIX}google`)).toBe(true);
-    expect(source.canResolve(`${JARVIS_PREFIX}gmail`)).toBe(true);
-    expect(source.canResolve(`${JARVIS_PREFIX}google-calendar`)).toBe(true);
-    expect(source.canResolve(`${JARVIS_PREFIX}google-drive`)).toBe(true);
-    expect(source.canResolve(`${JARVIS_PREFIX}other`)).toBe(false);
-    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
-    expect(got?.type).toBe("OAUTH2");
-    expect(got?.value).toMatchObject({ access_token: "tok", token_type: "Bearer" });
-  });
-
-  test("computes expires_in honestly from expiryDate and current time", async () => {
-    const fixedNow = 1_700_000_000_000;
-    const source = new JarvisGoogleSource(
-      async () => ({ accessToken: "tok", expiryDate: fixedNow + 1800_000 }),
-      () => fixedNow,
-    );
-    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
-    expect(got?.value.expires_in).toBe(1800);
-    expect(got?.value.claimed_at).toBe(Math.floor(fixedNow / 1000));
-  });
-
-  test("clamps expires_in to 0 for already-expired tokens", async () => {
-    const fixedNow = 1_700_000_000_000;
-    const source = new JarvisGoogleSource(
-      async () => ({ accessToken: "stale", expiryDate: fixedNow - 60_000 }),
-      () => fixedNow,
-    );
-    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
-    expect(got?.value.expires_in).toBe(0);
-  });
-
-  test("refresh_token is intentionally empty (Jarvis owns refresh)", async () => {
-    const source = new JarvisGoogleSource(async () => ({
-      accessToken: "tok",
-      expiryDate: Date.now() + 60_000,
-    }));
-    const got = await source.resolve(`${JARVIS_PREFIX}gmail`);
-    expect(got?.value.refresh_token).toBe("");
-  });
-
-  test("propagates errors from getToken (do not swallow refresh failures)", async () => {
-    const source = new JarvisGoogleSource(async () => {
-      throw new Error("refresh failed");
-    });
-    await expect(source.resolve(`${JARVIS_PREFIX}gmail`)).rejects.toThrow(/refresh failed/);
   });
 });
