@@ -46,6 +46,7 @@ export class AwarenessService implements Service {
   private analytics: BehaviorAnalytics;
   private llm: LLMManager;
   private eventCallback: ((event: AwarenessEvent) => void) | null;
+  private fetchCapture: ((sidecarId: string, path: string) => Promise<Buffer | null>) | null;
   private enabled: boolean;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -53,12 +54,14 @@ export class AwarenessService implements Service {
     jarvisConfig: JarvisConfig,
     llm: LLMManager,
     eventCallback?: (event: AwarenessEvent) => void,
-    googleAuth?: { isAuthenticated(): boolean; getAccessToken(): Promise<string> } | null
+    googleAuth?: { isAuthenticated(): boolean; getAccessToken(): Promise<string> } | null,
+    fetchCapture?: (sidecarId: string, path: string) => Promise<Buffer | null>
   ) {
     const cfg = jarvisConfig.awareness!;
     this.config = cfg;
     this.llm = llm;
     this.eventCallback = eventCallback ?? null;
+    this.fetchCapture = fetchCapture ?? null;
     this.enabled = cfg.enabled;
 
     this.contextTracker = new ContextTracker(cfg);
@@ -348,11 +351,40 @@ export class AwarenessService implements Service {
         });
       } catch { /* observation storage is best-effort */ }
 
-      // Cloud vision escalation: temporarily disabled until Phase 6 wires the
-      // fetch_capture RPC. After that, this block fetches the PNG bytes from
-      // the originating sidecar (data.sidecarId) using data.imagePath and runs
-      // the existing intelligence.analyze* paths.
       let cloudAnalysis: string | undefined;
+      if (
+        this.config.cloud_vision_enabled &&
+        this.fetchCapture &&
+        this.intelligence.shouldEscalateToCloud(context, events)
+      ) {
+        const imageBuffer = await this.fetchCapture(data.sidecarId, data.imagePath).catch(err => {
+          console.error('[Awareness] fetch_capture failed:', err instanceof Error ? err.message : err);
+          return null;
+        });
+
+        if (imageBuffer) {
+          const base64 = imageBuffer.toString('base64');
+
+          const struggleEvent = events.find(e => e.type === 'struggle_detected');
+          if (struggleEvent) {
+            cloudAnalysis = await this.intelligence.analyzeStruggle(
+              base64,
+              context,
+              String(struggleEvent.data.appCategory ?? 'general'),
+              (struggleEvent.data.signals as Array<{ name: string; score: number; detail: string }>) ?? [],
+              String(struggleEvent.data.ocrPreview ?? context.ocrText.slice(0, 500))
+            );
+          } else if (context.isSignificantChange) {
+            cloudAnalysis = await this.intelligence.analyzeDelta(
+              base64,
+              context,
+              this.contextTracker.getPreviousContext()
+            );
+          } else {
+            cloudAnalysis = await this.intelligence.analyzeGeneral(base64, context);
+          }
+        }
+      }
 
       // 7. Suggestion evaluation
       const suggestion = await this.suggestionEngine.evaluate(context, events, cloudAnalysis);

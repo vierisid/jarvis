@@ -35,6 +35,9 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, o
 	if caps[CapScreenshot] {
 		registry["capture_screen"] = handleCaptureScreen
 	}
+	if caps[CapAwareness] {
+		registry["fetch_capture"] = makeFetchCaptureHandler(cfg)
+	}
 	if caps[CapSystemInfo] {
 		registry["get_system_info"] = handleGetSystemInfo
 	}
@@ -286,6 +289,47 @@ func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
 			Data:     base64.StdEncoding.EncodeToString(data),
 		},
 	}, nil
+}
+
+// --- Awareness: fetch a saved capture by path ---
+
+// makeFetchCaptureHandler returns a handler that reads a previously-saved capture
+// PNG from disk and returns it as inline binary. The requested path is required
+// to resolve underneath the configured capture directory.
+func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		raw, _ := params["path"].(string)
+		if raw == "" {
+			return nil, fmt.Errorf("missing required parameter: path")
+		}
+
+		captureDir, err := filepath.Abs(cfg.Awareness.CaptureDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve capture dir: %w", err)
+		}
+		target, err := filepath.Abs(raw)
+		if err != nil {
+			return nil, fmt.Errorf("resolve path: %w", err)
+		}
+		rel, err := filepath.Rel(captureDir, target)
+		if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+			return nil, fmt.Errorf("path not within capture dir")
+		}
+
+		data, err := os.ReadFile(target)
+		if err != nil {
+			return nil, fmt.Errorf("read capture: %w", err)
+		}
+
+		return &RPCResult{
+			Result: map[string]any{"size": len(data)},
+			Binary: BinaryDataInline{
+				Type:     "inline",
+				MimeType: "image/png",
+				Data:     base64.StdEncoding.EncodeToString(data),
+			},
+		}, nil
+	}
 }
 
 // --- Config Management ---

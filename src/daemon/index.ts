@@ -757,7 +757,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               }
             }
           },
-          googleAuth
+          googleAuth,
+          async (sidecarId: string, imagePath: string) => {
+            try {
+              const result = await sidecarManager.dispatchRPC(sidecarId, 'fetch_capture', { path: imagePath }) as
+                | (Record<string, unknown> & { _binary?: { type?: string; data?: string } | Buffer })
+                | undefined;
+              const binary = result?._binary;
+              if (binary && typeof binary === 'object' && 'data' in binary && typeof binary.data === 'string') {
+                return Buffer.from(binary.data, 'base64');
+              }
+              if (Buffer.isBuffer(binary)) {
+                return binary;
+              }
+              return null;
+            } catch (err) {
+              console.error('[Daemon] fetch_capture RPC failed:', err instanceof Error ? err.message : err);
+              return null;
+            }
+          }
         );
         await svc.start();
         awarenessService = svc;
