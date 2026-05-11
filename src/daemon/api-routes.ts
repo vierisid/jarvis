@@ -2673,48 +2673,35 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     '/api/awareness/captures/:id/image': {
-      GET: (req: Request & { params: { id: string } }) => {
+      GET: async (req: Request & { params: { id: string } }) => {
         const capture = getCapture(req.params.id);
         if (!capture || !capture.image_path) return error('Image not found', 404);
-        // Validate path stays within the expected captures/data directory
-        const jarvisDir = path.join(os.homedir(), '.jarvis');
-        if (!isWithinBase(capture.image_path, jarvisDir)) {
-          return error('Image not found', 404);
-        }
+        if (!capture.sidecar_id) return error('Capture has no associated sidecar', 404);
+        if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+
         try {
-          const imageData = readFileSync(capture.image_path);
-          return new Response(imageData, {
+          const result = await ctx.sidecarManager.dispatchRPC(
+            capture.sidecar_id,
+            'fetch_capture',
+            { path: capture.image_path }
+          ) as (Record<string, unknown> & { _binary?: { type?: string; data?: string } | Buffer }) | undefined;
+
+          const binary = result?._binary;
+          let imageData: Buffer | null = null;
+          if (binary && typeof binary === 'object' && 'data' in binary && typeof binary.data === 'string') {
+            imageData = Buffer.from(binary.data, 'base64');
+          } else if (Buffer.isBuffer(binary)) {
+            imageData = binary;
+          }
+          if (!imageData) return error('Image data unavailable', 502);
+
+          return new Response(new Uint8Array(imageData), {
             headers: { ...CORS, 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=3600' },
           });
-        } catch {
-          return error('Image file not found on disk', 404);
+        } catch (err) {
+          console.error('[API] /captures/:id/image fetch_capture failed:', err instanceof Error ? err.message : err);
+          return error('Image fetch failed', 502);
         }
-      },
-    },
-
-    '/api/awareness/captures/:id/thumbnail': {
-      GET: (req: Request & { params: { id: string } }) => {
-        const capture = getCapture(req.params.id);
-        if (!capture) return error('Capture not found', 404);
-        const jarvisDir = path.join(os.homedir(), '.jarvis');
-        // Prefer thumbnail, fall back to full image
-        if (capture.thumbnail_path && isWithinBase(capture.thumbnail_path, jarvisDir)) {
-          try {
-            const thumbData = readFileSync(capture.thumbnail_path);
-            return new Response(thumbData, {
-              headers: { ...CORS, 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=3600' },
-            });
-          } catch { /* thumbnail file missing, fall through */ }
-        }
-        if (capture.image_path && isWithinBase(capture.image_path, jarvisDir)) {
-          try {
-            const imageData = readFileSync(capture.image_path);
-            return new Response(imageData, {
-              headers: { ...CORS, 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=3600' },
-            });
-          } catch { /* fall through */ }
-        }
-        return error('Thumbnail not found', 404);
       },
     },
 

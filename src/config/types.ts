@@ -91,7 +91,6 @@ export type AwarenessConfig = {
     full_hours: number;
     key_moment_hours: number;
   };
-  capture_dir: string;
 };
 
 export type PerActionOverride = {
@@ -291,7 +290,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       full_hours: 1,
       key_moment_hours: 24,
     },
-    capture_dir: '~/.jarvis/captures',
   },
   llm: {
     primary: 'anthropic',

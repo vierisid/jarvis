@@ -19,8 +19,8 @@ import type {
 export function createCapture(data: {
   timestamp: number;
   sessionId?: string;
+  sidecarId?: string;
   imagePath?: string;
-  thumbnailPath?: string;
   pixelChangePct: number;
   ocrText?: string;
   appName?: string;
@@ -35,15 +35,15 @@ export function createCapture(data: {
 
   db.prepare(`
     INSERT INTO screen_captures
-      (id, timestamp, session_id, image_path, thumbnail_path, pixel_change_pct,
+      (id, timestamp, session_id, sidecar_id, image_path, pixel_change_pct,
        ocr_text, app_name, window_title, url, file_path, retention_tier, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.timestamp,
     data.sessionId ?? null,
+    data.sidecarId ?? null,
     data.imagePath ?? null,
-    data.thumbnailPath ?? null,
     data.pixelChangePct,
     data.ocrText ?? null,
     data.appName ?? null,
@@ -58,8 +58,8 @@ export function createCapture(data: {
     id,
     timestamp: data.timestamp,
     session_id: data.sessionId ?? null,
+    sidecar_id: data.sidecarId ?? null,
     image_path: data.imagePath ?? null,
-    thumbnail_path: data.thumbnailPath ?? null,
     pixel_change_pct: data.pixelChangePct,
     ocr_text: data.ocrText ?? null,
     app_name: data.appName ?? null,

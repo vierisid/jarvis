@@ -1,10 +1,11 @@
 /**
  * Awareness Service — Orchestrator
  *
- * Wires together OCREngine, ContextTracker, Intelligence,
- * SuggestionEngine, ContextGraph, and Analytics into a single service.
- * Consumes pushed events from sidecar observers (screen_capture,
- * context_changed, idle_detected) instead of polling.
+ * Wires together ContextTracker, Intelligence, SuggestionEngine,
+ * ContextGraph, and Analytics into a single service. Consumes pushed
+ * events from sidecar observers (screen_capture, context_changed,
+ * idle_detected). OCR runs in the sidecar; the brain receives ocr_text
+ * inline on the event.
  */
 
 import type { Service, ServiceStatus } from '../daemon/services.ts';
@@ -47,6 +48,7 @@ export class AwarenessService implements Service {
   private llm: LLMManager;
   private eventCallback: ((event: AwarenessEvent) => void) | null;
   private fetchCapture: ((sidecarId: string, path: string) => Promise<Buffer | null>) | null;
+  private cleanupSidecarCaptures: ((cutoffMs: number) => Promise<void>) | null;
   private enabled: boolean;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -55,13 +57,15 @@ export class AwarenessService implements Service {
     llm: LLMManager,
     eventCallback?: (event: AwarenessEvent) => void,
     googleAuth?: { isAuthenticated(): boolean; getAccessToken(): Promise<string> } | null,
-    fetchCapture?: (sidecarId: string, path: string) => Promise<Buffer | null>
+    fetchCapture?: (sidecarId: string, path: string) => Promise<Buffer | null>,
+    cleanupSidecarCaptures?: (cutoffMs: number) => Promise<void>
   ) {
     const cfg = jarvisConfig.awareness!;
     this.config = cfg;
     this.llm = llm;
     this.eventCallback = eventCallback ?? null;
     this.fetchCapture = fetchCapture ?? null;
+    this.cleanupSidecarCaptures = cleanupSidecarCaptures ?? null;
     this.enabled = cfg.enabled;
 
     this.contextTracker = new ContextTracker(cfg);
@@ -280,8 +284,9 @@ export class AwarenessService implements Service {
 
   // ── Retention ──
 
-  // The sidecar owns capture files on its own filesystem; this only prunes the
-  // brain-side DB rows. File-side cleanup will move to the sidecar in Phase 7.
+  // The sidecar owns capture files on its own filesystem. This method prunes
+  // the brain-side DB rows and then asks each connected sidecar to drop files
+  // older than the longest-tier retention cutoff.
   private cleanupRetention(): void {
     try {
       const now = Date.now();
@@ -296,7 +301,15 @@ export class AwarenessService implements Service {
       } catch { /* DB may not be initialized in tests */ }
 
       if (fullDeleted > 0 || keyDeleted > 0) {
-        console.log(`[Awareness] Retention cleanup: ${fullDeleted} full, ${keyDeleted} key_moment captures deleted`);
+        console.log(`[Awareness] DB retention cleanup: ${fullDeleted} full, ${keyDeleted} key_moment captures deleted`);
+      }
+
+      // Tell sidecars to drop capture files older than the longest tier we
+      // still keep DB rows for. Best-effort, fire-and-forget.
+      if (this.cleanupSidecarCaptures) {
+        this.cleanupSidecarCaptures(keyMomentCutoff).catch(err =>
+          console.error('[Awareness] Sidecar capture cleanup failed:', err instanceof Error ? err.message : err)
+        );
       }
     } catch (err) {
       console.error('[Awareness] Retention cleanup error:', err instanceof Error ? err.message : err);
@@ -331,6 +344,7 @@ export class AwarenessService implements Service {
       createCapture({
         timestamp: context.timestamp,
         sessionId: context.sessionId,
+        sidecarId: data.sidecarId,
         imagePath: data.imagePath,
         pixelChangePct: data.pixelChangePct,
         ocrText,

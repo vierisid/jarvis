@@ -13,12 +13,6 @@ export type CaptureFrame = {
   pixelChangePct: number;
 };
 
-export type OCRResult = {
-  text: string;
-  confidence: number;
-  durationMs: number;
-};
-
 // ── Context ──
 
 export type ScreenContext = {
@@ -159,8 +153,8 @@ export type ScreenCaptureRow = {
   id: string;
   timestamp: number;
   session_id: string | null;
+  sidecar_id: string | null;
   image_path: string | null;
-  thumbnail_path: string | null;
   pixel_change_pct: number;
   ocr_text: string | null;
   app_name: string | null;

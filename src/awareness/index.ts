@@ -3,7 +3,6 @@
  */
 
 export { AwarenessService } from './service.ts';
-export { OCREngine } from './ocr-engine.ts';
 export { ContextTracker } from './context-tracker.ts';
 export { AwarenessIntelligence } from './intelligence.ts';
 export { SuggestionEngine } from './suggestion-engine.ts';
@@ -12,7 +11,6 @@ export { BehaviorAnalytics } from './analytics.ts';
 
 export type {
   CaptureFrame,
-  OCRResult,
   ScreenContext,
   AwarenessEvent,
   AwarenessEventType,

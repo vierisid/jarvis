@@ -34,7 +34,6 @@ const testConfig: AwarenessConfig = {
   stuck_threshold_ms: 5000, // 5s for tests
   suggestion_rate_limit_ms: 100, // fast for tests
   retention: { full_hours: 1, key_moment_hours: 24 },
-  capture_dir: '/tmp/jarvis-test-captures',
   struggle_grace_ms: 120000,
   struggle_cooldown_ms: 180000,
   overlay_autolaunch: false,

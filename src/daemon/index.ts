@@ -775,6 +775,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               console.error('[Daemon] fetch_capture RPC failed:', err instanceof Error ? err.message : err);
               return null;
             }
+          },
+          async (cutoffMs: number) => {
+            const connected = sidecarManager.listSidecars().filter(s => s.connected);
+            await Promise.all(connected.map(async (s) => {
+              try {
+                await sidecarManager.dispatchRPC(s.id, 'cleanup_captures', { before_ms: cutoffMs });
+              } catch (err) {
+                console.error(`[Daemon] cleanup_captures on ${s.id} failed:`, err instanceof Error ? err.message : err);
+              }
+            }));
           }
         );
         await svc.start();

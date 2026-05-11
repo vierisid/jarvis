@@ -37,6 +37,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, o
 	}
 	if caps[CapAwareness] {
 		registry["fetch_capture"] = makeFetchCaptureHandler(cfg)
+		registry["cleanup_captures"] = makeCleanupCapturesHandler(cfg)
 	}
 	if caps[CapSystemInfo] {
 		registry["get_system_info"] = handleGetSystemInfo
@@ -345,6 +346,69 @@ func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
 				Data:     base64.StdEncoding.EncodeToString(data),
 			},
 		}, nil
+	}
+}
+
+// --- Awareness: prune old capture files ---
+
+// makeCleanupCapturesHandler deletes capture files in CaptureDir whose mtime is
+// before the provided cutoff (epoch ms). Empty date directories are removed.
+// Returns counts so the brain can log progress.
+func makeCleanupCapturesHandler(cfg *SidecarConfig) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		beforeMs, ok := params["before_ms"].(float64)
+		if !ok || beforeMs <= 0 {
+			return nil, fmt.Errorf("missing or invalid before_ms")
+		}
+		cutoff := time.UnixMilli(int64(beforeMs))
+
+		captureDir := cfg.Awareness.CaptureDir
+		filesDeleted := 0
+		dirsRemoved := 0
+
+		entries, err := os.ReadDir(captureDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return &RPCResult{Result: map[string]any{"files_deleted": 0, "dirs_removed": 0}}, nil
+			}
+			return nil, fmt.Errorf("read capture dir: %w", err)
+		}
+
+		for _, dateEntry := range entries {
+			if !dateEntry.IsDir() {
+				continue
+			}
+			dateDir := filepath.Join(captureDir, dateEntry.Name())
+			files, err := os.ReadDir(dateDir)
+			if err != nil {
+				continue
+			}
+			for _, f := range files {
+				if f.IsDir() {
+					continue
+				}
+				p := filepath.Join(dateDir, f.Name())
+				info, err := f.Info()
+				if err != nil {
+					continue
+				}
+				if info.ModTime().Before(cutoff) {
+					if err := os.Remove(p); err == nil {
+						filesDeleted++
+					}
+				}
+			}
+			if remaining, _ := os.ReadDir(dateDir); len(remaining) == 0 {
+				if err := os.Remove(dateDir); err == nil {
+					dirsRemoved++
+				}
+			}
+		}
+
+		return &RPCResult{Result: map[string]any{
+			"files_deleted": filesDeleted,
+			"dirs_removed":  dirsRemoved,
+		}}, nil
 	}
 }
 

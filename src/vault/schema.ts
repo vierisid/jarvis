@@ -408,8 +408,8 @@ function createTables(db: Database): void {
       id TEXT PRIMARY KEY,
       timestamp INTEGER NOT NULL,
       session_id TEXT,
+      sidecar_id TEXT,
       image_path TEXT,
-      thumbnail_path TEXT,
       pixel_change_pct REAL,
       ocr_text TEXT,
       app_name TEXT,
@@ -421,6 +421,11 @@ function createTables(db: Database): void {
       created_at INTEGER NOT NULL
     )
   `);
+  // OCR moved to sidecar; thumbnails are no longer generated.
+  try { db.run('ALTER TABLE screen_captures DROP COLUMN thumbnail_path'); } catch { /* already dropped or never present */ }
+  // Track which sidecar owns the capture file so the brain can route
+  // fetch_capture RPCs correctly (sidecars may run on different hosts).
+  try { db.run('ALTER TABLE screen_captures ADD COLUMN sidecar_id TEXT'); } catch { /* already present */ }
   db.run(`CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON screen_captures(timestamp)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_captures_session ON screen_captures(session_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_captures_retention ON screen_captures(retention_tier)`);
