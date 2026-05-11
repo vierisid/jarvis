@@ -57,7 +57,7 @@ describe("JarvisNotifierAdapter: voice channel", () => {
 });
 
 describe("JarvisNotifierAdapter: channel expansion", () => {
-  test('"auto" expands to dashboard + telegram + discord', async () => {
+  test('"auto" without getConnectedExternalChannels falls back to dashboard + telegram + discord', async () => {
     const calls: { dashboard: boolean; channels: string[] } = {
       dashboard: false,
       channels: [],
@@ -79,6 +79,66 @@ describe("JarvisNotifierAdapter: channel expansion", () => {
     expect(r.delivered).toContain("dashboard");
     expect(r.delivered).toContain("telegram");
     expect(r.delivered).toContain("discord");
+  });
+
+  test('"auto" only fans out to *connected* external channels when the dep is wired', async () => {
+    // Jarvis with only telegram wired -> auto goes to dashboard + telegram,
+    // discord is silently skipped (it's not a failure -- it's just not
+    // configured). Previously this would have reported
+    // failed:[{channel:"discord", error:"not configured"}] every time.
+    const calls: { channels: string[] } = { channels: [] };
+    const adapter = new JarvisNotifierAdapter(
+      makeDeps({
+        broadcastToChannels: async (channels) => {
+          calls.channels = channels;
+          return { delivered: channels, failed: [] };
+        },
+        getConnectedExternalChannels: () => new Set(["telegram"]),
+      }),
+    );
+    const r = await adapter.notify({ message: "x", channels: ["auto"] });
+    expect(calls.channels).toEqual(["telegram"]);
+    expect(r.delivered.sort()).toEqual(["dashboard", "telegram"]);
+    expect(r.failed).toEqual([]);
+  });
+
+  test('"auto" on a Jarvis with no external channels connected only delivers to dashboard', async () => {
+    let m8Called = false;
+    const adapter = new JarvisNotifierAdapter(
+      makeDeps({
+        broadcastToChannels: async () => {
+          m8Called = true;
+          return { delivered: [], failed: [] };
+        },
+        getConnectedExternalChannels: () => new Set(),
+      }),
+    );
+    const r = await adapter.notify({ message: "x", channels: ["auto"] });
+    expect(m8Called).toBe(false);
+    expect(r.delivered).toEqual(["dashboard"]);
+    expect(r.failed).toEqual([]);
+  });
+
+  test("explicit ['telegram'] still attempts delivery regardless of connected set", async () => {
+    // The auto-filter is *exclusively* for auto. Explicit selection means
+    // the user asked for that channel by name; report the underlying
+    // adapter's failure verbatim if it isn't connected.
+    const calls: { channels: string[] } = { channels: [] };
+    const adapter = new JarvisNotifierAdapter(
+      makeDeps({
+        broadcastToChannels: async (channels) => {
+          calls.channels = channels;
+          return {
+            delivered: [],
+            failed: channels.map((c) => ({ channel: c, error: "not configured" })),
+          };
+        },
+        getConnectedExternalChannels: () => new Set(),
+      }),
+    );
+    const r = await adapter.notify({ message: "x", channels: ["telegram"] });
+    expect(calls.channels).toEqual(["telegram"]);
+    expect(r.failed[0]?.channel).toBe("telegram");
   });
 
   test("dashboard channel routes only to the dashboard, not to M8", async () => {

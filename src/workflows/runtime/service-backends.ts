@@ -125,6 +125,17 @@ export function buildSandboxServiceBackends(
     // suggestions. No-op when no client is connected or no TTS provider
     // is configured; the underlying method handles both.
     sendVoice: (text) => opts.wsService.broadcastProactiveVoice(text),
+    // Drives `auto`-channel expansion so unconfigured external channels
+    // don't surface as failures on every notification. Explicit
+    // `["telegram"]` still bypasses this and attempts delivery either way.
+    getConnectedExternalChannels: () => {
+      const status = opts.channelService.getChannelStatus();
+      const live = new Set<string>();
+      for (const [name, connected] of Object.entries(status)) {
+        if (connected) live.add(name);
+      }
+      return live;
+    },
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
   const notifierAdapter = new JarvisNotifierAdapter(notifierDeps);

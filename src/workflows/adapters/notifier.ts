@@ -4,13 +4,16 @@
  *
  * Channel routing rules:
  *
- *   "auto"      -> the user's last-known recipient on each connected channel
- *                  (M8's `lastRecipients`), plus a dashboard broadcast.
- *   "telegram"  -> ChannelService.broadcastToAll('telegram') if a recipient
- *                  is known; otherwise a single failure entry.
+ *   "auto"      -> dashboard, plus the *configured + connected* subset of
+ *                  external channels (telegram/discord) the daemon is
+ *                  currently wired to. Unconfigured channels are silently
+ *                  dropped here so a vanilla Jarvis without telegram doesn't
+ *                  surface a "telegram failed: not configured" entry on
+ *                  every auto notification. Explicit `["telegram"]` still
+ *                  reports the failure -- the user asked for it by name.
+ *   "telegram"  -> ChannelService.broadcastToChannels(['telegram']).
  *   "discord"   -> same idea on Discord.
- *   "voice"     -> not yet wired here (M10 lives elsewhere); reported as
- *                  failed("voice", "not yet wired") so flows surface it.
+ *   "voice"     -> TTS over the dashboard WS, when `sendVoice` is wired.
  *   "dashboard" -> WS broadcast to connected dashboards.
  *   "desktop"   -> sendDesktopNotification, when available.
  *
@@ -41,6 +44,17 @@ export interface NotifierDeps {
    * and the channel reports as failed with a clear message.
    */
   sendVoice?: (text: string) => Promise<void>;
+  /**
+   * Returns the set of *external* channel names currently configured AND
+   * connected (e.g. `{"telegram"}` on a Jarvis with only telegram wired).
+   * Consulted exclusively by `auto`-channel expansion so unconfigured
+   * channels don't surface as failures on every auto notification.
+   *
+   * Optional: when missing, `auto` falls back to the previous behaviour of
+   * trying both telegram and discord. Explicit channel selections
+   * (`["telegram"]`) ignore this entirely and always attempt delivery.
+   */
+  getConnectedExternalChannels?: () => Set<string>;
 }
 
 export interface NotifierBroadcastReport {
@@ -53,7 +67,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
 
   async notify(input: PieceNotifyInput): Promise<PieceNotifyResult> {
     const requested = input.channels && input.channels.length > 0 ? input.channels : (["auto"] as PieceNotifyChannel[]);
-    const expanded = expandChannels(requested);
+    const expanded = expandChannels(requested, this.deps);
     const priority = mapPriority(input.priority ?? "normal");
 
     const delivered: string[] = [];
@@ -116,15 +130,31 @@ export class JarvisNotifierAdapter implements PieceNotifier {
   }
 }
 
-function expandChannels(requested: PieceNotifyChannel[]): Set<string> {
+function expandChannels(requested: PieceNotifyChannel[], deps: NotifierDeps): Set<string> {
   const out = new Set<string>();
   for (const c of requested) {
     if (c === "auto") {
-      // Default policy: dashboard always, plus telegram + discord (best effort).
-      // The underlying broadcast methods absorb missing recipients gracefully.
+      // Dashboard always (in-app surface is always available when there's
+      // an open dashboard WS; if none is open the broadcast is a silent
+      // no-op). For external channels we consult the dep, when wired, to
+      // skip unconfigured ones -- otherwise every auto notification on a
+      // Jarvis without telegram/discord would report two failures the
+      // user can't act on.
       out.add("dashboard");
-      out.add("telegram");
-      out.add("discord");
+      const live = deps.getConnectedExternalChannels?.();
+      if (live) {
+        for (const name of ["telegram", "discord"]) {
+          if (live.has(name)) out.add(name);
+        }
+      } else {
+        // Conservative fallback: when the dep isn't wired, behave as before
+        // and try both. The downstream broadcast layer still reports
+        // per-channel success / failure; flows that branch on
+        // `failed.length === 0` will see noise, but at least the previous
+        // behaviour is preserved for callers that haven't opted in.
+        out.add("telegram");
+        out.add("discord");
+      }
     } else {
       out.add(c);
     }
