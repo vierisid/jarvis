@@ -49,7 +49,8 @@ import {
   type BootstrapWorkflowEngineResult,
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
-import type { PieceLookup } from "../workflows/runtime/piece-catalog.ts";
+import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
+import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 
@@ -635,7 +636,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (err.stack) console.error(err.stack);
     }
 
-    const workflowPieceCatalog: PieceLookup | null = engineBoot ? engineBoot.catalog : null;
+    // Local var is the concrete `PieceCatalog` (not the structural `PieceLookup`)
+    // so the `onPieceLibraryChanged` callback can call `upsert()` / `remove()`
+    // after runtime installs.
+    const workflowPieceCatalog = engineBoot?.catalog ?? null;
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 
@@ -651,12 +655,44 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Mount the daemon's existing routes plus the workflow runtime's routes.
     // The legacy in-house workflow routes that lived at /api/workflows/* were
     // removed in the Phase 6 cutover; the new runtime now owns those paths.
+    // onPieceLibraryChanged: extract metadata for a newly-installed piece
+    // and upsert into the running catalog so the flow editor picks it up
+    // without a daemon restart. Skipped if either the catalog or the engine
+    // runtime is missing (engine bootstrap failed earlier -- the install
+    // route still mutated disk; the next daemon start reconciles).
+    const onPieceLibraryChanged =
+      workflowPieceCatalog && workflowEngineRuntime
+        ? async (event: {
+            kind: "installed" | "uninstalled";
+            piece: { npmPackage: string; resolvedVersion: string };
+          }) => {
+            if (event.kind === "uninstalled") {
+              workflowPieceCatalog.remove(event.piece.npmPackage);
+              return;
+            }
+            const handle = await workflowEngineRuntime.acquire({
+              runId: "metadata-extract-runtime-install",
+              projectId: DEFAULT_IDS.project,
+            });
+            try {
+              const meta = await handle.extractPieceMetadata({
+                pieceName: event.piece.npmPackage,
+                pieceVersion: event.piece.resolvedVersion,
+              });
+              workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
+            } finally {
+              await handle.release();
+            }
+          }
+        : undefined;
+
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
         triggerManager,
         credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),
+        ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
       }),
     };
     wsService.setApiRoutes(apiRoutes);

@@ -62,6 +62,13 @@ import {
 import type { CredentialResolver } from "../credentials/adapter";
 import type { TriggerManager } from "../runner/triggers/manager";
 import type { PieceLookup } from "../runtime/piece-catalog";
+import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
+import {
+  installPiece,
+  readManifest,
+  uninstallPiece,
+  type InstalledPiece,
+} from "../pieces-library/installer";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -125,6 +132,36 @@ export interface CreateWorkflowRoutesOptions {
    * `app_connection` rows work without it.
    */
   credentialResolver?: CredentialResolver;
+  /**
+   * Callback fired after a successful install/uninstall through the Library
+   * routes. The daemon wires this to extract metadata for the new piece via
+   * the engine and upsert it into the running `PieceCatalog`, so the flow
+   * editor sees the piece immediately without a daemon restart.
+   *
+   * When omitted, install/uninstall still mutate `~/.jarvis/pieces/` and the
+   * manifest, but the in-memory catalog won't reflect the change until next
+   * daemon start (the reconciler picks it up at bootstrap).
+   */
+  onPieceLibraryChanged?: (event: {
+    kind: "installed" | "uninstalled";
+    piece: InstalledPiece;
+  }) => Promise<void>;
+}
+
+/**
+ * In-process mutex for the Library routes. Two concurrent installs would
+ * race on the shared `~/.jarvis/pieces/package.json` + bun-install
+ * invocation; we serialize them at the route boundary. One daemon, one
+ * writer.
+ */
+let libraryMutex: Promise<void> = Promise.resolve();
+function withLibraryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const release = libraryMutex.then(() => fn());
+  libraryMutex = release.then(
+    () => undefined,
+    () => undefined,
+  );
+  return release;
 }
 
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
@@ -166,6 +203,113 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               : [],
           }));
           return ok(list);
+        }),
+    },
+
+    // ------------------------------------------------------------- pieces library
+    // The Library tab in the dashboard renders this list. Each entry is a
+    // *curated* (Jarvis-vetted) community piece the user can opt into
+    // installing. Installed pieces are merged in with their resolved
+    // version + install timestamp so the UI can show "Installed" /
+    // "Update available" badges.
+    //
+    // Install / uninstall mutate `~/.jarvis/pieces/` (manifest + bun
+    // install). They block until bun finishes -- typical first install of a
+    // single piece is 3-8s end to end. The UI shows a spinner during the
+    // wait. A `withLibraryLock` mutex serializes concurrent requests so a
+    // second install doesn't race the first one's bun-install.
+    "/api/workflows/pieces/library": {
+      GET: () =>
+        trapErrors(async () => {
+          const manifest = await readManifest();
+          const installedById = new Map(
+            manifest.pieces.map((p) => [p.id, p]),
+          );
+          const entries = CATALOG.map((entry) => {
+            const installed = installedById.get(entry.id) ?? null;
+            return {
+              id: entry.id,
+              npmPackage: entry.npmPackage,
+              versionRange: entry.versionRange,
+              displayName: entry.displayName,
+              description: entry.description,
+              iconUrl: entry.iconUrl ?? null,
+              vettedVersion: entry.vettedVersion,
+              vettedAt: entry.vettedAt,
+              sourceUrl: entry.sourceUrl,
+              licenseSpdx: entry.licenseSpdx,
+              installed: installed
+                ? {
+                    resolvedVersion: installed.resolvedVersion,
+                    installedAt: installed.installedAt,
+                  }
+                : null,
+            };
+          });
+          return ok({ entries });
+        }),
+    },
+
+    "/api/workflows/pieces/library/:id/install": {
+      POST: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const entry = findCatalogEntry(id);
+          if (!entry) return err(`unknown piece id "${id}"`, 404);
+          const result = await withLibraryLock(() => installPiece(id));
+          if (opts.onPieceLibraryChanged) {
+            try {
+              await opts.onPieceLibraryChanged({
+                kind: "installed",
+                piece: result.piece,
+              });
+            } catch (e) {
+              // Install on disk succeeded; catalog refresh failed. Surface
+              // a partial-success marker so the UI can warn the user that
+              // a daemon restart is needed for the piece to appear in the
+              // flow editor's picker.
+              return ok(
+                {
+                  installed: true,
+                  catalogRefreshFailed: true,
+                  catalogRefreshError: (e as Error).message,
+                  piece: result.piece,
+                },
+                200,
+              );
+            }
+          }
+          return ok({ installed: true, piece: result.piece }, 200);
+        }),
+    },
+
+    "/api/workflows/pieces/library/:id": {
+      DELETE: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const entry = findCatalogEntry(id);
+          if (!entry) return err(`unknown piece id "${id}"`, 404);
+          const manifest = await readManifest();
+          const target = manifest.pieces.find((p) => p.id === id);
+          if (!target) {
+            // Already uninstalled; idempotent. Return 200 not 404 so the UI
+            // can race uninstall-then-confirm without surfacing an error.
+            return ok({ uninstalled: true, alreadyAbsent: true });
+          }
+          await withLibraryLock(() => uninstallPiece(id));
+          if (opts.onPieceLibraryChanged) {
+            try {
+              await opts.onPieceLibraryChanged({
+                kind: "uninstalled",
+                piece: target,
+              });
+            } catch {
+              // Catalog cleanup failure isn't fatal -- the piece is gone
+              // from disk; on next daemon restart it falls out of the
+              // catalog naturally.
+            }
+          }
+          return ok({ uninstalled: true });
         }),
     },
 

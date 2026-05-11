@@ -425,3 +425,43 @@
 .wf-conn__form-value { display: flex; flex-direction: column; gap: 4px; }
 .wf-conn__form-err { color: var(--accent-1, #f87171); font-size: 0.72rem; }
 .wf-conn__form-actions { display: flex; justify-content: flex-end; }
+
+/* Library panel: curated activepieces community pieces, install/uninstall. */
+.wf-lib { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) 0; }
+.wf-lib__header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); }
+.wf-lib__title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink-1); }
+.wf-lib__subtitle { margin: 2px 0 0; font-size: 0.78rem; color: var(--ink-3); }
+.wf-lib__actions { display: flex; gap: var(--s-1); }
+.wf-lib__intro {
+  margin: 0 0 var(--s-2);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+.wf-lib__intro code { font-family: monospace; font-size: 0.74rem; color: var(--ink-2); }
+.wf-lib__empty {
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.85rem;
+}
+.wf-lib__list { display: flex; flex-direction: column; gap: var(--s-2); list-style: none; padding: 0; margin: 0; }
+.wf-lib__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-2, 6px);
+  background: var(--surface-1);
+}
+.wf-lib__row-main { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.wf-lib__row-title { display: flex; align-items: center; gap: var(--s-1); flex-wrap: wrap; }
+.wf-lib__row-name { font-weight: 600; color: var(--ink-1); }
+.wf-lib__row-desc { margin: 0; font-size: 0.82rem; color: var(--ink-2); line-height: 1.4; }
+.wf-lib__row-meta { display: flex; gap: var(--s-2); font-size: 0.72rem; color: var(--ink-3); align-items: center; flex-wrap: wrap; }
+.wf-lib__row-pkg { font-family: monospace; font-size: 0.72rem; color: var(--ink-3); }
+.wf-lib__row-source { display: inline-flex; gap: 3px; align-items: center; color: var(--ink-3); text-decoration: none; }
+.wf-lib__row-source:hover { color: var(--ink-1); }
+.wf-lib__row-actions { display: flex; gap: var(--s-1); flex-shrink: 0; }

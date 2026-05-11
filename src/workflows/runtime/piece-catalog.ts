@@ -83,6 +83,23 @@ export class PieceCatalog implements PieceLookup {
   get(name: string): PieceCatalogEntry | null {
     return this.entries.get(name) ?? null;
   }
+
+  /**
+   * Insert or replace a single piece. Used after a runtime install (the user
+   * clicked Install in the Library tab) so the new piece becomes available
+   * in the flow editor without a daemon restart.
+   */
+  upsert(entry: PieceCatalogEntry): void {
+    this.entries.set(entry.name, entry);
+  }
+
+  /**
+   * Drop a piece from the catalog. Used after a runtime uninstall. Returns
+   * true if the piece was present.
+   */
+  remove(name: string): boolean {
+    return this.entries.delete(name);
+  }
 }
 
 interface PieceDiscoveryEntry {

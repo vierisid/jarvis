@@ -38,6 +38,11 @@ import {
   PieceCatalog,
   type PieceExtractionFailure,
 } from "./piece-catalog";
+import {
+  reconcilePiecesLibrary,
+  piecesNodeModulesDir,
+} from "../pieces-library/reconciler";
+import { piecesBaseDir } from "../pieces-library/installer";
 
 export interface BootstrapWorkflowEngineOptions {
   /** Service backends for the `/v1/jarvis/*` routes. Each unset slot returns 503. */
@@ -78,6 +83,26 @@ export async function bootstrapWorkflowEngine(
 ): Promise<BootstrapWorkflowEngineResult> {
   const log = opts.log ?? ((m) => console.log(`[engine-bootstrap] ${m}`));
   const t0 = Date.now();
+
+  // 0. Reconcile the user-installed pieces library before anything else.
+  // A fresh Docker container (volume mounted but no node_modules yet) needs
+  // `bun install` to re-materialize the install set declared in
+  // `~/.jarvis/pieces/installed.json`. Empty manifest = no-op. Failures are
+  // logged but don't block engine startup -- the catalog will just exclude
+  // the missing pieces and the user can re-trigger via the Library UI.
+  try {
+    const reconcile = await reconcilePiecesLibrary({ log });
+    if (reconcile.ranInstall) {
+      log(
+        `pieces-library reconciled: ${reconcile.materialized.length}/${reconcile.declared} ready` +
+          (reconcile.missing.length > 0
+            ? `, ${reconcile.missing.length} missing`
+            : ""),
+      );
+    }
+  } catch (e) {
+    log(`pieces-library reconcile failed (continuing without user pieces): ${(e as Error).message}`);
+  }
 
   // Phases 1-3 run in parallel because none depends on another:
   //   - bundle build (CPU + disk)
@@ -120,18 +145,34 @@ export async function bootstrapWorkflowEngine(
   // extraction below acquires + releases an engine; with pool=true the
   // released engine ends up in the warm slot and is reused by the first
   // real RUN_FLOW after bootstrap -- effectively "pre-warm for free".
+  //
+  // customPiecesPaths includes the user pieces dir (`~/.jarvis/pieces`)
+  // alongside the vendored Jarvis pieces. The engine's piece-loader walks
+  // both at runtime: vendored pieces resolve via the standard upstream
+  // layout, user-installed pieces via our patched shared-node_modules
+  // shape (see piece-loader.ts).
   const runtime = new EngineRuntime({
     api,
     bundlePath: cached.bundlePath,
     pool: true,
+    customPiecesPaths: [
+      resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"),
+      piecesBaseDir(),
+    ],
   });
 
   // 5. Extract piece metadata. Cached to disk keyed by the engine bundle's
   // content hash plus each piece's compiled bundle content; mismatch forces
   // a fresh extraction. A cache hit is ~instant; a miss spawns the engine
   // (~3s cold) and runs EXTRACT_PIECE_METADATA per piece.
+  // pieceRoots feeds discoverPieces -- which walks each root's children for
+  // a `package.json` and registers them in the catalog. Two roots today:
+  //   1. vendored Jarvis-native pieces (always present)
+  //   2. user-installed community pieces under `~/.jarvis/pieces/node_modules/@activepieces/`
+  //      (may be missing; discoverPieces handles a missing dir gracefully)
   const pieceRoots = opts.pieceRoots ?? [
     resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis"),
+    resolve(piecesNodeModulesDir(), "@activepieces"),
   ];
   const cacheKey = computeCatalogCacheKey({
     bundlePath: cached.bundlePath,

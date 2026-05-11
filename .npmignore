@@ -22,6 +22,11 @@ CLAUDE.md
 **/*.md
 !README.md
 
+# Internal READMEs that document source-tree directories -- shipped users
+# don't need them. Listed explicitly because `!README.md` above re-includes
+# every README in the tree.
+src/workflows/pieces-library/README.md
+
 # UI source (only dist + public needed)
 ui/src/
 ui/index.html

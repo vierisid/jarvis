@@ -53,12 +53,10 @@ From `packages/pieces/core/` (built-in primitives):
 approval, delay, file-helper, http, schedule, store, webhook
 ```
 
-From `packages/pieces/community/`:
-
-```
-claude, discord, github, gmail, google-calendar, google-drive,
-notion, openai, slack, telegram-bot
-```
+Community pieces (Gmail, Slack, Notion, ...) are NOT vendored. They install
+on demand at runtime via `bun install` from the curated catalog in
+`src/workflows/pieces-library/`. See that directory's README for the
+catalog policy and per-piece pin strategy.
 
 Plus the piece SDK and shared utilities: `packages/pieces/framework`, `packages/pieces/common`.
 
@@ -73,7 +71,7 @@ Additional pieces can be added later by editing `VENDOR_PATHS` in `scripts/sync-
 - `packages/pieces/framework` -- the piece SDK.
 - `packages/pieces/common` -- shared piece utilities.
 - `packages/pieces/core/<curated>` -- built-in primitives (see list above).
-- `packages/pieces/community/<curated>` -- integrations (see list above).
+- community pieces are NOT vendored -- they install at runtime; see `src/workflows/pieces-library/README.md`.
 - `packages/web` -- the Vite-based visual builder app (formerly `packages/react-ui` before 0.82).
 - `packages/react-ui` -- locale assets the web app references at runtime.
 

@@ -39,6 +39,7 @@ import {
 } from "./useWorkflowsData";
 import "./WorkflowsRoom.css";
 import { ConnectionsPanel } from "./ConnectionsPanel";
+import { LibraryPanel } from "./LibraryPanel";
 
 const STATUS_TONE: Record<FlowStatus, "ok" | "neutral"> = {
   ENABLED: "ok",
@@ -73,7 +74,7 @@ const TERMINAL_STATUSES = new Set<FlowRunStatus>([
   "SCHEDULE_FAILURE",
 ]);
 
-type RoomTab = "flows" | "connections";
+type RoomTab = "flows" | "connections" | "library";
 
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
@@ -110,6 +111,13 @@ export function WorkflowsRoomBody(): React.ReactElement {
           >
             Connections
           </button>
+          <button
+            type="button"
+            className={`wf-room__tab ${tab === "library" ? "wf-room__tab--active" : ""}`}
+            onClick={() => setTab("library")}
+          >
+            Library
+          </button>
         </div>
         <div className="wf-room__actions">
           {tab === "flows" ? (
@@ -131,6 +139,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
       ) : null}
 
       {tab === "connections" ? <ConnectionsPanel /> : null}
+      {tab === "library" ? <LibraryPanel /> : null}
 
       {tab === "flows" ? (
       <div className="wf-room__layout">

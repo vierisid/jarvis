@@ -660,3 +660,65 @@ describe("workflow API: waitpoints surface", () => {
     expect(body.waitpoints[0].resumeUrl).toBe(`/api/webhooks/waitpoints/${wp.id}`);
   });
 });
+
+describe("workflow API: pieces library", () => {
+  test("GET /api/workflows/pieces/library returns the catalog with per-entry installed status", async () => {
+    // Isolate from any pieces installed on the developer's machine.
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tempDir = mkdtempSync(join(tmpdir(), "jarvis-lib-api-"));
+    const prev = process.env.JARVIS_PIECES_DIR;
+    process.env.JARVIS_PIECES_DIR = tempDir;
+    try {
+      const r = createWorkflowRoutes();
+      const get = r["/api/workflows/pieces/library"]?.GET;
+      const { status, body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces/library"));
+      expect(status).toBe(200);
+      expect(Array.isArray(body.entries)).toBe(true);
+      // Every entry needs the minimum shape the UI binds to.
+      for (const entry of body.entries) {
+        expect(typeof entry.id).toBe("string");
+        expect(typeof entry.npmPackage).toBe("string");
+        expect(typeof entry.versionRange).toBe("string");
+        expect(typeof entry.displayName).toBe("string");
+        // `installed` is null when not installed -- temp dir has no manifest.
+        expect(entry.installed).toBeNull();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.JARVIS_PIECES_DIR;
+      else process.env.JARVIS_PIECES_DIR = prev;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("POST /api/workflows/pieces/library/:id/install rejects an unknown piece id", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/workflows/pieces/library/:id/install"]?.POST;
+    const { status, body } = await callJson(
+      post,
+      reqWithParams(
+        "POST",
+        "http://x/api/workflows/pieces/library/not-real/install",
+        { id: "not-real" },
+      ),
+    );
+    expect(status).toBe(404);
+    expect(body.error).toMatch(/unknown piece id/);
+  });
+
+  test("DELETE on a never-installed piece returns 200 with alreadyAbsent (idempotent uninstall)", async () => {
+    const r = createWorkflowRoutes();
+    const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
+    const { status, body } = await callJson(
+      del,
+      reqWithParams(
+        "DELETE",
+        "http://x/api/workflows/pieces/library/gmail",
+        { id: "gmail" },
+      ),
+    );
+    expect(status).toBe(200);
+    expect(body.alreadyAbsent).toBe(true);
+  });
+});
