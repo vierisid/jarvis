@@ -33,6 +33,14 @@ export interface NotifierDeps {
   broadcastToDashboard: (text: string, priority: "urgent" | "normal" | "low") => void;
   /** Optional desktop notification surface (D-Bus / native). Optional means "platform may not have it". */
   sendDesktop?: (title: string, body: string) => Promise<void>;
+  /**
+   * Optional voice / TTS surface. When provided, `jarvis-notify` calls with
+   * `channels: ["voice"]` synthesize speech and broadcast the audio to
+   * connected dashboard websockets. The daemon's `WebSocketService` exposes
+   * `broadcastProactiveVoice` for this. Missing means "TTS not configured"
+   * and the channel reports as failed with a clear message.
+   */
+  sendVoice?: (text: string) => Promise<void>;
 }
 
 export interface NotifierBroadcastReport {
@@ -73,11 +81,21 @@ export class JarvisNotifierAdapter implements PieceNotifier {
       }
     }
 
-    // Voice -- not wired in this adapter yet (M10's TTS pipeline lives outside
-    // ChannelService). Surface as a failure with a clear reason so flows can
-    // branch on it; flipping this on requires an injected `voiceSpeak`.
+    // Voice -- TTS through the daemon's `broadcastProactiveVoice` when the
+    // dep is wired. Speaks the message to every connected dashboard client
+    // through the same WS path the awareness suggestions use. Falls back to
+    // a clear failure when TTS isn't configured.
     if (expanded.has("voice")) {
-      failed.push({ channel: "voice", error: "voice channel not yet wired through workflow notifier" });
+      if (!this.deps.sendVoice) {
+        failed.push({ channel: "voice", error: "voice channel not wired (TTS provider not configured)" });
+      } else {
+        try {
+          await this.deps.sendVoice(input.message);
+          delivered.push("voice");
+        } catch (e) {
+          failed.push({ channel: "voice", error: errorMessage(e) });
+        }
+      }
     }
 
     // Desktop

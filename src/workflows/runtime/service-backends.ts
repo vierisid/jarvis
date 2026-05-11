@@ -121,6 +121,10 @@ export function buildSandboxServiceBackends(
     // every notification to every connected channel.
     broadcastToChannels: (channels, text) =>
       opts.channelService.tryBroadcastToChannels(channels, text),
+    // Voice channel = TTS over the same WS path used by awareness
+    // suggestions. No-op when no client is connected or no TTS provider
+    // is configured; the underlying method handles both.
+    sendVoice: (text) => opts.wsService.broadcastProactiveVoice(text),
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
   const notifierAdapter = new JarvisNotifierAdapter(notifierDeps);
