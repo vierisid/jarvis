@@ -16,3 +16,15 @@ jobs:
       - run: bun install
       - run: bun test
       - run: bunx tsc --noEmit
+
+  # Validate the macOS Vision OCR helper compiles. Cheap on macos-latest;
+  # catches breakage in helpers/ocr-helper.swift before it reaches a release.
+  swift-check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile ocr-helper.swift
+        working-directory: sidecar
+        run: |
+          swiftc -O -target arm64-apple-macos11 -o /tmp/ocr-helper helpers/ocr-helper.swift
+          file /tmp/ocr-helper

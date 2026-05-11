@@ -115,9 +115,36 @@ jobs:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
 
+  # ─── Build the macOS Vision OCR helper (universal arm64+amd64) ─
+  # Swift + Vision.framework are macOS-only, so this job has to run on a Mac.
+  # We produce one universal Mach-O binary that's bundled into both darwin
+  # npm packages and both darwin release tarballs.
+  build-ocr-helper:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build universal ocr-helper
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          swiftc -O -target arm64-apple-macos11  -o /tmp/ocr-helper-arm64 helpers/ocr-helper.swift
+          swiftc -O -target x86_64-apple-macos11 -o /tmp/ocr-helper-amd64 helpers/ocr-helper.swift
+          mkdir -p helpers
+          lipo -create -output helpers/ocr-helper /tmp/ocr-helper-arm64 /tmp/ocr-helper-amd64
+          file helpers/ocr-helper
+          lipo -info helpers/ocr-helper
+
+      - name: Upload helper binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: ocr-helper-darwin
+          path: sidecar/helpers/ocr-helper
+
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
-    needs: [build-sidecar, build-docker]
+    needs: [build-sidecar, build-docker, build-ocr-helper]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -131,6 +158,12 @@ jobs:
         with:
           path: artifacts
           pattern: sidecar-*
+
+      - name: Download macOS OCR helper
+        uses: actions/download-artifact@v5
+        with:
+          name: ocr-helper-darwin
+          path: artifacts/ocr-helper-darwin
 
       - name: Extract version from tag
         id: version
@@ -147,6 +180,14 @@ jobs:
             # Copy binary
             cp "artifacts/sidecar-${platform}/"* "${pkg_dir}/bin/"
             chmod +x "${pkg_dir}/bin/"*
+
+            # Bundle the macOS Vision OCR helper alongside the darwin sidecar binaries
+            case "${platform}" in
+              darwin-arm64|darwin-x64)
+                cp artifacts/ocr-helper-darwin/ocr-helper "${pkg_dir}/bin/"
+                chmod +x "${pkg_dir}/bin/ocr-helper"
+                ;;
+            esac
 
             # Update version
             cd "${pkg_dir}"
@@ -223,7 +264,7 @@ jobs:
 
   # ─── Create GitHub Release with binaries ───────────────────────
   github-release:
-    needs: [build-sidecar, build-docker]
+    needs: [build-sidecar, build-docker, build-ocr-helper]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -236,6 +277,12 @@ jobs:
           path: artifacts
           pattern: sidecar-*
 
+      - name: Download macOS OCR helper
+        uses: actions/download-artifact@v5
+        with:
+          name: ocr-helper-darwin
+          path: artifacts/ocr-helper-darwin
+
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
@@ -244,11 +291,26 @@ jobs:
         run: |
           mkdir -p release
 
+          # Bundle the helper alongside the darwin sidecar binaries so a single
+          # tarball contains everything a macOS install needs for OCR to work.
+          for platform in darwin-arm64 darwin-x64; do
+            cp artifacts/ocr-helper-darwin/ocr-helper "artifacts/sidecar-${platform}/"
+            chmod +x "artifacts/sidecar-${platform}/ocr-helper"
+          done
+
           # Create archives for each platform
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             chmod +x "artifacts/sidecar-${platform}/${{ env.SIDECAR_BIN }}"
-            tar -czf "release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-${platform}.tar.gz" \
-              -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
+            case "${platform}" in
+              darwin-*)
+                tar -czf "release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-${platform}.tar.gz" \
+                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}" "ocr-helper"
+                ;;
+              *)
+                tar -czf "release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-${platform}.tar.gz" \
+                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
+                ;;
+            esac
           done
 
           # Windows gets a zip
