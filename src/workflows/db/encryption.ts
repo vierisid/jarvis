@@ -105,6 +105,21 @@ export function encryptJson(value: unknown): string {
  * `context` is woven into thrown error messages so production debugging
  * (which connection / file is corrupt?) doesn't have to guess. Callers
  * supply the relevant identifier; defaults to a generic "stored value".
+ *
+ * Error granularity. The thrown messages distinguish three causes so the
+ * rotation script + operators can act differently per row:
+ *
+ *   - "malformed ciphertext (likely corrupted row)": wire-format issue --
+ *     base64 fails to decode, or the decoded buffer is shorter than
+ *     `iv ‖ authTag`. Means the row was truncated / mangled at rest, not
+ *     a key mismatch.
+ *   - "auth verification failed (likely wrong key or tampered ciphertext)":
+ *     wire format is valid, but GCM auth refuses the (key, iv, tag, ct)
+ *     tuple. Almost always wrong key when seen across many rows; almost
+ *     always tampering when seen on a single row.
+ *   - "decrypted bytes are not valid JSON": auth passed but the plaintext
+ *     can't be parsed. Implies the data was encrypted with an out-of-band
+ *     producer or the JSON wrapper changed.
  */
 export function decryptJson(stored: string, context = "stored value"): unknown {
   if (!stored.startsWith(PREFIX)) {
@@ -116,9 +131,21 @@ export function decryptJson(stored: string, context = "stored value"): unknown {
       );
     }
   }
-  const buf = Buffer.from(stored.slice(PREFIX.length), "base64");
+  // Sanity-check the wire format before touching crypto. A failure here is
+  // unambiguously row corruption, not a wrong-key situation: AES-GCM's auth
+  // step never even gets to run.
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(stored.slice(PREFIX.length), "base64");
+  } catch (e) {
+    throw new Error(
+      `${context}: malformed ciphertext (likely corrupted row): base64 decode failed: ${(e as Error).message}`,
+    );
+  }
   if (buf.length < IV_BYTES + 16) {
-    throw new Error(`${context}: encrypted blob is shorter than iv+authTag`);
+    throw new Error(
+      `${context}: malformed ciphertext (likely corrupted row): blob is ${buf.length} bytes, need at least ${IV_BYTES + 16} for iv+authTag`,
+    );
   }
   const iv = buf.subarray(0, IV_BYTES);
   const authTag = buf.subarray(IV_BYTES, IV_BYTES + 16);
@@ -130,14 +157,14 @@ export function decryptJson(stored: string, context = "stored value"): unknown {
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch (e) {
     throw new Error(
-      `${context}: decryption failed (likely wrong key or tampered ciphertext): ${(e as Error).message}`,
+      `${context}: auth verification failed (likely wrong key or tampered ciphertext): ${(e as Error).message}`,
     );
   }
   try {
     return JSON.parse(plaintext.toString("utf8"));
   } catch (e) {
     throw new Error(
-      `${context}: decrypted blob is not valid JSON: ${(e as Error).message}`,
+      `${context}: decrypted bytes are not valid JSON: ${(e as Error).message}`,
     );
   }
 }
