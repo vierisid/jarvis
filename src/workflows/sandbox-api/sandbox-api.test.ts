@@ -272,6 +272,45 @@ describe("SandboxApi server", () => {
     });
     expect(r.status).toBe(404);
   });
+
+  test("?token= query param is rejected on routes other than the logs upload", async () => {
+    // URL-borne tokens leak into proxy / access logs more readily than
+    // headers, so the fallback is restricted to exactly PUT /v1/logs/:runId.
+    // This test guards against re-broadening the fallback by accident.
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    // Valid token, wrong delivery channel -> 401.
+    const r = await fetch(`${api.baseUrl}/v1/worker/project?token=${encodeURIComponent(token)}`);
+    expect(r.status).toBe(401);
+  });
+
+  test("?token= query param is accepted on PUT /v1/logs/:runId (presigned-style upload)", async () => {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    // The handler will reject the payload (no real run row), but auth must
+    // pass first -- we only assert we're not getting the auth 401.
+    const r = await fetch(
+      `${api.baseUrl}/v1/logs/${encodeURIComponent(id.runId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        body: "log-bytes",
+        headers: { "content-type": "application/octet-stream" },
+      },
+    );
+    expect(r.status).not.toBe(401);
+  });
 });
 
 describe("SandboxApi routes (B2: connections, store, flows)", () => {

@@ -358,9 +358,15 @@ export class SandboxApi {
     // Authenticate via either:
     //   - Authorization: Bearer <engineToken>  (default; what the engine uses
     //     for HTTP RPC calls)
-    //   - ?token=<engineToken> in the URL      (fallback for engine endpoints
-    //     that the upstream client doesn't decorate with auth headers --
-    //     specifically the logs upload PUT, which expects a presigned URL)
+    //   - ?token=<engineToken> in the URL      (fallback for the single
+    //     endpoint where the engine's upstream client doesn't decorate the
+    //     request with auth headers: the logs upload PUT, which is shaped
+    //     after a presigned URL).
+    //
+    // The query-param fallback is restricted to exactly `PUT /v1/logs/:runId`
+    // because URL-borne tokens leak more readily than header tokens (proxy
+    // logs, access logs, browser history). Every other path requires the
+    // header.
     let token: string | null = null;
     const auth = req.headers.get("authorization") ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
@@ -368,7 +374,8 @@ export class SandboxApi {
       token = m[1]!;
     } else {
       const qp = url.searchParams.get("token");
-      if (qp) token = qp;
+      const isLogsUpload = req.method === "PUT" && /^\/v1\/logs\/[^/]+$/.test(pathname);
+      if (qp && isLogsUpload) token = qp;
     }
     if (!token) return err("missing bearer token", 401);
 
