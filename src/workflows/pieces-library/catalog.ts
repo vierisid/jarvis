@@ -75,10 +75,11 @@ export const CATALOG: CatalogEntry[] = [
     description:
       "Post messages, read channels, react to events. Requires a Slack bot token.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.16.4",
+    vettedVersion: "0.16.5",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/slack",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 70,
   },
   {
     id: "notion",
@@ -92,6 +93,7 @@ export const CATALOG: CatalogEntry[] = [
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/notion",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 55,
   },
   {
     id: "openai",
@@ -105,19 +107,24 @@ export const CATALOG: CatalogEntry[] = [
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/openai",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 60,
   },
   {
     id: "github",
+    // The original 0.6.8 pin was taken from the vendored package.json but
+    // never made it to npm; the 0.6 line topped out at 0.6.7. Re-vetted
+    // against the live registry at ^0.7.0.
     npmPackage: "@activepieces/piece-github",
-    versionRange: "^0.6.8",
+    versionRange: "^0.7.0",
     displayName: "GitHub",
     description:
       "Create issues, comment on PRs, read repository data. Requires a personal access token.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.6.8",
+    vettedVersion: "0.7.3",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/github",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 45,
   },
   {
     id: "google-calendar",
@@ -127,10 +134,12 @@ export const CATALOG: CatalogEntry[] = [
     description:
       "List, create, and update calendar events. Requires a Google OAuth connection.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.6.0",
+    vettedVersion: "0.6.7",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/google-calendar",
     licenseSpdx: "MIT",
+    // googleapis is the bulk -- shares transitive footprint with gmail.
+    estimatedSizeMb: 150,
   },
   {
     id: "google-drive",
@@ -140,10 +149,12 @@ export const CATALOG: CatalogEntry[] = [
     description:
       "Upload, search, and download files in Google Drive. Requires a Google OAuth connection.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.7.0",
+    vettedVersion: "0.7.5",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/google-drive",
     licenseSpdx: "MIT",
+    // Same googleapis footprint.
+    estimatedSizeMb: 160,
   },
   {
     id: "discord",
@@ -153,23 +164,27 @@ export const CATALOG: CatalogEntry[] = [
     description:
       "Post messages to Discord channels and react to webhook events.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.4.0",
+    vettedVersion: "0.4.4",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/discord",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 40,
   },
   {
     id: "telegram-bot",
+    // The original 0.6.x pin came from the vendored package.json but the
+    // public npm release line stops at 0.5.x. Re-vetted against ^0.5.0.
     npmPackage: "@activepieces/piece-telegram-bot",
-    versionRange: "^0.6.0",
+    versionRange: "^0.5.0",
     displayName: "Telegram Bot",
     description:
       "Send messages and react to Telegram bot updates. Requires a bot token.",
     vettedAt: "2026-05-11",
-    vettedVersion: "0.6.0",
+    vettedVersion: "0.5.7",
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/telegram-bot",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 40,
   },
   {
     id: "claude",
@@ -183,6 +198,7 @@ export const CATALOG: CatalogEntry[] = [
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/claude",
     licenseSpdx: "MIT",
+    estimatedSizeMb: 50,
   },
 ];
 
