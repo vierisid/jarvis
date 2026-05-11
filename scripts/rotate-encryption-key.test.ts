@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { encryptJson, setEncryptionKey } from "../src/workflows/db/encryption";
+import { decryptJson, encryptJson, setEncryptionKey } from "../src/workflows/db/encryption";
 import { initWorkflowDb, closeWorkflowDb } from "../src/workflows/db/index";
 import { createSchema } from "../src/workflows/db/schema";
 
@@ -115,10 +115,6 @@ describe("rotate-encryption-key", () => {
       id: string;
       value: string;
     }>;
-    const decryptJson = (
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("../src/workflows/db/encryption") as typeof import("../src/workflows/db/encryption")
-    ).decryptJson;
     const aValue = decryptJson(rows[0]!.value, "conn_a") as { access_token: string };
     const bValue = decryptJson(rows[1]!.value, "conn_b") as { api_key: string };
     expect(aValue.access_token).toBe("secret-a");
@@ -134,6 +130,58 @@ describe("rotate-encryption-key", () => {
       .get() as { value: string };
     expect(() => decryptJson(row.value, "conn_a")).toThrow();
     db2.close();
+  });
+
+  test("refuses to run when a daemon currently holds the pid lock", async () => {
+    // We can't easily fake the flock from outside Bun, so the test acquires
+    // the real daemon lock with the rotation script's own pid module. The
+    // script's subprocess then runs `isLocked()` and sees this process is
+    // holding it -- which is exactly the production "daemon is running"
+    // scenario, just with the test process standing in for the daemon.
+    const { acquireLock, releaseLock } = await import("../src/daemon/pid");
+    const acquired = acquireLock(process.pid);
+    if (!acquired) {
+      // Another daemon (or test) already holds the lock on this dev machine.
+      // Skip rather than fail.
+      return;
+    }
+    try {
+      const res = runScript();
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(/Daemon is running/);
+      // Keychain unchanged.
+      expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
+    } finally {
+      releaseLock();
+    }
+  });
+
+  test("--allow-running-daemon bypasses the lock check", async () => {
+    const { acquireLock, releaseLock } = await import("../src/daemon/pid");
+    const acquired = acquireLock(process.pid);
+    if (!acquired) return; // see note above
+    try {
+      // Spawn with the override flag. The script should rotate normally.
+      const res = spawnSync(
+        "bun",
+        [
+          "run",
+          SCRIPT,
+          "--data-dir",
+          dataDir,
+          "--key-file",
+          keyFile,
+          "--db",
+          dbPath,
+          "--allow-running-daemon",
+        ],
+        { stdio: "pipe", encoding: "utf8" },
+      );
+      expect(res.status).toBe(0);
+      expect(readFileSync(keyFile, "utf8").trim()).not.toBe(originalKey.toString("hex"));
+    } finally {
+      releaseLock();
+    }
   });
 
   test("refuses to run when JARVIS_WORKFLOW_ENCRYPTION_KEY is set", () => {

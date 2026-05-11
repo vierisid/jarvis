@@ -49,6 +49,7 @@ import {
   encryptJson,
   setEncryptionKey,
 } from "../src/workflows/db/encryption";
+import { isLocked } from "../src/daemon/pid";
 
 interface CliArgs {
   dataDir: string;
@@ -67,7 +68,9 @@ function parseArgs(): CliArgs {
     if (a === "--data-dir") dataDir = resolve(argv[++i]!);
     else if (a === "--key-file") keyFile = resolve(argv[++i]!);
     else if (a === "--db") dbPath = resolve(argv[++i]!);
-    else if (a === "--help" || a === "-h") {
+    else if (a === "--allow-running-daemon") {
+      // Already consumed before parseArgs; recognized here so it doesn't error.
+    } else if (a === "--help" || a === "-h") {
       console.log(
         [
           "Usage: bun run scripts/rotate-encryption-key.ts [options]",
@@ -124,6 +127,32 @@ async function main(): Promise<void> {
       ].join("\n"),
     );
     process.exit(1);
+  }
+
+  // Refuse to run while the daemon is alive. The daemon caches the
+  // encryption key in memory and would happily keep writing new
+  // app_connection rows with the OLD key while we re-encrypt the existing
+  // set with the NEW key -- those new rows would then be unreadable after
+  // the atomic rename. The flock check at `pid.isLocked()` returns the
+  // pid if another process holds the daemon lock; release the lock first
+  // (via `jarvis stop`) before rotating. Override the safety with
+  // `--allow-running-daemon` only if you've manually quiesced writes.
+  const allowRunningDaemon = process.argv.includes("--allow-running-daemon");
+  if (!allowRunningDaemon) {
+    const runningPid = isLocked();
+    if (runningPid !== null) {
+      console.error(
+        [
+          `Daemon is running (PID ${runningPid}). Stop it before rotating:`,
+          "  jarvis stop",
+          "",
+          "Rotating while the daemon writes to app_connection would corrupt",
+          "any new rows. To override (you've manually quiesced writes), pass",
+          "  --allow-running-daemon",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
   }
 
   const args = parseArgs();

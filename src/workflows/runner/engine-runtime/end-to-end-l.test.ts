@@ -96,7 +96,7 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
-    if (!piecesAlreadyBuilt && buildOptIn) await buildAllJarvisPieces();
+    if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
   });
 

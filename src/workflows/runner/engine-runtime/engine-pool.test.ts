@@ -45,7 +45,7 @@ describe("EngineRuntime pool", () => {
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
-    if (!piecesAlreadyBuilt && buildOptIn) await buildAllJarvisPieces();
+    if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({
       api,
       bundlePath: cached.bundlePath,
@@ -70,7 +70,10 @@ describe("EngineRuntime pool", () => {
         api,
         bundlePath: cached.bundlePath,
         pool: true,
-        poolIdleTtlMs: 150,
+        // 300ms TTL: long enough that a slow CI doesn't accidentally
+        // expire the engine before the "still alive" assertion below
+        // ran for the other test; short enough to keep the test fast.
+        poolIdleTtlMs: 300,
       });
       try {
         const h = await ttlRuntime.acquire({
@@ -81,9 +84,9 @@ describe("EngineRuntime pool", () => {
         await h.release();
         // Engine should be parked right now (alive in the registry).
         expect(api.registry.get(sandbox)).not.toBeNull();
-        // Wait past TTL + a small slack to let the timer fire + the
-        // registry.terminate to settle.
-        await new Promise((r) => setTimeout(r, 400));
+        // Wait past TTL with generous slack so the timer fires + the
+        // registry.terminate settles even under CI load.
+        await new Promise((r) => setTimeout(r, 800));
         expect(api.registry.get(sandbox)).toBeNull();
         // The next acquire spawns fresh (different sandboxId).
         const h2 = await ttlRuntime.acquire({
@@ -108,7 +111,7 @@ describe("EngineRuntime pool", () => {
         api,
         bundlePath: cached.bundlePath,
         pool: true,
-        poolIdleTtlMs: 150,
+        poolIdleTtlMs: 300,
       });
       try {
         const h1 = await ttlRuntime.acquire({
@@ -117,16 +120,17 @@ describe("EngineRuntime pool", () => {
         });
         const sandbox = h1.sandboxId;
         await h1.release();
-        // Acquire before TTL expires -- the eviction timer must be cancelled.
-        await new Promise((r) => setTimeout(r, 50));
+        // Acquire well before TTL expires -- the eviction timer must be
+        // cancelled.
+        await new Promise((r) => setTimeout(r, 100));
         const h2 = await ttlRuntime.acquire({
           runId: "run_ttl_acq2",
           projectId: "jrv_proj_default",
         });
         expect(h2.sandboxId).toBe(sandbox); // pool reuse
-        // Wait past the original TTL window; the cancelled timer must not
-        // tear down the live (in-use) engine.
-        await new Promise((r) => setTimeout(r, 200));
+        // Wait past the original TTL window with generous slack; the
+        // cancelled timer must not tear down the live (in-use) engine.
+        await new Promise((r) => setTimeout(r, 500));
         expect(api.registry.get(sandbox)).not.toBeNull();
         await h2.release();
       } finally {

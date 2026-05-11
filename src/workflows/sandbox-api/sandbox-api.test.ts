@@ -557,6 +557,13 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(r.status).toBe(403);
   });
 
+  test("GET /v1/step-files/:unknown-id returns 404", async () => {
+    const r = await authedFetchForRun("/v1/step-files/nonexistent-file-id");
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as { error?: string };
+    expect(body.error).toMatch(/file not found/);
+  });
+
   test("POST /v1/step-files rejects non-multipart bodies", async () => {
     const r = await authedFetchForRun("/v1/step-files", {
       method: "POST",

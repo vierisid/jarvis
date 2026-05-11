@@ -63,7 +63,7 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
-    if (!piecesAlreadyBuilt && buildOptIn) await buildAllJarvisPieces();
+    if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
   });
 
@@ -247,6 +247,128 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
       // The template `{{step_1.output.echo.n}}` resolves to the *number* 42
       // (upstream coerces single-template strings to the underlying value).
       expect(step3Envelope?.output?.output?.echo?.echoed_n).toBe(42);
+    },
+    90_000,
+  );
+
+  test.skipIf(skipE2eTests)(
+    "RESUME via EngineFlowExecutor: restoreExecutionState reads the backup itself",
+    async () => {
+      // The first test calls handle.executeFlow directly with an explicit
+      // executionState. The production path runs through
+      // `EngineFlowExecutor.restoreExecutionState`, which decides between
+      // the zstd backup and the flow_run.steps fallback. This test covers
+      // that integration: only the executor sees the runId; it discovers
+      // the backup file on its own.
+      const { EngineFlowExecutor } = await import("./engine-flow-executor");
+      const { RUN_FLOW } = await import("../handler");
+
+      // ── Build a flow that pauses, just like the previous test ─────────
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const trigger: FlowTriggerNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "Manual",
+        settings: {
+          pieceName: PIECE_TEST_NAME,
+          pieceVersion: PIECE_VERSION,
+          triggerName: "manual",
+          input: { payload: {} },
+        },
+        nextAction: {
+          name: "step_seed",
+          type: "PIECE",
+          displayName: "Seed output",
+          settings: {
+            pieceName: PIECE_TEST_NAME,
+            pieceVersion: PIECE_VERSION,
+            actionName: "echo",
+            input: { value: { seeded: 99 } },
+          },
+          nextAction: {
+            name: "step_pause",
+            type: "PIECE",
+            displayName: "Pause",
+            settings: {
+              pieceName: PIECE_TEST_NAME,
+              pieceVersion: PIECE_VERSION,
+              actionName: "wait_for_signal",
+              input: {},
+            },
+            nextAction: {
+              name: "step_final",
+              type: "PIECE",
+              displayName: "Final, references seed",
+              settings: {
+                pieceName: PIECE_TEST_NAME,
+                pieceVersion: PIECE_VERSION,
+                actionName: "echo",
+                input: { value: { recovered: "{{step_seed.echo.seeded}}" } },
+              },
+            },
+          },
+        },
+      };
+      const v = createDraftVersion({
+        flowId: flow.id,
+        displayName: "executor-resume",
+        trigger,
+      });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+
+      // ── Pause: same direct executeFlow as the previous test ──────────
+      const h1 = await runtime!.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      try {
+        const paused = await h1.executeFlow({
+          flowVersion: getFlowVersion(v.id)!,
+          streamStepProgress: "WEBSOCKET",
+          runEnvironment: "TESTING",
+        });
+        expect(paused.status).toBe("PAUSED");
+      } finally {
+        await h1.release();
+      }
+
+      // ── RESUME via the executor (production path) ────────────────────
+      // The executor's `restoreExecutionState` calls the loader for us;
+      // we don't pass an executionState here, only stepNameToTest=undefined
+      // and executionType=RESUME on the job payload.
+      const executor = new EngineFlowExecutor(runtime!);
+      const ctx = {
+        run: getFlowRun(run.id)!,
+        version: getFlowVersion(v.id)!,
+        job: {
+          id: "test_resume_via_executor",
+          payload: {
+            runId: run.id,
+            executionType: "RESUME",
+            resumePayload: { queryParams: {} },
+          },
+          jobType: RUN_FLOW,
+        },
+        payload: {},
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await executor.execute(ctx as any);
+      expect(result.stepsCount).toBeGreaterThanOrEqual(2);
+
+      // step_final should have dereferenced step_seed.echo.seeded -> 99.
+      const persisted = getFlowRun(run.id);
+      expect(persisted?.status).toBe("SUCCEEDED");
+      const finalSteps = (persisted?.steps ?? {}) as Record<string, { output?: unknown }>;
+      const finalEnvelope = finalSteps["step_final"] as
+        | { output?: { output?: { echo?: { recovered?: unknown } } } }
+        | undefined;
+      expect(finalEnvelope?.output?.output?.echo?.recovered).toBe(99);
     },
     90_000,
   );

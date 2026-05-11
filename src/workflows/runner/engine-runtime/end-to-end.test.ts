@@ -75,7 +75,7 @@ describe("Engine end-to-end (F gate)", () => {
       cached = await buildEngineBundle();
     }
     if (!cached) return;
-    if (!piecesAlreadyBuilt && buildOptIn) {
+    if (buildOptIn) {
       await buildAllJarvisPieces();
     }
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
@@ -269,7 +269,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
-    if (!piecesAlreadyBuilt && buildOptIn) await buildAllJarvisPieces();
+    if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
   });
 
