@@ -154,18 +154,43 @@ describe("PieceCatalog (unit)", () => {
     mkdirSync(resolve(root, "no-pkg"), { recursive: true });
     writeFileSync(
       resolve(root, "alpha/package.json"),
-      JSON.stringify({ name: "@scope/alpha", version: "0.0.1" }),
+      JSON.stringify({ name: "@scope/piece-alpha", version: "0.0.1" }),
     );
     writeFileSync(
       resolve(root, "beta/package.json"),
-      JSON.stringify({ name: "@scope/beta", version: "0.0.2" }),
+      JSON.stringify({ name: "@scope/piece-beta", version: "0.0.2" }),
     );
     try {
       const { entries, conflicts } = discoverPieces([root]);
       expect(entries.length).toBe(2);
-      expect(entries[0]?.name).toBe("@scope/alpha");
-      expect(entries[1]?.name).toBe("@scope/beta");
+      expect(entries[0]?.name).toBe("@scope/piece-alpha");
+      expect(entries[1]?.name).toBe("@scope/piece-beta");
       expect(conflicts).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("discoverPieces skips packages whose name doesn't match the piece-<id> convention", () => {
+    // Regression for users installing a community piece via the Library
+    // tab: bun also writes @activepieces/{shared,pieces-common,
+    // pieces-framework} into the same scoped dir. These must NOT be
+    // treated as pieces (the engine throws INTERNAL_ERROR trying to
+    // extract metadata for them).
+    const { path: root, cleanup } = tmp("discover-skip");
+    for (const sub of ["piece-gmail", "shared", "pieces-common", "pieces-framework"]) {
+      mkdirSync(resolve(root, sub), { recursive: true });
+      writeFileSync(
+        resolve(root, sub, "package.json"),
+        JSON.stringify({
+          name: sub === "piece-gmail" ? "@activepieces/piece-gmail" : `@activepieces/${sub}`,
+          version: "1.0.0",
+        }),
+      );
+    }
+    try {
+      const { entries } = discoverPieces([root]);
+      expect(entries.map((e) => e.name)).toEqual(["@activepieces/piece-gmail"]);
     } finally {
       cleanup();
     }
@@ -178,18 +203,18 @@ describe("PieceCatalog (unit)", () => {
     mkdirSync(resolve(b, "dup"), { recursive: true });
     writeFileSync(
       resolve(a, "dup/package.json"),
-      JSON.stringify({ name: "@scope/dup", version: "0.0.1" }),
+      JSON.stringify({ name: "@scope/piece-dup", version: "0.0.1" }),
     );
     writeFileSync(
       resolve(b, "dup/package.json"),
-      JSON.stringify({ name: "@scope/dup", version: "0.0.2" }),
+      JSON.stringify({ name: "@scope/piece-dup", version: "0.0.2" }),
     );
     try {
       const { entries, conflicts } = discoverPieces([a, b]);
       expect(entries.length).toBe(1);
       expect(entries[0]?.dir).toBe(resolve(a, "dup"));
       expect(conflicts.length).toBe(1);
-      expect(conflicts[0]?.name).toBe("@scope/dup");
+      expect(conflicts[0]?.name).toBe("@scope/piece-dup");
       expect(conflicts[0]?.kept).toBe(resolve(a, "dup"));
       expect(conflicts[0]?.dropped).toBe(resolve(b, "dup"));
     } finally {
@@ -218,7 +243,7 @@ describe("PieceCatalog (unit)", () => {
     mkdirSync(resolve(root, "pieces/p/dist/src"), { recursive: true });
     writeFileSync(
       resolve(root, "pieces/p/package.json"),
-      JSON.stringify({ name: "@scope/p", version: "0.0.1" }),
+      JSON.stringify({ name: "@scope/piece-p", version: "0.0.1" }),
     );
     writeFileSync(resolve(root, "pieces/p/dist/src/index.js"), "v1");
     try {
@@ -266,12 +291,12 @@ describe("PieceCatalog (unit)", () => {
 
   test("buildPieceCatalog isolates per-piece failures, surfaces them, still returns the catalog", async () => {
     // Stub runtime: each `acquire()` returns a handle whose extractPieceMetadata
-    // succeeds for "@scope/ok" and throws for "@scope/bad". buildPieceCatalog
+    // succeeds for "@scope/piece-ok" and throws for "@scope/piece-bad". buildPieceCatalog
     // should return a catalog with the OK piece + a failure for the bad one.
     const { path: root, cleanup } = tmp("build-isolate");
     for (const [sub, name] of [
-      ["ok", "@scope/ok"],
-      ["bad", "@scope/bad"],
+      ["ok", "@scope/piece-ok"],
+      ["bad", "@scope/piece-bad"],
     ] as const) {
       mkdirSync(resolve(root, sub), { recursive: true });
       writeFileSync(
@@ -281,7 +306,7 @@ describe("PieceCatalog (unit)", () => {
     }
     const fakeHandle = {
       async extractPieceMetadata(o: { pieceName: string }) {
-        if (o.pieceName === "@scope/bad") throw new Error("boom");
+        if (o.pieceName === "@scope/piece-bad") throw new Error("boom");
         return {
           name: o.pieceName,
           displayName: "OK",
@@ -302,11 +327,11 @@ describe("PieceCatalog (unit)", () => {
         reporter: (m) => reports.push(m),
       });
       expect(catalog.list().length).toBe(1);
-      expect(catalog.get("@scope/ok")?.displayName).toBe("OK");
+      expect(catalog.get("@scope/piece-ok")?.displayName).toBe("OK");
       expect(failures.length).toBe(1);
-      expect(failures[0]?.pieceName).toBe("@scope/bad");
+      expect(failures[0]?.pieceName).toBe("@scope/piece-bad");
       expect(failures[0]?.reason).toContain("boom");
-      expect(reports.some((r) => r.includes("@scope/bad"))).toBe(true);
+      expect(reports.some((r) => r.includes("@scope/piece-bad"))).toBe(true);
     } finally {
       cleanup();
     }
@@ -317,12 +342,12 @@ describe("PieceCatalog (unit)", () => {
     mkdirSync(resolve(root, "slow"), { recursive: true });
     writeFileSync(
       resolve(root, "slow/package.json"),
-      JSON.stringify({ name: "@scope/slow", version: "0.0.1" }),
+      JSON.stringify({ name: "@scope/piece-slow", version: "0.0.1" }),
     );
     const fakeHandle = {
       async extractPieceMetadata() {
         await new Promise((r) => setTimeout(r, 200));
-        return { name: "@scope/slow" };
+        return { name: "@scope/piece-slow" };
       },
       async release() { /* noop */ },
     } as unknown as EngineHandle;
@@ -348,7 +373,7 @@ describe("PieceCatalog (unit)", () => {
       mkdirSync(resolve(root, sub), { recursive: true });
       writeFileSync(
         resolve(root, sub, "package.json"),
-        JSON.stringify({ name: `@scope/${sub}`, version: "0.0.1" }),
+        JSON.stringify({ name: `@scope/piece-${sub}`, version: "0.0.1" }),
       );
     }
     let calls = 0;
@@ -386,7 +411,7 @@ describe("PieceCatalog (unit)", () => {
     mkdirSync(resolve(root, "bad"), { recursive: true });
     writeFileSync(
       resolve(root, "bad/package.json"),
-      JSON.stringify({ name: "@scope/bad", version: "0.0.1" }),
+      JSON.stringify({ name: "@scope/piece-bad", version: "0.0.1" }),
     );
     const fakeHandle = {
       async extractPieceMetadata() { throw new Error("boom"); },

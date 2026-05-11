@@ -145,6 +145,14 @@ export function discoverPieces(rootDirs: string[]): {
         continue;
       }
       if (typeof pkg.name !== "string" || typeof pkg.version !== "string") continue;
+      // Filter out non-piece packages that land in the same scoped dir.
+      // When users install a community piece (gmail, slack, ...) via the
+      // Library tab, bun also writes @activepieces/{shared,pieces-common,
+      // pieces-framework} into the same @activepieces/ folder. Without
+      // this filter, those would be treated as pieces and the engine would
+      // log INTERNAL_ERROR for each at every bootstrap. Convention: real
+      // pieces' npm names follow `<scope>/piece-<id>`.
+      if (!/(^|\/)piece-[a-z0-9][a-z0-9-]*$/.test(pkg.name)) continue;
       const existing = seen.get(pkg.name);
       if (existing) {
         conflicts.push({ name: pkg.name, kept: existing.dir, dropped: dir });
