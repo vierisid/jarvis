@@ -880,6 +880,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return `http://localhost:${port}/#/_panel_${key}`;
       };
 
+      // W3-T3 — restore last-known bounds for a room (voice / palette
+      // open). Saved values come from `~/.jarvis/window-state.json`,
+      // populated by the panel.bounds_changed handler above. Fallback
+      // is the room's catalog default with a sentinel x/y of -1 so the
+      // sidecar picks a position near the cursor (the existing behaviour
+      // for first-ever opens). Saved positions are NOT clamped here —
+      // doing so requires knowing the active monitor layout from the
+      // sidecar, which we don't have inline. Off-monitor saves still
+      // work because Win11 re-snaps windows whose top-left lands in the
+      // void to the primary monitor; the worst case is a one-time
+      // re-position on the next user drag, which immediately re-saves.
+      const boundsForRoom = (key: string, fallbackW: number, fallbackH: number): { x: number; y: number; w: number; h: number } => {
+        const saved = (windowState).getRoomBounds(key);
+        if (saved) return saved;
+        return { x: -1, y: -1, w: fallbackW, h: fallbackH };
+      };
+
       // Per-sidecar list of currently-open panels (oldest first; LAST is
       // the most recent). We resolve pronoun commands ("expand it") to
       // the last entry, and named commands ("expand the workflows
@@ -899,6 +916,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (idx >= 0) list.splice(idx, 1);
         if (list.length === 0) panelsBySidecar.delete(sidecarId);
       };
+
+      // W3-T2 — persist per-room window bounds to ~/.jarvis/window-state.json
+      // so reopening a room lands it where the user last left it. Bounds
+      // come from the sidecar's 1 Hz poll as `panel.bounds_changed`
+      // events; we resolve panel id → room key against the tracked
+      // inventory above (palette + voice opens both register here).
+      const windowState = await import('./window-state.ts');
+      const { setRoomBounds } = windowState;
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'panel.bounds_changed') return;
+        const payload = (event.payload ?? {}) as { panel_id?: string; x?: number; y?: number; w?: number; h?: number };
+        if (!payload.panel_id || typeof payload.x !== 'number' || typeof payload.y !== 'number'
+            || typeof payload.w !== 'number' || typeof payload.h !== 'number') {
+          return;
+        }
+        const list = panelsBySidecar.get(sidecarId);
+        const tracked = list?.find((e) => e.id === payload.panel_id);
+        if (!tracked) return; // untracked panel (e.g. palette itself) — don't persist
+        setRoomBounds(tracked.key, { x: payload.x, y: payload.y, w: payload.w, h: payload.h });
+      });
 
       // W4 — Cmd+K palette: cursor-anchored fuzzy room picker. The
       // sidecar's Ctrl+K hotkey emits a `pebble.palette` event with the
@@ -996,7 +1033,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
               url: dashboardURL(key),
               title: meta.title,
-              bounds: { x: -1, y: -1, w: meta.w, h: meta.h },
+              bounds: boundsForRoom(key, meta.w, meta.h),
               resizable: true,
               always_on_top: false,
               multi_instance: false,
@@ -1423,7 +1460,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
               url: dashboardURL(key),
               title: meta.title,
-              bounds: { x: -1, y: -1, w: meta.w, h: meta.h }, // -1 = let the sidecar pick (near cursor)
+              bounds: boundsForRoom(key, meta.w, meta.h),
               resizable: true,
               always_on_top: false,
               multi_instance: false,

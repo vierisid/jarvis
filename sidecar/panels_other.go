@@ -23,6 +23,14 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	return fmt.Errorf("window move not supported on this platform")
 }
 
+func platformGetWindowRect(handle unsafe.Pointer) (int, int, int, int, error) {
+	return 0, 0, 0, 0, fmt.Errorf("window rect not supported on this platform")
+}
+
+func platformMoveWindowKeepZOrder(handle unsafe.Pointer, x, y int) error {
+	return fmt.Errorf("window move not supported on this platform")
+}
+
 func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
 	return fmt.Errorf("region shaping not supported on this platform")
 }

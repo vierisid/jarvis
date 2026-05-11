@@ -203,6 +203,19 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	return nil
 }
 
+// platformGetWindowRect — Linux port deferred (needs gtk_window_get_position
+// + gtk_window_get_size CGO bridge). Returning an error causes the poll to
+// skip without spamming the daemon. W3 state persistence is Windows-first.
+func platformGetWindowRect(handle unsafe.Pointer) (int, int, int, int, error) {
+	return 0, 0, 0, 0, fmt.Errorf("platformGetWindowRect not implemented on linux")
+}
+
+// platformMoveWindowKeepZOrder — GTK doesn't impose a topmost reassertion
+// inside platformMoveWindow, so the plain move is already z-order safe.
+func platformMoveWindowKeepZOrder(handle unsafe.Pointer, x, y int) error {
+	return platformMoveWindow(handle, x, y)
+}
+
 func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
 	if handle == nil {
 		return fmt.Errorf("nil GtkWindow*")
