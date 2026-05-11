@@ -162,6 +162,20 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	return nil
 }
 
+// platformGetWindowRect — macOS port deferred (needs an NSWindow.frame
+// reader bridge). Returning an error here causes the poll to skip
+// without spamming the daemon. W3 state persistence is Windows-first.
+func platformGetWindowRect(handle unsafe.Pointer) (int, int, int, int, error) {
+	return 0, 0, 0, 0, fmt.Errorf("platformGetWindowRect not implemented on darwin")
+}
+
+// platformMoveWindowKeepZOrder — on macOS there's no global topmost
+// concept the way Win32 has; platformMoveWindow already preserves
+// order. Forwarding keeps the cross-platform API parity.
+func platformMoveWindowKeepZOrder(handle unsafe.Pointer, x, y int) error {
+	return platformMoveWindow(handle, x, y)
+}
+
 // platformSetInteractiveRegions on macOS is non-trivial (requires custom
 // NSView hit-testing + masking) — deferred to a follow-up. For now this
 // is a no-op; the entire window stays interactive and visible.

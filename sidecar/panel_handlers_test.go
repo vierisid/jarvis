@@ -132,6 +132,12 @@ func (f *fakePanelService) SetWindowState(id PanelID, _ PanelWindowState) error 
 	return nil
 }
 
+func (f *fakePanelService) OnBoundsChanged(cb func(id PanelID, x, y, w, h int)) {
+	// no-op — the fake never spawns a real window, so it never has
+	// bounds to report. The handler tests don't exercise this path.
+	_ = cb
+}
+
 // tiny itoa to avoid pulling strconv in this test file
 func itoa(n int) string {
 	if n == 0 {

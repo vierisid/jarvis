@@ -400,6 +400,33 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		})
 		log.Printf("[pebble] OnPalette callback registered")
 
+		// W3-T1 — panel bounds tracking. The sidecar polls each spawned
+		// panel's window rect at 1 Hz; when bounds change (user drag /
+		// resize / maximize) we forward a `panel.bounds_changed` event
+		// to the daemon so it can persist per-room window state. Only
+		// wired here because c.panels may be nil for sidecars lacking
+		// the `windows` capability.
+		if c.panels != nil {
+			c.panels.OnBoundsChanged(func(id PanelID, x, y, w, h int) {
+				evt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "panel.bounds_changed",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "low",
+					Payload: map[string]any{
+						"panel_id": string(id),
+						"x":        x,
+						"y":        y,
+						"w":        w,
+						"h":        h,
+					},
+				}
+				if err := sendFn(ctx, evt, nil); err != nil {
+					log.Printf("[panels] failed to emit bounds_changed for %s: %v", id, err)
+				}
+			})
+		}
+
 		// pebble.start_listening — daemon-driven session capture (no
 		// pebble.summon event). Used by the wake-word path: when a wake
 		// phrase fires with no trailing command, the daemon transitions

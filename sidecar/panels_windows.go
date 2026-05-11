@@ -75,6 +75,31 @@ var (
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
 	procCombineRgn         = gdi32.NewProc("CombineRgn")
 	procDeleteObject       = gdi32.NewProc("DeleteObject")
+
+	// W3-T4 — Win11 chrome polish. DWM provides the system backdrop
+	// (Mica), rounded corners, and immersive dark mode title bar.
+	// Failing calls (older Windows) are silently ignored — they return
+	// HRESULT codes we don't act on, just log.
+	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
+	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+)
+
+// DWM attribute identifiers used by the chrome polish below.
+//
+// DWMWA_USE_IMMERSIVE_DARK_MODE (20) — BOOL: dark title bar.
+// DWMWA_WINDOW_CORNER_PREFERENCE (33) — DWORD: corner radius enum.
+//   0 = default (let DWM decide), 1 = no round, 2 = round (large), 3 = small round.
+// DWMWA_SYSTEMBACKDROP_TYPE (38) — DWORD: backdrop material.
+//   1 = none, 2 = Mica, 3 = acrylic, 4 = tabbed Mica.
+// All three require Win11 22H2 (build 22621) or newer; older builds
+// return DWMRC_E_INVALID_ARG (0x80070057) which we ignore.
+const (
+	dwmWaUseImmersiveDarkMode  = 20
+	dwmWaWindowCornerPreference = 33
+	dwmWaSystemBackdropType    = 38
+
+	dwmwcpRoundLarge = 2
+	dwmsbtMainWindow = 2
 )
 
 // Virtual screen metric indices — together describe the bounding rect of all
@@ -172,7 +197,55 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 		)
 	}
 
+	// W3-T4 — Win11 chrome polish for regular Room panels. Skip
+	// frameless / transparent / click-through / always-on-top panels
+	// (those are overlays where Mica + rounded corners would conflict
+	// with custom rendering). Calls silently fail on older Windows.
+	if !spec.Frameless && !spec.Transparent && !spec.ClickThrough && !spec.AlwaysOnTop {
+		applyWin11ChromePolish(hwnd)
+	}
+
 	return nil
+}
+
+// applyWin11ChromePolish enables Mica backdrop, rounded corners, and the
+// dark-mode title bar on a panel HWND. All three DwmSetWindowAttribute
+// calls return HRESULTs we don't branch on — older Windows builds just
+// return DWMRC_E_INVALID_ARG and leave the window with classic chrome,
+// which is the desired fallback.
+func applyWin11ChromePolish(hwnd uintptr) {
+	// Dark title bar — follows the spawned page's general visual
+	// language better than a stark white classic title bar.
+	darkMode := int32(1)
+	procDwmSetWindowAttribute.Call(
+		hwnd,
+		uintptr(dwmWaUseImmersiveDarkMode),
+		uintptr(unsafe.Pointer(&darkMode)),
+		unsafe.Sizeof(darkMode),
+	)
+
+	// Large rounded corners — Win11's default for shell windows. The
+	// "large" radius matches Settings, File Explorer, etc.
+	corner := int32(dwmwcpRoundLarge)
+	procDwmSetWindowAttribute.Call(
+		hwnd,
+		uintptr(dwmWaWindowCornerPreference),
+		uintptr(unsafe.Pointer(&corner)),
+		unsafe.Sizeof(corner),
+	)
+
+	// Mica backdrop — gives the title bar + non-client area the
+	// translucent material look. Content stays opaque because we
+	// haven't reconfigured WebView2 transparency; the polish is most
+	// visible in the title bar and around the rounded corners, which
+	// is already a noticeable Win11-native upgrade over flat chrome.
+	backdrop := int32(dwmsbtMainWindow)
+	procDwmSetWindowAttribute.Call(
+		hwnd,
+		uintptr(dwmWaSystemBackdropType),
+		uintptr(unsafe.Pointer(&backdrop)),
+		unsafe.Sizeof(backdrop),
+	)
 }
 
 func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
@@ -274,6 +347,31 @@ func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) err
 	return nil
 }
 
+// w32Rect mirrors Win32 RECT — four LONGs (left, top, right, bottom).
+type w32Rect struct {
+	Left   int32
+	Top    int32
+	Right  int32
+	Bottom int32
+}
+
+var procGetWindowRect = user32.NewProc("GetWindowRect")
+
+// platformGetWindowRect returns the panel's current screen-space bounds
+// (x, y, w, h). Used by the bounds-tracking poll so the daemon can
+// persist where the user dragged/resized a panel last.
+func platformGetWindowRect(handle unsafe.Pointer) (int, int, int, int, error) {
+	if handle == nil {
+		return 0, 0, 0, 0, fmt.Errorf("nil HWND")
+	}
+	var r w32Rect
+	ret, _, err := procGetWindowRect.Call(uintptr(handle), uintptr(unsafe.Pointer(&r)))
+	if ret == 0 {
+		return 0, 0, 0, 0, fmt.Errorf("GetWindowRect failed: %v", err)
+	}
+	return int(r.Left), int(r.Top), int(r.Right - r.Left), int(r.Bottom - r.Top), nil
+}
+
 func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 	if handle == nil {
 		return fmt.Errorf("nil HWND")
@@ -289,6 +387,29 @@ func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
 		uintptr(int32(x)), uintptr(int32(y)),
 		0, 0,
 		swpNoSize|swpNoActivate,
+	)
+	return nil
+}
+
+// swpNoZOrder preserves the window's current z-order — opposite of
+// platformMoveWindow's HWND_TOPMOST reassertion. Used by initial-spawn
+// positioning where the daemon hands the sidecar a saved (x, y) and we
+// want the panel to land there without becoming always-on-top.
+const swpNoZOrder = 0x0004
+
+// platformMoveWindowKeepZOrder repositions without altering z-order.
+// Used by the W3-T3 saved-bounds restore so a regular Room panel
+// doesn't sneak above other windows just because it was repositioned.
+func platformMoveWindowKeepZOrder(handle unsafe.Pointer, x, y int) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	procSetWindowPos.Call(
+		uintptr(handle),
+		0,
+		uintptr(int32(x)), uintptr(int32(y)),
+		0, 0,
+		swpNoSize|swpNoActivate|swpNoZOrder,
 	)
 	return nil
 }

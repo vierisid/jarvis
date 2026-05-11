@@ -26,8 +26,9 @@ type panelImpl struct {
 // window-flag work (always-on-top, transparent, frameless, click-through) is
 // delegated to applyPlatformFlags which is implemented per OS in panels_<os>.go.
 type panelService struct {
-	mu  sync.Mutex
-	reg *panelRegistry
+	mu               sync.Mutex
+	reg              *panelRegistry
+	boundsChangedCb  func(id PanelID, x, y, w, h int)
 }
 
 // NewPanelService constructs a PanelService that uses webview_go for window
@@ -137,6 +138,19 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				log.Printf("[panels] spawn(%s): move to (%d,%d): %v", spec.ID, origX, origY, err)
 			} else {
 				log.Printf("[panels] spawn(%s): positioned at virtual-screen origin (%d,%d)", spec.ID, origX, origY)
+			}
+		} else if spec.Bounds.X >= 0 && spec.Bounds.Y >= 0 {
+			// W3-T3 — daemon passed an explicit top-left (restored from
+			// ~/.jarvis/window-state.json, or palette positioning). The
+			// sentinel for "let the sidecar pick" is x<0/y<0; treat
+			// 0,0 and positive coords as authoritative and move there.
+			// Use the keep-z-order variant so a non-always-on-top panel
+			// doesn't get promoted to topmost just because we repositioned
+			// it (platformMoveWindow does that for the cursor-follow path).
+			if err := platformMoveWindowKeepZOrder(handle, spec.Bounds.X, spec.Bounds.Y); err != nil {
+				log.Printf("[panels] spawn(%s): move to saved (%d,%d): %v", spec.ID, spec.Bounds.X, spec.Bounds.Y, err)
+			} else {
+				log.Printf("[panels] spawn(%s): positioned at saved (%d,%d)", spec.ID, spec.Bounds.X, spec.Bounds.Y)
 			}
 		}
 
@@ -266,6 +280,56 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			log.Printf("[panels] spawn(%s): cursor-follow started (mode=%s, offset %d,%d)", spec.ID, mode, ox, oy)
 		}
 
+		// W3-T1 — bounds poll. Fires the service-wide OnBoundsChanged
+		// callback when the user drags or resizes the window. Skipped
+		// for fullscreen panels (always virtual-screen-sized) and for
+		// cursor-following panels (their position is sidecar-driven, not
+		// user-driven). Polls at 1 Hz — fast enough to feel responsive
+		// for save-on-close, slow enough that drag-in-progress doesn't
+		// thrash. Stops when the panel goroutine exits.
+		if !spec.Fullscreen && !spec.FollowCursor {
+			panelID := spec.ID
+			panelHandle := handle
+			go func() {
+				ticker := time.NewTicker(1 * time.Second)
+				defer ticker.Stop()
+				var lastX, lastY, lastW, lastH int
+				initialized := false
+				for {
+					select {
+					case <-impl.done:
+						return
+					case <-impl.followStop:
+						return
+					case <-ticker.C:
+						x, y, w, h, err := platformGetWindowRect(panelHandle)
+						if err != nil {
+							// Unimplemented (mac/linux) or transient — skip.
+							return
+						}
+						if w <= 0 || h <= 0 {
+							continue // minimised or hidden
+						}
+						if !initialized {
+							lastX, lastY, lastW, lastH = x, y, w, h
+							initialized = true
+							continue
+						}
+						if x == lastX && y == lastY && w == lastW && h == lastH {
+							continue
+						}
+						lastX, lastY, lastW, lastH = x, y, w, h
+						s.mu.Lock()
+						cb := s.boundsChangedCb
+						s.mu.Unlock()
+						if cb != nil {
+							cb(panelID, x, y, w, h)
+						}
+					}
+				}
+			}()
+		}
+
 		close(impl.ready)
 		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
 		wv.Run() // blocks until Terminate() or window closed
@@ -389,5 +453,11 @@ func (s *panelService) Stop() {
 	for _, id := range s.reg.ids() {
 		_ = s.Close(id)
 	}
+}
+
+func (s *panelService) OnBoundsChanged(cb func(id PanelID, x, y, w, h int)) {
+	s.mu.Lock()
+	s.boundsChangedCb = cb
+	s.mu.Unlock()
 }
 

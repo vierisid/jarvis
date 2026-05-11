@@ -109,6 +109,14 @@ type PanelService interface {
 	// "normal" (restored), "minimized" (taskbar), "maximized" (fullscreen-
 	// like). Used by T18b voice commands ("expand", "minimize", "restore").
 	SetWindowState(id PanelID, state PanelWindowState) error
+	// OnBoundsChanged registers a callback fired whenever a spawned panel's
+	// screen-space bounds change (user drag, resize, or maximize). The
+	// callback runs from a poll goroutine — receivers should not block on
+	// network or disk I/O directly; dispatch onto a separate goroutine if
+	// they need to. Bounds are reported in OS pixel coordinates as
+	// (x, y, w, h). Only called once per change; identical consecutive
+	// readings are deduped inside the poll.
+	OnBoundsChanged(cb func(id PanelID, x, y, w, h int))
 	Stop()
 }
 
