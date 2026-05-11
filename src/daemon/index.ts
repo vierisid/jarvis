@@ -595,6 +595,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         "Workflow credential resolver: registered jarvis:google source",
       );
     }
+    // jarvis:telegram bridges the same bot token the daemon's Telegram
+    // adapter is using -- pieces (activepieces telegram-bot, custom flows)
+    // can reference `jarvis:telegram` instead of asking the user to create
+    // a separate app_connection. The closure reads from the live config so
+    // a token rotation + daemon restart picks up automatically.
+    if (jarvisConfig.channels?.telegram?.enabled && jarvisConfig.channels.telegram.bot_token) {
+      const { JarvisTelegramConnectionSource } = await import(
+        "../workflows/credentials/telegram-source.ts"
+      );
+      credentialResolver.register(
+        new JarvisTelegramConnectionSource(
+          () => jarvisConfig.channels?.telegram?.bot_token ?? null,
+        ),
+      );
+      logWithTimestamp(
+        "Workflow credential resolver: registered jarvis:telegram source",
+      );
+    }
     try {
       engineBoot = await bootstrapWorkflowEngine({
         services: {
