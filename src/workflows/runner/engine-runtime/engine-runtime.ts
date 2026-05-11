@@ -105,6 +105,14 @@ export interface ExecuteFlowOnHandleOptions {
   streamStepProgress?: ExecuteFlowOptions["streamStepProgress"];
   timeoutInSeconds?: number;
   stepNameToTest?: string | null;
+  /**
+   * Per-step sample outputs surfaced to the engine when running with
+   * `stepNameToTest`. Keyed by step name; the engine populates each
+   * preceding step's output from the corresponding entry so template
+   * references resolve without re-executing the chain. Ignored when
+   * `stepNameToTest` is unset.
+   */
+  sampleData?: Record<string, unknown>;
   /** Override the platformId the engine sees -- defaults to projectId. */
   platformId?: string;
   /** `BEGIN` for a fresh start, `RESUME` to wake a paused run. Default `BEGIN`. */
@@ -195,6 +203,7 @@ export class EngineHandle {
     if (opts.streamStepProgress !== undefined) baseExecuteFlowOptions.streamStepProgress = opts.streamStepProgress;
     if (opts.timeoutInSeconds !== undefined) baseExecuteFlowOptions.timeoutInSeconds = opts.timeoutInSeconds;
     if (opts.stepNameToTest !== undefined) baseExecuteFlowOptions.stepNameToTest = opts.stepNameToTest;
+    if (opts.sampleData !== undefined) baseExecuteFlowOptions.sampleData = opts.sampleData;
     if (opts.executionType !== undefined) baseExecuteFlowOptions.executionType = opts.executionType;
     if (opts.resumePayload !== undefined) baseExecuteFlowOptions.resumePayload = opts.resumePayload;
     if (opts.executionState !== undefined) baseExecuteFlowOptions.executionState = opts.executionState;

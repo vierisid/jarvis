@@ -135,6 +135,12 @@ export class EngineFlowExecutor implements FlowExecutor {
         // the result.
         if (ctx.job.payload.stepNameToTest) {
           flowOpts.stepNameToTest = ctx.job.payload.stepNameToTest;
+          // sampleData is meaningful only when stepNameToTest is set --
+          // production runs walk the real chain and ignore it. Forward
+          // when the route supplied one (the version's persisted map).
+          if (ctx.job.payload.sampleData) {
+            flowOpts.sampleData = ctx.job.payload.sampleData;
+          }
         }
       }
       await handle.executeFlow(flowOpts);

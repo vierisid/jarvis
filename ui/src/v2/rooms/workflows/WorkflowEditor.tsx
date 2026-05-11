@@ -279,6 +279,12 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
                 const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
                 if (created) setSelectedStepName(created);
               }}
+              sampleData={editor.version?.sampleData?.[selectedStep.name]}
+              isLocked={editor.version?.state === "LOCKED"}
+              onSetSampleData={(output) =>
+                editor.setStepSampleData(selectedStep.name, output)
+              }
+              onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
             />
           ) : editor.draftTrigger && !editor.draftTrigger.nextAction ? (
             <div className="wf-editor__panel-empty">
@@ -445,6 +451,14 @@ interface PropertiesPanelProps {
   isTopLevel: boolean;
   containerKind?: "loop" | "router";
   catalog: PieceCatalogEntry[];
+  /**
+   * Persisted sample data for this step (the output the engine will feed to
+   * downstream steps when running with `stepNameToTest`). Undefined when
+   * never set.
+   */
+  sampleData: unknown | undefined;
+  /** True when the loaded version is LOCKED -- disables sample-data editing + test. */
+  isLocked: boolean;
   onSetPiece: (pieceName: string, actionName: string) => void;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
   onSetInput: (key: string, value: unknown) => void;
@@ -459,6 +473,10 @@ interface PropertiesPanelProps {
   onAddRouterBranch: (branchName: string) => void;
   onRemoveRouterBranch: (branchIndex: number) => void;
   onAddStepToBranch: (branchName: string) => void;
+  /** Save the JSON sample output for this step. Pass null to clear. */
+  onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
+  /** Trigger a test-from-here run for this step. */
+  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
 }
 
 function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
@@ -670,7 +688,182 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           </p>
         ) : null}
       </div>
+
+      <SampleDataSection
+        stepName={step.name}
+        sampleData={props.sampleData}
+        isLocked={props.isLocked}
+        isTriggerStep={isTriggerStep}
+        onSetSampleData={props.onSetSampleData}
+        onTestFromHere={props.onTestFromHere}
+      />
     </div>
+  );
+}
+
+/**
+ * Per-step sample data editor + "Test from here" button. Renders inside the
+ * properties panel below the step-actions row.
+ *
+ * The textarea holds the JSON for THIS step's sample output -- what the
+ * engine would feed to downstream steps that reference {{ stepName.foo }}
+ * when running with stepNameToTest. The "Test from here" button fires a
+ * run with stepNameToTest set to this step name; the engine populates the
+ * preceding steps' outputs from the version's persisted sampleData map.
+ *
+ * The trigger step also accepts sample data -- that becomes the trigger
+ * payload visible to the first action. The button label adapts.
+ */
+function SampleDataSection({
+  stepName,
+  sampleData,
+  isLocked,
+  isTriggerStep,
+  onSetSampleData,
+  onTestFromHere,
+}: {
+  stepName: string;
+  sampleData: unknown | undefined;
+  isLocked: boolean;
+  isTriggerStep: boolean;
+  onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
+  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
+}): React.ReactElement {
+  const [text, setText] = useState<string>(() =>
+    sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2),
+  );
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [busy, setBusy] = useState<"save" | "test" | "clear" | null>(null);
+
+  // Sync local text when the upstream value changes (other tab edits,
+  // navigation between steps). useEffect with JSON-stringified comparison
+  // would loop; React.useMemo + a sync via key prop is the typical pattern,
+  // but PropertiesPanel doesn't remount on step change, so we update local
+  // state when the prop "snapshot" differs.
+  const incomingText = useMemo(
+    () => (sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2)),
+    [sampleData],
+  );
+  useEffect(() => {
+    setText(incomingText);
+    setParseError(null);
+  }, [incomingText, stepName]);
+
+  const flash = (tone: "ok" | "warn", t: string): void => {
+    setStatus({ tone, text: t });
+    window.setTimeout(() => setStatus(null), 3000);
+  };
+
+  const parseOrError = (): unknown | undefined => {
+    if (text.trim().length === 0) return undefined; // treat empty as "clear"
+    try {
+      const parsed = JSON.parse(text);
+      setParseError(null);
+      return parsed;
+    } catch (e) {
+      setParseError((e as Error).message);
+      return undefined;
+    }
+  };
+
+  const handleSave = async (): Promise<void> => {
+    const parsed = parseOrError();
+    if (text.trim().length > 0 && parsed === undefined && parseError) {
+      return; // parse error already surfaced
+    }
+    setBusy("save");
+    try {
+      const r = await onSetSampleData(parsed === undefined ? null : parsed);
+      flash(r.ok ? "ok" : "warn", r.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleClear = async (): Promise<void> => {
+    if (!window.confirm("Clear this step's sample data?")) return;
+    setBusy("clear");
+    try {
+      const r = await onSetSampleData(null);
+      if (r.ok) {
+        setText("");
+        setParseError(null);
+      }
+      flash(r.ok ? "ok" : "warn", r.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleTest = async (): Promise<void> => {
+    setBusy("test");
+    try {
+      const r = await onTestFromHere();
+      flash(r.ok ? "ok" : "warn", r.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="wf-props__sample-data" aria-label="Sample data + test from here">
+      <header className="wf-props__sample-header">
+        <h4 className="wf-props__sample-title">
+          Sample {isTriggerStep ? "trigger payload" : "output"}
+        </h4>
+        <p className="wf-props__hint">
+          {isTriggerStep
+            ? "JSON the test run feeds to the trigger. Downstream steps see it as the trigger payload."
+            : "JSON the test run feeds to downstream steps. Lets you run a step in isolation without re-executing the chain."}
+        </p>
+      </header>
+      <textarea
+        className="wf-props__sample-textarea"
+        rows={6}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder='{"key": "value"}'
+        disabled={isLocked}
+        spellCheck={false}
+      />
+      {parseError ? <span className="wf-props__sample-err">{parseError}</span> : null}
+      {status ? (
+        <span
+          className={`wf-props__sample-status wf-props__sample-status--${status.tone}`}
+        >
+          {status.text}
+        </span>
+      ) : null}
+      <div className="wf-props__sample-actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleSave()}
+          disabled={isLocked || busy !== null}
+          title={isLocked ? "Published versions are read-only" : "Save sample output"}
+        >
+          {busy === "save" ? "Saving..." : "Save sample"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleClear()}
+          disabled={isLocked || busy !== null || text.trim().length === 0}
+        >
+          {busy === "clear" ? "Clearing..." : "Clear"}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void handleTest()}
+          disabled={isLocked || busy !== null}
+          title="Run only this step using the saved sample data for preceding steps"
+        >
+          {busy === "test" ? "Queuing..." : "Test from here"}
+        </Button>
+      </div>
+    </section>
   );
 }
 

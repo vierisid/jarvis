@@ -42,6 +42,13 @@ export interface RunFlowJobPayload {
    */
   stepNameToTest?: string;
   /**
+   * Per-step sample outputs for "test from here" runs. Map
+   * `stepName -> sampleOutput`. Forwarded to the engine so it can populate
+   * preceding steps' outputs without re-running them. Ignored when
+   * `stepNameToTest` is unset (production runs walk the chain for real).
+   */
+  sampleData?: Record<string, unknown>;
+  /**
    * `RESUME` wakes a paused run -- the worker handler skips run-row
    * recreation and the executor sends EXECUTE_FLOW with executionType=RESUME
    * + resumePayload + the prior executionState restored from the run's

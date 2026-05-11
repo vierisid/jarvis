@@ -661,6 +661,100 @@ describe("workflow API: waitpoints surface", () => {
   });
 });
 
+describe("workflow API: sample data", () => {
+  async function setupVersion() {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "sample-data-test",
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } as unknown as Record<
+        string,
+        unknown
+      >,
+    });
+    return { flow, version: v };
+  }
+
+  test("PATCH stores a per-step sample output", async () => {
+    const { flow, version } = await setupVersion();
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    const { status, body } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flow.id}/versions/${version.id}/sample-data/step_a`,
+        { id: flow.id, versionId: version.id, stepName: "step_a" },
+        { output: { hello: "world", n: 42 } },
+      ),
+    );
+    expect(status).toBe(200);
+    expect(body.sampleData?.step_a).toEqual({ hello: "world", n: 42 });
+  });
+
+  test("PATCH with null/missing output clears the entry", async () => {
+    const { flow, version } = await setupVersion();
+    const { setSampleDataEntry } = await import("../db/repos/flow-version");
+    setSampleDataEntry(version.id, "step_a", { x: 1 });
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    const { status, body } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flow.id}/versions/${version.id}/sample-data/step_a`,
+        { id: flow.id, versionId: version.id, stepName: "step_a" },
+        {},
+      ),
+    );
+    expect(status).toBe(200);
+    // Map is empty after the only entry is cleared -> column is null.
+    expect(body.sampleData).toBeNull();
+  });
+
+  test("DELETE clears the entire sample-data map", async () => {
+    const { flow, version } = await setupVersion();
+    const { setSampleDataEntry } = await import("../db/repos/flow-version");
+    setSampleDataEntry(version.id, "step_a", { x: 1 });
+    setSampleDataEntry(version.id, "step_b", { y: 2 });
+    const r = createWorkflowRoutes();
+    const del = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.DELETE;
+    const { status, body } = await callJson(
+      del,
+      reqWithParams(
+        "DELETE",
+        `http://x/api/workflows/${flow.id}/versions/${version.id}/sample-data/_all`,
+        { id: flow.id, versionId: version.id, stepName: "_all" },
+      ),
+    );
+    expect(status).toBe(200);
+    expect(body.sampleData).toBeNull();
+  });
+
+  test("PATCH on a LOCKED version surfaces an error", async () => {
+    const { flow, version } = await setupVersion();
+    const { lockVersion } = await import("../db/repos/flow-version");
+    lockVersion(version.id);
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    const { status, body } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flow.id}/versions/${version.id}/sample-data/step_a`,
+        { id: flow.id, versionId: version.id, stepName: "step_a" },
+        { output: { x: 1 } },
+      ),
+    );
+    // The repo throws on LOCKED; trapErrors should surface a 500-style err.
+    expect(status).toBeGreaterThanOrEqual(400);
+    expect(body.error).toMatch(/LOCKED/);
+  });
+});
+
 describe("workflow API: pieces library", () => {
   test("GET /api/workflows/pieces/library returns the catalog with per-entry installed status", async () => {
     // Isolate from any pieces installed on the developer's machine.

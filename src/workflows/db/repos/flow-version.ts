@@ -29,6 +29,7 @@ export interface FlowVersionRow {
   backup_files: string | null;
   engine_listeners: string | null;
   engine_schedule: string | null;
+  sample_data: string | null;
   created: number;
   updated: number;
 }
@@ -70,6 +71,16 @@ export interface FlowVersion {
    * hasn't been enabled yet.
    */
   engineSchedule: EngineScheduleOptions | null;
+  /**
+   * Per-step sample data fed to the engine when running with
+   * `stepNameToTest`. Map `stepName -> output` so preceding steps' outputs
+   * are populated for template resolution (`{{ stepName.output.x }}`).
+   * Null when never set; the engine falls back to each step's intrinsic
+   * `sampleData` from the piece definition.
+   *
+   * Editable per-step in the visual editor's properties panel.
+   */
+  sampleData: Record<string, unknown> | null;
   created: number;
   updated: number;
 }
@@ -176,6 +187,9 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
       : null,
     engineSchedule: row.engine_schedule
       ? (JSON.parse(row.engine_schedule) as EngineScheduleOptions)
+      : null,
+    sampleData: row.sample_data
+      ? (JSON.parse(row.sample_data) as Record<string, unknown>)
       : null,
     created: row.created,
     updated: row.updated,
@@ -314,6 +328,69 @@ export function setEngineTriggerState(
   );
   const row = getFlowVersionRow(id);
   if (!row) throw new Error(`setEngineTriggerState: row missing after update (id=${id})`);
+  return rowToFlowVersion(row);
+}
+
+/**
+ * Update one entry in the per-version `sampleData` map. Editable on
+ * DRAFT versions only (locked versions are immutable to user edits).
+ * Pass `null` for `output` to remove the step's entry. Returns the updated
+ * version.
+ *
+ * The full-map setter (`replaceSampleData`) below covers bulk updates;
+ * this one is the editor's per-step save path.
+ */
+export function setSampleDataEntry(
+  id: string,
+  stepName: string,
+  output: unknown | null,
+): FlowVersion {
+  const existing = getFlowVersionRow(id);
+  if (!existing) throw new Error(`setSampleDataEntry: not found (id=${id})`);
+  if (existing.state === "LOCKED") {
+    throw new Error(`setSampleDataEntry: version ${id} is LOCKED`);
+  }
+  const current = existing.sample_data
+    ? (JSON.parse(existing.sample_data) as Record<string, unknown>)
+    : {};
+  if (output === null) {
+    delete current[stepName];
+  } else {
+    current[stepName] = output;
+  }
+  const json = Object.keys(current).length === 0 ? null : JSON.stringify(current);
+  const updated = now();
+  db().run(`UPDATE flow_version SET sample_data = ?, updated = ? WHERE id = ?`, [
+    json,
+    updated,
+    id,
+  ]);
+  const row = getFlowVersionRow(id);
+  if (!row) throw new Error(`setSampleDataEntry: row missing after update (id=${id})`);
+  return rowToFlowVersion(row);
+}
+
+/**
+ * Replace the entire sample-data map. Pass `null` to clear. DRAFT-only.
+ */
+export function replaceSampleData(
+  id: string,
+  data: Record<string, unknown> | null,
+): FlowVersion {
+  const existing = getFlowVersionRow(id);
+  if (!existing) throw new Error(`replaceSampleData: not found (id=${id})`);
+  if (existing.state === "LOCKED") {
+    throw new Error(`replaceSampleData: version ${id} is LOCKED`);
+  }
+  const json = data && Object.keys(data).length > 0 ? JSON.stringify(data) : null;
+  const updated = now();
+  db().run(`UPDATE flow_version SET sample_data = ?, updated = ? WHERE id = ?`, [
+    json,
+    updated,
+    id,
+  ]);
+  const row = getFlowVersionRow(id);
+  if (!row) throw new Error(`replaceSampleData: row missing after update (id=${id})`);
   return rowToFlowVersion(row);
 }
 

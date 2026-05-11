@@ -64,6 +64,7 @@ const STATEMENTS: string[] = [
     backup_files TEXT,
     engine_listeners TEXT,
     engine_schedule TEXT,
+    sample_data TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -224,6 +225,11 @@ function applyAdditiveColumnMigrations(db: Database): void {
   const migrations: ColMigration[] = [
     { table: "flow_version", column: "engine_listeners", ddl: "ALTER TABLE flow_version ADD COLUMN engine_listeners TEXT" },
     { table: "flow_version", column: "engine_schedule", ddl: "ALTER TABLE flow_version ADD COLUMN engine_schedule TEXT" },
+    // sample_data: JSON map { [stepName]: sampleOutput } fed to the engine
+    // when running with stepNameToTest so preceding steps' outputs are
+    // populated. Editable per-step in the visual editor; NULL means "use the
+    // piece's intrinsic sampleData."
+    { table: "flow_version", column: "sample_data", ddl: "ALTER TABLE flow_version ADD COLUMN sample_data TEXT" },
   ];
   for (const m of migrations) {
     const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;

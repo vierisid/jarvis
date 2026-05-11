@@ -153,6 +153,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
                   key={flow.id}
                   flow={flow}
                   selected={data.selectedFlowId === flow.id}
+                  triggerWarning={data.triggerWarnings[flow.id]?.warning}
                   onSelect={() => data.setSelectedFlowId(flow.id)}
                   onEdit={() => data.setEditingFlowId(flow.id)}
                   onRun={() => handleAction("Run", () => data.runFlow(flow.id))}
@@ -206,6 +207,8 @@ export function WorkflowsRoom(): React.ReactElement {
 interface FlowRowProps {
   flow: Flow;
   selected: boolean;
+  /** Set when TriggerManager reported a partial-state warning for this flow. */
+  triggerWarning?: string;
   onSelect: () => void;
   onEdit: () => void;
   onRun: () => void;
@@ -214,7 +217,7 @@ interface FlowRowProps {
   onDelete: () => void;
 }
 
-function FlowRow({ flow, selected, onSelect, onEdit, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
+function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
   const stop = (e: React.MouseEvent): void => e.stopPropagation();
   return (
     <li
@@ -238,6 +241,14 @@ function FlowRow({ flow, selected, onSelect, onEdit, onRun, onToggle, onPublish,
           ) : (
             <Chip tone="warn" dot={false}>Draft only</Chip>
           )}
+          {triggerWarning ? (
+            // Native title for hover; click-on-row still selects so we don't
+            // intercept here. Operators chasing a misbehaving flow see this
+            // as the first signal.
+            <Chip tone="warn" dot={false} title={triggerWarning}>
+              Trigger warning
+            </Chip>
+          ) : null}
           <span className="wf-list__hint">updated {fmtRelative(flow.updated)}</span>
         </div>
       </div>

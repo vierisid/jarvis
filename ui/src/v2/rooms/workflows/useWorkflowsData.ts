@@ -63,10 +63,20 @@ interface ActionResult {
  * Write actions are non-optimistic: they wait for the server, then refresh
  * the relevant list. Errors surface via the returned `ActionResult`.
  */
+export interface TriggerWarning {
+  flowId: string;
+  kind: "cron" | "webhook" | "event" | "engine";
+  warning: string;
+}
+
 export function useWorkflowsData() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Per-flow trigger warnings (e.g. engine ON_ENABLE half-failed, webhook
+  // route partially registered). Populated alongside flows so the list view
+  // can badge affected rows.
+  const [triggerWarnings, setTriggerWarnings] = useState<Record<string, TriggerWarning>>({});
 
   // Per-flow run history. Keyed by flow id; only loaded for the selected flow.
   const [runs, setRuns] = useState<Record<string, FlowRun[]>>({});
@@ -91,6 +101,25 @@ export function useWorkflowsData() {
         return cached ? { ...f, displayName: cached.displayName } : f;
       });
       setFlows(enriched);
+
+      // Triggers feed in alongside the flow list. Errors are non-fatal
+      // (workflows still render); we just skip the warning badges.
+      void (async () => {
+        try {
+          const tr = await fetch("/api/workflows/triggers");
+          if (!tr.ok) return;
+          const subs = (await tr.json()) as Array<TriggerWarning & { warning?: string }>;
+          const map: Record<string, TriggerWarning> = {};
+          for (const s of subs) {
+            if (typeof s.warning === "string" && s.warning.length > 0) {
+              map[s.flowId] = { flowId: s.flowId, kind: s.kind, warning: s.warning };
+            }
+          }
+          setTriggerWarnings(map);
+        } catch {
+          /* keep prior warnings, don't surface as a top-level error */
+        }
+      })();
 
       // Fetch missing or stale names without blocking the main render.
       const stale = list.filter((f) => {
@@ -257,6 +286,7 @@ export function useWorkflowsData() {
     flows,
     loading,
     error,
+    triggerWarnings,
     selectedFlowId,
     setSelectedFlowId,
     selectedFlow,

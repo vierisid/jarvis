@@ -455,3 +455,40 @@
   color: var(--ink-1);
   border-color: var(--accent-1, #5eead4);
 }
+
+/* Per-step sample data editor + Test from here, rendered inside PropertiesPanel
+   below the step-actions row. */
+.wf-props__sample-data {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px dashed var(--rule-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.wf-props__sample-header { display: flex; flex-direction: column; gap: 2px; }
+.wf-props__sample-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wf-props__sample-textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  padding: var(--s-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-2, 6px);
+  background: var(--surface-1);
+  color: var(--ink-1);
+  resize: vertical;
+}
+.wf-props__sample-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+.wf-props__sample-err { color: var(--accent-1, #f87171); font-size: 0.72rem; }
+.wf-props__sample-status { font-size: 0.78rem; }
+.wf-props__sample-status--ok { color: var(--accent-ok, #5eead4); }
+.wf-props__sample-status--warn { color: var(--accent-warn, #fbbf24); }
+.wf-props__sample-actions { display: flex; gap: var(--s-1); flex-wrap: wrap; }

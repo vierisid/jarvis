@@ -73,6 +73,11 @@ export interface FlowVersion {
   connectionIds: string[];
   notes: unknown[];
   backupFiles: Record<string, string> | null;
+  /**
+   * Per-step sample outputs (`stepName -> output`) for the "test from here"
+   * path. Editable per step via the properties panel. Null when never set.
+   */
+  sampleData: Record<string, unknown> | null;
   created: number;
   updated: number;
 }
@@ -402,6 +407,73 @@ export function useWorkflowEditor(flowId: string | null) {
     }
   }, [version]);
 
+  /**
+   * Per-step sample data update. Saves through to the server immediately
+   * (independent of `dirty`) so test-from-here always sees the latest
+   * inputs without requiring a separate "Save" click. Pass `null` to clear.
+   * The version's `sampleData` map is replaced with the API response so the
+   * local view stays consistent.
+   */
+  const setStepSampleData = useCallback(
+    async (stepName: string, output: unknown | null): Promise<ActionResult> => {
+      if (!flowId || !version) return { ok: false, message: "no version loaded" };
+      if (version.state === "LOCKED") {
+        return { ok: false, message: "version is published; create a new draft to edit sample data" };
+      }
+      try {
+        const res = await fetch(
+          `/api/workflows/${flowId}/versions/${version.id}/sample-data/${encodeURIComponent(stepName)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ output }),
+          },
+        );
+        if (!res.ok) {
+          const body = await safeJson(res);
+          return { ok: false, message: body?.error ?? `HTTP ${res.status}` };
+        }
+        const body = (await res.json()) as { sampleData: Record<string, unknown> | null };
+        setVersion((prev) => (prev ? { ...prev, sampleData: body.sampleData } : prev));
+        return { ok: true, message: "Sample data saved" };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [flowId, version],
+  );
+
+  /**
+   * Kick off a "test from here" run: enqueues a flow run with
+   * `stepNameToTest` set. The engine executes only that step, feeding it
+   * preceding-step outputs from the version's persisted sample data. The
+   * resulting flow_run row shows up in the run-history panel.
+   */
+  const testStepFromHere = useCallback(
+    async (stepName: string): Promise<ActionResult> => {
+      if (!flowId) return { ok: false, message: "no flow loaded" };
+      try {
+        const res = await fetch(`/api/workflows/${flowId}/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            triggeredBy: "dashboard:test-from-here",
+            stepNameToTest: stepName,
+            environment: "TESTING",
+          }),
+        });
+        if (!res.ok) {
+          const body = await safeJson(res);
+          return { ok: false, message: body?.error ?? `run failed: ${res.status}` };
+        }
+        return { ok: true, message: `Test run queued for "${stepName}"` };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [flowId],
+  );
+
   /** Depth-recursive flatten that includes LOOP body + ROUTER branch children.
    *  Top-level entries have depth=0; sub-graph entries carry their parent's
    *  step name + (for routers) the branch label. */
@@ -444,6 +516,8 @@ export function useWorkflowEditor(flowId: string | null) {
     removeRouterBranch,
     save,
     reset,
+    setStepSampleData,
+    testStepFromHere,
   };
 }
 

@@ -37,6 +37,8 @@ import {
   getLatestDraft,
   listVersions,
   lockVersion,
+  replaceSampleData,
+  setSampleDataEntry,
   updateDraftVersion,
 } from "../db/repos/flow-version";
 import {
@@ -669,6 +671,39 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // ------------------------------------------------- per-version sample data
+    // The version's `sampleData` map (stepName -> output) feeds the engine's
+    // "test from here" path so a step's preceding outputs resolve without
+    // re-running the chain. Editable per-step via this PATCH; the entire map
+    // can be replaced or cleared via the PUT below.
+    //
+    // DRAFT-only: locked versions are immutable to user edits. The repo
+    // enforces; the route just surfaces errors with a clear message.
+    "/api/workflows/:id/versions/:versionId/sample-data/:stepName": {
+      PATCH: (req) =>
+        trapErrors(async () => {
+          const { versionId, stepName } = (
+            req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
+          ).params;
+          const body = (await req.json().catch(() => ({}))) as { output?: unknown };
+          // `output: null` clears the entry; `output: undefined` (missing
+          // key) is the same as null. Anything else stores as the entry.
+          const output = body.output === undefined ? null : body.output;
+          const v = setSampleDataEntry(versionId, stepName, output);
+          return ok({ versionId: v.id, sampleData: v.sampleData });
+        }),
+      DELETE: (req) =>
+        trapErrors(() => {
+          // Clear all sample-data entries on this version. Sugar over the
+          // per-step PATCH with null when the UI's "reset all" action fires.
+          const { versionId } = (
+            req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
+          ).params;
+          const v = replaceSampleData(versionId, null);
+          return ok({ versionId: v.id, sampleData: v.sampleData });
+        }),
+    },
+
     "/api/workflows/:id/publish": {
       POST: (req) =>
         trapErrors(async () => {
@@ -721,15 +756,24 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             stepNameToTest: body.stepNameToTest,
             startTime: Date.now(),
           });
-          // The worker handler for RUN_FLOW (engine spawn) lands in a follow-up
-          // commit. This route's contract: persist the run row and queue the
-          // job; the job carries enough context for the worker to dispatch.
+          // For test-from-here runs, fetch the version's persisted sampleData
+          // so the engine can populate preceding steps' outputs without
+          // re-running them. The map is shared by all runs of this version --
+          // editing it via the version PATCH route updates it for the next
+          // test. Production runs (no stepNameToTest) ignore sampleData
+          // entirely.
+          let sampleData: Record<string, unknown> | undefined;
+          if (body.stepNameToTest) {
+            const ver = getFlowVersion(versionId);
+            if (ver?.sampleData) sampleData = ver.sampleData;
+          }
           enqueue({
             jobType: "RUN_FLOW",
             payload: {
               runId: run.id,
               payload: body.payload ?? {},
               ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
+              ...(sampleData ? { sampleData } : {}),
             },
             flowRunId: run.id,
             flowId: id,
