@@ -26,7 +26,7 @@ try {
     $allAsTask = [System.WindowsRuntimeSystemExtensions].GetMethods() |
         Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }
     if (-not $allAsTask) {
-        Fail "WindowsRuntimeSystemExtensions.AsTask<IAsyncOperation<T>> not found — needs PowerShell 5.1 on Windows 10+"
+        Fail "WindowsRuntimeSystemExtensions.AsTask not found -- needs PowerShell 5.1 on Windows 10 or later"
     }
     $asTaskGeneric = @($allAsTask)[0]
 
@@ -54,7 +54,7 @@ try {
         # language is not OCR-capable.
         $langs = [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages
         if (-not $langs -or $langs.Count -eq 0) {
-            Fail "no OCR language packs installed (Settings -> Time & Language -> Language -> add a language with the 'Optical character recognition' optional feature)"
+            Fail "no OCR language packs installed. Add one in Windows Settings under Time and Language, Language, then add a language with the Optical character recognition optional feature."
         }
         $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($langs[0])
         if ($null -eq $engine) {
