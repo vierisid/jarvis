@@ -49,7 +49,7 @@ import {
   encryptJson,
   setEncryptionKey,
 } from "../src/workflows/db/encryption";
-import { isLocked } from "../src/daemon/pid";
+import { isLocked, lockPathFor } from "../src/daemon/pid";
 
 interface CliArgs {
   dataDir: string;
@@ -129,21 +129,25 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const args = parseArgs();
+  const newKeyFile = `${args.keyFile}.new`;
+
   // Refuse to run while the daemon is alive. The daemon caches the
   // encryption key in memory and would happily keep writing new
   // app_connection rows with the OLD key while we re-encrypt the existing
   // set with the NEW key -- those new rows would then be unreadable after
-  // the atomic rename. The flock check at `pid.isLocked()` returns the
-  // pid if another process holds the daemon lock; release the lock first
-  // (via `jarvis stop`) before rotating. Override the safety with
+  // the atomic rename. The flock check probes the pid lock for the
+  // *resolved* data dir so a `--data-dir` override checks the right file
+  // (not just the default `~/.jarvis/jarvis.pid`). Override the safety with
   // `--allow-running-daemon` only if you've manually quiesced writes.
   const allowRunningDaemon = process.argv.includes("--allow-running-daemon");
   if (!allowRunningDaemon) {
-    const runningPid = isLocked();
+    const runningPid = isLocked(lockPathFor(args.dataDir));
     if (runningPid !== null) {
       console.error(
         [
-          `Daemon is running (PID ${runningPid}). Stop it before rotating:`,
+          `Daemon is running (PID ${runningPid}) against ${args.dataDir}.`,
+          "Stop it before rotating:",
           "  jarvis stop",
           "",
           "Rotating while the daemon writes to app_connection would corrupt",
@@ -154,9 +158,6 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   }
-
-  const args = parseArgs();
-  const newKeyFile = `${args.keyFile}.new`;
 
   if (existsSync(newKeyFile)) {
     console.error(

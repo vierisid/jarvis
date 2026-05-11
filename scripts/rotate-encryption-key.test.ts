@@ -78,7 +78,12 @@ afterEach(() => {
 
 function runScript(opts: {
   env?: Record<string, string | undefined>;
-  /** Pass `--allow-running-daemon` to bypass the flock check. Default true. */
+  /**
+   * Pass `--allow-running-daemon` to bypass the flock check. Default false.
+   * The rotation script now probes the lock at `<dataDir>/jarvis.pid` (not
+   * the global `~/.jarvis/jarvis.pid`), so tests are naturally isolated
+   * from whatever daemon happens to be running on the dev machine.
+   */
   allowDaemon?: boolean;
 } = {}): {
   status: number;
@@ -91,10 +96,7 @@ function runScript(opts: {
   if (!opts.env || !("JARVIS_WORKFLOW_ENCRYPTION_KEY" in opts.env)) {
     delete env["JARVIS_WORKFLOW_ENCRYPTION_KEY"];
   }
-  // Default to bypassing the daemon-running check so tests don't fail when
-  // the dev machine happens to have the daemon running. The lock-check
-  // tests opt out of the bypass explicitly.
-  const allowDaemon = opts.allowDaemon ?? true;
+  const allowDaemon = opts.allowDaemon ?? false;
   const args = ["run", SCRIPT, "--data-dir", dataDir, "--key-file", keyFile, "--db", dbPath];
   if (allowDaemon) args.push("--allow-running-daemon");
   const res = spawnSync("bun", args, { env, stdio: "pipe", encoding: "utf8" });
@@ -138,19 +140,15 @@ describe("rotate-encryption-key", () => {
     db2.close();
   });
 
-  test("refuses to run when a daemon currently holds the pid lock", async () => {
-    // We can't easily fake the flock from outside Bun, so the test acquires
-    // the real daemon lock with the rotation script's own pid module. The
-    // script's subprocess then runs `isLocked()` and sees this process is
-    // holding it -- which is exactly the production "daemon is running"
-    // scenario, just with the test process standing in for the daemon.
-    const { acquireLock, releaseLock } = await import("../src/daemon/pid");
-    const acquired = acquireLock(process.pid);
-    if (!acquired) {
-      // Another daemon (or test) already holds the lock on this dev machine.
-      // Skip rather than fail.
-      return;
-    }
+  test("refuses to run when a daemon currently holds the pid lock for the same data dir", async () => {
+    // Acquire a flock at the *test data dir's* pid path -- that's what the
+    // rotation script probes when invoked with `--data-dir <tempDir>`. This
+    // simulates "a daemon is running against this data dir" without
+    // colliding with a real daemon on the dev machine running against the
+    // default `~/.jarvis`.
+    const { acquireLockAt, lockPathFor } = await import("../src/daemon/pid");
+    const handle = acquireLockAt(lockPathFor(dataDir), process.pid);
+    if (!handle) throw new Error("could not acquire lock at test data dir");
     try {
       const res = runScript({ allowDaemon: false });
       expect(res.status).toBe(1);
@@ -158,36 +156,34 @@ describe("rotate-encryption-key", () => {
       // Keychain unchanged.
       expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
     } finally {
-      releaseLock();
+      handle.release();
     }
   });
 
   test("--allow-running-daemon bypasses the lock check", async () => {
-    const { acquireLock, releaseLock } = await import("../src/daemon/pid");
-    const acquired = acquireLock(process.pid);
-    if (!acquired) return; // see note above
+    const { acquireLockAt, lockPathFor } = await import("../src/daemon/pid");
+    const handle = acquireLockAt(lockPathFor(dataDir), process.pid);
+    if (!handle) throw new Error("could not acquire lock at test data dir");
     try {
-      // Spawn with the override flag. The script should rotate normally.
-      const res = spawnSync(
-        "bun",
-        [
-          "run",
-          SCRIPT,
-          "--data-dir",
-          dataDir,
-          "--key-file",
-          keyFile,
-          "--db",
-          dbPath,
-          "--allow-running-daemon",
-        ],
-        { stdio: "pipe", encoding: "utf8" },
-      );
+      const res = runScript({ allowDaemon: true });
       expect(res.status).toBe(0);
       expect(readFileSync(keyFile, "utf8").trim()).not.toBe(originalKey.toString("hex"));
     } finally {
-      releaseLock();
+      handle.release();
     }
+  });
+
+  test("ignores a daemon holding the default lock when --data-dir points elsewhere", async () => {
+    // Regression: previously the script called isLocked() without honoring
+    // --data-dir, so a daemon running against `~/.jarvis` blocked rotations
+    // for arbitrary other data dirs. Now isLocked is probed at
+    // <dataDir>/jarvis.pid, so a default-path daemon doesn't interfere.
+    // We don't try to grab the default lock here (the dev machine's daemon
+    // may already hold it); we just assert the test's tempDir-scoped run
+    // completes without daemon-error output.
+    const res = runScript({ allowDaemon: false });
+    expect(res.status).toBe(0);
+    expect(res.stderr).not.toMatch(/Daemon is running/);
   });
 
   test("refuses to run when JARVIS_WORKFLOW_ENCRYPTION_KEY is set", () => {
