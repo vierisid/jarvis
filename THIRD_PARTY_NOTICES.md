@@ -1,6 +1,13 @@
 # Third-Party Notices
 
-Jarvis incorporates source code from the following third-party projects. Each is distributed under its own license, reproduced below. The combined work (Jarvis) is distributed under the [Jarvis Source Available License 2.0](LICENSE); the third-party portions retain their original licenses for any party who extracts them as a standalone work.
+## Scope
+
+This file covers **third-party source vendored into this repository** -- code that ships in the Jarvis source tree at build time (today, just Activepieces under `src/workflows/activepieces/`). Each vendored project is distributed under its own license, reproduced below. The combined work (Jarvis) is distributed under the [Jarvis Source Available License 2.0](LICENSE); the third-party portions retain their original licenses for any party who extracts them as a standalone work.
+
+**Not covered here:**
+
+- **npm runtime dependencies** (e.g. `socket.io`, `nanoid`, `bun:sqlite`). These are listed in `package.json` and resolved into `node_modules` at install time; their licenses live next to the published packages and are not reproduced in this file.
+- **Community Activepieces pieces** installed at runtime into `~/.jarvis/pieces/` from the curated catalog. Each piece carries its own license metadata; the catalog (`src/workflows/pieces-library/catalog.ts`) only lists semver pins, not vendored source.
 
 ---
 
