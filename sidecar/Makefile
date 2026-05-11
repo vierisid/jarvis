@@ -13,12 +13,22 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack
+.PHONY: all build test vet clean dist npm-pack build-ocr-helper
 
 all: test build
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_NAME) .
+
+# Build the macOS Vision OCR helper. Requires `swiftc` (Xcode CLT). Must be
+# run on a Mac; cross-compiling Swift from other hosts is not supported.
+# Without this binary present, macOS sidecars run with OCR disabled.
+build-ocr-helper:
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "swiftc not found — run this target on a Mac with Xcode command line tools installed"; \
+		exit 1; \
+	fi
+	swiftc -O helpers/ocr-helper.swift -o helpers/ocr-helper
 
 # Cross-compile tester binaries for all platforms and run unit tests.
 test: vet
@@ -47,6 +57,7 @@ clean:
 	rm -f $(BIN_NAME) $(BIN_NAME).exe
 	rm -rf dist
 	rm -f tester/bin/tester_*
+	rm -f helpers/ocr-helper
 	rm -f npm/*/*.tgz
 	rm -rf npm/darwin-arm64/bin npm/darwin-x64/bin npm/linux-x64/bin npm/linux-arm64/bin npm/win32-x64/bin
 	rm -f npm/jarvis-sidecar/*.tgz
@@ -65,12 +76,17 @@ dist: test vet
 
 # Copy binaries into npm platform packages and pack them
 npm-pack: dist
+	@if [ ! -f helpers/ocr-helper ]; then \
+		echo "WARN: helpers/ocr-helper not built — darwin packages will ship without OCR (run 'make build-ocr-helper' on a Mac)"; \
+	fi
 	@# darwin-arm64
 	mkdir -p npm/darwin-arm64/bin
 	cp dist/darwin-arm64/$(BIN_NAME) npm/darwin-arm64/bin/
+	@if [ -f helpers/ocr-helper ]; then cp helpers/ocr-helper npm/darwin-arm64/bin/; fi
 	@# darwin-x64
 	mkdir -p npm/darwin-x64/bin
 	cp dist/darwin-amd64/$(BIN_NAME) npm/darwin-x64/bin/
+	@if [ -f helpers/ocr-helper ]; then cp helpers/ocr-helper npm/darwin-x64/bin/; fi
 	@# linux-x64
 	mkdir -p npm/linux-x64/bin
 	cp dist/linux-amd64/$(BIN_NAME) npm/linux-x64/bin/

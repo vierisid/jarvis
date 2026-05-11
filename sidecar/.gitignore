@@ -14,3 +14,6 @@ npm/win32-x64/bin/
 
 # Tester binaries (built by make test)
 tester/bin/tester_*
+
+# macOS Vision OCR helper (built by `make build-ocr-helper` on a Mac)
+helpers/ocr-helper
