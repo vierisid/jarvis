@@ -60,9 +60,16 @@ interface ConnectedSandbox {
   engineClient: EngineContract;
 }
 
+type ConnectionWaiter = {
+  resolve: (engineClient: EngineContract) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export class WorkerRpcServer {
   private io: Server | null = null;
   private readonly connections = new Map<string, ConnectedSandbox>();
+  private readonly waiters = new Map<string, ConnectionWaiter[]>();
   private readonly registry: SandboxRegistry;
   private readonly workerHandlers: WorkerContractHandlers;
   private readonly notifyHandlers: NotifyContractHandlers;
@@ -127,6 +134,14 @@ export class WorkerRpcServer {
     if (!this.io) return;
     for (const conn of this.connections.values()) conn.socket.disconnect(true);
     this.connections.clear();
+    // Reject anyone still awaiting a connect that's not going to happen now.
+    for (const [sandboxId, queue] of this.waiters) {
+      for (const w of queue) {
+        clearTimeout(w.timer);
+        w.reject(new Error(`engine ${sandboxId} wait aborted: server stopping`));
+      }
+    }
+    this.waiters.clear();
     // socket.io's close(cb) doesn't always invoke the callback under Bun's
     // node:http shim when there are no remaining clients (observed during
     // teardown of test cases that never connected). Cap the wait so a stuck
@@ -154,22 +169,30 @@ export class WorkerRpcServer {
     return conn.engineClient;
   }
 
-  /** Resolve once a sandbox connects (or reject after timeout). */
+  /**
+   * Resolve once a sandbox connects (or reject after timeout). Waiters are
+   * stored per-sandboxId and drained by `onConnection` the moment the engine
+   * registers, avoiding a per-call setInterval poll for every sandbox boot.
+   */
   async waitForConnection(sandboxId: string, timeoutMs = 10_000): Promise<EngineContract> {
     const existing = this.connections.get(sandboxId);
     if (existing) return existing.engineClient;
-    return new Promise<EngineContract>((res, rej) => {
+    return new Promise<EngineContract>((resolve, reject) => {
       const timer = setTimeout(() => {
-        rej(new Error(`engine ${sandboxId} did not connect within ${timeoutMs}ms`));
-      }, timeoutMs);
-      const interval = setInterval(() => {
-        const conn = this.connections.get(sandboxId);
-        if (conn) {
-          clearTimeout(timer);
-          clearInterval(interval);
-          res(conn.engineClient);
+        // Remove this waiter on timeout. Other queued waiters (rare but
+        // possible if multiple callers race) keep their own timers.
+        const queue = this.waiters.get(sandboxId);
+        if (queue) {
+          const idx = queue.findIndex((w) => w.timer === timer);
+          if (idx !== -1) queue.splice(idx, 1);
+          if (queue.length === 0) this.waiters.delete(sandboxId);
         }
-      }, 50);
+        reject(new Error(`engine ${sandboxId} did not connect within ${timeoutMs}ms`));
+      }, timeoutMs);
+      const waiter: ConnectionWaiter = { resolve, reject, timer };
+      const queue = this.waiters.get(sandboxId);
+      if (queue) queue.push(waiter);
+      else this.waiters.set(sandboxId, [waiter]);
     });
   }
 
@@ -207,6 +230,16 @@ export class WorkerRpcServer {
     );
 
     this.connections.set(sandboxId, { socket, engineClient });
+
+    // Drain any pending waiters for this sandbox.
+    const queue = this.waiters.get(sandboxId);
+    if (queue) {
+      this.waiters.delete(sandboxId);
+      for (const w of queue) {
+        clearTimeout(w.timer);
+        w.resolve(engineClient);
+      }
+    }
 
     socket.on("disconnect", () => {
       this.connections.delete(sandboxId);
