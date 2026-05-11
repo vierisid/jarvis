@@ -60,6 +60,83 @@ describe("EngineRuntime pool", () => {
   });
 
   test.skipIf(skipE2eTests)(
+    "idle TTL kills the parked engine after the configured timeout",
+    async () => {
+      // Separate runtime instance with an aggressive TTL so the test runs fast.
+      // The shared `runtime` set up in beforeAll uses the default 5min TTL.
+      let cached = findCachedBundle();
+      if (!cached) cached = await buildEngineBundle();
+      const ttlRuntime = new EngineRuntime({
+        api,
+        bundlePath: cached.bundlePath,
+        pool: true,
+        poolIdleTtlMs: 150,
+      });
+      try {
+        const h = await ttlRuntime.acquire({
+          runId: "run_ttl_park",
+          projectId: "jrv_proj_default",
+        });
+        const sandbox = h.sandboxId;
+        await h.release();
+        // Engine should be parked right now (alive in the registry).
+        expect(api.registry.get(sandbox)).not.toBeNull();
+        // Wait past TTL + a small slack to let the timer fire + the
+        // registry.terminate to settle.
+        await new Promise((r) => setTimeout(r, 400));
+        expect(api.registry.get(sandbox)).toBeNull();
+        // The next acquire spawns fresh (different sandboxId).
+        const h2 = await ttlRuntime.acquire({
+          runId: "run_ttl_postevict",
+          projectId: "jrv_proj_default",
+        });
+        expect(h2.sandboxId).not.toBe(sandbox);
+        await h2.release();
+      } finally {
+        await ttlRuntime.shutdown();
+      }
+    },
+    60_000,
+  );
+
+  test.skipIf(skipE2eTests)(
+    "reusing the warm engine cancels the pending eviction (TTL doesn't kill an in-use engine)",
+    async () => {
+      let cached = findCachedBundle();
+      if (!cached) cached = await buildEngineBundle();
+      const ttlRuntime = new EngineRuntime({
+        api,
+        bundlePath: cached.bundlePath,
+        pool: true,
+        poolIdleTtlMs: 150,
+      });
+      try {
+        const h1 = await ttlRuntime.acquire({
+          runId: "run_ttl_acq1",
+          projectId: "jrv_proj_default",
+        });
+        const sandbox = h1.sandboxId;
+        await h1.release();
+        // Acquire before TTL expires -- the eviction timer must be cancelled.
+        await new Promise((r) => setTimeout(r, 50));
+        const h2 = await ttlRuntime.acquire({
+          runId: "run_ttl_acq2",
+          projectId: "jrv_proj_default",
+        });
+        expect(h2.sandboxId).toBe(sandbox); // pool reuse
+        // Wait past the original TTL window; the cancelled timer must not
+        // tear down the live (in-use) engine.
+        await new Promise((r) => setTimeout(r, 200));
+        expect(api.registry.get(sandbox)).not.toBeNull();
+        await h2.release();
+      } finally {
+        await ttlRuntime.shutdown();
+      }
+    },
+    60_000,
+  );
+
+  test.skipIf(skipE2eTests)(
     "second acquire reuses the same engine process (sandboxId stays, pid stays)",
     async () => {
       const h1 = await runtime!.acquire({

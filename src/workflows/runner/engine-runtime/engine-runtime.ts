@@ -81,6 +81,14 @@ export interface EngineRuntimeOptions {
   handshakeTimeoutMs?: number;
   /** Graceful kill deadline before SIGKILL. Default 2s. */
   killGraceMs?: number;
+  /**
+   * Idle TTL for the warm engine, in milliseconds. After this much time
+   * sitting parked in the pool with no acquires, the engine is killed and
+   * the slot is cleared. Default 5 minutes -- long enough to absorb bursty
+   * cron firings, short enough that an idle daemon doesn't keep a dead-weight
+   * Bun subprocess. Pass 0 (or undefined with pool=false) to disable.
+   */
+  poolIdleTtlMs?: number;
   /** Override extra env for the spawned engine -- mostly for tests. */
   spawnEnvOverride?: Record<string, string | undefined>;
   /** Override the runtime binary (default: process.execPath). */
@@ -369,6 +377,7 @@ export class EngineRuntime {
   private readonly cwd: string;
   private readonly devPieces: string[];
   private readonly poolEnabled: boolean;
+  private readonly poolIdleTtlMs: number;
   /**
    * Single-slot warm pool. When pooling is enabled, `release()` parks the
    * engine here instead of killing it, and the next `acquire()` reuses it.
@@ -376,11 +385,22 @@ export class EngineRuntime {
    * and that one is killed on its release.
    */
   private idleEngine: WarmEngine | null = null;
+  /**
+   * Pending idle-eviction timer for the parked engine. Set when an engine
+   * enters the pool, cleared when it's reused or the pool is torn down.
+   * `.unref()`-ed so the timer alone doesn't keep the daemon alive.
+   */
+  private idleEvictionTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
     this.bundlePath = opts.bundlePath;
     this.poolEnabled = opts.pool ?? false;
+    // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
+    // shorter than the gap between cron fires defeats the pool's purpose;
+    // 5 minutes covers the common "fire every minute or two" pattern with
+    // headroom, while a long-idle daemon (overnight) reclaims memory.
+    this.poolIdleTtlMs = opts.poolIdleTtlMs ?? 5 * 60_000;
     this.baseCodeDir =
       opts.baseCodeDir ?? resolve(workflowLogsBase(), "..", "workflow-codes");
     this.customPiecesPaths =
@@ -426,10 +446,14 @@ export class EngineRuntime {
     if (this.poolEnabled && this.idleEngine && !this.idleEngine.proc.alive()) {
       this.api.registry.terminate(this.idleEngine.sandboxId);
       this.idleEngine = null;
+      this.clearIdleEvictionTimer();
     }
     if (this.poolEnabled && this.idleEngine) {
       const warm = this.idleEngine;
       this.idleEngine = null;
+      // Reusing the warm engine -- cancel its pending eviction; the next
+      // release will arm a fresh one.
+      this.clearIdleEvictionTimer();
       const { token, expiresAt } = await this.api.signer.mint(
         { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
         opts.tokenTtlSeconds,
@@ -551,6 +575,7 @@ export class EngineRuntime {
     }
     if (this.idleEngine === null) {
       this.idleEngine = engine;
+      this.armIdleEvictionTimer();
       return;
     }
     // Slot full -- kill the duplicate.
@@ -560,11 +585,45 @@ export class EngineRuntime {
   }
 
   /**
+   * Arm the idle-eviction timer. Called when an engine parks in the pool.
+   * Re-arming replaces any prior pending timer (defensive -- the pool only
+   * holds one engine, but the helper should be idempotent).
+   */
+  private armIdleEvictionTimer(): void {
+    if (this.poolIdleTtlMs <= 0) return;
+    this.clearIdleEvictionTimer();
+    this.idleEvictionTimer = setTimeout(() => {
+      this.idleEvictionTimer = null;
+      const engine = this.idleEngine;
+      if (!engine) return;
+      this.idleEngine = null;
+      // Same SIGTERM-then-SIGKILL grace pattern as `EngineHandle.killAndTerminate`.
+      engine.proc.kill("SIGTERM");
+      setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+      this.api.registry.terminate(engine.sandboxId);
+    }, this.poolIdleTtlMs);
+    // unref so a parked engine alone doesn't keep the daemon's event loop
+    // alive past shutdown.
+    this.idleEvictionTimer.unref();
+  }
+
+  private clearIdleEvictionTimer(): void {
+    if (this.idleEvictionTimer) {
+      clearTimeout(this.idleEvictionTimer);
+      this.idleEvictionTimer = null;
+    }
+  }
+
+  /**
    * Tear down the warm pool. Called by the daemon's shutdown path after
    * the worker has stopped accepting jobs. Safe to call when pooling is
    * disabled (no-op).
    */
   async shutdown(): Promise<void> {
+    // Cancel the eviction timer first -- otherwise it fires post-shutdown
+    // and the kill-then-terminate against an already-gone engine surfaces
+    // as noise in logs.
+    this.clearIdleEvictionTimer();
     if (!this.idleEngine) return;
     const engine = this.idleEngine;
     this.idleEngine = null;
