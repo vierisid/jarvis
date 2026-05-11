@@ -24,6 +24,8 @@ func CheckCapabilities(cfg *SidecarConfig) (available []SidecarCapability, unava
 			reason = checkScreenshot()
 		case CapAwareness:
 			reason = checkAwareness()
+		case CapOCR:
+			reason = checkOCR()
 		case CapBrowser:
 			reason = checkBrowser(cfg)
 		case CapDesktop:

@@ -25,7 +25,7 @@ func homeDir() string {
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
-			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser,
+			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR,
 		},
 		Terminal: TerminalConfig{
 			BlockedCommands: []string{},
@@ -43,6 +43,8 @@ func defaultConfig() SidecarConfig {
 			WindowIntervalMs:   2000,
 			MinChangeThreshold: 0.02,
 			StuckThresholdMs:   120000,
+			OCREnabled:         true,
+			CaptureDir:         filepath.Join(homeDir(), ".jarvis", "captures"),
 		},
 	}
 }
@@ -88,6 +90,9 @@ func LoadConfig() (*SidecarConfig, error) {
 	}
 	if cfg.Awareness.StuckThresholdMs == 0 {
 		cfg.Awareness.StuckThresholdMs = 120000
+	}
+	if cfg.Awareness.CaptureDir == "" {
+		cfg.Awareness.CaptureDir = filepath.Join(homeDir(), ".jarvis", "captures")
 	}
 
 	return &cfg, nil

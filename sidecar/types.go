@@ -12,6 +12,7 @@ const (
 	CapScreenshot SidecarCapability = "screenshot"
 	CapSystemInfo SidecarCapability = "system_info"
 	CapAwareness  SidecarCapability = "awareness"
+	CapOCR        SidecarCapability = "ocr"
 )
 
 // AwarenessConfig controls screen and window observer behavior.
@@ -20,6 +21,8 @@ type AwarenessConfig struct {
 	WindowIntervalMs   int     `yaml:"window_interval_ms"`
 	MinChangeThreshold float64 `yaml:"min_change_threshold"`
 	StuckThresholdMs   int     `yaml:"stuck_threshold_ms"`
+	OCREnabled         bool    `yaml:"ocr_enabled"`
+	CaptureDir         string  `yaml:"capture_dir"`
 }
 
 // SidecarTokenClaims is the JWT payload from the brain.
