@@ -2676,7 +2676,24 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async (req: Request & { params: { id: string } }) => {
         const capture = getCapture(req.params.id);
         if (!capture || !capture.image_path) return error('Image not found', 404);
-        if (!capture.sidecar_id) return error('Capture has no associated sidecar', 404);
+
+        // Legacy rows (pre-Phase-7) have null sidecar_id and an image_path that
+        // points to brain-local disk. Serve from there as a fallback.
+        if (!capture.sidecar_id) {
+          const jarvisDir = path.join(os.homedir(), '.jarvis');
+          if (!isWithinBase(capture.image_path, jarvisDir)) {
+            return error('Image not found', 404);
+          }
+          try {
+            const imageData = readFileSync(capture.image_path);
+            return new Response(new Uint8Array(imageData), {
+              headers: { ...CORS, 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=3600' },
+            });
+          } catch {
+            return error('Image file not found on disk', 404);
+          }
+        }
+
         if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
 
         try {

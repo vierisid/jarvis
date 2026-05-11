@@ -777,14 +777,30 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
           },
           async (cutoffMs: number) => {
-            const connected = sidecarManager.listSidecars().filter(s => s.connected);
+            const all = sidecarManager.listSidecars();
+            const connected = all.filter(s => s.connected);
+            const offline = all.length - connected.length;
+
+            let totalFiles = 0;
+            let totalDirs = 0;
             await Promise.all(connected.map(async (s) => {
               try {
-                await sidecarManager.dispatchRPC(s.id, 'cleanup_captures', { before_ms: cutoffMs });
+                const result = await sidecarManager.dispatchRPC(s.id, 'cleanup_captures', { before_ms: cutoffMs }) as
+                  | { files_deleted?: number; dirs_removed?: number }
+                  | undefined;
+                totalFiles += result?.files_deleted ?? 0;
+                totalDirs += result?.dirs_removed ?? 0;
               } catch (err) {
                 console.error(`[Daemon] cleanup_captures on ${s.id} failed:`, err instanceof Error ? err.message : err);
               }
             }));
+
+            if (totalFiles > 0 || totalDirs > 0) {
+              console.log(`[Daemon] Sidecar capture cleanup: ${totalFiles} files, ${totalDirs} dirs across ${connected.length} sidecar(s)`);
+            }
+            if (offline > 0) {
+              console.log(`[Daemon] Sidecar capture cleanup: skipped ${offline} offline sidecar(s); their files will be pruned on reconnect`);
+            }
           }
         );
         await svc.start();
@@ -799,6 +815,27 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               console.error('[Daemon] Awareness sidecar event error:', err instanceof Error ? err.message : err)
             );
           }
+        });
+
+        // On (re)connect, prune any capture files older than the longest
+        // retention tier — catches files that piled up while the sidecar
+        // was offline.
+        sidecarManager.onConnect((sidecarId) => {
+          const cfg = jarvisConfig.awareness;
+          if (!cfg) return;
+          const cutoffMs = Date.now() - cfg.retention.key_moment_hours * 60 * 60 * 1000;
+          sidecarManager.dispatchRPC(sidecarId, 'cleanup_captures', { before_ms: cutoffMs })
+            .then((result) => {
+              const r = result as { files_deleted?: number; dirs_removed?: number } | undefined;
+              const files = r?.files_deleted ?? 0;
+              const dirs = r?.dirs_removed ?? 0;
+              if (files > 0 || dirs > 0) {
+                console.log(`[Daemon] On-connect cleanup on ${sidecarId}: ${files} files, ${dirs} dirs`);
+              }
+            })
+            .catch((err) => {
+              console.error(`[Daemon] On-connect cleanup_captures on ${sidecarId} failed:`, err instanceof Error ? err.message : err);
+            });
         });
 
         // Auto-launch overlay widget (non-blocking, best-effort)

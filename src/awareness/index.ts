@@ -10,7 +10,6 @@ export { ContextGraph } from './context-graph.ts';
 export { BehaviorAnalytics } from './analytics.ts';
 
 export type {
-  CaptureFrame,
   ScreenContext,
   AwarenessEvent,
   AwarenessEventType,

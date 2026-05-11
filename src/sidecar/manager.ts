@@ -95,6 +95,7 @@ export class SidecarManager implements Service {
   private sidecarConnections = new Map<string, SidecarConnection>();
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
+  private connectListeners = new Set<(sidecarId: string) => void>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -391,6 +392,11 @@ export class SidecarManager implements Service {
       [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.id],
     );
     console.log(`[SidecarManager] Sidecar connected: ${sidecar.name} (${sidecar.id})`);
+    for (const listener of this.connectListeners) {
+      try { listener(sidecar.id); } catch (err) {
+        console.error('[SidecarManager] connect listener error:', err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   /** Remove a connected sidecar (called on WS close) */
@@ -572,6 +578,11 @@ export class SidecarManager implements Service {
   /** Register a listener for sidecar events */
   onEvent(listener: (sidecarId: string, event: SidecarEvent) => void): void {
     this.eventListeners.add(listener);
+  }
+
+  /** Register a listener for sidecar connect events */
+  onConnect(listener: (sidecarId: string) => void): void {
+    this.connectListeners.add(listener);
   }
 
   // --------------- Helpers ---------------

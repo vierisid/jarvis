@@ -6,13 +6,6 @@
 
 // ── Capture Layer ──
 
-export type CaptureFrame = {
-  id: string;
-  timestamp: number;
-  imageBuffer: Buffer;
-  pixelChangePct: number;
-};
-
 // ── Context ──
 
 export type ScreenContext = {

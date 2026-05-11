@@ -354,6 +354,9 @@ func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
 // makeCleanupCapturesHandler deletes capture files in CaptureDir whose mtime is
 // before the provided cutoff (epoch ms). Empty date directories are removed.
 // Returns counts so the brain can log progress.
+//
+// Safety: the cutoff must be in the past. A small clock-skew tolerance is
+// allowed (1 minute into the future), but we never wipe newer files than that.
 func makeCleanupCapturesHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		beforeMs, ok := params["before_ms"].(float64)
@@ -361,6 +364,9 @@ func makeCleanupCapturesHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("missing or invalid before_ms")
 		}
 		cutoff := time.UnixMilli(int64(beforeMs))
+		if cutoff.After(time.Now().Add(time.Minute)) {
+			return nil, fmt.Errorf("cutoff must be in the past")
+		}
 
 		captureDir := cfg.Awareness.CaptureDir
 		filesDeleted := 0
