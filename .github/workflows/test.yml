@@ -4,6 +4,7 @@ on:
     branches: ["**"]
     tags-ignore: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -17,14 +18,28 @@ jobs:
       - run: bun test
       - run: bunx tsc --noEmit
 
-  # Validate the macOS Vision OCR helper compiles. Cheap on macos-latest;
-  # catches breakage in helpers/ocr-helper.swift before it reaches a release.
-  swift-check:
+  # Validate the macOS Vision OCR helper compiles, and publish the universal
+  # Mach-O binary as an artifact so operators can grab it without cutting a
+  # release tag. The artifact is attached to every run and can also be built
+  # on demand via the Actions "Run workflow" button (workflow_dispatch).
+  ocr-helper:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Compile ocr-helper.swift
+
+      - name: Build universal ocr-helper
         working-directory: sidecar
         run: |
-          swiftc -O -target arm64-apple-macos11 -o /tmp/ocr-helper helpers/ocr-helper.swift
-          file /tmp/ocr-helper
+          set -euo pipefail
+          swiftc -O -target arm64-apple-macos11  -o /tmp/ocr-helper-arm64 helpers/ocr-helper.swift
+          swiftc -O -target x86_64-apple-macos11 -o /tmp/ocr-helper-amd64 helpers/ocr-helper.swift
+          mkdir -p helpers
+          lipo -create -output helpers/ocr-helper /tmp/ocr-helper-arm64 /tmp/ocr-helper-amd64
+          file helpers/ocr-helper
+          lipo -info helpers/ocr-helper
+
+      - name: Upload helper binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: ocr-helper-darwin
+          path: sidecar/helpers/ocr-helper
