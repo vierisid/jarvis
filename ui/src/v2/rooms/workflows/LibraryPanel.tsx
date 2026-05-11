@@ -115,8 +115,15 @@ function LibraryRow({
 }): React.ReactElement {
   const isInstalled = entry.installed !== null;
   const busy = actionState !== "idle";
-  const vettedMismatch =
-    isInstalled && entry.installed!.resolvedVersion !== entry.vettedVersion;
+  // Compare resolved vs vetted to surface the right hint:
+  //   resolved < vetted -> "Update available" (we vetted a newer version)
+  //   resolved > vetted -> "Newer than vetted" (user upgraded past our audit)
+  //   resolved == vetted -> no chip
+  const versionRel = isInstalled
+    ? compareSemver(entry.installed!.resolvedVersion, entry.vettedVersion)
+    : 0;
+  const updateAvailable = versionRel < 0;
+  const newerThanVetted = versionRel > 0;
 
   return (
     <li className="wf-lib__row">
@@ -128,9 +135,17 @@ function LibraryRow({
           ) : (
             <Chip tone="neutral">{entry.versionRange}</Chip>
           )}
-          {vettedMismatch ? (
-            <Chip tone="warn" title={`Tested with ${entry.vettedVersion}`}>
-              vetted {entry.vettedVersion}
+          {updateAvailable ? (
+            <Chip
+              tone="warn"
+              title={`Installed ${entry.installed!.resolvedVersion} -- catalog vetted ${entry.vettedVersion}. Click Install again to upgrade.`}
+            >
+              {`Update -> ${entry.vettedVersion}`}
+            </Chip>
+          ) : null}
+          {newerThanVetted ? (
+            <Chip tone="warn" title={`Tested with ${entry.vettedVersion}; you have a newer version`}>
+              ahead of vetted {entry.vettedVersion}
             </Chip>
           ) : null}
           <Chip tone="neutral">{entry.licenseSpdx}</Chip>
@@ -156,10 +171,22 @@ function LibraryRow({
       </div>
       <div className="wf-lib__row-actions">
         {isInstalled ? (
-          <Button variant="danger" size="sm" onClick={onUninstall} disabled={busy}>
-            <Icon icon={Trash2} size={12} />{" "}
-            {actionState === "uninstalling" ? "Uninstalling..." : "Uninstall"}
-          </Button>
+          <>
+            {updateAvailable ? (
+              // Re-installing an existing piece re-runs bun install, which
+              // re-resolves within the versionRange and pulls the newer
+              // vetted version. Same code path as a fresh install; the
+              // installer.ts preserves the original `installedAt`.
+              <Button variant="primary" size="sm" onClick={onInstall} disabled={busy}>
+                <Icon icon={Download} size={12} />{" "}
+                {actionState === "installing" ? "Updating..." : "Update"}
+              </Button>
+            ) : null}
+            <Button variant="danger" size="sm" onClick={onUninstall} disabled={busy}>
+              <Icon icon={Trash2} size={12} />{" "}
+              {actionState === "uninstalling" ? "Uninstalling..." : "Uninstall"}
+            </Button>
+          </>
         ) : (
           <Button variant="primary" size="sm" onClick={onInstall} disabled={busy}>
             <Icon icon={Download} size={12} />{" "}
@@ -169,4 +196,22 @@ function LibraryRow({
       </div>
     </li>
   );
+}
+
+/**
+ * Minimal semver compare for the catalog use case: both inputs are
+ * resolved/vetted versions (`x.y.z`, no operators). Returns -1 / 0 / 1
+ * for a < b / equal / a > b. Doesn't handle pre-release tags; we don't
+ * use them in the catalog.
+ */
+function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const av = pa[i] ?? 0;
+    const bv = pb[i] ?? 0;
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+  }
+  return 0;
 }

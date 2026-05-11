@@ -165,7 +165,17 @@ export function WorkflowsRoomBody(): React.ReactElement {
                   }
                   onPublish={() => handleAction("Publish", () => data.publishFlow(flow.id))}
                   onDelete={() => {
-                    if (window.confirm(`Delete "${flow.displayName ?? flow.id}"? This is permanent.`)) {
+                    // Spell out what disappears: not just the flow row but
+                    // every draft on it (including per-step sample data the
+                    // user invested time configuring for test-from-here).
+                    // Mentioning sample data explicitly catches the case where
+                    // a user has been iterating in the editor but hasn't
+                    // realized a flow delete wipes the whole version chain.
+                    const hasDraftOnly = !flow.publishedVersionId;
+                    const msg = hasDraftOnly
+                      ? `Delete "${flow.displayName ?? flow.id}"?\n\nThis flow has no published version -- the draft (including any per-step sample data) will be permanently lost.`
+                      : `Delete "${flow.displayName ?? flow.id}"?\n\nThe published version and any draft (including per-step sample data) will be permanently lost.`;
+                    if (window.confirm(msg)) {
                       void handleAction("Delete", () => data.deleteFlow(flow.id));
                     }
                   }}
@@ -242,14 +252,11 @@ function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onTo
             <Chip tone="warn" dot={false}>Draft only</Chip>
           )}
           {triggerWarning ? (
-            // Embed a short preview of the warning text in the chip itself
-            // so operators see the gist without hovering; the full message
-            // stays in the native title for the slow-tooltip path. ~50 char
-            // chips fit alongside the status chips at common widths; longer
-            // messages truncate with an ellipsis.
-            <Chip tone="warn" dot={false} title={triggerWarning}>
-              ! {triggerWarning.length > 50 ? triggerWarning.slice(0, 47) + "..." : triggerWarning}
-            </Chip>
+            // Click toggles an expanded detail below the meta row. Default
+            // collapsed state shows a 50-char preview; expanded shows the
+            // full message inline. Avoids the slow native tooltip + lets
+            // long messages wrap cleanly.
+            <TriggerWarningChip text={triggerWarning} />
           ) : null}
           <span className="wf-list__hint">updated {fmtRelative(flow.updated)}</span>
         </div>
@@ -274,6 +281,40 @@ function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onTo
         </Button>
       </div>
     </li>
+  );
+}
+
+/**
+ * Inline-expanding trigger warning. Replaces the native `title` tooltip
+ * (slow appearance, platform-styled, hard to read with long warnings).
+ * Collapsed: warn-toned chip with "! <50-char preview>". Click expands to
+ * a wrapping detail row below the chip. Click again collapses.
+ *
+ * `stopPropagation` is necessary because the parent flow row uses
+ * `onClick` to select the flow -- without it, expanding the warning would
+ * also select the row.
+ */
+function TriggerWarningChip({ text }: { text: string }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const preview = text.length > 50 ? text.slice(0, 47) + "..." : text;
+  return (
+    <span className="wf-list__warning-wrap">
+      <Chip
+        tone="warn"
+        dot={false}
+        onClick={(e: React.MouseEvent) => {
+          e.stopPropagation();
+          setExpanded((v) => !v);
+        }}
+      >
+        ! {preview}
+      </Chip>
+      {expanded ? (
+        <span className="wf-list__warning-full" onClick={(e) => e.stopPropagation()}>
+          {text}
+        </span>
+      ) : null}
+    </span>
   );
 }
 

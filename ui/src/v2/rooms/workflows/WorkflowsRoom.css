@@ -465,3 +465,21 @@
 .wf-lib__row-source { display: inline-flex; gap: 3px; align-items: center; color: var(--ink-3); text-decoration: none; }
 .wf-lib__row-source:hover { color: var(--ink-1); }
 .wf-lib__row-actions { display: flex; gap: var(--s-1); flex-shrink: 0; }
+
+/* Inline-expanding trigger warning: click the chip to reveal the full
+   message below in a wrapping detail line. Beats the native title tooltip
+   for long messages. */
+.wf-list__warning-wrap { display: inline-flex; flex-direction: column; gap: 4px; }
+.wf-list__warning-wrap .chip { cursor: pointer; }
+.wf-list__warning-full {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  background: var(--paper-3);
+  border-left: 2px solid var(--accent-warn, #fbbf24);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  padding: 4px 8px;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}
