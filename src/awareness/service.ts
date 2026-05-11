@@ -12,9 +12,8 @@ import type { JarvisConfig, AwarenessConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { AwarenessEvent, LiveContext, DailyReport, Suggestion, SessionSummary, WeeklyReport, BehavioralInsight } from './types.ts';
 import type { SuggestionType, SuggestionRow } from './types.ts';
-import type { SidecarEvent, BinaryDataInline } from '../sidecar/protocol.ts';
+import type { SidecarEvent } from '../sidecar/protocol.ts';
 
-import { OCREngine } from './ocr-engine.ts';
 import { ContextTracker } from './context-tracker.ts';
 import { AwarenessIntelligence } from './intelligence.ts';
 import { SuggestionEngine } from './suggestion-engine.ts';
@@ -35,21 +34,11 @@ import {
 import { createObservation } from '../vault/observations.ts';
 import { getUpcoming } from '../vault/commitments.ts';
 import { generateId } from '../vault/schema.ts';
-import { mkdirSync, existsSync, unlinkSync, readdirSync, statSync, rmdirSync } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-
-let sharp: any = null;
-try {
-  sharp = (await import('sharp')).default;
-} catch { /* sharp not available — thumbnails disabled */ }
-
 export class AwarenessService implements Service {
   name = 'awareness';
   private _status: ServiceStatus = 'stopped';
 
   private config: AwarenessConfig;
-  private ocrEngine: OCREngine;
   private contextTracker: ContextTracker;
   private intelligence: AwarenessIntelligence;
   private suggestionEngine: SuggestionEngine;
@@ -58,7 +47,6 @@ export class AwarenessService implements Service {
   private llm: LLMManager;
   private eventCallback: ((event: AwarenessEvent) => void) | null;
   private enabled: boolean;
-  private captureDir: string;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -72,9 +60,7 @@ export class AwarenessService implements Service {
     this.llm = llm;
     this.eventCallback = eventCallback ?? null;
     this.enabled = cfg.enabled;
-    this.captureDir = cfg.capture_dir.replace(/^~/, os.homedir());
 
-    this.ocrEngine = new OCREngine();
     this.contextTracker = new ContextTracker(cfg);
     this.intelligence = new AwarenessIntelligence(
       llm,
@@ -102,17 +88,12 @@ export class AwarenessService implements Service {
     this._status = 'starting';
 
     try {
-      // 1. Initialize OCR engine
-      await this.ocrEngine.initialize();
-
-      // 2. Ensure capture directory exists
-      mkdirSync(this.captureDir, { recursive: true });
-
-      // 3. Start retention cleanup every 10 minutes
+      // Retention cleanup: prunes the DB and (in the future) signals the sidecar
+      // to drop expired capture files. The sidecar now owns the on-disk store.
       this.cleanupTimer = setInterval(() => this.cleanupRetention(), 10 * 60 * 1000);
 
       this._status = 'running';
-      console.log('[Awareness] Service started — listening for sidecar events (OCR + context tracking active)');
+      console.log('[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)');
     } catch (err) {
       this._status = 'error';
       console.error('[Awareness] Failed to start:', err instanceof Error ? err.message : err);
@@ -123,15 +104,12 @@ export class AwarenessService implements Service {
   async stop(): Promise<void> {
     this._status = 'stopping';
 
-    // End current session
     this.contextTracker.endCurrentSession();
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
-
-    await this.ocrEngine.shutdown();
 
     this._status = 'stopped';
     console.log('[Awareness] Service stopped');
@@ -250,47 +228,28 @@ export class AwarenessService implements Service {
   // ── Event Handlers ──
 
   private async handleScreenCapture(sidecarId: string, event: SidecarEvent): Promise<void> {
-    // Extract image buffer from binary data
-    let imageBuffer: Buffer | null = null;
-
-    if (event.binary) {
-      if (event.binary.type === 'inline' && 'data' in event.binary) {
-        imageBuffer = Buffer.from((event.binary as BinaryDataInline).data, 'base64');
-      } else if (event.binary.type === 'ref') {
-        // Binary ref: payload._binary was resolved by SidecarConnection
-        const resolved = (event.payload as Record<string, unknown>)._binary as Buffer | undefined;
-        if (resolved) {
-          imageBuffer = resolved;
-        }
-      }
-    }
-
-    if (!imageBuffer || imageBuffer.length < 1000) {
-      return;
-    }
-
     const payload = event.payload as Record<string, unknown>;
     const pixelChangePct = (payload.pixel_change_pct as number) ?? 0;
     const captureId = String(payload.capture_id ?? generateId());
+    const imagePath = String(payload.image_path ?? '');
+    const ocrText = String(payload.ocr_text ?? '');
     const windowTitle = String(payload.window_title ?? '');
     const appName = String(payload.app_name ?? '');
 
-    // Update context tracker with window info from sidecar
+    if (!imagePath) {
+      return;
+    }
+
     if (appName || windowTitle) {
       this.contextTracker.updateWindowInfo(appName, windowTitle);
     }
 
-    // Save to disk
-    const imagePath = await this.saveCapture(imageBuffer, event.timestamp);
-    const thumbnailPath = await this.generateThumbnail(imagePath);
-
-    // Run through existing pipeline
     await this.processCaptureEvent({
+      sidecarId,
       captureId,
       pixelChangePct,
       imagePath,
-      thumbnailPath: thumbnailPath ?? undefined,
-      imageBuffer,
+      ocrText,
       windowTitle,
     });
   }
@@ -315,34 +274,10 @@ export class AwarenessService implements Service {
     this.contextTracker.reportIdle(appName, durationMs);
   }
 
-  // ── Capture Storage ──
+  // ── Retention ──
 
-  private async saveCapture(imageBuffer: Buffer, timestamp: number): Promise<string> {
-    const date = new Date(timestamp);
-    const dateDir = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    const fileName = `${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(date.getSeconds()).padStart(2, '0')}.png`;
-
-    const dir = path.join(this.captureDir, dateDir);
-    mkdirSync(dir, { recursive: true });
-
-    const filePath = path.join(dir, fileName);
-    await Bun.write(filePath, imageBuffer);
-
-    return filePath;
-  }
-
-  private async generateThumbnail(fullImagePath: string): Promise<string | null> {
-    if (!sharp) return null;
-
-    const thumbPath = fullImagePath.replace(/\.png$/, '-thumb.jpg');
-    try {
-      await sharp(fullImagePath).resize(200).jpeg({ quality: 60 }).toFile(thumbPath);
-      return thumbPath;
-    } catch {
-      return null;
-    }
-  }
-
+  // The sidecar owns capture files on its own filesystem; this only prunes the
+  // brain-side DB rows. File-side cleanup will move to the sidecar in Phase 7.
   private cleanupRetention(): void {
     try {
       const now = Date.now();
@@ -356,37 +291,6 @@ export class AwarenessService implements Service {
         keyDeleted = deleteCapturesBefore(keyMomentCutoff, 'key_moment');
       } catch { /* DB may not be initialized in tests */ }
 
-      if (!existsSync(this.captureDir)) return;
-
-      const dateDirs = readdirSync(this.captureDir);
-      for (const dateDir of dateDirs) {
-        const dirPath = path.join(this.captureDir, dateDir);
-        try {
-          const stat = statSync(dirPath);
-          if (!stat.isDirectory()) continue;
-
-          const files = readdirSync(dirPath);
-          let remaining = files.length;
-
-          for (const file of files) {
-            const filePath = path.join(dirPath, file);
-            try {
-              const fileStat = statSync(filePath);
-              if (fileStat.mtimeMs < keyMomentCutoff) {
-                unlinkSync(filePath);
-                remaining--;
-              }
-            } catch { /* file already gone */ }
-          }
-
-          if (remaining === 0) {
-            try {
-              if (readdirSync(dirPath).length === 0) rmdirSync(dirPath);
-            } catch { /* ignore */ }
-          }
-        } catch { /* skip */ }
-      }
-
       if (fullDeleted > 0 || keyDeleted > 0) {
         console.log(`[Awareness] Retention cleanup: ${fullDeleted} full, ${keyDeleted} key_moment captures deleted`);
       }
@@ -398,23 +302,16 @@ export class AwarenessService implements Service {
   // ── Processing Pipeline ──
 
   private async processCaptureEvent(data: {
+    sidecarId: string;
     captureId: string;
     pixelChangePct: number;
     imagePath: string;
-    thumbnailPath?: string;
-    imageBuffer: Buffer;
+    ocrText: string;
     windowTitle?: string;
   }): Promise<void> {
     try {
-      // 1. OCR — extract text from screenshot
-      let ocrText = '';
-      if (this.ocrEngine.isReady()) {
-        const ocr = await this.ocrEngine.extractText(data.imageBuffer);
-        ocrText = ocr.text;
-      }
+      const ocrText = data.ocrText;
 
-      // 2. Context tracking — detect app changes, stuck states, errors
-      // Use window title from capture source (PowerShell/sidecar), fall back to tracker state
       const windowTitle = data.windowTitle || this.contextTracker.getLastWindowTitle();
 
       const { context, events } = this.contextTracker.processCapture(
@@ -423,15 +320,12 @@ export class AwarenessService implements Service {
         windowTitle
       );
 
-      // 3. Entity linking
       this.contextGraph.linkCaptureToEntities(context);
 
-      // 4. Store capture metadata in DB
       createCapture({
         timestamp: context.timestamp,
         sessionId: context.sessionId,
         imagePath: data.imagePath,
-        thumbnailPath: data.thumbnailPath ?? undefined,
         pixelChangePct: data.pixelChangePct,
         ocrText,
         appName: context.appName,
@@ -440,13 +334,11 @@ export class AwarenessService implements Service {
         filePath: context.filePath ?? undefined,
       });
 
-      // 4b. Promote to key_moment retention if significant events fired
       const keyMomentEventTypes = ['error_detected', 'stuck_detected', 'context_changed'];
       if (events.some(e => keyMomentEventTypes.includes(e.type))) {
         try { updateCaptureRetention(data.captureId, 'key_moment'); } catch { /* best-effort */ }
       }
 
-      // 5. Store as observation
       try {
         createObservation('screen_capture', {
           captureId: data.captureId,
@@ -456,30 +348,11 @@ export class AwarenessService implements Service {
         });
       } catch { /* observation storage is best-effort */ }
 
-      // 6. Cloud vision escalation (async, non-blocking)
+      // Cloud vision escalation: temporarily disabled until Phase 6 wires the
+      // fetch_capture RPC. After that, this block fetches the PNG bytes from
+      // the originating sidecar (data.sidecarId) using data.imagePath and runs
+      // the existing intelligence.analyze* paths.
       let cloudAnalysis: string | undefined;
-      if (this.config.cloud_vision_enabled && this.intelligence.shouldEscalateToCloud(context, events)) {
-        const base64 = data.imageBuffer.toString('base64');
-
-        const struggleEvent = events.find(e => e.type === 'struggle_detected');
-        if (struggleEvent) {
-          cloudAnalysis = await this.intelligence.analyzeStruggle(
-            base64,
-            context,
-            String(struggleEvent.data.appCategory ?? 'general'),
-            (struggleEvent.data.signals as Array<{ name: string; score: number; detail: string }>) ?? [],
-            String(struggleEvent.data.ocrPreview ?? context.ocrText.slice(0, 500))
-          );
-        } else if (context.isSignificantChange) {
-          cloudAnalysis = await this.intelligence.analyzeDelta(
-            base64,
-            context,
-            this.contextTracker.getPreviousContext()
-          );
-        } else {
-          cloudAnalysis = await this.intelligence.analyzeGeneral(base64, context);
-        }
-      }
 
       // 7. Suggestion evaluation
       const suggestion = await this.suggestionEngine.evaluate(context, events, cloudAnalysis);
