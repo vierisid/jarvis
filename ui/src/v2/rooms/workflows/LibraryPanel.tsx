@@ -62,6 +62,19 @@ export function LibraryPanel(): React.ReactElement {
               entry={entry}
               actionState={lib.actionState[entry.id] ?? "idle"}
               onInstall={async () => {
+                if (entry.estimatedSizeMb !== null && entry.estimatedSizeMb >= 100) {
+                  // Disk-footprint warning for heavyweight pieces (gmail
+                  // pulls 165MB through googleapis). Mid-weight pieces
+                  // skip the prompt; the badge in the row already surfaces
+                  // the number.
+                  if (
+                    !window.confirm(
+                      `Installing ${entry.displayName} will use about ${entry.estimatedSizeMb}MB of disk. Continue?`,
+                    )
+                  ) {
+                    return;
+                  }
+                }
                 const r = await lib.install(entry.id);
                 flash(
                   r.ok ? (r.partial ? "warn" : "ok") : "warn",
@@ -121,6 +134,11 @@ function LibraryRow({
             </Chip>
           ) : null}
           <Chip tone="neutral">{entry.licenseSpdx}</Chip>
+          {entry.estimatedSizeMb !== null ? (
+            <Chip tone="neutral" title="Approximate disk footprint after install">
+              ~{entry.estimatedSizeMb}MB
+            </Chip>
+          ) : null}
         </div>
         <p className="wf-lib__row-desc">{entry.description}</p>
         <div className="wf-lib__row-meta">

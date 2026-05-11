@@ -33,6 +33,15 @@ export interface CatalogEntry {
   sourceUrl: string;
   /** SPDX identifier for the piece's own license (deps may differ). */
   licenseSpdx: string;
+  /**
+   * Approximate on-disk size of the piece + its transitive deps after
+   * `bun install`, in megabytes. Surfaced in the Library UI so users can
+   * see the disk cost before clicking Install (gmail's googleapis dep
+   * pulls ~165MB; openai is leaner). Measured manually during vetting --
+   * the README has the procedure. Omit when unknown; the UI hides the
+   * footprint badge in that case.
+   */
+  estimatedSizeMb?: number;
 }
 
 /**
@@ -55,6 +64,8 @@ export const CATALOG: CatalogEntry[] = [
     sourceUrl:
       "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/gmail",
     licenseSpdx: "MIT",
+    // googleapis pulls a lot of transitive types + API surfaces.
+    estimatedSizeMb: 165,
   },
   {
     id: "slack",

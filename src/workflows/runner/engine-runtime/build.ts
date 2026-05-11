@@ -100,19 +100,31 @@ function buildStagingPackageJson(): string {
 }
 
 /**
- * Cache key combines the synthesized package.json (which captures dep versions)
- * with the UPSTREAM.md pin (which captures the source SHA). When either changes,
- * the bundle is rebuilt.
+ * Vendored engine source files we patch directly in this fork. Their content
+ * MUST flow into the bundle hash, otherwise a patch (e.g., the piece-loader
+ * shared-`node_modules` discovery branch) would be served stale from cached
+ * bundles. Listed explicitly -- relative to VENDOR_PACKAGES -- so adding a
+ * new patch is a one-line cache-invalidation registration.
+ */
+const PATCHED_VENDOR_SOURCES = [
+  "server/engine/src/lib/helper/piece-loader.ts",
+] as const;
+
+/**
+ * Cache key combines the synthesized package.json (which captures dep versions),
+ * the UPSTREAM.md pin (which captures the source SHA), and the content of any
+ * vendored source files we've patched (so a patch invalidates the cache even
+ * when deps + UPSTREAM.md are unchanged).
  */
 function bundleHash(): string {
   const pkg = buildStagingPackageJson();
   const upstream = readFileSync(UPSTREAM_DOC, "utf8");
-  return createHash("sha256")
-    .update(pkg)
-    .update("\0")
-    .update(upstream)
-    .digest("hex")
-    .slice(0, 16);
+  const hasher = createHash("sha256").update(pkg).update("\0").update(upstream);
+  for (const rel of PATCHED_VENDOR_SOURCES) {
+    const content = readFileSync(resolve(VENDOR_PACKAGES, rel), "utf8");
+    hasher.update("\0").update(rel).update("\0").update(content);
+  }
+  return hasher.digest("hex").slice(0, 16);
 }
 
 async function ensureStagingInstalled(): Promise<void> {

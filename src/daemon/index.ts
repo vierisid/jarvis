@@ -51,6 +51,7 @@ import {
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
 import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
+import { apId } from "../workflows/db/ids.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 
@@ -670,8 +671,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               workflowPieceCatalog.remove(event.piece.npmPackage);
               return;
             }
+            // Unique runId per acquire so any future parallel installs
+            // (today serialized by the API's library mutex) don't collide on
+            // the engine's runId-keyed state.
             const handle = await workflowEngineRuntime.acquire({
-              runId: "metadata-extract-runtime-install",
+              runId: `metadata-extract-runtime-install-${apId()}`,
               projectId: DEFAULT_IDS.project,
             });
             try {

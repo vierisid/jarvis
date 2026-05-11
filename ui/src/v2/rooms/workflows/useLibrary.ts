@@ -19,6 +19,8 @@ export interface LibraryEntry {
   vettedAt: string;
   sourceUrl: string;
   licenseSpdx: string;
+  /** Disk footprint after install, in MB. Null when not measured. */
+  estimatedSizeMb: number | null;
   installed: {
     resolvedVersion: string;
     installedAt: number;

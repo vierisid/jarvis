@@ -721,4 +721,81 @@ describe("workflow API: pieces library", () => {
     expect(status).toBe(200);
     expect(body.alreadyAbsent).toBe(true);
   });
+
+  test("DELETE works for a piece installed but no longer in the catalog (security-yank scenario)", async () => {
+    // Set up a manifest with an id that doesn't exist in CATALOG. Simulates
+    // the case where we yanked the entry from the catalog (e.g., advisory)
+    // but the user already had it installed; they must still be able to
+    // uninstall through the UI.
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tempDir = mkdtempSync(join(tmpdir(), "jarvis-lib-delete-"));
+    const prev = process.env.JARVIS_PIECES_DIR;
+    process.env.JARVIS_PIECES_DIR = tempDir;
+    try {
+      const { writeManifest } = await import("../pieces-library/installer");
+      await writeManifest(
+        {
+          version: 1,
+          pieces: [
+            {
+              id: "yanked-piece",
+              npmPackage: "@activepieces/piece-yanked",
+              versionRange: "^0.1.0",
+              resolvedVersion: "0.1.0",
+              installedAt: Date.now(),
+            },
+          ],
+        },
+        tempDir,
+      );
+
+      const r = createWorkflowRoutes();
+      const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
+      const { status, body } = await callJson(
+        del,
+        reqWithParams(
+          "DELETE",
+          "http://x/api/workflows/pieces/library/yanked-piece",
+          { id: "yanked-piece" },
+        ),
+      );
+      // Must NOT return 404 just because the catalog forgot the piece --
+      // that would strand the user.
+      expect(status).toBe(200);
+      expect(body.uninstalled).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.JARVIS_PIECES_DIR;
+      else process.env.JARVIS_PIECES_DIR = prev;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("DELETE returns 404 only when neither catalog nor manifest knows the id", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tempDir = mkdtempSync(join(tmpdir(), "jarvis-lib-delete-404-"));
+    const prev = process.env.JARVIS_PIECES_DIR;
+    process.env.JARVIS_PIECES_DIR = tempDir;
+    try {
+      const r = createWorkflowRoutes();
+      const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
+      const { status, body } = await callJson(
+        del,
+        reqWithParams(
+          "DELETE",
+          "http://x/api/workflows/pieces/library/totally-fake",
+          { id: "totally-fake" },
+        ),
+      );
+      expect(status).toBe(404);
+      expect(body.error).toMatch(/unknown piece id/);
+    } finally {
+      if (prev === undefined) delete process.env.JARVIS_PIECES_DIR;
+      else process.env.JARVIS_PIECES_DIR = prev;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

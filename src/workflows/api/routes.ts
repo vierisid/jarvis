@@ -238,6 +238,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               vettedAt: entry.vettedAt,
               sourceUrl: entry.sourceUrl,
               licenseSpdx: entry.licenseSpdx,
+              estimatedSizeMb: entry.estimatedSizeMb ?? null,
               installed: installed
                 ? {
                     resolvedVersion: installed.resolvedVersion,
@@ -287,13 +288,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       DELETE: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const entry = findCatalogEntry(id);
-          if (!entry) return err(`unknown piece id "${id}"`, 404);
+          // Check the manifest BEFORE the catalog. A piece can legitimately
+          // be installed but not in the catalog -- we yank entries from the
+          // catalog when security advisories drop, and users with the piece
+          // already installed need to be able to uninstall. Failing the
+          // request because the catalog forgot the piece would strand them.
           const manifest = await readManifest();
           const target = manifest.pieces.find((p) => p.id === id);
           if (!target) {
-            // Already uninstalled; idempotent. Return 200 not 404 so the UI
-            // can race uninstall-then-confirm without surfacing an error.
+            // Neither installed nor (necessarily) in the catalog. Return a
+            // 404 only when both are absent -- a soft "nothing to do" 200
+            // for an idempotent uninstall of something that was never
+            // installed would mask user typos.
+            if (!findCatalogEntry(id)) {
+              return err(`unknown piece id "${id}"`, 404);
+            }
+            // In-catalog but not installed: idempotent no-op.
             return ok({ uninstalled: true, alreadyAbsent: true });
           }
           await withLibraryLock(() => uninstallPiece(id));

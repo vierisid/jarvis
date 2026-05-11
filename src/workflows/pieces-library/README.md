@@ -142,26 +142,42 @@ upstream patch fixes between Jarvis releases.
    find node_modules -name "isolated-vm" 2>/dev/null   # should print nothing
    ```
 
-5. **Engine end-to-end** (gated):
+5. **Gated install integration test**:
 
    ```sh
-   JARVIS_TEST_PIECES_LIBRARY=<piece-id> bun test src/workflows/pieces-library
+   JARVIS_TEST_PIECES_LIBRARY=1 bun test src/workflows/pieces-library/integration.test.ts
    ```
 
-   Spins up the engine with this piece installed in a temp pieces dir,
-   runs `EXTRACT_PIECE_METADATA`, asserts the catalog returns valid
-   metadata (actions + triggers + props parse).
+   Runs a real `bun install` of the gmail catalog entry into a temp pieces
+   dir, then `require()`s the published bundle and asserts its exported
+   piece object has the expected shape (`name`, `actions`, `triggers`).
+   Network-bound -- skipped by default. Run before bumping `vettedVersion`
+   for the gmail entry (or any other entry you add to the integration
+   test's allowlist).
+
+   This test stops at the bundle-loads-via-require boundary. Verifying
+   the *engine subprocess* can extract metadata for an npm-installed
+   piece is a future test that would need to spin up the full engine
+   bootstrap; today's coverage is the regular engine-end-to-end suite
+   plus the manual spike described in step 2.
 
 6. **Add the catalog entry.** Set `vettedAt` to today's ISO date,
    `vettedVersion` to the exact version step 3 produced, `versionRange` to
    the caret/tilde range you want users to install.
 
-7. **Record what you tested.** In the PR description, paste:
+7. **Measure disk footprint** (optional but recommended). After step 2's
+   `bun add`, run `du -sm node_modules` and round to the nearest 5MB.
+   Set `estimatedSizeMb` on the catalog entry. The Library UI shows this
+   to users before they click Install -- googleapis-heavy pieces (165MB+)
+   deserve the heads-up. Omitting the field hides the badge; not wrong,
+   just less helpful.
+
+8. **Record what you tested.** In the PR description, paste:
    - The Bun version (`bun --version`)
    - The resolved piece version (`bun pm ls | grep <name>`)
    - The first 5-10 lines of the EXTRACT_PIECE_METADATA output
 
-8. **Update `BRANCH_SUMMARY.md`** if relevant and the project changelog.
+9. **Update `BRANCH_SUMMARY.md`** if relevant and the project changelog.
 
 ## Updating versions
 

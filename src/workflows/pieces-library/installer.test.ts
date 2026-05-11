@@ -180,6 +180,25 @@ describe("installPiece", () => {
     expect(second.piece.resolvedVersion).toBe("0.12.5");
   });
 
+  test("reinstall preserves the original installedAt timestamp", async () => {
+    // Simulates a user who installed gmail months ago, then re-runs install
+    // to pick up a patch. The "first installed" date is more useful for
+    // diagnostics than "last touched" (which is captured by the on-disk
+    // node_modules mtime if anyone needs it).
+    const first = await installPiece("gmail", {
+      base,
+      runBunInstall: async () => fakeInstall("@activepieces/piece-gmail", "0.12.3"),
+    });
+    const originalInstalledAt = first.piece.installedAt;
+    // Move the clock forward enough that Date.now() will definitely differ.
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await installPiece("gmail", {
+      base,
+      runBunInstall: async () => fakeInstall("@activepieces/piece-gmail", "0.12.5"),
+    });
+    expect(second.piece.installedAt).toBe(originalInstalledAt);
+  });
+
   test("throws when bun install completes but the package isn't materialized", async () => {
     await expect(
       installPiece("gmail", {

@@ -190,7 +190,11 @@ export async function installPiece(
     npmPackage: entry.npmPackage,
     versionRange: entry.versionRange,
     resolvedVersion: existing?.resolvedVersion ?? "",
-    installedAt: Date.now(),
+    // Preserve the original install timestamp on reinstall / update --
+    // "installedAt" is the first-install date, useful for diagnostics
+    // ("when did the user first opt into this piece?"). For brand-new
+    // installs we set it to now.
+    installedAt: existing?.installedAt ?? Date.now(),
   };
   const nextManifest: InstalledManifest = {
     version: 1,
