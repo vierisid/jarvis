@@ -43,11 +43,11 @@ export interface JarvisNotifyRouteDeps {
 export function createJarvisNotifyRoute(
   deps: JarvisNotifyRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.notify) {
       return err("jarvis notify not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.message !== "string" || raw.message.length === 0) {
       return err("message must be a non-empty string", 400);
@@ -78,7 +78,7 @@ export function createJarvisNotifyRoute(
     }
     const reply = await deps.notify(
       { message: raw.message, channels, priority },
-      { runId: req.claims.runId, projectId: req.claims.projectId },
+      { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
     );
     return json(reply);
   };

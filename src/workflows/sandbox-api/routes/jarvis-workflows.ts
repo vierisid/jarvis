@@ -45,11 +45,11 @@ export interface JarvisWorkflowsRouteDeps {
 export function createJarvisWorkflowsStartRoute(
   deps: JarvisWorkflowsRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.workflowsStart) {
       return err("jarvis workflows.start not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     const out: WorkflowsStartRequest = {};
     if (raw.flowId !== undefined) {
@@ -74,8 +74,8 @@ export function createJarvisWorkflowsStartRoute(
       out.payload = raw.payload as Record<string, unknown>;
     }
     const reply = await deps.workflowsStart(out, {
-      runId: req.claims.runId,
-      projectId: req.claims.projectId,
+      runId: ctx.claims.runId,
+      projectId: ctx.claims.projectId,
     });
     return json(reply);
   };

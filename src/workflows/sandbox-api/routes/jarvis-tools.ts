@@ -32,11 +32,11 @@ export interface JarvisToolsRouteDeps {
 export function createJarvisToolsInvokeRoute(
   deps: JarvisToolsRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.toolsInvoke) {
       return err("jarvis tools.invoke not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.toolName !== "string" || raw.toolName.length === 0) {
       return err("toolName must be a non-empty string", 400);
@@ -54,7 +54,7 @@ export function createJarvisToolsInvokeRoute(
     }
     const reply = await deps.toolsInvoke(
       { toolName: raw.toolName, params },
-      { runId: req.claims.runId, projectId: req.claims.projectId },
+      { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
     );
     return json(reply);
   };

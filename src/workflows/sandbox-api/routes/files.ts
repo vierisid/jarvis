@@ -35,12 +35,12 @@ function safeBasename(name: string): string {
   return b || "file";
 }
 
-export const stepFilesUploadRoute: RouteHandler = async (req: RouteContext) => {
-  const contentType = req.headers.get("content-type") ?? "";
+export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
+  const contentType = ctx.req.headers.get("content-type") ?? "";
   if (!contentType.startsWith("multipart/form-data")) {
     return err("expected multipart/form-data body", 400);
   }
-  const form = await req.formData();
+  const form = await ctx.req.formData();
   const stepName = String(form.get("stepName") ?? "");
   const flowId = String(form.get("flowId") ?? "");
   const fileName = String(form.get("fileName") ?? form.get("file")?.toString() ?? "file");
@@ -51,7 +51,7 @@ export const stepFilesUploadRoute: RouteHandler = async (req: RouteContext) => {
   const buf = Buffer.from(await file.arrayBuffer());
 
   const fileRow = createWorkflowFile({
-    projectId: req.claims.projectId,
+    projectId: ctx.claims.projectId,
     flowId,
     type: "FLOW_STEP_FILE",
     fileName,
@@ -73,12 +73,12 @@ export const stepFilesUploadRoute: RouteHandler = async (req: RouteContext) => {
   });
 };
 
-export const stepFilesDownloadRoute: RouteHandler = async (req: RouteContext) => {
-  const id = req.params?.id;
+export const stepFilesDownloadRoute: RouteHandler = async (ctx: RouteContext) => {
+  const id = ctx.params.id;
   if (!id) return err("missing file id", 400);
   const row = getWorkflowFile(id);
   if (!row) return err("file not found", 404);
-  if (row.projectId !== req.claims.projectId) return err("forbidden", 403);
+  if (row.projectId !== ctx.claims.projectId) return err("forbidden", 403);
   return new Response(new Blob([new Uint8Array(row.data)]), {
     status: 200,
     headers: {

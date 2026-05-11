@@ -39,11 +39,11 @@ export interface JarvisAgentRouteDeps {
 export function createJarvisAgentDelegateRoute(
   deps: JarvisAgentRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.agentDelegate) {
       return err("jarvis agent.delegate not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.goal !== "string" || raw.goal.length === 0) {
       return err("goal must be a non-empty string", 400);
@@ -68,8 +68,8 @@ export function createJarvisAgentDelegateRoute(
       out.maxIterations = n;
     }
     const reply = await deps.agentDelegate(out, {
-      runId: req.claims.runId,
-      projectId: req.claims.projectId,
+      runId: ctx.claims.runId,
+      projectId: ctx.claims.projectId,
     });
     return json(reply);
   };

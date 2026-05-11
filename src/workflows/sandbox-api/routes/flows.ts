@@ -18,14 +18,14 @@ import { listFlows, parseFlowMetadata } from "../../db/repos/flow";
 import { getFlowVersion } from "../../db/repos/flow-version";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
-export const populatedFlowsRoute: RouteHandler = async (req: RouteContext) => {
-  const url = new URL(req.url);
+export const populatedFlowsRoute: RouteHandler = async (ctx: RouteContext) => {
+  const url = new URL(ctx.req.url);
   const externalIdsRaw = url.searchParams.get("externalIds");
   const externalIds = externalIdsRaw
     ? externalIdsRaw.split(",").map((s) => s.trim()).filter(Boolean)
     : null;
 
-  const projectId = req.claims.projectId;
+  const projectId = ctx.claims.projectId;
   const allFlows = listFlows(projectId);
   const filtered = externalIds
     ? allFlows.filter((f) => externalIds.includes(f.external_id))

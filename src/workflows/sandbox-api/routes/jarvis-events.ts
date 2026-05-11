@@ -50,11 +50,11 @@ export interface JarvisEventsRouteDeps {
 export function createJarvisEventsPollRoute(
   deps: JarvisEventsRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.eventsPoll) {
       return err("jarvis events.poll not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.eventType !== "string" || raw.eventType.length === 0) {
       return err("eventType must be a non-empty string", 400);
@@ -76,8 +76,8 @@ export function createJarvisEventsPollRoute(
       out.filter = raw.filter as Record<string, unknown>;
     }
     const reply = await deps.eventsPoll(out, {
-      runId: req.claims.runId,
-      projectId: req.claims.projectId,
+      runId: ctx.claims.runId,
+      projectId: ctx.claims.projectId,
     });
     return json(reply);
   };

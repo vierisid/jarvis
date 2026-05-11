@@ -1,18 +1,24 @@
 /**
  * Shared helpers for SandboxApi route handlers.
  *
- * Every route is invoked with an `AuthenticatedRequest` (Request extended with
- * `claims` and `params`); the server's dispatcher attaches both before calling.
+ * Every route is invoked with a `RouteContext` -- a plain object carrying
+ * the underlying `Request`, the verified engine-token `claims`, and any
+ * URL `params` matched from the route pattern. The dispatcher constructs
+ * this object per request; handlers never mutate the Request itself.
  */
 
 import type { EngineTokenClaims } from "../types";
 
-export interface RouteContext extends Request {
+export interface RouteContext {
+  /** The underlying Bun `Request`. Read body / headers / url from here. */
+  req: Request;
+  /** Verified claims from the engine token. */
   claims: EngineTokenClaims;
-  params?: Record<string, string>;
+  /** URL params extracted from the route pattern (e.g. `:runId`). */
+  params: Record<string, string>;
 }
 
-export type RouteHandler = (req: RouteContext) => Response | Promise<Response>;
+export type RouteHandler = (ctx: RouteContext) => Response | Promise<Response>;
 
 export const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -32,11 +38,11 @@ export const err = (message: string, status = 400): Response =>
  * absent on a non-object body.
  */
 export async function parseJsonObject(
-  req: RouteContext,
+  ctx: RouteContext,
 ): Promise<Record<string, unknown> | Response> {
   let raw: unknown;
   try {
-    raw = await req.json();
+    raw = await ctx.req.json();
   } catch {
     return err("invalid JSON body", 400);
   }

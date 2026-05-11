@@ -42,13 +42,13 @@ interface ConnectionResponseShape {
 }
 
 export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler {
-  return async (req: RouteContext) => {
-    const url = new URL(req.url);
-    const externalIdRaw = req.params?.externalId;
+  return async (ctx: RouteContext) => {
+    const url = new URL(ctx.req.url);
+    const externalIdRaw = ctx.params.externalId;
     if (!externalIdRaw) return err("missing externalId path param", 400);
     const externalId = externalIdRaw;
     const queryProject = url.searchParams.get("projectId") ?? undefined;
-    const projectId = queryProject ?? req.claims.projectId;
+    const projectId = queryProject ?? ctx.claims.projectId;
 
     // The engine doesn't tell us which piece is asking, but our resolver only
     // needs the pieceName for app_connection lookups. For jarvis:* external
@@ -73,7 +73,7 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       type: resolved.value["type"] ?? resolved.type,
     };
 
-    const claims: EngineTokenClaims = req.claims;
+    const claims: EngineTokenClaims = ctx.claims;
     const now = new Date().toISOString();
     const response: ConnectionResponseShape = {
       id: `engine_${claims.runId}_${externalId}`,

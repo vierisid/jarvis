@@ -14,11 +14,11 @@ import { resolve } from "node:path";
 import { workflowLogsBase } from "../config";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
-export const logsUploadRoute: RouteHandler = async (req: RouteContext) => {
-  const runId = req.params?.runId;
+export const logsUploadRoute: RouteHandler = async (ctx: RouteContext) => {
+  const runId = ctx.params.runId;
   if (!runId) return err("missing runId", 400);
-  if (runId !== req.claims.runId) return err("runId does not match this sandbox", 403);
-  const buf = Buffer.from(await req.arrayBuffer());
+  if (runId !== ctx.claims.runId) return err("runId does not match this sandbox", 403);
+  const buf = Buffer.from(await ctx.req.arrayBuffer());
   const dir = workflowLogsBase();
   mkdirSync(dir, { recursive: true });
   writeFileSync(resolve(dir, `${runId}.bin`), buf);

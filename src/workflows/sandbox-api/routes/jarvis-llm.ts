@@ -38,11 +38,11 @@ export interface JarvisLlmRouteDeps {
 }
 
 export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.llmChat) {
       return err("jarvis llm chat not configured", 503);
     }
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.prompt !== "string" || raw.prompt.length === 0) {
       return err("prompt must be a non-empty string", 400);
@@ -51,8 +51,8 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     if (typeof raw.system === "string") body.system = raw.system;
     if (raw.parseJson === true) body.parseJson = true;
     const reply = await deps.llmChat(body, {
-      runId: req.claims.runId,
-      projectId: req.claims.projectId,
+      runId: ctx.claims.runId,
+      projectId: ctx.claims.projectId,
     });
     return json(reply);
   };

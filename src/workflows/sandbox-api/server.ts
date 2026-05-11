@@ -146,8 +146,6 @@ export interface SandboxApiOptions {
   services: SandboxApiServices;
 }
 
-export type AuthenticatedRequest = RouteContext;
-
 interface RouteEntry {
   /** Path with optional `:param` segments. Matched in order against the request URL. */
   path: string;
@@ -216,8 +214,8 @@ export class SandboxApi {
         path: "/v1/worker/project",
         method: "GET",
         // Single-tenant: every request resolves to the daemon's default project.
-        handler: async (req) =>
-          json({ id: DEFAULT_IDS.project, externalId: req.claims.projectId }),
+        handler: async (ctx) =>
+          json({ id: DEFAULT_IDS.project, externalId: ctx.claims.projectId }),
       },
       {
         path: "/v1/worker/app-connections/:externalId",
@@ -389,17 +387,16 @@ export class SandboxApi {
       return err("sandbox terminated", 401);
     }
 
-    const authedReq = req as AuthenticatedRequest;
-    authedReq.claims = claims;
-
     for (const route of this.routes) {
       if (route.method !== req.method) continue;
       const params = matchPath(route.path, pathname);
       if (params === null) continue;
-      // Stash matched params on the request via a property -- callers cast.
-      Object.assign(authedReq, { params });
+      // Build a fresh per-request context. The Request itself is never
+      // mutated -- callers read body/headers/url from `ctx.req`, with
+      // verified claims and matched params alongside.
+      const ctx: RouteContext = { req, claims, params };
       try {
-        return await route.handler(authedReq);
+        return await route.handler(ctx);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         return err(`internal error: ${message}`, 500);

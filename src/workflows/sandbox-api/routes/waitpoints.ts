@@ -39,10 +39,10 @@ export interface WaitpointRouteDeps {
 }
 
 export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     let body: CreateWaitpointBody;
     try {
-      body = (await req.json()) as CreateWaitpointBody;
+      body = (await ctx.req.json()) as CreateWaitpointBody;
     } catch {
       return err("invalid JSON body", 400);
     }
@@ -51,12 +51,12 @@ export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
     if (!body.type || !ALLOWED_TYPES.has(body.type as WaitpointType)) {
       return err(`unsupported waitpoint type ${body.type}`, 400);
     }
-    if (body.flowRunId !== req.claims.runId) {
+    if (body.flowRunId !== ctx.claims.runId) {
       return err("flowRunId does not match this sandbox", 403);
     }
     const wp = createWaitpoint({
       flowRunId: body.flowRunId,
-      projectId: body.projectId ?? req.claims.projectId,
+      projectId: body.projectId ?? ctx.claims.projectId,
       stepName: body.stepName,
       type: body.type as WaitpointType,
       version: body.version,

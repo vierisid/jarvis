@@ -100,9 +100,9 @@ function readOptionalNonNegInt(
 export function createJarvisContextVaultSearchRoute(
   deps: JarvisContextRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     const out: VaultSearchRequest = {};
     if (raw.query !== undefined) {
@@ -128,9 +128,9 @@ export function createJarvisContextVaultSearchRoute(
 export function createJarvisContextVaultGetEntityRoute(
   deps: JarvisContextRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     if (typeof raw.id !== "string" || raw.id.length === 0) {
       return err("id is required", 400);
@@ -142,9 +142,9 @@ export function createJarvisContextVaultGetEntityRoute(
 export function createJarvisContextAwarenessRecentRoute(
   deps: JarvisContextRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     const out: AwarenessRecentRequest = {};
     const limit = readOptionalNonNegInt(raw, "limit");
@@ -160,9 +160,9 @@ export function createJarvisContextAwarenessRecentRoute(
 export function createJarvisContextCommitmentsListRoute(
   deps: JarvisContextRouteDeps,
 ): RouteHandler {
-  return async (req: RouteContext) => {
+  return async (ctx: RouteContext) => {
     if (!deps.contextProvider) return err("jarvis context not configured", 503);
-    const raw = await parseJsonObject(req);
+    const raw = await parseJsonObject(ctx);
     if (raw instanceof Response) return raw;
     const out: CommitmentsListRequest = {};
     if (raw.status !== undefined) {
