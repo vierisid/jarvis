@@ -156,6 +156,17 @@ export interface CreateWorkflowRoutesOptions {
     kind: "installed" | "uninstalled";
     piece: InstalledPiece;
   }) => Promise<void>;
+  /**
+   * Optional read-side accessor for `WorkflowEventBuffer.dropped()`. When
+   * provided, the triggers list endpoint reports the buffer's overflow
+   * counter so operators can see when on-event polling triggers might have
+   * missed events past the 10k window.
+   */
+  getEventBufferDropped?: () => {
+    count: number;
+    lastDroppedAt: number;
+    lastDroppedHeadId: number;
+  };
 }
 
 /**
@@ -345,6 +356,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           if (!opts.triggerManager) return ok([]);
           return ok(opts.triggerManager.list());
+        }),
+    },
+
+    // Event-buffer overflow signal for the `jarvis-trigger:on_event`
+    // polling path. Returns the buffer's running drop counter so operators
+    // can see when events may have been evicted past the capacity/age
+    // window between two polls. `count > 0` is a warning condition; the
+    // dashboard renders a banner. Returns nulls when the daemon hasn't
+    // wired the read accessor.
+    "/api/workflows/events/buffer-stats": {
+      GET: () =>
+        trapErrors(() => {
+          if (!opts.getEventBufferDropped) {
+            return ok({ count: 0, lastDroppedAt: 0, lastDroppedHeadId: 0 });
+          }
+          return ok(opts.getEventBufferDropped());
         }),
     },
 

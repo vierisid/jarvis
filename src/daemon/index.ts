@@ -697,6 +697,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
+        getEventBufferDropped: () => workflowEventBuffer.dropped(),
       }),
     };
     wsService.setApiRoutes(apiRoutes);
