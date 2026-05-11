@@ -252,6 +252,154 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
   );
 
   test.skipIf(skipE2eTests)(
+    "LOOP+RESUME: iteration state survives the pause/resume round-trip",
+    async () => {
+      // flow shape:
+      //   trigger (manual)
+      //     -> loop_a (LOOP over items=[42])
+      //          body: [step_pause, step_echo (uses {{loop_a.item}})]
+      //     -> step_final (after loop)
+      //
+      // Single-item loop on purpose: the wait_for_signal action pauses on
+      // every BEGIN execution. With multi-item loops, each iteration would
+      // pause again -- testing that requires multiple resume cycles, which
+      // is out of scope here. One iteration is enough to verify the LOOP's
+      // iteration-state shape round-trips through the zstd backup.
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const trigger: FlowTriggerNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "Manual",
+        settings: {
+          pieceName: PIECE_TEST_NAME,
+          pieceVersion: PIECE_VERSION,
+          triggerName: "manual",
+          input: { payload: {} },
+        },
+        nextAction: {
+          name: "loop_a",
+          type: "LOOP_ON_ITEMS",
+          displayName: "Loop",
+          settings: { items: "{{[42]}}" },
+          firstLoopAction: {
+            name: "step_pause",
+            type: "PIECE",
+            displayName: "Pause inside loop",
+            settings: {
+              pieceName: PIECE_TEST_NAME,
+              pieceVersion: PIECE_VERSION,
+              actionName: "wait_for_signal",
+              input: {},
+            },
+            nextAction: {
+              name: "step_echo",
+              type: "PIECE",
+              displayName: "Echo loop item",
+              settings: {
+                pieceName: PIECE_TEST_NAME,
+                pieceVersion: PIECE_VERSION,
+                actionName: "echo",
+                // {{loop_a.item}} resolves to the current iteration's item.
+                input: { value: { item: "{{loop_a.item}}" } },
+              },
+            },
+          },
+          nextAction: {
+            name: "step_final",
+            type: "PIECE",
+            displayName: "After loop",
+            settings: {
+              pieceName: PIECE_TEST_NAME,
+              pieceVersion: PIECE_VERSION,
+              actionName: "echo",
+              input: { value: { done: true } },
+            },
+          },
+        },
+      };
+      const v = createDraftVersion({ flowId: flow.id, displayName: "loop-resume", trigger });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+
+      // ── BEGIN: walk until pause inside iter 0 ──
+      const h1 = await runtime!.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      let stderrBuf = "";
+      h1.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
+      try {
+        const paused = await h1.executeFlow({
+          flowVersion: getFlowVersion(v.id)!,
+          streamStepProgress: "WEBSOCKET",
+          runEnvironment: "TESTING",
+        });
+        if (paused.status !== "PAUSED") {
+          console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
+        }
+        expect(paused.status).toBe("PAUSED");
+      } finally {
+        await h1.release();
+      }
+
+      // Verify the loaded executionState has LOOP iteration shape preserved.
+      const { loadExecutionStateFromLog } = await import("./execution-state-loader");
+      const restored = await loadExecutionStateFromLog(run.id);
+      expect(restored).not.toBeNull();
+      // The LOOP step's output carries `iterations: Array<Record<stepName, StepOutput>>`
+      // The pause happened on iteration 0; iteration 0's `step_pause` should be PAUSED.
+      const loopStep = restored!.steps["loop_a"] as
+        | { output?: { iterations?: Array<Record<string, { status?: string }>> } }
+        | undefined;
+      expect(loopStep?.output?.iterations).toBeDefined();
+      expect(loopStep!.output!.iterations!.length).toBeGreaterThan(0);
+      const iter0 = loopStep!.output!.iterations![0]!;
+      expect(iter0.step_pause?.status).toBe("PAUSED");
+
+      // ── RESUME via direct executeFlow with the restored state ──
+      const h2 = await runtime!.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      let stderrBuf2 = "";
+      h2.stderr?.on("data", (d) => { stderrBuf2 += d.toString(); });
+      try {
+        const final = await h2.executeFlow({
+          flowVersion: getFlowVersion(v.id)!,
+          executionType: "RESUME",
+          resumePayload: { queryParams: {} },
+          executionState: restored!,
+          streamStepProgress: "WEBSOCKET",
+          runEnvironment: "TESTING",
+        });
+        if (final.status !== "SUCCEEDED") {
+          console.error(`[engine stderr]\n${stderrBuf2.slice(0, 4000)}`);
+        }
+        expect(final.status).toBe("SUCCEEDED");
+      } finally {
+        await h2.release();
+      }
+
+      // ── Assertions: iteration completed, step_final ran past the loop ──
+      const persisted = getFlowRun(run.id);
+      expect(persisted?.status).toBe("SUCCEEDED");
+      // step_final lives at the top level (outside the loop). The flat
+      // flow_run.steps captures it.
+      const steps = (persisted?.steps ?? {}) as Record<string, { output?: unknown }>;
+      const finalEnvelope = steps["step_final"] as
+        | { output?: { output?: { echo?: { done?: boolean } } } }
+        | undefined;
+      expect(finalEnvelope?.output?.output?.echo?.done).toBe(true);
+    },
+    90_000,
+  );
+
+  test.skipIf(skipE2eTests)(
     "RESUME via EngineFlowExecutor: restoreExecutionState reads the backup itself",
     async () => {
       // The first test calls handle.executeFlow directly with an explicit
