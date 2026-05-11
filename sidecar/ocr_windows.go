@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -29,22 +31,35 @@ func platformOCR(imagePath string) (OCRResult, error) {
 	}
 	defer os.Remove(scriptFile)
 
-	out, err := exec.Command(
+	cmd := exec.Command(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-ExecutionPolicy", "Bypass",
 		"-File", scriptFile,
 		"-Path", imagePath,
-	).Output()
-	if err != nil {
-		return OCRResult{}, fmt.Errorf("powershell ocr: %w", err)
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return OCRResult{}, fmt.Errorf("powershell ocr: %s", msg)
 	}
 
 	var result struct {
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return OCRResult{}, fmt.Errorf("decode ocr output: %w", err)
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		// Surface stderr too — strict-mode failures may print there even on exit 0.
+		details := strings.TrimSpace(stderr.String())
+		if details != "" {
+			return OCRResult{}, fmt.Errorf("decode ocr output (%s): %w", details, err)
+		}
+		return OCRResult{}, fmt.Errorf("decode ocr output: %w (raw: %q)", err, stdout.String())
 	}
 
 	return OCRResult{
