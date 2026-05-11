@@ -12,6 +12,7 @@
 import { createPiece, PieceAuth } from "@activepieces/pieces-framework";
 import { manualTrigger } from "./lib/triggers/manual";
 import { echoAction } from "./lib/actions/echo";
+import { waitForSignalAction } from "./lib/actions/wait-for-signal";
 
 export const jarvisTestPiece = createPiece({
   displayName: "Jarvis Test",
@@ -20,6 +21,6 @@ export const jarvisTestPiece = createPiece({
   minimumSupportedRelease: "0.0.0",
   logoUrl: "",
   authors: ["jarvis"],
-  actions: [echoAction],
+  actions: [echoAction, waitForSignalAction],
   triggers: [manualTrigger],
 });
