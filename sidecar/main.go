@@ -13,6 +13,7 @@ import (
 func main() {
 	token := flag.String("token", "", "JWT enrollment token from the brain")
 	help := flag.Bool("help", false, "Show help")
+	testMode := flag.Bool("test", false, "Run built-in platform tests (requires build with -tags sidecartest)")
 	flag.Parse()
 
 	if *help {
@@ -21,8 +22,13 @@ func main() {
 Usage:
   jarvis-sidecar --token <jwt>    Enroll and start (saves token to config)
   jarvis-sidecar                  Start using saved token
+  jarvis-sidecar --test <cmd>     Run a built-in platform test (test build only)
   jarvis-sidecar --help           Show this help`)
 		os.Exit(0)
+	}
+
+	if *testMode {
+		os.Exit(runTests(flag.Args()))
 	}
 
 	cfg, err := LoadConfig()

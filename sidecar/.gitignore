@@ -2,6 +2,8 @@
 dist/
 /jarvis-sidecar
 /jarvis-sidecar.exe
+/jarvis-sidecar-test
+/jarvis-sidecar-test.exe
 /sidecar
 
 # npm platform package binaries (built by make npm-pack)

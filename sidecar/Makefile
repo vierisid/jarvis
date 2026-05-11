@@ -13,12 +13,32 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack build-ocr-helper
+.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test
 
 all: test build
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_NAME) .
+
+# Build a sidecar with platform-test capabilities enabled. The `--test` flag on
+# this binary runs checks that CI cannot run (Vision on macOS, WinRT on
+# Windows, real screen capture). Ship to the target machine and invoke:
+#   ./$(BIN_NAME)-test --test help
+build-test:
+	go build -tags sidecartest -ldflags "$(LDFLAGS)" -o $(BIN_NAME)-test .
+
+# Cross-compile the test-enabled binary for every platform we ship. Useful
+# when the host doing the build is not the host doing the platform validation.
+dist-test:
+	@for platform in $(PLATFORMS); do \
+		os=$${platform%%/*}; \
+		arch=$${platform##*/}; \
+		ext=""; \
+		[ "$$os" = "windows" ] && ext=".exe"; \
+		echo "Building $$os/$$arch test-enabled..."; \
+		GOOS=$$os GOARCH=$$arch go build -tags sidecartest -ldflags "$(LDFLAGS)" \
+			-o "dist/$${os}-$${arch}/$(BIN_NAME)-test$${ext}" . || exit 1; \
+	done
 
 # Build the macOS Vision OCR helper. Requires `swiftc` (Xcode CLT). Must be
 # run on a Mac; cross-compiling Swift from other hosts is not supported.
@@ -54,7 +74,7 @@ vet:
 	go vet ./...
 
 clean:
-	rm -f $(BIN_NAME) $(BIN_NAME).exe
+	rm -f $(BIN_NAME) $(BIN_NAME).exe $(BIN_NAME)-test $(BIN_NAME)-test.exe
 	rm -rf dist
 	rm -f tester/bin/tester_*
 	rm -f helpers/ocr-helper
