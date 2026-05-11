@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -24,16 +26,28 @@ func helperPath() string {
 func platformOCR(imagePath string) (OCRResult, error) {
 	start := time.Now()
 
-	out, err := exec.Command(helperPath(), imagePath).Output()
-	if err != nil {
-		return OCRResult{}, fmt.Errorf("ocr-helper: %w", err)
+	cmd := exec.Command(helperPath(), imagePath)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return OCRResult{}, fmt.Errorf("ocr-helper: %s", msg)
 	}
 
 	var result struct {
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return OCRResult{}, fmt.Errorf("decode ocr-helper output: %w", err)
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if details != "" {
+			return OCRResult{}, fmt.Errorf("decode ocr-helper output (%s): %w", details, err)
+		}
+		return OCRResult{}, fmt.Errorf("decode ocr-helper output: %w (raw: %q)", err, stdout.String())
 	}
 
 	return OCRResult{
