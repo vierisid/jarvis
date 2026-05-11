@@ -488,6 +488,75 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(text).toBe("hello world");
   });
 
+  test("POST /v1/step-files round-trips binary bytes exactly (no text encoding drift)", async () => {
+    // 2KB of full-range bytes -- catches accidental utf8/base64 detours
+    // that work for ASCII payloads but corrupt arbitrary bytes.
+    const original = new Uint8Array(2048);
+    for (let i = 0; i < original.length; i++) original[i] = i & 0xff;
+
+    const form = new FormData();
+    form.set("stepName", "step_bin");
+    form.set("flowId", "flow_bin");
+    form.set("fileName", "fixture.bin");
+    form.set("file", new Blob([original], { type: "application/octet-stream" }), "fixture.bin");
+    const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
+    expect(upload.status).toBe(200);
+    const uploadBody = (await upload.json()) as { url: string };
+
+    const download = await authedFetchForRun(uploadBody.url);
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toBe("application/octet-stream");
+    expect(download.headers.get("content-length")).toBe(String(original.length));
+    const got = new Uint8Array(await download.arrayBuffer());
+    expect(got.length).toBe(original.length);
+    // Comparing one byte at a time pinpoints the failure offset on regression.
+    let firstDiff = -1;
+    for (let i = 0; i < original.length; i++) {
+      if (got[i] !== original[i]) {
+        firstDiff = i;
+        break;
+      }
+    }
+    expect(firstDiff).toBe(-1);
+  });
+
+  test("POST /v1/step-files rejects a missing file blob with 400", async () => {
+    const form = new FormData();
+    form.set("stepName", "step_a");
+    form.set("flowId", "flow_x");
+    // No `file` field.
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error?: string };
+    expect(body.error).toMatch(/missing file blob/);
+  });
+
+  test("GET /v1/step-files from a different project is denied with 403", async () => {
+    // Upload as the test's default identity (project default).
+    const upForm = new FormData();
+    upForm.set("stepName", "step_x");
+    upForm.set("flowId", "flow_x");
+    upForm.set("file", new Blob([new Uint8Array([1, 2, 3])]), "x.bin");
+    const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: upForm });
+    expect(upload.status).toBe(200);
+    const { url } = (await upload.json()) as { url: string };
+
+    // Mint a token with a different projectId and try to download. The
+    // route's `req.claims.projectId !== row.projectId` check forbids it.
+    const otherId = { ...sampleIdentity(), projectId: "proj_outsider" };
+    const { token: otherToken } = await signer.mint(otherId);
+    registry.register({
+      ...otherId,
+      engineToken: otherToken,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    const r = await fetch(`${api.baseUrl}${url}`, {
+      headers: { Authorization: `Bearer ${otherToken}` },
+    });
+    expect(r.status).toBe(403);
+  });
+
   test("POST /v1/step-files rejects non-multipart bodies", async () => {
     const r = await authedFetchForRun("/v1/step-files", {
       method: "POST",
