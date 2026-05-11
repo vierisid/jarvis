@@ -6,10 +6,13 @@
  * returns the same token Jarvis is using for the inbound bot.
  *
  * The piece sees a `SECRET_TEXT`-shaped value:
- *   { value: <bot-token-string> }
+ *   { secret_text: <bot-token-string> }
  *
- * This matches activepieces' telegram-bot piece auth shape -- pieces that
- * call `https://api.telegram.org/bot<token>/...` read `auth.value`.
+ * This matches the engine's V0-context unwrap in
+ * `connection-resolver.ts:makeConnectionValueCompatibleWithContextV0`, which
+ * reads `connection.value.secret_text` for SECRET_TEXT auth. V1-context
+ * pieces receive the same object verbatim. Activepieces' telegram-bot piece
+ * sees the raw token string in V0 mode and `auth.secret_text` in V1.
  *
  * If Telegram isn't configured (token missing or empty), `resolve` returns
  * null so the credential resolver falls through to the user's manually-
@@ -42,7 +45,7 @@ export class JarvisTelegramConnectionSource implements JarvisConnectionSource {
     if (!token) return null;
     return {
       type: "SECRET_TEXT",
-      value: { value: token },
+      value: { secret_text: token },
     };
   }
 }
