@@ -65,7 +65,12 @@ interface ActionResult {
  */
 export interface TriggerWarning {
   flowId: string;
-  kind: "cron" | "webhook" | "event" | "engine";
+  /**
+   * Subscription kind from `TriggerManager.list()`. Kept loose (`string`)
+   * because new kinds can land server-side without a UI release -- the UI
+   * doesn't branch on kind, only displays warnings.
+   */
+  kind: string;
   warning: string;
 }
 
@@ -104,10 +109,12 @@ export function useWorkflowsData() {
 
       // Triggers feed in alongside the flow list. Errors are non-fatal
       // (workflows still render); we just skip the warning badges.
-      void (async () => {
-        try {
-          const tr = await fetch("/api/workflows/triggers");
-          if (!tr.ok) return;
+      // Awaited inline so `await refresh()` callers see the warnings settled
+      // when refresh resolves -- avoids a stale-data window where the
+      // selected flow's warning hasn't loaded yet.
+      try {
+        const tr = await fetch("/api/workflows/triggers");
+        if (tr.ok) {
           const subs = (await tr.json()) as Array<TriggerWarning & { warning?: string }>;
           const map: Record<string, TriggerWarning> = {};
           for (const s of subs) {
@@ -116,10 +123,10 @@ export function useWorkflowsData() {
             }
           }
           setTriggerWarnings(map);
-        } catch {
-          /* keep prior warnings, don't surface as a top-level error */
         }
-      })();
+      } catch {
+        /* keep prior warnings, don't surface as a top-level error */
+      }
 
       // Fetch missing or stale names without blocking the main render.
       const stale = list.filter((f) => {

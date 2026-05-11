@@ -89,6 +89,14 @@ interface RouteMethods {
 
 export type WorkflowRouteMap = Record<string, RouteMethods>;
 
+/**
+ * Per-step sample-data entry size cap, in bytes of serialized JSON. 256KB.
+ * Big enough for typical fixtures (Gmail message, Notion page block) and
+ * small enough that 100 entries still fit under SQLite's default 1MB TEXT
+ * limit comfortably with room for the map's JSON overhead.
+ */
+const SAMPLE_DATA_ENTRY_MAX_BYTES = 256 * 1024;
+
 const ok = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
@@ -689,6 +697,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // `output: null` clears the entry; `output: undefined` (missing
           // key) is the same as null. Anything else stores as the entry.
           const output = body.output === undefined ? null : body.output;
+          // Soft cap: each step's serialized sample output. Prevents a typo
+          // (or a pasted log dump) from bloating flow_version.sample_data
+          // into multi-MB JSON we'd parse on every read. 256KB per entry is
+          // enough for realistic test payloads (e.g., a Gmail message body)
+          // and small enough to keep DB reads fast.
+          if (output !== null) {
+            const serialized = JSON.stringify(output);
+            if (serialized.length > SAMPLE_DATA_ENTRY_MAX_BYTES) {
+              return err(
+                `sample output for "${stepName}" exceeds ${SAMPLE_DATA_ENTRY_MAX_BYTES} bytes (got ${serialized.length}); store large fixtures elsewhere and reference them by id`,
+                413,
+              );
+            }
+          }
           const v = setSampleDataEntry(versionId, stepName, output);
           return ok({ versionId: v.id, sampleData: v.sampleData });
         }),
@@ -743,9 +765,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             stepNameToTest?: string;
             payload?: Record<string, unknown>;
           };
-          // Prefer published version; fall back to latest draft for testing.
-          const versionId =
-            flow.published_version_id ?? getLatestDraft(id)?.id ?? null;
+          // Version selection:
+          //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
+          //     is iterating on step definitions + sample data in the editor,
+          //     which mutates the draft; running the published version would
+          //     test stale state.
+          //   - Production runs: prefer PUBLISHED. Drafts are explicitly
+          //     unverified; the trigger manager only fires production runs
+          //     against published flows.
+          const draftId = getLatestDraft(id)?.id ?? null;
+          const versionId = body.stepNameToTest
+            ? (draftId ?? flow.published_version_id ?? null)
+            : (flow.published_version_id ?? draftId ?? null);
           if (!versionId) return err("flow has no published or draft version", 400);
 
           const run = createFlowRun({

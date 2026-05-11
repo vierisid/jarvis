@@ -690,6 +690,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       </div>
 
       <SampleDataSection
+        // `key` resets the section's internal text/state cleanly when the
+        // user switches steps, so the textarea always starts from the new
+        // step's persisted value rather than effect-syncing mid-edit (which
+        // would clobber in-flight typing during a Save round-trip).
+        key={step.name}
         stepName={step.name}
         sampleData={props.sampleData}
         isLocked={props.isLocked}
@@ -715,7 +720,6 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
  * payload visible to the first action. The button label adapts.
  */
 function SampleDataSection({
-  stepName,
   sampleData,
   isLocked,
   isTriggerStep,
@@ -729,26 +733,24 @@ function SampleDataSection({
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
   onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
 }): React.ReactElement {
-  const [text, setText] = useState<string>(() =>
-    sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2),
-  );
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [busy, setBusy] = useState<"save" | "test" | "clear" | null>(null);
-
-  // Sync local text when the upstream value changes (other tab edits,
-  // navigation between steps). useEffect with JSON-stringified comparison
-  // would loop; React.useMemo + a sync via key prop is the typical pattern,
-  // but PropertiesPanel doesn't remount on step change, so we update local
-  // state when the prop "snapshot" differs.
+  // The component is mounted with `key={stepName}` by PropertiesPanel, so
+  // selecting a different step gives us a fresh instance with state derived
+  // from the new step's `sampleData`. That removes the need for an effect-
+  // based sync (which previously clobbered in-flight typing during the
+  // Save round-trip).
   const incomingText = useMemo(
     () => (sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2)),
     [sampleData],
   );
-  useEffect(() => {
-    setText(incomingText);
-    setParseError(null);
-  }, [incomingText, stepName]);
+  const [text, setText] = useState<string>(incomingText);
+  const [savedText, setSavedText] = useState<string>(incomingText);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [busy, setBusy] = useState<"save" | "test" | "clear" | null>(null);
+
+  // Unsaved-edit indicator: local text diverged from the value we last
+  // pushed to the server. Used to nudge the user to save before testing.
+  const hasUnsavedEdits = text !== savedText;
 
   const flash = (tone: "ok" | "warn", t: string): void => {
     setStatus({ tone, text: t });
@@ -775,6 +777,13 @@ function SampleDataSection({
     setBusy("save");
     try {
       const r = await onSetSampleData(parsed === undefined ? null : parsed);
+      if (r.ok) {
+        // Snapshot what we just saved so `hasUnsavedEdits` resets to false.
+        // We track our own snapshot rather than re-deriving from the prop:
+        // the server might canonicalize whitespace, and the prop sync would
+        // momentarily show "saved" -> "edited" -> "saved" as React re-renders.
+        setSavedText(text);
+      }
       flash(r.ok ? "ok" : "warn", r.message);
     } finally {
       setBusy(null);
@@ -788,6 +797,7 @@ function SampleDataSection({
       const r = await onSetSampleData(null);
       if (r.ok) {
         setText("");
+        setSavedText("");
         setParseError(null);
       }
       flash(r.ok ? "ok" : "warn", r.message);
@@ -828,6 +838,11 @@ function SampleDataSection({
         spellCheck={false}
       />
       {parseError ? <span className="wf-props__sample-err">{parseError}</span> : null}
+      {hasUnsavedEdits ? (
+        <span className="wf-props__sample-status wf-props__sample-status--warn">
+          Unsaved edits -- save before testing or they won't be used.
+        </span>
+      ) : null}
       {status ? (
         <span
           className={`wf-props__sample-status wf-props__sample-status--${status.tone}`}
@@ -857,8 +872,15 @@ function SampleDataSection({
           variant="primary"
           size="sm"
           onClick={() => void handleTest()}
-          disabled={isLocked || busy !== null}
-          title="Run only this step using the saved sample data for preceding steps"
+          // Block Test when the textarea has unsaved edits -- otherwise the
+          // run executes against the older saved version and the user sees a
+          // confusing "I just typed this, why doesn't it show up" result.
+          disabled={isLocked || busy !== null || hasUnsavedEdits}
+          title={
+            hasUnsavedEdits
+              ? "Save your changes first; Test runs the persisted sample data"
+              : "Run only this step using the saved sample data for preceding steps"
+          }
         >
           {busy === "test" ? "Queuing..." : "Test from here"}
         </Button>

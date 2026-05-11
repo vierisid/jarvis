@@ -242,11 +242,13 @@ function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onTo
             <Chip tone="warn" dot={false}>Draft only</Chip>
           )}
           {triggerWarning ? (
-            // Native title for hover; click-on-row still selects so we don't
-            // intercept here. Operators chasing a misbehaving flow see this
-            // as the first signal.
+            // Embed a short preview of the warning text in the chip itself
+            // so operators see the gist without hovering; the full message
+            // stays in the native title for the slow-tooltip path. ~50 char
+            // chips fit alongside the status chips at common widths; longer
+            // messages truncate with an ellipsis.
             <Chip tone="warn" dot={false} title={triggerWarning}>
-              Trigger warning
+              ! {triggerWarning.length > 50 ? triggerWarning.slice(0, 47) + "..." : triggerWarning}
             </Chip>
           ) : null}
           <span className="wf-list__hint">updated {fmtRelative(flow.updated)}</span>

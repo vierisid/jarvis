@@ -292,6 +292,55 @@ describe("workflow API: runs", () => {
     expect(queueStats().queued).toBe(1);
   });
 
+  test("POST /:id/run with stepNameToTest prefers DRAFT over PUBLISHED", async () => {
+    // The test-from-here UX edits sample data + step definitions on a
+    // draft. If we ran the published version instead, the test would
+    // execute stale state -- this regression covers that selection rule.
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { setPublishedVersion } = await import("../db/repos/flow");
+    const flow = createFlow();
+    // Lock + publish one version, then create a new draft on top.
+    const published = createDraftVersion({
+      flowId: flow.id,
+      displayName: "v1",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(published.id);
+    setPublishedVersion(flow.id, published.id);
+    const draft = createDraftVersion({
+      flowId: flow.id,
+      displayName: "v2",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+
+    const run = routes["/api/workflows/:id/run"]?.POST;
+
+    // Production run: prefers PUBLISHED.
+    const prod = await callJson(
+      run,
+      reqWithParams(
+        "POST",
+        `http://x/api/workflows/${flow.id}/run`,
+        { id: flow.id },
+        { triggeredBy: "test" },
+      ),
+    );
+    expect(prod.body.flowVersionId).toBe(published.id);
+
+    // Test-from-here: prefers DRAFT.
+    const test = await callJson(
+      run,
+      reqWithParams(
+        "POST",
+        `http://x/api/workflows/${flow.id}/run`,
+        { id: flow.id },
+        { triggeredBy: "test", stepNameToTest: "trigger" },
+      ),
+    );
+    expect(test.body.flowVersionId).toBe(draft.id);
+  });
+
   test("POST /:id/run 400s when the flow has no draft or published version", async () => {
     // Build a flow row directly (no draft) to reproduce the edge case.
     const { createFlow } = await import("../db/repos/flow");
@@ -732,6 +781,25 @@ describe("workflow API: sample data", () => {
     );
     expect(status).toBe(200);
     expect(body.sampleData).toBeNull();
+  });
+
+  test("PATCH rejects an output that exceeds the per-entry size cap", async () => {
+    const { flow, version } = await setupVersion();
+    const r = createWorkflowRoutes();
+    const patch = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    // 300KB > 256KB cap. A pasted log dump would easily reach this.
+    const huge = { blob: "x".repeat(300 * 1024) };
+    const { status, body } = await callJson(
+      patch,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flow.id}/versions/${version.id}/sample-data/step_a`,
+        { id: flow.id, versionId: version.id, stepName: "step_a" },
+        { output: huge },
+      ),
+    );
+    expect(status).toBe(413);
+    expect(body.error).toMatch(/exceeds .* bytes/);
   });
 
   test("PATCH on a LOCKED version surfaces an error", async () => {
