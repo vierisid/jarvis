@@ -313,7 +313,11 @@ export class CronScheduler {
 
     const handle = setInterval(() => {
       const now = new Date();
-      const currentMinute = now.getFullYear() * 525960 + (now.getMonth() + 1) * 43830 + now.getDate() * 1440 + now.getHours() * 60 + now.getMinutes();
+      // Epoch minute -- monotonically increasing across years/DST/leap
+      // seconds, unlike the old `year*525960 + ...` formula whose
+      // coefficients (a year isn't exactly 525960 minutes) only happen
+      // to dedupe correctly because intra-month days never overflow.
+      const currentMinute = Math.floor(now.getTime() / 60_000);
 
       // Only evaluate once per minute
       if (currentMinute === lastTickMinute) return;
