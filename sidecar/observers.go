@@ -96,18 +96,26 @@ func readClipboardContent() (string, error) {
 // ── Screen Observer ──────────────────────────────────────────────────
 
 // ScreenObserver polls capture_screen at intervals and emits events on change.
+// The sidecar saves each capture locally, runs OCR (if available), and emits
+// a JSON-only event with the resulting metadata. The image bytes themselves
+// are never sent to the brain in the hot path — the brain fetches them on
+// demand via the fetch_capture RPC when cloud vision escalation fires.
 type ScreenObserver struct {
 	intervalMs         int
 	minChangeThreshold float64
 	previousBuffer     []byte
 	mu                 sync.Mutex
 	captureCount       int
+	ocrEnabled         bool
+	captureDir         string
 }
 
-func NewScreenObserver(cfg *SidecarConfig) *ScreenObserver {
+func NewScreenObserver(cfg *SidecarConfig, ocrAvailable bool) *ScreenObserver {
 	return &ScreenObserver{
 		intervalMs:         cfg.Awareness.ScreenIntervalMs,
 		minChangeThreshold: cfg.Awareness.MinChangeThreshold,
+		ocrEnabled:         cfg.Awareness.OCREnabled && ocrAvailable,
+		captureDir:         cfg.Awareness.CaptureDir,
 	}
 }
 
@@ -134,7 +142,6 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		return
 	}
 
-	// Extract the raw image data from the result
 	var imageData []byte
 	if inline, ok := result.Binary.(BinaryDataInline); ok && inline.Data != "" {
 		decoded, err := decodeBase64Data(inline.Data)
@@ -148,7 +155,6 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		return
 	}
 
-	// Compute sampled pixel diff
 	changePct := o.computePixelDiff(imageData)
 
 	o.mu.Lock()
@@ -165,22 +171,47 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 	captureId := o.captureCount
 	o.mu.Unlock()
 
-	log.Printf("[screen] Change detected (%.1f%%), sending capture #%d (%d bytes)", changePct*100, captureId, len(imageData))
+	now := time.Now()
+	imagePath, err := saveCaptureToFile(o.captureDir, imageData, now)
+	if err != nil {
+		log.Printf("[screen] Failed to save capture: %v", err)
+		return
+	}
+
+	var ocrText string
+	var ocrDurationMs int64
+	if o.ocrEnabled {
+		ocr, err := platformOCR(imagePath)
+		if err != nil {
+			log.Printf("[screen] OCR failed: %v", err)
+		} else {
+			ocrText = ocr.Text
+			ocrDurationMs = ocr.DurationMs
+		}
+	}
+
+	appName, windowTitle := platformGetActiveWindow()
+
+	log.Printf("[screen] Change detected (%.1f%%), capture #%d (%d bytes, ocr %dms, %d chars)",
+		changePct*100, captureId, len(imageData), ocrDurationMs, len(ocrText))
 
 	event := SidecarEvent{
 		Type:      "sidecar_event",
 		EventType: "screen_capture",
-		Timestamp: time.Now().UnixMilli(),
+		Timestamp: now.UnixMilli(),
 		Priority:  "normal",
 		Payload: map[string]any{
 			"pixel_change_pct": changePct,
 			"capture_id":       captureId,
+			"image_path":       imagePath,
+			"ocr_text":         ocrText,
+			"ocr_duration_ms":  ocrDurationMs,
+			"app_name":         appName,
+			"window_title":     windowTitle,
 		},
 	}
 
-	// Pass raw binary data to the sender — it will choose inline base64 or
-	// binary ref protocol based on the size threshold.
-	if err := send(ctx, event, imageData); err != nil {
+	if err := send(ctx, event, nil); err != nil {
 		log.Printf("[screen] Failed to send event: %v", err)
 	}
 }
@@ -343,7 +374,7 @@ func StartObservers(ctx context.Context, cfg *SidecarConfig, availableCaps []Sid
 	}
 
 	if caps[CapAwareness] {
-		go NewScreenObserver(cfg).Run(ctx, send)
+		go NewScreenObserver(cfg, caps[CapOCR]).Run(ctx, send)
 		go NewWindowObserver(cfg).Run(ctx, send)
 	}
 }
