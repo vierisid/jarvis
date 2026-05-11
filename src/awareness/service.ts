@@ -250,6 +250,7 @@ export class AwarenessService implements Service {
     await this.processCaptureEvent({
       sidecarId,
       captureId,
+      capturedAt: event.timestamp,
       pixelChangePct,
       imagePath,
       ocrText,
@@ -307,6 +308,7 @@ export class AwarenessService implements Service {
   private async processCaptureEvent(data: {
     sidecarId: string;
     captureId: string;
+    capturedAt: number;
     pixelChangePct: number;
     imagePath: string;
     ocrText: string;
@@ -320,7 +322,8 @@ export class AwarenessService implements Service {
       const { context, events } = this.contextTracker.processCapture(
         data.captureId,
         ocrText,
-        windowTitle
+        windowTitle,
+        data.capturedAt
       );
 
       this.contextGraph.linkCaptureToEntities(context);

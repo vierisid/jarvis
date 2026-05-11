@@ -54,11 +54,11 @@ export class ContextTracker {
   /**
    * Process a new screen capture. Returns the context and any detected events.
    */
-  processCapture(captureId: string, ocrText: string, rawWindowTitle?: string): {
+  processCapture(captureId: string, ocrText: string, rawWindowTitle?: string, capturedAt?: number): {
     context: ScreenContext;
     events: AwarenessEvent[];
   } {
-    const now = Date.now();
+    const now = capturedAt ?? Date.now();
     const events: AwarenessEvent[] = [];
 
     // Use pending window info from sidecar context_changed if no rawWindowTitle provided

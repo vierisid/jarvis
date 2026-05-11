@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"log"
 	"sync"
 	"time"
@@ -136,20 +135,10 @@ func (o *ScreenObserver) Run(ctx context.Context, send EventSender) {
 }
 
 func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
-	result, err := handleCaptureScreen(nil)
+	imageData, err := captureScreenBytes()
 	if err != nil {
 		log.Printf("[screen] Capture failed: %v", err)
 		return
-	}
-
-	var imageData []byte
-	if inline, ok := result.Binary.(BinaryDataInline); ok && inline.Data != "" {
-		decoded, err := decodeBase64Data(inline.Data)
-		if err != nil {
-			log.Printf("[screen] Failed to decode screenshot: %v", err)
-			return
-		}
-		imageData = decoded
 	}
 	if len(imageData) == 0 {
 		return
@@ -243,25 +232,11 @@ func (o *ScreenObserver) computePixelDiff(current []byte) float64 {
 	return float64(changed) / float64(total)
 }
 
-func decodeBase64Data(s string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(s)
-}
-
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-func padTo36(s string) string {
-	for len(s) < 36 {
-		s += "0"
-	}
-	if len(s) > 36 {
-		s = s[:36]
-	}
-	return s
 }
 
 // ── Window Observer ─────────────────────────────────────────────────

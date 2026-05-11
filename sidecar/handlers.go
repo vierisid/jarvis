@@ -268,15 +268,21 @@ func handleSetClipboard(params map[string]any) (*RPCResult, error) {
 
 // --- Screenshot ---
 
-func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("jarvis-screenshot-%d.png", time.Now().UnixMilli()))
+// captureScreenBytes invokes the platform screenshot tool, returning the raw PNG.
+// Both the RPC handler and the ScreenObserver use this to skip a base64
+// round-trip on the in-process path.
+func captureScreenBytes() ([]byte, error) {
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("jarvis-screenshot-%d.png", time.Now().UnixNano()))
 	defer os.Remove(tmpFile)
 
 	if err := platformCaptureScreen(tmpFile); err != nil {
 		return nil, fmt.Errorf("screenshot capture failed: %w", err)
 	}
+	return os.ReadFile(tmpFile)
+}
 
-	data, err := os.ReadFile(tmpFile)
+func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
+	data, err := captureScreenBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +301,8 @@ func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
 
 // makeFetchCaptureHandler returns a handler that reads a previously-saved capture
 // PNG from disk and returns it as inline binary. The requested path is required
-// to resolve underneath the configured capture directory.
+// to resolve underneath the configured capture directory, with symlinks evaluated
+// so that a symlink inside the dir cannot point outside it.
 func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		raw, _ := params["path"].(string)
@@ -307,16 +314,25 @@ func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
 		if err != nil {
 			return nil, fmt.Errorf("resolve capture dir: %w", err)
 		}
+		if resolved, err := filepath.EvalSymlinks(captureDir); err == nil {
+			captureDir = resolved
+		}
+
 		target, err := filepath.Abs(raw)
 		if err != nil {
 			return nil, fmt.Errorf("resolve path: %w", err)
 		}
-		rel, err := filepath.Rel(captureDir, target)
-		if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+		resolvedTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			return nil, fmt.Errorf("read capture: %w", err)
+		}
+
+		rel, err := filepath.Rel(captureDir, resolvedTarget)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("path not within capture dir")
 		}
 
-		data, err := os.ReadFile(target)
+		data, err := os.ReadFile(resolvedTarget)
 		if err != nil {
 			return nil, fmt.Errorf("read capture: %w", err)
 		}
