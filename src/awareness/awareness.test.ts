@@ -59,6 +59,31 @@ describe('Vault — Screen Captures', () => {
     expect(fetched!.ocr_text).toContain('hello');
   });
 
+  test('createCapture persists sidecarId for fetch_capture routing', () => {
+    const row = createCapture({
+      timestamp: Date.now(),
+      pixelChangePct: 0.2,
+      sidecarId: 'sidecar-abc-123',
+      imagePath: '/home/user/.jarvis/captures/2026-05-11/12-00-00.png',
+      appName: 'Terminal',
+    });
+    expect(row.sidecar_id).toBe('sidecar-abc-123');
+
+    const fetched = getCapture(row.id);
+    expect(fetched!.sidecar_id).toBe('sidecar-abc-123');
+    expect(fetched!.image_path).toBe('/home/user/.jarvis/captures/2026-05-11/12-00-00.png');
+  });
+
+  test('createCapture without sidecarId stores null (legacy rows)', () => {
+    const row = createCapture({
+      timestamp: Date.now(),
+      pixelChangePct: 0.1,
+      appName: 'Legacy',
+    });
+    expect(row.sidecar_id).toBeNull();
+    expect(getCapture(row.id)!.sidecar_id).toBeNull();
+  });
+
   test('getRecentCaptures with app filter', () => {
     createCapture({ timestamp: Date.now() - 2000, pixelChangePct: 0.1, appName: 'Chrome' });
     createCapture({ timestamp: Date.now() - 1000, pixelChangePct: 0.2, appName: 'VS Code' });
@@ -240,6 +265,29 @@ describe('ContextTracker', () => {
 
     const r2 = tracker.processCapture('2', '', 'Google - Mozilla Firefox');
     expect(r2.context.appName).toBe('Mozilla Firefox');
+  });
+
+  test('uses sidecar capturedAt timestamp when provided', () => {
+    const tracker = new ContextTracker(testConfig);
+
+    const sidecarTimestamp = 1700000000000; // arbitrary past timestamp
+    const r = tracker.processCapture('1', 'hello', 'win - App', sidecarTimestamp);
+
+    expect(r.context.timestamp).toBe(sidecarTimestamp);
+    // Session start should also reflect sidecar time, not Date.now().
+    const sessionStart = r.events.find(e => e.type === 'session_started');
+    expect(sessionStart?.timestamp).toBe(sidecarTimestamp);
+  });
+
+  test('falls back to Date.now() when capturedAt omitted', () => {
+    const tracker = new ContextTracker(testConfig);
+
+    const before = Date.now();
+    const r = tracker.processCapture('1', 'hello', 'win - App');
+    const after = Date.now();
+
+    expect(r.context.timestamp).toBeGreaterThanOrEqual(before);
+    expect(r.context.timestamp).toBeLessThanOrEqual(after);
   });
 });
 
