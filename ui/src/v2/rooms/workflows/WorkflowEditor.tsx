@@ -332,11 +332,20 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     [canvasMenu, closeCanvasMenu],
   );
 
-  /** Handle the user picking a piece+action from the library popover. */
+  /**
+   * Route a library pick to the right orphan-spawn action. Piece actions
+   * land as configured PIECE steps with schema-default inputs; control-
+   * flow built-ins land as native LOOP_ON_ITEMS / ROUTER nodes with
+   * sensible defaults (see `createOrphanControlFlowStep`).
+   */
   const onPickFromLibrary = useCallback(
-    (pieceName: string, actionName: string): void => {
+    (entry: LibraryEntry): void => {
       if (!libraryPicker) return;
-      editor.createOrphanStep(libraryPicker.flow, pieceName, actionName);
+      if (entry.kind === "control-flow") {
+        editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
+      } else {
+        editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
+      }
       closeLibraryPicker();
     },
     [editor, libraryPicker, closeLibraryPicker],
@@ -843,16 +852,85 @@ function clampToViewport(
 const LIBRARY_WIDTH = 360;
 const LIBRARY_MAX_ROWS = 14;
 
-interface LibraryRow {
-  piece: PieceCatalogEntry;
-  action: PieceCatalogActionOrTrigger;
+/**
+ * One pickable entry in the library popover. Discriminated so the
+ * picker's `onPick` callback can route piece actions and engine-built-in
+ * control-flow steps to the right editor action.
+ */
+type LibraryEntry =
+  | {
+      kind: "piece-action";
+      piece: PieceCatalogEntry;
+      action: PieceCatalogActionOrTrigger;
+    }
+  | {
+      kind: "control-flow";
+      controlType: "LOOP_ON_ITEMS" | "ROUTER";
+      displayName: string;
+      description: string;
+    };
+
+type LibraryCategory = "all" | "action" | "control";
+
+const CATEGORY_LABEL: Record<LibraryCategory, string> = {
+  all: "All",
+  action: "Actions",
+  control: "Control flow",
+};
+const CATEGORY_ORDER: LibraryCategory[] = ["all", "action", "control"];
+
+/**
+ * Engine-built-in control-flow entries surfaced alongside piece actions.
+ * These aren't real pieces -- the runtime treats them as native
+ * `FlowActionType`s -- but for the user's mental model they're just
+ * "another block you add". Defaults applied at spawn time live in
+ * `useWorkflowEditor.createOrphanControlFlowStep`.
+ */
+const CONTROL_FLOW_ENTRIES: LibraryEntry[] = [
+  {
+    kind: "control-flow",
+    controlType: "ROUTER",
+    displayName: "If / Router",
+    description: "Branch the flow on conditions. Each branch runs a separate sub-chain; an optional fallback catches everything else.",
+  },
+  {
+    kind: "control-flow",
+    controlType: "LOOP_ON_ITEMS",
+    displayName: "Loop on items",
+    description: "Run a body once per item in an array. Reference `{{<name>.item}}` inside the body to read the current iteration.",
+  },
+];
+
+function entryCategory(e: LibraryEntry): "action" | "control" {
+  return e.kind === "control-flow" ? "control" : "action";
+}
+
+function entryKey(e: LibraryEntry): string {
+  return e.kind === "control-flow"
+    ? `control:${e.controlType}`
+    : `piece:${e.piece.name}::${e.action.name}`;
+}
+
+function entryMatchesQuery(e: LibraryEntry, q: string): boolean {
+  if (!q) return true;
+  if (e.kind === "control-flow") {
+    return (
+      e.displayName.toLowerCase().includes(q) ||
+      e.description.toLowerCase().includes(q) ||
+      e.controlType.toLowerCase().includes(q)
+    );
+  }
+  return (
+    e.piece.displayName.toLowerCase().includes(q) ||
+    e.action.displayName.toLowerCase().includes(q) ||
+    (e.action.description ?? "").toLowerCase().includes(q)
+  );
 }
 
 /**
- * Searchable list of every piece's actions. The first match auto-selects
- * so Enter picks the obvious choice without keystrokes. Picking a row
- * fires `onPick(pieceName, actionName)`; the caller handles the spawn /
- * canvas placement.
+ * Searchable, category-filterable list of things a user can add to the
+ * canvas. Picking a row fires `onPick(entry)`; the caller routes piece
+ * actions vs. control-flow entries to the appropriate editor mutation.
  *
  * Triggers are NOT in this list -- there's exactly one trigger per flow
  * and it's configured via the trigger node's settings popover, not by
@@ -866,38 +944,44 @@ function PieceLibraryPopover({
 }: {
   anchor: { x: number; y: number };
   catalog: PieceCatalogEntry[];
-  onPick: (pieceName: string, actionName: string) => void;
+  onPick: (entry: LibraryEntry) => void;
   onClose: () => void;
 }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<LibraryCategory>("all");
   const [activeIdx, setActiveIdx] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y });
 
-  // Flatten the catalog to one row per (piece, action) and filter by the
-  // search query against the piece name, action label, and description.
-  const rows = useMemo<LibraryRow[]>(() => {
-    const all: LibraryRow[] = [];
+  // Build the unified entry list. Control-flow entries are pushed up top
+  // when the user is in "all" or "control" so they're immediately
+  // visible (they're the more common "where do I add an if?" question).
+  const entries = useMemo<LibraryEntry[]>(() => {
+    const pieceEntries: LibraryEntry[] = [];
     for (const p of catalog) {
-      for (const a of p.actions) all.push({ piece: p, action: a });
+      for (const a of p.actions) {
+        pieceEntries.push({ kind: "piece-action", piece: p, action: a });
+      }
     }
-    if (!query.trim()) return all;
+    return [...CONTROL_FLOW_ENTRIES, ...pieceEntries];
+  }, [catalog]);
+
+  // Apply the category filter and search query. Same lowercased q is
+  // reused across every entry so we don't pay for the per-iteration call.
+  const rows = useMemo<LibraryEntry[]>(() => {
     const q = query.trim().toLowerCase();
-    return all.filter(({ piece, action }) => {
-      return (
-        piece.displayName.toLowerCase().includes(q) ||
-        action.displayName.toLowerCase().includes(q) ||
-        (action.description ?? "").toLowerCase().includes(q)
-      );
+    return entries.filter((e) => {
+      if (category !== "all" && entryCategory(e) !== category) return false;
+      return entryMatchesQuery(e, q);
     });
-  }, [catalog, query]);
+  }, [entries, category, query]);
 
   // Reset the keyboard cursor when the result set changes so Enter always
   // targets a visible row.
   useEffect(() => {
     setActiveIdx(0);
-  }, [query]);
+  }, [query, category]);
 
   // Auto-focus the search input on mount so the user can type immediately
   // without clicking the field. Defer one tick so React's commit phase
@@ -953,7 +1037,7 @@ function PieceLibraryPopover({
       } else if (e.key === "Enter") {
         e.preventDefault();
         const row = rows[activeIdx];
-        if (row) onPick(row.piece.name, row.action.name);
+        if (row) onPick(row);
       }
     },
     [rows, activeIdx, onPick, onClose],
@@ -978,32 +1062,43 @@ function PieceLibraryPopover({
           aria-label="Filter pieces by name or description"
         />
       </div>
+      <div className="wf-library__categories" role="tablist" aria-label="Category">
+        {CATEGORY_ORDER.map((c) => (
+          <button
+            key={c}
+            type="button"
+            role="tab"
+            aria-selected={c === category}
+            className={`wf-library__category ${c === category ? "wf-library__category--active" : ""}`}
+            onClick={() => setCategory(c)}
+          >
+            {CATEGORY_LABEL[c]}
+          </button>
+        ))}
+      </div>
       {rows.length === 0 ? (
-        <div className="wf-library__empty">No pieces match "{query}".</div>
+        <div className="wf-library__empty">
+          {query.trim()
+            ? `No ${category === "all" ? "entries" : CATEGORY_LABEL[category].toLowerCase()} match "${query}".`
+            : `No ${CATEGORY_LABEL[category].toLowerCase()} available.`}
+        </div>
       ) : (
         <ul
           className="wf-library__list"
           style={{ maxHeight: `calc(${LIBRARY_MAX_ROWS} * 44px)` }}
           role="listbox"
         >
-          {rows.map((row, i) => (
-            <li key={`${row.piece.name}::${row.action.name}`}>
+          {rows.map((entry, i) => (
+            <li key={entryKey(entry)}>
               <button
                 type="button"
                 role="option"
                 aria-selected={i === activeIdx}
                 className={`wf-library__row ${i === activeIdx ? "wf-library__row--active" : ""}`}
-                onClick={() => onPick(row.piece.name, row.action.name)}
+                onClick={() => onPick(entry)}
                 onMouseEnter={() => setActiveIdx(i)}
               >
-                <div className="wf-library__row-head">
-                  <span className="wf-library__piece">{row.piece.displayName}</span>
-                  <span className="wf-library__sep">·</span>
-                  <span className="wf-library__action">{row.action.displayName}</span>
-                </div>
-                {row.action.description ? (
-                  <div className="wf-library__row-desc">{row.action.description}</div>
-                ) : null}
+                <LibraryRowContent entry={entry} />
               </button>
             </li>
           ))}
@@ -1011,6 +1106,39 @@ function PieceLibraryPopover({
       )}
     </div>,
     document.body,
+  );
+}
+
+/**
+ * Row body for a single library entry. Splits the two shapes (piece
+ * action vs. control-flow built-in) so each can render with the right
+ * label hierarchy: piece actions read "<piece> · <action>" with the
+ * piece name de-emphasised, control-flow entries read with a tag chip on
+ * the left signalling they're a different KIND of block.
+ */
+function LibraryRowContent({ entry }: { entry: LibraryEntry }): React.ReactElement {
+  if (entry.kind === "control-flow") {
+    return (
+      <>
+        <div className="wf-library__row-head">
+          <span className="wf-library__tag">Control</span>
+          <span className="wf-library__action">{entry.displayName}</span>
+        </div>
+        <div className="wf-library__row-desc">{entry.description}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="wf-library__row-head">
+        <span className="wf-library__piece">{entry.piece.displayName}</span>
+        <span className="wf-library__sep">·</span>
+        <span className="wf-library__action">{entry.action.displayName}</span>
+      </div>
+      {entry.action.description ? (
+        <div className="wf-library__row-desc">{entry.action.description}</div>
+      ) : null}
+    </>
   );
 }
 

@@ -321,6 +321,49 @@
   text-align: center;
 }
 
+/* Category tabs sit below the search input. Pill-style buttons so the
+   active one reads as a chip rather than a tab underline -- the latter
+   doesn't fit the editor's mostly-flat treatment. */
+.wf-library__categories {
+  display: flex;
+  gap: 4px;
+  padding: 0 var(--s-2) var(--s-2);
+  border-bottom: 1px solid var(--rule-soft);
+}
+.wf-library__category {
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.wf-library__category:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.wf-library__category--active {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+/* Category tag rendered on the left of a control-flow row. Reads as
+   "this isn't a piece" without crowding the row's text content. */
+.wf-library__tag {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: 4px;
+  padding: 1px 6px;
+  line-height: 1.5;
+}
+
 /* ── React Flow surface tweaks ── */
 
 .wf-editor__canvas .react-flow__renderer { background: var(--paper); }

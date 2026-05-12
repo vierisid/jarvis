@@ -549,6 +549,61 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
+   * Spawn a control-flow orphan (LOOP_ON_ITEMS or ROUTER) at the given
+   * canvas coordinates. These are engine-built-in `FlowActionType`s, not
+   * pieces -- the library popover surfaces them alongside piece actions
+   * via the "Control flow" category. Defaults mirror what the assistant's
+   * `workflow-composer` shapes for the same node kinds:
+   *
+   *   - LOOP_ON_ITEMS starts with an empty `items` template so the user
+   *     fills it via the settings popover. No body wired yet -- they
+   *     connect one via the loop-body handle (Task 3).
+   *   - ROUTER starts as an "If / Else" pair: one CONDITION branch named
+   *     "If" and one FALLBACK named "Else". Both child slots are null
+   *     until the user wires bodies in.
+   */
+  const createOrphanControlFlowStep = useCallback(
+    (flowPos: { x: number; y: number }, kind: "LOOP_ON_ITEMS" | "ROUTER"): string | null => {
+      const taken = new Set<string>();
+      if (draftTrigger) {
+        for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
+      }
+      for (const o of draftOrphans) taken.add(o.node.name);
+      let n = 1;
+      while (taken.has(`step_${n}`)) n++;
+      const newName = `step_${n}`;
+
+      let newStep: FlowStepNode;
+      if (kind === "LOOP_ON_ITEMS") {
+        newStep = {
+          name: newName,
+          type: "LOOP_ON_ITEMS",
+          displayName: "Loop on items",
+          settings: { items: "" },
+        };
+      } else {
+        newStep = {
+          name: newName,
+          type: "ROUTER",
+          displayName: "If",
+          settings: {
+            executionType: "EXECUTE_FIRST_MATCH",
+            branches: [
+              { branchName: "If", branchType: "CONDITION", conditions: [] },
+              { branchName: "Else", branchType: "FALLBACK" },
+            ],
+          },
+          children: [null, null],
+        };
+      }
+      setDraftOrphans((prev) => [...prev, { node: newStep, x: flowPos.x, y: flowPos.y }]);
+      setDirty(true);
+      return newName;
+    },
+    [draftTrigger, draftOrphans],
+  );
+
+  /**
    * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
    * EMPTY stashes the prior settings; switching back restores them so the
    * round-trip doesn't discard the user's piece + input.
@@ -828,6 +883,7 @@ export function useWorkflowEditor(flowId: string | null) {
     setStepPosition,
     stepPositions,
     createOrphanStep,
+    createOrphanControlFlowStep,
     save,
     reset,
     setStepSampleData,
