@@ -21,6 +21,7 @@ import {
   Pause,
   Pencil,
   Play,
+  Plus,
   RefreshCw,
   Trash2,
   Upload,
@@ -90,6 +91,21 @@ export function WorkflowsRoomBody(): React.ReactElement {
     window.setTimeout(() => setActionMessage(null), 3000);
   };
 
+  /**
+   * Create a new flow + jump straight into the visual editor. Rename happens
+   * inside the editor; we don't prompt for a name up front because the user's
+   * intent at this point is to start building, not to bikeshed a label.
+   */
+  const handleCreate = async (): Promise<void> => {
+    const result = await data.createFlow();
+    if (result.ok && result.flowId) {
+      data.setEditingFlowId(result.flowId);
+    } else {
+      setActionMessage({ tone: "warn", text: `Create failed: ${result.message}` });
+      window.setTimeout(() => setActionMessage(null), 3000);
+    }
+  };
+
   return (
     <div className="wf-room">
       {data.editingFlowId ? (
@@ -129,6 +145,9 @@ export function WorkflowsRoomBody(): React.ReactElement {
               <Button variant="ghost" size="sm" onClick={() => void data.refresh()} title="Refresh">
                 <Icon icon={RefreshCw} size={14} /> Refresh
               </Button>
+              <Button variant="primary" size="sm" onClick={() => void handleCreate()} title="New workflow">
+                <Icon icon={Plus} size={14} /> New workflow
+              </Button>
             </>
           ) : null}
         </div>
@@ -145,7 +164,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
       <div className="wf-room__layout">
         <section className="wf-room__list" aria-label="Workflow list">
           {data.flows.length === 0 && !data.loading ? (
-            <EmptyState />
+            <EmptyState onCreate={() => void handleCreate()} />
           ) : (
             <ul className="wf-list">
               {data.flows.map((flow) => (
@@ -501,13 +520,16 @@ function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
 
 /* ------------------------------------------------------------- placeholders */
 
-function EmptyState(): React.ReactElement {
+function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement {
   return (
     <div className="wf-empty">
       <p>No workflows yet.</p>
       <p className="wf-empty__hint">
-        Create one via <code>POST /api/workflows</code> or wait for the assistant tools to ship.
+        Start with a blank canvas and add steps as you go.
       </p>
+      <Button variant="primary" size="sm" onClick={onCreate}>
+        <Icon icon={Plus} size={14} /> New workflow
+      </Button>
     </div>
   );
 }

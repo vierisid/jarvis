@@ -608,6 +608,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const version = createDraftVersion({
             flowId: flow.id,
             displayName: body.displayName,
+            // Seed an EMPTY (manual) trigger so the visual editor has a valid
+            // FlowStepNode to render on a freshly created flow. Without this
+            // the trigger defaults to `{}`, which the editor can't traverse
+            // and the engine can't run. Users morph to PIECE_TRIGGER inside
+            // the editor when they pick a real trigger.
+            trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" },
           });
           return ok({ flow: serializeFlow(flow), version }, 201);
         }),

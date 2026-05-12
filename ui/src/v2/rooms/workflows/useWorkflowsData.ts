@@ -247,6 +247,36 @@ export function useWorkflowsData() {
     }
   }, [refresh, selectedFlowId]);
 
+  /**
+   * Create a fresh workflow. POSTs to `/api/workflows`, which creates the
+   * flow row + a DRAFT version named `displayName`. Returns the new flow's
+   * id on success so callers can open the editor on it immediately.
+   *
+   * `displayName` defaults to a human-readable placeholder; users rename
+   * from inside the editor.
+   */
+  const createFlow = useCallback(
+    async (displayName = "Untitled workflow"): Promise<ActionResult & { flowId?: string }> => {
+      try {
+        const res = await fetch("/api/workflows", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ displayName }),
+        });
+        if (!res.ok) {
+          const body = await safeJson(res);
+          return { ok: false, message: body?.error ?? `create failed: ${res.status}` };
+        }
+        const body = (await res.json()) as { flow: Flow; version: { id: string } };
+        void refresh();
+        return { ok: true, message: "Workflow created", flowId: body.flow.id };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [refresh],
+  );
+
   const cancelRun = useCallback(async (runId: string): Promise<ActionResult> => {
     try {
       const res = await fetch(`/api/workflow-runs/${runId}/cancel`, { method: "POST" });
@@ -304,6 +334,7 @@ export function useWorkflowsData() {
     setStatus,
     publishFlow,
     deleteFlow,
+    createFlow,
     cancelRun,
     editingFlowId,
     setEditingFlowId,
