@@ -222,9 +222,24 @@
   cursor: pointer;
   text-align: left;
 }
-.wf-canvas-menu__item--active,
-.wf-canvas-menu__item:hover {
+.wf-canvas-menu__item--active:not(.wf-canvas-menu__item--disabled),
+.wf-canvas-menu__item:hover:not(.wf-canvas-menu__item--disabled) {
   background: var(--paper-3);
+}
+/* Destructive (Delete): tints the icon + label red on hover/active so the
+   user has a clear visual cue before they trigger the irreversible
+   action. Plain state stays neutral to avoid scaring the user at rest. */
+.wf-canvas-menu__item--destructive.wf-canvas-menu__item--active,
+.wf-canvas-menu__item--destructive:hover {
+  color: var(--accent);
+}
+/* Disabled (e.g. "Add error handling" placeholder): no hover, no fire on
+   click. Keeps the entry visible so users discover the feature is
+   coming, without letting them accidentally invoke a no-op. */
+.wf-canvas-menu__item--disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 .wf-canvas-menu__label { flex: 1 1 auto; }
 .wf-canvas-menu__shortcut {

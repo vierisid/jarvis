@@ -30,7 +30,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Save, RotateCcw, X, Plus, Trash2 } from "lucide-react";
+import { Save, RotateCcw, ShieldAlert, X, Plus, Trash2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -96,6 +96,12 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     | null
   >(null);
   const closeLibraryPicker = useCallback((): void => setLibraryPicker(null), []);
+  // Per-node right-click menu (Delete / Add error handling).
+  const [nodeContextMenu, setNodeContextMenu] = useState<
+    | { screen: { x: number; y: number }; nodeId: string; isTrigger: boolean }
+    | null
+  >(null);
+  const closeNodeContextMenu = useCallback((): void => setNodeContextMenu(null), []);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const closePopover = useCallback((): void => {
@@ -304,6 +310,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       // Close any other floating affordance before opening this one so we
       // don't end up with overlapping menus.
       closePopover();
+      closeNodeContextMenu();
       const mouseEvent = event as React.MouseEvent;
       const flowPos = rfInstanceRef.current?.screenToFlowPosition({
         x: mouseEvent.clientX,
@@ -314,7 +321,28 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         flow: flowPos,
       });
     },
-    [closePopover],
+    [closePopover, closeNodeContextMenu],
+  );
+
+  /**
+   * Right-click on a node opens its per-piece menu (Delete, error
+   * handling). The trigger node hides Delete since the engine refuses to
+   * remove it -- showing the entry would just mislead the user.
+   */
+  const onNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node<StepNodeData>): void => {
+      event.preventDefault();
+      closePopover();
+      closeCanvasMenu();
+      closeLibraryPicker();
+      const isTrigger = editor.draftTrigger?.name === node.id;
+      setNodeContextMenu({
+        screen: { x: event.clientX, y: event.clientY },
+        nodeId: node.id,
+        isTrigger,
+      });
+    },
+    [editor.draftTrigger?.name, closePopover, closeCanvasMenu, closeLibraryPicker],
   );
 
   /**
@@ -415,8 +443,10 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               closePopover();
               closeCanvasMenu();
               closeLibraryPicker();
+              closeNodeContextMenu();
             }}
             onPaneContextMenu={onPaneContextMenu}
+            onNodeContextMenu={onNodeContextMenu}
             onNodeDragStop={onNodeDragStop}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
@@ -464,6 +494,47 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           catalog={editor.catalog}
           onPick={onPickFromLibrary}
           onClose={closeLibraryPicker}
+        />
+      ) : null}
+
+      {/* Per-node right-click menu. Delete is hidden for the trigger
+          (the engine treats it as undeletable). "Add error handling" is
+          rendered as a disabled "Soon" entry pending the actual settings
+          wiring. */}
+      {nodeContextMenu ? (
+        <CanvasContextMenu
+          anchor={nodeContextMenu.screen}
+          onClose={closeNodeContextMenu}
+          items={[
+            ...(nodeContextMenu.isTrigger
+              ? []
+              : [
+                  {
+                    key: "delete",
+                    icon: Trash2,
+                    label: "Delete",
+                    destructive: true,
+                    onSelect: () => {
+                      editor.deleteStep(nodeContextMenu.nodeId);
+                      closeNodeContextMenu();
+                      // Close the settings popover too if it happened to
+                      // be open on the same step -- the step's gone, the
+                      // popover would render against a phantom selection.
+                      if (selectedStepName === nodeContextMenu.nodeId) {
+                        closePopover();
+                      }
+                    },
+                  },
+                ]),
+            {
+              key: "add-error-handling",
+              icon: ShieldAlert,
+              label: "Add error handling",
+              shortcut: "Soon",
+              disabled: true,
+              onSelect: () => {},
+            },
+          ]}
         />
       ) : null}
 
@@ -717,7 +788,15 @@ interface CanvasMenuItem {
   key: string;
   label: string;
   icon: typeof Plus;
+  /** Small chip rendered on the right of the row. Used for keyboard
+   *  shortcut hints AND for "Soon" / "WIP" badges. */
   shortcut?: string;
+  /** When true, the entry renders dimmed and won't fire on click / Enter.
+   *  Used to surface in-progress features (e.g. "Add error handling")
+   *  before the wiring lands. */
+  disabled?: boolean;
+  /** Visual emphasis for destructive entries (Delete). */
+  destructive?: boolean;
   onSelect: () => void;
 }
 
@@ -768,23 +847,35 @@ function CanvasContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard nav.
+  // Keyboard nav. Arrow keys skip disabled entries so Enter always lands
+  // on something that fires.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         onClose();
         return;
       }
+      const step = (delta: 1 | -1): void => {
+        if (items.length === 0) return;
+        setActiveIdx((i) => {
+          let next = i;
+          for (let k = 0; k < items.length; k++) {
+            next = (next + delta + items.length) % items.length;
+            if (!items[next]?.disabled) return next;
+          }
+          return i;
+        });
+      };
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActiveIdx((i) => (i + 1) % items.length);
+        step(1);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setActiveIdx((i) => (i - 1 + items.length) % items.length);
+        step(-1);
       } else if (e.key === "Enter") {
         e.preventDefault();
         const item = items[activeIdx];
-        if (item) item.onSelect();
+        if (item && !item.disabled) item.onSelect();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -799,21 +890,36 @@ function CanvasContextMenu({
       style={{ left: pos.left, top: pos.top }}
     >
       <ul className="wf-canvas-menu__list">
-        {items.map((item, i) => (
-          <li key={item.key}>
-            <button
-              type="button"
-              role="menuitem"
-              className={`wf-canvas-menu__item ${i === activeIdx ? "wf-canvas-menu__item--active" : ""}`}
-              onClick={item.onSelect}
-              onMouseEnter={() => setActiveIdx(i)}
-            >
-              <Icon icon={item.icon} size={14} />
-              <span className="wf-canvas-menu__label">{item.label}</span>
-              {item.shortcut ? <span className="wf-canvas-menu__shortcut">{item.shortcut}</span> : null}
-            </button>
-          </li>
-        ))}
+        {items.map((item, i) => {
+          const classes = [
+            "wf-canvas-menu__item",
+            i === activeIdx ? "wf-canvas-menu__item--active" : "",
+            item.disabled ? "wf-canvas-menu__item--disabled" : "",
+            item.destructive ? "wf-canvas-menu__item--destructive" : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return (
+            <li key={item.key}>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                className={classes}
+                onClick={item.disabled ? undefined : item.onSelect}
+                onMouseEnter={() => {
+                  if (!item.disabled) setActiveIdx(i);
+                }}
+              >
+                <Icon icon={item.icon} size={14} />
+                <span className="wf-canvas-menu__label">{item.label}</span>
+                {item.shortcut ? (
+                  <span className="wf-canvas-menu__shortcut">{item.shortcut}</span>
+                ) : null}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>,
     document.body,
