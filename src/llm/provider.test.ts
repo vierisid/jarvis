@@ -292,7 +292,7 @@ describe('Default Models', () => {
 
   test('NVIDIAProvider has correct default model', () => {
     const provider = new NVIDIAProvider('test-key') as any;
-    expect(provider.defaultModel).toBe('mistral-nemo-minitron-8b-base');
+    expect(provider.defaultModel).toBe('meta/llama-3.3-70b-instruct');
   });
 
   test('can override default models', () => {

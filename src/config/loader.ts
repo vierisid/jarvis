@@ -88,7 +88,7 @@ function applyEnvOverrides(config: JarvisConfig): void {
   }
 
   if (env.NVIDIA_API_KEY) {
-    if (!config.llm.nvidia) config.llm.nvidia = { api_key: '', model: 'mistral-nemo-minitron-8b-base' };
+    if (!config.llm.nvidia) config.llm.nvidia = { api_key: '', model: 'meta/llama-3.3-70b-instruct' };
     config.llm.nvidia.api_key = env.NVIDIA_API_KEY;
   }
 

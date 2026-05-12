@@ -1313,6 +1313,27 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Live model catalog for NVIDIA. NVIDIA's `/v1/models` is publicly
+    // readable, so this works during onboarding before any key is stored.
+    // We pass the user's key through when available so the call still
+    // authenticates if NVIDIA ever requires it. Mixes chat / embedding /
+    // vision models — the UI shows them all and relies on the connection
+    // test to weed out anything that can't speak /v1/chat/completions.
+    '/api/config/llm/nvidia/models': {
+      GET: async () => {
+        try {
+          const { NVIDIAProvider } = await import('../llm/nvidia.ts');
+          const key = ctx.config.llm.nvidia?.api_key ?? '';
+          const provider = new NVIDIAProvider(key);
+          const models = await provider.listModels();
+          return json({ ok: true, models });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ ok: false, error: msg, models: [] });
+        }
+      },
+    },
+
     // --- Roles ---
     '/api/roles': {
       GET: () => {

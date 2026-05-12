@@ -86,7 +86,7 @@ export class NVIDIAProvider implements LLMProvider {
   private defaultModel: string;
   private apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
-  constructor(apiKey: string, defaultModel = 'mistral-nemo-minitron-8b-base') {
+  constructor(apiKey: string, defaultModel = 'meta/llama-3.3-70b-instruct') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
   }
@@ -272,11 +272,19 @@ export class NVIDIAProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    return [
-      'mistral-nemo-minitron-8b-base',
-      'usdcode',
-      'gemma-2-2b-it',
-    ];
+    const url = 'https://integrate.api.nvidia.com/v1/models';
+    const resp = await fetch(url, {
+      headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {},
+    });
+    if (!resp.ok) {
+      throw new Error(`NVIDIA models API error (${resp.status})`);
+    }
+    const data = await resp.json() as { data?: Array<{ id?: string }> };
+    const ids = (data.data ?? [])
+      .map(m => m.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    // The catalog occasionally returns duplicate ids; de-dupe and sort.
+    return [...new Set(ids)].sort();
   }
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {

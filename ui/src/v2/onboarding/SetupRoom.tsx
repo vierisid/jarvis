@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowRight, Check, Loader2, Volume2, VolumeX, type LucideIcon } from "lucide-react";
 import { Button, Icon } from "../ui";
 import "./SetupRoom.css";
@@ -86,11 +86,14 @@ const PROVIDERS: ReadonlyArray<{
     defaultModel: "anthropic/claude-sonnet-4",
   },
   {
+    // NVIDIA's catalog rotates often, so the live list from
+    // GET /api/config/llm/nvidia/models replaces this fallback once it
+    // arrives. These entries are only the offline safety net.
     id: "nvidia",
     label: "NVIDIA NIM",
     needsKey: true,
-    models: ["mistral-nemo-minitron-8b-base", "gemma-2-2b-it"],
-    defaultModel: "mistral-nemo-minitron-8b-base",
+    models: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-8b-instruct", "google/gemma-2-2b-it"],
+    defaultModel: "meta/llama-3.3-70b-instruct",
   },
 ];
 
@@ -120,6 +123,52 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
     | { ok: false; error: string }
     | null
   >(null);
+
+  // NVIDIA's catalog rotates, so we fetch live IDs. Falls back to the
+  // hardcoded `provider.models` if the call fails (offline, daemon down).
+  // The list mixes chat / embedding / vision models — there's no type
+  // field to filter on, so the connection test is the final guard.
+  const [nvidiaModels, setNvidiaModels] = useState<string[] | null>(null);
+  const [nvidiaFilter, setNvidiaFilter] = useState("");
+  const [nvidiaLoading, setNvidiaLoading] = useState(false);
+  useEffect(() => {
+    if (providerId !== "nvidia" || nvidiaModels !== null) return;
+    let cancelled = false;
+    setNvidiaLoading(true);
+    fetch("/api/config/llm/nvidia/models")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; models?: string[] }) => {
+        if (cancelled) return;
+        if (d.ok && d.models && d.models.length > 0) {
+          setNvidiaModels(d.models);
+        } else {
+          setNvidiaModels([]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setNvidiaModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setNvidiaLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, nvidiaModels]);
+
+  // When the NVIDIA list arrives and the user is still on the default
+  // fallback model, snap to the first live id so the test button works
+  // even if NVIDIA has dropped our hardcoded default from the catalog.
+  useEffect(() => {
+    if (providerId !== "nvidia") return;
+    if (!nvidiaModels || nvidiaModels.length === 0) return;
+    if (!nvidiaModels.includes(model)) {
+      const preferred =
+        nvidiaModels.find((m) => m === "meta/llama-3.3-70b-instruct") ??
+        nvidiaModels[0]!;
+      setModel(preferred);
+    }
+  }, [nvidiaModels, providerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── TTS screen state ───────────────────────────────────────────────
   const [ttsChoice, setTtsChoice] = useState<TTSChoice>("edge");
@@ -304,41 +353,122 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
               </div>
             )}
 
-            <div className="v2-setup__field">
-              <label className="v2-setup__label" htmlFor="setup-model">
-                Model
-              </label>
-              <select
-                id="setup-model"
-                className="v2-setup__select"
-                value={provider.models.includes(model) ? model : "custom"}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setModel(v === "custom" ? "" : v);
-                  setTestResult(null);
-                }}
-              >
-                {provider.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-                <option value="custom">Custom…</option>
-              </select>
-              {!provider.models.includes(model) && (
-                <input
-                  className="v2-setup__input"
-                  value={model}
+            {providerId === "nvidia" ? (
+              (() => {
+                const liveModels = nvidiaModels && nvidiaModels.length > 0
+                  ? nvidiaModels
+                  : provider.models;
+                const filter = nvidiaFilter.trim().toLowerCase();
+                const filtered = filter
+                  ? liveModels.filter((m) => m.toLowerCase().includes(filter))
+                  : liveModels;
+                const selectValue = filtered.includes(model)
+                  ? model
+                  : liveModels.includes(model)
+                    ? "__hidden_by_filter"
+                    : "custom";
+                return (
+                  <div className="v2-setup__field">
+                    <label className="v2-setup__label" htmlFor="setup-model">
+                      Model
+                    </label>
+                    <input
+                      className="v2-setup__input"
+                      value={nvidiaFilter}
+                      onChange={(e) => setNvidiaFilter(e.target.value)}
+                      placeholder={
+                        nvidiaLoading
+                          ? "Loading model catalog…"
+                          : `Filter ${liveModels.length} models (e.g. llama, mistral, gemma)`
+                      }
+                      autoComplete="off"
+                      style={{ marginBottom: "var(--s-2)" }}
+                    />
+                    <select
+                      id="setup-model"
+                      className="v2-setup__select"
+                      value={selectValue}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "__hidden_by_filter") return;
+                        setModel(v === "custom" ? "" : v);
+                        setTestResult(null);
+                      }}
+                    >
+                      {selectValue === "__hidden_by_filter" && (
+                        <option value="__hidden_by_filter" disabled>
+                          {model} (hidden by filter)
+                        </option>
+                      )}
+                      {filtered.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                      {filtered.length === 0 && (
+                        <option value="" disabled>
+                          No models match "{nvidiaFilter}"
+                        </option>
+                      )}
+                      <option value="custom">Custom…</option>
+                    </select>
+                    {selectValue === "custom" && (
+                      <input
+                        className="v2-setup__input"
+                        value={model}
+                        onChange={(e) => {
+                          setModel(e.target.value);
+                          setTestResult(null);
+                        }}
+                        placeholder="model id (e.g. meta/llama-3.3-70b-instruct)"
+                        autoComplete="off"
+                        style={{ marginTop: "var(--s-2)" }}
+                      />
+                    )}
+                    <p className="v2-setup__hint">
+                      The catalog includes chat, embedding and vision models.
+                      Test connection confirms the model speaks chat.
+                    </p>
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="v2-setup__field">
+                <label className="v2-setup__label" htmlFor="setup-model">
+                  Model
+                </label>
+                <select
+                  id="setup-model"
+                  className="v2-setup__select"
+                  value={provider.models.includes(model) ? model : "custom"}
                   onChange={(e) => {
-                    setModel(e.target.value);
+                    const v = e.target.value;
+                    setModel(v === "custom" ? "" : v);
                     setTestResult(null);
                   }}
-                  placeholder="model id (e.g. your local Ollama model name)"
-                  autoComplete="off"
-                  style={{ marginTop: "var(--s-2)" }}
-                />
-              )}
-            </div>
+                >
+                  {provider.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                  <option value="custom">Custom…</option>
+                </select>
+                {!provider.models.includes(model) && (
+                  <input
+                    className="v2-setup__input"
+                    value={model}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      setTestResult(null);
+                    }}
+                    placeholder="model id (e.g. your local Ollama model name)"
+                    autoComplete="off"
+                    style={{ marginTop: "var(--s-2)" }}
+                  />
+                )}
+              </div>
+            )}
 
             <div className="v2-setup__test-row">
               <Button

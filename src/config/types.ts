@@ -321,7 +321,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     },
     nvidia: {
       api_key: '',
-      model: 'mistral-nemo-minitron-8b-base',
+      model: 'meta/llama-3.3-70b-instruct',
     },
   },
   personality: {

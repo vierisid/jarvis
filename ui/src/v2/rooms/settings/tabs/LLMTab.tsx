@@ -65,7 +65,9 @@ const MODELS: Record<LLMProvider, string[]> = {
     "meta-llama/llama-4-maverick",
     "mistralai/mistral-large",
   ],
-  nvidia: ["usdcode", "mistral-nemo-minitron-8b-base", "gemma-2-2b-it"],
+  // NVIDIA models are fetched live from /api/config/llm/nvidia/models when
+  // the row is expanded. These entries are the offline fallback.
+  nvidia: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-8b-instruct", "google/gemma-2-2b-it"],
 };
 
 export function LLMTab({
@@ -181,7 +183,34 @@ function ProviderRow({
   const currentModel: string = pCfg?.model ?? "";
   const currentBaseUrl: string = pCfg?.base_url ?? "";
 
-  const knownModels = MODELS[provider];
+  // NVIDIA's catalog rotates often, so we fetch the live model list when the
+  // row opens. Falls back to the hardcoded MODELS[provider] entries when the
+  // call fails. The list mixes chat / embedding / vision models — the row's
+  // "Test connection" button is the final guard against picking a non-chat
+  // model.
+  const [liveNvidiaModels, setLiveNvidiaModels] = useState<string[] | null>(null);
+  const [nvidiaFilter, setNvidiaFilter] = useState("");
+  useEffect(() => {
+    if (provider !== "nvidia" || !expanded || liveNvidiaModels !== null) return;
+    let cancelled = false;
+    fetch("/api/config/llm/nvidia/models")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; models?: string[] }) => {
+        if (cancelled) return;
+        setLiveNvidiaModels(d.ok && d.models && d.models.length > 0 ? d.models : []);
+      })
+      .catch(() => {
+        if (!cancelled) setLiveNvidiaModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, expanded, liveNvidiaModels]);
+
+  const knownModels =
+    provider === "nvidia" && liveNvidiaModels && liveNvidiaModels.length > 0
+      ? liveNvidiaModels
+      : MODELS[provider];
   const isCustomModel = currentModel && !knownModels.includes(currentModel);
   const [modelChoice, setModelChoice] = useState<string>(
     isCustomModel ? "custom" : currentModel || knownModels[0]!,
@@ -198,6 +227,13 @@ function ProviderRow({
     setCustomModel(isCustomModel ? currentModel : "");
     setBaseUrl(currentBaseUrl);
   }, [currentModel, currentBaseUrl, isCustomModel, knownModels]);
+
+  const filteredModels =
+    provider === "nvidia" && nvidiaFilter.trim()
+      ? knownModels.filter((m) =>
+          m.toLowerCase().includes(nvidiaFilter.trim().toLowerCase()),
+        )
+      : knownModels;
 
   const resolveModel = () => (modelChoice === "custom" ? customModel : modelChoice);
 
@@ -315,6 +351,27 @@ function ProviderRow({
             </div>
           )}
 
+          {provider === "nvidia" && (
+            <div className="v2-set__field">
+              <label className="v2-set__field-label">
+                Filter models
+                <span style={{ color: "var(--ink-3)", marginLeft: "var(--s-2)" }}>
+                  ({knownModels.length} from NVIDIA catalog)
+                </span>
+              </label>
+              <input
+                className="v2-set__input"
+                value={nvidiaFilter}
+                onChange={(e) => setNvidiaFilter(e.target.value)}
+                placeholder="e.g. llama, mistral, gemma"
+              />
+              <p className="v2-set__hint">
+                Catalog mixes chat, embedding and vision models. Use Test
+                connection to confirm the chosen model supports chat.
+              </p>
+            </div>
+          )}
+
           <div className="v2-set__field">
             <label className="v2-set__field-label">Model</label>
             <div style={{ display: "flex", gap: "var(--s-2)" }}>
@@ -324,11 +381,16 @@ function ProviderRow({
                 onChange={(e) => setModelChoice(e.target.value)}
                 style={{ flex: 1 }}
               >
-                {knownModels.map((m) => (
+                {filteredModels.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
                 ))}
+                {provider === "nvidia" && filteredModels.length === 0 && (
+                  <option value="" disabled>
+                    No models match "{nvidiaFilter}"
+                  </option>
+                )}
                 <option value="custom">Custom…</option>
               </select>
               {modelChoice === "custom" && (
