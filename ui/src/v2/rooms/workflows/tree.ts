@@ -375,6 +375,138 @@ export function removeRouterBranch(root: FlowStepNode, stepName: string, branchI
   return tree;
 }
 
+/* ----------------------------------------- connect / disconnect helpers */
+
+/**
+ * Identifies which source handle on a step a connection is using. The
+ * handle ids rendered by `StepNode` (`out` / `loop-body` / `branch:<name>`)
+ * parse into one of these shapes.
+ */
+export type ConnectionHandle =
+  | { kind: "out" }
+  | { kind: "loop-body" }
+  | { kind: "branch"; branchName: string };
+
+/** Parse a handle id back into its semantic kind. Returns null on garbage. */
+export function parseSourceHandle(raw: string | null | undefined): ConnectionHandle | null {
+  if (!raw || raw === "out") return { kind: "out" };
+  if (raw === "loop-body") return { kind: "loop-body" };
+  if (raw.startsWith("branch:")) {
+    return { kind: "branch", branchName: raw.slice("branch:".length) };
+  }
+  return null;
+}
+
+/**
+ * Whether a source-handle on `step` is currently wired to a successor.
+ * Used by the editor to drive `Handle.isConnectableStart` so users can't
+ * start dragging from an already-used circle.
+ */
+export function isSourceHandleConnected(step: FlowStepNode, handle: ConnectionHandle): boolean {
+  switch (handle.kind) {
+    case "out":
+      return !!step.nextAction;
+    case "loop-body":
+      return step.type === "LOOP_ON_ITEMS" && !!step.firstLoopAction;
+    case "branch": {
+      if (step.type !== "ROUTER" || !Array.isArray(step.children)) return false;
+      const branches = step.settings?.branches ?? [];
+      const idx = branches.findIndex((b) => b?.branchName === handle.branchName);
+      if (idx < 0 || idx >= step.children.length) return false;
+      return !!step.children[idx];
+    }
+  }
+}
+
+/**
+ * Attach `targetSubtree` (typically a previously-orphan step) at the named
+ * source-handle of `sourceName`. The handle must currently be unwired — the
+ * caller is responsible for the "one parent per node" invariant. Returns
+ * null when the source/handle can't be resolved or is already in use.
+ *
+ * The target subtree is deep-cloned so the caller's orphan reference does
+ * not become aliased to the tree.
+ */
+export function connectSteps(
+  root: FlowStepNode,
+  sourceName: string,
+  sourceHandle: ConnectionHandle,
+  targetSubtree: FlowStepNode,
+): FlowStepNode | null {
+  const tree = cloneTrigger(root);
+  const source = findStep(tree, sourceName);
+  if (!source) return null;
+  const clonedTarget = cloneTrigger(targetSubtree);
+
+  switch (sourceHandle.kind) {
+    case "out":
+      if (source.nextAction) return null;
+      source.nextAction = clonedTarget;
+      break;
+    case "loop-body":
+      if (source.type !== "LOOP_ON_ITEMS" || source.firstLoopAction) return null;
+      source.firstLoopAction = clonedTarget;
+      break;
+    case "branch": {
+      if (source.type !== "ROUTER" || !Array.isArray(source.children)) return null;
+      const branches = source.settings?.branches ?? [];
+      const idx = branches.findIndex((b) => b?.branchName === sourceHandle.branchName);
+      if (idx < 0 || idx >= source.children.length) return null;
+      if (source.children[idx]) return null;
+      source.children[idx] = clonedTarget;
+      break;
+    }
+  }
+  return tree;
+}
+
+/**
+ * Sever the outgoing edge at `sourceName`'s `sourceHandle`. Returns the new
+ * tree plus the detached subtree (head only -- its own `nextAction` chain
+ * travels with it). The caller typically pushes `detached` into the editor's
+ * orphan list so the user can re-wire it without losing work.
+ */
+export function disconnectEdge(
+  root: FlowStepNode,
+  sourceName: string,
+  sourceHandle: ConnectionHandle,
+): { tree: FlowStepNode; detached: FlowStepNode } | null {
+  const tree = cloneTrigger(root);
+  const source = findStep(tree, sourceName);
+  if (!source) return null;
+
+  let detached: FlowStepNode | undefined;
+  switch (sourceHandle.kind) {
+    case "out":
+      detached = source.nextAction;
+      source.nextAction = undefined;
+      break;
+    case "loop-body":
+      if (source.type !== "LOOP_ON_ITEMS") return null;
+      detached = source.firstLoopAction;
+      source.firstLoopAction = undefined;
+      break;
+    case "branch": {
+      if (source.type !== "ROUTER" || !Array.isArray(source.children)) return null;
+      const branches = source.settings?.branches ?? [];
+      const idx = branches.findIndex((b) => b?.branchName === sourceHandle.branchName);
+      if (idx < 0 || idx >= source.children.length) return null;
+      detached = source.children[idx] ?? undefined;
+      source.children[idx] = null;
+      break;
+    }
+  }
+  if (!detached) return null;
+  return { tree, detached };
+}
+
+/** Collect every step name reachable from the trigger -- used to test
+ *  whether a candidate target is already part of the tree (and therefore
+ *  has a parent we shouldn't overwrite). */
+export function allReachableNames(root: FlowStepNode): Set<string> {
+  return new Set(flattenSteps(root).map((fs) => fs.step.name));
+}
+
 /** Look up the current ChainScope for a step, mainly so the editor can wire
  *  per-sub-chain "Add step" buttons without recomputing scope. */
 export function chainScopeFor(root: FlowStepNode, stepName: string): ChainScope | null {

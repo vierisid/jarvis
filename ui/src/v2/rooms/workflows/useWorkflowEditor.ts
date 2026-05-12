@@ -16,16 +16,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addStepToHead as treeAddStepToHead,
   addRouterBranch as treeAddRouterBranch,
+  allReachableNames,
   applySchemaDefaults,
   cloneTrigger,
+  connectSteps as treeConnectSteps,
+  disconnectEdge as treeDisconnectEdge,
   findStep,
   flattenSteps,
   insertStepAfter as treeInsertStepAfter,
+  isSourceHandleConnected,
+  parseSourceHandle,
   removeRouterBranch as treeRemoveRouterBranch,
   removeStep,
   reorderChain as treeReorderChain,
   setLoopItems as treeSetLoopItems,
   setRouterExecutionType as treeSetRouterExecutionType,
+  type ConnectionHandle,
 } from "./tree";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
@@ -136,6 +142,11 @@ export function useWorkflowEditor(flowId: string | null) {
 
   // Local edit buffer: a copy of `version.trigger` the editor mutates until save.
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
+  // Orphan steps live outside the trigger tree: head node + its (optional)
+  // own `nextAction` chain. They appear on the canvas with a stored x/y so
+  // the user can wire them in by dragging a handle. Saving discards any
+  // remaining orphans -- the API only persists the connected tree.
+  const [draftOrphans, setDraftOrphans] = useState<OrphanStep[]>([]);
   const ignoreNextLoadRef = useRef(false);
 
   // Stash for trigger settings while the user is in EMPTY (manual) mode.
@@ -172,6 +183,7 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       setVersion(editable);
       setDraftTrigger(editable ? cloneTrigger(editable.trigger) : null);
+      setDraftOrphans([]);
       setDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -302,8 +314,78 @@ export function useWorkflowEditor(flowId: string | null) {
    */
   const deleteStep = useCallback((stepName: string): void => {
     setDraftTrigger((prev) => (prev ? removeStep(prev, stepName) : prev));
+    // Also drop any matching orphan -- step names are unique across the tree
+    // + orphans, so the same name shouldn't appear in both, but defensive.
+    setDraftOrphans((prev) => prev.filter((o) => !containsName(o.node, stepName)));
     setDirty(true);
   }, []);
+
+  /**
+   * Wire `sourceName`'s `sourceHandle` to a step in the orphan list, removing
+   * that orphan from the orphan pool. Both ends must currently be free
+   * (one parent per node is enforced by `isValidConnection` upstream). Returns
+   * true on success.
+   */
+  const connectByHandles = useCallback(
+    (sourceName: string, sourceHandleId: string, targetName: string): boolean => {
+      const handle = parseSourceHandle(sourceHandleId);
+      if (!handle) return false;
+      let connected = false;
+      setDraftTrigger((prev) => {
+        if (!prev) return prev;
+        const orphan = draftOrphans.find((o) => o.node.name === targetName);
+        if (!orphan) return prev;
+        const next = treeConnectSteps(prev, sourceName, handle, orphan.node);
+        if (!next) return prev;
+        connected = true;
+        return next;
+      });
+      if (connected) {
+        setDraftOrphans((prev) => prev.filter((o) => o.node.name !== targetName));
+        setDirty(true);
+      }
+      return connected;
+    },
+    [draftOrphans],
+  );
+
+  /**
+   * Sever the outgoing edge at `sourceName`'s `sourceHandle`. The detached
+   * subtree's head becomes a new orphan placed at the given canvas
+   * coordinates so the user can re-wire it without losing work.
+   */
+  const disconnectEdgeByHandle = useCallback(
+    (sourceName: string, sourceHandleId: string, dropAt: { x: number; y: number }): boolean => {
+      const handle = parseSourceHandle(sourceHandleId);
+      if (!handle) return false;
+      let detached: FlowStepNode | null = null;
+      setDraftTrigger((prev) => {
+        if (!prev) return prev;
+        const result = treeDisconnectEdge(prev, sourceName, handle);
+        if (!result) return prev;
+        detached = result.detached;
+        return result.tree;
+      });
+      if (detached) {
+        setDraftOrphans((prev) => [...prev, { node: detached!, x: dropAt.x, y: dropAt.y }]);
+        setDirty(true);
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  /** Update an orphan's stored canvas position. Called on drag-stop so the
+   *  orphan stays where the user left it across re-renders. */
+  const setOrphanPosition = useCallback(
+    (stepName: string, x: number, y: number): void => {
+      setDraftOrphans((prev) =>
+        prev.map((o) => (o.node.name === stepName ? { ...o, x, y } : o)),
+      );
+    },
+    [],
+  );
 
   /**
    * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
@@ -393,6 +475,7 @@ export function useWorkflowEditor(flowId: string | null) {
       ignoreNextLoadRef.current = true;
       setVersion(updated);
       setDraftTrigger(cloneTrigger(updated.trigger));
+      setDraftOrphans([]);
       setDirty(false);
       return { ok: true, message: "Saved" };
     } catch (e) {
@@ -403,6 +486,7 @@ export function useWorkflowEditor(flowId: string | null) {
   const reset = useCallback((): void => {
     if (version) {
       setDraftTrigger(cloneTrigger(version.trigger));
+      setDraftOrphans([]);
       setDirty(false);
     }
   }, [version]);
@@ -482,6 +566,31 @@ export function useWorkflowEditor(flowId: string | null) {
     [draftTrigger],
   );
 
+  /** Names already reachable from the trigger -- their target handle is
+   *  taken (every connected step has exactly one parent). Used by the
+   *  canvas to disable target-side dragging on already-wired nodes. */
+  const treeNames = useMemo(
+    () => (draftTrigger ? allReachableNames(draftTrigger) : new Set<string>()),
+    [draftTrigger],
+  );
+
+  /** Predicate the canvas passes to each Handle so already-connected source
+   *  handles refuse to start a new drag. */
+  const isHandleAvailable = useCallback(
+    (stepName: string, handleId: string): boolean => {
+      if (!draftTrigger) return false;
+      const handle = parseSourceHandle(handleId);
+      if (!handle) return false;
+      const step = findStep(draftTrigger, stepName);
+      if (!step) {
+        // Orphan: its source handles are always free until wired.
+        return true;
+      }
+      return !isSourceHandleConnected(step, handle);
+    },
+    [draftTrigger],
+  );
+
   /**
    * Walk every step and collect required-but-empty inputs (according to the
    * piece's declared schema). The dashboard uses this for a save-time
@@ -496,7 +605,10 @@ export function useWorkflowEditor(flowId: string | null) {
     catalog,
     version,
     draftTrigger,
+    draftOrphans,
     allSteps,
+    treeNames,
+    isHandleAvailable,
     error,
     loading,
     dirty,
@@ -514,11 +626,44 @@ export function useWorkflowEditor(flowId: string | null) {
     setRouterExecutionType,
     addRouterBranch,
     removeRouterBranch,
+    connectByHandles,
+    disconnectEdgeByHandle,
+    setOrphanPosition,
     save,
     reset,
     setStepSampleData,
     testStepFromHere,
   };
+}
+
+/**
+ * An orphan step: head node of a disconnected subgraph that lives on the
+ * canvas at a stored x/y. Created by right-click disconnect (the detached
+ * subtree's head) and by the library picker (Task 7).
+ */
+export interface OrphanStep {
+  node: FlowStepNode;
+  x: number;
+  y: number;
+}
+
+/** Re-export the ConnectionHandle shape so the canvas component can type
+ *  the handle ids without re-importing from `./tree`. */
+export type { ConnectionHandle } from "./tree";
+
+/** Recursive name-check across a step and every successor (`nextAction`,
+ *  `firstLoopAction`, `children[]`). Used to scrub deletions out of the
+ *  orphan list. */
+function containsName(node: FlowStepNode, name: string): boolean {
+  if (node.name === name) return true;
+  if (node.nextAction && containsName(node.nextAction, name)) return true;
+  if (node.firstLoopAction && containsName(node.firstLoopAction, name)) return true;
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      if (child && containsName(child, name)) return true;
+    }
+  }
+  return false;
 }
 
 export interface EditorValidationGap {

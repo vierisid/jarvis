@@ -182,6 +182,16 @@
 .wf-editor__canvas .react-flow__handle.wf-handle--branch {
   bottom: -6px;
 }
+/* "Used" handle: already wired to a successor. We dim the circle and disable
+   the pointer cursor so the user understands they have to right-click the
+   existing edge first to free the handle before dragging a new one. */
+.wf-editor__canvas .react-flow__handle.wf-handle--used::after {
+  background: var(--wf-handle-border);
+  opacity: 0.55;
+}
+.wf-editor__canvas .react-flow__handle.wf-handle--used {
+  cursor: not-allowed;
+}
 
 /* ── Custom node ── */
 
@@ -203,6 +213,14 @@
 .wf-node--nested {
   background: var(--paper-3);
   border-style: dashed;
+}
+/* Orphan: created by right-click disconnect (until re-wired) or by the
+   library picker before the user connects it. Renders with a dashed warn-
+   tinted border so it's obviously "not yet part of the flow". */
+.wf-node--orphan {
+  border-style: dashed;
+  border-color: var(--accent-warn, #fbbf24);
+  opacity: 0.92;
 }
 
 .wf-node__branch-label {

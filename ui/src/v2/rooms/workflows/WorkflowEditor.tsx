@@ -22,9 +22,11 @@ import {
   Handle,
   Position,
   useNodesState,
+  type Connection,
   type Edge,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Save, RotateCcw, X, Plus, Trash2 } from "lucide-react";
@@ -33,6 +35,7 @@ import {
   useWorkflowEditor,
   type FlatStep,
   type FlowStepNode,
+  type OrphanStep,
   type PieceCatalogActionOrTrigger,
   type PieceCatalogEntry,
   type PieceInputField,
@@ -59,6 +62,14 @@ interface StepNodeData extends Record<string, unknown> {
   catalog: PieceCatalogEntry[];
   depth: number;
   branchName?: string;
+  /** True when this node is an orphan (not reachable from the trigger). */
+  isOrphan: boolean;
+  /** Per-handle "already wired" state -- the rendered Handle uses these to
+   *  block a drag from starting on a handle that's currently in use. */
+  outConnected: boolean;
+  loopBodyConnected: boolean;
+  /** Keyed by branch name. */
+  branchConnected: Record<string, boolean>;
 }
 
 export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
@@ -127,8 +138,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // chain's authoritative order; React Flow needs an internal mutable copy
   // so dragged positions update visually without losing reactivity.
   const { nodes: baseNodes, edges } = useMemo(
-    () => buildGraph(editor.allSteps, selectedStepName, editor.catalog),
-    [editor.allSteps, selectedStepName, editor.catalog],
+    () => buildGraph(editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog),
+    [editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
   // Sync incoming chain order changes back into React Flow's internal state.
@@ -140,12 +151,23 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
 
   const triggerName = editor.draftTrigger?.name ?? null;
 
+  // Capture the ReactFlowInstance so right-click handlers can translate
+  // the cursor's screen coordinates into the canvas's flow coordinates
+  // for orphan placement.
+  const rfInstanceRef = useRef<ReactFlowInstance<Node<StepNodeData>, Edge> | null>(null);
+
   // Drag-rearrange: when a node is dropped, identify its chain (top-level /
   // LOOP body / ROUTER branch) from its FlatStep entry, gather siblings in
   // the SAME chain, sort by Y, and propagate. Cross-chain moves are not
   // supported -- React Flow allows them visually, but we ignore the move.
+  // Orphan nodes (not in the chain) just persist their new x/y.
   const onNodeDragStop = useCallback(
     (_e: React.MouseEvent | TouchEvent | MouseEvent, draggedNode: Node<StepNodeData>) => {
+      // Orphan repositioning: persist the new position, nothing to reorder.
+      if (draggedNode.data?.isOrphan) {
+        editor.setOrphanPosition(draggedNode.id, draggedNode.position.x, draggedNode.position.y);
+        return;
+      }
       if (!triggerName) return;
       const draggedFlat = editor.allSteps.find((fs) => fs.step.name === draggedNode.id);
       if (!draggedFlat) return;
@@ -177,6 +199,56 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       editor.reorderChain(scope, newOrder);
     },
     [nodes, triggerName, editor],
+  );
+
+  /**
+   * Drop-time validation: enforce the one-parent invariant and reject
+   * self-loops. xyflow runs this on every potential drop target so it can
+   * decorate invalid connection lines in red. Already-wired source handles
+   * are also blocked at drag-start via `isConnectableStart` on the Handle
+   * itself (see `StepNode`), so this is the second line of defence.
+   */
+  const isValidConnection = useCallback(
+    (conn: Connection | Edge): boolean => {
+      const { source, target, sourceHandle } = conn;
+      if (!source || !target) return false;
+      if (source === target) return false;
+      // The target must be a free orphan; targets already in the tree have
+      // a parent and the one-parent rule forbids re-attaching them.
+      const targetIsOrphan = editor.draftOrphans.some((o) => o.node.name === target);
+      if (!targetIsOrphan) return false;
+      // The source handle must be free.
+      if (sourceHandle && !editor.isHandleAvailable(source, sourceHandle)) return false;
+      return true;
+    },
+    [editor],
+  );
+
+  /** Drop: turn the visual connection into a tree mutation. */
+  const onConnect = useCallback(
+    (conn: Connection): void => {
+      if (!conn.source || !conn.target || !conn.sourceHandle) return;
+      editor.connectByHandles(conn.source, conn.sourceHandle, conn.target);
+    },
+    [editor],
+  );
+
+  /**
+   * Right-click an edge to delete it. The disconnected subtree's head
+   * becomes an orphan at the cursor's flow coordinate so the user can re-
+   * wire it without losing the work it represents.
+   */
+  const onEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge): void => {
+      event.preventDefault();
+      if (!edge.source || !edge.sourceHandle) return;
+      const flowPos = rfInstanceRef.current?.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      }) ?? { x: 0, y: 0 };
+      editor.disconnectEdgeByHandle(edge.source, edge.sourceHandle, flowPos);
+    },
+    [editor],
   );
 
   return (
@@ -223,17 +295,23 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             <ReactFlow
               nodes={nodes}
               edges={edges}
+              onInit={(instance) => {
+                rfInstanceRef.current = instance;
+              }}
               onNodesChange={onNodesChange}
               nodeTypes={NODE_TYPES}
               onNodeClick={(_, n) => setSelectedStepName(n.id)}
               onPaneClick={() => setSelectedStepName(null)}
               onNodeDragStop={onNodeDragStop}
+              onConnect={onConnect}
+              isValidConnection={isValidConnection}
+              onEdgeContextMenu={onEdgeContextMenu}
               fitView
               fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
               // Per-node `draggable` flag (set to false for the trigger in
               // buildGraph) overrides this. Nodes default to draggable.
               nodesDraggable
-              nodesConnectable={false}
+              nodesConnectable
               elementsSelectable
               panOnDrag
               zoomOnScroll
@@ -333,9 +411,32 @@ const NODE_TYPES = { stepNode: StepNode };
 
 function buildGraph(
   steps: FlatStep[],
+  orphans: OrphanStep[],
   selected: string | null,
   catalog: PieceCatalogEntry[],
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
+  const buildNodeData = (step: FlowStepNode, depth: number, branchName: string | undefined, isOrphan: boolean): StepNodeData => {
+    const branchConnected: Record<string, boolean> = {};
+    if (step.type === "ROUTER" && Array.isArray(step.children)) {
+      const branches = step.settings?.branches ?? [];
+      for (let i = 0; i < step.children.length; i++) {
+        const bName = branches[i]?.branchName ?? `branch_${i}`;
+        branchConnected[bName] = !!step.children[i];
+      }
+    }
+    return {
+      step,
+      selected: selected === step.name,
+      catalog,
+      depth,
+      branchName,
+      isOrphan,
+      outConnected: !!step.nextAction,
+      loopBodyConnected: step.type === "LOOP_ON_ITEMS" && !!step.firstLoopAction,
+      branchConnected,
+    };
+  };
+
   const nodes: Node<StepNodeData>[] = steps.map((entry, i) => {
     const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
@@ -348,12 +449,27 @@ function buildGraph(
       // components (Task 2).
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
-      data: { step, selected: selected === step.name, catalog, depth: entry.depth, branchName: entry.branchName },
+      data: buildNodeData(step, entry.depth, entry.branchName, false),
       // Trigger is always pinned. Every other node is draggable; the chain
       // it belongs to is inferred at drop time from its FlatStep entry.
       draggable: !isTrigger,
     };
   });
+
+  // Orphan nodes are pushed last so they paint above the chain. They're
+  // freely draggable; their stored x/y persists across renders via
+  // `setOrphanPosition` on drag-stop.
+  for (const o of orphans) {
+    nodes.push({
+      id: o.node.name,
+      type: "stepNode",
+      position: { x: o.x, y: o.y },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      data: buildNodeData(o.node, 0, undefined, true),
+      draggable: true,
+    });
+  }
 
   // Edges: each step's structural pointers become an edge. sourceHandle ids
   // mirror the Handle components rendered in StepNode (`out` / `loop-body` /
@@ -409,7 +525,17 @@ function buildGraph(
 }
 
 function StepNode({ data }: NodeProps): React.ReactElement {
-  const { step, selected, catalog, depth, branchName } = data as StepNodeData;
+  const {
+    step,
+    selected,
+    catalog,
+    depth,
+    branchName,
+    isOrphan,
+    outConnected,
+    loopBodyConnected,
+    branchConnected,
+  } = data as StepNodeData;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
   const isLoop = step.type === "LOOP_ON_ITEMS";
   const isRouter = step.type === "ROUTER";
@@ -437,38 +563,44 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 
   return (
     <div
-      className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""}`}
+      className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""} ${isOrphan ? "wf-node--orphan" : ""}`}
     >
       {/* Target ("in"): left edge, every non-trigger node accepts an incoming
-          connection from a preceding step's source handle. */}
+          connection from a preceding step's source handle. Orphans accept
+          drops; nodes already in the tree have a parent and refuse. */}
       {!isTrigger ? (
         <Handle
           type="target"
           position={Position.Left}
           id="in"
           className="wf-handle wf-handle--target"
+          isConnectableEnd={isOrphan}
+          isConnectableStart={false}
         />
       ) : null}
       {/* Main source ("out"): right edge. Represents `nextAction` -- the
-          sequential continuation of this chain. Every node has it, including
-          LOOP/ROUTER (their successor runs after the loop/router itself
-          finishes). The trigger uses it to start the top-level chain. */}
+          sequential continuation of this chain. Refuses to start a new drag
+          when already wired (the user must right-click the edge to free it
+          first). */}
       <Handle
         type="source"
         position={Position.Right}
         id="out"
-        className="wf-handle wf-handle--source"
+        className={`wf-handle wf-handle--source ${outConnected ? "wf-handle--used" : ""}`}
+        isConnectableStart={!outConnected}
+        isConnectableEnd={false}
       />
       {/* LOOP body source: bottom-edge handle that feeds into the loop's
-          `firstLoopAction`. Visually distinct from the main "out" so the
-          user can tell which sub-chain a connection wires. */}
+          `firstLoopAction`. */}
       {isLoop ? (
         <Handle
           type="source"
           position={Position.Bottom}
           id="loop-body"
-          className="wf-handle wf-handle--source wf-handle--branch"
+          className={`wf-handle wf-handle--source wf-handle--branch ${loopBodyConnected ? "wf-handle--used" : ""}`}
           style={{ left: "50%" }}
+          isConnectableStart={!loopBodyConnected}
+          isConnectableEnd={false}
         />
       ) : null}
       {/* ROUTER branches: one bottom source handle per branch, spread along
@@ -478,14 +610,17 @@ function StepNode({ data }: NodeProps): React.ReactElement {
         ? branches.map((b, i) => {
             const name = b?.branchName ?? `branch_${i}`;
             const pct = ((i + 1) * 100) / (branches.length + 1);
+            const used = !!branchConnected[name];
             return (
               <Handle
                 key={`branch:${name}`}
                 type="source"
                 position={Position.Bottom}
                 id={`branch:${name}`}
-                className="wf-handle wf-handle--source wf-handle--branch"
+                className={`wf-handle wf-handle--source wf-handle--branch ${used ? "wf-handle--used" : ""}`}
                 style={{ left: `${pct}%` }}
+                isConnectableStart={!used}
+                isConnectableEnd={false}
               />
             );
           })

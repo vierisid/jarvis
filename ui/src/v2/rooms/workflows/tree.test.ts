@@ -4,11 +4,15 @@ import {
   addStepToHead,
   cloneTrigger,
   chainScopeFor,
+  connectSteps,
+  disconnectEdge,
   findStep,
   findStepLocation,
   flattenSteps,
   insertStepAfter,
+  isSourceHandleConnected,
   nextStepName,
+  parseSourceHandle,
   removeRouterBranch,
   removeStep,
   reorderChain,
@@ -319,5 +323,86 @@ describe("cloneTrigger", () => {
     expect(after).not.toBe(before);
     after.nextAction!.displayName = "modified";
     expect(before.nextAction!.displayName).toBeUndefined();
+  });
+});
+
+describe("parseSourceHandle", () => {
+  test("recognises the three handle shapes", () => {
+    expect(parseSourceHandle("out")).toEqual({ kind: "out" });
+    expect(parseSourceHandle(null)).toEqual({ kind: "out" });
+    expect(parseSourceHandle("loop-body")).toEqual({ kind: "loop-body" });
+    expect(parseSourceHandle("branch:approved")).toEqual({ kind: "branch", branchName: "approved" });
+    expect(parseSourceHandle("nonsense")).toBeNull();
+  });
+});
+
+describe("isSourceHandleConnected", () => {
+  test("reflects wired vs free handles on each kind", () => {
+    const t = fixture();
+    const step1 = findStep(t, "step_1")!;
+    const loop = findStep(t, "loop_1")!;
+    const router = findStep(t, "router_1")!;
+    const step6 = findStep(t, "step_6")!;
+    expect(isSourceHandleConnected(step1, { kind: "out" })).toBe(true);
+    expect(isSourceHandleConnected(step6, { kind: "out" })).toBe(false);
+    expect(isSourceHandleConnected(loop, { kind: "loop-body" })).toBe(true);
+    expect(isSourceHandleConnected(router, { kind: "branch", branchName: "a" })).toBe(true);
+    expect(isSourceHandleConnected(router, { kind: "branch", branchName: "ghost" })).toBe(false);
+  });
+});
+
+describe("connectSteps", () => {
+  test("attaches an orphan at the named source handle", () => {
+    const t = fixture();
+    const orphan: FlowStepNode = {
+      name: "orphan_1",
+      type: "PIECE",
+      settings: { pieceName: "p", actionName: "a" },
+    };
+    const next = connectSteps(t, "step_6", { kind: "out" }, orphan);
+    expect(next).not.toBeNull();
+    expect(findStep(next!, "orphan_1")).toBeTruthy();
+    // The clone should be independent: mutating the source orphan must not
+    // leak into the tree.
+    orphan.displayName = "modified";
+    expect(findStep(next!, "orphan_1")!.displayName).toBeUndefined();
+  });
+
+  test("refuses to overwrite an already-wired source handle", () => {
+    const t = fixture();
+    const orphan: FlowStepNode = { name: "orphan_1", type: "PIECE" };
+    // step_1's `out` is already wired to loop_1 -- must reject.
+    expect(connectSteps(t, "step_1", { kind: "out" }, orphan)).toBeNull();
+    // loop_1's body is already wired to step_2 -- must reject.
+    expect(connectSteps(t, "loop_1", { kind: "loop-body" }, orphan)).toBeNull();
+    // router_1's "a" branch already has step_4 -- must reject.
+    expect(connectSteps(t, "router_1", { kind: "branch", branchName: "a" }, orphan)).toBeNull();
+  });
+});
+
+describe("disconnectEdge", () => {
+  test("severs a chain edge and returns the detached head", () => {
+    const t = fixture();
+    const result = disconnectEdge(t, "step_1", { kind: "out" });
+    expect(result).not.toBeNull();
+    expect(result!.detached.name).toBe("loop_1");
+    // step_1 in the new tree has no nextAction.
+    expect(findStep(result!.tree, "step_1")!.nextAction).toBeUndefined();
+    // The detached subtree shouldn't be reachable from the new tree.
+    expect(findStep(result!.tree, "loop_1")).toBeNull();
+  });
+
+  test("severs a loop body and a router branch", () => {
+    const t1 = disconnectEdge(fixture(), "loop_1", { kind: "loop-body" });
+    expect(t1!.detached.name).toBe("step_2");
+    expect(findStep(t1!.tree, "loop_1")!.firstLoopAction).toBeUndefined();
+
+    const t2 = disconnectEdge(fixture(), "router_1", { kind: "branch", branchName: "b" });
+    expect(t2!.detached.name).toBe("step_5");
+    expect(findStep(t2!.tree, "router_1")!.children![1]).toBeNull();
+  });
+
+  test("returns null when the handle is already free", () => {
+    expect(disconnectEdge(fixture(), "step_6", { kind: "out" })).toBeNull();
   });
 });
