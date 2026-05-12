@@ -22,6 +22,17 @@
   box-sizing: border-box;
 }
 
+/* When a top banner (e.g. restart-required) sits above the shell, share the
+   100vh root between banner and shell instead of stacking 100vh on top of
+   the banner — otherwise the composer is pushed below the viewport. */
+.v2-shell-frame {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Phase 7 Pass B — visually-hidden utility for screen-reader-only
    announcements (voice state changes, room transitions). Standard
    recipe: takes itself out of the visual tree without `display: none`

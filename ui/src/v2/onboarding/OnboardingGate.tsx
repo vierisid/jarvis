@@ -73,8 +73,10 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   if (!status.tutorial_completed && !status.tutorial_dismissed) {
     return (
       <TutorialEventProvider>
-        <RestartRequiredBanner status={status} />
-        {children}
+        <div className="v2-shell-frame">
+          <RestartRequiredBanner status={status} />
+          {children}
+        </div>
         <TutorialRoom
           resumeFromStepId={status.tutorial_progress_step}
           onComplete={() => refresh()}
@@ -97,9 +99,9 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
+    <div className="v2-shell-frame">
       <RestartRequiredBanner status={status} />
       {children}
-    </>
+    </div>
   );
 }
