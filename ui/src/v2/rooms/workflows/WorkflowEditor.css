@@ -62,19 +62,9 @@
 .wf-editor__toast--ok { color: var(--accent-ok, #5eead4); border-color: var(--accent-ok-soft, #134e4a); }
 .wf-editor__toast--warn { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn-soft, #713f12); }
 
-.wf-editor__layout {
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  min-height: 0;
-}
-
-@media (max-width: 880px) {
-  .wf-editor__layout { grid-template-columns: 1fr; }
-  .wf-editor__panel { display: none; }
-}
-
 .wf-editor__canvas {
+  flex: 1 1 auto;
+  min-height: 0;
   position: relative;
   background: var(--paper);
   overflow: hidden;
@@ -90,25 +80,55 @@
 }
 .wf-editor__placeholder--error { color: var(--accent-warn, #fbbf24); }
 
-.wf-editor__panel {
-  border-left: 1px solid var(--rule-soft);
-  background: var(--paper-2);
-  overflow-y: auto;
-  padding: var(--s-4);
-}
-
-.wf-editor__panel-empty {
-  color: var(--ink-3);
-  font-size: 0.88rem;
-  line-height: 1.5;
-}
-.wf-editor__panel-empty p { margin: var(--s-2) 0; }
-.wf-editor__panel-empty code,
 .wf-editor__hint code {
   background: var(--paper-3);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 0.78rem;
+}
+
+/* Floating settings popover: portal-rendered into <body> at the cursor's
+   click location. Positioned via inline `left` / `top` (computed by
+   `clampToViewport` in the component). Width is also inline (POPOVER_WIDTH)
+   so the JS clamp logic stays the single source of truth. */
+.wf-popover {
+  position: fixed;
+  z-index: 200;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.5), 0 4px 12px -4px rgba(0, 0, 0, 0.25);
+  max-height: min(70vh, 600px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wf-popover__close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  padding: 4px;
+  border-radius: var(--r-1, 4px);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.wf-popover__close:hover { color: var(--ink-1); background: var(--paper-3); }
+.wf-popover__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wf-popover__body {
+  padding: var(--s-4);
+  padding-top: var(--s-3);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ── React Flow surface tweaks ── */

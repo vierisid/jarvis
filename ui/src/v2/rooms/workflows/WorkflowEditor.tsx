@@ -14,7 +14,8 @@
  * Stage 3 lights all of those up.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ReactFlow,
   Background,
@@ -75,7 +76,16 @@ interface StepNodeData extends Record<string, unknown> {
 export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
   const editor = useWorkflowEditor(flowId);
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
+  // Anchor for the floating settings popover. Captured at click-time from
+  // the originating MouseEvent so the popover opens near the cursor rather
+  // than at a fixed location. Null when the popover is closed.
+  const [popoverAnchor, setPopoverAnchor] = useState<{ x: number; y: number } | null>(null);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+
+  const closePopover = useCallback((): void => {
+    setSelectedStepName(null);
+    setPopoverAnchor(null);
+  }, []);
 
   // Keep selection valid: when steps shift, drop the selection if it doesn't exist.
   useEffect(() => {
@@ -283,126 +293,219 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         </div>
       </header>
 
-      <div className="wf-editor__layout">
-        <section className="wf-editor__canvas" aria-label="Workflow graph">
-          {editor.loading ? (
-            <div className="wf-editor__placeholder">Loading flow…</div>
-          ) : editor.error ? (
-            <div className="wf-editor__placeholder wf-editor__placeholder--error">{editor.error}</div>
-          ) : nodes.length === 0 ? (
-            <div className="wf-editor__placeholder">This flow has no steps yet.</div>
-          ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onInit={(instance) => {
-                rfInstanceRef.current = instance;
-              }}
-              onNodesChange={onNodesChange}
-              nodeTypes={NODE_TYPES}
-              onNodeClick={(_, n) => setSelectedStepName(n.id)}
-              onPaneClick={() => setSelectedStepName(null)}
-              onNodeDragStop={onNodeDragStop}
-              onConnect={onConnect}
-              isValidConnection={isValidConnection}
-              onEdgeContextMenu={onEdgeContextMenu}
-              fitView
-              fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
-              // Per-node `draggable` flag (set to false for the trigger in
-              // buildGraph) overrides this. Nodes default to draggable.
-              nodesDraggable
-              nodesConnectable
-              elementsSelectable
-              panOnDrag
-              zoomOnScroll
-            >
-              <Background gap={16} />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-          )}
-        </section>
+      <section className="wf-editor__canvas" aria-label="Workflow graph">
+        {editor.loading ? (
+          <div className="wf-editor__placeholder">Loading flow…</div>
+        ) : editor.error ? (
+          <div className="wf-editor__placeholder wf-editor__placeholder--error">{editor.error}</div>
+        ) : nodes.length === 0 ? (
+          <div className="wf-editor__placeholder">This flow has no steps yet.</div>
+        ) : (
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onInit={(instance) => {
+              rfInstanceRef.current = instance;
+            }}
+            onNodesChange={onNodesChange}
+            nodeTypes={NODE_TYPES}
+            onNodeClick={(event, n) => {
+              setSelectedStepName(n.id);
+              setPopoverAnchor({ x: event.clientX, y: event.clientY });
+            }}
+            onPaneClick={closePopover}
+            onNodeDragStop={onNodeDragStop}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            onEdgeContextMenu={onEdgeContextMenu}
+            fitView
+            fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
+            // Per-node `draggable` flag (set to false for the trigger in
+            // buildGraph) overrides this. Nodes default to draggable.
+            nodesDraggable
+            nodesConnectable
+            elementsSelectable
+            panOnDrag
+            zoomOnScroll
+          >
+            <Background gap={16} />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        )}
+      </section>
 
-        <aside className="wf-editor__panel" aria-label="Step properties">
-          {selectedStep ? (
-            <PropertiesPanel
-              step={selectedStep}
-              isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
-              hasNextAction={!!selectedStep.nextAction}
-              isTopLevel={selectedDepth === 0}
-              containerKind={selectedFlat?.containerKind}
-              catalog={editor.catalog}
-              onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
-              onSetTriggerType={(type) => editor.setTriggerType(type)}
-              onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
-              onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
-              onRemoveInputKey={(key) => {
-                const settings = selectedStep.settings ?? {};
-                const input = { ...(settings.input ?? {}) };
-                delete input[key];
-                editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
-              }}
-              onSetDisplayName={(displayName) => editor.updateStep(selectedStep.name, { displayName })}
-              onAddStepAfter={() => {
-                const created = editor.insertStepAfter(selectedStep.name);
-                if (created) setSelectedStepName(created);
-              }}
-              onDelete={() => {
-                if (window.confirm(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
-                  editor.deleteStep(selectedStep.name);
-                  setSelectedStepName(null);
-                }
-              }}
-              // LOOP-specific
-              onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
-              onAddStepToLoopBody={() => {
-                const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
-                if (created) setSelectedStepName(created);
-              }}
-              // ROUTER-specific
-              onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
-              onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
-              onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
-              onAddStepToBranch={(branchName) => {
-                const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
-                if (created) setSelectedStepName(created);
-              }}
-              sampleData={editor.version?.sampleData?.[selectedStep.name]}
-              isLocked={editor.version?.state === "LOCKED"}
-              onSetSampleData={(output) =>
-                editor.setStepSampleData(selectedStep.name, output)
+      {/* Floating settings popover: opens at the cursor when a node is
+          clicked, replaces the legacy right-rail aside. Outside-click and
+          Esc close it via the shared `closePopover` handler. */}
+      {selectedStep && popoverAnchor ? (
+        <NodeSettingsPopover anchor={popoverAnchor} onClose={closePopover}>
+          <PropertiesPanel
+            step={selectedStep}
+            isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
+            hasNextAction={!!selectedStep.nextAction}
+            isTopLevel={selectedDepth === 0}
+            containerKind={selectedFlat?.containerKind}
+            catalog={editor.catalog}
+            onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
+            onSetTriggerType={(type) => editor.setTriggerType(type)}
+            onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
+            onRemoveInputKey={(key) => {
+              const settings = selectedStep.settings ?? {};
+              const input = { ...(settings.input ?? {}) };
+              delete input[key];
+              editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
+            }}
+            onSetDisplayName={(displayName) => editor.updateStep(selectedStep.name, { displayName })}
+            onAddStepAfter={() => {
+              const created = editor.insertStepAfter(selectedStep.name);
+              if (created) setSelectedStepName(created);
+            }}
+            onDelete={() => {
+              if (window.confirm(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+                editor.deleteStep(selectedStep.name);
+                closePopover();
               }
-              onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
-            />
-          ) : editor.draftTrigger && !editor.draftTrigger.nextAction ? (
-            <div className="wf-editor__panel-empty">
-              <p>This flow has no actions yet.</p>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => {
-                  if (!editor.draftTrigger) return;
-                  const created = editor.insertStepAfter(editor.draftTrigger.name);
-                  if (created) setSelectedStepName(created);
-                }}
-              >
-                <Icon icon={Plus} size={12} /> Add first action
-              </Button>
-              <p className="wf-editor__hint">
-                Or click the trigger node to configure when the flow fires.
-              </p>
-            </div>
-          ) : (
-            <div className="wf-editor__panel-empty">
-              <p>Click a node to edit its piece, action, and inputs.</p>
-              <p className="wf-editor__hint">
-                Use <code>{`{{stepName.field}}`}</code> in any input to reference a previous step's output.
-              </p>
-            </div>
-          )}
-        </aside>
-      </div>
+            }}
+            // LOOP-specific
+            onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
+            onAddStepToLoopBody={() => {
+              const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
+              if (created) setSelectedStepName(created);
+            }}
+            // ROUTER-specific
+            onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
+            onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
+            onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
+            onAddStepToBranch={(branchName) => {
+              const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
+              if (created) setSelectedStepName(created);
+            }}
+            sampleData={editor.version?.sampleData?.[selectedStep.name]}
+            isLocked={editor.version?.state === "LOCKED"}
+            onSetSampleData={(output) =>
+              editor.setStepSampleData(selectedStep.name, output)
+            }
+            onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
+          />
+        </NodeSettingsPopover>
+      ) : null}
     </div>
   );
+}
+
+/* =========================================================== node settings popover */
+
+const POPOVER_WIDTH = 360;
+const POPOVER_MARGIN = 12;
+
+/**
+ * Floating settings panel anchored to the click location. Portal-rendered
+ * into document.body so it escapes the canvas overflow, with viewport
+ * clamping so it never paints off-screen. Closes on Esc and outside-click;
+ * re-anchors when `anchor` changes (clicking a different node).
+ */
+function NodeSettingsPopover({
+  anchor,
+  onClose,
+  children,
+}: {
+  anchor: { x: number; y: number };
+  onClose: () => void;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>(() => clampToViewport(anchor, undefined));
+
+  // Re-clamp when anchor changes (new node clicked) or after the panel
+  // measures its own height. `useLayoutEffect` so the visible position is
+  // correct on first paint -- no flicker from initial click coords to
+  // clamped coords.
+  useLayoutEffect(() => {
+    setPos(clampToViewport(anchor, ref.current ?? undefined));
+  }, [anchor]);
+
+  // Outside-click. Defer registration one tick so the same click that
+  // opened us doesn't immediately close us.
+  useEffect(() => {
+    const handler = (e: MouseEvent): void => {
+      if (!ref.current) return;
+      // The xyflow `Node` type shadows the DOM Node in this module, so we
+      // disambiguate via globalThis.
+      if (ref.current.contains(e.target as globalThis.Node)) return;
+      onClose();
+    };
+    const timer = window.setTimeout(() => {
+      document.addEventListener("mousedown", handler);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [onClose]);
+
+  // Esc closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      // Don't hijack Esc when the user is editing a field; let it bubble
+      // so the field's own handler can revert.
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="wf-popover"
+      role="dialog"
+      aria-label="Step settings"
+      style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
+    >
+      <button
+        type="button"
+        className="wf-popover__close"
+        onClick={onClose}
+        aria-label="Close settings"
+      >
+        <Icon icon={X} size={14} />
+      </button>
+      <div className="wf-popover__body">{children}</div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * Position the popover near the cursor, then nudge it back inside the
+ * viewport on the right / bottom edges. We use the panel's measured height
+ * when available so a tall settings form doesn't clip; before the first
+ * measurement we estimate from `min(70vh, 600px)`.
+ */
+function clampToViewport(
+  anchor: { x: number; y: number },
+  el: HTMLElement | undefined,
+): { left: number; top: number } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const measuredH = el?.offsetHeight ?? Math.min(vh * 0.7, 600);
+  const measuredW = el?.offsetWidth ?? POPOVER_WIDTH;
+  // Default: a touch below-right of the cursor so the popover doesn't
+  // overlap the clicked node card.
+  let left = anchor.x + 16;
+  let top = anchor.y + 8;
+  if (left + measuredW + POPOVER_MARGIN > vw) {
+    left = Math.max(POPOVER_MARGIN, anchor.x - measuredW - 16);
+  }
+  if (top + measuredH + POPOVER_MARGIN > vh) {
+    top = Math.max(POPOVER_MARGIN, vh - measuredH - POPOVER_MARGIN);
+  }
+  return { left, top };
 }
 
 /* ============================================================ react-flow */
