@@ -42,6 +42,56 @@
   font-size: 1rem;
   color: var(--ink);
 }
+
+/* Click-to-edit title. The h2 reads as a button (cursor + subtle hover
+   tint) when the version is editable; we keep the visual chrome identical
+   to a non-editable title so the affordance shows on hover, not at rest. */
+.wf-editor__title-text {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink);
+  cursor: text;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border-radius: var(--r-2);
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-editor__title-text:hover {
+  background: var(--paper-3);
+}
+.wf-editor__title-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wf-editor__title-text--locked {
+  cursor: default;
+}
+.wf-editor__title-text--locked:hover {
+  background: transparent;
+}
+
+/* Input variant: matches the h2's font + sizing so the swap doesn't
+   produce a visual jump. */
+.wf-editor__title-input {
+  margin: 0;
+  margin-left: -6px;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--paper-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  padding: 2px 6px;
+  outline: none;
+  min-width: 200px;
+  max-width: 480px;
+  width: 100%;
+  box-sizing: border-box;
+}
 .wf-editor__title p {
   margin: 2px 0 0;
   font-size: 0.78rem;

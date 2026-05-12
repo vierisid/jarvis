@@ -346,7 +346,15 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
       <header className="wf-editor__header">
         <div className="wf-editor__title">
-          <h2 id="wf-editor-title">{editor.version?.displayName ?? "Loading…"}</h2>
+          {editor.version ? (
+            <EditableTitle
+              value={editor.version.displayName}
+              disabled={editor.version.state === "LOCKED"}
+              onCommit={(name) => editor.setVersionDisplayName(name)}
+            />
+          ) : (
+            <h2 id="wf-editor-title">Loading…</h2>
+          )}
           <p>
             {editor.version ? (
               <>
@@ -507,6 +515,103 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         </NodeSettingsPopover>
       ) : null}
     </div>
+  );
+}
+
+/* =========================================================== editable title */
+
+/**
+ * Click-to-edit workflow title. Renders as the existing `<h2>` until the
+ * user clicks it; swaps to a same-sized `<input>` so the chrome doesn't
+ * jump. Enter / blur commits via `onCommit`; Esc reverts. Empty values
+ * are silently discarded so a stray double-click + clear-out can't blank
+ * the workflow name. Published (LOCKED) versions are read-only.
+ */
+function EditableTitle({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: string;
+  disabled?: boolean;
+  onCommit: (next: string) => void;
+}): React.ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keep the local draft in sync when the parent value changes from
+  // outside (load, save echo, discard).
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  // Auto-focus + select the field's contents on enter so the user can
+  // either type a fresh name or move the cursor without an extra click.
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editing]);
+
+  const commit = useCallback((): void => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) onCommit(trimmed);
+    else setDraft(value); // revert on empty / no-op so the input shows truth
+    setEditing(false);
+  }, [draft, value, onCommit]);
+
+  const cancel = useCallback((): void => {
+    setDraft(value);
+    setEditing(false);
+  }, [value]);
+
+  if (!editing) {
+    return (
+      <h2
+        id="wf-editor-title"
+        className={`wf-editor__title-text ${disabled ? "wf-editor__title-text--locked" : ""}`}
+        onClick={() => {
+          if (disabled) return;
+          setEditing(true);
+        }}
+        title={disabled ? "Published versions are read-only" : "Click to rename"}
+        role={disabled ? undefined : "button"}
+        tabIndex={disabled ? -1 : 0}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setEditing(true);
+          }
+        }}
+      >
+        {value}
+      </h2>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="wf-editor__title-input"
+      id="wf-editor-title"
+      aria-label="Workflow name"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          cancel();
+        }
+      }}
+    />
   );
 }
 

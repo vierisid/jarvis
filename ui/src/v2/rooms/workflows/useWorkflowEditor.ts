@@ -255,6 +255,23 @@ export function useWorkflowEditor(flowId: string | null) {
     [draftTrigger, draftOrphans],
   );
 
+  /**
+   * Rename the version's `displayName` -- the visible workflow name in the
+   * editor's header and the room list. Empty values are rejected at the
+   * setter (the caller normalises whitespace); the actual persist happens
+   * on the next `save()` so users can revert before committing.
+   */
+  const setVersionDisplayName = useCallback((displayName: string): void => {
+    const trimmed = displayName.trim();
+    if (!trimmed) return;
+    setVersion((prev) => {
+      if (!prev) return prev;
+      if (prev.displayName === trimmed) return prev;
+      return { ...prev, displayName: trimmed };
+    });
+    setDirty(true);
+  }, []);
+
   /** Update a single step in-place by name. Works for both tree and orphan steps. */
   const updateStep = useCallback(
     (stepName: string, patch: Partial<FlowStepNode>): void => {
@@ -624,10 +641,19 @@ export function useWorkflowEditor(flowId: string | null) {
           body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
+        // Send the current `displayName` alongside the trigger so renames
+        // from the editor's header reach the server in the same round-trip.
+        // The API treats `displayName` as a partial update -- omitting it
+        // would leave the server value untouched, but always sending it is
+        // simpler and lets the API echo a consistent record back.
         res = await fetch(`/api/workflows/${flowId}/versions/${version.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trigger: draftTrigger, uiMeta }),
+          body: JSON.stringify({
+            displayName: version.displayName,
+            trigger: draftTrigger,
+            uiMeta,
+          }),
         });
       }
       if (!res.ok) {
@@ -783,6 +809,7 @@ export function useWorkflowEditor(flowId: string | null) {
     dirty,
     validationGaps,
     reload,
+    setVersionDisplayName,
     updateStep,
     updateStepInput,
     setStepPiece,
