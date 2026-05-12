@@ -24,6 +24,8 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
 import { findFacts, createFact } from '../vault/facts.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
+import { listFlows } from '../workflows/db/repos/flow.ts';
+import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version.ts';
 
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
@@ -2151,40 +2153,28 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
         const results: PaletteResult[] = [];
 
-        // 1. Workflows
+        // 1. Workflows. Pulls from the new engine-backed flow tables. The
+        // display name lives on the latest version row (published, or draft
+        // if there is no published yet), so we resolve per-flow.
         try {
-          const { findWorkflows } = require('../vault/workflows.ts');
-          const wfs = findWorkflows({ limit: 100 }) as Array<{
-            id: string;
-            name: string;
-            description?: string;
-            enabled?: boolean;
-            tags?: string[];
-            current_version?: number;
-            execution_count?: number;
-            last_executed_at?: number | null;
-          }>;
+          const flows = listFlows(undefined, { limit: 100 });
           let added = 0;
-          for (const w of wfs) {
+          for (const f of flows) {
             if (added >= perType) break;
-            if (!matches(w.name) && !matches(w.description)) continue;
-            // Phase 5B: enrich the meta line with version + run count when
-            // available so the palette row tells the user what they're picking
-            // beyond just tags.
+            const version = f.published_version_id
+              ? getFlowVersion(f.published_version_id)
+              : getLatestDraft(f.id);
+            const title = version?.displayName ?? f.external_id;
+            if (!matches(title)) continue;
             const metaParts: string[] = [];
-            if (typeof w.current_version === 'number') metaParts.push(`v${w.current_version}`);
-            if (typeof w.execution_count === 'number') {
-              metaParts.push(`${w.execution_count} ${w.execution_count === 1 ? 'run' : 'runs'}`);
-            }
-            if (w.tags && w.tags.length > 0) metaParts.push(w.tags.join(' · '));
+            if (version?.schemaVersion) metaParts.push(`v${version.schemaVersion}`);
             results.push({
               type: 'workflow',
-              id: w.id,
-              ref: w.id,
-              title: w.name,
-              summary: w.description,
+              id: f.id,
+              ref: f.id,
+              title,
               meta: metaParts.length > 0 ? metaParts.join(' · ') : undefined,
-              status: w.enabled
+              status: f.status === 'ENABLED'
                 ? { label: 'Enabled', tone: 'ok' }
                 : { label: 'Disabled', tone: 'neutral' },
             });
