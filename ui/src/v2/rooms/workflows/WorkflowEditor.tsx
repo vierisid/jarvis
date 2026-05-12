@@ -1076,6 +1076,19 @@ function PieceLibraryPopover({
           </button>
         ))}
       </div>
+      {/* If the catalog is empty (route returned []), surface a banner so
+          the user understands the cause rather than just seeing the two
+          built-in control-flow entries. Almost always means engine
+          bootstrap failed in the daemon -- the route falls back to []
+          when `pieceRegistry` isn't wired. */}
+      {catalog.length === 0 ? (
+        <div className="wf-library__notice" role="status">
+          <strong>No pieces loaded.</strong>{" "}
+          The workflow engine may have failed to start. Check the daemon logs
+          and rerun <code>bun run scripts/build-engine.ts</code> if the
+          engine bundle is missing.
+        </div>
+      ) : null}
       {rows.length === 0 ? (
         <div className="wf-library__empty">
           {query.trim()

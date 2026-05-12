@@ -321,6 +321,29 @@
   text-align: center;
 }
 
+/* Status banner pinned between the categories and the list. Used when
+   the catalog is empty so the user understands the popover isn't broken --
+   the daemon side is. Warn-tinted to read as "needs attention" without
+   being alarming. */
+.wf-library__notice {
+  margin: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--warn);
+  background: var(--paper-3);
+  border-radius: var(--r-2);
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.wf-library__notice strong { color: var(--ink); }
+.wf-library__notice code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  background: var(--paper-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* Category tabs sit below the search input. Pill-style buttons so the
    active one reads as a chip rather than a tab underline -- the latter
    doesn't fit the editor's mostly-flat treatment. */
