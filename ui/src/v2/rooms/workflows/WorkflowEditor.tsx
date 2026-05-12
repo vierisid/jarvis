@@ -19,6 +19,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  Handle,
   Position,
   useNodesState,
   type Edge,
@@ -354,10 +355,10 @@ function buildGraph(
     };
   });
 
-  // Edges: each step's structural pointers become an edge.
-  //   - nextAction (sequential continuation, same depth)
-  //   - LOOP_ON_ITEMS firstLoopAction (parent -> body head, label "iterates")
-  //   - ROUTER children[i] (parent -> branch head, label = branchName)
+  // Edges: each step's structural pointers become an edge. sourceHandle ids
+  // mirror the Handle components rendered in StepNode (`out` / `loop-body` /
+  // `branch:<name>`) so xyflow attaches the edge to the right circle when a
+  // node has multiple source handles (ROUTER especially).
   const edges: Edge[] = [];
   const knownNames = new Set(steps.map((s) => s.step.name));
   for (const entry of steps) {
@@ -367,7 +368,10 @@ function buildGraph(
         id: `${step.name}->${step.nextAction.name}`,
         source: step.name,
         target: step.nextAction.name,
+        sourceHandle: "out",
+        targetHandle: "in",
         type: "smoothstep",
+        className: "wf-edge",
       });
     }
     if (step.type === "LOOP_ON_ITEMS" && step.firstLoopAction && knownNames.has(step.firstLoopAction.name)) {
@@ -375,9 +379,11 @@ function buildGraph(
         id: `${step.name}->loop->${step.firstLoopAction.name}`,
         source: step.name,
         target: step.firstLoopAction.name,
+        sourceHandle: "loop-body",
+        targetHandle: "in",
         type: "smoothstep",
         label: "iterates",
-        style: { strokeDasharray: "4 3" },
+        className: "wf-edge wf-edge--branch",
       });
     }
     if (step.type === "ROUTER" && Array.isArray(step.children)) {
@@ -390,9 +396,11 @@ function buildGraph(
           id: `${step.name}->router_${i}->${child.name}`,
           source: step.name,
           target: child.name,
+          sourceHandle: `branch:${bName}`,
+          targetHandle: "in",
           type: "smoothstep",
           label: bName,
-          style: { strokeDasharray: "4 3" },
+          className: "wf-edge wf-edge--branch",
         });
       }
     }
@@ -422,10 +430,67 @@ function StepNode({ data }: NodeProps): React.ReactElement {
   else if (isRouter) { kindLabel = "Router"; kindTone = "warn"; }
   else { kindLabel = "Action"; }
 
+  // ROUTER lays out one bottom-edge source handle per branch, spread evenly.
+  // The handle id encodes the branch name so the eventual onConnect (Task 3)
+  // can route a connection straight into the correct `children[i]` slot.
+  const branches = isRouter ? step.settings?.branches ?? [] : [];
+
   return (
     <div
       className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""}`}
     >
+      {/* Target ("in"): left edge, every non-trigger node accepts an incoming
+          connection from a preceding step's source handle. */}
+      {!isTrigger ? (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="in"
+          className="wf-handle wf-handle--target"
+        />
+      ) : null}
+      {/* Main source ("out"): right edge. Represents `nextAction` -- the
+          sequential continuation of this chain. Every node has it, including
+          LOOP/ROUTER (their successor runs after the loop/router itself
+          finishes). The trigger uses it to start the top-level chain. */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="out"
+        className="wf-handle wf-handle--source"
+      />
+      {/* LOOP body source: bottom-edge handle that feeds into the loop's
+          `firstLoopAction`. Visually distinct from the main "out" so the
+          user can tell which sub-chain a connection wires. */}
+      {isLoop ? (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          id="loop-body"
+          className="wf-handle wf-handle--source wf-handle--branch"
+          style={{ left: "50%" }}
+        />
+      ) : null}
+      {/* ROUTER branches: one bottom source handle per branch, spread along
+          the bottom edge. Handle id = `branch:<branchName>` so onConnect can
+          locate the matching slot in `settings.branches` / `children`. */}
+      {isRouter && branches.length > 0
+        ? branches.map((b, i) => {
+            const name = b?.branchName ?? `branch_${i}`;
+            const pct = ((i + 1) * 100) / (branches.length + 1);
+            return (
+              <Handle
+                key={`branch:${name}`}
+                type="source"
+                position={Position.Bottom}
+                id={`branch:${name}`}
+                className="wf-handle wf-handle--source wf-handle--branch"
+                style={{ left: `${pct}%` }}
+              />
+            );
+          })
+        : null}
+
       {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
         <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
