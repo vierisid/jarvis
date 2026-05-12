@@ -109,7 +109,16 @@ export function WorkflowsRoomBody(): React.ReactElement {
   return (
     <div className="wf-room">
       {data.editingFlowId ? (
-        <WorkflowEditor flowId={data.editingFlowId} onClose={() => data.setEditingFlowId(null)} />
+        <WorkflowEditor
+          flowId={data.editingFlowId}
+          onClose={() => {
+            data.setEditingFlowId(null);
+            // The editor may have renamed the flow or otherwise mutated
+            // the version; force an immediate refresh so the list reflects
+            // those edits without waiting for the polling tick.
+            void data.refresh();
+          }}
+        />
       ) : null}
       <header className="wf-room__header">
         <div className="wf-room__tabs">

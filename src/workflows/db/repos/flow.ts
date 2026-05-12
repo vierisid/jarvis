@@ -108,6 +108,18 @@ export function updateFlowStatus(id: string, status: FlowStatus): void {
   if (res.changes === 0) throw new Error(`updateFlowStatus: flow not found (id=${id})`);
 }
 
+/**
+ * Bump a flow row's `updated` timestamp without touching its other columns.
+ * Called from `flow-version` mutations so version edits propagate as flow
+ * staleness signals -- the workflows list orders by `flow.updated DESC`
+ * and the editor's name cache (`useWorkflowsData`) re-fetches displayName
+ * only when `flow.updated` advances past the cache entry. Without this,
+ * renaming a workflow in the editor leaves the list stale until reload.
+ */
+export function touchFlow(id: string): void {
+  db().run(`UPDATE flow SET updated = ? WHERE id = ?`, [now(), id]);
+}
+
 export function setPublishedVersion(id: string, versionId: string | null): void {
   const res = db().run(
     `UPDATE flow SET published_version_id = ?, updated = ? WHERE id = ?`,

@@ -11,6 +11,7 @@
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
+import { touchFlow } from "./flow";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -218,6 +219,9 @@ export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion 
   );
   const row = getFlowVersionRow(id);
   if (!row) throw new Error(`createDraftVersion: row missing after insert (id=${id})`);
+  // Propagate as a flow-level change so the listings page sees the new
+  // version (and any displayName attached to it).
+  touchFlow(input.flowId);
   return rowToFlowVersion(row);
 }
 
@@ -293,6 +297,10 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
       id,
     ],
   );
+  // Bump the parent flow's `updated` timestamp so the workflows-list cache
+  // notices the change. Without this, renames + trigger edits made in the
+  // editor don't surface in the list until a full reload.
+  touchFlow(next.flow_id);
   return rowToFlowVersion(next);
 }
 
