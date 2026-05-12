@@ -407,7 +407,15 @@ export function useWorkflowEditor(flowId: string | null) {
             break;
           }
         }
-        branches.splice(insertAt, 0, { branchName, branchType: "CONDITION", conditions: [] });
+        // Seed with one empty condition so the condition editor opens
+        // pre-populated when the user expands the new branch.
+        branches.splice(insertAt, 0, {
+          branchName,
+          branchType: "CONDITION",
+          conditions: [
+            [{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }],
+          ],
+        });
         children.splice(insertAt, 0, null);
         target.settings = { ...(target.settings ?? {}), branches };
         target.children = children;
@@ -427,6 +435,39 @@ export function useWorkflowEditor(flowId: string | null) {
         children.splice(branchIndex, 1);
         target.settings = { ...(target.settings ?? {}), branches };
         target.children = children;
+      });
+    },
+    [mutateAnyStep],
+  );
+
+  /**
+   * Replace a CONDITION branch's `conditions` array. The shape is
+   * OR-of-ANDs: `Array<Array<Condition>>`. FALLBACK branches don't carry
+   * conditions, so the mutator silently skips them. No-op when the step
+   * isn't a ROUTER or the index is out of range so a stale UI call can't
+   * corrupt the tree.
+   */
+  const setBranchConditions = useCallback(
+    (
+      stepName: string,
+      branchIndex: number,
+      conditions: Array<
+        Array<{
+          firstValue: string;
+          operator: string;
+          secondValue?: string;
+          caseSensitive?: boolean;
+        }>
+      >,
+    ): void => {
+      mutateAnyStep(stepName, (target) => {
+        if (target.type !== "ROUTER") return;
+        const branches = [...(target.settings?.branches ?? [])];
+        if (branchIndex < 0 || branchIndex >= branches.length) return;
+        const branch = branches[branchIndex];
+        if (!branch || branch.branchType !== "CONDITION") return;
+        branches[branchIndex] = { ...branch, conditions };
+        target.settings = { ...(target.settings ?? {}), branches };
       });
     },
     [mutateAnyStep],
@@ -619,7 +660,18 @@ export function useWorkflowEditor(flowId: string | null) {
             executionType: "EXECUTE_FIRST_MATCH",
             routerKind: "if",
             branches: [
-              { branchName: "True", branchType: "CONDITION", conditions: [] },
+              {
+                branchName: "True",
+                branchType: "CONDITION",
+                // Seed one empty condition so the panel opens with a
+                // ready-to-fill row rather than an "Add condition"
+                // button. Default operator is TEXT_EXACTLY_MATCHES
+                // since that's the most-common IF use case ("if
+                // {{step.field}} equals X").
+                conditions: [
+                  [{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }],
+                ],
+              },
               { branchName: "False", branchType: "FALLBACK" },
             ],
           },
@@ -634,7 +686,13 @@ export function useWorkflowEditor(flowId: string | null) {
             executionType: "EXECUTE_FIRST_MATCH",
             routerKind: "router",
             branches: [
-              { branchName: "Branch 1", branchType: "CONDITION", conditions: [] },
+              {
+                branchName: "Branch 1",
+                branchType: "CONDITION",
+                conditions: [
+                  [{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }],
+                ],
+              },
               { branchName: "Else", branchType: "FALLBACK" },
             ],
           },
@@ -1062,6 +1120,7 @@ export function useWorkflowEditor(flowId: string | null) {
     setRouterExecutionType,
     addRouterBranch,
     removeRouterBranch,
+    setBranchConditions,
     connectByHandles,
     disconnectEdgeByHandle,
     setOrphanPosition,

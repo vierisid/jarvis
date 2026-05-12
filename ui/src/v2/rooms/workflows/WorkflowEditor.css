@@ -541,15 +541,23 @@
   flex-direction: column;
   gap: 4px;
 }
+/* Branch row carries two children: a head (name + actions) and an
+   optional inline condition editor below it. Column layout so the
+   editor can wrap and grow without pushing the actions sideways. */
 .wf-props__branch-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 6px;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+}
+.wf-props__branch-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-2);
-  padding: 4px 6px;
-  background: var(--paper-3);
-  border: 1px solid var(--rule-soft);
-  border-radius: var(--r-2);
 }
 .wf-props__branch-name {
   display: flex;
@@ -572,6 +580,70 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* Inline condition editor stacked beneath a CONDITION branch. Each row
+   is [firstValue] [operator] [secondValue?] [trash] [case sensitive?]. */
+.wf-props__conditions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px dashed var(--rule-soft);
+}
+.wf-props__condition-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wf-props__condition-row {
+  display: grid;
+  /* firstValue and secondValue flex; operator + trash sit at fixed widths */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+}
+.wf-props__condition-and {
+  grid-column: 1 / -1;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+.wf-props__condition-field {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  box-sizing: border-box;
+}
+.wf-props__condition-op {
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 0.8rem;
+}
+.wf-props__condition-case {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+.wf-props__condition-case input { width: 12px; height: 12px; margin: 0; }
+.wf-props__hint--inline {
+  margin: 0;
+  font-size: 0.74rem;
 }
 
 .wf-node__head {

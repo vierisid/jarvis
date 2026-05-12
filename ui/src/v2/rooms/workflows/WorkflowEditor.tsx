@@ -603,6 +603,9 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
             onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
             onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
+            onSetBranchConditions={(idx, conditions) =>
+              editor.setBranchConditions(selectedStep.name, idx, conditions)
+            }
             onAddStepToBranch={(branchName) => {
               const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
               if (created) setSelectedStepName(created);
@@ -1614,6 +1617,7 @@ interface PropertiesPanelProps {
   onAddRouterBranch: (branchName: string) => void;
   onRemoveRouterBranch: (branchIndex: number) => void;
   onAddStepToBranch: (branchName: string) => void;
+  onSetBranchConditions: (branchIndex: number, conditions: BranchConditions) => void;
   /** Save the JSON sample output for this step. Pass null to clear. */
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
   /** Trigger a test-from-here run for this step. */
@@ -1642,6 +1646,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     onAddRouterBranch,
     onRemoveRouterBranch,
     onAddStepToBranch,
+    onSetBranchConditions,
   } = props;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
   const isManual = step.type === "EMPTY";
@@ -1783,6 +1788,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onAddRouterBranch={onAddRouterBranch}
           onRemoveRouterBranch={onRemoveRouterBranch}
           onAddStepToBranch={onAddStepToBranch}
+          onSetBranchConditions={onSetBranchConditions}
         />
       ) : null}
 
@@ -2553,12 +2559,14 @@ function RouterEditor({
   onAddRouterBranch,
   onRemoveRouterBranch,
   onAddStepToBranch,
+  onSetBranchConditions,
 }: {
   step: FlowStepNode;
   onSetRouterExecutionType: (type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH") => void;
   onAddRouterBranch: (branchName: string) => void;
   onRemoveRouterBranch: (branchIndex: number) => void;
   onAddStepToBranch: (branchName: string) => void;
+  onSetBranchConditions: (branchIndex: number, conditions: BranchConditions) => void;
 }): React.ReactElement {
   const branches = step.settings?.branches ?? [];
   const children = step.children ?? [];
@@ -2601,8 +2609,8 @@ function RouterEditor({
         </div>
         <p className="wf-props__hint">
           {isIf
-            ? "An If has exactly two branches: True (when the condition matches) and False (when it doesn't). Branch names and count are locked."
-            : "Branch conditions aren't editable in the panel yet. Use manage_workflow compose for new flows, or hand-edit the JSON via PATCH /api/workflows/.../versions/..."}
+            ? "An If has exactly two branches. Write the condition below; the True branch fires when it matches, the False branch fires otherwise."
+            : "Each CONDITION branch fires when its conditions match. The FALLBACK runs when no other branch matches."}
         </p>
         <ul className="wf-props__branch-list">
           {branches.map((b, idx) => {
@@ -2610,34 +2618,45 @@ function RouterEditor({
             const isFallback = b?.branchType === "FALLBACK";
             return (
               <li key={`${idx}_${b?.branchName ?? ""}`} className="wf-props__branch-row">
-                <div className="wf-props__branch-name">
-                  <span>{b?.branchName ?? `(branch ${idx})`}</span>
-                  {isFallback && !isIf ? <span className="wf-props__branch-tag">fallback</span> : null}
+                <div className="wf-props__branch-row-head">
+                  <div className="wf-props__branch-name">
+                    <span>{b?.branchName ?? `(branch ${idx})`}</span>
+                    {isFallback && !isIf ? <span className="wf-props__branch-tag">fallback</span> : null}
+                  </div>
+                  <div className="wf-props__branch-actions">
+                    {!child && b?.branchName && !isFallback ? (
+                      <Button variant="ghost" size="sm" onClick={() => onAddStepToBranch(b.branchName)}>
+                        <Icon icon={Plus} size={12} /> Add step
+                      </Button>
+                    ) : null}
+                    {/* Lock branch removal for IF -- the two branches are
+                        structurally required. Removal stays available for
+                        free-form Router. */}
+                    {!isIf ? (
+                      <button
+                        type="button"
+                        className="wf-props__input-remove"
+                        onClick={() => {
+                          if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
+                            onRemoveRouterBranch(idx);
+                          }
+                        }}
+                        title="Remove branch"
+                      >
+                        <Icon icon={Trash2} size={12} />
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="wf-props__branch-actions">
-                  {!child && b?.branchName && !isFallback ? (
-                    <Button variant="ghost" size="sm" onClick={() => onAddStepToBranch(b.branchName)}>
-                      <Icon icon={Plus} size={12} /> Add step
-                    </Button>
-                  ) : null}
-                  {/* Lock branch removal for IF -- the two branches are
-                      structurally required. Removal stays available for
-                      free-form Router. */}
-                  {!isIf ? (
-                    <button
-                      type="button"
-                      className="wf-props__input-remove"
-                      onClick={() => {
-                        if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
-                          onRemoveRouterBranch(idx);
-                        }
-                      }}
-                      title="Remove branch"
-                    >
-                      <Icon icon={Trash2} size={12} />
-                    </button>
-                  ) : null}
-                </div>
+                {/* Condition editor inline for CONDITION branches.
+                    FALLBACK branches don't carry conditions -- they fire
+                    when nothing else matched. */}
+                {!isFallback && b?.branchType === "CONDITION" ? (
+                  <BranchConditionsEditor
+                    conditions={(b.conditions ?? []) as BranchConditions}
+                    onChange={(next) => onSetBranchConditions(idx, next)}
+                  />
+                ) : null}
               </li>
             );
           })}
@@ -2681,4 +2700,251 @@ function scopeLabel(kind: "loop" | "router" | undefined): string {
   if (kind === "loop") return "loop body";
   if (kind === "router") return "router branch";
   return "sub-chain";
+}
+
+/* =========================================================== branch conditions editor */
+
+/** OR-of-ANDs condition shape mirroring the activepieces schema. */
+type BranchCondition = {
+  firstValue: string;
+  operator: string;
+  secondValue?: string;
+  caseSensitive?: boolean;
+};
+type BranchConditions = BranchCondition[][];
+
+/** Operators that don't take a second value -- the engine's
+ *  router-executor treats `firstValue` alone. Must mirror
+ *  `singleValueConditions` in
+ *  `src/workflows/activepieces/.../actions/action.ts`. */
+const SINGLE_VALUE_OPERATORS = new Set<string>([
+  "EXISTS",
+  "DOES_NOT_EXIST",
+  "BOOLEAN_IS_TRUE",
+  "BOOLEAN_IS_FALSE",
+  "LIST_IS_EMPTY",
+  "LIST_IS_NOT_EMPTY",
+]);
+
+/** Operators that respect a `caseSensitive` flag (text family). */
+const CASE_SENSITIVE_OPERATORS = new Set<string>([
+  "TEXT_CONTAINS",
+  "TEXT_DOES_NOT_CONTAIN",
+  "TEXT_EXACTLY_MATCHES",
+  "TEXT_DOES_NOT_EXACTLY_MATCH",
+  "TEXT_START_WITH",
+  "TEXT_DOES_NOT_START_WITH",
+  "TEXT_ENDS_WITH",
+  "TEXT_DOES_NOT_END_WITH",
+]);
+
+/**
+ * Human-readable labels for the engine's BranchOperator enum. The select
+ * groups them by family (text / number / boolean / date / list /
+ * existence) so the dropdown is scannable. Wire values mirror the
+ * BranchOperator enum verbatim -- changing a string here would silently
+ * desync from the engine and break flows at runtime.
+ */
+const OPERATOR_GROUPS: Array<{ label: string; options: Array<{ value: string; label: string }> }> = [
+  {
+    label: "Text",
+    options: [
+      { value: "TEXT_EXACTLY_MATCHES", label: "equals" },
+      { value: "TEXT_DOES_NOT_EXACTLY_MATCH", label: "does not equal" },
+      { value: "TEXT_CONTAINS", label: "contains" },
+      { value: "TEXT_DOES_NOT_CONTAIN", label: "does not contain" },
+      { value: "TEXT_START_WITH", label: "starts with" },
+      { value: "TEXT_DOES_NOT_START_WITH", label: "does not start with" },
+      { value: "TEXT_ENDS_WITH", label: "ends with" },
+      { value: "TEXT_DOES_NOT_END_WITH", label: "does not end with" },
+    ],
+  },
+  {
+    label: "Number",
+    options: [
+      { value: "NUMBER_IS_EQUAL_TO", label: "= number" },
+      { value: "NUMBER_IS_GREATER_THAN", label: "> number" },
+      { value: "NUMBER_IS_LESS_THAN", label: "< number" },
+    ],
+  },
+  {
+    label: "Boolean",
+    options: [
+      { value: "BOOLEAN_IS_TRUE", label: "is true" },
+      { value: "BOOLEAN_IS_FALSE", label: "is false" },
+    ],
+  },
+  {
+    label: "Date",
+    options: [
+      { value: "DATE_IS_BEFORE", label: "is before" },
+      { value: "DATE_IS_EQUAL", label: "is equal to" },
+      { value: "DATE_IS_AFTER", label: "is after" },
+    ],
+  },
+  {
+    label: "List",
+    options: [
+      { value: "LIST_CONTAINS", label: "list contains" },
+      { value: "LIST_DOES_NOT_CONTAIN", label: "list does not contain" },
+      { value: "LIST_IS_EMPTY", label: "list is empty" },
+      { value: "LIST_IS_NOT_EMPTY", label: "list is not empty" },
+    ],
+  },
+  {
+    label: "Existence",
+    options: [
+      { value: "EXISTS", label: "exists / is set" },
+      { value: "DOES_NOT_EXIST", label: "does not exist / is empty" },
+    ],
+  },
+];
+
+/**
+ * Visual editor for a CONDITION branch's `conditions` array (the
+ * OR-of-ANDs shape the engine consumes).
+ *
+ * Scope: a single OR group with N AND-ed conditions. The engine supports
+ * multiple OR groups (`conditions[0..n][..]`); this UI flattens to the
+ * first group so users who need complex OR composition can still edit
+ * the JSON via the API, but the common case (a few AND-stacked
+ * conditions) doesn't require it. Adding nested OR groups is a follow-
+ * up if/when users ask.
+ *
+ * Each row carries: a `firstValue` (typically a `{{step.field}}`
+ * template), an operator, and (for two-value operators) a `secondValue`.
+ * Text operators also expose a "case sensitive" toggle.
+ */
+function BranchConditionsEditor({
+  conditions,
+  onChange,
+}: {
+  conditions: BranchConditions;
+  onChange: (next: BranchConditions) => void;
+}): React.ReactElement {
+  // Flatten to the first OR group for editing. If the user authored
+  // multiple OR groups elsewhere, this preserves them on the side:
+  // edits only touch group 0; everything past it is appended back
+  // verbatim when we emit a change.
+  const firstGroup: BranchCondition[] = conditions[0] ?? [];
+  const tailGroups: BranchCondition[][] = conditions.slice(1);
+
+  const emit = useCallback(
+    (nextGroup: BranchCondition[]): void => {
+      // Drop the leading group entirely when empty so the engine sees
+      // "no conditions" -> branch doesn't match (the user is in a
+      // partially-deleted state, FALLBACK takes over).
+      const next: BranchConditions = nextGroup.length > 0 ? [nextGroup, ...tailGroups] : tailGroups;
+      onChange(next);
+    },
+    [tailGroups, onChange],
+  );
+
+  const updateAt = useCallback(
+    (idx: number, patch: Partial<BranchCondition>): void => {
+      const next = firstGroup.map((c, i) => (i === idx ? { ...c, ...patch } : c));
+      // When the new operator no longer takes a second value, drop the
+      // stale `secondValue` so the JSON stays clean (no orphan field).
+      if (patch.operator && SINGLE_VALUE_OPERATORS.has(patch.operator)) {
+        next[idx] = { ...next[idx]!, secondValue: undefined };
+      }
+      emit(next);
+    },
+    [firstGroup, emit],
+  );
+
+  const remove = useCallback(
+    (idx: number): void => {
+      emit(firstGroup.filter((_, i) => i !== idx));
+    },
+    [firstGroup, emit],
+  );
+
+  const add = useCallback((): void => {
+    emit([
+      ...firstGroup,
+      { firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" },
+    ]);
+  }, [firstGroup, emit]);
+
+  return (
+    <div className="wf-props__conditions">
+      {firstGroup.length === 0 ? (
+        <p className="wf-props__hint wf-props__hint--inline">
+          No conditions yet -- this branch will never match. Add one below.
+        </p>
+      ) : (
+        <ul className="wf-props__condition-list">
+          {firstGroup.map((c, idx) => {
+            const isSingle = SINGLE_VALUE_OPERATORS.has(c.operator);
+            const supportsCase = CASE_SENSITIVE_OPERATORS.has(c.operator);
+            return (
+              <li key={idx} className="wf-props__condition-row">
+                {idx > 0 ? <span className="wf-props__condition-and">AND</span> : null}
+                <input
+                  type="text"
+                  className="wf-props__condition-field"
+                  value={c.firstValue}
+                  placeholder="{{step.field}}"
+                  onChange={(e) => updateAt(idx, { firstValue: e.target.value })}
+                />
+                <select
+                  className="wf-props__condition-op"
+                  value={c.operator}
+                  onChange={(e) => updateAt(idx, { operator: e.target.value })}
+                >
+                  {OPERATOR_GROUPS.map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.options.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                {!isSingle ? (
+                  <input
+                    type="text"
+                    className="wf-props__condition-field"
+                    value={c.secondValue ?? ""}
+                    placeholder="value"
+                    onChange={(e) => updateAt(idx, { secondValue: e.target.value })}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  className="wf-props__input-remove"
+                  onClick={() => remove(idx)}
+                  title="Remove condition"
+                  aria-label="Remove condition"
+                >
+                  <Icon icon={Trash2} size={12} />
+                </button>
+                {supportsCase ? (
+                  <label className="wf-props__condition-case">
+                    <input
+                      type="checkbox"
+                      checked={c.caseSensitive === true}
+                      onChange={(e) => updateAt(idx, { caseSensitive: e.target.checked })}
+                    />
+                    case sensitive
+                  </label>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <Button variant="ghost" size="sm" onClick={add}>
+        <Icon icon={Plus} size={12} /> Add condition
+      </Button>
+      {tailGroups.length > 0 ? (
+        <p className="wf-props__hint wf-props__hint--inline">
+          {tailGroups.length} additional OR group{tailGroups.length === 1 ? "" : "s"} not
+          shown -- edit them via the API if you need to.
+        </p>
+      ) : null}
+    </div>
+  );
 }
