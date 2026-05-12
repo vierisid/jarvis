@@ -164,8 +164,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // chain's authoritative order; React Flow needs an internal mutable copy
   // so dragged positions update visually without losing reactivity.
   const { nodes: baseNodes, edges } = useMemo(
-    () => buildGraph(editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog),
-    [editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog],
+    () => buildGraph(editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions),
+    [editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
   // Sync incoming chain order changes back into React Flow's internal state.
@@ -197,6 +197,10 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       if (!triggerName) return;
       const draggedFlat = editor.allSteps.find((fs) => fs.step.name === draggedNode.id);
       if (!draggedFlat) return;
+      // Persist the new (x, y) for the tree node too. Chain reorder below
+      // adjusts the logical order based on Y; the saved coordinate is what
+      // the canvas redraws from next time.
+      editor.setStepPosition(draggedNode.id, draggedNode.position.x, draggedNode.position.y);
       // Build scope from the dragged node's container info.
       let scope: { kind: "top" } | { kind: "loop"; parentName: string } | { kind: "branch"; parentName: string; branchName: string };
       if (draggedFlat.depth === 0) {
@@ -904,6 +908,7 @@ function buildGraph(
   orphans: OrphanStep[],
   selected: string | null,
   catalog: PieceCatalogEntry[],
+  stepPositions: Record<string, { x: number; y: number }>,
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
   const buildNodeData = (step: FlowStepNode, depth: number, branchName: string | undefined, isOrphan: boolean): StepNodeData => {
     const branchConnected: Record<string, boolean> = {};
@@ -930,10 +935,17 @@ function buildGraph(
   const nodes: Node<StepNodeData>[] = steps.map((entry, i) => {
     const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
+    // Prefer the user's persisted x/y when one exists; fall back to the
+    // deterministic auto-layout so newly added (untouched) steps still
+    // appear next to their predecessor instead of stacking at (0, 0).
+    const saved = stepPositions[step.name];
+    const position = saved
+      ? { x: saved.x, y: saved.y }
+      : { x: i * NODE_X_STEP, y: NODE_Y_BASE + entry.depth * NODE_Y_BRANCH };
     return {
       id: step.name,
       type: "stepNode",
-      position: { x: i * NODE_X_STEP, y: NODE_Y_BASE + entry.depth * NODE_Y_BRANCH },
+      position,
       // Tell xyflow the natural side for each default handle so smoothstep
       // edges route horizontally even before we render explicit <Handle/>
       // components (Task 2).

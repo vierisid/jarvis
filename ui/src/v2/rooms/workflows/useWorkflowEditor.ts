@@ -144,9 +144,14 @@ export function useWorkflowEditor(flowId: string | null) {
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
   // Orphan steps live outside the trigger tree: head node + its (optional)
   // own `nextAction` chain. They appear on the canvas with a stored x/y so
-  // the user can wire them in by dragging a handle. Saving discards any
-  // remaining orphans -- the API only persists the connected tree.
+  // the user can wire them in by dragging a handle. Persisted in the
+  // `flow_version_ui_meta` sidecar so reloads preserve them.
   const [draftOrphans, setDraftOrphans] = useState<OrphanStep[]>([]);
+  // Per-step x/y positions for nodes inside the connected tree. Empty means
+  // "use the deterministic auto-layout". Populated lazily as the user drags
+  // tree nodes; sent to the server as `uiMeta.positions` on save so the
+  // editor reopens at the layout the user left.
+  const [stepPositions, setStepPositions] = useState<Record<string, NodePosition>>({});
   const ignoreNextLoadRef = useRef(false);
 
   // Stash for trigger settings while the user is in EMPTY (manual) mode.
@@ -173,6 +178,7 @@ export function useWorkflowEditor(flowId: string | null) {
         flow: { id: string };
         latestDraft: FlowVersion | null;
         published: FlowVersion | null;
+        uiMeta: FlowVersionUiMeta | null;
       };
       let editable: FlowVersion | null = detail.latestDraft;
       if (!editable && detail.published) {
@@ -183,7 +189,16 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       setVersion(editable);
       setDraftTrigger(editable ? cloneTrigger(editable.trigger) : null);
-      setDraftOrphans([]);
+      // Hydrate orphans + positions from the editor sidecar. Both default to
+      // empty so a flow that's never been visually edited renders with the
+      // deterministic auto-layout.
+      const meta = detail.uiMeta;
+      setDraftOrphans(
+        Array.isArray(meta?.orphans)
+          ? meta!.orphans.map((o) => orphanFromMeta(o)).filter((o): o is OrphanStep => !!o)
+          : [],
+      );
+      setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -383,6 +398,26 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftOrphans((prev) =>
         prev.map((o) => (o.node.name === stepName ? { ...o, x, y } : o)),
       );
+      setDirty(true);
+    },
+    [],
+  );
+
+  /**
+   * Record the canvas position of a *connected* (tree) step. Used by the
+   * canvas drag handler in addition to the existing chain-reorder logic --
+   * order changes by Y, but X is now also persisted so the editor reopens
+   * with the same layout the user left. Steps without an entry fall back
+   * to the deterministic auto-layout.
+   */
+  const setStepPosition = useCallback(
+    (stepName: string, x: number, y: number): void => {
+      setStepPositions((prev) => {
+        const cur = prev[stepName];
+        if (cur && cur.x === x && cur.y === y) return prev;
+        return { ...prev, [stepName]: { x, y } };
+      });
+      setDirty(true);
     },
     [],
   );
@@ -491,6 +526,29 @@ export function useWorkflowEditor(flowId: string | null) {
       return { ok: false, message: "nothing to save" };
     }
     try {
+      // Build the sidecar payload. Positions are scrubbed of stale entries
+      // (deleted steps) so we don't accumulate dead keys forever. Orphans
+      // serialize to plain step nodes; their x/y is carried inside the
+      // orphan record so the editor can rehydrate them at the same spot.
+      const liveNames = new Set<string>();
+      const collect = (n: FlowStepNode): void => {
+        liveNames.add(n.name);
+        if (n.nextAction) collect(n.nextAction);
+        if (n.firstLoopAction) collect(n.firstLoopAction);
+        if (Array.isArray(n.children)) for (const c of n.children) if (c) collect(c);
+      };
+      collect(draftTrigger);
+      for (const o of draftOrphans) liveNames.add(o.node.name);
+      const positionsScrubbed: Record<string, NodePosition> = {};
+      for (const [name, pos] of Object.entries(stepPositions)) {
+        if (liveNames.has(name)) positionsScrubbed[name] = pos;
+      }
+      const uiMeta: FlowVersionUiMeta = {
+        schema: UI_META_SCHEMA_VERSION,
+        positions: positionsScrubbed,
+        orphans: draftOrphans.map(orphanToMeta),
+      };
+
       // If editing a published version (LOCKED clone), we need to create a
       // new draft via POST /api/workflows/:id/versions. Otherwise PATCH.
       let res: Response;
@@ -498,13 +556,13 @@ export function useWorkflowEditor(flowId: string | null) {
         res = await fetch(`/api/workflows/${flowId}/versions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger }),
+          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
         res = await fetch(`/api/workflows/${flowId}/versions/${version.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trigger: draftTrigger }),
+          body: JSON.stringify({ trigger: draftTrigger, uiMeta }),
         });
       }
       if (!res.ok) {
@@ -515,18 +573,24 @@ export function useWorkflowEditor(flowId: string | null) {
       ignoreNextLoadRef.current = true;
       setVersion(updated);
       setDraftTrigger(cloneTrigger(updated.trigger));
-      setDraftOrphans([]);
+      setStepPositions(positionsScrubbed);
+      // Orphans persist across save -- they're part of the user's editing
+      // state and the server now stores them too.
       setDirty(false);
       return { ok: true, message: "Saved" };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
-  }, [flowId, version, draftTrigger]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions]);
 
   const reset = useCallback((): void => {
     if (version) {
       setDraftTrigger(cloneTrigger(version.trigger));
+      // Reset clears in-memory edits including orphans + positions. The
+      // last server-known state is recovered by the next reload() if the
+      // user wants those back.
       setDraftOrphans([]);
+      setStepPositions({});
       setDirty(false);
     }
   }, [version]);
@@ -669,6 +733,8 @@ export function useWorkflowEditor(flowId: string | null) {
     connectByHandles,
     disconnectEdgeByHandle,
     setOrphanPosition,
+    setStepPosition,
+    stepPositions,
     createOrphanStep,
     save,
     reset,
@@ -686,6 +752,45 @@ export interface OrphanStep {
   node: FlowStepNode;
   x: number;
   y: number;
+}
+
+/** Sidecar wire shape -- mirrors `FlowVersionUiMeta` on the server. Kept
+ *  inline so the hook doesn't reach into a server-side module. */
+export const UI_META_SCHEMA_VERSION = 1;
+
+export interface NodePosition {
+  x: number;
+  y: number;
+}
+
+export interface FlowVersionUiMeta {
+  schema: number;
+  positions: Record<string, NodePosition>;
+  orphans: OrphanMeta[];
+}
+
+/** On-wire orphan record. `node` is the FlowStepNode head; x/y are stored
+ *  alongside so the sidecar contains everything the editor needs to repaint
+ *  this orphan at the same canvas spot on reload. */
+export interface OrphanMeta {
+  node: FlowStepNode;
+  x: number;
+  y: number;
+}
+
+function orphanToMeta(o: OrphanStep): OrphanMeta {
+  return { node: o.node, x: o.x, y: o.y };
+}
+
+function orphanFromMeta(raw: unknown): OrphanStep | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Partial<OrphanMeta>;
+  if (!o.node || typeof o.node !== "object" || typeof (o.node as FlowStepNode).name !== "string") return null;
+  return {
+    node: o.node as FlowStepNode,
+    x: typeof o.x === "number" ? o.x : 0,
+    y: typeof o.y === "number" ? o.y : 0,
+  };
 }
 
 /** Re-export the ConnectionHandle shape so the canvas component can type

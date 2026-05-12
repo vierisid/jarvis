@@ -42,6 +42,11 @@ import {
   updateDraftVersion,
 } from "../db/repos/flow-version";
 import {
+  getFlowVersionUiMeta,
+  upsertFlowVersionUiMeta,
+  type FlowVersionUiMeta,
+} from "../db/repos/flow-version-ui-meta";
+import {
   createFlowRun,
   getFlowRun,
   listRuns,
@@ -629,7 +634,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const published = flow.published_version_id
             ? getFlowVersion(flow.published_version_id)
             : null;
-          return ok({ flow: serializeFlow(flow), latestDraft: draft, published });
+          // Sidecar layout / orphan list for whichever version the editor
+          // will mount (draft preferred, falls back to published). The
+          // editor calls this once on open so it can lay out nodes at the
+          // positions the user left them.
+          const editableId = draft?.id ?? published?.id ?? null;
+          const uiMeta = editableId ? getFlowVersionUiMeta(editableId) : null;
+          return ok({
+            flow: serializeFlow(flow),
+            latestDraft: draft,
+            published,
+            uiMeta,
+          });
         }),
       PATCH: (req) =>
         trapErrors(async () => {
@@ -671,6 +687,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const body = (await req.json()) as {
             displayName?: string;
             trigger?: Record<string, unknown>;
+            uiMeta?: FlowVersionUiMeta;
           };
           if (!body.displayName) return err("displayName is required");
           const version = createDraftVersion({
@@ -678,6 +695,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             displayName: body.displayName,
             trigger: body.trigger,
           });
+          if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
           return ok(version, 201);
         }),
     },
@@ -687,7 +705,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
           const v = getFlowVersion(versionId);
-          return v ? ok(v) : err("version not found", 404);
+          if (!v) return err("version not found", 404);
+          return ok({ ...v, uiMeta: getFlowVersionUiMeta(versionId) });
         }),
       PATCH: (req) =>
         trapErrors(async () => {
@@ -698,8 +717,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             valid?: boolean;
             connectionIds?: string[];
             agentIds?: string[];
+            uiMeta?: FlowVersionUiMeta;
           };
-          const v = updateDraftVersion(versionId, body);
+          const { uiMeta, ...versionPatch } = body;
+          const v = updateDraftVersion(versionId, versionPatch);
+          // Sidecar write goes after the version update so a failed version
+          // update doesn't leave a half-orphan sidecar pointing at stale
+          // step names. The editor sends both together; either both land or
+          // neither does.
+          if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
           return ok(v);
         }),
     },
@@ -708,6 +734,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(() => {
           const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          // Lock mutates the same row state DRAFT -> LOCKED, so the sidecar
+          // (keyed on versionId) already follows. No copy needed; mentioned
+          // here so future readers know that's by design.
           return ok(lockVersion(versionId));
         }),
     },

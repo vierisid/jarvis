@@ -203,6 +203,18 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_job_claim ON workflow_job(status, scheduled_at, priority)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_job_flow_run ON workflow_job(flow_run_id)`,
+
+  // --- Editor-only sidecar for flow_version: stores node x/y positions and
+  // any "orphan" steps the user dragged onto the canvas but didn't connect.
+  // The engine never reads this -- it serializes/runs only the tree rooted
+  // at flow_version.trigger. Keeping orphans + positions here means the
+  // visual editor can survive reloads without polluting the executable
+  // schema. Cascaded DELETE on flow_version removes the sidecar too. ---
+  `CREATE TABLE IF NOT EXISTS flow_version_ui_meta (
+    version_id TEXT PRIMARY KEY REFERENCES flow_version(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    updated INTEGER NOT NULL
+  )`,
 ];
 
 /** Apply the schema to a fresh or existing database. Idempotent. */
