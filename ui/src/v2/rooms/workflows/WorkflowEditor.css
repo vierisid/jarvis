@@ -833,6 +833,28 @@
   border-color: var(--accent);
 }
 
+/* Error-handling section inside the settings popover for PIECE/CODE
+   steps. Two checkboxes (continueOnFailure, retryOnFailure) and their
+   help text -- same field layout as the rest of the panel. */
+.wf-props__error-handling {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wf-props__error-handling h4 {
+  margin: 0 0 var(--s-2);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.wf-props__error-handling .wf-props__field {
+  margin-bottom: 0;
+}
+.wf-props__error-handling .wf-props__hint {
+  margin: 0 0 var(--s-2) 22px;
+}
+
 /* Per-step sample data editor + Test from here, rendered inside PropertiesPanel
    below the step-actions row. */
 .wf-props__sample-data {

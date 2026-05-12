@@ -55,6 +55,24 @@ export interface FlowStepNode {
     branches?: FlowRouterBranch[];
     /** ROUTER: which matched branches to run. */
     executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
+    /**
+     * PIECE / CODE: per-step error-handling toggles consumed by the engine
+     * at `src/workflows/activepieces/.../helper/error-handling.ts`.
+     *   - `continueOnFailure.value === true`: a FAILED step is treated as
+     *     RUNNING for verdict purposes -- downstream steps execute, and
+     *     this step's `output` stays undefined so a downstream Router can
+     *     branch on `{{<step>}}` with DOES_NOT_EXIST.
+     *   - `retryOnFailure.value === true`: the engine retries up to 4
+     *     attempts with exponential backoff (engine-wide constants). Final
+     *     failure still respects `continueOnFailure`.
+     * Both fields nest in their own `{ value: boolean }` wrapper to match
+     * the activepieces shared schema. Setting `value: false` (or omitting)
+     * disables the feature.
+     */
+    errorHandlingOptions?: {
+      continueOnFailure?: { value?: boolean };
+      retryOnFailure?: { value?: boolean };
+    };
   };
   nextAction?: FlowStepNode;
   /** LOOP_ON_ITEMS: head of the inner subgraph executed once per iteration. */
@@ -657,6 +675,139 @@ export function useWorkflowEditor(flowId: string | null) {
     [catalog, mutateAnyStep],
   );
 
+  /**
+   * Toggle one of the two per-step error-handling flags. Works on PIECE +
+   * CODE steps (the only types the engine consults for these options) --
+   * other types are silently no-op'd so an accidental call from a shared
+   * UI surface can't corrupt their settings.
+   */
+  const setStepErrorHandling = useCallback(
+    (
+      stepName: string,
+      patch: { continueOnFailure?: boolean; retryOnFailure?: boolean },
+    ): void => {
+      mutateAnyStep(stepName, (target) => {
+        // The engine consults `errorHandlingOptions` for PIECE (and CODE,
+        // which the editor doesn't model). Other types ignore them, so we
+        // short-circuit rather than writing dead settings.
+        if (target.type !== "PIECE") return;
+        const prev = target.settings?.errorHandlingOptions ?? {};
+        const next: NonNullable<NonNullable<FlowStepNode["settings"]>["errorHandlingOptions"]> = {
+          ...prev,
+        };
+        if (patch.continueOnFailure !== undefined) {
+          next.continueOnFailure = { value: patch.continueOnFailure };
+        }
+        if (patch.retryOnFailure !== undefined) {
+          next.retryOnFailure = { value: patch.retryOnFailure };
+        }
+        target.settings = { ...(target.settings ?? {}), errorHandlingOptions: next };
+      });
+    },
+    [mutateAnyStep],
+  );
+
+  /**
+   * "Add error handling" template. Composition (per the spec):
+   *   1. Force `continueOnFailure = true` on the target piece, regardless
+   *      of prior state -- without this the engine fails the whole flow on
+   *      step failure and the router never runs.
+   *   2. Build a ROUTER whose CONDITION branch matches when the piece's
+   *      `output` is undefined (engine-native "failed" signal: a FAILED
+   *      step never has `setOutput` called, so `{{<piece>}}` resolves to
+   *      undefined and `DOES_NOT_EXIST` returns true). The FALLBACK
+   *      branch is the success path.
+   *   3. Splice the router between the piece and its existing successor:
+   *      - No successor (Case A): router becomes piece.nextAction with
+   *        both children null.
+   *      - Has successor X (Case B): router becomes piece.nextAction;
+   *        the FALLBACK branch's child slot points at X (continuing the
+   *        success path); the CONDITION branch's child slot is null for
+   *        the user to fill in.
+   * Returns the new router's name so the caller can select it.
+   */
+  const addErrorHandling = useCallback(
+    (stepName: string): string | null => {
+      // Build the router shell up front so we can pick a unique step name
+      // that considers BOTH the tree and the orphan pool at the same time
+      // -- once we mutate the target, the next call to `nextStepName`
+      // would also see this new router and skip past its number.
+      const taken = new Set<string>();
+      if (draftTrigger) for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
+      for (const o of draftOrphans) taken.add(o.node.name);
+      let n = 1;
+      while (taken.has(`step_${n}`)) n++;
+      const routerName = `step_${n}`;
+
+      // We need the target's identity (displayName, existing successor)
+      // BEFORE we mutate so we can pre-construct the router. Look it up
+      // in both places.
+      const findTarget = (): FlowStepNode | null => {
+        if (draftTrigger) {
+          const inTree = findStep(draftTrigger, stepName);
+          if (inTree) return inTree;
+        }
+        const orphan = draftOrphans.find((o) => o.node.name === stepName);
+        return orphan?.node ?? null;
+      };
+      const target = findTarget();
+      if (!target) return null;
+      if (target.type !== "PIECE") return null;
+
+      const pieceLabel = target.displayName ?? target.name;
+      const router: FlowStepNode = {
+        name: routerName,
+        type: "ROUTER",
+        displayName: `${pieceLabel} error catch`,
+        settings: {
+          executionType: "EXECUTE_FIRST_MATCH",
+          branches: [
+            {
+              branchType: "CONDITION",
+              branchName: "On error",
+              // Engine resolves `{{<stepName>}}` to `step.output`. A failed
+              // step never has setOutput() called, so the resolved value
+              // is undefined and DOES_NOT_EXIST fires. The router-executor
+              // checks: `firstValue === undefined || null || ""`.
+              conditions: [
+                [
+                  {
+                    firstValue: `{{${target.name}}}`,
+                    operator: "DOES_NOT_EXIST",
+                  },
+                ],
+              ],
+            },
+            { branchType: "FALLBACK", branchName: "On success" },
+          ],
+        },
+        // children parallel to branches: [CONDITION, FALLBACK].
+        // Case A (no successor): both null. Case B: FALLBACK takes the
+        // previous successor; the user populates the CONDITION branch.
+        children: [null, target.nextAction ?? null],
+      };
+
+      mutateAnyStep(stepName, (live) => {
+        // 1. Force continueOnFailure=true. The user can still opt out via
+        //    the settings popover after the fact.
+        const prevErr = live.settings?.errorHandlingOptions ?? {};
+        live.settings = {
+          ...(live.settings ?? {}),
+          errorHandlingOptions: {
+            ...prevErr,
+            continueOnFailure: { value: true },
+          },
+        };
+        // 2. Insert the router between the piece and its existing
+        //    successor. The successor (if any) already lives on
+        //    `router.children[1]` per the construction above.
+        live.nextAction = router;
+      });
+      return routerName;
+    },
+    [draftTrigger, draftOrphans, mutateAnyStep],
+  );
+
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {
     if (!flowId || !version || !draftTrigger) {
@@ -868,6 +1019,8 @@ export function useWorkflowEditor(flowId: string | null) {
     updateStep,
     updateStepInput,
     setStepPiece,
+    setStepErrorHandling,
+    addErrorHandling,
     setTriggerType,
     insertStepAfter,
     addStepToHead,

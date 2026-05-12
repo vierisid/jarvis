@@ -97,8 +97,15 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   >(null);
   const closeLibraryPicker = useCallback((): void => setLibraryPicker(null), []);
   // Per-node right-click menu (Delete / Add error handling).
+  // Carrying the step type here avoids a lookup against tree+orphans
+  // every time the menu re-renders to decide which entries to show.
   const [nodeContextMenu, setNodeContextMenu] = useState<
-    | { screen: { x: number; y: number }; nodeId: string; isTrigger: boolean }
+    | {
+        screen: { x: number; y: number };
+        nodeId: string;
+        isTrigger: boolean;
+        stepType: FlowStepNode["type"];
+      }
     | null
   >(null);
   const closeNodeContextMenu = useCallback((): void => setNodeContextMenu(null), []);
@@ -340,6 +347,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         screen: { x: event.clientX, y: event.clientY },
         nodeId: node.id,
         isTrigger,
+        stepType: node.data.step.type,
       });
     },
     [editor.draftTrigger?.name, closePopover, closeCanvasMenu, closeLibraryPicker],
@@ -498,9 +506,9 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       ) : null}
 
       {/* Per-node right-click menu. Delete is hidden for the trigger
-          (the engine treats it as undeletable). "Add error handling" is
-          rendered as a disabled "Soon" entry pending the actual settings
-          wiring. */}
+          (the engine treats it as undeletable). "Add error handling"
+          only renders for PIECE / CODE steps -- those are the only
+          types the engine consults `errorHandlingOptions` for. */}
       {nodeContextMenu ? (
         <CanvasContextMenu
           anchor={nodeContextMenu.screen}
@@ -526,14 +534,27 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
                     },
                   },
                 ]),
-            {
-              key: "add-error-handling",
-              icon: ShieldAlert,
-              label: "Add error handling",
-              shortcut: "Soon",
-              disabled: true,
-              onSelect: () => {},
-            },
+            ...(nodeContextMenu.stepType === "PIECE"
+              ? [
+                  {
+                    key: "add-error-handling",
+                    icon: ShieldAlert,
+                    label: "Add error handling",
+                    onSelect: () => {
+                      const routerName = editor.addErrorHandling(nodeContextMenu.nodeId);
+                      closeNodeContextMenu();
+                      // Select the new router so the user immediately sees
+                      // the conditions / branches in the settings popover.
+                      // Anchor where the menu was painted so the popover
+                      // opens predictably.
+                      if (routerName) {
+                        setSelectedStepName(routerName);
+                        setPopoverAnchor(nodeContextMenu.screen);
+                      }
+                    },
+                  },
+                ]
+              : []),
           ]}
         />
       ) : null}
@@ -552,6 +573,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             catalog={editor.catalog}
             onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
             onSetTriggerType={(type) => editor.setTriggerType(type)}
+            onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
             onRemoveInputKey={(key) => {
@@ -1538,6 +1560,7 @@ interface PropertiesPanelProps {
   isLocked: boolean;
   onSetPiece: (pieceName: string, actionName: string) => void;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
+  onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
@@ -1565,6 +1588,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     catalog,
     onSetPiece,
     onSetTriggerType,
+    onSetErrorHandling,
     onSetInput,
     onAddInputKey,
     onRemoveInputKey,
@@ -1748,6 +1772,21 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </div>
       ) : null}
 
+      {/* Error handling lives on PIECE / CODE steps only -- the engine's
+          retry + continue-on-failure helpers explicitly type-narrow to
+          those. Rendering this for LOOP/ROUTER/EMPTY would mislead the
+          user since their toggles would be ignored at runtime. */}
+      {step.type === "PIECE" && !isTriggerStep ? (
+        <>
+          <div className="wf-props__divider" />
+          <ErrorHandlingSection
+            continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
+            retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
+            onChange={onSetErrorHandling}
+          />
+        </>
+      ) : null}
+
       <div className="wf-props__divider" />
 
       <div className="wf-props__step-actions">
@@ -1780,6 +1819,57 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         onTestFromHere={props.onTestFromHere}
       />
     </div>
+  );
+}
+
+/**
+ * Per-step error-handling toggles. These map 1:1 to the activepieces
+ * engine's `errorHandlingOptions` shape:
+ *   - `continueOnFailure`: flip a FAILED verdict back to RUNNING so the
+ *     flow continues. The step's `output` stays undefined -- downstream
+ *     templating can use `{{<step>}}` + DOES_NOT_EXIST to branch on the
+ *     failure (this is exactly what the "Add error handling" template
+ *     wires up automatically).
+ *   - `retryOnFailure`: retry with exponential backoff. Cadence is engine
+ *     config (max 4 attempts, ~14s total wait); not per-step tunable.
+ */
+function ErrorHandlingSection({
+  continueOnFailure,
+  retryOnFailure,
+  onChange,
+}: {
+  continueOnFailure: boolean;
+  retryOnFailure: boolean;
+  onChange: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
+}): React.ReactElement {
+  return (
+    <section className="wf-props__error-handling" aria-label="Error handling">
+      <h4>Error handling</h4>
+      <label className="wf-props__field wf-props__field--inline">
+        <input
+          type="checkbox"
+          checked={continueOnFailure}
+          onChange={(e) => onChange({ continueOnFailure: e.target.checked })}
+        />
+        <span className="wf-props__field-label">Continue on failure</span>
+      </label>
+      <p className="wf-props__hint">
+        Treat this step's failure as success. Downstream steps still run; the
+        failure shows up in the step's output for routers to branch on.
+      </p>
+      <label className="wf-props__field wf-props__field--inline">
+        <input
+          type="checkbox"
+          checked={retryOnFailure}
+          onChange={(e) => onChange({ retryOnFailure: e.target.checked })}
+        />
+        <span className="wf-props__field-label">Retry on failure</span>
+      </label>
+      <p className="wf-props__hint">
+        Retry up to 4 times with exponential backoff (~14s total) before
+        giving up. Final failure still respects "Continue on failure".
+      </p>
+    </section>
   );
 }
 
