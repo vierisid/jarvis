@@ -40,7 +40,7 @@
 .wf-editor__title h2 {
   margin: 0;
   font-size: 1rem;
-  color: var(--ink-1);
+  color: var(--ink);
 }
 .wf-editor__title p {
   margin: 2px 0 0;
@@ -125,7 +125,7 @@
   align-items: center;
   justify-content: center;
 }
-.wf-popover__close:hover { color: var(--ink-1); background: var(--paper-3); }
+.wf-popover__close:hover { color: var(--ink); background: var(--paper-3); }
 .wf-popover__close:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -167,7 +167,7 @@
   background: transparent;
   border: none;
   border-radius: var(--r-1, 4px);
-  color: var(--ink-1);
+  color: var(--ink);
   font-size: 0.85rem;
   cursor: pointer;
   text-align: left;
@@ -212,7 +212,7 @@
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 6px 10px;
   font-size: 0.88rem;
   box-sizing: border-box;
@@ -235,7 +235,7 @@
   border: none;
   border-radius: var(--r-1, 4px);
   padding: 6px 10px;
-  color: var(--ink-1);
+  color: var(--ink);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -253,7 +253,7 @@
 }
 .wf-library__piece { color: var(--ink-2); }
 .wf-library__sep { color: var(--ink-3); }
-.wf-library__action { color: var(--ink-1); font-weight: 500; }
+.wf-library__action { color: var(--ink); font-weight: 500; }
 .wf-library__row-desc {
   font-size: 0.74rem;
   color: var(--ink-3);
@@ -363,7 +363,7 @@
   border-radius: var(--r-2);
   padding: var(--s-2) var(--s-3);
   font-size: 0.85rem;
-  color: var(--ink-1);
+  color: var(--ink);
   cursor: pointer;
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
@@ -426,7 +426,7 @@
   align-items: center;
   gap: 6px;
   font-size: 0.85rem;
-  color: var(--ink-1);
+  color: var(--ink);
 }
 .wf-props__branch-tag {
   background: var(--paper);
@@ -468,7 +468,7 @@
   text-overflow: ellipsis;
 }
 .wf-node__sep { color: var(--ink-3); }
-.wf-node__action { color: var(--ink-1); }
+.wf-node__action { color: var(--ink); }
 .wf-node__piece--missing { color: var(--accent-warn, #fbbf24); font-style: italic; }
 
 /* ── Properties panel ── */
@@ -476,7 +476,7 @@
 .wf-props__header h3 {
   margin: 0;
   font-size: 0.95rem;
-  color: var(--ink-1);
+  color: var(--ink);
 }
 .wf-props__header p {
   margin: 2px 0 var(--s-3);
@@ -511,7 +511,7 @@
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 6px 8px;
   font-size: 0.85rem;
 }
@@ -559,7 +559,7 @@
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 6px 8px;
   font-size: 0.82rem;
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -590,7 +590,7 @@
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 6px 8px;
   font-size: 0.82rem;
 }
@@ -615,7 +615,7 @@
   padding: 5px 8px;
   cursor: pointer;
 }
-.wf-props__seg:hover { color: var(--ink-1); }
+.wf-props__seg:hover { color: var(--ink); }
 .wf-props__seg--on {
   background: var(--paper-3);
   color: var(--ink);
@@ -671,7 +671,7 @@
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 6px 8px;
   font-size: 0.82rem;
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -695,7 +695,7 @@
   cursor: pointer;
   transition: border-color 0.15s ease;
 }
-.wf-props__chip:hover { color: var(--ink-1); }
+.wf-props__chip:hover { color: var(--ink); }
 .wf-props__chip--on {
   background: var(--paper-3);
   color: var(--ink);
@@ -717,7 +717,7 @@
   margin: 0;
   font-size: 0.85rem;
   font-weight: 600;
-  color: var(--ink-1);
+  color: var(--ink);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -729,7 +729,7 @@
   border: 1px solid var(--rule-soft);
   border-radius: var(--radius-2, 6px);
   background: var(--surface-1);
-  color: var(--ink-1);
+  color: var(--ink);
   resize: vertical;
 }
 .wf-props__sample-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
