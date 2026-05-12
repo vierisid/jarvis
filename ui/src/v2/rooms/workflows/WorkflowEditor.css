@@ -3,7 +3,7 @@
 .wf-editor {
   position: fixed;
   inset: 0;
-  background: var(--paper-1, #0a0e14);
+  background: var(--paper);
   display: flex;
   flex-direction: column;
   z-index: 100;
@@ -66,7 +66,7 @@
 
 .wf-editor__canvas {
   position: relative;
-  background: var(--paper-1, #0a0e14);
+  background: var(--paper);
   overflow: hidden;
 }
 
@@ -103,7 +103,7 @@
 
 /* ── React Flow surface tweaks ── */
 
-.wf-editor__canvas .react-flow__renderer { background: var(--paper-1, #0a0e14); }
+.wf-editor__canvas .react-flow__renderer { background: var(--paper); }
 .wf-editor__canvas .react-flow__background { color: var(--rule-soft); }
 .wf-editor__canvas .react-flow__edge-path { stroke: var(--ink-3); stroke-width: 1.5px; }
 .wf-editor__canvas .react-flow__controls {
@@ -132,7 +132,7 @@
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
 .wf-node:hover { border-color: var(--ink-3); }
-.wf-node--selected { border-color: var(--accent-1, #5eead4); }
+.wf-node--selected { border-color: var(--accent); }
 .wf-node--unconfigured { border-color: var(--accent-warn, #fbbf24); }
 .wf-node--nested {
   background: var(--paper-3);
@@ -147,7 +147,7 @@
   color: var(--ink-3);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: var(--paper-1, #0a0e14);
+  background: var(--paper);
   padding: 0 4px;
   border-radius: 2px;
   z-index: 1;
@@ -183,7 +183,7 @@
   color: var(--ink-1);
 }
 .wf-props__branch-tag {
-  background: var(--paper-1, #0a0e14);
+  background: var(--paper);
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -354,7 +354,7 @@
 .wf-props__segmented {
   display: flex;
   gap: 4px;
-  background: var(--paper-3);
+  background: var(--paper-2);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
   padding: 3px;
@@ -371,9 +371,9 @@
 }
 .wf-props__seg:hover { color: var(--ink-1); }
 .wf-props__seg--on {
-  background: var(--paper-1, #0a0e14);
-  color: var(--ink-1);
-  box-shadow: inset 0 0 0 1px var(--accent-1, #5eead4);
+  background: var(--paper-3);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .wf-props__step-actions {
@@ -440,7 +440,7 @@
   gap: 4px;
 }
 .wf-props__chip {
-  background: var(--paper-3);
+  background: var(--paper-2);
   border: 1px solid var(--rule-soft);
   border-radius: 999px;
   padding: 3px 10px;
@@ -451,9 +451,9 @@
 }
 .wf-props__chip:hover { color: var(--ink-1); }
 .wf-props__chip--on {
-  background: var(--paper-1, #0a0e14);
-  color: var(--ink-1);
-  border-color: var(--accent-1, #5eead4);
+  background: var(--paper-3);
+  color: var(--ink);
+  border-color: var(--accent);
 }
 
 /* Per-step sample data editor + Test from here, rendered inside PropertiesPanel
@@ -487,7 +487,7 @@
   resize: vertical;
 }
 .wf-props__sample-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
-.wf-props__sample-err { color: var(--accent-1, #f87171); font-size: 0.72rem; }
+.wf-props__sample-err { color: var(--accent); font-size: 0.72rem; }
 .wf-props__sample-status { font-size: 0.78rem; }
 .wf-props__sample-status--ok { color: var(--accent-ok, #5eead4); }
 .wf-props__sample-status--warn { color: var(--accent-warn, #fbbf24); }
