@@ -141,17 +141,19 @@
 
 .wf-node__branch-label {
   position: absolute;
-  top: -16px;
-  left: 0;
-  font-size: 0.7rem;
+  top: -18px;
+  left: 6px;
+  font-size: 0.68rem;
   color: var(--ink-3);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   background: var(--paper);
-  padding: 0 4px;
-  border-radius: 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--rule-soft);
+  border-radius: 999px;
   z-index: 1;
   pointer-events: none;
+  white-space: nowrap;
 }
 .wf-node { position: relative; }
 

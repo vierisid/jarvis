@@ -19,6 +19,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  Position,
   useNodesState,
   type Edge,
   type Node,
@@ -37,9 +38,14 @@ import {
 } from "./useWorkflowEditor";
 import "./WorkflowEditor.css";
 
-const NODE_X = 0;
-const NODE_Y_STEP = 130;
-const INDENT_PX = 64;
+// Horizontal flow layout. Each step in the flattened chain advances the
+// cursor rightward by NODE_X_STEP; nested branches (loop body / router
+// children) stack downward by NODE_Y_BRANCH * depth so a parent and its
+// branch head are visually adjacent. Y baseline starts at NODE_Y_BASE so
+// the trigger doesn't sit flush against the top of the canvas.
+const NODE_Y_BASE = 40;
+const NODE_X_STEP = 280;
+const NODE_Y_BRANCH = 140;
 
 interface WorkflowEditorProps {
   flowId: string;
@@ -161,9 +167,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           fs.containerKind === draggedFlat.containerKind,
       );
       const siblingNames = new Set(siblings.map((s) => s.step.name));
+      // Horizontal layout: chain order = left-to-right, so sort siblings
+      // by their dragged x position.
       const sorted = nodes
         .filter((n) => siblingNames.has(n.id) && n.id !== triggerName)
-        .sort((a, b) => a.position.y - b.position.y);
+        .sort((a, b) => a.position.x - b.position.x);
       const newOrder = sorted.map((n) => n.id);
       editor.reorderChain(scope, newOrder);
     },
@@ -220,7 +228,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               onPaneClick={() => setSelectedStepName(null)}
               onNodeDragStop={onNodeDragStop}
               fitView
-              fitViewOptions={{ padding: 0.2 }}
+              fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
               // Per-node `draggable` flag (set to false for the trigger in
               // buildGraph) overrides this. Nodes default to draggable.
               nodesDraggable
@@ -333,7 +341,12 @@ function buildGraph(
     return {
       id: step.name,
       type: "stepNode",
-      position: { x: NODE_X + entry.depth * INDENT_PX, y: i * NODE_Y_STEP },
+      position: { x: i * NODE_X_STEP, y: NODE_Y_BASE + entry.depth * NODE_Y_BRANCH },
+      // Tell xyflow the natural side for each default handle so smoothstep
+      // edges route horizontally even before we render explicit <Handle/>
+      // components (Task 2).
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       data: { step, selected: selected === step.name, catalog, depth: entry.depth, branchName: entry.branchName },
       // Trigger is always pinned. Every other node is draggable; the chain
       // it belongs to is inferred at drop time from its FlatStep entry.
