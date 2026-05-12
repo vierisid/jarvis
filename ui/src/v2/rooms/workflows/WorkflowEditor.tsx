@@ -187,8 +187,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // chain's authoritative order; React Flow needs an internal mutable copy
   // so dragged positions update visually without losing reactivity.
   const { nodes: baseNodes, edges } = useMemo(
-    () => buildGraph(editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions),
-    [editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions],
+    () => buildGraph(editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions),
+    [editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
   // Sync incoming chain order changes back into React Flow's internal state.
@@ -1280,13 +1280,114 @@ function LibraryRowContent({ entry }: { entry: LibraryEntry }): React.ReactEleme
 
 const NODE_TYPES = { stepNode: StepNode };
 
+/**
+ * Tree-aware auto-layout. The previous "x = flatten-index * step, y =
+ * depth * branch" formula collapsed every router branch onto the same
+ * `y` (depth+1), which stacked multiple outputs in a single horizontal
+ * line. This walks the trigger tree and distributes branches
+ * SYMMETRICALLY around the parent's row using the subtree heights, so
+ * a 2-branch router lands with one above and one below, a 3-branch
+ * router with one above / one at center / one below, etc.
+ *
+ * Rows are integer grid units. We measure each subtree's height once
+ * (memoised), then a second pass assigns coordinates. Final negative
+ * rows are shifted so the topmost row lands at NODE_Y_BASE -- nothing
+ * paints outside the viewport on first fit.
+ *
+ * LOOP body sits below its chain (row + chainHeight) rather than
+ * symmetrically: a loop's two outputs are not peers (the "after-loop"
+ * IS the chain continuation, the body is the lateral branch), and
+ * keeping the chain horizontal preserves the "main path" reading.
+ */
+function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: number; y: number }> {
+  if (!root) return {};
+  const heightCache = new Map<string, number>();
+  // `height(node)` returns how many rows the subtree starting at `node`
+  // occupies. The node itself contributes 1; routers add the sum of
+  // branch heights; loops add the body's height below the chain. The
+  // chain continuation (`nextAction`) shares this node's row, so the
+  // chain's own extent is max'd with the node-local extent.
+  const height = (node: FlowStepNode | undefined | null): number => {
+    if (!node) return 0;
+    const cached = heightCache.get(node.name);
+    if (cached !== undefined) return cached;
+    let own = 1;
+    if (node.type === "ROUTER" && Array.isArray(node.children)) {
+      const branches = node.children.filter((c): c is FlowStepNode => !!c);
+      if (branches.length > 0) {
+        const total = branches.reduce((acc, b) => acc + height(b), 0);
+        own = Math.max(own, total);
+      }
+    }
+    if (node.type === "LOOP_ON_ITEMS" && node.firstLoopAction) {
+      own += height(node.firstLoopAction);
+    }
+    const chainH = node.nextAction ? height(node.nextAction) : 0;
+    const result = Math.max(own, chainH);
+    heightCache.set(node.name, result);
+    return result;
+  };
+
+  const gridPositions: Record<string, { col: number; row: number }> = {};
+  const layout = (node: FlowStepNode | undefined | null, col: number, row: number): void => {
+    if (!node || gridPositions[node.name]) return;
+    gridPositions[node.name] = { col, row };
+
+    if (node.type === "ROUTER" && Array.isArray(node.children)) {
+      const branches = node.children.filter((c): c is FlowStepNode => !!c);
+      if (branches.length > 0) {
+        const branchHeights = branches.map(height);
+        const totalH = branchHeights.reduce((a, b) => a + b, 0);
+        // Walk a row cursor starting at `row - (totalH - 1) / 2` so the
+        // branches are centred on the router's row. Each branch's
+        // CENTRE row = cursor + (h - 1) / 2; advance cursor by `h` for
+        // the next branch.
+        let cursor = row - (totalH - 1) / 2;
+        for (let i = 0; i < branches.length; i++) {
+          const h = branchHeights[i] || 1;
+          const centre = cursor + (h - 1) / 2;
+          layout(branches[i], col + 1, centre);
+          cursor += h;
+        }
+      }
+    }
+    if (node.type === "LOOP_ON_ITEMS" && node.firstLoopAction) {
+      // Body sits below the chain (chain occupies rows row..row+chainH-1).
+      const chainH = node.nextAction ? height(node.nextAction) : 1;
+      layout(node.firstLoopAction, col + 1, row + chainH);
+    }
+    if (node.nextAction) {
+      layout(node.nextAction, col + 1, row);
+    }
+  };
+
+  layout(root, 0, 0);
+
+  // Some branches end up at negative rows (above the trigger). Shift the
+  // whole layout so the topmost row maps to NODE_Y_BASE.
+  let minRow = 0;
+  for (const p of Object.values(gridPositions)) {
+    if (p.row < minRow) minRow = p.row;
+  }
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const [name, { col, row }] of Object.entries(gridPositions)) {
+    out[name] = {
+      x: col * NODE_X_STEP,
+      y: NODE_Y_BASE + (row - minRow) * NODE_Y_BRANCH,
+    };
+  }
+  return out;
+}
+
 function buildGraph(
+  trigger: FlowStepNode | null,
   steps: FlatStep[],
   orphans: OrphanStep[],
   selected: string | null,
   catalog: PieceCatalogEntry[],
   stepPositions: Record<string, { x: number; y: number }>,
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
+  const autoPositions = computeAutoLayout(trigger);
   const buildNodeData = (step: FlowStepNode, depth: number, branchName: string | undefined, isOrphan: boolean): StepNodeData => {
     const branchConnected: Record<string, boolean> = {};
     if (step.type === "ROUTER" && Array.isArray(step.children)) {
@@ -1309,16 +1410,16 @@ function buildGraph(
     };
   };
 
-  const nodes: Node<StepNodeData>[] = steps.map((entry, i) => {
+  const nodes: Node<StepNodeData>[] = steps.map((entry) => {
     const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
     // Prefer the user's persisted x/y when one exists; fall back to the
-    // deterministic auto-layout so newly added (untouched) steps still
-    // appear next to their predecessor instead of stacking at (0, 0).
+    // tree-aware auto-layout (see `computeAutoLayout`) so newly added
+    // steps slot in next to their predecessor and multi-output nodes
+    // distribute their branches above/below rather than stacking.
     const saved = stepPositions[step.name];
-    const position = saved
-      ? { x: saved.x, y: saved.y }
-      : { x: i * NODE_X_STEP, y: NODE_Y_BASE + entry.depth * NODE_Y_BRANCH };
+    const auto = autoPositions[step.name];
+    const position = saved ?? auto ?? { x: 0, y: NODE_Y_BASE };
     return {
       id: step.name,
       type: "stepNode",
