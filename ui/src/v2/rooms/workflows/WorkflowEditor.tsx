@@ -30,7 +30,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Save, RotateCcw, ShieldAlert, X, Plus, Trash2 } from "lucide-react";
+import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -382,6 +382,23 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               {actionMessage.text}
             </span>
           ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              editor.clearStepPositions();
+              // Refit the viewport so the rearranged grid is fully
+              // visible (similar to xyflow's "fitView" controls button
+              // but triggered by the explicit user action).
+              window.requestAnimationFrame(() => {
+                rfInstanceRef.current?.fitView({ padding: 0.15, duration: 250 });
+              });
+            }}
+            title="Reset all step positions to the auto-arranged grid (does not change connections)"
+            disabled={Object.keys(editor.stepPositions).length === 0}
+          >
+            <Icon icon={LayoutGrid} size={14} /> Auto-arrange
+          </Button>
           <Button variant="ghost" size="sm" onClick={onDiscard} disabled={!editor.dirty}>
             <Icon icon={RotateCcw} size={14} /> Discard
           </Button>

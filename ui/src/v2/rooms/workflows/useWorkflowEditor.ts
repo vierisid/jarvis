@@ -576,6 +576,22 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
+   * Drop all saved tree-node positions so the next render falls through
+   * to the deterministic auto-layout (`buildGraph` computes a left-to-
+   * right grid from the chain's flatten order when a step has no saved
+   * coords). Used by the editor's "Auto-arrange" button. Orphans aren't
+   * touched -- they live outside the chain and have no auto position to
+   * fall back to.
+   */
+  const clearStepPositions = useCallback((): void => {
+    setStepPositions((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      return {};
+    });
+    setDirty(true);
+  }, []);
+
+  /**
    * Spawn an orphan PIECE step pre-configured with the chosen piece +
    * action, positioned at the given canvas (flow) coordinates. The user
    * wires it into the chain by dragging from a source handle into this
@@ -1125,6 +1141,7 @@ export function useWorkflowEditor(flowId: string | null) {
     disconnectEdgeByHandle,
     setOrphanPosition,
     setStepPosition,
+    clearStepPositions,
     stepPositions,
     createOrphanStep,
     createOrphanControlFlowStep,
