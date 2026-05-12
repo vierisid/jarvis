@@ -187,6 +187,90 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Piece library popover: searchable list of actions opened from the
+   canvas context menu's "Add piece" entry. */
+.wf-library {
+  position: fixed;
+  z-index: 210;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.5), 0 4px 12px -4px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wf-library__search {
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  position: sticky;
+  top: 0;
+}
+.wf-library__search input {
+  width: 100%;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  padding: 6px 10px;
+  font-size: 0.88rem;
+  box-sizing: border-box;
+}
+.wf-library__search input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+.wf-library__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+.wf-library__row {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-1, 4px);
+  padding: 6px 10px;
+  color: var(--ink-1);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wf-library__row--active,
+.wf-library__row:hover {
+  background: var(--paper-3);
+}
+.wf-library__row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.wf-library__piece { color: var(--ink-2); }
+.wf-library__sep { color: var(--ink-3); }
+.wf-library__action { color: var(--ink-1); font-weight: 500; }
+.wf-library__row-desc {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.wf-library__empty {
+  padding: var(--s-4) var(--s-3);
+  color: var(--ink-3);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 /* ── React Flow surface tweaks ── */
 
 .wf-editor__canvas .react-flow__renderer { background: var(--paper); }

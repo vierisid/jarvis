@@ -88,6 +88,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     | null
   >(null);
   const closeCanvasMenu = useCallback((): void => setCanvasMenu(null), []);
+  // Library picker (Task 7). When set, renders the floating piece library
+  // at the recorded screen coords; picking a piece spawns an orphan step
+  // at the matching flow coords for the user to wire in via a handle drag.
+  const [libraryPicker, setLibraryPicker] = useState<
+    | { screen: { x: number; y: number }; flow: { x: number; y: number } }
+    | null
+  >(null);
+  const closeLibraryPicker = useCallback((): void => setLibraryPicker(null), []);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const closePopover = useCallback((): void => {
@@ -296,31 +304,28 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   );
 
   /**
-   * Stub Add-piece handler. Task 7 replaces this with the library popover
-   * (search + categorised piece list). Until then, the menu entry just
-   * inserts an unconfigured step after the trigger so the workflow can
-   * still grow -- preserving the existing "Insert step" capability the
-   * properties panel used to provide.
+   * Open the floating library picker at the right-click location. The
+   * picker shows a searchable list of every piece action; choosing one
+   * spawns an orphan step at the captured flow coordinates which the
+   * user then wires into the chain by dragging from a source handle.
    */
   const onAddPieceFromMenu = useCallback(
-    (_flowPos: { x: number; y: number }): void => {
-      const triggerStepName = editor.draftTrigger?.name;
-      if (!triggerStepName) return;
-      // Walk to the tail of the top-level chain so the new step lands at
-      // the end, not awkwardly between the trigger and step_1.
-      let cursor = editor.draftTrigger;
-      while (cursor?.nextAction) cursor = cursor.nextAction;
-      const predecessor = cursor?.name ?? triggerStepName;
-      const created = editor.insertStepAfter(predecessor);
-      if (created) {
-        setSelectedStepName(created);
-        // Anchor the new node's settings popover where the user right-
-        // clicked so the configure-step UX flows from the click location.
-        setPopoverAnchor(canvasMenu?.screen ?? null);
-      }
+    (flowPos: { x: number; y: number }): void => {
+      if (!canvasMenu) return;
+      setLibraryPicker({ screen: canvasMenu.screen, flow: flowPos });
       closeCanvasMenu();
     },
-    [editor, canvasMenu, closeCanvasMenu],
+    [canvasMenu, closeCanvasMenu],
+  );
+
+  /** Handle the user picking a piece+action from the library popover. */
+  const onPickFromLibrary = useCallback(
+    (pieceName: string, actionName: string): void => {
+      if (!libraryPicker) return;
+      editor.createOrphanStep(libraryPicker.flow, pieceName, actionName);
+      closeLibraryPicker();
+    },
+    [editor, libraryPicker, closeLibraryPicker],
   );
 
   return (
@@ -378,6 +383,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             onPaneClick={() => {
               closePopover();
               closeCanvasMenu();
+              closeLibraryPicker();
             }}
             onPaneContextMenu={onPaneContextMenu}
             onNodeDragStop={onNodeDragStop}
@@ -401,8 +407,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       </section>
 
       {/* Canvas right-click menu: anchored at the cursor's screen
-          position. First entry adds a piece (Task 7 will swap this for
-          the floating library picker). */}
+          position. First entry opens the floating piece library. */}
       {canvasMenu ? (
         <CanvasContextMenu
           anchor={canvasMenu.screen}
@@ -416,6 +421,18 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               onSelect: () => onAddPieceFromMenu(canvasMenu.flow),
             },
           ]}
+        />
+      ) : null}
+
+      {/* Floating piece library picker, opened from the canvas context
+          menu. Picking a piece+action spawns an orphan step at the
+          captured flow coords (Task 3 wires the drag-to-connect). */}
+      {libraryPicker ? (
+        <PieceLibraryPopover
+          anchor={libraryPicker.screen}
+          catalog={editor.catalog}
+          onPick={onPickFromLibrary}
+          onClose={closeLibraryPicker}
         />
       ) : null}
 
@@ -700,6 +717,182 @@ function clampToViewport(
     top = Math.max(POPOVER_MARGIN, vh - measuredH - POPOVER_MARGIN);
   }
   return { left, top };
+}
+
+/* =========================================================== piece library popover */
+
+const LIBRARY_WIDTH = 360;
+const LIBRARY_MAX_ROWS = 14;
+
+interface LibraryRow {
+  piece: PieceCatalogEntry;
+  action: PieceCatalogActionOrTrigger;
+}
+
+/**
+ * Searchable list of every piece's actions. The first match auto-selects
+ * so Enter picks the obvious choice without keystrokes. Picking a row
+ * fires `onPick(pieceName, actionName)`; the caller handles the spawn /
+ * canvas placement.
+ *
+ * Triggers are NOT in this list -- there's exactly one trigger per flow
+ * and it's configured via the trigger node's settings popover, not by
+ * adding a new node.
+ */
+function PieceLibraryPopover({
+  anchor,
+  catalog,
+  onPick,
+  onClose,
+}: {
+  anchor: { x: number; y: number };
+  catalog: PieceCatalogEntry[];
+  onPick: (pieceName: string, actionName: string) => void;
+  onClose: () => void;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y });
+
+  // Flatten the catalog to one row per (piece, action) and filter by the
+  // search query against the piece name, action label, and description.
+  const rows = useMemo<LibraryRow[]>(() => {
+    const all: LibraryRow[] = [];
+    for (const p of catalog) {
+      for (const a of p.actions) all.push({ piece: p, action: a });
+    }
+    if (!query.trim()) return all;
+    const q = query.trim().toLowerCase();
+    return all.filter(({ piece, action }) => {
+      return (
+        piece.displayName.toLowerCase().includes(q) ||
+        action.displayName.toLowerCase().includes(q) ||
+        (action.description ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [catalog, query]);
+
+  // Reset the keyboard cursor when the result set changes so Enter always
+  // targets a visible row.
+  useEffect(() => {
+    setActiveIdx(0);
+  }, [query]);
+
+  // Auto-focus the search input on mount so the user can type immediately
+  // without clicking the field. Defer one tick so React's commit phase
+  // doesn't fight with our focus call.
+  useEffect(() => {
+    const t = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  // Viewport clamp -- same shape as the settings popover's clamp.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchor.x;
+    let top = anchor.y;
+    if (left + el.offsetWidth + 12 > vw) left = Math.max(12, vw - el.offsetWidth - 12);
+    if (top + el.offsetHeight + 12 > vh) top = Math.max(12, vh - el.offsetHeight - 12);
+    setPos({ left, top });
+  }, [anchor, rows.length]);
+
+  // Outside-click closes. Deferred so the right-click that summoned us
+  // doesn't immediately bounce.
+  useEffect(() => {
+    const handler = (e: MouseEvent): void => {
+      if (!ref.current) return;
+      if (ref.current.contains(e.target as globalThis.Node)) return;
+      onClose();
+    };
+    const timer = window.setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [onClose]);
+
+  // Keyboard nav: handled via a keydown attached to the popover so it
+  // doesn't fight with the global Esc-closes-editor handler.
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIdx((i) => Math.min(rows.length - 1, i + 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIdx((i) => Math.max(0, i - 1));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const row = rows[activeIdx];
+        if (row) onPick(row.piece.name, row.action.name);
+      }
+    },
+    [rows, activeIdx, onPick, onClose],
+  );
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="wf-library"
+      role="dialog"
+      aria-label="Add piece"
+      style={{ left: pos.left, top: pos.top, width: LIBRARY_WIDTH }}
+      onKeyDown={onKeyDown}
+    >
+      <div className="wf-library__search">
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="Search pieces..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Filter pieces by name or description"
+        />
+      </div>
+      {rows.length === 0 ? (
+        <div className="wf-library__empty">No pieces match "{query}".</div>
+      ) : (
+        <ul
+          className="wf-library__list"
+          style={{ maxHeight: `calc(${LIBRARY_MAX_ROWS} * 44px)` }}
+          role="listbox"
+        >
+          {rows.map((row, i) => (
+            <li key={`${row.piece.name}::${row.action.name}`}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={i === activeIdx}
+                className={`wf-library__row ${i === activeIdx ? "wf-library__row--active" : ""}`}
+                onClick={() => onPick(row.piece.name, row.action.name)}
+                onMouseEnter={() => setActiveIdx(i)}
+              >
+                <div className="wf-library__row-head">
+                  <span className="wf-library__piece">{row.piece.displayName}</span>
+                  <span className="wf-library__sep">·</span>
+                  <span className="wf-library__action">{row.action.displayName}</span>
+                </div>
+                {row.action.description ? (
+                  <div className="wf-library__row-desc">{row.action.description}</div>
+                ) : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>,
+    document.body,
+  );
 }
 
 /* ============================================================ react-flow */

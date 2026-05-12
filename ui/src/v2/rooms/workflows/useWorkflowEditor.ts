@@ -388,6 +388,46 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
+   * Spawn an orphan PIECE step pre-configured with the chosen piece +
+   * action, positioned at the given canvas (flow) coordinates. The user
+   * wires it into the chain by dragging from a source handle into this
+   * step's target handle. Returns the new step's name.
+   *
+   * Used by the library popover opened from the canvas right-click menu
+   * (Task 7). Names are unique across the tree AND the existing orphan
+   * pool so step references can't collide.
+   */
+  const createOrphanStep = useCallback(
+    (flowPos: { x: number; y: number }, pieceName: string, actionName: string): string | null => {
+      const piece = catalog.find((p) => p.name === pieceName);
+      const action = piece?.actions.find((a) => a.name === actionName);
+      if (!piece || !action) return null;
+      const seed = applySchemaDefaults({}, action.inputSchema ?? null);
+
+      // Generate a unique step_<n> by scanning tree + orphans.
+      const taken = new Set<string>();
+      if (draftTrigger) {
+        for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
+      }
+      for (const o of draftOrphans) taken.add(o.node.name);
+      let n = 1;
+      while (taken.has(`step_${n}`)) n++;
+      const newName = `step_${n}`;
+
+      const newStep: FlowStepNode = {
+        name: newName,
+        type: "PIECE",
+        displayName: action.displayName,
+        settings: { pieceName, actionName, input: seed },
+      };
+      setDraftOrphans((prev) => [...prev, { node: newStep, x: flowPos.x, y: flowPos.y }]);
+      setDirty(true);
+      return newName;
+    },
+    [catalog, draftTrigger, draftOrphans],
+  );
+
+  /**
    * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
    * EMPTY stashes the prior settings; switching back restores them so the
    * round-trip doesn't discard the user's piece + input.
@@ -629,6 +669,7 @@ export function useWorkflowEditor(flowId: string | null) {
     connectByHandles,
     disconnectEdgeByHandle,
     setOrphanPosition,
+    createOrphanStep,
     save,
     reset,
     setStepSampleData,
