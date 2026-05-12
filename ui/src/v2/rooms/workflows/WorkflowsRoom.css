@@ -345,7 +345,7 @@
 
 /* ── Connections panel ───────────────────────────────────────────────── */
 
-.wf-conn { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) 0; }
+.wf-conn { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) var(--s-6); }
 .wf-conn__header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); }
 .wf-conn__title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink-1); }
 .wf-conn__subtitle { margin: 2px 0 0; font-size: 0.78rem; color: var(--ink-3); }
@@ -427,7 +427,7 @@
 .wf-conn__form-actions { display: flex; justify-content: flex-end; }
 
 /* Library panel: curated activepieces community pieces, install/uninstall. */
-.wf-lib { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) 0; }
+.wf-lib { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3) var(--s-6); }
 .wf-lib__header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); }
 .wf-lib__title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink-1); }
 .wf-lib__subtitle { margin: 2px 0 0; font-size: 0.78rem; color: var(--ink-3); }
