@@ -564,23 +564,33 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Phase A — onboarding setup-mode guard for LLM-dependent services.
     // While `setup_completed_at === null` the user hasn't saved an LLM
     // provider/key/model yet, so the heartbeat-driven background agent,
-    // commitment executor, and awareness service all have nothing to
-    // call. Skip them to keep the logs clean; they spin up on the next
-    // daemon restart after the user finishes the setup screens.
+    // commitment executor, and awareness service have nothing to call.
+    //
+    // The construction logic lives in `startPostSetupServices` below so it
+    // can be invoked in TWO places: here at boot (when setup was already
+    // completed in a prior run) AND from the `/api/onboarding/setup`
+    // endpoint right after the user finishes onboarding — so the daemon
+    // does NOT need to be restarted for background services to come
+    // online. Critical for Docker/VPS deploys where a process restart
+    // breaks WS connections, sidecars, and watchers.
     const inSetupMode = !jarvisConfig.onboarding?.setup_completed_at;
     if (inSetupMode) {
-      console.log('[Daemon] Setup mode — skipping bgAgent / executor / awareness until first-run setup completes');
+      console.log('[Daemon] Setup mode — bgAgent / executor / awareness will start when onboarding completes');
     }
 
-    // 10b. Create and start background agent (needs LLM providers from agentService.start())
-    if (!inSetupMode) {
+    // Idempotent constructor for the LLM-dependent services. Safe to call
+    // multiple times; returns immediately if `bgAgent` is already running.
+    const startPostSetupServices = async (): Promise<void> => {
+      if (bgAgent) return; // already running
+
+      // 10b. Background agent (needs LLM providers from agentService.start())
       const bgAgentService = new BackgroundAgentService(jarvisConfig, agentService.getLLMManager());
       bgAgentService.setResearchQueue(researchQueue);
       await bgAgentService.start();
       bgAgent = bgAgentService;
       console.log('[Daemon] Background agent started (separate browser for heartbeat/reactions)');
 
-      // 10c. Wire reactor + executor to background agent (separate browser, no chat contention)
+      // 10c. Wire reactor + executor to background agent
       reactor.setAgentService(bgAgentService);
       executor.setAgentService(bgAgentService);
 
@@ -589,12 +599,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       wsService.setCommitmentExecutor(executor);
       executor.start();
       commitmentExecutor = executor;
-    }
 
-    // 10e. Create and start Awareness Service (M13)
-    //       Skipped when --no-local-tools is set (headless / Docker)
-    //       Also skipped in setup mode (no LLM yet).
-    if (!inSetupMode && jarvisConfig.awareness?.enabled !== false && !config.noLocalTools) {
+      // 10e. Awareness Service (M13). Skipped when --no-local-tools is set
+      //       (headless / Docker) or explicitly disabled in config.
+      if (jarvisConfig.awareness?.enabled !== false && !config.noLocalTools) {
+        await startAwarenessService();
+      }
+    };
+
+    // Awareness service construction extracted so the post-setup helper
+    // can call it conditionally. Closes over the same boot-scope deps as
+    // the original inline block.
+    const startAwarenessService = async (): Promise<void> => {
+      if (awarenessService) return;
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
         const svc = new AwarenessService(
@@ -784,6 +801,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without awareness
       }
+    };
+
+    // Expose the helper to the API layer so /api/onboarding/setup can
+    // bring services online at the end of onboarding without a restart.
+    apiContext.startPostSetupServices = startPostSetupServices;
+    apiContext.isPostSetupServicesReady = () => bgAgent !== null;
+
+    // Boot-time path: setup was completed in a prior run, so spin services
+    // up now. Skipped in setup mode — the onboarding endpoint will call
+    // the same helper when the user finishes.
+    if (!inSetupMode) {
+      await startPostSetupServices();
     }
 
     // 10a-2. Site Builder Service

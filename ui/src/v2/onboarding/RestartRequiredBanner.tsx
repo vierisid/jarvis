@@ -2,35 +2,23 @@ import { useMemo } from "react";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 
 /**
- * Banner shown post-setup when the daemon needs to be restarted before
- * background services (heartbeat, commitments, awareness) become active.
+ * Defensive fallback banner. The normal flow constructs the LLM-
+ * dependent services in-process at `/api/onboarding/setup`, so this
+ * stays hidden. It only fires when setup is complete AND the daemon
+ * reports `post_setup_services_ready: false` — i.e. the in-process
+ * construction failed, or the user is on a pre-fix daemon binary that
+ * never wires services until restart.
  *
- * Background:
- *   `bgAgent`, `commitmentExecutor`, and `awarenessService` are
- *   constructed at daemon boot, gated on `setup_completed_at !== null`.
- *   The setup-completion endpoint flips the flag and hot-reloads LLM
- *   providers, but it doesn't construct those services in-process. Until
- *   the in-process construction lands (follow-up issue F2), users have
- *   to restart the daemon for those features to come online.
- *
- * Detection:
- *   The /api/onboarding/status endpoint now exposes `daemon_started_at`.
- *   We compare against `setup_completed_at`. If the user finished setup
- *   AFTER this daemon process booted, the flag is set but the services
- *   aren't running — show the banner. If the user has restarted since,
- *   `daemon_started_at` will be later than `setup_completed_at` and the
- *   banner stays hidden.
- *
- * Defensive on missing field: pre-fix daemons don't send
- * `daemon_started_at`. In that case we hide the banner rather than
- * showing a false-positive.
+ * Defensive on missing field: status endpoints that don't send
+ * `post_setup_services_ready` are treated as "ready" so we never show
+ * a false positive against an old daemon that doesn't report the flag.
  */
 export function RestartRequiredBanner({ status }: { status: OnboardingStatus | null }) {
   const visible = useMemo(() => {
     if (!status) return false;
     if (!status.setup_completed_at) return false;
-    if (typeof status.daemon_started_at !== "number") return false;
-    return status.setup_completed_at > status.daemon_started_at;
+    if (status.post_setup_services_ready !== false) return false;
+    return true;
   }, [status]);
 
   if (!visible) return null;

@@ -149,6 +149,21 @@ export type ApiContext = {
   goalService?: import('../goals/service.ts').GoalService;
   sidecarManager?: import('../sidecar/manager.ts').SidecarManager;
   siteBuilderService?: import('../sites/service.ts').SiteBuilderService;
+  /**
+   * Bring the LLM-dependent post-setup services (background agent,
+   * commitment executor, awareness) online in-process. Wired by the
+   * daemon at boot. Called by `/api/onboarding/setup` so the user does
+   * not have to restart the daemon at the end of onboarding — critical
+   * for Docker / VPS deploys where a process restart is disruptive.
+   * Idempotent: a no-op if the services are already running.
+   */
+  startPostSetupServices?: () => Promise<void>;
+  /**
+   * Reports whether the post-setup services have come online. Used by
+   * the onboarding status endpoint so the dashboard knows whether to
+   * show the "Restart Jarvis" fallback banner.
+   */
+  isPostSetupServicesReady?: () => boolean;
 };
 
 // CORS headers — scoped to the dashboard origin, not wildcard
@@ -892,10 +907,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_dismissed: o?.tutorial_dismissed_at != null,
             tutorial_progress_step: o?.tutorial_progress_step ?? null,
             last_reset_at: o?.last_reset_at ?? null,
-            // Boot timestamp lets the dashboard detect when setup
-            // completed AFTER the daemon started (= restart needed
-            // before background services activate).
+            // Boot timestamp + post-setup readiness let the dashboard
+            // detect whether the background services (bgAgent, commitment
+            // executor, awareness) are actually running. With in-process
+            // construction at `/api/onboarding/setup`, no restart is
+            // needed in the normal flow; the banner only shows if that
+            // construction step failed.
             daemon_started_at: ctx.daemonStartedAt,
+            post_setup_services_ready: ctx.isPostSetupServicesReady?.() ?? false,
           });
         } catch (err) {
           return errorFromException(err);
@@ -1169,9 +1188,29 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           await saveConfig(fresh);
           ctx.config.onboarding = fresh.onboarding;
 
+          // 4. Bring the LLM-dependent services (bgAgent, commitment
+          //    executor, awareness) online in-process. Without this the
+          //    user would have to restart the daemon — fatal UX on
+          //    Docker / VPS. Failure here is non-fatal: chat still works
+          //    via the hot-reloaded LLM, just without background features
+          //    until the next daemon restart.
+          let postSetupStarted = false;
+          if (ctx.startPostSetupServices) {
+            try {
+              await ctx.startPostSetupServices();
+              postSetupStarted = true;
+            } catch (err) {
+              console.error(
+                '[Onboarding] Failed to start post-setup services in-process:',
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+
           return json({
             ok: true,
             setup_completed_at: now,
+            post_setup_services_started: postSetupStarted,
             message: 'Setup complete. Jarvis is ready.',
           });
         } catch (err) {

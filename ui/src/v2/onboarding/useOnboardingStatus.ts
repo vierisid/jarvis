@@ -34,12 +34,18 @@ export interface OnboardingStatus {
   tutorial_dismissed: boolean;
   tutorial_progress_step: string | null;
   last_reset_at: number | null;
-  /** Daemon process boot time (ms). When `setup_completed_at >
-   *  daemon_started_at`, background services (heartbeat, commitments,
-   *  awareness) haven't been constructed yet — the dashboard surfaces
-   *  a "Restart Jarvis" banner until the in-process construction lands
-   *  (follow-up issue F2). */
+  /** Daemon process boot time (ms). Used in tandem with
+   *  `post_setup_services_ready` to detect a stale daemon that needs a
+   *  restart. */
   daemon_started_at?: number;
+  /** True once the LLM-dependent background services (bgAgent,
+   *  commitment executor, awareness) are running. The normal flow
+   *  constructs them in-process at `/api/onboarding/setup`, so this
+   *  flips to true without a daemon restart. The "Restart Jarvis"
+   *  banner only shows when setup is complete but this is false — a
+   *  defensive fallback for failed in-process construction or daemons
+   *  on a pre-fix binary. */
+  post_setup_services_ready?: boolean;
 }
 
 interface HookValue {
