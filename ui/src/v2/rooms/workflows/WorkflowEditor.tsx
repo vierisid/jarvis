@@ -198,60 +198,27 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     setNodes(baseNodes);
   }, [baseNodes, setNodes]);
 
-  const triggerName = editor.draftTrigger?.name ?? null;
-
   // Capture the ReactFlowInstance so right-click handlers can translate
   // the cursor's screen coordinates into the canvas's flow coordinates
   // for orphan placement.
   const rfInstanceRef = useRef<ReactFlowInstance<Node<StepNodeData>, Edge> | null>(null);
 
-  // Drag-rearrange: when a node is dropped, identify its chain (top-level /
-  // LOOP body / ROUTER branch) from its FlatStep entry, gather siblings in
-  // the SAME chain, sort by Y, and propagate. Cross-chain moves are not
-  // supported -- React Flow allows them visually, but we ignore the move.
-  // Orphan nodes (not in the chain) just persist their new x/y.
+  // Drag-stop: persist the new (x, y) for both tree-resident and orphan
+  // nodes. We deliberately DO NOT touch the chain wiring on drag --
+  // moving C between A and B used to reorder the chain into A -> C -> B,
+  // which silently changed the workflow behind the user's back. Edges
+  // are only ever changed by explicit handle drags / right-click delete;
+  // position is purely visual.
   const onNodeDragStop = useCallback(
     (_e: React.MouseEvent | TouchEvent | MouseEvent, draggedNode: Node<StepNodeData>) => {
-      // Orphan repositioning: persist the new position, nothing to reorder.
       if (draggedNode.data?.isOrphan) {
         editor.setOrphanPosition(draggedNode.id, draggedNode.position.x, draggedNode.position.y);
         return;
       }
-      if (!triggerName) return;
-      const draggedFlat = editor.allSteps.find((fs) => fs.step.name === draggedNode.id);
-      if (!draggedFlat) return;
-      // Persist the new (x, y) for the tree node too. Chain reorder below
-      // adjusts the logical order based on Y; the saved coordinate is what
-      // the canvas redraws from next time.
+      // Tree node: just save the layout. No chain mutation.
       editor.setStepPosition(draggedNode.id, draggedNode.position.x, draggedNode.position.y);
-      // Build scope from the dragged node's container info.
-      let scope: { kind: "top" } | { kind: "loop"; parentName: string } | { kind: "branch"; parentName: string; branchName: string };
-      if (draggedFlat.depth === 0) {
-        scope = { kind: "top" };
-      } else if (draggedFlat.containerKind === "loop" && draggedFlat.parentName) {
-        scope = { kind: "loop", parentName: draggedFlat.parentName };
-      } else if (draggedFlat.containerKind === "router" && draggedFlat.parentName && draggedFlat.branchName) {
-        scope = { kind: "branch", parentName: draggedFlat.parentName, branchName: draggedFlat.branchName };
-      } else {
-        return; // unknown scope; refuse to act
-      }
-      // Sibling FlatSteps share parentName + branchName + containerKind.
-      const siblings = editor.allSteps.filter(
-        (fs) =>
-          fs.parentName === draggedFlat.parentName &&
-          fs.branchName === draggedFlat.branchName &&
-          fs.containerKind === draggedFlat.containerKind,
-      );
-      const siblingNames = new Set(siblings.map((s) => s.step.name));
-      // Horizontal layout: chain order = left-to-right, so sort siblings
-      // by their dragged x position.
-      const sorted = nodes
-        .filter((n) => siblingNames.has(n.id) && n.id !== triggerName)
-        .sort((a, b) => a.position.x - b.position.x);
-      const newOrder = sorted.map((n) => n.id);
-      editor.reorderChain(scope, newOrder);
     },
-    [nodes, triggerName, editor],
+    [editor],
   );
 
   /**
