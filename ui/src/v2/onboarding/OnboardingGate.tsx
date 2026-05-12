@@ -4,7 +4,7 @@ import { ProfileInterviewRoom } from "./ProfileInterviewRoom";
 import { TutorialRoom } from "./TutorialRoom";
 import { TutorialEventProvider } from "./TutorialEventContext";
 import { useOnboardingStatus } from "./useOnboardingStatus";
-import { RestartRequiredBanner } from "./RestartRequiredBanner";
+import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequiredBanner";
 
 /**
  * Phase A + B onboarding gate. Sits between AppShellV2's render and
@@ -71,12 +71,17 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   // AppShell can fire palette_opened / room_opened / notif_opened
   // events that the tutorial subscribes to for auto-advance.
   if (!status.tutorial_completed && !status.tutorial_dismissed) {
+    const showBanner = shouldShowRestartBanner(status);
     return (
       <TutorialEventProvider>
-        <div className="v2-shell-frame">
-          <RestartRequiredBanner status={status} />
-          {children}
-        </div>
+        {showBanner ? (
+          <div className="v2-shell-frame">
+            <RestartRequiredBanner status={status} />
+            {children}
+          </div>
+        ) : (
+          children
+        )}
         <TutorialRoom
           resumeFromStepId={status.tutorial_progress_step}
           onComplete={() => refresh()}
@@ -98,10 +103,14 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return (
-    <div className="v2-shell-frame">
-      <RestartRequiredBanner status={status} />
-      {children}
-    </div>
-  );
+  if (shouldShowRestartBanner(status)) {
+    return (
+      <div className="v2-shell-frame">
+        <RestartRequiredBanner status={status} />
+        {children}
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }

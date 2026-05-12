@@ -2,6 +2,20 @@ import { useMemo } from "react";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 
 /**
+ * Whether the restart banner should be visible for the given status.
+ * Exported so the OnboardingGate can decide whether to wrap the shell
+ * in the `.v2-shell-frame` grid container — when the banner is hidden,
+ * wrapping causes the shell to collapse into the `auto` row track and
+ * the composer ends up mid-page.
+ */
+export function shouldShowRestartBanner(status: OnboardingStatus | null): boolean {
+  if (!status) return false;
+  if (!status.setup_completed_at) return false;
+  if (status.post_setup_services_ready !== false) return false;
+  return true;
+}
+
+/**
  * Defensive fallback banner. The normal flow constructs the LLM-
  * dependent services in-process at `/api/onboarding/setup`, so this
  * stays hidden. It only fires when setup is complete AND the daemon
@@ -14,12 +28,7 @@ import type { OnboardingStatus } from "./useOnboardingStatus";
  * a false positive against an old daemon that doesn't report the flag.
  */
 export function RestartRequiredBanner({ status }: { status: OnboardingStatus | null }) {
-  const visible = useMemo(() => {
-    if (!status) return false;
-    if (!status.setup_completed_at) return false;
-    if (status.post_setup_services_ready !== false) return false;
-    return true;
-  }, [status]);
+  const visible = useMemo(() => shouldShowRestartBanner(status), [status]);
 
   if (!visible) return null;
 
