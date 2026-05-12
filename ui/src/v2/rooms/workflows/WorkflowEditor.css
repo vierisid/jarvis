@@ -467,12 +467,11 @@
   background: var(--wf-handle-border-hover);
   transform: scale(1.15);
 }
-/* Branch / loop-body handles sit on the bottom edge -- shift the visible
-   circle slightly outside the card so it reads as "going somewhere else"
-   rather than "part of the card". */
-.wf-editor__canvas .react-flow__handle.wf-handle--branch {
-  bottom: -6px;
-}
+/* Right-edge source handles are vertically spread via inline `top` set
+   from `StepNode`. When there are multiple (LOOP body + after-loop;
+   ROUTER one-per-branch), each one ends up at `top: (i+1)/(n+1) * 100%`
+   so they're evenly distributed along the right edge regardless of card
+   height. No bottom-edge handles anymore. */
 /* "Used" handle: already wired to a successor. We dim the circle and disable
    the pointer cursor so the user understands they have to right-click the
    existing edge first to free the handle before dragging a new one. */

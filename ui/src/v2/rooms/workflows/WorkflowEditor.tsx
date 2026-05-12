@@ -993,7 +993,7 @@ type LibraryEntry =
     }
   | {
       kind: "control-flow";
-      controlType: "LOOP_ON_ITEMS" | "ROUTER";
+      controlType: "LOOP_ON_ITEMS" | "IF" | "ROUTER";
       displayName: string;
       description: string;
     };
@@ -1017,9 +1017,15 @@ const CATEGORY_ORDER: LibraryCategory[] = ["all", "action", "control"];
 const CONTROL_FLOW_ENTRIES: LibraryEntry[] = [
   {
     kind: "control-flow",
+    controlType: "IF",
+    displayName: "If",
+    description: "Two-way split on a condition. Locked branches: True (the condition matched) and False (it didn't).",
+  },
+  {
+    kind: "control-flow",
     controlType: "ROUTER",
-    displayName: "If / Router",
-    description: "Branch the flow on conditions. Each branch runs a separate sub-chain; an optional fallback catches everything else.",
+    displayName: "Router",
+    description: "Branch the flow into N renameable paths. Use when you need more than a binary True/False split.",
   },
   {
     kind: "control-flow",
@@ -1365,7 +1371,17 @@ function buildGraph(
   const knownNames = new Set(steps.map((s) => s.step.name));
   for (const entry of steps) {
     const step = entry.step;
-    if (step.nextAction && knownNames.has(step.nextAction.name)) {
+    // ROUTER nodes don't render a separate "out" handle -- after-router
+    // composition lives inside each branch's chain. Emitting an edge to
+    // a non-existent source handle would leave xyflow routing from the
+    // node centre, which looks broken; skip the edge entirely. Any
+    // existing `router.nextAction` in the data model survives the
+    // round-trip (we don't mutate it), it's just not drawn.
+    if (
+      step.nextAction &&
+      knownNames.has(step.nextAction.name) &&
+      step.type !== "ROUTER"
+    ) {
       edges.push({
         id: `${step.name}->${step.nextAction.name}`,
         source: step.name,
@@ -1434,18 +1450,69 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
 
+  const routerKind = step.settings?.routerKind;
   let kindLabel: string;
   let kindTone: "accent" | "neutral" | "warn" | "ok" = "neutral";
   if (step.type === "EMPTY") { kindLabel = "Manual"; kindTone = "accent"; }
   else if (isTrigger) { kindLabel = "Trigger"; kindTone = "accent"; }
   else if (isLoop) { kindLabel = "Loop"; kindTone = "warn"; }
-  else if (isRouter) { kindLabel = "Router"; kindTone = "warn"; }
+  else if (isRouter) {
+    // IF reads as a distinct affordance even though it's a ROUTER under
+    // the hood -- the user-visible naming reflects the locked True/False
+    // structure rather than the underlying engine type.
+    kindLabel = routerKind === "if" ? "If" : "Router";
+    kindTone = "warn";
+  }
   else { kindLabel = "Action"; }
 
-  // ROUTER lays out one bottom-edge source handle per branch, spread evenly.
-  // The handle id encodes the branch name so the eventual onConnect (Task 3)
-  // can route a connection straight into the correct `children[i]` slot.
+  // ROUTER branches feed the right-edge source handles. The handle id
+  // encodes the branch name so onConnect can route a connection straight
+  // into the correct `children[i]` slot.
   const branches = isRouter ? step.settings?.branches ?? [] : [];
+
+  // Compose the right-edge output list. LOOP shows two stacked handles:
+  // loop-body (iterates) and out (after-loop continuation). ROUTER shows
+  // one handle per branch; no separate continuation -- after-router
+  // composition lives inside each branch's chain. PIECE/CODE shows the
+  // standard single "out" continuation. The trigger node behaves as a
+  // PIECE for output purposes (one "out" to start the chain).
+  type RightHandle = {
+    id: string;
+    title: string;
+    used: boolean;
+  };
+  const rightHandles: RightHandle[] = (() => {
+    if (isLoop) {
+      return [
+        { id: "loop-body", title: "Iterates", used: loopBodyConnected },
+        { id: "out", title: "After loop", used: outConnected },
+      ];
+    }
+    if (isRouter) {
+      return branches.map((b, i) => {
+        const name = b?.branchName ?? `branch_${i}`;
+        // Tooltip: prefer the branch name; for an unnamed CONDITION
+        // branch fall back to a short rendering of its first
+        // condition formula so the user can identify the branch even
+        // when they haven't labelled it.
+        let title = name;
+        if (!b?.branchName && b?.branchType === "CONDITION") {
+          const first = b.conditions?.[0]?.[0];
+          if (first?.firstValue) {
+            const op = first.operator ?? "?";
+            const second = first.secondValue ?? "";
+            title = `${first.firstValue} ${op}${second ? ` ${second}` : ""}`;
+          }
+        }
+        return {
+          id: `branch:${name}`,
+          title,
+          used: !!branchConnected[name],
+        };
+      });
+    }
+    return [{ id: "out", title: "Next step", used: outConnected }];
+  })();
 
   return (
     <div
@@ -1464,53 +1531,27 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           isConnectableStart={false}
         />
       ) : null}
-      {/* Main source ("out"): right edge. Represents `nextAction` -- the
-          sequential continuation of this chain. Refuses to start a new drag
-          when already wired (the user must right-click the edge to free it
-          first). */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="out"
-        className={`wf-handle wf-handle--source ${outConnected ? "wf-handle--used" : ""}`}
-        isConnectableStart={!outConnected}
-        isConnectableEnd={false}
-      />
-      {/* LOOP body source: bottom-edge handle that feeds into the loop's
-          `firstLoopAction`. */}
-      {isLoop ? (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          id="loop-body"
-          className={`wf-handle wf-handle--source wf-handle--branch ${loopBodyConnected ? "wf-handle--used" : ""}`}
-          style={{ left: "50%" }}
-          isConnectableStart={!loopBodyConnected}
-          isConnectableEnd={false}
-        />
-      ) : null}
-      {/* ROUTER branches: one bottom source handle per branch, spread along
-          the bottom edge. Handle id = `branch:<branchName>` so onConnect can
-          locate the matching slot in `settings.branches` / `children`. */}
-      {isRouter && branches.length > 0
-        ? branches.map((b, i) => {
-            const name = b?.branchName ?? `branch_${i}`;
-            const pct = ((i + 1) * 100) / (branches.length + 1);
-            const used = !!branchConnected[name];
-            return (
-              <Handle
-                key={`branch:${name}`}
-                type="source"
-                position={Position.Bottom}
-                id={`branch:${name}`}
-                className={`wf-handle wf-handle--source wf-handle--branch ${used ? "wf-handle--used" : ""}`}
-                style={{ left: `${pct}%` }}
-                isConnectableStart={!used}
-                isConnectableEnd={false}
-              />
-            );
-          })
-        : null}
+      {/* Right-edge source handles. For multiple handles we spread them
+          vertically using percentage `top` so they stay anchored even
+          when the node card grows / shrinks. The `title` attribute drives
+          the native tooltip showing each branch's name (or its condition
+          formula when unnamed). */}
+      {rightHandles.map((h, i) => {
+        const pct = ((i + 1) * 100) / (rightHandles.length + 1);
+        return (
+          <Handle
+            key={h.id}
+            type="source"
+            position={Position.Right}
+            id={h.id}
+            className={`wf-handle wf-handle--source ${h.used ? "wf-handle--used" : ""}`}
+            style={{ top: `${pct}%` }}
+            isConnectableStart={!h.used}
+            isConnectableEnd={false}
+            title={h.title}
+          />
+        );
+      })}
 
       {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
@@ -2522,6 +2563,11 @@ function RouterEditor({
   const branches = step.settings?.branches ?? [];
   const children = step.children ?? [];
   const executionType = step.settings?.executionType ?? "EXECUTE_FIRST_MATCH";
+  // IF is a strict two-way split: branch names ("True" / "False") are
+  // locked, and the user can't add or remove branches. Anything that
+  // wasn't spawned via the IF library entry (or saved from older flows
+  // without the marker) defaults to the renameable Router family.
+  const isIf = step.settings?.routerKind === "if";
   const [newBranchName, setNewBranchName] = useState("");
 
   return (
@@ -2554,9 +2600,9 @@ function RouterEditor({
           <h4>Branches</h4>
         </div>
         <p className="wf-props__hint">
-          Branch conditions are not editable in the panel yet. Use{" "}
-          <code>manage_workflow compose</code> for new flows, or hand-edit the JSON via{" "}
-          <code>PATCH /api/workflows/.../versions/...</code>.
+          {isIf
+            ? "An If has exactly two branches: True (when the condition matches) and False (when it doesn't). Branch names and count are locked."
+            : "Branch conditions aren't editable in the panel yet. Use manage_workflow compose for new flows, or hand-edit the JSON via PATCH /api/workflows/.../versions/..."}
         </p>
         <ul className="wf-props__branch-list">
           {branches.map((b, idx) => {
@@ -2566,7 +2612,7 @@ function RouterEditor({
               <li key={`${idx}_${b?.branchName ?? ""}`} className="wf-props__branch-row">
                 <div className="wf-props__branch-name">
                   <span>{b?.branchName ?? `(branch ${idx})`}</span>
-                  {isFallback ? <span className="wf-props__branch-tag">fallback</span> : null}
+                  {isFallback && !isIf ? <span className="wf-props__branch-tag">fallback</span> : null}
                 </div>
                 <div className="wf-props__branch-actions">
                   {!child && b?.branchName && !isFallback ? (
@@ -2574,48 +2620,58 @@ function RouterEditor({
                       <Icon icon={Plus} size={12} /> Add step
                     </Button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="wf-props__input-remove"
-                    onClick={() => {
-                      if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
-                        onRemoveRouterBranch(idx);
-                      }
-                    }}
-                    title="Remove branch"
-                  >
-                    <Icon icon={Trash2} size={12} />
-                  </button>
+                  {/* Lock branch removal for IF -- the two branches are
+                      structurally required. Removal stays available for
+                      free-form Router. */}
+                  {!isIf ? (
+                    <button
+                      type="button"
+                      className="wf-props__input-remove"
+                      onClick={() => {
+                        if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
+                          onRemoveRouterBranch(idx);
+                        }
+                      }}
+                      title="Remove branch"
+                    >
+                      <Icon icon={Trash2} size={12} />
+                    </button>
+                  ) : null}
                 </div>
               </li>
             );
           })}
         </ul>
-        <div className="wf-props__add-row">
-          <input
-            type="text"
-            placeholder="new branch name"
-            value={newBranchName}
-            onChange={(e) => setNewBranchName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && newBranchName.trim()) {
+        {/* "Add branch" UI hidden for IF: the True / False pair is the
+            entire taxonomy. If the user needs a third path they should
+            use a Router instead. */}
+        {!isIf ? (
+          <div className="wf-props__add-row">
+            <input
+              type="text"
+              placeholder="new branch name"
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newBranchName.trim()) {
+                  onAddRouterBranch(newBranchName.trim());
+                  setNewBranchName("");
+                }
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!newBranchName.trim()}
+              onClick={() => {
                 onAddRouterBranch(newBranchName.trim());
                 setNewBranchName("");
-              }
-            }}
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!newBranchName.trim()}
-            onClick={() => {
-              onAddRouterBranch(newBranchName.trim());
-              setNewBranchName("");
-            }}
-          >
-            <Icon icon={Plus} size={12} /> Add branch
-          </Button>
-        </div>
+              }}
+            >
+              <Icon icon={Plus} size={12} /> Add branch
+            </Button>
+          </div>
+        ) : null}
       </div>
     </>
   );

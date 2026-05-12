@@ -56,6 +56,14 @@ export interface FlowStepNode {
     /** ROUTER: which matched branches to run. */
     executionType?: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH";
     /**
+     * ROUTER: UI-only marker the engine ignores. Distinguishes a strict
+     * "If" (exactly two branches "True"/"False", branch names locked) from
+     * a free-form "Router" (N renameable branches). Absent means
+     * "router" -- a step authored via the API / assistant doesn't carry
+     * this flag, so the editor treats it as the more flexible Router.
+     */
+    routerKind?: "if" | "router";
+    /**
      * PIECE / CODE: per-step error-handling toggles consumed by the engine
      * at `src/workflows/activepieces/.../helper/error-handling.ts`.
      *   - `continueOnFailure.value === true`: a FAILED step is treated as
@@ -567,21 +575,24 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
-   * Spawn a control-flow orphan (LOOP_ON_ITEMS or ROUTER) at the given
-   * canvas coordinates. These are engine-built-in `FlowActionType`s, not
-   * pieces -- the library popover surfaces them alongside piece actions
-   * via the "Control flow" category. Defaults mirror what the assistant's
-   * `workflow-composer` shapes for the same node kinds:
+   * Spawn a control-flow orphan (LOOP_ON_ITEMS / IF / ROUTER) at the given
+   * canvas coordinates. IF and ROUTER both produce a `ROUTER` step at the
+   * engine level -- they differ only in the UI marker `settings.routerKind`
+   * which gates the rename/add-branch UI:
    *
-   *   - LOOP_ON_ITEMS starts with an empty `items` template so the user
-   *     fills it via the settings popover. No body wired yet -- they
-   *     connect one via the loop-body handle (Task 3).
-   *   - ROUTER starts as an "If / Else" pair: one CONDITION branch named
-   *     "If" and one FALLBACK named "Else". Both child slots are null
-   *     until the user wires bodies in.
+   *   - IF: two locked branches named "True" (CONDITION) and "False"
+   *     (FALLBACK). The user can't rename them or add more -- it's a
+   *     strict two-way split.
+   *   - ROUTER: same two branches (renamed "Branch 1" / "Else") that the
+   *     user is free to rename, plus an "Add branch" affordance.
+   *   - LOOP_ON_ITEMS: empty `items` template; body wired in later via
+   *     the loop-body handle.
    */
   const createOrphanControlFlowStep = useCallback(
-    (flowPos: { x: number; y: number }, kind: "LOOP_ON_ITEMS" | "ROUTER"): string | null => {
+    (
+      flowPos: { x: number; y: number },
+      kind: "LOOP_ON_ITEMS" | "IF" | "ROUTER",
+    ): string | null => {
       const taken = new Set<string>();
       if (draftTrigger) {
         for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
@@ -599,15 +610,31 @@ export function useWorkflowEditor(flowId: string | null) {
           displayName: "Loop on items",
           settings: { items: "" },
         };
-      } else {
+      } else if (kind === "IF") {
         newStep = {
           name: newName,
           type: "ROUTER",
           displayName: "If",
           settings: {
             executionType: "EXECUTE_FIRST_MATCH",
+            routerKind: "if",
             branches: [
-              { branchName: "If", branchType: "CONDITION", conditions: [] },
+              { branchName: "True", branchType: "CONDITION", conditions: [] },
+              { branchName: "False", branchType: "FALLBACK" },
+            ],
+          },
+          children: [null, null],
+        };
+      } else {
+        newStep = {
+          name: newName,
+          type: "ROUTER",
+          displayName: "Router",
+          settings: {
+            executionType: "EXECUTE_FIRST_MATCH",
+            routerKind: "router",
+            branches: [
+              { branchName: "Branch 1", branchType: "CONDITION", conditions: [] },
               { branchName: "Else", branchType: "FALLBACK" },
             ],
           },
@@ -761,6 +788,11 @@ export function useWorkflowEditor(flowId: string | null) {
         displayName: `${pieceLabel} error catch`,
         settings: {
           executionType: "EXECUTE_FIRST_MATCH",
+          // Renameable: error-catch branches start with descriptive
+          // labels but the user can rephrase them ("Retry path",
+          // "Notify ops", ...) so this lives in the renameable Router
+          // family, not the strict IF.
+          routerKind: "router",
           branches: [
             {
               branchType: "CONDITION",
