@@ -80,6 +80,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // the originating MouseEvent so the popover opens near the cursor rather
   // than at a fixed location. Null when the popover is closed.
   const [popoverAnchor, setPopoverAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Anchor for the canvas right-click context menu. Stores both screen
+  // coordinates (where to paint the menu) and the corresponding flow
+  // coordinates (where any newly-added piece should land in the graph).
+  const [canvasMenu, setCanvasMenu] = useState<
+    | { screen: { x: number; y: number }; flow: { x: number; y: number } }
+    | null
+  >(null);
+  const closeCanvasMenu = useCallback((): void => setCanvasMenu(null), []);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const closePopover = useCallback((): void => {
@@ -261,6 +269,60 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     [editor],
   );
 
+  /**
+   * Right-click on the empty canvas opens the "+ Add piece" context menu.
+   * We capture both the screen coordinates (where to paint the menu) and
+   * the corresponding flow coordinates so the eventual "Add piece" action
+   * (Task 7's library popover) can drop the new step where the user
+   * clicked, not at an arbitrary default.
+   */
+  const onPaneContextMenu = useCallback(
+    (event: React.MouseEvent | MouseEvent): void => {
+      event.preventDefault();
+      // Close any other floating affordance before opening this one so we
+      // don't end up with overlapping menus.
+      closePopover();
+      const mouseEvent = event as React.MouseEvent;
+      const flowPos = rfInstanceRef.current?.screenToFlowPosition({
+        x: mouseEvent.clientX,
+        y: mouseEvent.clientY,
+      }) ?? { x: 0, y: 0 };
+      setCanvasMenu({
+        screen: { x: mouseEvent.clientX, y: mouseEvent.clientY },
+        flow: flowPos,
+      });
+    },
+    [closePopover],
+  );
+
+  /**
+   * Stub Add-piece handler. Task 7 replaces this with the library popover
+   * (search + categorised piece list). Until then, the menu entry just
+   * inserts an unconfigured step after the trigger so the workflow can
+   * still grow -- preserving the existing "Insert step" capability the
+   * properties panel used to provide.
+   */
+  const onAddPieceFromMenu = useCallback(
+    (_flowPos: { x: number; y: number }): void => {
+      const triggerStepName = editor.draftTrigger?.name;
+      if (!triggerStepName) return;
+      // Walk to the tail of the top-level chain so the new step lands at
+      // the end, not awkwardly between the trigger and step_1.
+      let cursor = editor.draftTrigger;
+      while (cursor?.nextAction) cursor = cursor.nextAction;
+      const predecessor = cursor?.name ?? triggerStepName;
+      const created = editor.insertStepAfter(predecessor);
+      if (created) {
+        setSelectedStepName(created);
+        // Anchor the new node's settings popover where the user right-
+        // clicked so the configure-step UX flows from the click location.
+        setPopoverAnchor(canvasMenu?.screen ?? null);
+      }
+      closeCanvasMenu();
+    },
+    [editor, canvasMenu, closeCanvasMenu],
+  );
+
   return (
     <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
       <header className="wf-editor__header">
@@ -313,7 +375,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               setSelectedStepName(n.id);
               setPopoverAnchor({ x: event.clientX, y: event.clientY });
             }}
-            onPaneClick={closePopover}
+            onPaneClick={() => {
+              closePopover();
+              closeCanvasMenu();
+            }}
+            onPaneContextMenu={onPaneContextMenu}
             onNodeDragStop={onNodeDragStop}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
@@ -333,6 +399,25 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           </ReactFlow>
         )}
       </section>
+
+      {/* Canvas right-click menu: anchored at the cursor's screen
+          position. First entry adds a piece (Task 7 will swap this for
+          the floating library picker). */}
+      {canvasMenu ? (
+        <CanvasContextMenu
+          anchor={canvasMenu.screen}
+          onClose={closeCanvasMenu}
+          items={[
+            {
+              key: "add-piece",
+              icon: Plus,
+              label: "Add piece",
+              shortcut: "+",
+              onSelect: () => onAddPieceFromMenu(canvasMenu.flow),
+            },
+          ]}
+        />
+      ) : null}
 
       {/* Floating settings popover: opens at the cursor when a node is
           clicked, replaces the legacy right-rail aside. Outside-click and
@@ -476,6 +561,115 @@ function NodeSettingsPopover({
         <Icon icon={X} size={14} />
       </button>
       <div className="wf-popover__body">{children}</div>
+    </div>,
+    document.body,
+  );
+}
+
+/* =========================================================== canvas context menu */
+
+interface CanvasMenuItem {
+  key: string;
+  label: string;
+  icon: typeof Plus;
+  shortcut?: string;
+  onSelect: () => void;
+}
+
+/**
+ * Small floating menu opened by right-clicking the empty canvas. Painted
+ * at the cursor's screen coordinates via a portal so it escapes the
+ * canvas's overflow + transform stack. Keyboard navigable (↑/↓ to move,
+ * Enter to invoke, Esc to dismiss).
+ */
+function CanvasContextMenu({
+  anchor,
+  items,
+  onClose,
+}: {
+  anchor: { x: number; y: number };
+  items: CanvasMenuItem[];
+  onClose: () => void;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y });
+  const [activeIdx, setActiveIdx] = useState<number>(0);
+
+  // Re-clamp when the menu first measures itself (after mount).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchor.x;
+    let top = anchor.y;
+    if (left + el.offsetWidth + 8 > vw) left = Math.max(8, vw - el.offsetWidth - 8);
+    if (top + el.offsetHeight + 8 > vh) top = Math.max(8, vh - el.offsetHeight - 8);
+    setPos({ left, top });
+  }, [anchor]);
+
+  // Outside-click closes. Deferred a tick so the right-click that opened
+  // us doesn't immediately close it.
+  useEffect(() => {
+    const handler = (e: MouseEvent): void => {
+      if (!ref.current) return;
+      if (ref.current.contains(e.target as globalThis.Node)) return;
+      onClose();
+    };
+    const timer = window.setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [onClose]);
+
+  // Keyboard nav.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIdx((i) => (i + 1) % items.length);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIdx((i) => (i - 1 + items.length) % items.length);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const item = items[activeIdx];
+        if (item) item.onSelect();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [items, activeIdx, onClose]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="wf-canvas-menu"
+      role="menu"
+      style={{ left: pos.left, top: pos.top }}
+    >
+      <ul className="wf-canvas-menu__list">
+        {items.map((item, i) => (
+          <li key={item.key}>
+            <button
+              type="button"
+              role="menuitem"
+              className={`wf-canvas-menu__item ${i === activeIdx ? "wf-canvas-menu__item--active" : ""}`}
+              onClick={item.onSelect}
+              onMouseEnter={() => setActiveIdx(i)}
+            >
+              <Icon icon={item.icon} size={14} />
+              <span className="wf-canvas-menu__label">{item.label}</span>
+              {item.shortcut ? <span className="wf-canvas-menu__shortcut">{item.shortcut}</span> : null}
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>,
     document.body,
   );

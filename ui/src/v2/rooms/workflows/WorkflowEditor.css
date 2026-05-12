@@ -138,6 +138,55 @@
   min-height: 0;
 }
 
+/* Canvas right-click menu. Small, terse, keyboard-navigable. Painted via
+   portal at the cursor's screen coordinates. */
+.wf-canvas-menu {
+  position: fixed;
+  z-index: 210;
+  min-width: 180px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.45), 0 3px 8px -2px rgba(0, 0, 0, 0.2);
+  padding: 4px;
+}
+.wf-canvas-menu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wf-canvas-menu__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-1, 4px);
+  color: var(--ink-1);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+.wf-canvas-menu__item--active,
+.wf-canvas-menu__item:hover {
+  background: var(--paper-3);
+}
+.wf-canvas-menu__label { flex: 1 1 auto; }
+.wf-canvas-menu__shortcut {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  padding: 1px 6px;
+  border: 1px solid var(--rule-soft);
+  border-radius: 4px;
+  background: var(--paper);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* ── React Flow surface tweaks ── */
 
 .wf-editor__canvas .react-flow__renderer { background: var(--paper); }
