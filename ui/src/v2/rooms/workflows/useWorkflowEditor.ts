@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addStepToHead as treeAddStepToHead,
-  addRouterBranch as treeAddRouterBranch,
   allReachableNames,
   applySchemaDefaults,
   cloneTrigger,
@@ -26,11 +25,8 @@ import {
   insertStepAfter as treeInsertStepAfter,
   isSourceHandleConnected,
   parseSourceHandle,
-  removeRouterBranch as treeRemoveRouterBranch,
   removeStep,
   reorderChain as treeReorderChain,
-  setLoopItems as treeSetLoopItems,
-  setRouterExecutionType as treeSetRouterExecutionType,
   type ConnectionHandle,
 } from "./tree";
 
@@ -215,39 +211,75 @@ export function useWorkflowEditor(flowId: string | null) {
     void reload();
   }, [reload]);
 
-  /** Update a single step in-place by name. The mutated tree replaces draftTrigger. */
-  const updateStep = useCallback((stepName: string, patch: Partial<FlowStepNode>): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const next = cloneTrigger(prev);
-      const target = findStep(next, stepName);
-      if (target) {
+  /**
+   * Apply an in-place mutation to a step wherever it lives -- inside the
+   * connected trigger tree OR in the orphan pool. Centralising the routing
+   * here means every "edit step" mutator below works the same way for
+   * orphan steps (settings popover, input fields, piece swap, ...) without
+   * each call site needing to know which collection the selected step is
+   * currently in.
+   *
+   * The mutator is called with a freshly cloned node; mutate in place. We
+   * splice the resulting node back into the right state slot.
+   */
+  const mutateAnyStep = useCallback(
+    (stepName: string, mutate: (step: FlowStepNode) => void): void => {
+      // Tree path: locate via findStep on the current draft. Reading the
+      // current `draftTrigger` from the closure (rather than inside the
+      // setter) is safe because every mutator that calls us is itself
+      // recreated when `draftTrigger` changes.
+      if (draftTrigger && findStep(draftTrigger, stepName)) {
+        setDraftTrigger((prev) => {
+          if (!prev) return prev;
+          const next = cloneTrigger(prev);
+          const target = findStep(next, stepName);
+          if (target) mutate(target);
+          return next;
+        });
+        setDirty(true);
+        return;
+      }
+      // Orphan path: rebuild the matching entry with a freshly cloned
+      // node so identity changes and React re-renders.
+      if (!draftOrphans.some((o) => o.node.name === stepName)) return;
+      setDraftOrphans((prev) =>
+        prev.map((o) => {
+          if (o.node.name !== stepName) return o;
+          const cloned = cloneTrigger(o.node);
+          mutate(cloned);
+          return { ...o, node: cloned };
+        }),
+      );
+      setDirty(true);
+    },
+    [draftTrigger, draftOrphans],
+  );
+
+  /** Update a single step in-place by name. Works for both tree and orphan steps. */
+  const updateStep = useCallback(
+    (stepName: string, patch: Partial<FlowStepNode>): void => {
+      mutateAnyStep(stepName, (target) => {
         Object.assign(target, patch);
-        // Preserve nested objects we didn't touch
+        // Preserve nested objects we didn't touch.
         if (patch.settings) {
           target.settings = { ...target.settings, ...patch.settings };
         }
-      }
-      return next;
-    });
-    setDirty(true);
-  }, []);
+      });
+    },
+    [mutateAnyStep],
+  );
 
   /** Update a single input key on a step. Convenience for the properties panel. */
-  const updateStepInput = useCallback((stepName: string, key: string, value: unknown): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const next = cloneTrigger(prev);
-      const target = findStep(next, stepName);
-      if (target) {
+  const updateStepInput = useCallback(
+    (stepName: string, key: string, value: unknown): void => {
+      mutateAnyStep(stepName, (target) => {
         const settings = target.settings ? { ...target.settings } : {};
         settings.input = { ...(settings.input ?? {}), [key]: value };
         target.settings = settings;
-      }
-      return next;
-    });
-    setDirty(true);
-  }, []);
+      });
+    },
+    [mutateAnyStep],
+  );
 
   /**
    * Insert a new PIECE step immediately after `predecessorName`. The new step
@@ -297,28 +329,65 @@ export function useWorkflowEditor(flowId: string | null) {
     setDirty(true);
   }, []);
 
-  const setLoopItems = useCallback((stepName: string, items: string): void => {
-    setDraftTrigger((prev) => (prev ? treeSetLoopItems(prev, stepName, items) : prev));
-    setDirty(true);
-  }, []);
+  const setLoopItems = useCallback(
+    (stepName: string, items: string): void => {
+      mutateAnyStep(stepName, (target) => {
+        if (target.type !== "LOOP_ON_ITEMS") return;
+        target.settings = { ...(target.settings ?? {}), items };
+      });
+    },
+    [mutateAnyStep],
+  );
 
   const setRouterExecutionType = useCallback(
     (stepName: string, type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH"): void => {
-      setDraftTrigger((prev) => (prev ? treeSetRouterExecutionType(prev, stepName, type) : prev));
-      setDirty(true);
+      mutateAnyStep(stepName, (target) => {
+        if (target.type !== "ROUTER") return;
+        target.settings = { ...(target.settings ?? {}), executionType: type };
+      });
     },
-    [],
+    [mutateAnyStep],
   );
 
-  const addRouterBranch = useCallback((stepName: string, branchName: string): void => {
-    setDraftTrigger((prev) => (prev ? treeAddRouterBranch(prev, stepName, branchName) : prev));
-    setDirty(true);
-  }, []);
+  const addRouterBranch = useCallback(
+    (stepName: string, branchName: string): void => {
+      mutateAnyStep(stepName, (target) => {
+        if (target.type !== "ROUTER") return;
+        const branches = [...(target.settings?.branches ?? [])];
+        const children = [...(target.children ?? [])];
+        // Insert before any FALLBACK so the catch-all stays last (mirrors
+        // the same convention as the tree-only `addRouterBranch` helper).
+        let insertAt = branches.length;
+        for (let i = 0; i < branches.length; i++) {
+          if (branches[i]?.branchType === "FALLBACK") {
+            insertAt = i;
+            break;
+          }
+        }
+        branches.splice(insertAt, 0, { branchName, branchType: "CONDITION", conditions: [] });
+        children.splice(insertAt, 0, null);
+        target.settings = { ...(target.settings ?? {}), branches };
+        target.children = children;
+      });
+    },
+    [mutateAnyStep],
+  );
 
-  const removeRouterBranch = useCallback((stepName: string, branchIndex: number): void => {
-    setDraftTrigger((prev) => (prev ? treeRemoveRouterBranch(prev, stepName, branchIndex) : prev));
-    setDirty(true);
-  }, []);
+  const removeRouterBranch = useCallback(
+    (stepName: string, branchIndex: number): void => {
+      mutateAnyStep(stepName, (target) => {
+        if (target.type !== "ROUTER") return;
+        const branches = [...(target.settings?.branches ?? [])];
+        const children = [...(target.children ?? [])];
+        if (branchIndex < 0 || branchIndex >= branches.length) return;
+        branches.splice(branchIndex, 1);
+        children.splice(branchIndex, 1);
+        target.settings = { ...(target.settings ?? {}), branches };
+        target.children = children;
+      });
+    },
+    [mutateAnyStep],
+  );
 
   /**
    * Remove a step from the tree by name. Works at any depth — top-level
@@ -492,33 +561,29 @@ export function useWorkflowEditor(flowId: string | null) {
     setDirty(true);
   }, []);
 
-  const setStepPiece = useCallback((stepName: string, pieceName: string, actionName: string): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const next = cloneTrigger(prev);
-      const target = findStep(next, stepName);
-      if (!target) return next;
+  const setStepPiece = useCallback(
+    (stepName: string, pieceName: string, actionName: string): void => {
+      mutateAnyStep(stepName, (target) => {
+        const isTrigger = target.type === "PIECE_TRIGGER" || target.type === "EMPTY";
+        // Look up the chosen sub-action's schema to seed defaults.
+        const piece = catalog.find((p) => p.name === pieceName);
+        const sub = isTrigger
+          ? piece?.triggers.find((t) => t.name === actionName)
+          : piece?.actions.find((a) => a.name === actionName);
+        const seed = applySchemaDefaults(target.settings?.input ?? {}, sub?.inputSchema ?? null);
 
-      const isTrigger = target.type === "PIECE_TRIGGER" || target.type === "EMPTY";
-      // Look up the chosen sub-action's schema to seed defaults.
-      const piece = catalog.find((p) => p.name === pieceName);
-      const sub = isTrigger
-        ? piece?.triggers.find((t) => t.name === actionName)
-        : piece?.actions.find((a) => a.name === actionName);
-      const seed = applySchemaDefaults(target.settings?.input ?? {}, sub?.inputSchema ?? null);
-
-      const settings: NonNullable<FlowStepNode["settings"]> = {
-        ...(target.settings ?? {}),
-        pieceName,
-        input: seed,
-      };
-      if (isTrigger) settings.triggerName = actionName;
-      else settings.actionName = actionName;
-      target.settings = settings;
-      return next;
-    });
-    setDirty(true);
-  }, [catalog]);
+        const settings: NonNullable<FlowStepNode["settings"]> = {
+          ...(target.settings ?? {}),
+          pieceName,
+          input: seed,
+        };
+        if (isTrigger) settings.triggerName = actionName;
+        else settings.actionName = actionName;
+        target.settings = settings;
+      });
+    },
+    [catalog, mutateAnyStep],
+  );
 
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {

@@ -103,12 +103,16 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     setPopoverAnchor(null);
   }, []);
 
-  // Keep selection valid: when steps shift, drop the selection if it doesn't exist.
+  // Keep selection valid: when steps shift, drop the selection if it
+  // doesn't exist. We have to check BOTH the connected tree AND the
+  // orphan pool — clicking an orphan is a valid selection that should
+  // open its settings popover.
   useEffect(() => {
     if (!selectedStepName) return;
-    const found = editor.allSteps.some((fs) => fs.step.name === selectedStepName);
-    if (!found) setSelectedStepName(null);
-  }, [editor.allSteps, selectedStepName]);
+    const inTree = editor.allSteps.some((fs) => fs.step.name === selectedStepName);
+    const inOrphans = editor.draftOrphans.some((o) => o.node.name === selectedStepName);
+    if (!inTree && !inOrphans) setSelectedStepName(null);
+  }, [editor.allSteps, editor.draftOrphans, selectedStepName]);
 
   // Esc closes the editor. If there are unsaved changes, confirm first so a
   // stray keystroke doesn't lose work.
@@ -151,12 +155,18 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     window.setTimeout(() => setActionMessage(null), 2000);
   };
 
-  // Single lookup for the selected step's FlatStep entry; downstream `step`
-  // and `depth` derive from it without a second pass over allSteps.
-  const selectedFlat = useMemo(
-    () => editor.allSteps.find((fs) => fs.step.name === selectedStepName) ?? null,
-    [editor.allSteps, selectedStepName],
-  );
+  // Single lookup for the selected step. We check the connected tree first
+  // (FlatStep carries depth / containerKind for the properties panel); on
+  // miss, fall back to the orphan pool. Orphans live at depth 0 with no
+  // container, so the synthesised FlatStep mirrors that.
+  const selectedFlat = useMemo<FlatStep | null>(() => {
+    if (!selectedStepName) return null;
+    const inTree = editor.allSteps.find((fs) => fs.step.name === selectedStepName);
+    if (inTree) return inTree;
+    const orphan = editor.draftOrphans.find((o) => o.node.name === selectedStepName);
+    if (orphan) return { step: orphan.node, depth: 0 };
+    return null;
+  }, [editor.allSteps, editor.draftOrphans, selectedStepName]);
   const selectedStep = selectedFlat?.step ?? null;
   const selectedDepth = selectedFlat?.depth ?? 0;
 
