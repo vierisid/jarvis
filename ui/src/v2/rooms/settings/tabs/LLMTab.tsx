@@ -265,7 +265,16 @@ function ProviderRow({
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
-    const r = await data.testProvider(provider);
+    // Send the *currently-typed* model + baseUrl with the test request
+    // so the user can verify a change before committing it with Save.
+    // Without these overrides the server falls back to the stored config,
+    // which would test the previously-saved model even though the user
+    // already typed a new one in the textbox.
+    const overrides: { model?: string; baseUrl?: string } = {};
+    const m = resolveModel();
+    if (m) overrides.model = m;
+    if (provider === "ollama" && baseUrl) overrides.baseUrl = baseUrl.trim();
+    const r = await data.testProvider(provider, overrides);
     setTestResult({ ok: r.ok, text: r.message });
     setTesting(false);
   };

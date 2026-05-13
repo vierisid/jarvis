@@ -406,12 +406,25 @@ export function useSettingsData() {
     [refresh],
   );
 
+  /**
+   * Test a provider's connection. Accepts optional `model` / `baseUrl`
+   * overrides so the UI can test what's currently in the textbox before
+   * the user clicks Save. Without overrides the server falls back to the
+   * stored config -- which would test the OLD model after the user typed
+   * a new one but hadn't saved yet.
+   */
   const testProvider = useCallback(
-    async (provider: LLMProvider): Promise<ActionResult> => {
+    async (
+      provider: LLMProvider,
+      overrides?: { model?: string; baseUrl?: string },
+    ): Promise<ActionResult> => {
       try {
+        const body: Record<string, unknown> = { provider };
+        if (overrides?.model) body.model = overrides.model;
+        if (overrides?.baseUrl) body.base_url = overrides.baseUrl;
         const r = await postJson<{ ok: boolean; model?: string; error?: string }>(
           "/api/config/llm/test",
-          { provider },
+          body,
         );
         if (r.ok) {
           return { ok: true, message: `${LLM_PROVIDER_LABELS[provider]}: ${r.model ?? "connected"}.` };

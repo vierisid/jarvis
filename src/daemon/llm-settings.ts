@@ -185,24 +185,41 @@ export function saveLLMSettings(
     };
   }
 
-  // Ollama. An explicit empty base_url is a "disable / clear" signal: wipe the
-  // stored URL/model so the provider stops appearing as configured in the UI.
+  // Ollama. Two independent fields (base_url, model) saved by two
+  // independent UI buttons -- handle them independently so a "Save model"
+  // POST that doesn't include base_url still persists the new model.
+  //
+  // An explicit empty base_url is a "disable / clear" signal: wipe the
+  // stored URL/model so the provider stops appearing as configured in
+  // the UI. A `model` without `base_url` updates only the model and keeps
+  // the existing URL (the common case from the UI's "Save model" button).
   if (body.ollama) {
-    const url = body.ollama.base_url?.trim();
-    if (url) {
-      setSetting(SETTING_OLLAMA_BASE_URL, url);
-      if (body.ollama.model) {
-        setSetting(SETTING_OLLAMA_MODEL, body.ollama.model);
-      }
-      config.llm.ollama = {
-        ...config.llm.ollama,
-        model: body.ollama.model ?? config.llm.ollama?.model,
-        base_url: url,
-      };
-    } else if (body.ollama.base_url !== undefined) {
+    const trimmedUrl = body.ollama.base_url?.trim();
+    const clearingUrl = body.ollama.base_url !== undefined && !trimmedUrl;
+    if (clearingUrl) {
+      // Explicit clear: wipe everything.
       deleteSetting(SETTING_OLLAMA_BASE_URL);
       deleteSetting(SETTING_OLLAMA_MODEL);
       config.llm.ollama = undefined;
+    } else {
+      if (trimmedUrl) {
+        setSetting(SETTING_OLLAMA_BASE_URL, trimmedUrl);
+      }
+      if (body.ollama.model) {
+        setSetting(SETTING_OLLAMA_MODEL, body.ollama.model);
+      }
+      // Update in-memory config only if there's something useful to keep.
+      // Skip when neither field is present (defensive: shouldn't happen
+      // because we wouldn't be in this branch, but be safe).
+      const nextUrl = trimmedUrl ?? config.llm.ollama?.base_url;
+      const nextModel = body.ollama.model ?? config.llm.ollama?.model;
+      if (nextUrl || nextModel) {
+        config.llm.ollama = {
+          ...config.llm.ollama,
+          ...(nextModel ? { model: nextModel } : {}),
+          ...(nextUrl ? { base_url: nextUrl } : {}),
+        };
+      }
     }
   }
 
