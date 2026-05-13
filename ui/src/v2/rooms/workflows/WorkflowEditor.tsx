@@ -41,6 +41,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
+import { flattenSteps } from "./tree";
 import "./WorkflowEditor.css";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
@@ -63,8 +64,15 @@ interface StepNodeData extends Record<string, unknown> {
   catalog: PieceCatalogEntry[];
   depth: number;
   branchName?: string;
-  /** True when this node is an orphan (not reachable from the trigger). */
+  /** True when this node belongs to an orphan subgraph (head OR internal).
+   *  Drives the dashed warn-tinted card styling so the user sees the whole
+   *  disconnected chain at a glance, not just its head. */
   isOrphan: boolean;
+  /** True when this node has no incoming connection -- the target handle
+   *  is OPEN and accepts new drops. This is the orphan HEAD case (no
+   *  predecessor) and only that case: tree-resident nodes always have a
+   *  parent, orphan-internal nodes are wired to the preceding orphan step. */
+  targetIsFree: boolean;
   /** Per-handle "already wired" state -- the rendered Handle uses these to
    *  block a drag from starting on a handle that's currently in use. */
   outConnected: boolean;
@@ -1396,7 +1404,13 @@ function buildGraph(
   stepPositions: Record<string, { x: number; y: number }>,
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
   const autoPositions = computeAutoLayout(trigger);
-  const buildNodeData = (step: FlowStepNode, depth: number, branchName: string | undefined, isOrphan: boolean): StepNodeData => {
+  const buildNodeData = (
+    step: FlowStepNode,
+    depth: number,
+    branchName: string | undefined,
+    isOrphan: boolean,
+    targetIsFree: boolean,
+  ): StepNodeData => {
     const branchConnected: Record<string, boolean> = {};
     if (step.type === "ROUTER" && Array.isArray(step.children)) {
       const branches = step.settings?.branches ?? [];
@@ -1412,6 +1426,7 @@ function buildGraph(
       depth,
       branchName,
       isOrphan,
+      targetIsFree,
       outConnected: !!step.nextAction,
       loopBodyConnected: step.type === "LOOP_ON_ITEMS" && !!step.firstLoopAction,
       branchConnected,
@@ -1437,35 +1452,67 @@ function buildGraph(
       // components (Task 2).
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
-      data: buildNodeData(step, entry.depth, entry.branchName, false),
+      // Tree steps always have a parent (the trigger or a predecessor)
+      // so targetIsFree=false -- new drops are rejected.
+      data: buildNodeData(step, entry.depth, entry.branchName, false, false),
       // Trigger is always pinned. Every other node is draggable; the chain
       // it belongs to is inferred at drop time from its FlatStep entry.
       draggable: !isTrigger,
     };
   });
 
-  // Orphan nodes are pushed last so they paint above the chain. They're
-  // freely draggable; their stored x/y persists across renders via
-  // `setOrphanPosition` on drag-stop.
+  // Orphan subgraphs: walk each orphan's whole subtree and emit a node
+  // for EVERY step it contains, not just the head. Previously we pushed
+  // only the head, which silently hid any successors that travelled
+  // along with the disconnected subtree (A-B-C-D-E → disconnect B->C →
+  // only C was drawn, D and E lived in C.nextAction but were invisible).
+  // Internal orphan edges are emitted in the edge loop below alongside
+  // tree edges via the unified `allFlatEntries` list.
   for (const o of orphans) {
-    nodes.push({
-      id: o.node.name,
-      type: "stepNode",
-      position: { x: o.x, y: o.y },
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-      data: buildNodeData(o.node, 0, undefined, true),
-      draggable: true,
-    });
+    const subFlat = flattenSteps(o.node);
+    const subAuto = computeAutoLayout(o.node);
+    // computeAutoLayout sets the root at NODE_Y_BASE. We want the head
+    // to land at the orphan entry's stored (x, y), so translate the
+    // whole subtree by (orphan.x - subAuto[head].x, orphan.y - subAuto[head].y).
+    const headAuto = subAuto[o.node.name] ?? { x: 0, y: NODE_Y_BASE };
+    for (const entry of subFlat) {
+      const step = entry.step;
+      const isHead = step.name === o.node.name;
+      const auto = subAuto[step.name] ?? { x: 0, y: NODE_Y_BASE };
+      const saved = stepPositions[step.name];
+      const position = saved ?? {
+        x: o.x + (auto.x - headAuto.x),
+        y: o.y + (auto.y - headAuto.y),
+      };
+      nodes.push({
+        id: step.name,
+        type: "stepNode",
+        position,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        // Only the head has no parent -- internal orphan steps are wired
+        // to the preceding orphan step and should reject new drops on
+        // their target handle. Both render with the orphan styling.
+        data: buildNodeData(step, entry.depth, entry.branchName, true, isHead),
+        draggable: true,
+      });
+    }
   }
+
+  // Unified entry list for edge emission: tree + every orphan's subtree.
+  // We need orphan internal edges (C->D, D->E inside a detached C-D-E
+  // chain) to render too -- otherwise the user sees disconnected dots
+  // and can't tell the subgraph is still connected internally.
+  const orphanFlats: FlatStep[] = orphans.flatMap((o) => flattenSteps(o.node));
+  const allFlatEntries: FlatStep[] = [...steps, ...orphanFlats];
 
   // Edges: each step's structural pointers become an edge. sourceHandle ids
   // mirror the Handle components rendered in StepNode (`out` / `loop-body` /
   // `branch:<name>`) so xyflow attaches the edge to the right circle when a
   // node has multiple source handles (ROUTER especially).
   const edges: Edge[] = [];
-  const knownNames = new Set(steps.map((s) => s.step.name));
-  for (const entry of steps) {
+  const knownNames = new Set(allFlatEntries.map((s) => s.step.name));
+  for (const entry of allFlatEntries) {
     const step = entry.step;
     // ROUTER nodes don't render a separate "out" handle -- after-router
     // composition lives inside each branch's chain. Emitting an edge to
@@ -1530,6 +1577,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     depth,
     branchName,
     isOrphan,
+    targetIsFree,
     outConnected,
     loopBodyConnected,
     branchConnected,
@@ -1623,7 +1671,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           position={Position.Left}
           id="in"
           className="wf-handle wf-handle--target"
-          isConnectableEnd={isOrphan}
+          isConnectableEnd={targetIsFree}
           isConnectableStart={false}
         />
       ) : null}

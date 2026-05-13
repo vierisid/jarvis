@@ -489,59 +489,120 @@ export function useWorkflowEditor(flowId: string | null) {
   }, []);
 
   /**
-   * Wire `sourceName`'s `sourceHandle` to a step in the orphan list, removing
-   * that orphan from the orphan pool. Both ends must currently be free
-   * (one parent per node is enforced by `isValidConnection` upstream). Returns
-   * true on success.
+   * Wire `sourceName`'s `sourceHandle` to an orphan HEAD `targetName`,
+   * removing that orphan entry from the pool. Works whether `sourceName`
+   * lives in the tree or inside another orphan's subtree -- needed so the
+   * user can re-join a detached chain into another detached chain without
+   * first re-wiring it into the tree.
    */
   const connectByHandles = useCallback(
     (sourceName: string, sourceHandleId: string, targetName: string): boolean => {
       const handle = parseSourceHandle(sourceHandleId);
       if (!handle) return false;
-      let connected = false;
-      setDraftTrigger((prev) => {
-        if (!prev) return prev;
-        const orphan = draftOrphans.find((o) => o.node.name === targetName);
-        if (!orphan) return prev;
-        const next = treeConnectSteps(prev, sourceName, handle, orphan.node);
-        if (!next) return prev;
-        connected = true;
+      const targetIdx = draftOrphans.findIndex((o) => o.node.name === targetName);
+      if (targetIdx < 0) return false;
+      const targetOrphan = draftOrphans[targetIdx]!;
+
+      // Tree path: source lives in the connected trigger tree.
+      if (draftTrigger && findStep(draftTrigger, sourceName)) {
+        let connected = false;
+        setDraftTrigger((prev) => {
+          if (!prev) return prev;
+          const next = treeConnectSteps(prev, sourceName, handle, targetOrphan.node);
+          if (!next) return prev;
+          connected = true;
+          return next;
+        });
+        if (connected) {
+          setDraftOrphans((prev) => prev.filter((_, i) => i !== targetIdx));
+          setDirty(true);
+        }
+        return connected;
+      }
+
+      // Orphan path: source lives inside one of the OTHER orphan
+      // subtrees (not the target's own subtree -- that'd be a cycle and
+      // findStep wouldn't find a separate source there anyway). We mutate
+      // that orphan's subtree in place and absorb the target subtree.
+      const sourceIdx = draftOrphans.findIndex(
+        (o, i) => i !== targetIdx && !!findStep(o.node, sourceName),
+      );
+      if (sourceIdx < 0) return false;
+      const sourceOrphan = draftOrphans[sourceIdx]!;
+      const newSourceSubtree = treeConnectSteps(
+        sourceOrphan.node,
+        sourceName,
+        handle,
+        targetOrphan.node,
+      );
+      if (!newSourceSubtree) return false;
+      setDraftOrphans((prev) => {
+        const next: OrphanStep[] = [];
+        for (let i = 0; i < prev.length; i++) {
+          if (i === targetIdx) continue;
+          if (i === sourceIdx) {
+            next.push({ ...sourceOrphan, node: newSourceSubtree });
+          } else {
+            next.push(prev[i]!);
+          }
+        }
         return next;
       });
-      if (connected) {
-        setDraftOrphans((prev) => prev.filter((o) => o.node.name !== targetName));
-        setDirty(true);
-      }
-      return connected;
+      setDirty(true);
+      return true;
     },
-    [draftOrphans],
+    [draftTrigger, draftOrphans],
   );
 
   /**
-   * Sever the outgoing edge at `sourceName`'s `sourceHandle`. The detached
-   * subtree's head becomes a new orphan placed at the given canvas
-   * coordinates so the user can re-wire it without losing work.
+   * Sever the outgoing edge at `sourceName`'s `sourceHandle`. The
+   * detached subtree's head becomes a new orphan placed at the given
+   * canvas coordinates so the user can re-wire it without losing work.
+   * Works whether the source lives in the trigger tree OR inside an
+   * orphan's subtree (so right-click-disconnect inside a detached chain
+   * just splits it into two smaller orphans).
    */
   const disconnectEdgeByHandle = useCallback(
     (sourceName: string, sourceHandleId: string, dropAt: { x: number; y: number }): boolean => {
       const handle = parseSourceHandle(sourceHandleId);
       if (!handle) return false;
-      let detached: FlowStepNode | null = null;
-      setDraftTrigger((prev) => {
-        if (!prev) return prev;
-        const result = treeDisconnectEdge(prev, sourceName, handle);
-        if (!result) return prev;
-        detached = result.detached;
-        return result.tree;
-      });
-      if (detached) {
-        setDraftOrphans((prev) => [...prev, { node: detached!, x: dropAt.x, y: dropAt.y }]);
-        setDirty(true);
-        return true;
+
+      // Tree path: source is reachable from the trigger.
+      if (draftTrigger && findStep(draftTrigger, sourceName)) {
+        let detached: FlowStepNode | null = null;
+        setDraftTrigger((prev) => {
+          if (!prev) return prev;
+          const result = treeDisconnectEdge(prev, sourceName, handle);
+          if (!result) return prev;
+          detached = result.detached;
+          return result.tree;
+        });
+        if (detached) {
+          setDraftOrphans((prev) => [...prev, { node: detached!, x: dropAt.x, y: dropAt.y }]);
+          setDirty(true);
+          return true;
+        }
+        return false;
       }
-      return false;
+
+      // Orphan path: source is inside an orphan subtree. Disconnect there
+      // and split: the surviving head shrinks; the detached subtree
+      // becomes its own new orphan at the cursor.
+      const orphanIdx = draftOrphans.findIndex((o) => !!findStep(o.node, sourceName));
+      if (orphanIdx < 0) return false;
+      const orphan = draftOrphans[orphanIdx]!;
+      const result = treeDisconnectEdge(orphan.node, sourceName, handle);
+      if (!result) return false;
+      setDraftOrphans((prev) => {
+        const next = [...prev];
+        next[orphanIdx] = { ...orphan, node: result.tree };
+        next.push({ node: result.detached, x: dropAt.x, y: dropAt.y });
+        return next;
+      });
+      setDirty(true);
+      return true;
     },
-    [],
+    [draftTrigger, draftOrphans],
   );
 
   /** Update an orphan's stored canvas position. Called on drag-stop so the
@@ -1082,20 +1143,29 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /** Predicate the canvas passes to each Handle so already-connected source
-   *  handles refuse to start a new drag. */
+   *  handles refuse to start a new drag. Looks in BOTH the tree and the
+   *  orphan subtrees -- orphan-internal nodes (like the middle of a
+   *  detached C-D-E chain) have their source handles wired to the next
+   *  step in the chain, so they must refuse new drags too. */
   const isHandleAvailable = useCallback(
     (stepName: string, handleId: string): boolean => {
-      if (!draftTrigger) return false;
       const handle = parseSourceHandle(handleId);
       if (!handle) return false;
-      const step = findStep(draftTrigger, stepName);
+      let step: FlowStepNode | null = null;
+      if (draftTrigger) step = findStep(draftTrigger, stepName);
       if (!step) {
-        // Orphan: its source handles are always free until wired.
-        return true;
+        for (const o of draftOrphans) {
+          const found = findStep(o.node, stepName);
+          if (found) {
+            step = found;
+            break;
+          }
+        }
       }
+      if (!step) return false;
       return !isSourceHandleConnected(step, handle);
     },
-    [draftTrigger],
+    [draftTrigger, draftOrphans],
   );
 
   /**
