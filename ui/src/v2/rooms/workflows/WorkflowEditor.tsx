@@ -2362,9 +2362,16 @@ function StepNode({ data }: NodeProps): React.ReactElement {
   };
   const rightHandles: RightHandle[] = (() => {
     if (isLoop) {
+      // Order matches the auto-layout: "after-loop" is the chain
+      // continuation and stays on the main horizontal line, so its
+      // handle reads as the TOP (the straight-right edge). The body
+      // drops to the row below, so its handle reads as the BOTTOM
+      // (the down-right edge). Inverting these makes the upper handle
+      // point at a destination drawn beneath the node, which doesn't
+      // match the eye's path.
       return [
-        { id: "loop-body", title: "Iterates", used: loopBodyConnected },
         { id: "out", title: "After loop", used: outConnected },
+        { id: "loop-body", title: "Iterates", used: loopBodyConnected },
       ];
     }
     if (isRouter) {
