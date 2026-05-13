@@ -23,7 +23,13 @@
   --wf-handle-bg: var(--paper-2);
   --wf-handle-border: var(--ink-3);
   --wf-handle-border-hover: var(--accent);
-  --wf-handle-size: 12px;
+  /* Hit target (the actual <Handle/> div). Generous so the user doesn't
+     have to aim at a pixel-perfect dot when starting a connection. */
+  --wf-handle-size: 24px;
+  /* Visible dot painted by the ::after pseudo-element, centred inside
+     the hit area. Smaller than the hit target so the chrome reads as
+     "small circle" while the click area stays forgiving. */
+  --wf-handle-dot: 10px;
 }
 
 .wf-editor__header {
@@ -436,11 +442,12 @@
 }
 
 /* ── Connection handles ──
-   xyflow renders each <Handle/> as a small .react-flow__handle div. We give
-   it a transparent 12px hit area so users can grab it without surgical
-   precision, then draw the visible 8px circle via a pseudo-element. The
-   ::after isn't strictly necessary, but it lets us animate the visible
-   circle on hover without touching the hit area. */
+   xyflow renders each <Handle/> as a small .react-flow__handle div. The
+   outer div is the HIT TARGET -- generous (`--wf-handle-size`) so the
+   user doesn't have to aim at a pixel-perfect dot. The ::after is the
+   VISIBLE chrome (`--wf-handle-dot`) -- smaller, centred inside the
+   hit area, so the affordance reads as a small circle without sacrificing
+   click slack. */
 .wf-editor__canvas .react-flow__handle.wf-handle {
   width: var(--wf-handle-size);
   height: var(--wf-handle-size);
@@ -454,7 +461,13 @@
 .wf-editor__canvas .react-flow__handle.wf-handle::after {
   content: "";
   position: absolute;
-  inset: 2px;
+  /* Centre the visible dot inside the hit area. */
+  top: 50%;
+  left: 50%;
+  width: var(--wf-handle-dot);
+  height: var(--wf-handle-dot);
+  margin-top: calc(var(--wf-handle-dot) / -2);
+  margin-left: calc(var(--wf-handle-dot) / -2);
   background: var(--wf-handle-bg);
   border: 1.5px solid var(--wf-handle-border);
   border-radius: 999px;
@@ -465,7 +478,7 @@
 .wf-editor__canvas .react-flow__handle.wf-handle.connectingto::after {
   border-color: var(--wf-handle-border-hover);
   background: var(--wf-handle-border-hover);
-  transform: scale(1.15);
+  transform: scale(1.4);
 }
 /* Right-edge source handles are vertically spread via inline `top` set
    from `StepNode`. When there are multiple (LOOP body + after-loop;

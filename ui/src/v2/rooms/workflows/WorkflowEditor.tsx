@@ -445,6 +445,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             onEdgeContextMenu={onEdgeContextMenu}
             fitView
             fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
+            // Distance (px) from the pointer at which a connection drag
+            // snaps to the closest valid handle. The default of 20 forces
+            // pixel-perfect drops on the handle dot; raising it to ~140
+            // (just under a node's width) lets the user drop anywhere on
+            // the target node's body and still land on its input handle.
+            // The handles' own hit area is also enlarged in CSS so users
+            // who DO aim at the dot get extra slack.
+            connectionRadius={140}
             // Per-node `draggable` flag (set to false for the trigger in
             // buildGraph) overrides this. Nodes default to draggable.
             nodesDraggable
