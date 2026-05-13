@@ -194,6 +194,123 @@
   min-height: 0;
 }
 
+/* Variable picker. Floats beside the settings popover (typically to its
+   left so the canvas stays uncovered) when a text input in the panel is
+   focused. Lists predecessor steps' outputs in flow order; click or drag
+   a row to insert `{{step.field}}` at the input's cursor. */
+.wf-var-picker {
+  position: fixed;
+  width: 280px;
+  max-height: 70vh;
+  z-index: 205;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.5), 0 4px 12px -4px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wf-var-picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--rule-soft);
+}
+.wf-var-picker__head h3 {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.wf-var-picker__close {
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  padding: 2px;
+  border-radius: var(--r-1, 4px);
+  cursor: pointer;
+  display: inline-flex;
+}
+.wf-var-picker__close:hover { color: var(--ink); background: var(--paper-3); }
+.wf-var-picker__empty {
+  padding: var(--s-3);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+.wf-var-picker__groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.wf-var-picker__group {
+  border-bottom: 1px solid var(--rule-soft);
+}
+.wf-var-picker__group:last-child { border-bottom: none; }
+.wf-var-picker__group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px var(--s-3) 4px;
+  background: var(--paper-3);
+}
+.wf-var-picker__step {
+  font-size: 0.78rem;
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-var-picker__step-name {
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.wf-var-picker__rows {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+}
+.wf-var-picker__row {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 4px var(--s-3);
+  color: var(--ink);
+  font-size: 0.82rem;
+  cursor: grab;
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.wf-var-picker__row:hover,
+.wf-var-picker__row:focus-visible {
+  background: var(--paper-3);
+  outline: none;
+}
+.wf-var-picker__row:active { cursor: grabbing; }
+.wf-var-picker__label { display: inline-block; }
+.wf-var-picker__footer {
+  padding: 6px var(--s-3);
+  border-top: 1px solid var(--rule-soft);
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  background: var(--paper-3);
+}
+.wf-var-picker__footer code {
+  background: var(--paper);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* Canvas right-click menu. Small, terse, keyboard-navigable. Painted via
    portal at the cursor's screen coordinates. */
 .wf-canvas-menu {

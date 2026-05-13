@@ -71,6 +71,50 @@ export function flattenSteps(root: FlowStepNode): FlatStep[] {
   return out;
 }
 
+/**
+ * Walk every step that EXECUTES BEFORE `target` and return them in flow
+ * order (trigger first). The variable picker uses this to show "previous
+ * steps' outputs" -- a step can reference any predecessor's `{{name}}`
+ * because by the time it runs, those predecessors have populated
+ * `executionState.steps`.
+ *
+ * Predecessors include:
+ *   - the trigger (always)
+ *   - every linear chain ancestor (...prev → prev → target)
+ *   - the parent LOOP / ROUTER, plus that container's own predecessors
+ *
+ * Predecessors do NOT include:
+ *   - sibling chains in other ROUTER branches (different execution paths)
+ *   - the LOOP body when looking from outside the body
+ *   - the target itself
+ *
+ * Returns `null` when the target isn't reachable from `root`.
+ */
+export function pathToStep(root: FlowStepNode, target: string): FlowStepNode[] | null {
+  if (root.name === target) return [];
+  const dfs = (node: FlowStepNode, ancestors: FlowStepNode[]): FlowStepNode[] | null => {
+    if (node.name === target) return ancestors;
+    const next = [...ancestors, node];
+    if (node.nextAction) {
+      const r = dfs(node.nextAction, next);
+      if (r !== null) return r;
+    }
+    if (node.firstLoopAction) {
+      const r = dfs(node.firstLoopAction, next);
+      if (r !== null) return r;
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        if (!child) continue;
+        const r = dfs(child, next);
+        if (r !== null) return r;
+      }
+    }
+    return null;
+  };
+  return dfs(root, []);
+}
+
 /** Recursive lookup for a step anywhere in the trigger tree. */
 export function findStep(root: FlowStepNode, name: string): FlowStepNode | null {
   if (root.name === name) return root;

@@ -13,6 +13,7 @@ import {
   isSourceHandleConnected,
   nextStepName,
   parseSourceHandle,
+  pathToStep,
   removeRouterBranch,
   removeStep,
   reorderChain,
@@ -404,5 +405,31 @@ describe("disconnectEdge", () => {
 
   test("returns null when the handle is already free", () => {
     expect(disconnectEdge(fixture(), "step_6", { kind: "out" })).toBeNull();
+  });
+});
+
+describe("pathToStep", () => {
+  test("returns predecessors in flow order for a top-level step", () => {
+    const t = fixture();
+    const path = pathToStep(t, "loop_1");
+    expect(path).not.toBeNull();
+    expect(path!.map((p) => p.name)).toEqual(["trigger", "step_1"]);
+  });
+
+  test("descends into LOOP body and includes the loop itself", () => {
+    const t = fixture();
+    const path = pathToStep(t, "step_3");
+    expect(path!.map((p) => p.name)).toEqual(["trigger", "step_1", "loop_1", "step_2"]);
+  });
+
+  test("descends into ROUTER branch and includes the router", () => {
+    const t = fixture();
+    const path = pathToStep(t, "step_4");
+    expect(path!.map((p) => p.name)).toEqual(["trigger", "step_1", "loop_1", "router_1"]);
+  });
+
+  test("returns [] for the trigger itself, null for unknown", () => {
+    expect(pathToStep(fixture(), "trigger")).toEqual([]);
+    expect(pathToStep(fixture(), "ghost")).toBeNull();
   });
 });

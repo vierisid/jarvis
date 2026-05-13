@@ -14,7 +14,7 @@
  * Stage 3 lights all of those up.
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ReactFlow,
@@ -41,7 +41,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps } from "./tree";
+import { flattenSteps, pathToStep } from "./tree";
 import "./WorkflowEditor.css";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
@@ -563,7 +563,16 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           clicked, replaces the legacy right-rail aside. Outside-click and
           Esc close it via the shared `closePopover` handler. */}
       {selectedStep && popoverAnchor ? (
-        <NodeSettingsPopover anchor={popoverAnchor} onClose={closePopover}>
+        <NodeSettingsPopover
+          anchor={popoverAnchor}
+          onClose={closePopover}
+          predecessors={
+            editor.draftTrigger
+              ? pathToStep(editor.draftTrigger, selectedStep.name) ?? []
+              : []
+          }
+          sampleData={editor.version?.sampleData ?? {}}
+        >
           <PropertiesPanel
             step={selectedStep}
             isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
@@ -726,22 +735,169 @@ const POPOVER_WIDTH = 360;
 const POPOVER_MARGIN = 12;
 
 /**
+ * Active state of the variable picker. Set when a text input in the
+ * settings popover gains focus; cleared on blur. `el` is the DOM input
+ * to insert into; `onInsert` is the controlled-state setter that should
+ * commit the new value after the picker splices in a template.
+ */
+interface VariablePickerActive {
+  el: HTMLInputElement | HTMLTextAreaElement;
+  onInsert: (next: string) => void;
+}
+
+interface VariablePickerHandle {
+  /** Called by an input on focus -- registers it as the insertion target. */
+  open(el: HTMLInputElement | HTMLTextAreaElement, onInsert: (next: string) => void): void;
+  /** Called on blur. The picker is dismissed after a short delay so a click
+   *  inside the picker still fires before the input loses the target. */
+  scheduleClose(): void;
+  /** Cancels a pending scheduleClose -- the picker calls this from its
+   *  own onMouseDown so clicking a variable row doesn't trip the blur path. */
+  cancelClose(): void;
+}
+
+/** No-op default so a text input rendered outside the popover (legacy
+ *  paths) doesn't crash on focus -- it just won't get a picker. */
+const NULL_PICKER: VariablePickerHandle = {
+  open: () => {},
+  scheduleClose: () => {},
+  cancelClose: () => {},
+};
+
+const VariablePickerContext = createContext<VariablePickerHandle>(NULL_PICKER);
+
+/**
+ * Insert `template` at the input's current selection range and emit the
+ * new value via `onChange`. Cursor lands after the inserted text on the
+ * next tick so the user can keep typing seamlessly. Works for both
+ * `<input>` and `<textarea>`.
+ */
+function insertAtCursor(
+  el: HTMLInputElement | HTMLTextAreaElement,
+  template: string,
+  onChange: (next: string) => void,
+): void {
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  const before = el.value.slice(0, start);
+  const after = el.value.slice(end);
+  const next = `${before}${template}${after}`;
+  onChange(next);
+  // Restore focus + cursor after React commits the new value. Without
+  // this the input loses focus to the picker and the cursor jumps.
+  window.setTimeout(() => {
+    el.focus();
+    const caret = start + template.length;
+    el.setSelectionRange(caret, caret);
+  }, 0);
+}
+
+/**
+ * Build a flat list of "output rows" from a chain of predecessor steps.
+ * Recent steps come first ({@code reverse()}); within each step, we list
+ * one row per top-level key of its sample data. Steps with no sample
+ * data show a single "(output)" row that inserts the whole-step template.
+ */
+interface VariableRow {
+  /** The step that produces this output. */
+  step: FlowStepNode;
+  /** Field key (`"name"`) -- empty for whole-output rows. */
+  field: string;
+  /** Display label shown in the picker; matches `field` or "(output)". */
+  label: string;
+  /** Full template inserted into the input: `{{stepName.field}}` or `{{stepName}}`. */
+  template: string;
+}
+
+function buildVariableRows(
+  predecessors: FlowStepNode[],
+  sampleData: Record<string, unknown>,
+): VariableRow[] {
+  const rows: VariableRow[] = [];
+  // Most-recent first: the chain comes out trigger-first from
+  // pathToStep, but the user wants the closest predecessor on top.
+  const ordered = [...predecessors].reverse();
+  for (const step of ordered) {
+    const sample = sampleData[step.name];
+    if (sample && typeof sample === "object" && !Array.isArray(sample)) {
+      const entries = Object.keys(sample as Record<string, unknown>);
+      if (entries.length === 0) {
+        rows.push({ step, field: "", label: "(output)", template: `{{${step.name}}}` });
+      } else {
+        for (const key of entries) {
+          rows.push({
+            step,
+            field: key,
+            label: key,
+            template: `{{${step.name}.${key}}}`,
+          });
+        }
+      }
+    } else {
+      // No sample data, array-typed, or primitive -- offer the
+      // whole-step template; the user can drill in with `.field` manually.
+      rows.push({ step, field: "", label: "(output)", template: `{{${step.name}}}` });
+    }
+  }
+  return rows;
+}
+
+/**
  * Floating settings panel anchored to the click location. Portal-rendered
  * into document.body so it escapes the canvas overflow, with viewport
  * clamping so it never paints off-screen. Closes on Esc and outside-click;
  * re-anchors when `anchor` changes (clicking a different node).
+ *
+ * Also hosts the variable-picker context: any text input rendered inside
+ * `children` can call `useContext(VariablePickerContext)` and register
+ * itself on focus. A floating panel listing predecessor outputs then
+ * opens beside the popover.
  */
 function NodeSettingsPopover({
   anchor,
   onClose,
+  predecessors,
+  sampleData,
   children,
 }: {
   anchor: { x: number; y: number };
   onClose: () => void;
+  predecessors: FlowStepNode[];
+  sampleData: Record<string, unknown>;
   children: React.ReactNode;
 }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>(() => clampToViewport(anchor, undefined));
+  const [pickerActive, setPickerActive] = useState<VariablePickerActive | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const pickerHandle = useMemo<VariablePickerHandle>(
+    () => ({
+      open: (el, onInsert) => {
+        if (closeTimerRef.current !== null) {
+          window.clearTimeout(closeTimerRef.current);
+          closeTimerRef.current = null;
+        }
+        setPickerActive({ el, onInsert });
+      },
+      scheduleClose: () => {
+        if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+        // Defer enough that a mousedown inside the picker (which clears
+        // this timer via cancelClose) wins the race.
+        closeTimerRef.current = window.setTimeout(() => {
+          setPickerActive(null);
+          closeTimerRef.current = null;
+        }, 180);
+      },
+      cancelClose: () => {
+        if (closeTimerRef.current !== null) {
+          window.clearTimeout(closeTimerRef.current);
+          closeTimerRef.current = null;
+        }
+      },
+    }),
+    [],
+  );
 
   // Re-clamp when anchor changes (new node clicked) or after the panel
   // measures its own height. `useLayoutEffect` so the visible position is
@@ -752,13 +908,18 @@ function NodeSettingsPopover({
   }, [anchor]);
 
   // Outside-click. Defer registration one tick so the same click that
-  // opened us doesn't immediately close us.
+  // opened us doesn't immediately close us. Clicks inside the variable
+  // picker are also considered "inside" so they don't dismiss the popover.
   useEffect(() => {
     const handler = (e: MouseEvent): void => {
       if (!ref.current) return;
       // The xyflow `Node` type shadows the DOM Node in this module, so we
       // disambiguate via globalThis.
-      if (ref.current.contains(e.target as globalThis.Node)) return;
+      const target = e.target as globalThis.Node;
+      if (ref.current.contains(target)) return;
+      // Clicks inside the picker shouldn't close the settings popover.
+      const pickerEl = document.querySelector(".wf-var-picker");
+      if (pickerEl && pickerEl.contains(target)) return;
       onClose();
     };
     const timer = window.setTimeout(() => {
@@ -785,26 +946,237 @@ function NodeSettingsPopover({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const variableRows = useMemo(
+    () => buildVariableRows(predecessors, sampleData),
+    [predecessors, sampleData],
+  );
+
+  return (
+    <VariablePickerContext.Provider value={pickerHandle}>
+      {createPortal(
+        <div
+          ref={ref}
+          className="wf-popover"
+          role="dialog"
+          aria-label="Step settings"
+          style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
+        >
+          <button
+            type="button"
+            className="wf-popover__close"
+            onClick={onClose}
+            aria-label="Close settings"
+          >
+            <Icon icon={X} size={14} />
+          </button>
+          <div className="wf-popover__body">{children}</div>
+        </div>,
+        document.body,
+      )}
+      {pickerActive ? (
+        <VariablePickerPanel
+          settingsPopoverRef={ref}
+          targetInput={pickerActive.el}
+          rows={variableRows}
+          onInsert={(template) => {
+            insertAtCursor(pickerActive.el, template, pickerActive.onInsert);
+          }}
+          onClose={() => setPickerActive(null)}
+          onMouseDownInside={() => pickerHandle.cancelClose()}
+        />
+      ) : null}
+    </VariablePickerContext.Provider>
+  );
+}
+
+/**
+ * Floating panel listing predecessor outputs. Positions itself opposite
+ * the settings popover so both stay visible side-by-side. Empty state
+ * tells the user nothing's available yet (e.g. editing the trigger or
+ * a step with no predecessors).
+ *
+ * Rows are click-to-insert AND draggable. The drag payload carries the
+ * full template (`{{step.field}}`) under both a custom MIME type and
+ * `text/plain` so dropping into a target that only supports text still
+ * works.
+ */
+function VariablePickerPanel({
+  settingsPopoverRef,
+  targetInput,
+  rows,
+  onInsert,
+  onClose,
+  onMouseDownInside,
+}: {
+  settingsPopoverRef: React.RefObject<HTMLDivElement | null>;
+  targetInput: HTMLInputElement | HTMLTextAreaElement;
+  rows: VariableRow[];
+  onInsert: (template: string) => void;
+  onClose: () => void;
+  onMouseDownInside: () => void;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
+
+  // Pick a side adjacent to the settings popover. Prefer LEFT (so the
+  // picker sits between the canvas and the popover). Fall back to RIGHT
+  // when there isn't room on the left.
+  useLayoutEffect(() => {
+    const settings = settingsPopoverRef.current;
+    const picker = ref.current;
+    if (!settings || !picker) return;
+    const settingsBox = settings.getBoundingClientRect();
+    const pickerW = picker.offsetWidth || 280;
+    const gap = 12;
+    let left = settingsBox.left - pickerW - gap;
+    if (left < 12) left = settingsBox.right + gap;
+    // Vertically align the picker's top with the focused input's top so
+    // it reads as "this menu is for THAT field".
+    const inputBox = targetInput.getBoundingClientRect();
+    let top = inputBox.top;
+    // Clamp inside viewport.
+    const vh = window.innerHeight;
+    const pickerH = picker.offsetHeight || 320;
+    if (top + pickerH + 12 > vh) top = Math.max(12, vh - pickerH - 12);
+    if (top < 12) top = 12;
+    setPos({ left, top });
+  }, [settingsPopoverRef, targetInput, rows.length]);
+
+  // Group rows by step for the section headers. We keep the rows array
+  // ordered (most-recent step first) so the grouping preserves that order.
+  const groups = useMemo(() => {
+    const out: Array<{ step: FlowStepNode; rows: VariableRow[] }> = [];
+    let current: { step: FlowStepNode; rows: VariableRow[] } | null = null;
+    for (const row of rows) {
+      if (!current || current.step.name !== row.step.name) {
+        current = { step: row.step, rows: [row] };
+        out.push(current);
+      } else {
+        current.rows.push(row);
+      }
+    }
+    return out;
+  }, [rows]);
+
   return createPortal(
     <div
       ref={ref}
-      className="wf-popover"
+      className="wf-var-picker"
       role="dialog"
-      aria-label="Step settings"
-      style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
+      aria-label="Insert variable"
+      style={{ left: pos.left, top: pos.top }}
+      onMouseDown={onMouseDownInside}
     >
-      <button
-        type="button"
-        className="wf-popover__close"
-        onClick={onClose}
-        aria-label="Close settings"
-      >
-        <Icon icon={X} size={14} />
-      </button>
-      <div className="wf-popover__body">{children}</div>
+      <header className="wf-var-picker__head">
+        <h3>Insert variable</h3>
+        <button
+          type="button"
+          className="wf-var-picker__close"
+          onClick={onClose}
+          aria-label="Close variable picker"
+        >
+          <Icon icon={X} size={12} />
+        </button>
+      </header>
+      {groups.length === 0 ? (
+        <div className="wf-var-picker__empty">
+          No previous steps. Add steps before this one or set sample data on
+          the trigger to expose its payload.
+        </div>
+      ) : (
+        <ul className="wf-var-picker__groups">
+          {groups.map((g) => (
+            <li key={g.step.name} className="wf-var-picker__group">
+              <div className="wf-var-picker__group-head">
+                <span className="wf-var-picker__step">
+                  {g.step.displayName ?? g.step.name}
+                </span>
+                <span className="wf-var-picker__step-name">{g.step.name}</span>
+              </div>
+              <ul className="wf-var-picker__rows">
+                {g.rows.map((row) => (
+                  <li key={row.template}>
+                    <button
+                      type="button"
+                      className="wf-var-picker__row"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "copy";
+                        e.dataTransfer.setData("text/x-wf-variable", row.template);
+                        // text/plain fallback so dragging into anything
+                        // that accepts plain text inserts the template.
+                        e.dataTransfer.setData("text/plain", row.template);
+                      }}
+                      onClick={() => onInsert(row.template)}
+                      // Re-focus the target input on mousedown so the
+                      // click insert lands the cursor where it should --
+                      // without this the blur fires first, selection
+                      // resets, and the template lands at index 0.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        targetInput.focus();
+                      }}
+                      title={row.template}
+                    >
+                      <span className="wf-var-picker__label">{row.label}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+      <footer className="wf-var-picker__footer">
+        Or type <code>{"{{stepName.field}}"}</code> directly.
+      </footer>
     </div>,
     document.body,
   );
+}
+
+/**
+ * Wire a text-like input to the variable picker context. Centralised so
+ * every editable field in the panel gets the same focus/blur/drop
+ * behaviour without copy-pasting handlers.
+ *
+ * Pass the input's current `value` and its `onChange` setter; the hook
+ * returns the JSX-ready props you spread onto the `<input>` or
+ * `<textarea>`. Existing `onFocus` / `onBlur` / `onDrop` props on the
+ * field are composed with the picker handlers.
+ */
+function useVariableFieldProps(
+  value: string,
+  onChange: (next: string) => void,
+): {
+  onFocus: React.FocusEventHandler<HTMLInputElement | HTMLTextAreaElement>;
+  onBlur: React.FocusEventHandler<HTMLInputElement | HTMLTextAreaElement>;
+  onDragOver: React.DragEventHandler<HTMLInputElement | HTMLTextAreaElement>;
+  onDrop: React.DragEventHandler<HTMLInputElement | HTMLTextAreaElement>;
+} {
+  const picker = useContext(VariablePickerContext);
+  return {
+    onFocus: (e) => {
+      picker.open(e.currentTarget, onChange);
+    },
+    onBlur: () => {
+      picker.scheduleClose();
+    },
+    onDragOver: (e) => {
+      // Only accept our own drag payload; ignore unrelated drags.
+      const types = Array.from(e.dataTransfer.types ?? []);
+      if (!types.includes("text/x-wf-variable") && !types.includes("text/plain")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    onDrop: (e) => {
+      const template =
+        e.dataTransfer.getData("text/x-wf-variable") || e.dataTransfer.getData("text/plain");
+      if (!template) return;
+      e.preventDefault();
+      insertAtCursor(e.currentTarget, template, onChange);
+    },
+  };
 }
 
 /* =========================================================== canvas context menu */
@@ -2365,18 +2737,7 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
   }
 
   if (field.type === "long_text") {
-    return (
-      <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
-        {labelEl}
-        <textarea
-          rows={3}
-          value={typeof value === "string" ? value : ""}
-          placeholder={field.placeholder}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
-      </label>
-    );
+    return <LongTextField field={field} value={value} onChange={onChange} labelEl={labelEl} isMissing={isMissing} />;
   }
 
   if (field.type === "datetime") {
@@ -2394,14 +2755,70 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
   }
 
   // default: string
+  return <StringField field={field} value={value} onChange={onChange} labelEl={labelEl} isMissing={isMissing} />;
+}
+
+/**
+ * String-typed input wrapper. Extracted so the variable-picker focus/drop
+ * handlers live alongside the rest of the input chrome without bloating
+ * the TypedField switch. Behaves like the prior inline `<input type=text>`
+ * when no picker is mounted (NULL_PICKER no-ops).
+ */
+function StringField({
+  field,
+  value,
+  onChange,
+  labelEl,
+  isMissing,
+}: {
+  field: PieceInputField;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  labelEl: React.ReactNode;
+  isMissing: boolean;
+}): React.ReactElement {
+  const text = typeof value === "string" ? value : "";
+  const varProps = useVariableFieldProps(text, (next) => onChange(next));
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
       <input
         type="text"
-        value={typeof value === "string" ? value : ""}
+        value={text}
         placeholder={field.placeholder}
         onChange={(e) => onChange(e.target.value)}
+        {...varProps}
+      />
+      {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+    </label>
+  );
+}
+
+/** Long-text variant -- same shape as StringField but with a textarea. */
+function LongTextField({
+  field,
+  value,
+  onChange,
+  labelEl,
+  isMissing,
+}: {
+  field: PieceInputField;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  labelEl: React.ReactNode;
+  isMissing: boolean;
+}): React.ReactElement {
+  const text = typeof value === "string" ? value : "";
+  const varProps = useVariableFieldProps(text, (next) => onChange(next));
+  return (
+    <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
+      {labelEl}
+      <textarea
+        rows={3}
+        value={text}
+        placeholder={field.placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        {...varProps}
       />
       {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
     </label>
@@ -2454,6 +2871,21 @@ function NumberField({
     lastPropagatedRef.current = value;
   }, [value]);
 
+  // Variable-picker hookup: an inserted `{{...}}` template lands in the
+  // field as a string. The propagate logic above only emits a parsed
+  // number when the text matches the numeric regex, so a template won't
+  // fire `onChange(number)` -- it'll just sit there until the user types
+  // a number. The engine resolves the template at run time. So we pass
+  // the raw-text setter as the picker's onInsert.
+  const varProps = useVariableFieldProps(text, (next) => {
+    setText(next);
+    // String-typed value (template). Propagate as the raw string so the
+    // engine can resolve it at runtime; the schema validator treats
+    // templated number inputs as valid.
+    lastPropagatedRef.current = next;
+    onChange(next);
+  });
+
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
@@ -2462,6 +2894,7 @@ function NumberField({
         inputMode="decimal"
         value={text}
         placeholder={field.placeholder}
+        {...varProps}
         onChange={(e) => {
           const raw = e.target.value;
           setText(raw);
@@ -2526,6 +2959,29 @@ function JsonField({
     lastPropagatedRef.current = value;
   }, [value]);
 
+  // Variable-picker hookup: insertions arrive as raw template text. We
+  // splice them into the textarea contents and re-run the parse path so
+  // a snippet like `{ "to": {{step_3.email}} }` propagates as a parse
+  // error (until the user closes the template) which is the right
+  // signal -- the picker DOESN'T quote the template for the user.
+  const varProps = useVariableFieldProps(text, (next) => {
+    setText(next);
+    if (next.trim() === "") {
+      setParseError(null);
+      lastPropagatedRef.current = undefined;
+      onChange(undefined);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(next);
+      setParseError(null);
+      lastPropagatedRef.current = parsed;
+      onChange(parsed);
+    } catch (err) {
+      setParseError((err as Error).message);
+    }
+  });
+
   return (
     <label className="wf-props__field">
       {labelEl}
@@ -2533,6 +2989,7 @@ function JsonField({
         rows={4}
         value={text}
         placeholder={field.placeholder ?? "{}"}
+        {...varProps}
         onChange={(e) => {
           const next = e.target.value;
           setText(next);
@@ -2595,25 +3052,13 @@ function FreeformInputs({
       ) : (
         <ul className="wf-props__input-list">
           {inputEntries.map(([key, value]) => (
-            <li key={key} className="wf-props__input-row">
-              <label>
-                <span className="wf-props__input-key">{key}</span>
-                <textarea
-                  rows={typeof value === "string" && value.length > 60 ? 3 : 1}
-                  value={stringifyValue(value)}
-                  onChange={(e) => onSetInput(key, e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="wf-props__input-remove"
-                onClick={() => onRemoveInputKey(key)}
-                aria-label={`Remove ${key}`}
-                title={`Remove ${key}`}
-              >
-                <Icon icon={Trash2} size={12} />
-              </button>
-            </li>
+            <FreeformInputRow
+              key={key}
+              inputKey={key}
+              value={value}
+              onSetInput={onSetInput}
+              onRemoveInputKey={onRemoveInputKey}
+            />
           ))}
         </ul>
       )}
@@ -2646,6 +3091,49 @@ function FreeformInputs({
   );
 }
 
+/**
+ * Single key/value row in the freeform inputs editor. Extracted so the
+ * variable-picker hook can be called per-row (the row controls its own
+ * textarea; the parent's `onSetInput` is partially applied with the
+ * row's `key`).
+ */
+function FreeformInputRow({
+  inputKey,
+  value,
+  onSetInput,
+  onRemoveInputKey,
+}: {
+  inputKey: string;
+  value: unknown;
+  onSetInput: (key: string, value: unknown) => void;
+  onRemoveInputKey: (key: string) => void;
+}): React.ReactElement {
+  const text = stringifyValue(value);
+  const varProps = useVariableFieldProps(text, (next) => onSetInput(inputKey, next));
+  return (
+    <li className="wf-props__input-row">
+      <label>
+        <span className="wf-props__input-key">{inputKey}</span>
+        <textarea
+          rows={text.length > 60 ? 3 : 1}
+          value={text}
+          onChange={(e) => onSetInput(inputKey, e.target.value)}
+          {...varProps}
+        />
+      </label>
+      <button
+        type="button"
+        className="wf-props__input-remove"
+        onClick={() => onRemoveInputKey(inputKey)}
+        aria-label={`Remove ${inputKey}`}
+        title={`Remove ${inputKey}`}
+      >
+        <Icon icon={Trash2} size={12} />
+      </button>
+    </li>
+  );
+}
+
 function stringifyValue(v: unknown): string {
   if (typeof v === "string") return v;
   if (v === null || v === undefined) return "";
@@ -2669,6 +3157,7 @@ function LoopEditor({
 }): React.ReactElement {
   const items = step.settings?.items ?? "";
   const hasBody = !!step.firstLoopAction;
+  const varProps = useVariableFieldProps(items, onSetLoopItems);
   return (
     <>
       <Field label="Items expression">
@@ -2677,6 +3166,7 @@ function LoopEditor({
           value={items}
           placeholder="{{trigger.list}}"
           onChange={(e) => onSetLoopItems(e.target.value)}
+          {...varProps}
         />
         <span className="wf-props__field-help">
           Must resolve to an array. Inside the body, reference <code>{`{{${step.name}.item}}`}</code> and{" "}
@@ -3016,65 +3506,15 @@ function BranchConditionsEditor({
         </p>
       ) : (
         <ul className="wf-props__condition-list">
-          {firstGroup.map((c, idx) => {
-            const isSingle = SINGLE_VALUE_OPERATORS.has(c.operator);
-            const supportsCase = CASE_SENSITIVE_OPERATORS.has(c.operator);
-            return (
-              <li key={idx} className="wf-props__condition-row">
-                {idx > 0 ? <span className="wf-props__condition-and">AND</span> : null}
-                <input
-                  type="text"
-                  className="wf-props__condition-field"
-                  value={c.firstValue}
-                  placeholder="{{step.field}}"
-                  onChange={(e) => updateAt(idx, { firstValue: e.target.value })}
-                />
-                <select
-                  className="wf-props__condition-op"
-                  value={c.operator}
-                  onChange={(e) => updateAt(idx, { operator: e.target.value })}
-                >
-                  {OPERATOR_GROUPS.map((g) => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.options.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                {!isSingle ? (
-                  <input
-                    type="text"
-                    className="wf-props__condition-field"
-                    value={c.secondValue ?? ""}
-                    placeholder="value"
-                    onChange={(e) => updateAt(idx, { secondValue: e.target.value })}
-                  />
-                ) : null}
-                <button
-                  type="button"
-                  className="wf-props__input-remove"
-                  onClick={() => remove(idx)}
-                  title="Remove condition"
-                  aria-label="Remove condition"
-                >
-                  <Icon icon={Trash2} size={12} />
-                </button>
-                {supportsCase ? (
-                  <label className="wf-props__condition-case">
-                    <input
-                      type="checkbox"
-                      checked={c.caseSensitive === true}
-                      onChange={(e) => updateAt(idx, { caseSensitive: e.target.checked })}
-                    />
-                    case sensitive
-                  </label>
-                ) : null}
-              </li>
-            );
-          })}
+          {firstGroup.map((c, idx) => (
+            <ConditionRow
+              key={idx}
+              condition={c}
+              showAnd={idx > 0}
+              onUpdate={(patch) => updateAt(idx, patch)}
+              onRemove={() => remove(idx)}
+            />
+          ))}
         </ul>
       )}
       <Button variant="ghost" size="sm" onClick={add}>
@@ -3087,5 +3527,89 @@ function BranchConditionsEditor({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One AND-condition row inside {@link BranchConditionsEditor}. Extracted
+ * so the variable-picker hook can be called per-row -- both the
+ * `firstValue` and `secondValue` inputs participate in the picker, so a
+ * condition like `{{step_3.status}} = "ok"` is two clicks away.
+ */
+function ConditionRow({
+  condition,
+  showAnd,
+  onUpdate,
+  onRemove,
+}: {
+  condition: BranchCondition;
+  showAnd: boolean;
+  onUpdate: (patch: Partial<BranchCondition>) => void;
+  onRemove: () => void;
+}): React.ReactElement {
+  const isSingle = SINGLE_VALUE_OPERATORS.has(condition.operator);
+  const supportsCase = CASE_SENSITIVE_OPERATORS.has(condition.operator);
+  const firstValueProps = useVariableFieldProps(condition.firstValue, (next) =>
+    onUpdate({ firstValue: next }),
+  );
+  const secondValueProps = useVariableFieldProps(condition.secondValue ?? "", (next) =>
+    onUpdate({ secondValue: next }),
+  );
+  return (
+    <li className="wf-props__condition-row">
+      {showAnd ? <span className="wf-props__condition-and">AND</span> : null}
+      <input
+        type="text"
+        className="wf-props__condition-field"
+        value={condition.firstValue}
+        placeholder="{{step.field}}"
+        onChange={(e) => onUpdate({ firstValue: e.target.value })}
+        {...firstValueProps}
+      />
+      <select
+        className="wf-props__condition-op"
+        value={condition.operator}
+        onChange={(e) => onUpdate({ operator: e.target.value })}
+      >
+        {OPERATOR_GROUPS.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.options.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {!isSingle ? (
+        <input
+          type="text"
+          className="wf-props__condition-field"
+          value={condition.secondValue ?? ""}
+          placeholder="value"
+          onChange={(e) => onUpdate({ secondValue: e.target.value })}
+          {...secondValueProps}
+        />
+      ) : null}
+      <button
+        type="button"
+        className="wf-props__input-remove"
+        onClick={onRemove}
+        title="Remove condition"
+        aria-label="Remove condition"
+      >
+        <Icon icon={Trash2} size={12} />
+      </button>
+      {supportsCase ? (
+        <label className="wf-props__condition-case">
+          <input
+            type="checkbox"
+            checked={condition.caseSensitive === true}
+            onChange={(e) => onUpdate({ caseSensitive: e.target.checked })}
+          />
+          case sensitive
+        </label>
+      ) : null}
+    </li>
   );
 }
