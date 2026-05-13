@@ -311,6 +311,72 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Chip-rendering text field. Used everywhere a piece input takes a
+   templated string -- the contentEditable hosts both plain text and
+   atomic `{{step.field}}` chips. Visually mimics the prior native
+   `<input>` chrome so the swap reads as "same field, smarter content". */
+.wf-chip-field {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink);
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  min-height: 1.5em;
+  cursor: text;
+  width: 100%;
+  box-sizing: border-box;
+  /* Without explicit line-height, chip baselines wobble vertically when
+     adjacent text doesn't have descenders. */
+  line-height: 1.6;
+}
+.wf-chip-field:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.wf-chip-field--singleline {
+  /* Keep the field one line tall and scroll horizontally for long
+     content; matches the visual model of an `<input type="text">`. */
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.wf-chip-field--multiline {
+  white-space: pre-wrap;
+  min-height: 3em;
+  overflow-y: auto;
+  resize: vertical;
+}
+/* Placeholder: render via data-attribute since `::placeholder` doesn't
+   apply to contentEditable. Disappears as soon as the field has any
+   child (text or chip). */
+.wf-chip-field:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+/* Atomic variable chip. Pill-shaped accent-tinted token; the user reads
+   it as "this slot will be filled with whatever `email_status` resolves
+   to". Cursor stays text (not pointer) because the chip lives inside an
+   editable region and users may want to click around it. */
+.wf-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 1px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  user-select: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
 /* Canvas right-click menu. Small, terse, keyboard-navigable. Painted via
    portal at the cursor's screen coordinates. */
 .wf-canvas-menu {

@@ -740,16 +740,24 @@ const POPOVER_MARGIN = 12;
  * to insert into; `onInsert` is the controlled-state setter that should
  * commit the new value after the picker splices in a template.
  */
+/**
+ * What the picker needs from the focused field. `anchorEl` is the field's
+ * root DOM node -- used purely to position the picker beside it.
+ * `insert(template)` is the field-specific insertion logic: a native
+ * `<input>` splices the template into its `value` via `insertAtCursor`;
+ * a contentEditable chip field inserts a chip span at the current
+ * selection and emits the new raw value.
+ */
 interface VariablePickerActive {
-  el: HTMLInputElement | HTMLTextAreaElement;
-  onInsert: (next: string) => void;
+  anchorEl: HTMLElement;
+  insert: (template: string) => void;
 }
 
 interface VariablePickerHandle {
-  /** Called by an input on focus -- registers it as the insertion target. */
-  open(el: HTMLInputElement | HTMLTextAreaElement, onInsert: (next: string) => void): void;
+  /** Called by a field on focus -- registers it as the insertion target. */
+  open(active: VariablePickerActive): void;
   /** Called on blur. The picker is dismissed after a short delay so a click
-   *  inside the picker still fires before the input loses the target. */
+   *  inside the picker still fires before the field loses the target. */
   scheduleClose(): void;
   /** Cancels a pending scheduleClose -- the picker calls this from its
    *  own onMouseDown so clicking a variable row doesn't trip the blur path. */
@@ -873,12 +881,12 @@ function NodeSettingsPopover({
 
   const pickerHandle = useMemo<VariablePickerHandle>(
     () => ({
-      open: (el, onInsert) => {
+      open: (active) => {
         if (closeTimerRef.current !== null) {
           window.clearTimeout(closeTimerRef.current);
           closeTimerRef.current = null;
         }
-        setPickerActive({ el, onInsert });
+        setPickerActive(active);
       },
       scheduleClose: () => {
         if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
@@ -976,11 +984,9 @@ function NodeSettingsPopover({
       {pickerActive ? (
         <VariablePickerPanel
           settingsPopoverRef={ref}
-          targetInput={pickerActive.el}
+          anchorEl={pickerActive.anchorEl}
           rows={variableRows}
-          onInsert={(template) => {
-            insertAtCursor(pickerActive.el, template, pickerActive.onInsert);
-          }}
+          onInsert={pickerActive.insert}
           onClose={() => setPickerActive(null)}
           onMouseDownInside={() => pickerHandle.cancelClose()}
         />
@@ -1002,14 +1008,14 @@ function NodeSettingsPopover({
  */
 function VariablePickerPanel({
   settingsPopoverRef,
-  targetInput,
+  anchorEl,
   rows,
   onInsert,
   onClose,
   onMouseDownInside,
 }: {
   settingsPopoverRef: React.RefObject<HTMLDivElement | null>;
-  targetInput: HTMLInputElement | HTMLTextAreaElement;
+  anchorEl: HTMLElement;
   rows: VariableRow[];
   onInsert: (template: string) => void;
   onClose: () => void;
@@ -1030,9 +1036,9 @@ function VariablePickerPanel({
     const gap = 12;
     let left = settingsBox.left - pickerW - gap;
     if (left < 12) left = settingsBox.right + gap;
-    // Vertically align the picker's top with the focused input's top so
+    // Vertically align the picker's top with the focused field's top so
     // it reads as "this menu is for THAT field".
-    const inputBox = targetInput.getBoundingClientRect();
+    const inputBox = anchorEl.getBoundingClientRect();
     let top = inputBox.top;
     // Clamp inside viewport.
     const vh = window.innerHeight;
@@ -1040,7 +1046,7 @@ function VariablePickerPanel({
     if (top + pickerH + 12 > vh) top = Math.max(12, vh - pickerH - 12);
     if (top < 12) top = 12;
     setPos({ left, top });
-  }, [settingsPopoverRef, targetInput, rows.length]);
+  }, [settingsPopoverRef, anchorEl, rows.length]);
 
   // Group rows by step for the section headers. We keep the rows array
   // ordered (most-recent step first) so the grouping preserves that order.
@@ -1114,7 +1120,7 @@ function VariablePickerPanel({
                       // resets, and the template lands at index 0.
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        targetInput.focus();
+                        anchorEl.focus();
                       }}
                       title={row.template}
                     >
@@ -1157,7 +1163,11 @@ function useVariableFieldProps(
   const picker = useContext(VariablePickerContext);
   return {
     onFocus: (e) => {
-      picker.open(e.currentTarget, onChange);
+      const el = e.currentTarget;
+      picker.open({
+        anchorEl: el,
+        insert: (template) => insertAtCursor(el, template, onChange),
+      });
     },
     onBlur: () => {
       picker.scheduleClose();
@@ -1177,6 +1187,359 @@ function useVariableFieldProps(
       insertAtCursor(e.currentTarget, template, onChange);
     },
   };
+}
+
+/* =========================================================== variable chip field */
+
+/**
+ * `value` parsed into alternating text and variable segments. Variables
+ * are atomic units in the visual editor -- each `{{...}}` template
+ * renders as a single chip that the user can delete with one Backspace
+ * but can't half-edit. Text segments are freely typed.
+ */
+type ValueSegment =
+  | { kind: "text"; text: string }
+  | { kind: "var"; template: string };
+
+const TEMPLATE_REGEX = /\{\{[^{}]+\}\}/g;
+
+/** Split a raw value into segments. Anything matching `{{...}}` becomes a
+ *  var segment; the rest is text. Tolerant: unmatched braces stay text. */
+function parseSegments(value: string): ValueSegment[] {
+  const out: ValueSegment[] = [];
+  let lastIndex = 0;
+  // Reset before each call -- the regex is module-scoped for perf.
+  TEMPLATE_REGEX.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TEMPLATE_REGEX.exec(value)) !== null) {
+    if (m.index > lastIndex) {
+      out.push({ kind: "text", text: value.slice(lastIndex, m.index) });
+    }
+    out.push({ kind: "var", template: m[0] });
+    lastIndex = TEMPLATE_REGEX.lastIndex;
+  }
+  if (lastIndex < value.length) {
+    out.push({ kind: "text", text: value.slice(lastIndex) });
+  }
+  return out;
+}
+
+/**
+ * Extract the user-facing label from a `{{...}}` template. For a typical
+ * `{{step_3.email_status}}` template we want "email_status"; for a
+ * whole-step `{{step_3}}` template we fall back to the step name itself
+ * (no field to drill into).
+ */
+function templateLabel(template: string): string {
+  const inner = template.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "").trim();
+  const dot = inner.indexOf(".");
+  if (dot === -1) return inner;
+  // For nested templates like `{{step.user.email}}`, surface the whole
+  // dotted path after the step name -- that's enough context.
+  return inner.slice(dot + 1);
+}
+
+/**
+ * Build a DOM chip element representing one `{{...}}` template. The chip
+ * is `contentEditable=false` so the browser treats it as a single
+ * "character" -- one Backspace removes it whole, typing next to it
+ * doesn't split it. The full template lives on a data attribute so
+ * `extractValue` can reconstruct the raw string.
+ */
+function createChipElement(template: string): HTMLSpanElement {
+  const chip = document.createElement("span");
+  chip.className = "wf-chip";
+  chip.contentEditable = "false";
+  chip.setAttribute("data-template", template);
+  chip.textContent = templateLabel(template);
+  // Native tooltip showing the full template -- helps users learn what
+  // the chip resolves to without inspecting state.
+  chip.title = template;
+  return chip;
+}
+
+/**
+ * Walk the contentEditable's DOM and reconstruct the raw template-laden
+ * string. Chips contribute their `data-template`; text nodes contribute
+ * their text; `<br>` becomes `\n` (for multi-line fields).
+ */
+function extractValue(root: HTMLElement): string {
+  // The xyflow `Node` type imported at the top of this module shadows
+  // the global DOM Node, so we disambiguate via globalThis everywhere
+  // we need the DOM one. Same workaround used elsewhere in this file.
+  let out = "";
+  const walk = (node: globalThis.Node): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === globalThis.Node.TEXT_NODE) {
+        out += child.textContent ?? "";
+      } else if (child.nodeType === globalThis.Node.ELEMENT_NODE) {
+        const el = child as HTMLElement;
+        if (el.classList.contains("wf-chip")) {
+          out += el.getAttribute("data-template") ?? "";
+        } else if (el.tagName === "BR") {
+          out += "\n";
+        } else {
+          // Anything else (e.g. a stray div from a paste): recurse into
+          // its children so the visible text survives.
+          walk(child);
+        }
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/** Replace the contentEditable's children with chips + text built from
+ *  `value`. Called both on mount and when `value` changes from outside. */
+function renderSegmentsTo(root: HTMLElement, value: string, multiline: boolean): void {
+  root.innerHTML = "";
+  for (const seg of parseSegments(value)) {
+    if (seg.kind === "var") {
+      root.appendChild(createChipElement(seg.template));
+    } else {
+      // Multi-line: split on `\n` and insert <br> between, so the line
+      // breaks survive the round-trip via extractValue.
+      if (multiline && seg.text.includes("\n")) {
+        const lines = seg.text.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]) root.appendChild(document.createTextNode(lines[i]!));
+          if (i < lines.length - 1) root.appendChild(document.createElement("br"));
+        }
+      } else if (seg.text) {
+        root.appendChild(document.createTextNode(seg.text));
+      }
+    }
+  }
+}
+
+/** Insert a chip at the current selection inside `root`. If selection
+ *  isn't inside the field (lost focus, never set), append at the end.
+ *  Leaves the caret right after the inserted chip so subsequent typing
+ *  reads as "the user added a thing and is continuing after it". */
+function insertChipAtSelection(root: HTMLElement, template: string): void {
+  const chip = createChipElement(template);
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) {
+    root.appendChild(chip);
+    placeCursorAfter(chip);
+    return;
+  }
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  range.insertNode(chip);
+  placeCursorAfter(chip);
+}
+
+function placeCursorAfter(node: globalThis.Node): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Modern + legacy caret-from-point. Used by the drop handler so the
+ *  chip lands where the user actually dropped, not at the field's
+ *  end-of-text by default. */
+function caretRangeFromPoint(x: number, y: number): Range | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: globalThis.Node; offset: number } | null;
+  };
+  if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
+  if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    if (!pos) return null;
+    const range = document.createRange();
+    range.setStart(pos.offsetNode, pos.offset);
+    range.collapse(true);
+    return range;
+  }
+  return null;
+}
+
+/**
+ * Chip-rendering text field. Looks and behaves like a regular input,
+ * except `{{step.field}}` templates inside the value render as visible
+ * `field` chips. The chip is atomic -- backspace removes it whole, you
+ * can't half-edit it.
+ *
+ * Uncontrolled internally w.r.t. the contentEditable DOM (rebuilding it
+ * on every onChange would reset the caret). Re-renders only when the
+ * `value` prop changes from OUTSIDE (load, reset, picker insert from
+ * another field, ...). The `lastEmittedRef` trick distinguishes "we
+ * just emitted this" from "something external set this".
+ */
+function VariableChipField({
+  value,
+  onChange,
+  placeholder,
+  multiline = false,
+  className = "",
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  multiline?: boolean;
+  className?: string;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const lastEmittedRef = useRef<string>(value);
+  const picker = useContext(VariablePickerContext);
+
+  // Initial render. `useLayoutEffect` so the DOM is populated before the
+  // first paint -- otherwise the user sees an empty box flash before
+  // chips appear.
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    renderSegmentsTo(root, value, multiline);
+    lastEmittedRef.current = value;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // External value change: rebuild. Skip when this is the echo from our
+  // own onChange (lastEmittedRef matches), or the DOM would reset the
+  // caret on every keystroke.
+  useLayoutEffect(() => {
+    if (value === lastEmittedRef.current) return;
+    const root = ref.current;
+    if (!root) return;
+    renderSegmentsTo(root, value, multiline);
+    lastEmittedRef.current = value;
+  }, [value, multiline]);
+
+  const emit = useCallback((): void => {
+    const root = ref.current;
+    if (!root) return;
+    const raw = extractValue(root);
+    lastEmittedRef.current = raw;
+    onChange(raw);
+  }, [onChange]);
+
+  const handleInput = useCallback((): void => {
+    emit();
+  }, [emit]);
+
+  const handleFocus = useCallback((): void => {
+    const root = ref.current;
+    if (!root) return;
+    picker.open({
+      anchorEl: root,
+      insert: (template) => {
+        insertChipAtSelection(root, template);
+        emit();
+      },
+    });
+  }, [picker, emit]);
+
+  const handleBlur = useCallback((): void => {
+    picker.scheduleClose();
+  }, [picker]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): void => {
+      // Single-line variant blocks Enter so the field stays one line tall.
+      // Tab behaves natively (focus moves), Esc bubbles so popovers close.
+      if (!multiline && e.key === "Enter") {
+        e.preventDefault();
+        return;
+      }
+    },
+    [multiline],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>): void => {
+    const types = Array.from(e.dataTransfer.types ?? []);
+    if (!types.includes("text/x-wf-variable") && !types.includes("text/plain")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>): void => {
+      const template =
+        e.dataTransfer.getData("text/x-wf-variable") || e.dataTransfer.getData("text/plain");
+      if (!template) return;
+      e.preventDefault();
+      const root = ref.current;
+      if (!root) return;
+      // Position the caret where the user dropped before inserting the
+      // chip so it lands precisely under the cursor -- otherwise the
+      // chip would always append at the field's current selection or end.
+      const range = caretRangeFromPoint(e.clientX, e.clientY);
+      if (range && root.contains(range.commonAncestorContainer)) {
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      } else {
+        root.focus();
+      }
+      insertChipAtSelection(root, template);
+      emit();
+    },
+    [emit],
+  );
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLDivElement>): void => {
+      // Force plain-text paste so users can't paste rich HTML that
+      // bypasses the chip parsing. `execCommand` is deprecated but still
+      // works in all relevant browsers; the modern alternative is to
+      // shape a range and insertNode, which is more code for the same effect.
+      e.preventDefault();
+      const text = e.clipboardData.getData("text/plain");
+      if (!text) return;
+      // Parse the pasted text for embedded templates so a paste of
+      // "{{step.x}} done" produces chip + text, not raw braces.
+      const root = ref.current;
+      if (!root) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) {
+        // No valid selection -- append at the end.
+        for (const seg of parseSegments(text)) {
+          if (seg.kind === "var") root.appendChild(createChipElement(seg.template));
+          else if (seg.text) root.appendChild(document.createTextNode(seg.text));
+        }
+      } else {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const fragments: globalThis.Node[] = [];
+        for (const seg of parseSegments(text)) {
+          if (seg.kind === "var") fragments.push(createChipElement(seg.template));
+          else if (seg.text) fragments.push(document.createTextNode(seg.text));
+        }
+        for (const f of fragments) range.insertNode(f);
+        // Move caret after the last inserted fragment.
+        const last = fragments[fragments.length - 1];
+        if (last) placeCursorAfter(last);
+      }
+      emit();
+    },
+    [emit],
+  );
+
+  return (
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      role="textbox"
+      aria-multiline={multiline}
+      data-placeholder={placeholder ?? ""}
+      className={`wf-chip-field ${multiline ? "wf-chip-field--multiline" : "wf-chip-field--singleline"} ${className}`.trim()}
+      onInput={handleInput}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      onPaste={handlePaste}
+    />
+  );
 }
 
 /* =========================================================== canvas context menu */
@@ -2759,10 +3122,12 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
 }
 
 /**
- * String-typed input wrapper. Extracted so the variable-picker focus/drop
- * handlers live alongside the rest of the input chrome without bloating
- * the TypedField switch. Behaves like the prior inline `<input type=text>`
- * when no picker is mounted (NULL_PICKER no-ops).
+ * String-typed input wrapper. Uses the chip field so `{{step.field}}`
+ * templates render as visible `field` chips rather than raw braces.
+ * Native `<input type="text">` would only show the raw template; the
+ * chip field provides the make.com / n8n-style token UI without
+ * sacrificing manual typing (Backspace deletes a chip whole; typing
+ * around chips just edits the surrounding text).
  */
 function StringField({
   field,
@@ -2778,23 +3143,20 @@ function StringField({
   isMissing: boolean;
 }): React.ReactElement {
   const text = typeof value === "string" ? value : "";
-  const varProps = useVariableFieldProps(text, (next) => onChange(next));
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
-      <input
-        type="text"
+      <VariableChipField
         value={text}
+        onChange={(next) => onChange(next)}
         placeholder={field.placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        {...varProps}
       />
       {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
     </label>
   );
 }
 
-/** Long-text variant -- same shape as StringField but with a textarea. */
+/** Long-text variant -- chip field in multiline mode. */
 function LongTextField({
   field,
   value,
@@ -2809,16 +3171,14 @@ function LongTextField({
   isMissing: boolean;
 }): React.ReactElement {
   const text = typeof value === "string" ? value : "";
-  const varProps = useVariableFieldProps(text, (next) => onChange(next));
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
-      <textarea
-        rows={3}
+      <VariableChipField
         value={text}
+        onChange={(next) => onChange(next)}
         placeholder={field.placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        {...varProps}
+        multiline
       />
       {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
     </label>
@@ -3109,16 +3469,14 @@ function FreeformInputRow({
   onRemoveInputKey: (key: string) => void;
 }): React.ReactElement {
   const text = stringifyValue(value);
-  const varProps = useVariableFieldProps(text, (next) => onSetInput(inputKey, next));
   return (
     <li className="wf-props__input-row">
       <label>
         <span className="wf-props__input-key">{inputKey}</span>
-        <textarea
-          rows={text.length > 60 ? 3 : 1}
+        <VariableChipField
           value={text}
-          onChange={(e) => onSetInput(inputKey, e.target.value)}
-          {...varProps}
+          onChange={(next) => onSetInput(inputKey, next)}
+          multiline
         />
       </label>
       <button
@@ -3157,16 +3515,13 @@ function LoopEditor({
 }): React.ReactElement {
   const items = step.settings?.items ?? "";
   const hasBody = !!step.firstLoopAction;
-  const varProps = useVariableFieldProps(items, onSetLoopItems);
   return (
     <>
       <Field label="Items expression">
-        <input
-          type="text"
+        <VariableChipField
           value={items}
+          onChange={onSetLoopItems}
           placeholder="{{trigger.list}}"
-          onChange={(e) => onSetLoopItems(e.target.value)}
-          {...varProps}
         />
         <span className="wf-props__field-help">
           Must resolve to an array. Inside the body, reference <code>{`{{${step.name}.item}}`}</code> and{" "}
@@ -3549,22 +3904,14 @@ function ConditionRow({
 }): React.ReactElement {
   const isSingle = SINGLE_VALUE_OPERATORS.has(condition.operator);
   const supportsCase = CASE_SENSITIVE_OPERATORS.has(condition.operator);
-  const firstValueProps = useVariableFieldProps(condition.firstValue, (next) =>
-    onUpdate({ firstValue: next }),
-  );
-  const secondValueProps = useVariableFieldProps(condition.secondValue ?? "", (next) =>
-    onUpdate({ secondValue: next }),
-  );
   return (
     <li className="wf-props__condition-row">
       {showAnd ? <span className="wf-props__condition-and">AND</span> : null}
-      <input
-        type="text"
+      <VariableChipField
         className="wf-props__condition-field"
         value={condition.firstValue}
+        onChange={(next) => onUpdate({ firstValue: next })}
         placeholder="{{step.field}}"
-        onChange={(e) => onUpdate({ firstValue: e.target.value })}
-        {...firstValueProps}
       />
       <select
         className="wf-props__condition-op"
@@ -3582,13 +3929,11 @@ function ConditionRow({
         ))}
       </select>
       {!isSingle ? (
-        <input
-          type="text"
+        <VariableChipField
           className="wf-props__condition-field"
           value={condition.secondValue ?? ""}
+          onChange={(next) => onUpdate({ secondValue: next })}
           placeholder="value"
-          onChange={(e) => onUpdate({ secondValue: e.target.value })}
-          {...secondValueProps}
         />
       ) : null}
       <button
