@@ -78,6 +78,52 @@ type GroqStreamChunk = {
   }>;
 };
 
+/**
+ * Groq strict-validates tool call arguments server-side against the
+ * tool's JSON Schema. The Llama/Kimi/etc. models it hosts have a
+ * habit of emitting *every* declared property — including optional
+ * ones — and filling absent values with `null` instead of omitting
+ * the key. Standard JSON Schema treats "not required" as "may be
+ * omitted", not "may be null", so the validator 400s the call before
+ * we ever see it (error: `expected string, but got null`).
+ *
+ * We can't change the model's habit and we can't sanitize after the
+ * fact (Groq rejects upstream). The fix is to walk the schema before
+ * sending and expand every optional property's `type` to also accept
+ * `null`. Tool handlers across the codebase already normalize null
+ * back to `undefined`, so this is purely a wire-format adjustment.
+ */
+export function relaxOptionalFieldsToNullable(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(relaxOptionalFieldsToNullable);
+
+  const node = schema as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...node };
+
+  if (node.type === 'object' && node.properties && typeof node.properties === 'object') {
+    const required = new Set(Array.isArray(node.required) ? (node.required as string[]) : []);
+    const props = node.properties as Record<string, unknown>;
+    const newProps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(props)) {
+      const relaxed = relaxOptionalFieldsToNullable(value) as Record<string, unknown> | unknown;
+      if (!required.has(key) && relaxed && typeof relaxed === 'object' && 'type' in (relaxed as object)) {
+        const t = (relaxed as Record<string, unknown>).type;
+        if (typeof t === 'string' && t !== 'null') {
+          (relaxed as Record<string, unknown>).type = [t, 'null'];
+        } else if (Array.isArray(t) && !t.includes('null')) {
+          (relaxed as Record<string, unknown>).type = [...t, 'null'];
+        }
+      }
+      newProps[key] = relaxed;
+    }
+    out.properties = newProps;
+  }
+
+  if (node.items) out.items = relaxOptionalFieldsToNullable(node.items);
+
+  return out;
+}
+
 export class GroqProvider implements LLMProvider {
   name = 'groq';
   private apiKey: string;
@@ -497,7 +543,7 @@ export class GroqProvider implements LLMProvider {
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: tool.parameters,
+        parameters: relaxOptionalFieldsToNullable(tool.parameters) as Record<string, unknown>,
       },
     }));
   }

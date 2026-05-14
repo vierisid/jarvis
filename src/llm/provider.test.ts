@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
-import { GroqProvider } from './groq.ts';
+import { GroqProvider, relaxOptionalFieldsToNullable } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
@@ -496,6 +496,76 @@ describe('Groq request shaping', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  test('relaxOptionalFieldsToNullable makes optional fields accept null', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        city: { type: 'string' },
+        notes: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+        nested: {
+          type: 'object',
+          properties: {
+            required_inner: { type: 'string' },
+            optional_inner: { type: 'number' },
+          },
+          required: ['required_inner'],
+        },
+      },
+      required: ['city'],
+    };
+    const out = relaxOptionalFieldsToNullable(schema) as any;
+    expect(out.properties.city.type).toBe('string');
+    expect(out.properties.notes.type).toEqual(['string', 'null']);
+    expect(out.properties.tags.type).toEqual(['array', 'null']);
+    expect(out.properties.nested.type).toEqual(['object', 'null']);
+    expect(out.properties.nested.properties.required_inner.type).toBe('string');
+    expect(out.properties.nested.properties.optional_inner.type).toEqual(['number', 'null']);
+  });
+
+  test('GroqProvider relaxes optional tool params to accept null before sending', async () => {
+    const provider = new GroqProvider('test-key') as any;
+    await provider.chat(
+      [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hi' },
+      ],
+      {
+        tools: [
+          {
+            name: 'record_profile_facts',
+            description: 'd',
+            parameters: {
+              type: 'object',
+              properties: {
+                facts: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      theme: { type: 'string' },
+                      summary: { type: 'string' },
+                      raw_quote: { type: 'string' },
+                    },
+                    required: ['theme', 'summary'],
+                  },
+                },
+              },
+              required: ['facts'],
+            },
+          },
+        ],
+      },
+    );
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    const itemProps = body.tools[0].function.parameters.properties.facts.items.properties;
+    expect(itemProps.theme.type).toBe('string');
+    expect(itemProps.summary.type).toBe('string');
+    expect(itemProps.raw_quote.type).toEqual(['string', 'null']);
   });
 
   test('GroqProvider uses Groq-compatible tool fields', async () => {
