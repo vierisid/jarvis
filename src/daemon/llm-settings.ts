@@ -15,6 +15,7 @@ import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { NVIDIAProvider } from '../llm/nvidia.ts';
+import { OpenAICompatibleProvider } from '../llm/openai-compatible.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
 
@@ -25,6 +26,7 @@ const KEY_GROQ = 'llm.groq.api_key';
 const KEY_GEMINI = 'llm.gemini.api_key';
 const KEY_OPENROUTER = 'llm.openrouter.api_key';
 const KEY_NVIDIA = 'llm.nvidia.api_key';
+const KEY_OPENAI_COMPAT = 'llm.openai_compatible.api_key';
 
 // DB setting keys
 const SETTING_PRIMARY = 'llm.primary';
@@ -37,6 +39,8 @@ const SETTING_OLLAMA_MODEL = 'llm.ollama.model';
 const SETTING_OLLAMA_BASE_URL = 'llm.ollama.base_url';
 const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
 const SETTING_NVIDIA_MODEL = 'llm.nvidia.model';
+const SETTING_OPENAI_COMPAT_MODEL = 'llm.openai_compatible.model';
+const SETTING_OPENAI_COMPAT_BASE_URL = 'llm.openai_compatible.base_url';
 
 export type LLMSettingsResponse = {
   primary: string;
@@ -48,6 +52,7 @@ export type LLMSettingsResponse = {
   ollama: { base_url: string; model: string } | null;
   openrouter: { model: string; has_api_key: boolean } | null;
   nvidia: { model: string; has_api_key: boolean } | null;
+  openai_compatible: { base_url: string; model: string; has_api_key: boolean } | null;
 };
 
 /**
@@ -85,6 +90,21 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
       }
     : null;
 
+  // OpenAI-compatible: same rule as Ollama. Requires an explicit base_url
+  // since there's no sensible default — it could be llama.cpp, vLLM,
+  // LM Studio, or a hosted compatible endpoint. The API key is optional.
+  const dbCompatUrl = getSetting(SETTING_OPENAI_COMPAT_BASE_URL);
+  const dbCompatModel = getSetting(SETTING_OPENAI_COMPAT_MODEL);
+  const compatConfigured = !!(dbCompatUrl || config.llm.openai_compatible?.base_url);
+  const hasCompatKey = hasSecret(KEY_OPENAI_COMPAT) || !!config.llm.openai_compatible?.api_key;
+  const openai_compatible = compatConfigured
+    ? {
+        base_url: dbCompatUrl ?? config.llm.openai_compatible?.base_url ?? '',
+        model: dbCompatModel ?? config.llm.openai_compatible?.model ?? '',
+        has_api_key: hasCompatKey,
+      }
+    : null;
+
   return {
     primary,
     fallback,
@@ -95,6 +115,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     ollama,
     openrouter: { model: openrouterModel, has_api_key: hasOpenrouterKey },
     nvidia: { model: nvidiaModel, has_api_key: hasNvidiaKey },
+    openai_compatible,
   };
 }
 
@@ -113,6 +134,7 @@ export function saveLLMSettings(
     ollama?: { base_url?: string; model?: string };
     openrouter?: { api_key?: string; model?: string };
     nvidia?: { api_key?: string; model?: string };
+    openai_compatible?: { base_url?: string; api_key?: string; model?: string };
   },
 ): void {
   // Save non-secret settings to DB
@@ -252,6 +274,41 @@ export function saveLLMSettings(
       api_key: body.nvidia.api_key ?? getNvidiaApiKey(config) ?? '',
     };
   }
+
+  // OpenAI-compatible. Same independent-field model as Ollama: a `base_url`,
+  // `model`, and `api_key` can each be saved independently. An explicit
+  // empty `base_url` clears the provider entirely.
+  if (body.openai_compatible) {
+    const trimmedUrl = body.openai_compatible.base_url?.trim();
+    const clearingUrl = body.openai_compatible.base_url !== undefined && !trimmedUrl;
+    if (clearingUrl) {
+      deleteSetting(SETTING_OPENAI_COMPAT_BASE_URL);
+      deleteSetting(SETTING_OPENAI_COMPAT_MODEL);
+      deleteSecret(KEY_OPENAI_COMPAT);
+      config.llm.openai_compatible = undefined;
+    } else {
+      if (trimmedUrl) {
+        setSetting(SETTING_OPENAI_COMPAT_BASE_URL, trimmedUrl);
+      }
+      if (body.openai_compatible.model) {
+        setSetting(SETTING_OPENAI_COMPAT_MODEL, body.openai_compatible.model);
+      }
+      if (body.openai_compatible.api_key) {
+        setSecret(KEY_OPENAI_COMPAT, body.openai_compatible.api_key);
+      }
+      const nextUrl = trimmedUrl ?? config.llm.openai_compatible?.base_url;
+      const nextModel = body.openai_compatible.model ?? config.llm.openai_compatible?.model;
+      const nextKey = body.openai_compatible.api_key ?? getOpenAICompatibleApiKey(config) ?? '';
+      if (nextUrl || nextModel || nextKey) {
+        config.llm.openai_compatible = {
+          ...config.llm.openai_compatible,
+          ...(nextModel ? { model: nextModel } : {}),
+          ...(nextUrl ? { base_url: nextUrl } : {}),
+          ...(nextKey ? { api_key: nextKey } : {}),
+        };
+      }
+    }
+  }
 }
 
 /**
@@ -294,6 +351,14 @@ function getOpenRouterApiKey(config: JarvisConfig): string | null {
  */
 function getNvidiaApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_NVIDIA) ?? config.llm.nvidia?.api_key ?? null;
+}
+
+/**
+ * Resolve the OpenAI-compatible API key: keychain > config.yaml.
+ * Optional — many local servers (llama.cpp, LM Studio) don't require auth.
+ */
+function getOpenAICompatibleApiKey(config: JarvisConfig): string | null {
+  return getSecret(KEY_OPENAI_COMPAT) ?? config.llm.openai_compatible?.api_key ?? null;
 }
 
 /**
@@ -398,6 +463,19 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
       model: dbNvidiaModel ?? config.llm.nvidia?.model,
     };
   }
+
+  // OpenAI-compatible
+  const dbCompatModel = getSetting(SETTING_OPENAI_COMPAT_MODEL);
+  const dbCompatUrl = getSetting(SETTING_OPENAI_COMPAT_BASE_URL);
+  const keychainCompatKey = getSecret(KEY_OPENAI_COMPAT);
+  if (dbCompatModel || dbCompatUrl || keychainCompatKey) {
+    config.llm.openai_compatible = {
+      ...config.llm.openai_compatible,
+      base_url: dbCompatUrl ?? config.llm.openai_compatible?.base_url,
+      model: dbCompatModel ?? config.llm.openai_compatible?.model,
+      api_key: keychainCompatKey ?? config.llm.openai_compatible?.api_key ?? '',
+    };
+  }
 }
 
 /**
@@ -435,6 +513,14 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
   if (llm.ollama?.base_url) {
     providers.push(new OllamaProvider(llm.ollama.base_url, llm.ollama.model));
     console.log('[LLM] Hot-reloaded Ollama provider');
+  }
+  if (llm.openai_compatible?.base_url) {
+    providers.push(new OpenAICompatibleProvider(
+      llm.openai_compatible.base_url,
+      llm.openai_compatible.model,
+      llm.openai_compatible.api_key,
+    ));
+    console.log('[LLM] Hot-reloaded OpenAI-compatible provider');
   }
 
   const fallback = llm.fallback.filter(n => providers.some(p => p.name === n));
@@ -487,6 +573,12 @@ export async function testLLMProvider(
         opts.base_url ?? config.llm.ollama?.base_url,
         opts.model ?? config.llm.ollama?.model,
       );
+    } else if (opts.provider === 'openai_compatible') {
+      const baseUrl = opts.base_url ?? config.llm.openai_compatible?.base_url;
+      if (!baseUrl) return { ok: false, error: 'Base URL required' };
+      const model = opts.model ?? config.llm.openai_compatible?.model;
+      const key = opts.api_key ?? getOpenAICompatibleApiKey(config) ?? '';
+      instance = new OpenAICompatibleProvider(baseUrl, model, key);
     } else {
       return { ok: false, error: `Unknown provider: ${opts.provider}` };
     }

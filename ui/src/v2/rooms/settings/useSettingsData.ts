@@ -9,7 +9,8 @@ export type LLMProvider =
   | "gemini"
   | "ollama"
   | "openrouter"
-  | "nvidia";
+  | "nvidia"
+  | "openai_compatible";
 
 export const LLM_PROVIDERS: readonly LLMProvider[] = [
   "anthropic",
@@ -19,6 +20,7 @@ export const LLM_PROVIDERS: readonly LLMProvider[] = [
   "ollama",
   "openrouter",
   "nvidia",
+  "openai_compatible",
 ] as const;
 
 export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = {
@@ -29,6 +31,7 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = {
   ollama: "Ollama",
   openrouter: "OpenRouter",
   nvidia: "NVIDIA NIM",
+  openai_compatible: "OpenAI-compatible",
 };
 
 export type STTProvider = "openai" | "groq" | "sarvam" | "local";
@@ -44,6 +47,7 @@ export interface LLMConfig {
   ollama?: { base_url: string; model: string } | null;
   openrouter?: { model: string; has_api_key: boolean } | null;
   nvidia?: { model: string; has_api_key: boolean } | null;
+  openai_compatible?: { base_url: string; model: string; has_api_key: boolean } | null;
 }
 
 export interface ChannelStatus {
@@ -307,7 +311,10 @@ export function useSettingsData() {
       for (const p of LLM_PROVIDERS) {
         const v = (llm as any)[p];
         if (!v) continue;
-        if (p === "ollama" || (v && v.has_api_key)) providersWithKey++;
+        // Ollama and OpenAI-compatible are "configured" by a base_url, not a key.
+        if (p === "ollama" || p === "openai_compatible" || v.has_api_key) {
+          providersWithKey++;
+        }
       }
     }
     const channelsEnabled =
@@ -406,6 +413,22 @@ export function useSettingsData() {
     [refresh],
   );
 
+  const setOpenAICompatibleBaseUrl = useCallback(
+    async (baseUrl: string): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/llm",
+          { openai_compatible: { base_url: baseUrl } },
+        );
+        await refresh();
+        return { ok: true, message: r.message || "OpenAI-compatible base URL updated." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
   /**
    * Test a provider's connection. Accepts optional `model` / `baseUrl`
    * overrides so the UI can test what's currently in the textbox before
@@ -416,12 +439,13 @@ export function useSettingsData() {
   const testProvider = useCallback(
     async (
       provider: LLMProvider,
-      overrides?: { model?: string; baseUrl?: string },
+      overrides?: { model?: string; baseUrl?: string; apiKey?: string },
     ): Promise<ActionResult> => {
       try {
         const body: Record<string, unknown> = { provider };
         if (overrides?.model) body.model = overrides.model;
         if (overrides?.baseUrl) body.base_url = overrides.baseUrl;
+        if (overrides?.apiKey) body.api_key = overrides.apiKey;
         const r = await postJson<{ ok: boolean; model?: string; error?: string }>(
           "/api/config/llm/test",
           body,
@@ -739,6 +763,7 @@ export function useSettingsData() {
     setLLMModel,
     setLLMApiKey,
     setOllamaBaseUrl,
+    setOpenAICompatibleBaseUrl,
     testProvider,
     setTelegram,
     setDiscord,

@@ -22,13 +22,18 @@ type LLMProviderId =
   | "gemini"
   | "ollama"
   | "openrouter"
-  | "nvidia";
+  | "nvidia"
+  | "openai_compatible";
 
 const PROVIDERS: ReadonlyArray<{
   id: LLMProviderId;
   label: string;
   /** True when the provider needs an API key (false for local Ollama). */
   needsKey: boolean;
+  /** True when the provider needs a base URL (Ollama, OpenAI-compatible). */
+  needsBaseUrl?: boolean;
+  /** True when the API key is optional (OpenAI-compatible local servers). */
+  optionalKey?: boolean;
   models: string[];
   /** Default model on first pick — the safest current model per provider. */
   defaultModel: string;
@@ -70,6 +75,7 @@ const PROVIDERS: ReadonlyArray<{
     id: "ollama",
     label: "Ollama (local)",
     needsKey: false,
+    needsBaseUrl: true,
     models: ["llama3.1", "llama3.2", "mistral", "qwen2.5", "deepseek-coder-v2"],
     defaultModel: "llama3.1",
   },
@@ -94,6 +100,18 @@ const PROVIDERS: ReadonlyArray<{
     needsKey: true,
     models: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-8b-instruct", "google/gemma-2-2b-it"],
     defaultModel: "meta/llama-3.3-70b-instruct",
+  },
+  {
+    // Generic /v1/chat/completions endpoint: llama.cpp, vLLM, LM Studio,
+    // TGI, Together, Anyscale, etc. The model id is entirely user-defined
+    // so we leave the list empty and let the "Custom..." path handle it.
+    id: "openai_compatible",
+    label: "OpenAI-compatible",
+    needsKey: false,
+    needsBaseUrl: true,
+    optionalKey: true,
+    models: [],
+    defaultModel: "",
   },
 ];
 
@@ -184,6 +202,13 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
     const p = PROVIDERS.find((x) => x.id === id)!;
     setModel(p.defaultModel);
     setApiKey("");
+    // Switch the base URL placeholder per provider so the user doesn't
+    // submit an Ollama URL into an OpenAI-compatible setup and vice versa.
+    if (id === "ollama") {
+      setBaseUrl("http://localhost:11434");
+    } else if (id === "openai_compatible") {
+      setBaseUrl("");
+    }
     setTestResult(null);
   };
 
@@ -198,8 +223,17 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
           return;
         }
         body.api_key = apiKey;
-      } else if (providerId === "ollama") {
-        body.base_url = baseUrl;
+      }
+      if (provider.needsBaseUrl) {
+        if (!baseUrl.trim()) {
+          setTestResult({ ok: false, error: "Enter a base URL first." });
+          return;
+        }
+        body.base_url = baseUrl.trim();
+      }
+      // openai_compatible: forward the typed key when present (optional).
+      if (providerId === "openai_compatible" && apiKey) {
+        body.api_key = apiKey;
       }
       const r = await fetch("/api/config/llm/test", {
         method: "POST",
@@ -229,7 +263,9 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
       const llmBlock: Record<string, unknown> = { primary: providerId };
       const provBlock: Record<string, unknown> = { model };
       if (provider.needsKey && apiKey) provBlock.api_key = apiKey;
-      if (providerId === "ollama") provBlock.base_url = baseUrl;
+      // openai_compatible: api_key is optional, forward when provided.
+      if (provider.optionalKey && apiKey) provBlock.api_key = apiKey;
+      if (provider.needsBaseUrl) provBlock.base_url = baseUrl.trim();
       llmBlock[providerId] = provBlock;
 
       // Build the TTS payload — explicit choice always sent so the
@@ -309,17 +345,53 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                   >
                     <span className="v2-setup__provider-name">{p.label}</span>
                     <span className="v2-setup__provider-meta">
-                      {p.needsKey ? "API key" : "local"}
+                      {p.id === "openai_compatible"
+                        ? "self-hosted"
+                        : p.needsKey
+                          ? "API key"
+                          : "local"}
                     </span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {provider.needsKey && (
+            {provider.needsBaseUrl && (
+              <div className="v2-setup__field">
+                <label className="v2-setup__label" htmlFor="setup-baseurl">
+                  {providerId === "ollama" ? "Ollama base URL" : "Base URL"}
+                </label>
+                <input
+                  id="setup-baseurl"
+                  className="v2-setup__input"
+                  value={baseUrl}
+                  onChange={(e) => {
+                    setBaseUrl(e.target.value);
+                    setTestResult(null);
+                  }}
+                  placeholder={
+                    providerId === "ollama"
+                      ? "http://localhost:11434"
+                      : "http://localhost:8080/v1"
+                  }
+                />
+                {providerId === "openai_compatible" && (
+                  <p
+                    className="v2-setup__hint"
+                    style={{ color: "var(--ink-3)", marginTop: "var(--s-1)" }}
+                  >
+                    Any server that speaks /v1/chat/completions: llama.cpp,
+                    vLLM, LM Studio, TGI, Together, Anyscale. Include the
+                    /v1 suffix.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {(provider.needsKey || provider.optionalKey) && (
               <div className="v2-setup__field">
                 <label className="v2-setup__label" htmlFor="setup-key">
-                  API key
+                  API key{provider.optionalKey ? " (optional)" : ""}
                 </label>
                 <input
                   id="setup-key"
@@ -330,25 +402,12 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     setApiKey(e.target.value);
                     setTestResult(null);
                   }}
-                  placeholder="paste your key"
+                  placeholder={
+                    provider.optionalKey
+                      ? "leave empty if your server skips auth"
+                      : "paste your key"
+                  }
                   autoComplete="off"
-                />
-              </div>
-            )}
-
-            {providerId === "ollama" && (
-              <div className="v2-setup__field">
-                <label className="v2-setup__label" htmlFor="setup-baseurl">
-                  Ollama base URL
-                </label>
-                <input
-                  id="setup-baseurl"
-                  className="v2-setup__input"
-                  value={baseUrl}
-                  onChange={(e) => {
-                    setBaseUrl(e.target.value);
-                    setTestResult(null);
-                  }}
                 />
               </div>
             )}
@@ -437,23 +496,25 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 <label className="v2-setup__label" htmlFor="setup-model">
                   Model
                 </label>
-                <select
-                  id="setup-model"
-                  className="v2-setup__select"
-                  value={provider.models.includes(model) ? model : "custom"}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setModel(v === "custom" ? "" : v);
-                    setTestResult(null);
-                  }}
-                >
-                  {provider.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                  <option value="custom">Custom…</option>
-                </select>
+                {provider.models.length > 0 && (
+                  <select
+                    id="setup-model"
+                    className="v2-setup__select"
+                    value={provider.models.includes(model) ? model : "custom"}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setModel(v === "custom" ? "" : v);
+                      setTestResult(null);
+                    }}
+                  >
+                    {provider.models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    <option value="custom">Custom…</option>
+                  </select>
+                )}
                 {!provider.models.includes(model) && (
                   <input
                     className="v2-setup__input"
@@ -462,9 +523,15 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                       setModel(e.target.value);
                       setTestResult(null);
                     }}
-                    placeholder="model id (e.g. your local Ollama model name)"
+                    placeholder={
+                      providerId === "openai_compatible"
+                        ? "model id (whatever your server exposes)"
+                        : "model id (e.g. your local Ollama model name)"
+                    }
                     autoComplete="off"
-                    style={{ marginTop: "var(--s-2)" }}
+                    style={{
+                      marginTop: provider.models.length > 0 ? "var(--s-2)" : 0,
+                    }}
                   />
                 )}
               </div>

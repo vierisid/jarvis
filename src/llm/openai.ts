@@ -82,13 +82,23 @@ type OpenAIStreamChunk = {
 
 export class OpenAIProvider implements LLMProvider {
   name = 'openai';
-  private apiKey: string;
-  private defaultModel: string;
-  private apiUrl = 'https://api.openai.com/v1/chat/completions';
+  protected apiKey: string;
+  protected defaultModel: string;
+  protected baseUrl: string;
+  protected get apiUrl(): string {
+    return `${this.baseUrl}/chat/completions`;
+  }
+  protected get modelsUrl(): string {
+    return `${this.baseUrl}/models`;
+  }
+  protected get errorLabel(): string {
+    return 'OpenAI';
+  }
 
-  constructor(apiKey: string, defaultModel = 'gpt-4o') {
+  constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
+    this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -110,18 +120,20 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
     const response = await fetch(this.apiUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+      throw new Error(`${this.errorLabel} API error (${response.status}): ${errorText}`);
     }
 
     const data = await response.json() as OpenAIResponse;
@@ -148,12 +160,14 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
     const response = await fetch(this.apiUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body),
     });
 
@@ -161,7 +175,7 @@ export class OpenAIProvider implements LLMProvider {
       const errorText = await response.text();
       yield {
         type: 'error',
-        error: `OpenAI API error (${response.status}): ${errorText}`,
+        error: `${this.errorLabel} API error (${response.status}): ${errorText}`,
         code: classifyHttpStatus(response.status),
       };
       return;
@@ -274,11 +288,9 @@ export class OpenAIProvider implements LLMProvider {
 
   async listModels(): Promise<string[]> {
     try {
-      const response = await fetch('https://api.openai.com/v1/models', {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-      });
+      const headers: Record<string, string> = {};
+      if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+      const response = await fetch(this.modelsUrl, { headers });
 
       if (!response.ok) {
         throw new Error(`Failed to list models: ${response.status}`);

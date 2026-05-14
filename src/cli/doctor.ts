@@ -98,7 +98,7 @@ export async function runDoctor(): Promise<void> {
   if (config) {
     const spin = startSpinner('Testing LLM connectivity...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider, OpenAICompatibleProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
       const primary = config.llm?.primary ?? 'anthropic';
 
@@ -114,6 +114,12 @@ export async function runDoctor(): Promise<void> {
         manager.registerProvider(new OpenRouterProvider(config.llm.openrouter.api_key, config.llm.openrouter.model));
       } else if (primary === 'ollama') {
         manager.registerProvider(new OllamaProvider(config.llm.ollama?.base_url, config.llm.ollama?.model));
+      } else if (primary === 'openai_compatible' && config.llm?.openai_compatible?.base_url) {
+        manager.registerProvider(new OpenAICompatibleProvider(
+          config.llm.openai_compatible.base_url,
+          config.llm.openai_compatible.model,
+          config.llm.openai_compatible.api_key,
+        ));
       }
 
       manager.setPrimary(primary);

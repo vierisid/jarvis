@@ -1232,6 +1232,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             openai: config.llm.openai ? { model: config.llm.openai.model } : null,
             groq: config.llm.groq ? { model: config.llm.groq.model } : null,
             ollama: config.llm.ollama ?? null,
+            openai_compatible: config.llm.openai_compatible
+              ? {
+                  base_url: config.llm.openai_compatible.base_url,
+                  model: config.llm.openai_compatible.model,
+                }
+              : null,
           },
           personality: config.personality,
           authority: config.authority,

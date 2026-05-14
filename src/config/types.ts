@@ -222,6 +222,7 @@ export type JarvisConfig = {
     ollama?: { base_url?: string; model?: string };
     openrouter?: { api_key: string; model?: string };
     nvidia?: { api_key: string; model?: string };
+    openai_compatible?: { base_url?: string; api_key?: string; model?: string };
   };
   personality: {
     core_traits: string[];

@@ -68,6 +68,10 @@ const MODELS: Record<LLMProvider, string[]> = {
   // NVIDIA models are fetched live from /api/config/llm/nvidia/models when
   // the row is expanded. These entries are the offline fallback.
   nvidia: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-8b-instruct", "google/gemma-2-2b-it"],
+  // OpenAI-compatible covers llama.cpp, vLLM, LM Studio, TGI and other
+  // backends — model names are entirely user-defined, so the dropdown
+  // starts empty and the user types or pastes a model id.
+  openai_compatible: [],
 };
 
 export function LLMTab({
@@ -176,10 +180,11 @@ function ProviderRow({
   onToggleExpanded: () => void;
 }) {
   const pCfg = data.llm ? (data.llm as any)[provider] : null;
-  // For Ollama "configured" means the user actually set a base_url. The
-  // default config now ships with an empty base_url (see PR 179) so a fresh
-  // install no longer reports Ollama as ready when it isn't.
-  const hasKey = provider === "ollama" ? !!pCfg?.base_url : !!pCfg?.has_api_key;
+  // For Ollama and OpenAI-compatible "configured" means the user set a
+  // base_url. The API key is optional in those flows (local servers often
+  // skip auth). All other providers gate on `has_api_key`.
+  const usesBaseUrl = provider === "ollama" || provider === "openai_compatible";
+  const hasKey = usesBaseUrl ? !!pCfg?.base_url : !!pCfg?.has_api_key;
   const currentModel: string = pCfg?.model ?? "";
   const currentBaseUrl: string = pCfg?.base_url ?? "";
 
@@ -211,11 +216,19 @@ function ProviderRow({
     provider === "nvidia" && liveNvidiaModels && liveNvidiaModels.length > 0
       ? liveNvidiaModels
       : MODELS[provider];
-  const isCustomModel = currentModel && !knownModels.includes(currentModel);
-  const [modelChoice, setModelChoice] = useState<string>(
-    isCustomModel ? "custom" : currentModel || knownModels[0]!,
+  // For openai_compatible the canonical list is empty: every model is a
+  // user-typed id, so the row always starts in "custom" mode unless we
+  // happen to know the model from a prior save.
+  const isCustomModel =
+    (currentModel && !knownModels.includes(currentModel)) ||
+    (knownModels.length === 0 && !currentModel);
+  const initialChoice = isCustomModel
+    ? "custom"
+    : currentModel || knownModels[0] || "custom";
+  const [modelChoice, setModelChoice] = useState<string>(initialChoice);
+  const [customModel, setCustomModel] = useState<string>(
+    isCustomModel ? currentModel : "",
   );
-  const [customModel, setCustomModel] = useState<string>(isCustomModel ? currentModel : "");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(currentBaseUrl);
   const [testing, setTesting] = useState(false);
@@ -223,7 +236,9 @@ function ProviderRow({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setModelChoice(isCustomModel ? "custom" : currentModel || knownModels[0]!);
+    setModelChoice(
+      isCustomModel ? "custom" : currentModel || knownModels[0] || "custom",
+    );
     setCustomModel(isCustomModel ? currentModel : "");
     setBaseUrl(currentBaseUrl);
   }, [currentModel, currentBaseUrl, isCustomModel, knownModels]);
@@ -257,7 +272,10 @@ function ProviderRow({
 
   const handleSaveBaseUrl = async () => {
     setSaving(true);
-    const r = await data.setOllamaBaseUrl(baseUrl.trim());
+    const trimmed = baseUrl.trim();
+    const r = provider === "openai_compatible"
+      ? await data.setOpenAICompatibleBaseUrl(trimmed)
+      : await data.setOllamaBaseUrl(trimmed);
     onToast(r.message, r.ok ? "ok" : "warn");
     setSaving(false);
   };
@@ -270,10 +288,13 @@ function ProviderRow({
     // Without these overrides the server falls back to the stored config,
     // which would test the previously-saved model even though the user
     // already typed a new one in the textbox.
-    const overrides: { model?: string; baseUrl?: string } = {};
+    const overrides: { model?: string; baseUrl?: string; apiKey?: string } = {};
     const m = resolveModel();
     if (m) overrides.model = m;
-    if (provider === "ollama" && baseUrl) overrides.baseUrl = baseUrl.trim();
+    if (usesBaseUrl && baseUrl) overrides.baseUrl = baseUrl.trim();
+    // For openai_compatible the freshly-typed key (if any) should be used
+    // for the test request. Ollama doesn't take a key.
+    if (provider === "openai_compatible" && apiKey) overrides.apiKey = apiKey;
     const r = await data.testProvider(provider, overrides);
     setTestResult({ ok: r.ok, text: r.message });
     setTesting(false);
@@ -302,7 +323,7 @@ function ProviderRow({
 
       {expanded && (
         <div className="v2-set__provider-fields">
-          {provider === "ollama" && (
+          {usesBaseUrl && (
             <div className="v2-set__field">
               <label className="v2-set__field-label">Base URL</label>
               <div style={{ display: "flex", gap: "var(--s-2)" }}>
@@ -310,17 +331,23 @@ function ProviderRow({
                   className="v2-set__input"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="http://localhost:11434"
+                  placeholder={
+                    provider === "ollama"
+                      ? "http://localhost:11434"
+                      : "http://localhost:8080/v1"
+                  }
                 />
-                <button
-                  type="button"
-                  className="v2-set__btn"
-                  onClick={() => setBaseUrl("http://localhost:11434")}
-                  disabled={saving}
-                  title="Fill in the default localhost URL"
-                >
-                  Default
-                </button>
+                {provider === "ollama" && (
+                  <button
+                    type="button"
+                    className="v2-set__btn"
+                    onClick={() => setBaseUrl("http://localhost:11434")}
+                    disabled={saving}
+                    title="Fill in the default localhost URL"
+                  >
+                    Default
+                  </button>
+                )}
                 <button
                   type="button"
                   className="v2-set__btn"
@@ -330,19 +357,39 @@ function ProviderRow({
                   Save
                 </button>
               </div>
+              {provider === "openai_compatible" && (
+                <p className="v2-set__hint">
+                  Point at any server that speaks the OpenAI Chat Completions
+                  API -- llama.cpp (e.g. http://localhost:8080/v1), vLLM, LM
+                  Studio, TGI, Together, Anyscale. Include the /v1 suffix.
+                </p>
+              )}
             </div>
           )}
 
-          {provider !== "ollama" && (
+          {(provider !== "ollama") && (
             <div className="v2-set__field">
-              <label className="v2-set__field-label">API Key</label>
+              <label className="v2-set__field-label">
+                API Key
+                {provider === "openai_compatible" && (
+                  <span style={{ color: "var(--ink-3)", marginLeft: "var(--s-2)" }}>
+                    (optional)
+                  </span>
+                )}
+              </label>
               <div style={{ display: "flex", gap: "var(--s-2)" }}>
                 <input
                   className="v2-set__input"
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={hasKey ? "Stored — leave empty to keep" : "Enter API key"}
+                  placeholder={
+                    hasKey
+                      ? "Stored -- leave empty to keep"
+                      : provider === "openai_compatible"
+                        ? "Optional bearer token"
+                        : "Enter API key"
+                  }
                 />
                 <button
                   type="button"
@@ -354,8 +401,9 @@ function ProviderRow({
                 </button>
               </div>
               <p className="v2-set__hint">
-                Keys are stored in the keychain and never echoed back. Voice never sets keys —
-                use this field directly.
+                {provider === "openai_compatible"
+                  ? "Most local servers (llama.cpp, LM Studio) skip auth. Leave empty unless your endpoint requires a bearer token."
+                  : "Keys are stored in the keychain and never echoed back. Voice never sets keys -- use this field directly."}
               </p>
             </div>
           )}
@@ -384,25 +432,27 @@ function ProviderRow({
           <div className="v2-set__field">
             <label className="v2-set__field-label">Model</label>
             <div style={{ display: "flex", gap: "var(--s-2)" }}>
-              <select
-                className="v2-set__select"
-                value={modelChoice}
-                onChange={(e) => setModelChoice(e.target.value)}
-                style={{ flex: 1 }}
-              >
-                {filteredModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-                {provider === "nvidia" && filteredModels.length === 0 && (
-                  <option value="" disabled>
-                    No models match "{nvidiaFilter}"
-                  </option>
-                )}
-                <option value="custom">Custom…</option>
-              </select>
-              {modelChoice === "custom" && (
+              {knownModels.length > 0 && (
+                <select
+                  className="v2-set__select"
+                  value={modelChoice}
+                  onChange={(e) => setModelChoice(e.target.value)}
+                  style={{ flex: 1 }}
+                >
+                  {filteredModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                  {provider === "nvidia" && filteredModels.length === 0 && (
+                    <option value="" disabled>
+                      No models match "{nvidiaFilter}"
+                    </option>
+                  )}
+                  <option value="custom">Custom…</option>
+                </select>
+              )}
+              {(modelChoice === "custom" || knownModels.length === 0) && (
                 <input
                   className="v2-set__input"
                   value={customModel}

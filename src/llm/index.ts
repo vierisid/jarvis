@@ -12,6 +12,7 @@ export type {
 // Provider implementations
 export { AnthropicProvider } from './anthropic.ts';
 export { OpenAIProvider } from './openai.ts';
+export { OpenAICompatibleProvider } from './openai-compatible.ts';
 export { GroqProvider } from './groq.ts';
 export { GeminiProvider } from './gemini.ts';
 export { OllamaProvider } from './ollama.ts';

@@ -21,6 +21,7 @@ import { GeminiProvider } from '../llm/gemini.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { NVIDIAProvider } from '../llm/nvidia.ts';
+import { OpenAICompatibleProvider } from '../llm/openai-compatible.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -417,6 +418,19 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered Ollama provider');
+    }
+
+    // Register OpenAI-compatible (llama.cpp, vLLM, LM Studio, etc.).
+    // Needs an explicit base_url; api_key is optional.
+    if (llm.openai_compatible?.base_url) {
+      const provider = new OpenAICompatibleProvider(
+        llm.openai_compatible.base_url,
+        llm.openai_compatible.model,
+        llm.openai_compatible.api_key,
+      );
+      this.llmManager.registerProvider(provider);
+      hasProvider = true;
+      console.log('[AgentService] Registered OpenAI-compatible provider');
     }
 
     if (!hasProvider) {
