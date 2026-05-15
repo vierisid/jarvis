@@ -42,6 +42,7 @@ import {
   type PieceInputField,
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep } from "./tree";
+import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
 import "./WorkflowEditor.css";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
@@ -83,6 +84,12 @@ interface StepNodeData extends Record<string, unknown> {
 
 export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
   const editor = useWorkflowEditor(flowId);
+  // Library catalog: pieces from npm that the user may or may not have
+  // installed yet. The piece-library popover surfaces non-installed pieces
+  // alongside installed ones so a user typing "telegram" can find it even
+  // before they've installed it; picking an uninstalled row triggers the
+  // install via this hook.
+  const library = useLibrary();
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   // Anchor for the floating settings popover. Captured at click-time from
   // the originating MouseEvent so the popover opens near the cursor rather
@@ -347,19 +354,51 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
    * Route a library pick to the right orphan-spawn action. Piece actions
    * land as configured PIECE steps with schema-default inputs; control-
    * flow built-ins land as native LOOP_ON_ITEMS / ROUTER nodes with
-   * sensible defaults (see `createOrphanControlFlowStep`).
+   * sensible defaults (see `createOrphanControlFlowStep`). Uninstalled
+   * pieces kick off an install via the library hook -- once installation
+   * completes the daemon refreshes the engine's piece catalog and the
+   * editor reloads so the freshly-installed piece's actions become
+   * pickable on the next popover open.
    */
   const onPickFromLibrary = useCallback(
     (entry: LibraryEntry): void => {
       if (!libraryPicker) return;
       if (entry.kind === "control-flow") {
         editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
-      } else {
+        closeLibraryPicker();
+      } else if (entry.kind === "piece-action") {
         editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
+        closeLibraryPicker();
+      } else {
+        // piece-uninstalled: kick off install + close. We don't auto-add a
+        // node because we don't know which action the user wants yet -- and
+        // we can't read the piece's action schema until the engine has
+        // extracted metadata. Toast feedback so the user knows what's
+        // happening + can re-open the menu to pick an action when ready.
+        const id = entry.catalogEntry.id;
+        const displayName = entry.catalogEntry.displayName;
+        closeLibraryPicker();
+        setActionMessage({ tone: "ok", text: `Installing ${displayName}...` });
+        void (async () => {
+          const r = await library.install(id);
+          if (r.ok) {
+            // Refresh the editor's catalog so the new piece's actions show
+            // up the next time the user opens the picker.
+            await editor.reload();
+            setActionMessage({
+              tone: r.partial ? "warn" : "ok",
+              text: r.partial
+                ? `${displayName} installed but ${r.message}`
+                : `${displayName} installed -- open Add piece again to use it.`,
+            });
+          } else {
+            setActionMessage({ tone: "warn", text: `Install failed: ${r.message}` });
+          }
+          window.setTimeout(() => setActionMessage(null), 4000);
+        })();
       }
-      closeLibraryPicker();
     },
-    [editor, libraryPicker, closeLibraryPicker],
+    [editor, library, libraryPicker, closeLibraryPicker],
   );
 
   return (
@@ -500,6 +539,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         <PieceLibraryPopover
           anchor={libraryPicker.screen}
           catalog={editor.catalog}
+          library={library.entries}
           onPick={onPickFromLibrary}
           onClose={closeLibraryPicker}
         />
@@ -1720,8 +1760,15 @@ const LIBRARY_MAX_ROWS = 14;
 
 /**
  * One pickable entry in the library popover. Discriminated so the
- * picker's `onPick` callback can route piece actions and engine-built-in
- * control-flow steps to the right editor action.
+ * picker's `onPick` callback can route the three kinds to the right
+ * editor action:
+ *
+ *   piece-action       Installed piece + specific action. Adds a configured
+ *                      PIECE step to the canvas.
+ *   piece-uninstalled  Piece visible in the user's curated catalog but not
+ *                      yet pulled from npm. Picking it triggers install;
+ *                      after install the action list expands on re-open.
+ *   control-flow       Engine-native LOOP_ON_ITEMS / IF / ROUTER block.
  */
 type LibraryEntry =
   | {
@@ -1730,20 +1777,24 @@ type LibraryEntry =
       action: PieceCatalogActionOrTrigger;
     }
   | {
+      kind: "piece-uninstalled";
+      catalogEntry: InstallableLibraryEntry;
+    }
+  | {
       kind: "control-flow";
       controlType: "LOOP_ON_ITEMS" | "IF" | "ROUTER";
       displayName: string;
       description: string;
     };
 
-type LibraryCategory = "all" | "action" | "control";
+type LibraryCategory = "all" | "installed" | "control";
 
 const CATEGORY_LABEL: Record<LibraryCategory, string> = {
   all: "All",
-  action: "Actions",
+  installed: "Installed",
   control: "Control flow",
 };
-const CATEGORY_ORDER: LibraryCategory[] = ["all", "action", "control"];
+const CATEGORY_ORDER: LibraryCategory[] = ["all", "installed", "control"];
 
 /**
  * Engine-built-in control-flow entries surfaced alongside piece actions.
@@ -1773,14 +1824,29 @@ const CONTROL_FLOW_ENTRIES: LibraryEntry[] = [
   },
 ];
 
-function entryCategory(e: LibraryEntry): "action" | "control" {
-  return e.kind === "control-flow" ? "control" : "action";
+/**
+ * Membership predicate for the category tabs:
+ *   - "all"        every kind passes (the popover applies the tab filter)
+ *   - "installed"  installed pieces + control-flow (always available)
+ *   - "control"    control-flow only
+ *
+ * Note: `entryCategory` returns a SET-style classification because some
+ * kinds belong to multiple tabs (control-flow is in both "installed" and
+ * "control"). The caller filters by `inCategory(entry, category)`.
+ */
+function inCategory(e: LibraryEntry, category: LibraryCategory): boolean {
+  if (category === "all") return true;
+  if (category === "installed") {
+    return e.kind === "piece-action" || e.kind === "control-flow";
+  }
+  // "control"
+  return e.kind === "control-flow";
 }
 
 function entryKey(e: LibraryEntry): string {
-  return e.kind === "control-flow"
-    ? `control:${e.controlType}`
-    : `piece:${e.piece.name}::${e.action.name}`;
+  if (e.kind === "control-flow") return `control:${e.controlType}`;
+  if (e.kind === "piece-uninstalled") return `uninstalled:${e.catalogEntry.id}`;
+  return `piece:${e.piece.name}::${e.action.name}`;
 }
 
 function entryMatchesQuery(e: LibraryEntry, q: string): boolean {
@@ -1790,6 +1856,15 @@ function entryMatchesQuery(e: LibraryEntry, q: string): boolean {
       e.displayName.toLowerCase().includes(q) ||
       e.description.toLowerCase().includes(q) ||
       e.controlType.toLowerCase().includes(q)
+    );
+  }
+  if (e.kind === "piece-uninstalled") {
+    const c = e.catalogEntry;
+    return (
+      c.displayName.toLowerCase().includes(q) ||
+      c.description.toLowerCase().includes(q) ||
+      c.id.toLowerCase().includes(q) ||
+      c.npmPackage.toLowerCase().includes(q)
     );
   }
   return (
@@ -1811,11 +1886,20 @@ function entryMatchesQuery(e: LibraryEntry, q: string): boolean {
 function PieceLibraryPopover({
   anchor,
   catalog,
+  library,
   onPick,
   onClose,
 }: {
   anchor: { x: number; y: number };
   catalog: PieceCatalogEntry[];
+  /**
+   * Full curated catalog from `/api/workflows/pieces/library` (verified +
+   * community pieces, with per-piece installed status). Drives the
+   * "uninstalled but installable" rows that appear in the "All" tab so
+   * users can discover pieces before installing them. Empty array is a
+   * safe fallback when the library endpoint is still loading.
+   */
+  library: InstallableLibraryEntry[];
   onPick: (entry: LibraryEntry) => void;
   onClose: () => void;
 }): React.ReactElement {
@@ -1826,27 +1910,39 @@ function PieceLibraryPopover({
   const [activeIdx, setActiveIdx] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y });
 
-  // Build the unified entry list. Control-flow entries are pushed up top
-  // when the user is in "all" or "control" so they're immediately
-  // visible (they're the more common "where do I add an if?" question).
+  // Build the unified entry list. Three layers in display order:
+  //   1. Control-flow built-ins (top -- always-available, always visible)
+  //   2. Installed pieces' actions (one row per action)
+  //   3. Uninstalled curated pieces (one row per piece, "Install" chip)
+  //
+  // Installed pieces are matched against the library catalog by piece name
+  // (`@activepieces/piece-<id>` vs the engine's piece.name). Any installed
+  // piece NOT in the library catalog still shows under (2) so locally
+  // sideloaded pieces -- if that ever ships -- don't go missing.
   const entries = useMemo<LibraryEntry[]>(() => {
+    const installedNames = new Set(catalog.map((p) => p.name));
     const pieceEntries: LibraryEntry[] = [];
     for (const p of catalog) {
       for (const a of p.actions) {
         pieceEntries.push({ kind: "piece-action", piece: p, action: a });
       }
     }
-    return [...CONTROL_FLOW_ENTRIES, ...pieceEntries];
-  }, [catalog]);
+    const uninstalledEntries: LibraryEntry[] = [];
+    for (const lib of library) {
+      // Library ids are bare ("gmail"); the engine's piece.name is the
+      // full npm spec ("@activepieces/piece-gmail"). Match on the latter.
+      if (installedNames.has(lib.npmPackage)) continue;
+      if (lib.installed) continue; // belt + suspenders -- the library hook also tracks this
+      uninstalledEntries.push({ kind: "piece-uninstalled", catalogEntry: lib });
+    }
+    return [...CONTROL_FLOW_ENTRIES, ...pieceEntries, ...uninstalledEntries];
+  }, [catalog, library]);
 
   // Apply the category filter and search query. Same lowercased q is
   // reused across every entry so we don't pay for the per-iteration call.
   const rows = useMemo<LibraryEntry[]>(() => {
     const q = query.trim().toLowerCase();
-    return entries.filter((e) => {
-      if (category !== "all" && entryCategory(e) !== category) return false;
-      return entryMatchesQuery(e, q);
-    });
+    return entries.filter((e) => inCategory(e, category) && entryMatchesQuery(e, q));
   }, [entries, category, query]);
 
   // Reset the keyboard cursor when the result set changes so Enter always
@@ -2010,6 +2106,29 @@ function LibraryRowContent({ entry }: { entry: LibraryEntry }): React.ReactEleme
           <span className="wf-library__action">{entry.displayName}</span>
         </div>
         <div className="wf-library__row-desc">{entry.description}</div>
+      </>
+    );
+  }
+  if (entry.kind === "piece-uninstalled") {
+    // Single row per piece (we don't know the action list yet -- that
+    // info comes from the engine after install). The "Install" tag on the
+    // left signals that picking this row will trigger a download rather
+    // than immediately drop a node on the canvas.
+    const c = entry.catalogEntry;
+    return (
+      <>
+        <div className="wf-library__row-head">
+          <span className="wf-library__tag wf-library__tag--install">Install</span>
+          <span className="wf-library__action">{c.displayName}</span>
+          {c.tier === "community" ? (
+            <span className="wf-library__tier">community</span>
+          ) : null}
+        </div>
+        {c.description ? (
+          <div className="wf-library__row-desc">{c.description}</div>
+        ) : (
+          <div className="wf-library__row-desc">{c.npmPackage}</div>
+        )}
       </>
     );
   }

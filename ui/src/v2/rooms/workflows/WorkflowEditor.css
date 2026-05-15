@@ -590,6 +590,28 @@
   padding: 1px 6px;
   line-height: 1.5;
 }
+/* "Install" variant for uninstalled-piece rows. Painted in the accent
+   color so users notice picking the row will trigger a download rather
+   than drop an immediate node. */
+.wf-library__tag--install {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* Small secondary chip showing tier=community on uninstalled rows. Stays
+   subtle -- verified pieces don't render this at all. */
+.wf-library__tier {
+  font-size: 0.65rem;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-pill);
+  padding: 0 6px;
+  line-height: 1.4;
+  margin-left: auto;
+}
 
 /* ── React Flow surface tweaks ── */
 
