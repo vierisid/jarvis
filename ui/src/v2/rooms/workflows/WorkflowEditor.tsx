@@ -111,6 +111,16 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     | null
   >(null);
   const closeLibraryPicker = useCallback((): void => setLibraryPicker(null), []);
+  // Pending install fired from the picker. When non-null, the popover
+  // renders that row as a spinner + blocks all other picks until the
+  // install completes (or fails). On success we auto-place the new piece's
+  // first action at the captured flow coords and close the popover so the
+  // round-trip feels atomic to the user: click -> wait -> node appears.
+  const [pendingInstall, setPendingInstall] = useState<{
+    id: string;
+    npmPackage: string;
+    displayName: string;
+  } | null>(null);
   // Per-node right-click menu (Delete / Add error handling).
   // Carrying the step type here avoids a lookup against tree+orphans
   // every time the menu re-renders to decide which entries to show.
@@ -351,54 +361,108 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   );
 
   /**
-   * Route a library pick to the right orphan-spawn action. Piece actions
-   * land as configured PIECE steps with schema-default inputs; control-
-   * flow built-ins land as native LOOP_ON_ITEMS / ROUTER nodes with
-   * sensible defaults (see `createOrphanControlFlowStep`). Uninstalled
-   * pieces kick off an install via the library hook -- once installation
-   * completes the daemon refreshes the engine's piece catalog and the
-   * editor reloads so the freshly-installed piece's actions become
-   * pickable on the next popover open.
+   * Route a library pick to the right orphan-spawn action.
+   *
+   *   control-flow      Native LOOP_ON_ITEMS / IF / ROUTER node with
+   *                     sensible defaults. Drops + closes immediately.
+   *   piece-action      Installed piece + chosen action. Drops + closes
+   *                     immediately.
+   *   piece-uninstalled Two-phase: install first, then drop the piece's
+   *                     first action at the captured flow coords once
+   *                     metadata is available. The popover stays open
+   *                     during install with the row showing a spinner.
+   *                     On success we close and place; on failure we
+   *                     leave the popover open so the user can retry.
+   *
+   * Why we pick the first action automatically rather than re-asking the
+   * user: the user-facing semantic the user signed up for here is "I want
+   * to add an X step." Once the install finishes we have a piece with a
+   * default action that matches that intent; making them re-pick would
+   * undermine the "feels atomic" contract.
    */
   const onPickFromLibrary = useCallback(
     (entry: LibraryEntry): void => {
       if (!libraryPicker) return;
+      // Block additional picks while an install is already in flight; the
+      // popover should also disable interaction visually but defending
+      // here too in case a stale event sneaks through.
+      if (pendingInstall) return;
       if (entry.kind === "control-flow") {
         editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
         closeLibraryPicker();
-      } else if (entry.kind === "piece-action") {
+        return;
+      }
+      if (entry.kind === "piece-action") {
         editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
         closeLibraryPicker();
-      } else {
-        // piece-uninstalled: kick off install + close. We don't auto-add a
-        // node because we don't know which action the user wants yet -- and
-        // we can't read the piece's action schema until the engine has
-        // extracted metadata. Toast feedback so the user knows what's
-        // happening + can re-open the menu to pick an action when ready.
-        const id = entry.catalogEntry.id;
-        const displayName = entry.catalogEntry.displayName;
-        closeLibraryPicker();
-        setActionMessage({ tone: "ok", text: `Installing ${displayName}...` });
-        void (async () => {
+        return;
+      }
+      // piece-uninstalled: install, refresh, place.
+      const id = entry.catalogEntry.id;
+      const npmPackage = entry.catalogEntry.npmPackage;
+      const displayName = entry.catalogEntry.displayName;
+      const flow = libraryPicker.flow;
+      setPendingInstall({ id, npmPackage, displayName });
+      void (async () => {
+        try {
           const r = await library.install(id);
-          if (r.ok) {
-            // Refresh the editor's catalog so the new piece's actions show
-            // up the next time the user opens the picker.
-            await editor.reload();
+          if (!r.ok) {
+            setActionMessage({ tone: "warn", text: `${displayName}: ${r.message}` });
+            window.setTimeout(() => setActionMessage(null), 4000);
+            return; // keep popover open so the user can retry / pick something else
+          }
+          // Refresh the engine catalog so the new piece's actions are
+          // reachable. The install endpoint already triggers a server-side
+          // refresh; this reload pulls the result client-side.
+          await editor.reload();
+          // The catalog we receive from reload() lives in editor.catalog
+          // but our closure captured the OLD value. Re-fetch through the
+          // /api/workflows/pieces endpoint inline so we can find the new
+          // piece + pick its first action without waiting for React to
+          // commit a re-render. This is a tiny extra GET that keeps the
+          // "click -> wait -> placed" round-trip atomic.
+          const piecesRes = await fetch("/api/workflows/pieces");
+          if (!piecesRes.ok) {
             setActionMessage({
-              tone: r.partial ? "warn" : "ok",
+              tone: "warn",
+              text: `${displayName} installed but catalog re-fetch failed -- open Add piece again to use it.`,
+            });
+            window.setTimeout(() => setActionMessage(null), 4000);
+            closeLibraryPicker();
+            return;
+          }
+          const pieces = (await piecesRes.json()) as PieceCatalogEntry[];
+          const piece = pieces.find((p) => p.name === npmPackage);
+          const action = piece?.actions[0];
+          if (!piece || !action) {
+            // Engine refresh probably half-failed (catalogRefreshFailed path
+            // in the install endpoint). Surface clearly and keep the popover
+            // open so the user can refresh or pick something else.
+            setActionMessage({
+              tone: "warn",
               text: r.partial
                 ? `${displayName} installed but ${r.message}`
-                : `${displayName} installed -- open Add piece again to use it.`,
+                : `${displayName} installed but no actions found yet -- open Add piece again to retry.`,
             });
-          } else {
-            setActionMessage({ tone: "warn", text: `Install failed: ${r.message}` });
+            window.setTimeout(() => setActionMessage(null), 4000);
+            return;
           }
+          editor.createOrphanStep(flow, piece.name, action.name);
+          closeLibraryPicker();
+          setActionMessage({ tone: "ok", text: `${displayName}: ${action.displayName}` });
+          window.setTimeout(() => setActionMessage(null), 2500);
+        } catch (e) {
+          setActionMessage({
+            tone: "warn",
+            text: `Install failed: ${e instanceof Error ? e.message : String(e)}`,
+          });
           window.setTimeout(() => setActionMessage(null), 4000);
-        })();
-      }
+        } finally {
+          setPendingInstall(null);
+        }
+      })();
     },
-    [editor, library, libraryPicker, closeLibraryPicker],
+    [editor, library, libraryPicker, closeLibraryPicker, pendingInstall],
   );
 
   return (
@@ -540,6 +604,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           anchor={libraryPicker.screen}
           catalog={editor.catalog}
           library={library.entries}
+          installingId={pendingInstall?.id ?? null}
           onPick={onPickFromLibrary}
           onClose={closeLibraryPicker}
         />
@@ -1887,6 +1952,7 @@ function PieceLibraryPopover({
   anchor,
   catalog,
   library,
+  installingId,
   onPick,
   onClose,
 }: {
@@ -1900,6 +1966,13 @@ function PieceLibraryPopover({
    * safe fallback when the library endpoint is still loading.
    */
   library: InstallableLibraryEntry[];
+  /**
+   * Id of the piece currently being installed via this popover, or null
+   * when no install is in flight. The row matching this id renders as a
+   * spinner + disabled state; all other picks are blocked while non-null
+   * so a stray click can't fire a second pick mid-install.
+   */
+  installingId: string | null;
   onPick: (entry: LibraryEntry) => void;
   onClose: () => void;
 }): React.ReactElement {
@@ -1973,11 +2046,14 @@ function PieceLibraryPopover({
   }, [anchor, rows.length]);
 
   // Outside-click closes. Deferred so the right-click that summoned us
-  // doesn't immediately bounce.
+  // doesn't immediately bounce. While an install is in flight we keep the
+  // popover open so the user can see the spinner; closing mid-install
+  // would also break the install->reload->place handoff in the parent.
   useEffect(() => {
     const handler = (e: MouseEvent): void => {
       if (!ref.current) return;
       if (ref.current.contains(e.target as globalThis.Node)) return;
+      if (installingId) return;
       onClose();
     };
     const timer = window.setTimeout(() => document.addEventListener("mousedown", handler), 0);
@@ -1985,15 +2061,17 @@ function PieceLibraryPopover({
       window.clearTimeout(timer);
       document.removeEventListener("mousedown", handler);
     };
-  }, [onClose]);
+  }, [onClose, installingId]);
 
   // Keyboard nav: handled via a keydown attached to the popover so it
-  // doesn't fight with the global Esc-closes-editor handler.
+  // doesn't fight with the global Esc-closes-editor handler. Enter and
+  // Esc are no-ops while an install is in flight -- same reasoning as the
+  // outside-click guard above.
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent): void => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        if (!installingId) onClose();
         return;
       }
       if (e.key === "ArrowDown") {
@@ -2004,11 +2082,12 @@ function PieceLibraryPopover({
         setActiveIdx((i) => Math.max(0, i - 1));
       } else if (e.key === "Enter") {
         e.preventDefault();
+        if (installingId) return;
         const row = rows[activeIdx];
         if (row) onPick(row);
       }
     },
-    [rows, activeIdx, onPick, onClose],
+    [rows, activeIdx, onPick, onClose, installingId],
   );
 
   return createPortal(
@@ -2069,20 +2148,37 @@ function PieceLibraryPopover({
           style={{ maxHeight: `calc(${LIBRARY_MAX_ROWS} * 44px)` }}
           role="listbox"
         >
-          {rows.map((entry, i) => (
-            <li key={entryKey(entry)}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={i === activeIdx}
-                className={`wf-library__row ${i === activeIdx ? "wf-library__row--active" : ""}`}
-                onClick={() => onPick(entry)}
-                onMouseEnter={() => setActiveIdx(i)}
-              >
-                <LibraryRowContent entry={entry} />
-              </button>
-            </li>
-          ))}
+          {rows.map((entry, i) => {
+            const isInstallingThis =
+              entry.kind === "piece-uninstalled" &&
+              installingId !== null &&
+              entry.catalogEntry.id === installingId;
+            // Once ANY install starts, lock the entire list so a stray
+            // click can't fire a second pick before the first resolves.
+            // The installing row keeps its visual treatment (spinner +
+            // active highlight); others fade to indicate they're paused.
+            const lockedByInstall = installingId !== null && !isInstallingThis;
+            return (
+              <li key={entryKey(entry)}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={i === activeIdx}
+                  aria-disabled={lockedByInstall || isInstallingThis}
+                  disabled={lockedByInstall || isInstallingThis}
+                  className={`wf-library__row ${i === activeIdx ? "wf-library__row--active" : ""} ${
+                    isInstallingThis ? "wf-library__row--installing" : ""
+                  } ${lockedByInstall ? "wf-library__row--locked" : ""}`}
+                  onClick={() => onPick(entry)}
+                  onMouseEnter={() => {
+                    if (!lockedByInstall) setActiveIdx(i);
+                  }}
+                >
+                  <LibraryRowContent entry={entry} installing={isInstallingThis} />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>,
@@ -2097,7 +2193,16 @@ function PieceLibraryPopover({
  * piece name de-emphasised, control-flow entries read with a tag chip on
  * the left signalling they're a different KIND of block.
  */
-function LibraryRowContent({ entry }: { entry: LibraryEntry }): React.ReactElement {
+function LibraryRowContent({
+  entry,
+  installing,
+}: {
+  entry: LibraryEntry;
+  /** True for the uninstalled-piece row currently being installed. Swaps
+   *  the "Install" chip for a spinner + "Installing..." subtext so the
+   *  user sees the round-trip in progress. */
+  installing: boolean;
+}): React.ReactElement {
   if (entry.kind === "control-flow") {
     return (
       <>
@@ -2111,24 +2216,32 @@ function LibraryRowContent({ entry }: { entry: LibraryEntry }): React.ReactEleme
   }
   if (entry.kind === "piece-uninstalled") {
     // Single row per piece (we don't know the action list yet -- that
-    // info comes from the engine after install). The "Install" tag on the
-    // left signals that picking this row will trigger a download rather
-    // than immediately drop a node on the canvas.
+    // info comes from the engine after install). The "Install" tag on
+    // the left signals that picking this row will trigger a download
+    // rather than immediately drop a node on the canvas. While the
+    // install is actively running, the tag becomes a spinner + the
+    // description is replaced with a status line.
     const c = entry.catalogEntry;
     return (
       <>
         <div className="wf-library__row-head">
-          <span className="wf-library__tag wf-library__tag--install">Install</span>
+          {installing ? (
+            <span className="wf-library__tag wf-library__tag--installing" aria-label="Installing">
+              <span className="wf-library__spinner" aria-hidden="true" />
+            </span>
+          ) : (
+            <span className="wf-library__tag wf-library__tag--install">Install</span>
+          )}
           <span className="wf-library__action">{c.displayName}</span>
           {c.tier === "community" ? (
             <span className="wf-library__tier">community</span>
           ) : null}
         </div>
-        {c.description ? (
-          <div className="wf-library__row-desc">{c.description}</div>
-        ) : (
-          <div className="wf-library__row-desc">{c.npmPackage}</div>
-        )}
+        <div className="wf-library__row-desc">
+          {installing
+            ? `Installing ${c.npmPackage}...`
+            : (c.description || c.npmPackage)}
+        </div>
       </>
     );
   }
