@@ -1,21 +1,31 @@
 /**
- * Library panel: curated list of activepieces community pieces a Jarvis
- * user can opt into installing. Each row shows piece metadata, vetted
- * version, license, source link, and an Install / Uninstall button.
+ * Library panel: tiered list of activepieces community pieces a Jarvis user
+ * can opt into installing. Rendered as two sections:
+ *
+ *   - Verified  -- hand-reviewed by a maintainer, no preamble needed.
+ *   - Community -- pulled from npm; runs in the engine sandbox but has not
+ *                  been individually reviewed. Collapsed by default behind
+ *                  a one-line "third-party code" notice so users opt in
+ *                  with their eyes open.
+ *
+ * Each row shows piece metadata, vetted version, license, source link, and
+ * an Install / Uninstall button. Search filters across both tiers.
  *
  * Pieces install via npm at runtime into `~/.jarvis/pieces/`; this panel
  * only triggers the install/uninstall + reflects state, it doesn't bundle
  * any piece code itself.
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Button, Chip, Icon } from "../../ui";
-import { RefreshCw, Download, Trash2, ExternalLink } from "lucide-react";
+import { ChevronRight, RefreshCw, Download, Trash2, ExternalLink, ShieldCheck } from "lucide-react";
 import { useLibrary, type LibraryEntry, type LibraryActionState } from "./useLibrary";
 
 export function LibraryPanel(): React.ReactElement {
   const lib = useLibrary();
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [query, setQuery] = useState("");
+  const [communityOpen, setCommunityOpen] = useState(false);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
     setToast({ tone, text });
@@ -23,6 +33,31 @@ export function LibraryPanel(): React.ReactElement {
   };
 
   const installedCount = lib.entries.filter((e) => e.installed !== null).length;
+
+  // Filtered + tier-split view. Search is case-insensitive against
+  // displayName + npmPackage + description so users typing "gmail" find
+  // gmail regardless of which field carries the match.
+  const { verified, community } = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const matches = (e: LibraryEntry): boolean =>
+      !q ||
+      e.displayName.toLowerCase().includes(q) ||
+      e.npmPackage.toLowerCase().includes(q) ||
+      e.description.toLowerCase().includes(q) ||
+      e.id.includes(q);
+    const verified: LibraryEntry[] = [];
+    const community: LibraryEntry[] = [];
+    for (const e of lib.entries) {
+      if (!matches(e)) continue;
+      if (e.tier === "verified") verified.push(e);
+      else community.push(e);
+    }
+    return { verified, community };
+  }, [lib.entries, query]);
+
+  // Auto-expand the community list when the user is actively searching so
+  // their typed query isn't hidden behind the collapsed disclosure.
+  const showCommunity = communityOpen || query.trim().length > 0;
 
   return (
     <div className="wf-lib">
@@ -43,62 +78,150 @@ export function LibraryPanel(): React.ReactElement {
         </div>
       </header>
 
-      <p className="wf-lib__intro">
-        Curated activepieces community pieces. Installing fetches the package from
-        npm into <code>~/.jarvis/pieces/</code>. Each piece runs with full daemon
-        access -- only install pieces you trust. See each entry's source link
-        before opting in.
-      </p>
+      <input
+        className="wf-lib__search"
+        type="search"
+        placeholder="Search pieces by name, package, or description"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search pieces"
+      />
 
       {toast ? <div className={`wf-toast wf-toast--${toast.tone}`}>{toast.text}</div> : null}
 
       {lib.entries.length === 0 && !lib.loading ? (
         <div className="wf-lib__empty">The catalog is empty.</div>
       ) : (
-        <ul className="wf-lib__list">
-          {lib.entries.map((entry) => (
-            <LibraryRow
-              key={entry.id}
-              entry={entry}
-              actionState={lib.actionState[entry.id] ?? "idle"}
-              onInstall={async () => {
-                if (entry.estimatedSizeMb !== null && entry.estimatedSizeMb >= 100) {
-                  // Disk-footprint warning for heavyweight pieces (gmail
-                  // pulls 165MB through googleapis). Mid-weight pieces
-                  // skip the prompt; the badge in the row already surfaces
-                  // the number.
-                  if (
-                    !window.confirm(
-                      `Installing ${entry.displayName} will use about ${entry.estimatedSizeMb}MB of disk. Continue?`,
-                    )
-                  ) {
-                    return;
-                  }
-                }
-                const r = await lib.install(entry.id);
-                flash(
-                  r.ok ? (r.partial ? "warn" : "ok") : "warn",
-                  r.ok ? `${entry.displayName}: ${r.message}` : `Install failed: ${r.message}`,
-                );
-              }}
-              onUninstall={async () => {
-                if (
-                  !window.confirm(
-                    `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
-                  )
-                )
-                  return;
-                const r = await lib.uninstall(entry.id);
-                flash(
-                  r.ok ? "ok" : "warn",
-                  r.ok ? `${entry.displayName} uninstalled` : `Uninstall failed: ${r.message}`,
-                );
-              }}
-            />
-          ))}
-        </ul>
+        <>
+          {/* Verified section -- always visible, no warning preamble. */}
+          <section className="wf-lib__section">
+            <h4 className="wf-lib__section-title">
+              <Icon icon={ShieldCheck} size={14} /> Verified
+              <span className="wf-lib__section-count">{verified.length}</span>
+            </h4>
+            <p className="wf-lib__section-hint">
+              Hand-reviewed by Jarvis maintainers and smoke-tested against the engine.
+            </p>
+            {verified.length === 0 ? (
+              <div className="wf-lib__empty-section">
+                {query ? "No verified pieces match the search." : "No verified pieces."}
+              </div>
+            ) : (
+              <ul className="wf-lib__list">
+                {verified.map((entry) => (
+                  <LibraryRowWired
+                    key={entry.id}
+                    entry={entry}
+                    actionState={lib.actionState[entry.id] ?? "idle"}
+                    lib={lib}
+                    flash={flash}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* Community section -- collapsed by default, with preamble. */}
+          <section className="wf-lib__section">
+            <button
+              type="button"
+              className="wf-lib__section-toggle"
+              onClick={() => setCommunityOpen((v) => !v)}
+              aria-expanded={showCommunity}
+            >
+              <Icon
+                icon={ChevronRight}
+                size={14}
+                style={{
+                  transform: showCommunity ? "rotate(90deg)" : "rotate(0deg)",
+                  transition: "transform var(--dur-fast) var(--ease-out)",
+                }}
+              />
+              Community
+              <span className="wf-lib__section-count">{community.length}</span>
+            </button>
+            {showCommunity ? (
+              <>
+                <p className="wf-lib__section-hint wf-lib__section-hint--warn">
+                  Community pieces are installed from npm and run inside the engine
+                  sandbox. They haven't been individually reviewed by Jarvis -- check
+                  each piece's source link before opting in.
+                </p>
+                {community.length === 0 ? (
+                  <div className="wf-lib__empty-section">
+                    {query ? "No community pieces match the search." : "No community pieces."}
+                  </div>
+                ) : (
+                  <ul className="wf-lib__list">
+                    {community.map((entry) => (
+                      <LibraryRowWired
+                        key={entry.id}
+                        entry={entry}
+                        actionState={lib.actionState[entry.id] ?? "idle"}
+                        lib={lib}
+                        flash={flash}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </>
+            ) : null}
+          </section>
+        </>
       )}
     </div>
+  );
+}
+
+/**
+ * Thin wrapper around LibraryRow that wires the install/uninstall handlers.
+ * Pulled out so the two tier sections don't duplicate the handler logic.
+ */
+function LibraryRowWired({
+  entry,
+  actionState,
+  lib,
+  flash,
+}: {
+  entry: LibraryEntry;
+  actionState: LibraryActionState;
+  lib: ReturnType<typeof useLibrary>;
+  flash: (tone: "ok" | "warn", text: string) => void;
+}): React.ReactElement {
+  return (
+    <LibraryRow
+      entry={entry}
+      actionState={actionState}
+      onInstall={async () => {
+        if (entry.estimatedSizeMb !== null && entry.estimatedSizeMb >= 100) {
+          if (
+            !window.confirm(
+              `Installing ${entry.displayName} will use about ${entry.estimatedSizeMb}MB of disk. Continue?`,
+            )
+          ) {
+            return;
+          }
+        }
+        const r = await lib.install(entry.id);
+        flash(
+          r.ok ? (r.partial ? "warn" : "ok") : "warn",
+          r.ok ? `${entry.displayName}: ${r.message}` : `Install failed: ${r.message}`,
+        );
+      }}
+      onUninstall={async () => {
+        if (
+          !window.confirm(
+            `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
+          )
+        )
+          return;
+        const r = await lib.uninstall(entry.id);
+        flash(
+          r.ok ? "ok" : "warn",
+          r.ok ? `${entry.displayName} uninstalled` : `Uninstall failed: ${r.message}`,
+        );
+      }}
+    />
   );
 }
 
@@ -148,14 +271,16 @@ function LibraryRow({
               ahead of vetted {entry.vettedVersion}
             </Chip>
           ) : null}
-          <Chip tone="neutral">{entry.licenseSpdx}</Chip>
+          {entry.licenseSpdx ? <Chip tone="neutral">{entry.licenseSpdx}</Chip> : null}
           {entry.estimatedSizeMb !== null ? (
             <Chip tone="neutral" title="Approximate disk footprint after install">
               ~{entry.estimatedSizeMb}MB
             </Chip>
           ) : null}
         </div>
-        <p className="wf-lib__row-desc">{entry.description}</p>
+        {entry.description ? (
+          <p className="wf-lib__row-desc">{entry.description}</p>
+        ) : null}
         <div className="wf-lib__row-meta">
           <code className="wf-lib__row-pkg">{entry.npmPackage}</code>
           <a
@@ -166,17 +291,13 @@ function LibraryRow({
           >
             <Icon icon={ExternalLink} size={11} /> source
           </a>
-          <span>vetted {entry.vettedAt}</span>
+          {entry.vettedAt ? <span>vetted {entry.vettedAt}</span> : null}
         </div>
       </div>
       <div className="wf-lib__row-actions">
         {isInstalled ? (
           <>
             {updateAvailable ? (
-              // Re-installing an existing piece re-runs bun install, which
-              // re-resolves within the versionRange and pulls the newer
-              // vetted version. Same code path as a fresh install; the
-              // installer.ts preserves the original `installedAt`.
               <Button variant="primary" size="sm" onClick={onInstall} disabled={busy}>
                 <Icon icon={Download} size={12} />{" "}
                 {actionState === "installing" ? "Updating..." : "Update"}
@@ -199,19 +320,16 @@ function LibraryRow({
 }
 
 /**
- * Minimal semver compare for the catalog use case: both inputs are
- * resolved/vetted versions (`x.y.z`, no operators). Returns -1 / 0 / 1
- * for a < b / equal / a > b. Doesn't handle pre-release tags; we don't
- * use them in the catalog.
+ * Loose semver comparison: returns negative if `a < b`, 0 if equal, positive
+ * if `a > b`. Stops at the first numeric mismatch; ignores prerelease tags
+ * (catalog entries shouldn't carry them).
  */
 function compareSemver(a: string, b: string): number {
-  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
-  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    const av = pa[i] ?? 0;
-    const bv = pb[i] ?? 0;
-    if (av < bv) return -1;
-    if (av > bv) return 1;
+  const pa = a.split(".").map((p) => parseInt(p, 10) || 0);
+  const pb = b.split(".").map((p) => parseInt(p, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
   }
   return 0;
 }

@@ -20,6 +20,7 @@ import {
   uninstallPiece,
   writeManifest,
 } from "./installer";
+import { findCatalogEntry } from "./catalog";
 
 let base: string;
 
@@ -143,6 +144,14 @@ describe("installPiece", () => {
   });
 
   test("adds to manifest + records resolved version after install", async () => {
+    // Read the catalog's current versionRange dynamically instead of hard-
+    // coding -- the range floats with `latestVersion` from the generator
+    // every time the sync action runs, and we don't want this test to break
+    // every refresh. We just verify that *whatever* the catalog says,
+    // that's what the installer records on the manifest + synthesized
+    // package.json.
+    const catalogEntry = findCatalogEntry("gmail")!;
+    const range = catalogEntry.versionRange;
     const result = await installPiece("gmail", {
       base,
       runBunInstall: async () => {
@@ -151,14 +160,14 @@ describe("installPiece", () => {
     });
     expect(result.piece.id).toBe("gmail");
     expect(result.piece.resolvedVersion).toBe("0.12.3");
-    expect(result.piece.versionRange).toBe("^0.12.2");
+    expect(result.piece.versionRange).toBe(range);
     // Manifest on disk reflects the same.
     const m = await readManifest(base);
     expect(m.pieces.map((p) => p.id)).toEqual(["gmail"]);
     expect(m.pieces[0]?.resolvedVersion).toBe("0.12.3");
     // package.json got synthesized.
     const pkg = JSON.parse(readFileSync(resolve(base, "package.json"), "utf8"));
-    expect(pkg.dependencies["@activepieces/piece-gmail"]).toBe("^0.12.2");
+    expect(pkg.dependencies["@activepieces/piece-gmail"]).toBe(range);
   });
 
   test("reinstalling the same piece doesn't duplicate the entry", async () => {

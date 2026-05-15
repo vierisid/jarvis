@@ -33,6 +33,8 @@
     "build:ui": "bun build ui/index.html --outdir ui/dist",
     "test": "bun test",
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
+    "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
+    "check:pieces": "bun run scripts/sync-pieces-catalog.ts --check",
     "db:init": "bun run src/vault/schema.ts",
     "setup": "bun run scripts/setup-config.ts",
     "test:llm": "bun run src/llm/test.ts",

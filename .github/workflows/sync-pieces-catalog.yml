@@ -1,0 +1,94 @@
+# Weekly refresh of the activepieces community catalog.
+#
+# What runs:
+#   1. `bun run scripts/sync-pieces-catalog.ts` -- walks the activepieces
+#      monorepo at the pinned SHA, queries npm for the latest version of
+#      every piece, and writes `src/workflows/pieces-library/catalog-generated.ts`.
+#   2. `bun test` and `tsc --noEmit` -- the catalog tests in
+#      `pieces-library/catalog.test.ts` guard against malformed entries
+#      (bad semver, missing displayName, ids that collide, etc.).
+#   3. If anything changed, open a PR with the diff. If nothing changed,
+#      exit silently.
+#
+# Why a PR (not a direct commit):
+#   - Every catalog change is reviewable. Pieces can be renamed or removed
+#     upstream, new pieces can be junk. Human eyes on the diff catch this
+#     without much overhead.
+#   - The PR can sit until someone has bandwidth; no urgency.
+#
+# Manual trigger:
+#   workflow_dispatch lets a maintainer run this on demand from the Actions
+#   tab without waiting for the cron tick. Useful when bumping PINNED_SHA
+#   in the sync script and wanting an immediate catalog refresh.
+
+name: Sync pieces catalog
+on:
+  schedule:
+    # Sunday 03:00 UTC -- when nobody's pushing and reviewers can pick it up
+    # Monday morning. Adjust if our CI quota care says otherwise.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      # Run the generator. Writes catalog-generated.ts in place.
+      - name: Regenerate pieces catalog
+        run: bun run scripts/sync-pieces-catalog.ts
+        env:
+          # Lift the GitHub API rate limit when the script needs it
+          # (mostly for the sparse clone, which is unauthenticated by
+          # default). Using GITHUB_TOKEN is fine -- it has no write
+          # scope when consumed here.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Make sure the regenerated catalog still passes the catalog tests
+      # (id uniqueness, semver shape, etc.) and the wider type check.
+      - name: Validate
+        run: |
+          bun run scripts/check-no-ee-imports.ts
+          bun test src/workflows/pieces-library/catalog.test.ts
+          bunx tsc --noEmit
+
+      # Open (or update) a PR with the catalog diff. peter-evans's
+      # create-pull-request handles the branch creation, push, and PR
+      # creation idempotently -- a second run on an already-open PR just
+      # updates the branch.
+      - name: Open PR with catalog changes
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: refresh pieces catalog"
+          title: "chore: refresh pieces catalog"
+          body: |
+            Automated refresh of `src/workflows/pieces-library/catalog-generated.ts`.
+
+            The sync script walked the activepieces monorepo at the pinned SHA
+            (see `scripts/sync-pieces-catalog.ts`) and queried npm for the
+            latest published version of each piece.
+
+            Review checklist:
+            - [ ] Diff looks reasonable (no unexpected wholesale removal)
+            - [ ] No new pieces with suspicious names / licenses
+            - [ ] CI passed (catalog invariants + typecheck)
+
+            Hand-tuning lives in `catalog-overrides.ts` -- this PR doesn't
+            touch that file. If a newly-added piece needs a description
+            override, version pin, or exclusion, follow up with a separate
+            commit on the merged branch.
+          branch: chore/sync-pieces-catalog
+          labels: |
+            pieces-catalog
+            dependencies
+          delete-branch: true

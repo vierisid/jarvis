@@ -1,21 +1,45 @@
 # Pieces Library Catalog
 
-This directory owns the *curated list* of activepieces community pieces that
-Jarvis users can install at runtime via the Library tab in the Workflows
-room. Each catalog entry is a promise: "Jarvis verified this piece loads
-and runs correctly under our Bun + engine setup at `vettedVersion`, and
-we're willing to let users install it within the `versionRange` band."
+This directory owns the list of activepieces community pieces that Jarvis
+users can install at runtime via the Library tab in the Workflows room.
+The catalog is split into two tiers:
 
-## What this catalog is (and isn't)
+- **Verified** -- hand-reviewed by a Jarvis maintainer + smoke-tested
+  end-to-end through the engine. Each entry is a promise: "this piece
+  loads and runs correctly under our Bun + engine setup at `vettedVersion`."
+- **Community** -- auto-discovered from upstream + npm. Has not been
+  individually reviewed. Installs run inside the engine sandbox; the
+  Library UI surfaces a "third-party code" preamble so users opt in
+  with their eyes open.
 
-The catalog is hardcoded source. Adding a piece = code change + Jarvis
-release. It is NOT a dynamic registry, NOT a marketplace, NOT auto-synced
-with activepieces' upstream. We trade discoverability for trust: every
-entry here has been audited by a human.
+## How the catalog is built
 
-The catalog is the *only* path by which community pieces reach a Jarvis
-install. Users cannot side-load arbitrary npm packages as pieces -- the
-installer accepts piece ids defined in `catalog.ts`, nothing else.
+The CATALOG export in `catalog.ts` is a merge of two inputs:
+
+1. **`catalog-generated.ts`** -- auto-generated. Every `@activepieces/piece-*`
+   package known to upstream at the pinned SHA, cross-checked against npm.
+   Refreshed weekly by the `sync-pieces-catalog` GitHub Action (or on
+   demand: `bun run scripts/sync-pieces-catalog.ts`). DO NOT EDIT.
+2. **`catalog-overrides.ts`** -- hand-edited. Holds:
+   - `VERIFIED` -- the set of ids that get the verified tier
+   - `VERIFIED_METADATA` -- per-id audit dates
+   - `EXCLUDED` -- ids we never want to ship (deprecated, broken, license)
+   - `VERSION_PIN` -- hold-back pins for known-broken upstream releases
+   - `SIZE_OVERRIDE` -- hand-measured disk-after-install sizes
+   - `DESCRIPTION_OVERRIDE` -- better descriptions where upstream's is poor
+
+The merge logic + tier resolution lives in `catalog.ts`; callers read
+exclusively from there.
+
+## What the catalog is (and isn't)
+
+The catalog is committed source. Adding a Verified piece = code change +
+review. It is NOT a dynamic registry, NOT a marketplace. Community
+discovery is automated through the sync action; trust elevation is manual.
+
+The catalog is the *only* path by which pieces reach a Jarvis install.
+Users cannot side-load arbitrary npm packages -- the installer accepts ids
+defined in the merged CATALOG, nothing else.
 
 ## How a piece reaches a user
 
@@ -101,7 +125,13 @@ only. The choice signals intent and matters post-1.0.
 When in doubt, use `^`. Re-resolution on each install lets users pick up
 upstream patch fixes between Jarvis releases.
 
-## Adding a new piece
+## Promoting a piece to Verified
+
+Once a piece exists in `catalog-generated.ts` (auto-populated) you can
+promote it to the Verified tier by adding its id to `VERIFIED` and
+`VERIFIED_METADATA` in `catalog-overrides.ts`. The checklist below
+matches what the original "Adding a new piece" flow was for, retargeted
+at the verification path.
 
 1. **Verify license.** Browse the piece's source on GitHub. Look for an
    `LICENSE` file in the piece directory and confirm it's MIT (or another
@@ -161,16 +191,19 @@ upstream patch fixes between Jarvis releases.
    bootstrap; today's coverage is the regular engine-end-to-end suite
    plus the manual spike described in step 2.
 
-6. **Add the catalog entry.** Set `vettedAt` to today's ISO date,
-   `vettedVersion` to the exact version step 3 produced, `versionRange` to
-   the caret/tilde range you want users to install.
+6. **Add to the override layer.** In `catalog-overrides.ts`:
+   - Add the id to `VERIFIED`.
+   - Add an entry to `VERIFIED_METADATA` with today's ISO date as `vettedAt`.
+   - If the latest upstream version is broken, add a `VERSION_PIN` entry
+     with the holdback versionRange + vettedVersion + reason.
+   - If you want to override the upstream description, add a `DESCRIPTION_OVERRIDE`.
 
 7. **Measure disk footprint** (optional but recommended). After step 2's
    `bun add`, run `du -sm node_modules` and round to the nearest 5MB.
-   Set `estimatedSizeMb` on the catalog entry. The Library UI shows this
-   to users before they click Install -- googleapis-heavy pieces (165MB+)
-   deserve the heads-up. Omitting the field hides the badge; not wrong,
-   just less helpful.
+   Add the value to `SIZE_OVERRIDE` in `catalog-overrides.ts`. The Library
+   UI shows this to users before they click Install -- googleapis-heavy
+   pieces (165MB+) deserve the heads-up. Omitting the field hides the
+   badge; not wrong, just less helpful.
 
 8. **Record what you tested.** In the PR description, paste:
    - The Bun version (`bun --version`)

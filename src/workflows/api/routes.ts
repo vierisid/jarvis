@@ -261,10 +261,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               description: entry.description,
               iconUrl: entry.iconUrl ?? null,
               vettedVersion: entry.vettedVersion,
-              vettedAt: entry.vettedAt,
+              vettedAt: entry.vettedAt ?? null,
               sourceUrl: entry.sourceUrl,
               licenseSpdx: entry.licenseSpdx,
               estimatedSizeMb: entry.estimatedSizeMb ?? null,
+              tier: entry.tier,
               installed: installed
                 ? {
                     resolvedVersion: installed.resolvedVersion,

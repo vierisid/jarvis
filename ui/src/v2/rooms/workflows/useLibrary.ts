@@ -8,6 +8,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+export type PieceTier = "verified" | "community";
+
 export interface LibraryEntry {
   id: string;
   npmPackage: string;
@@ -16,11 +18,20 @@ export interface LibraryEntry {
   description: string;
   iconUrl: string | null;
   vettedVersion: string;
-  vettedAt: string;
+  /** ISO date when a human last vetted this piece. Null on community pieces. */
+  vettedAt: string | null;
   sourceUrl: string;
   licenseSpdx: string;
   /** Disk footprint after install, in MB. Null when not measured. */
   estimatedSizeMb: number | null;
+  /**
+   * Trust tier:
+   *   "verified"  -- hand-reviewed + smoke-tested by a Jarvis maintainer.
+   *   "community" -- pulled from npm under the @activepieces/piece-* prefix
+   *                  but not individually reviewed. Runs in the engine
+   *                  sandbox; user opts in with explicit eyes.
+   */
+  tier: PieceTier;
   installed: {
     resolvedVersion: string;
     installedAt: number;

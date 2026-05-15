@@ -445,6 +445,90 @@
   color: var(--ink-3);
   font-size: 0.85rem;
 }
+.wf-lib__empty-section {
+  padding: var(--s-3);
+  color: var(--ink-3);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+/* Search input sits between the header and the tier sections. */
+.wf-lib__search {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+}
+.wf-lib__search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+/* Tier sections (Verified / Community). Each has a small heading + hint,
+   and the community section is a button so it can collapse. */
+.wf-lib__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.wf-lib__section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.wf-lib__section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.wf-lib__section-toggle:hover { color: var(--ink); }
+.wf-lib__section-count {
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  letter-spacing: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-pill);
+  background: var(--paper-2);
+  text-transform: none;
+}
+.wf-lib__section-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  line-height: 1.45;
+}
+.wf-lib__section-hint--warn {
+  padding: var(--s-2) var(--s-3);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-2);
+}
 .wf-lib__list { display: flex; flex-direction: column; gap: var(--s-2); list-style: none; padding: 0; margin: 0; }
 .wf-lib__row {
   display: flex;

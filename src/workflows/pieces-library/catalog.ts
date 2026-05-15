@@ -1,13 +1,37 @@
 /**
- * Curated list of activepieces community pieces that Jarvis users can
- * install at runtime via the Library tab. See `./README.md` for the policy
- * around pin style (`^` vs `~`), how to add / update / remove entries, and
- * the trust model.
+ * Pieces catalog -- the merge layer.
  *
- * Adding to this list requires running the bun smoke test (README step 2)
- * AND the engine end-to-end check (README step 5). Don't just paste
- * something in from a hunch -- the catalog is the trust boundary.
+ * Two inputs:
+ *   - `catalog-generated.ts` (auto): every `@activepieces/piece-*` package
+ *     known to upstream at the pinned SHA. Refreshed by the sync action.
+ *   - `catalog-overrides.ts` (hand): verified-tier promotions, exclusions,
+ *     version pins, size overrides, description overrides.
+ *
+ * This file applies the overrides onto the generated list and exports the
+ * final `CATALOG`. Consumers (API routes, installer, UI) read from here and
+ * shouldn't reach into the underlying files directly.
+ *
+ * Trust model:
+ *   - `tier: "verified"` -- the id appeared in `VERIFIED` in overrides.
+ *     Someone read the source, ran a smoke test, and signed off (date in
+ *     `VERIFIED_METADATA`).
+ *   - `tier: "community"` -- everything else. Installed from npm at the
+ *     user's request, runs inside the engine sandbox, but has not been
+ *     individually reviewed. The Library UI surfaces a preamble explaining
+ *     this distinction so users opt in with their eyes open.
  */
+
+import { GENERATED, type GeneratedCatalogEntry } from "./catalog-generated";
+import {
+  DESCRIPTION_OVERRIDE,
+  EXCLUDED,
+  SIZE_OVERRIDE,
+  VERIFIED,
+  VERIFIED_METADATA,
+  VERSION_PIN,
+} from "./catalog-overrides";
+
+export type PieceTier = "verified" | "community";
 
 export interface CatalogEntry {
   /**
@@ -18,189 +42,95 @@ export interface CatalogEntry {
   /** npm package name resolved at install time. */
   npmPackage: string;
   /**
-   * Semver range bun resolves against. Default convention is `^x.y.z` (caret).
-   * Use `~x.y.z` (tilde) for patch-only floats, or a bare `x.y.z` (exact pin)
-   * when a specific version is broken and we need to hold back. See README.
+   * Semver range bun resolves against. Default `^x.y.z` from the generator;
+   * `VERSION_PIN` in overrides can swap to `~x.y.z` or an exact pin.
    */
   versionRange: string;
   displayName: string;
   description: string;
   iconUrl?: string;
-  /** ISO date of the most recent manual audit. */
-  vettedAt: string;
-  /** Exact version Jarvis last tested end-to-end. */
+  /**
+   * Exact version Jarvis last tested end-to-end. For verified pieces this
+   * is set by the human reviewer; for community pieces it tracks the latest
+   * version the sync script saw on npm.
+   */
   vettedVersion: string;
+  /**
+   * ISO date of the most recent manual audit. Present on verified pieces;
+   * undefined on community pieces (they haven't been audited).
+   */
+  vettedAt?: string;
   sourceUrl: string;
   /** SPDX identifier for the piece's own license (deps may differ). */
   licenseSpdx: string;
   /**
    * Approximate on-disk size of the piece + its transitive deps after
-   * `bun install`, in megabytes. Surfaced in the Library UI so users can
-   * see the disk cost before clicking Install (gmail's googleapis dep
-   * pulls ~165MB; openai is leaner). Measured manually during vetting --
-   * the README has the procedure. Omit when unknown; the UI hides the
-   * footprint badge in that case.
+   * `bun install`, in megabytes. Hand-measured via `SIZE_OVERRIDE`;
+   * undefined when never measured (most community pieces).
    */
   estimatedSizeMb?: number;
+  /** Trust tier. See file header. */
+  tier: PieceTier;
 }
 
 /**
- * Initial entries are deliberately a small, well-trusted set. New pieces
- * follow the README's "Adding a new piece" checklist before landing here.
- *
- * Each entry below was smoke-tested with the bun version pinned in this
- * repo's `package.json` engines field at vettedAt.
+ * Build the final catalog by applying overrides to the generated list.
+ * Computed once at module load -- the inputs are static.
  */
-export const CATALOG: CatalogEntry[] = [
-  {
-    id: "gmail",
-    npmPackage: "@activepieces/piece-gmail",
-    versionRange: "^0.12.2",
-    displayName: "Gmail",
-    description:
-      "Send + read email through the Gmail API. Requires a Google OAuth connection.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.12.3",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/gmail",
-    licenseSpdx: "MIT",
-    // googleapis pulls a lot of transitive types + API surfaces.
-    estimatedSizeMb: 165,
-  },
-  {
-    id: "slack",
-    npmPackage: "@activepieces/piece-slack",
-    versionRange: "^0.16.4",
-    displayName: "Slack",
-    description:
-      "Post messages, read channels, react to events. Requires a Slack bot token.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.16.5",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/slack",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 70,
-  },
-  {
-    id: "notion",
-    npmPackage: "@activepieces/piece-notion",
-    versionRange: "^0.6.1",
-    displayName: "Notion",
-    description:
-      "Read and write Notion pages / databases. Requires a Notion integration token.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.6.1",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/notion",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 55,
-  },
-  {
-    id: "openai",
-    npmPackage: "@activepieces/piece-openai",
-    versionRange: "^0.7.5",
-    displayName: "OpenAI",
-    description:
-      "Chat completions, embeddings, image generation via the OpenAI API.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.7.5",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/openai",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 60,
-  },
-  {
-    id: "github",
-    // The original 0.6.8 pin was taken from the vendored package.json but
-    // never made it to npm; the 0.6 line topped out at 0.6.7. Re-vetted
-    // against the live registry at ^0.7.0.
-    npmPackage: "@activepieces/piece-github",
-    versionRange: "^0.7.0",
-    displayName: "GitHub",
-    description:
-      "Create issues, comment on PRs, read repository data. Requires a personal access token.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.7.3",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/github",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 45,
-  },
-  {
-    id: "google-calendar",
-    npmPackage: "@activepieces/piece-google-calendar",
-    versionRange: "^0.6.0",
-    displayName: "Google Calendar",
-    description:
-      "List, create, and update calendar events. Requires a Google OAuth connection.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.6.7",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/google-calendar",
-    licenseSpdx: "MIT",
-    // googleapis is the bulk -- shares transitive footprint with gmail.
-    estimatedSizeMb: 150,
-  },
-  {
-    id: "google-drive",
-    npmPackage: "@activepieces/piece-google-drive",
-    versionRange: "^0.7.0",
-    displayName: "Google Drive",
-    description:
-      "Upload, search, and download files in Google Drive. Requires a Google OAuth connection.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.7.5",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/google-drive",
-    licenseSpdx: "MIT",
-    // Same googleapis footprint.
-    estimatedSizeMb: 160,
-  },
-  {
-    id: "discord",
-    npmPackage: "@activepieces/piece-discord",
-    versionRange: "^0.4.0",
-    displayName: "Discord",
-    description:
-      "Post messages to Discord channels and react to webhook events.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.4.4",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/discord",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 40,
-  },
-  {
-    id: "telegram-bot",
-    // The original 0.6.x pin came from the vendored package.json but the
-    // public npm release line stops at 0.5.x. Re-vetted against ^0.5.0.
-    npmPackage: "@activepieces/piece-telegram-bot",
-    versionRange: "^0.5.0",
-    displayName: "Telegram Bot",
-    description:
-      "Send messages and react to Telegram bot updates. Requires a bot token.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.5.7",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/telegram-bot",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 40,
-  },
-  {
-    id: "claude",
-    npmPackage: "@activepieces/piece-claude",
-    versionRange: "^0.3.0",
-    displayName: "Anthropic Claude",
-    description:
-      "Chat completions via the Anthropic Claude API.",
-    vettedAt: "2026-05-11",
-    vettedVersion: "0.3.0",
-    sourceUrl:
-      "https://github.com/activepieces/activepieces/tree/main/packages/pieces/community/claude",
-    licenseSpdx: "MIT",
-    estimatedSizeMb: 50,
-  },
-];
+function buildCatalog(): CatalogEntry[] {
+  const out: CatalogEntry[] = [];
+  for (const g of GENERATED) {
+    if (EXCLUDED.has(g.id)) continue;
+    out.push(mergeEntry(g));
+  }
+  // Stable sort: verified first (so they appear at the top of the UI),
+  // then alphabetical within tier. Ties stable.
+  out.sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier === "verified" ? -1 : 1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+  return out;
+}
+
+function mergeEntry(g: GeneratedCatalogEntry): CatalogEntry {
+  const tier: PieceTier = VERIFIED.has(g.id) ? "verified" : "community";
+  const pin = VERSION_PIN[g.id];
+
+  // Merge per the precedence:
+  //   - VERSION_PIN beats generated for versionRange + vettedVersion.
+  //   - DESCRIPTION_OVERRIDE beats generated for description.
+  //   - SIZE_OVERRIDE adds an estimatedSizeMb when the generator had none.
+  //   - VERIFIED_METADATA supplies vettedAt for verified entries.
+  const entry: CatalogEntry = {
+    id: g.id,
+    npmPackage: g.npmPackage,
+    versionRange: pin?.versionRange ?? g.versionRange,
+    vettedVersion: pin?.vettedVersion ?? g.latestVersion,
+    displayName: g.displayName,
+    description: DESCRIPTION_OVERRIDE[g.id] ?? g.description,
+    sourceUrl: g.sourceUrl,
+    licenseSpdx: g.licenseSpdx,
+    tier,
+  };
+
+  const size = SIZE_OVERRIDE[g.id];
+  if (size !== undefined) entry.estimatedSizeMb = size;
+
+  if (tier === "verified") {
+    const meta = VERIFIED_METADATA[g.id];
+    if (meta) entry.vettedAt = meta.vettedAt;
+  }
+
+  return entry;
+}
+
+/**
+ * The merged catalog. Verified pieces first, then community, alphabetised
+ * within each tier. Re-exported here is the SINGLE source of truth for
+ * callers; never read from `catalog-generated` / `catalog-overrides` directly
+ * outside this file.
+ */
+export const CATALOG: CatalogEntry[] = buildCatalog();
 
 /** Look up a catalog entry by Jarvis-side id. Returns null when missing. */
 export function findCatalogEntry(id: string): CatalogEntry | null {
@@ -210,7 +140,7 @@ export function findCatalogEntry(id: string): CatalogEntry | null {
 /**
  * Stable map keyed by id, useful in callers that look up entries repeatedly
  * (the API route handlers, the reconciler). Re-computed every call -- the
- * catalog is tiny and never mutates at runtime.
+ * catalog is tiny enough that the cost is invisible.
  */
 export function catalogById(): Map<string, CatalogEntry> {
   return new Map(CATALOG.map((entry) => [entry.id, entry]));
