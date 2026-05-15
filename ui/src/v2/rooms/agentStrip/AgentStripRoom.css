@@ -1,0 +1,176 @@
+/* Background agent strip — ambient native window, dense vertical list.
+   Lives at ~280×400 and tracks every async sub-agent task the daemon
+   has in flight. Never scrolls horizontally; vertical scrollbar appears
+   only when the list overflows. */
+
+.agent-strip {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.agent-strip__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-bottom: var(--hair);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  flex: 0 0 auto;
+}
+
+.agent-strip__title {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.agent-strip__count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.agent-strip__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--s-1) 0;
+}
+
+.agent-strip__empty {
+  padding: var(--s-6) var(--s-4);
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+}
+
+.agent-strip__card {
+  padding: var(--s-3) var(--s-4);
+  border-bottom: var(--hair-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-strip__card:last-child {
+  border-bottom: none;
+}
+
+.agent-strip__card--completed {
+  opacity: 0.62;
+}
+
+.agent-strip__card--failed {
+  background: rgba(194, 58, 42, 0.04);
+}
+
+.agent-strip__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.agent-strip__name {
+  flex: 1 1 auto;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-strip__elapsed {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.agent-strip__task {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-left: 14px;
+}
+
+/* Status dots — small, deliberate. */
+.agent-strip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  flex: 0 0 auto;
+  display: inline-block;
+}
+
+.agent-strip__dot--running {
+  background: #E5A91E;
+  box-shadow: 0 0 0 0 rgba(229, 169, 30, 0.6);
+  animation: agent-strip-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-strip-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 169, 30, 0.5); }
+  50%      { box-shadow: 0 0 0 5px rgba(229, 169, 30, 0); }
+}
+
+.agent-strip__dot--completed {
+  background: #4A7C3F;
+}
+
+.agent-strip__dot--failed {
+  background: var(--accent);
+}
+
+.agent-strip__dot--idle {
+  background: transparent;
+  border: 1px solid var(--ink-3);
+}
+
+/* Idle group — collapsed visual weight; tells you they exist without
+   competing with running tasks for attention. */
+.agent-strip__idle-group {
+  margin-top: var(--s-3);
+  padding: var(--s-2) var(--s-4) var(--s-3);
+  border-top: var(--hair);
+}
+
+.agent-strip__idle-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s-2);
+}
+
+.agent-strip__idle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px 0;
+}
+
+.agent-strip__idle-name {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
