@@ -99,14 +99,20 @@ func LoadConfig() (*SidecarConfig, error) {
 }
 
 func SaveConfig(cfg *SidecarConfig) error {
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(configDir, 0700); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, data, 0644)
+	if err := os.WriteFile(configFile, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(configFile, 0600)
 }
 
 func DecodeJWTPayload(token string) (*SidecarTokenClaims, error) {

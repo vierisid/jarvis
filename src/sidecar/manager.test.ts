@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { buildEnrollmentUrls, isLocalhostBrainUrl } from './manager.ts';
+import { statSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildEnrollmentUrls, isLocalhostBrainUrl, SidecarManager } from './manager.ts';
 
 describe('buildEnrollmentUrls', () => {
   test('parses https URL into wss/https pair', () => {
@@ -86,5 +90,23 @@ describe('isLocalhostBrainUrl', () => {
     ['notlocalhost.example.com', false],
   ])('isLocalhostBrainUrl(%p) === %p', (input, expected) => {
     expect(isLocalhostBrainUrl(input)).toBe(expected);
+  });
+});
+
+describe('SidecarManager key storage', () => {
+  test('stores the enrollment private key with owner-only permissions', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    const manager = new SidecarManager(dataDir);
+
+    await manager.start();
+    await manager.stop();
+
+    const keyDir = join(dataDir, 'sidecar-keys');
+    const privateKeyPath = join(keyDir, 'private.pem');
+    const publicKeyPath = join(keyDir, 'public.pem');
+
+    expect(statSync(keyDir).mode & 0o777).toBe(0o700);
+    expect(statSync(privateKeyPath).mode & 0o777).toBe(0o600);
+    expect(statSync(publicKeyPath).mode & 0o777).toBe(0o644);
   });
 });

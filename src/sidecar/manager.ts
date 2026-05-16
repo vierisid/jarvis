@@ -6,7 +6,8 @@
  */
 
 import { generateKeyPair, exportJWK, exportPKCS8, exportSPKI, importPKCS8, importSPKI, SignJWT, jwtVerify, createRemoteJWKSet, type JWK } from 'jose';
-import { existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
@@ -228,6 +229,7 @@ export class SidecarManager implements Service {
   private async loadOrGenerateKeys(): Promise<void> {
     if (existsSync(this.privateKeyPath) && existsSync(this.publicKeyPath)) {
       await this.loadKeys();
+      this.secureKeyFilePermissions();
       console.log('[SidecarManager] Loaded existing ES256 key pair');
     } else {
       await this.generateKeys();
@@ -240,7 +242,8 @@ export class SidecarManager implements Service {
   }
 
   private async generateKeys(): Promise<void> {
-    mkdirSync(this.keysDir, { recursive: true });
+    mkdirSync(this.keysDir, { recursive: true, mode: 0o700 });
+    chmodSync(this.keysDir, 0o700);
 
     const { privateKey, publicKey } = await generateKeyPair(ALG, { extractable: true });
     this.privateKey = privateKey;
@@ -250,8 +253,9 @@ export class SidecarManager implements Service {
     const pkcs8 = await exportPKCS8(privateKey);
     const spki = await exportSPKI(publicKey);
 
-    await Bun.write(this.privateKeyPath, pkcs8);
-    await Bun.write(this.publicKeyPath, spki);
+    await writeFile(this.privateKeyPath, pkcs8, { mode: 0o600 });
+    await writeFile(this.publicKeyPath, spki, { mode: 0o644 });
+    this.secureKeyFilePermissions();
   }
 
   private async loadKeys(): Promise<void> {
@@ -260,6 +264,12 @@ export class SidecarManager implements Service {
 
     this.privateKey = await importPKCS8(privatePem, ALG, { extractable: true });
     this.publicKey = await importSPKI(publicPem, ALG, { extractable: true });
+  }
+
+  private secureKeyFilePermissions(): void {
+    try { chmodSync(this.keysDir, 0o700); } catch {}
+    try { chmodSync(this.privateKeyPath, 0o600); } catch {}
+    try { chmodSync(this.publicKeyPath, 0o644); } catch {}
   }
 
   // --------------- JWKS ---------------

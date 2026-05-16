@@ -1,6 +1,7 @@
 import YAML from 'yaml';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 
@@ -170,7 +171,11 @@ export async function saveConfig(
       defaultKeyType: 'PLAIN',
     });
 
-    await Bun.write(path, yaml);
+    const configDir = dirname(path);
+    await mkdir(configDir, { recursive: true, mode: 0o700 });
+    await chmod(configDir, 0o700);
+    await writeFile(path, yaml, { mode: 0o600 });
+    await chmod(path, 0o600);
     console.log(`Config saved to ${path}`);
   } catch (err) {
     throw new Error(`Failed to save config to ${path}: ${err}`);
