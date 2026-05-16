@@ -12,6 +12,13 @@ function expandTilde(filepath: string): string {
   return filepath;
 }
 
+async function secureParentDirectory(filePath: string): Promise<void> {
+  const dir = dirname(filePath);
+  if (dir === '.' || dir === '') return;
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+}
+
 function deepMerge(target: any, source: any): any {
   if (!source || typeof source !== 'object') {
     // If source is absent, return a clone of target so callers (or subsequent
@@ -171,9 +178,7 @@ export async function saveConfig(
       defaultKeyType: 'PLAIN',
     });
 
-    const configDir = dirname(path);
-    await mkdir(configDir, { recursive: true, mode: 0o700 });
-    await chmod(configDir, 0o700);
+    await secureParentDirectory(path);
     await writeFile(path, yaml, { mode: 0o600 });
     await chmod(path, 0o600);
     console.log(`Config saved to ${path}`);

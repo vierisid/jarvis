@@ -14,6 +14,13 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 
+async function secureParentDirectory(filePath: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  if (dir === '.' || dir === '') return;
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+}
+
 export type GoogleTokens = {
   access_token: string;
   refresh_token: string;
@@ -63,9 +70,7 @@ export class GoogleAuth {
    */
   async saveTokens(tokens: GoogleTokens): Promise<void> {
     this.tokens = tokens;
-    const tokensDir = path.dirname(this.tokensPath);
-    await mkdir(tokensDir, { recursive: true, mode: 0o700 });
-    await chmod(tokensDir, 0o700);
+    await secureParentDirectory(this.tokensPath);
     await writeFile(this.tokensPath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
     await chmod(this.tokensPath, 0o600);
   }
