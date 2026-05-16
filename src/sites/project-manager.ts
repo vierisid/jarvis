@@ -7,7 +7,7 @@
 import type { Project, ProjectMeta, FileEntry, SiteBuilderConfig } from './types.ts';
 import { GitManager } from './git-manager.ts';
 import { TEMPLATES, generateMakefile, scaffoldBunReact } from './templates.ts';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync, statSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 
@@ -324,7 +324,7 @@ export class ProjectManager {
 
   private isWithin(resolvedPath: string, basePath: string): boolean {
     const rel = relative(basePath, resolvedPath);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
   }
 
   private sanitizeId(name: string): string {

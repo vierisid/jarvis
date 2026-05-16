@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProjectManager } from './project-manager.ts';
@@ -19,12 +19,30 @@ function makeManager(projectsDir: string): ProjectManager {
 describe('ProjectManager path containment', () => {
   test('blocks sibling directory traversal with a shared prefix', async () => {
     const projectsDir = await mkdtemp(join(tmpdir(), 'jarvis-sites-'));
-    await mkdir(join(projectsDir, 'app'), { recursive: true });
-    await mkdir(join(projectsDir, 'app-backup'), { recursive: true });
-    const manager = makeManager(projectsDir);
+    try {
+      await mkdir(join(projectsDir, 'app'), { recursive: true });
+      await mkdir(join(projectsDir, 'app-backup'), { recursive: true });
+      const manager = makeManager(projectsDir);
 
-    await expect(manager.writeFile('app', '../app-backup/pwned.txt', 'owned'))
-      .rejects.toThrow('Path traversal attempt blocked');
-    expect(existsSync(join(projectsDir, 'app-backup', 'pwned.txt'))).toBe(false);
+      await expect(manager.writeFile('app', '../app-backup/pwned.txt', 'owned'))
+        .rejects.toThrow('Path traversal attempt blocked');
+      expect(existsSync(join(projectsDir, 'app-backup', 'pwned.txt'))).toBe(false);
+    } finally {
+      await rm(projectsDir, { recursive: true, force: true });
+    }
+  });
+
+  test('allows descendant paths whose segment starts with two dots', async () => {
+    const projectsDir = await mkdtemp(join(tmpdir(), 'jarvis-sites-'));
+    try {
+      await mkdir(join(projectsDir, 'app'), { recursive: true });
+      const manager = makeManager(projectsDir);
+
+      await manager.writeFile('app', '..config/settings.json', '{}');
+
+      expect(existsSync(join(projectsDir, 'app', '..config', 'settings.json'))).toBe(true);
+    } finally {
+      await rm(projectsDir, { recursive: true, force: true });
+    }
   });
 });
