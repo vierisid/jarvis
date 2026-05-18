@@ -506,6 +506,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     () => runs.runs.filter((r) => !RUN_TERMINAL_STATUSES.has(r.status)).length,
     [runs.runs],
   );
+  // First active run (most recent that's still in-flight). Drives the
+  // sticky banner so single-run cases can show specific status / step
+  // info rather than just a count.
+  const activeRun = useMemo(
+    () => runs.runs.find((r) => !RUN_TERMINAL_STATUSES.has(r.status)) ?? null,
+    [runs.runs],
+  );
 
   return (
     <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
@@ -592,6 +599,19 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           </Button>
         </div>
       </header>
+
+      {/* Sticky banner: surfaces in-flight runs with status + duration so
+          the user notices long-running executions even when the right
+          panel is closed. Clicking the banner opens the panel; the close
+          button just dismisses the banner for this session (the chip on
+          the header Runs button still flags the count). */}
+      {activeRunCount > 0 && activeRun ? (
+        <RunningBanner
+          activeCount={activeRunCount}
+          run={activeRun}
+          onOpenPanel={() => setRunsPanelOpen(true)}
+        />
+      ) : null}
 
       <div className="wf-editor__body">
       <section className="wf-editor__canvas" aria-label="Workflow graph">
@@ -4464,4 +4484,71 @@ function formatDuration(ms: number): string {
   const m = Math.floor(s / 60);
   const rs = s % 60;
   return `${m}m${rs.toString().padStart(2, "0")}s`;
+}
+
+/**
+ * Sticky banner at the top of the editor body that surfaces in-flight
+ * runs. Clicking the banner opens the runs panel (the natural "I want
+ * details" affordance). The banner self-updates the elapsed duration via
+ * a 1s ticker while a run is RUNNING so users get live feedback even
+ * when the polling loop is on the 2s cadence.
+ */
+function RunningBanner({
+  activeCount,
+  run,
+  onOpenPanel,
+}: {
+  activeCount: number;
+  run: FlowRun;
+  onOpenPanel: () => void;
+}): React.ReactElement {
+  // Live elapsed time. Re-renders once per second so the duration ticks
+  // in real time; the underlying run object only refreshes every 2s.
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    // Only RUNNING / PAUSED are worth ticking; QUEUED has no start time
+    // yet so the duration display would be meaningless.
+    if (run.status !== "RUNNING" && run.status !== "PAUSED") return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [run.status]);
+
+  // Compose the headline text. Multiple active runs collapse to a count;
+  // single-run is the common case and gets the specific status.
+  const headline =
+    activeCount === 1
+      ? `${run.status}${run.failedStep ? ` @ ${run.failedStep.displayName}` : ""}`
+      : `${activeCount} runs in flight`;
+
+  // Duration: live for RUNNING / PAUSED, frozen for QUEUED (no startTime).
+  const duration = run.startTime
+    ? formatDuration(now - run.startTime)
+    : run.status === "QUEUED"
+      ? "queued"
+      : "—";
+
+  // Tone derived from the status -- maps to a CSS modifier so the bar
+  // gets a tinted background appropriate for the state.
+  const tone: "warn" | "neutral" =
+    run.status === "RUNNING" || run.status === "PAUSED" ? "warn" : "neutral";
+
+  return (
+    <button
+      type="button"
+      className={`wf-editor__running-banner wf-editor__running-banner--${tone}`}
+      onClick={onOpenPanel}
+      title="Open runs panel"
+      aria-live="polite"
+    >
+      <span className="wf-editor__running-banner-icon" aria-hidden="true">
+        <RunStatusIcon status={run.status} />
+        {run.status === "RUNNING" ? (
+          <span className="wf-editor__running-banner-pulse" />
+        ) : null}
+      </span>
+      <span className="wf-editor__running-banner-text">{headline}</span>
+      <span className="wf-editor__running-banner-duration">{duration}</span>
+      <span className="wf-editor__running-banner-cta">View runs</span>
+    </button>
+  );
 }

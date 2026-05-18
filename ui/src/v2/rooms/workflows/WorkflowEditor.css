@@ -125,6 +125,90 @@
 .wf-editor__toast--ok { color: var(--accent-ok, #5eead4); border-color: var(--accent-ok-soft, #134e4a); }
 .wf-editor__toast--warn { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn-soft, #713f12); }
 
+/* ── Sticky "currently running" banner ─────────────────────────────────
+   Renders just below the editor header when any run is non-terminal.
+   Whole bar is a button -- click jumps the user into the runs panel. */
+.wf-editor__running-banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 6px var(--s-5);
+  border: 0;
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.wf-editor__running-banner:hover { background: var(--paper-3); }
+.wf-editor__running-banner:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Tone variants. `warn` is the common in-flight case (RUNNING / PAUSED);
+   `neutral` covers QUEUED before a startTime exists. */
+.wf-editor__running-banner--warn {
+  background: color-mix(in srgb, var(--warn) 10%, var(--paper-2));
+  border-bottom-color: color-mix(in srgb, var(--warn) 35%, var(--rule-soft));
+}
+.wf-editor__running-banner--warn:hover {
+  background: color-mix(in srgb, var(--warn) 16%, var(--paper-2));
+}
+
+.wf-editor__running-banner-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--warn);
+}
+
+/* Soft pulsing ring on the icon while a run is actively RUNNING -- gives
+   the banner a heartbeat so users notice the live state without us
+   having to spin a constant animation. */
+.wf-editor__running-banner-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--warn) 45%, transparent);
+  animation: wf-banner-pulse 1.4s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes wf-banner-pulse {
+  0%   { transform: scale(0.6); opacity: 0.7; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.wf-editor__running-banner-text {
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.wf-editor__running-banner-duration {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.wf-editor__running-banner-cta {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.wf-editor__running-banner:hover .wf-editor__running-banner-cta {
+  color: var(--ink);
+}
+
 /* Body: horizontal split between the xyflow canvas and the (optional)
    right-side runs panel. The canvas takes whatever's left after the
    panel's fixed width. */
