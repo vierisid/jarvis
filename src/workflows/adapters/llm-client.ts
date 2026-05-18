@@ -49,11 +49,14 @@ export function projectResponse(reply: LLMResponse): PieceLlmResponse {
 }
 
 function extractText(reply: LLMResponse): string {
-  // LLMResponse may have either `content` (block array) or `text` (string)
-  // depending on provider shape. Be defensive.
+  // `LLMResponse.content` is typed as `string` in provider.ts, which is
+  // what every provider returns today. Older / parallel shapes may carry
+  // a block array (`{ type: 'text', text: '...' }[]`) or a top-level
+  // `text` field. Be defensive: try each shape in turn, fall back to "".
   const r = reply as unknown as Record<string, unknown>;
   if (typeof r.text === "string") return r.text;
   const content = r.content;
+  if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const block of content as Array<Record<string, unknown>>) {
