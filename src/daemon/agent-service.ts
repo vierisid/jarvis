@@ -501,7 +501,20 @@ export class AgentService implements Service, IAgentService {
     );
   }
 
-  private buildFullSystemPrompt(channel: string, userMessage?: string): string {
+  /**
+   * Build the full system prompt used by chat turns. Public so other code
+   * paths (workflow's `jarvis-ask` piece, etc.) can give the LLM the same
+   * Jarvis identity + role + personality + vault context that chat gets.
+   *
+   * `channel` selects channel-specific personality overrides (telegram,
+   * discord, etc.); unknown channel names fall back to the default
+   * personality.
+   *
+   * `userMessage` is optional -- when provided we pull message-relevant
+   * knowledge / webapp instructions from the vault to inject into the
+   * prompt. Pass it for "the user said X" turns; omit for heartbeats.
+   */
+  buildFullSystemPrompt(channel: string, userMessage?: string): string {
     if (!this.role) return '';
 
     // Build prompt context with live data + vault knowledge

@@ -74,6 +74,16 @@ export interface BuildServiceBackendsOptions {
   authorityEngine?: AuthorityEngine;
   auditTrail?: AuditTrail;
   emergencyController?: EmergencyController;
+  /**
+   * Optional callback that builds the Jarvis-flavoured system prompt for
+   * a workflow LLM call. When set, the `jarvis-ask` piece will pass this
+   * prompt to the LLM so the model knows it's Jarvis (role, personality,
+   * vault context). Skipped when the piece's `system` field is set --
+   * that's the user's explicit override.
+   *
+   * Production wiring passes `AgentService.buildFullSystemPrompt`.
+   */
+  buildJarvisSystemPrompt?: (userMessage: string) => string;
 }
 
 export function buildSandboxServiceBackends(
@@ -81,9 +91,21 @@ export function buildSandboxServiceBackends(
 ): SandboxApiServices {
   const llmClient = new JarvisLlmClient(opts.llmManager);
   const llmChat: LlmChatFn = async (req) => {
+    // System-prompt precedence:
+    //   1. The piece's explicit `system` field wins -- user knows best.
+    //   2. Otherwise inject Jarvis's full identity + role + personality
+    //      via `buildJarvisSystemPrompt`. Without this the LLM has no
+    //      idea it's Jarvis and answers as the bare base model (we hit
+    //      this with local Ollama: Qwen would introduce itself as Qwen).
+    //   3. If no prompt builder is wired, send no system message.
+    const system =
+      req.system ??
+      (opts.buildJarvisSystemPrompt
+        ? opts.buildJarvisSystemPrompt(req.prompt)
+        : undefined);
     const reply = await llmClient.chat({
       prompt: req.prompt,
-      ...(req.system !== undefined ? { system: req.system } : {}),
+      ...(system !== undefined ? { system } : {}),
     });
     if (req.parseJson) {
       try {

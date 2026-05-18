@@ -841,6 +841,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         authorityEngine,
         auditTrail,
         emergencyController,
+        // Give the jarvis-ask piece the same Jarvis-flavoured system
+        // prompt the chat agent uses, so workflow LLM calls answer as
+        // Jarvis rather than as the bare base model. `"workflow"` is the
+        // channel slug -- not a real channel, just a key for personality
+        // overrides if any are configured.
+        buildJarvisSystemPrompt: (userMessage) =>
+          agentService.buildFullSystemPrompt("workflow", userMessage),
       });
       workflowSandboxApi.setServices(backends);
       logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");
