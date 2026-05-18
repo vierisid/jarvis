@@ -311,9 +311,11 @@
 .wf-runs__steps pre {
   margin: var(--s-1) 0 0;
   padding: var(--s-2);
-  background: var(--paper-1, #0a0e14);
+  background: var(--paper-2);
+  color: var(--ink);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r-2);
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   max-height: 320px;
   overflow: auto;
