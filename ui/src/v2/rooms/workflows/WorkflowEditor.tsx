@@ -651,10 +651,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       {/* Run overlay banner: when a past run is selected for canvas
           overlay, surfaces which run + lets the user exit overlay mode.
           Distinct from the in-flight banner so they can coexist (user
-          viewing run #4's overlay while run #5 is currently running). */}
+          viewing run #4's overlay while run #5 is currently running).
+          Passes `hasOverlayData` so the banner can warn when the run has
+          no per-step trace (PRODUCTION runs, runs that timed out before
+          any step output streamed). */}
       {overlayRun ? (
         <OverlayBanner
           run={overlayRun}
+          hasOverlayData={Object.keys(overlaySnapshots).length > 0}
           onClear={() => setOverlayRunId(null)}
         />
       ) : null}
@@ -4605,12 +4609,20 @@ function RunRow({
  * Banner showing which past run is being overlaid on the canvas, with a
  * close button to exit overlay mode. Sits below the running banner when
  * both are active (live in-flight + overlaying a past run).
+ *
+ * `hasOverlayData=false` means we have a run row but no usable per-step
+ * trace (PRODUCTION run with no streamStepProgress, or a run that
+ * timed out before any step output landed). In that case the banner
+ * surfaces a "limited trace" hint so the user knows why no nodes are
+ * lighting up -- otherwise the click feels like a no-op.
  */
 function OverlayBanner({
   run,
+  hasOverlayData,
   onClear,
 }: {
   run: FlowRun;
+  hasOverlayData: boolean;
   onClear: () => void;
 }): React.ReactElement {
   const startedAt = run.startTime
@@ -4631,6 +4643,11 @@ function OverlayBanner({
       <span className="wf-editor__overlay-banner-text">
         Viewing run {startedAt} -- <strong>{run.status}</strong>
         {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
+        {!hasOverlayData ? (
+          <em className="wf-editor__overlay-banner-note">
+            {" "}-- no per-step trace recorded for this run
+          </em>
+        ) : null}
       </span>
       <button
         type="button"
@@ -4728,9 +4745,15 @@ export function buildRunOverlay(
   if (!run) return {};
   const steps = (run.steps ?? {}) as Record<string, unknown>;
   const hasStepData = Object.keys(steps).length > 0;
+  const canvasNames = new Set(stepNames);
 
-  // Mode 2: empty steps + a known failed step -> highlight just that.
-  if (!hasStepData && run.failedStep) {
+  // Mode 2: empty steps + a known failed step that maps to a CANVAS step.
+  // Some engine-level failures (e.g. the terminal-timeout path) emit a
+  // synthetic failedStep with name "engine" that doesn't correspond to a
+  // user-visible node -- skip the highlight in that case so we don't end
+  // up with an overlay map keyed by a name no node can match (which used
+  // to silently produce a "nothing happens" feeling).
+  if (!hasStepData && run.failedStep && canvasNames.has(run.failedStep.name)) {
     return {
       [run.failedStep.name]: {
         status: "failed",
@@ -4740,6 +4763,8 @@ export function buildRunOverlay(
     };
   }
   // Mode 3: nothing actionable -- skip overlay so the canvas isn't dimmed.
+  // The OverlayBanner explains the state so the user doesn't feel like
+  // the click did nothing.
   if (!hasStepData) return {};
 
   // Mode 1: rich per-step trace.
