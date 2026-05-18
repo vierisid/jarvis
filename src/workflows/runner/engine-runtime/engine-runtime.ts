@@ -518,6 +518,24 @@ export class EngineRuntime {
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
     const proc = spawnEngine(spawnOptions);
 
+    // CRITICAL: drain the engine's stdout + stderr or the engine WILL hang.
+    // The bundle is spawned with `stdio: [ignore, pipe, pipe]` and the
+    // engine's `worker-socket.ts` overrides `console.log` / `warn` /
+    // `error` to fire-and-forget the message over socket.io AND then call
+    // the original (which writes to stdout/stderr). Without a reader on
+    // those pipes the OS buffer (~64KB on Linux) fills, the next write
+    // blocks the engine event loop, and the engine deadlocks mid-flow --
+    // EXECUTE_FLOW returns its RPC reply (the engine's RPC handler was
+    // dispatched before the deadlock) but uploadRunLog never lands and
+    // the run sits forever at RUNNING.
+    //
+    // We forward each line to the daemon's stdout with a sandbox prefix
+    // so engine crashes are visible during debugging. The error / warn
+    // streams differentiate by prefix; production daemons that want to
+    // suppress this can pipe their output through a filter.
+    bindEngineStream(proc.stdout, "stdout", sandboxId);
+    bindEngineStream(proc.stderr, "stderr", sandboxId);
+
     let earlyExitMessage: string | null = null;
     const earlyExitWatcher = proc.exited.then(({ code, signal }) => {
       earlyExitMessage = `engine exited before handshake (code=${code}, signal=${signal})`;
@@ -641,4 +659,42 @@ function isUpstreamFlowVersion(
   v: JarvisFlowVersion | UpstreamFlowVersion,
 ): v is UpstreamFlowVersion {
   return typeof (v as UpstreamFlowVersion).created === "string";
+}
+
+/**
+ * Attach a no-op-with-side-effect reader to one of the engine subprocess's
+ * pipes. The side effect is forwarding each newline-delimited chunk to the
+ * daemon's own stdout / stderr with a `[engine <sandboxId> <stream>]`
+ * prefix so the operator can see engine output in the daemon log.
+ *
+ * The "no-op" part is the important one: just by being a reader, this
+ * drains the OS pipe buffer so the engine never blocks on write -- see
+ * the deadlock note next to the `spawnEngine` call site.
+ *
+ * Resilient by design:
+ *   - `proc.stdout` / `proc.stderr` are nullable when stdio isn't piped;
+ *     skip silently if so.
+ *   - "data" events arrive as `Buffer` chunks; we don't try to split into
+ *     lines (one chunk may carry partial lines). Each chunk is prefixed,
+ *     which is enough for diagnosability.
+ */
+function bindEngineStream(
+  stream: NodeJS.ReadableStream | null,
+  kind: "stdout" | "stderr",
+  sandboxId: string,
+): void {
+  if (!stream) return;
+  const prefix = `[engine ${sandboxId.slice(0, 8)} ${kind}]`;
+  const sink: NodeJS.WriteStream =
+    kind === "stderr" ? process.stderr : process.stdout;
+  stream.on("data", (chunk: Buffer) => {
+    // Trim a trailing newline so the daemon log doesn't double-space; we
+    // re-add a single newline ourselves.
+    const text = chunk.toString("utf8").replace(/\n$/, "");
+    if (text.length === 0) return;
+    sink.write(`${prefix} ${text}\n`);
+  });
+  // Errors on the pipe itself (rare: e.g. the proc exited mid-read) are
+  // ignored -- the spawned process is gone, nothing to do about it.
+  stream.on("error", () => {});
 }
