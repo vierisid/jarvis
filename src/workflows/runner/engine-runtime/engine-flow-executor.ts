@@ -53,8 +53,32 @@ const NON_SUCCESS_STATUSES = new Set<FlowRunStatus>([
   "SCHEDULE_FAILURE",
 ]);
 
-const DEFAULT_TERMINAL_TIMEOUT_MS = 5_000;
+/**
+ * How long the executor waits for the engine's `uploadRunLog` to flip the
+ * `flow_run` row to a terminal status after `executeFlow` (the engine RPC)
+ * resolves. Activepieces' contract says uploadRunLog lands BEFORE the RPC
+ * returns, but in practice the engine sometimes flushes zstd backups +
+ * progress updates on a slightly delayed pathway, especially for runs
+ * with many steps or large per-step outputs.
+ *
+ * The previous 5 second default produced false "did not reach terminal
+ * status" timeouts on real workflows. 60s is generous enough to absorb
+ * any reasonable flush delay; runs that genuinely hang for that long are
+ * stuck somewhere else and should fail loudly.
+ *
+ * Override via `JARVIS_WORKFLOW_TERMINAL_TIMEOUT_MS` for unusual environments.
+ */
+const DEFAULT_TERMINAL_TIMEOUT_MS = parsePositiveIntEnv(
+  process.env["JARVIS_WORKFLOW_TERMINAL_TIMEOUT_MS"],
+  60_000,
+);
 const DEFAULT_TERMINAL_POLL_INTERVAL_MS = 25;
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 export interface EngineFlowExecutorOptions {
   /**

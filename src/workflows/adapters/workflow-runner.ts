@@ -52,6 +52,10 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
       flowRunId: run.id,
       flowId: flow.id,
       flowVersionId: versionId,
+      // No auto-retry: a flow with side effects (sending email, hitting an
+      // API) would duplicate those effects on retry. The user gets a clear
+      // FAILED status and can re-run manually.
+      maxAttempts: 1,
     });
     return { runId: run.id };
   }

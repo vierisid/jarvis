@@ -494,6 +494,11 @@ export class TriggerManager {
       flowRunId: run.id,
       flowId: opts.flowId,
       flowVersionId: opts.versionId,
+      // No auto-retry: trigger-fired runs often have side effects that
+      // would duplicate on retry (e.g. notify, email, downstream API
+      // calls). Surface the failure once; the trigger's next fire is
+      // the natural "retry" cadence.
+      maxAttempts: 1,
     });
   }
 

@@ -576,6 +576,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               resumePayload,
             },
             flowRunId: wp.flowRunId,
+            // RESUME jobs especially shouldn't retry: re-resuming an
+            // already-resumed waitpoint would walk past it with stale
+            // payload state. One shot per webhook hit.
+            maxAttempts: 1,
           });
           return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
         }),
@@ -872,6 +876,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             flowRunId: run.id,
             flowId: id,
             flowVersionId: versionId,
+            // No auto-retry: flow code with side effects (notify, send
+            // email, hit API) would duplicate on retry. The user gets a
+            // clear FAILED status and clicks Run again if they want.
+            maxAttempts: 1,
           });
           return ok(run, 202);
         }),
