@@ -113,6 +113,15 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // / didn't get reached. Clicking a row in the panel toggles this; the
   // banner at the top of the canvas lets the user exit overlay mode.
   const [overlayRunId, setOverlayRunId] = useState<string | null>(null);
+  // While in overlay mode, clicking a node opens this popover with the
+  // step's input/output/error/duration instead of the settings panel.
+  // Cleared automatically when overlay mode is exited or the node goes
+  // missing from the graph.
+  const [runDetail, setRunDetail] = useState<{
+    stepName: string;
+    anchor: { x: number; y: number };
+  } | null>(null);
+  const closeRunDetail = useCallback((): void => setRunDetail(null), []);
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   // Anchor for the floating settings popover. Captured at click-time from
   // the originating MouseEvent so the popover opens near the cursor rather
@@ -163,6 +172,20 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     setSelectedStepName(null);
     setPopoverAnchor(null);
   }, []);
+
+  // Auto-close the run-detail popover when overlay mode is exited or the
+  // node it references is no longer in the graph. Keeps the popover from
+  // floating against a stale anchor after the user clicks Exit on the
+  // overlay banner.
+  useEffect(() => {
+    if (!runDetail) return;
+    if (!overlayRunId) {
+      setRunDetail(null);
+      return;
+    }
+    const stillExists = editor.allSteps.some((fs) => fs.step.name === runDetail.stepName);
+    if (!stillExists) setRunDetail(null);
+  }, [runDetail, overlayRunId, editor.allSteps]);
 
   // Keep selection valid: when steps shift, drop the selection if it
   // doesn't exist. We have to check BOTH the connected tree AND the
@@ -681,11 +704,24 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             onNodesChange={onNodesChange}
             nodeTypes={NODE_TYPES}
             onNodeClick={(event, n) => {
-              setSelectedStepName(n.id);
-              setPopoverAnchor({ x: event.clientX, y: event.clientY });
+              const anchor = { x: event.clientX, y: event.clientY };
+              if (overlayRunId) {
+                // Overlay mode: clicking a node opens the run-detail
+                // popover (input/output/error/duration for that step in
+                // the selected run) instead of the settings panel. The
+                // user is inspecting a past execution; mutating the flow
+                // doesn't make sense in that context.
+                setRunDetail({ stepName: n.id, anchor });
+                closePopover();
+              } else {
+                setSelectedStepName(n.id);
+                setPopoverAnchor(anchor);
+                closeRunDetail();
+              }
             }}
             onPaneClick={() => {
               closePopover();
+              closeRunDetail();
               closeCanvasMenu();
               closeLibraryPicker();
               closeNodeContextMenu();
@@ -900,6 +936,18 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
           />
         </NodeSettingsPopover>
+      ) : null}
+
+      {/* Run-detail popover (overlay mode only). Opens in place of the
+          settings panel when the user clicks a node while a past run is
+          overlaid. Shows that step's input / output / error / duration. */}
+      {runDetail && overlayRun ? (
+        <RunStepDetailPopover
+          anchor={runDetail.anchor}
+          run={overlayRun}
+          stepName={runDetail.stepName}
+          onClose={closeRunDetail}
+        />
       ) : null}
     </div>
   );
@@ -4670,6 +4718,188 @@ function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElemen
   if (status === "PAUSED") return <Icon icon={Pause} size={12} />;
   if (status === "RUNNING" || status === "QUEUED") return <Icon icon={Clock} size={12} />;
   return <Icon icon={AlertTriangle} size={12} />;
+}
+
+/**
+ * Floating popover that surfaces a single step's execution data from the
+ * overlaid run -- input, output, error, duration, status. Opens at the
+ * cursor when the user clicks a node while overlay mode is active.
+ *
+ * Read-only. Closing semantics mirror NodeSettingsPopover (outside-click
+ * + Esc), so the user can dismiss without leaving overlay mode.
+ */
+function RunStepDetailPopover({
+  anchor,
+  run,
+  stepName,
+  onClose,
+}: {
+  anchor: { x: number; y: number };
+  run: FlowRun;
+  stepName: string;
+  onClose: () => void;
+}): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>(() =>
+    clampPopoverToViewport(anchor, undefined),
+  );
+
+  // Pull the wrapped step entry. Worker handlers store output as
+  // `{ output: <StepOutput> }`; some legacy code paths may store the
+  // StepOutput directly. Tolerate both.
+  const snapshot = useMemo(() => {
+    const steps = (run.steps ?? {}) as Record<string, unknown>;
+    const entry = steps[stepName];
+    if (!entry || typeof entry !== "object") return null;
+    const wrapper = entry as { output?: unknown };
+    const stepOutput = wrapper.output !== undefined ? wrapper.output : entry;
+    return stepOutput as {
+      status?: string;
+      input?: unknown;
+      output?: unknown;
+      errorMessage?: unknown;
+      duration?: number;
+    };
+  }, [run.steps, stepName]);
+
+  // Clamp position once we know the popover's measured size. useLayoutEffect
+  // so the first paint is already correct (no flicker on the way to the
+  // clamped position).
+  useLayoutEffect(() => {
+    setPos(clampPopoverToViewport(anchor, ref.current ?? undefined));
+  }, [anchor, snapshot]);
+
+  // Outside-click closes. Deferred so the click that opened us doesn't
+  // immediately dismiss.
+  useEffect(() => {
+    const handler = (e: MouseEvent): void => {
+      if (!ref.current) return;
+      const target = e.target as globalThis.Node;
+      if (ref.current.contains(target)) return;
+      onClose();
+    };
+    const timer = window.setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [onClose]);
+
+  // Esc closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const status = snapshot?.status ?? null;
+  const statusTone: "ok" | "warn" | "accent" | "neutral" =
+    status === "SUCCEEDED"
+      ? "ok"
+      : status === "FAILED"
+        ? "accent"
+        : status === "PAUSED" || status === "RUNNING"
+          ? "warn"
+          : "neutral";
+  const errorText = snapshot ? stringifyErrorMessage(snapshot.errorMessage) : null;
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="wf-run-detail"
+      role="dialog"
+      aria-label={`Run details for ${stepName}`}
+      style={{ left: pos.left, top: pos.top }}
+    >
+      <header className={`wf-run-detail__header wf-run-detail__header--${statusTone}`}>
+        <span className="wf-run-detail__title">
+          <code>{stepName}</code>
+        </span>
+        <span className="wf-run-detail__status">
+          {status ?? "not reached"}
+          {typeof snapshot?.duration === "number" ? (
+            <span className="wf-run-detail__duration">{formatDuration(snapshot.duration)}</span>
+          ) : null}
+        </span>
+        <button
+          type="button"
+          className="wf-run-detail__close"
+          onClick={onClose}
+          aria-label="Close run details"
+        >
+          <Icon icon={X} size={12} />
+        </button>
+      </header>
+      {!snapshot ? (
+        <div className="wf-run-detail__empty">
+          This step didn't execute in this run.
+        </div>
+      ) : (
+        <div className="wf-run-detail__body">
+          {errorText ? (
+            <section className="wf-run-detail__section wf-run-detail__section--error">
+              <h4>Error</h4>
+              <pre>{errorText}</pre>
+            </section>
+          ) : null}
+          {snapshot.output !== undefined ? (
+            <section className="wf-run-detail__section">
+              <h4>Output</h4>
+              <pre>{stringifyForDisplay(snapshot.output)}</pre>
+            </section>
+          ) : null}
+          {snapshot.input !== undefined && !isEmptyValue(snapshot.input) ? (
+            <section className="wf-run-detail__section">
+              <h4>Input</h4>
+              <pre>{stringifyForDisplay(snapshot.input)}</pre>
+            </section>
+          ) : null}
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+const RUN_DETAIL_WIDTH = 380;
+
+/**
+ * Conservative viewport clamp for popovers we render via portal. Mirrors
+ * the behaviour of NodeSettingsPopover's `clampToViewport` helper but
+ * lives here to avoid leaking that internal helper across components.
+ */
+function clampPopoverToViewport(
+  anchor: { x: number; y: number },
+  el: HTMLElement | undefined,
+): { left: number; top: number } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const width = el?.offsetWidth ?? RUN_DETAIL_WIDTH;
+  const height = el?.offsetHeight ?? 320;
+  let left = anchor.x;
+  let top = anchor.y;
+  if (left + width + 12 > vw) left = Math.max(12, vw - width - 12);
+  if (top + height + 12 > vh) top = Math.max(12, vh - height - 12);
+  return { left, top };
+}
+
+function stringifyForDisplay(v: unknown): string {
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
+
+function isEmptyValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "object" && !Array.isArray(v)) {
+    return Object.keys(v as Record<string, unknown>).length === 0;
+  }
+  return false;
 }
 
 function formatDuration(ms: number): string {

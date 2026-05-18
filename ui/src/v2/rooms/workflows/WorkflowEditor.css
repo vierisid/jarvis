@@ -181,6 +181,120 @@
   color: var(--ink);
 }
 
+/* ── Run-detail popover (overlay mode) ─────────────────────────────────
+   Shown when the user clicks a node while a past run is overlaid. Lives
+   over the canvas via portal; positioned by JS-clamp. Read-only view
+   of one step's input/output/error/duration. */
+.wf-run-detail {
+  position: fixed;
+  z-index: 200;
+  width: 380px;
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.5),
+              0 4px 12px -4px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.wf-run-detail__header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-3);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+}
+.wf-run-detail__header code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  background: var(--paper-3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+.wf-run-detail__header--ok { border-bottom-color: color-mix(in srgb, var(--ok) 35%, var(--rule-soft)); }
+.wf-run-detail__header--warn { border-bottom-color: color-mix(in srgb, var(--warn) 35%, var(--rule-soft)); }
+.wf-run-detail__header--accent { border-bottom-color: color-mix(in srgb, var(--accent) 35%, var(--rule-soft)); }
+.wf-run-detail__status {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wf-run-detail__duration {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.wf-run-detail__close {
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-pill);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.wf-run-detail__close:hover { background: var(--paper-3); color: var(--ink); }
+
+.wf-run-detail__body {
+  overflow-y: auto;
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.wf-run-detail__empty {
+  padding: var(--s-4);
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.wf-run-detail__section h4 {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.wf-run-detail__section pre {
+  margin: 0;
+  padding: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Error section gets a tinted accent left rule so it's the first thing
+   the eye lands on when a step failed. */
+.wf-run-detail__section--error pre {
+  background: color-mix(in srgb, var(--accent) 6%, var(--paper-2));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--rule-soft));
+  color: var(--accent);
+}
+
 /* ── Per-node run status (overlay mode) ────────────────────────────────
    Painted by `wf-node--run-<status>` modifier classes. Applied alongside
    the regular border / unconfigured / orphan modifiers; the run colors
