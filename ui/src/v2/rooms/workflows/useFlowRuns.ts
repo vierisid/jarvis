@@ -143,6 +143,13 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             triggeredBy: "editor:run",
+            // TESTING mode opts into per-step output streaming via the
+            // engine's WEBSOCKET `streamStepProgress`. Without this the
+            // run's `steps` map stays empty (PRODUCTION runs only write
+            // the final uploadRunLog), which makes the canvas overlay
+            // show every node as "not reached" -- the editor is a dev
+            // surface where the user wants the granular trace.
+            environment: "TESTING",
             ...(payload ? { payload } : {}),
           }),
         });

@@ -4700,19 +4700,53 @@ export interface CanvasStepSnapshot {
 
 /**
  * Decide a CanvasRunStatus per step name from a run row's `steps` map.
- * Steps that don't appear in the map get "not-reached"; the run-level
- * status influences "running" vs "not-reached" so an in-flight run shows
- * the currently-executing step rather than a sea of grey.
+ *
+ * Three modes:
+ *
+ *   1. Steps map is populated (TESTING runs, or partially-populated
+ *      PRODUCTION runs after a few engine progress updates landed):
+ *      each named step gets a status from the entry; unnamed steps fall
+ *      through to "not-reached" so the user sees which branches the run
+ *      did NOT take.
+ *
+ *   2. Steps map is EMPTY but the run has a `failedStep` (common for
+ *      PRODUCTION runs that ran with `streamStepProgress: NONE` and
+ *      failed before any uploadRunLog populated the steps tree): mark
+ *      only that one step as "failed" and leave everything else
+ *      unmarked (no fade). The banner already tells the user which run
+ *      they're viewing; fading the whole canvas would be confusing.
+ *
+ *   3. Steps map is empty AND no failedStep: the run has no usable
+ *      per-step trace. Return an empty map so the canvas renders as
+ *      normal -- the overlay banner is enough to convey "viewing this
+ *      run" without applying any node-level styling.
  */
 export function buildRunOverlay(
   run: FlowRun | null,
   stepNames: string[],
 ): Record<string, CanvasStepSnapshot> {
-  if (!run || !run.steps) return {};
+  if (!run) return {};
+  const steps = (run.steps ?? {}) as Record<string, unknown>;
+  const hasStepData = Object.keys(steps).length > 0;
+
+  // Mode 2: empty steps + a known failed step -> highlight just that.
+  if (!hasStepData && run.failedStep) {
+    return {
+      [run.failedStep.name]: {
+        status: "failed",
+        errorMessage: null,
+        duration: null,
+      },
+    };
+  }
+  // Mode 3: nothing actionable -- skip overlay so the canvas isn't dimmed.
+  if (!hasStepData) return {};
+
+  // Mode 1: rich per-step trace.
   const out: Record<string, CanvasStepSnapshot> = {};
   const isRunActive = run.status === "RUNNING" || run.status === "QUEUED";
   for (const name of stepNames) {
-    const entry = (run.steps as Record<string, unknown>)[name];
+    const entry = steps[name];
     if (!entry || typeof entry !== "object") {
       // No record yet. For a still-running flow we DON'T know if this
       // step is upcoming or skipped, but "not-reached" is the honest
