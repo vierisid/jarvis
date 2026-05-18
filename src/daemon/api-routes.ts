@@ -1141,6 +1141,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = (await req.json()) as {
             llm?: Record<string, unknown>;
+            stt?: Record<string, unknown>;
             tts?: Record<string, unknown>;
           };
 
@@ -1151,7 +1152,33 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
           }
 
-          // 2. TTS settings — same path as /api/config/tts POST. Inline
+          // 2. STT settings — mirrors /api/config/stt POST semantics so
+          //    the onboarding form can persist a Whisper choice (cloud or
+          //    local) without restart. STT itself is consumed at the next
+          //    transcription request, so no hot-swap is needed.
+          if (body.stt) {
+            const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
+            const fresh = await lc();
+            if (!fresh.stt) fresh.stt = { provider: 'openai' };
+            const sttBody = { ...(body.stt as Record<string, unknown>) };
+            for (const p of ['openai', 'groq', 'sarvam'] as const) {
+              const incoming = sttBody[p] as Record<string, unknown> | undefined;
+              const existing = (fresh.stt as any)[p];
+              if (incoming) {
+                (fresh.stt as any)[p] = {
+                  ...existing,
+                  ...incoming,
+                  api_key: (incoming.api_key as string) || existing?.api_key || '',
+                };
+                delete sttBody[p];
+              }
+            }
+            fresh.stt = { ...fresh.stt, ...sttBody } as any;
+            await sc(fresh);
+            ctx.config.stt = fresh.stt;
+          }
+
+          // 3. TTS settings — same path as /api/config/tts POST. Inline
           //    the relevant write since the TTS endpoint is large; we
           //    don't need provider hot-swap UI feedback here.
           if (body.tts) {
