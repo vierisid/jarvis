@@ -125,12 +125,222 @@
 .wf-editor__toast--ok { color: var(--accent-ok, #5eead4); border-color: var(--accent-ok-soft, #134e4a); }
 .wf-editor__toast--warn { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn-soft, #713f12); }
 
+/* Body: horizontal split between the xyflow canvas and the (optional)
+   right-side runs panel. The canvas takes whatever's left after the
+   panel's fixed width. */
+.wf-editor__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+}
+
 .wf-editor__canvas {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   position: relative;
   background: var(--paper);
   overflow: hidden;
+}
+
+/* ── Runs panel (right side of the editor) ─────────────────────────────── */
+
+.wf-editor__runs-panel {
+  flex: 0 0 320px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--rule-soft);
+  background: var(--paper-2);
+  overflow: hidden;
+}
+
+.wf-editor__runs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper);
+}
+
+.wf-editor__runs-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wf-editor__runs-meta {
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.wf-editor__runs-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.wf-editor__runs-error {
+  padding: var(--s-2) var(--s-3);
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.wf-editor__runs-empty {
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.82rem;
+}
+
+.wf-editor__runs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.wf-editor__run {
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.wf-editor__run-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+.wf-editor__run-head:hover { background: var(--paper-3); }
+
+.wf-editor__run-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.wf-editor__run-status {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.wf-editor__run-failed {
+  grid-column: 2 / 3;
+  font-size: 0.7rem;
+  color: var(--accent);
+  font-style: italic;
+}
+
+.wf-editor__run-time,
+.wf-editor__run-duration {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Status color accents on the run icon. Picks the matching ink color so
+   the row's status word also reads in tone. */
+.wf-editor__run--ok .wf-editor__run-icon { color: var(--ok); }
+.wf-editor__run--warn .wf-editor__run-icon { color: var(--warn); }
+.wf-editor__run--accent .wf-editor__run-icon { color: var(--accent); }
+.wf-editor__run--neutral .wf-editor__run-icon { color: var(--ink-3); }
+
+.wf-editor__run-body {
+  padding: var(--s-2) var(--s-3) var(--s-3);
+  border-top: 1px dashed var(--rule-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  background: var(--paper);
+}
+
+.wf-editor__run-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--s-2);
+  margin: 0;
+  font-size: 0.72rem;
+}
+.wf-editor__run-kv dt { color: var(--ink-3); }
+.wf-editor__run-kv dd { margin: 0; color: var(--ink-2); }
+.wf-editor__run-kv code {
+  background: var(--paper-3);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+}
+
+.wf-editor__run-output summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  padding: 2px 0;
+}
+.wf-editor__run-output pre {
+  margin: 4px 0 0;
+  padding: var(--s-2);
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Header chips for the Runs button: small badge for active runs (accent)
+   vs a quiet count when everything's terminal. */
+.wf-editor__runs-badge,
+.wf-editor__runs-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+}
+.wf-editor__runs-badge {
+  background: var(--accent);
+  color: var(--paper);
+}
+.wf-editor__runs-count {
+  background: var(--paper-3);
+  color: var(--ink-2);
+  border: 1px solid var(--rule-soft);
 }
 
 .wf-editor__placeholder {

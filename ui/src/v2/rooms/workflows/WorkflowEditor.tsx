@@ -30,7 +30,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2 } from "lucide-react";
+import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -43,6 +43,8 @@ import {
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep } from "./tree";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
+import { useFlowRuns } from "./useFlowRuns";
+import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
@@ -90,6 +92,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // before they've installed it; picking an uninstalled row triggers the
   // install via this hook.
   const library = useLibrary();
+  // Scoped runs for this flow: powers the header Run button and the
+  // right-side Runs panel. Polls adaptively (2s while active, 8s idle).
+  const runs = useFlowRuns(flowId);
+  // Visibility of the Runs side panel. Defaults closed so the canvas has
+  // the full width; the header button shows a count badge so the user
+  // notices new runs even when it's hidden.
+  const [runsPanelOpen, setRunsPanelOpen] = useState<boolean>(false);
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   // Anchor for the floating settings popover. Captured at click-time from
   // the originating MouseEvent so the popover opens near the cursor rather
@@ -465,6 +474,39 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     [editor, library, libraryPicker, closeLibraryPicker, pendingInstall],
   );
 
+  /**
+   * Queue a run for the current flow. The server runs the latest published
+   * version (or the latest draft if no published version exists), so a
+   * user with unsaved edits should save first; we warn with a confirm
+   * rather than disabling outright so the user can deliberately re-run
+   * the last-saved version if that's what they want.
+   */
+  const handleRun = useCallback(async (): Promise<void> => {
+    if (!flowId) return;
+    if (editor.dirty) {
+      const proceed = window.confirm(
+        "You have unsaved changes. Running will use the last SAVED version, not your current edits. Continue?",
+      );
+      if (!proceed) return;
+    }
+    const result = await runs.start();
+    if (result.ok) {
+      setActionMessage({ tone: "ok", text: "Run queued" });
+      // Open the panel automatically so the user can watch progress.
+      setRunsPanelOpen(true);
+    } else {
+      setActionMessage({ tone: "warn", text: `Run failed: ${result.message}` });
+    }
+    window.setTimeout(() => setActionMessage(null), 2500);
+  }, [flowId, editor.dirty, runs]);
+
+  // Count of non-terminal runs surfaced as a badge on the Runs button so
+  // users see "something's still going" without having to open the panel.
+  const activeRunCount = useMemo(
+    () => runs.runs.filter((r) => !RUN_TERMINAL_STATUSES.has(r.status)).length,
+    [runs.runs],
+  );
+
   return (
     <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
       <header className="wf-editor__header">
@@ -516,12 +558,42 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty}>
             <Icon icon={Save} size={14} /> Save
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleRun()}
+            disabled={runs.starting || !editor.version}
+            title={
+              editor.dirty
+                ? "Run the LAST SAVED version (your unsaved edits won't apply)"
+                : "Queue a run of this workflow"
+            }
+          >
+            <Icon icon={Play} size={14} /> {runs.starting ? "Queueing..." : "Run"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setRunsPanelOpen((v) => !v)}
+            title={runsPanelOpen ? "Hide runs panel" : "Show runs panel"}
+            aria-expanded={runsPanelOpen}
+          >
+            <Icon icon={History} size={14} /> Runs
+            {activeRunCount > 0 ? (
+              <span className="wf-editor__runs-badge" aria-label={`${activeRunCount} active`}>
+                {activeRunCount}
+              </span>
+            ) : runs.runs.length > 0 ? (
+              <span className="wf-editor__runs-count">{runs.runs.length}</span>
+            ) : null}
+          </Button>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close editor">
             <Icon icon={X} size={14} />
           </Button>
         </div>
       </header>
 
+      <div className="wf-editor__body">
       <section className="wf-editor__canvas" aria-label="Workflow graph">
         {editor.loading ? (
           <div className="wf-editor__placeholder">Loading flow…</div>
@@ -577,6 +649,28 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           </ReactFlow>
         )}
       </section>
+
+      {/* Side panel: this flow's run history. Toggled via the header Runs
+          button. Stays mounted but visually collapsed when closed so the
+          poll loop continues (badge in the header keeps incrementing). */}
+      {runsPanelOpen ? (
+        <RunsPanel
+          runs={runs.runs}
+          loading={runs.loading}
+          error={runs.error}
+          onClose={() => setRunsPanelOpen(false)}
+          onRefresh={() => void runs.refresh()}
+          onCancel={async (runId) => {
+            const r = await runs.cancel(runId);
+            setActionMessage({
+              tone: r.ok ? "ok" : "warn",
+              text: r.ok ? "Cancel queued" : `Cancel failed: ${r.message}`,
+            });
+            window.setTimeout(() => setActionMessage(null), 2500);
+          }}
+        />
+      ) : null}
+      </div>
 
       {/* Canvas right-click menu: anchored at the cursor's screen
           position. First entry opens the floating piece library. */}
@@ -4196,4 +4290,178 @@ function ConditionRow({
       ) : null}
     </li>
   );
+}
+
+/* ============================================================= runs panel */
+
+/**
+ * Right-side panel showing this flow's run history. Re-uses the polled
+ * data from `useFlowRuns`; rows are intentionally tighter than the
+ * room-level list because we're working inside the editor's narrower
+ * side column. Click a row to expand its step output JSON; non-terminal
+ * runs surface a Cancel button.
+ */
+const RUN_TERMINAL_STATUSES = new Set<FlowRunStatus>([
+  "SUCCEEDED",
+  "FAILED",
+  "STOPPED",
+  "TIMEOUT",
+  "INTERNAL_ERROR",
+  "QUOTA_EXCEEDED",
+  "MEMORY_LIMIT_EXCEEDED",
+  "SCHEDULE_FAILURE",
+]);
+
+const RUN_STATUS_TONE: Record<FlowRunStatus, "ok" | "neutral" | "warn" | "accent"> = {
+  QUEUED: "neutral",
+  RUNNING: "warn",
+  SUCCEEDED: "ok",
+  FAILED: "accent",
+  PAUSED: "warn",
+  TIMEOUT: "accent",
+  INTERNAL_ERROR: "accent",
+  QUOTA_EXCEEDED: "accent",
+  STOPPED: "neutral",
+  MEMORY_LIMIT_EXCEEDED: "accent",
+  SCHEDULE_FAILURE: "accent",
+};
+
+function RunsPanel({
+  runs,
+  loading,
+  error,
+  onClose,
+  onRefresh,
+  onCancel,
+}: {
+  runs: FlowRun[];
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onRefresh: () => void;
+  onCancel: (runId: string) => Promise<void>;
+}): React.ReactElement {
+  const activeCount = runs.filter((r) => !RUN_TERMINAL_STATUSES.has(r.status)).length;
+  return (
+    <aside className="wf-editor__runs-panel" aria-label="Workflow runs">
+      <header className="wf-editor__runs-header">
+        <div className="wf-editor__runs-title">
+          <Icon icon={History} size={14} />
+          <span>Runs</span>
+          <span className="wf-editor__runs-meta">
+            {runs.length === 0 ? "no runs yet" : `${runs.length} total${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
+          </span>
+        </div>
+        <div className="wf-editor__runs-actions">
+          <Button variant="ghost" size="sm" onClick={onRefresh} title="Refresh">
+            <Icon icon={RotateCcw} size={12} />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close runs panel">
+            <Icon icon={X} size={12} />
+          </Button>
+        </div>
+      </header>
+      {error ? (
+        <div className="wf-editor__runs-error">{error}</div>
+      ) : null}
+      {runs.length === 0 ? (
+        <div className="wf-editor__runs-empty">
+          {loading ? "Loading runs..." : "No runs yet. Click Run above to queue one."}
+        </div>
+      ) : (
+        <ul className="wf-editor__runs-list">
+          {runs.map((run) => (
+            <RunRow key={run.id} run={run} onCancel={() => onCancel(run.id)} />
+          ))}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
+function RunRow({
+  run,
+  onCancel,
+}: {
+  run: FlowRun;
+  onCancel: () => Promise<void>;
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState<boolean>(false);
+  const isTerminal = RUN_TERMINAL_STATUSES.has(run.status);
+  const duration = run.startTime && run.finishTime
+    ? formatDuration(run.finishTime - run.startTime)
+    : run.startTime
+      ? formatDuration(Date.now() - run.startTime) + "..."
+      : "—";
+  const startedAt = run.startTime
+    ? new Date(run.startTime).toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "—";
+  return (
+    <li className={`wf-editor__run wf-editor__run--${RUN_STATUS_TONE[run.status]}`}>
+      <button
+        type="button"
+        className="wf-editor__run-head"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="wf-editor__run-icon" aria-hidden="true">
+          <RunStatusIcon status={run.status} />
+        </span>
+        <span className="wf-editor__run-status">{run.status}</span>
+        {run.failedStep ? (
+          <span className="wf-editor__run-failed">@ {run.failedStep.displayName}</span>
+        ) : null}
+        <span className="wf-editor__run-time">{startedAt}</span>
+        <span className="wf-editor__run-duration">{duration}</span>
+      </button>
+      {expanded ? (
+        <div className="wf-editor__run-body">
+          <dl className="wf-editor__run-kv">
+            <dt>Id</dt>
+            <dd><code>{run.id}</code></dd>
+            <dt>Steps</dt>
+            <dd>{run.stepsCount ?? 0}</dd>
+            <dt>Trigger</dt>
+            <dd>{run.triggeredBy ?? "manual"}</dd>
+            <dt>Env</dt>
+            <dd>{run.environment}</dd>
+          </dl>
+          {run.steps && Object.keys(run.steps).length > 0 ? (
+            <details className="wf-editor__run-output">
+              <summary>Step output JSON</summary>
+              <pre>{JSON.stringify(run.steps, null, 2)}</pre>
+            </details>
+          ) : null}
+          {!isTerminal ? (
+            <Button variant="danger" size="sm" onClick={() => void onCancel()}>
+              <Icon icon={X} size={12} /> Cancel
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElement {
+  if (status === "SUCCEEDED") return <Icon icon={CheckCircle2} size={12} />;
+  if (status === "FAILED" || status === "INTERNAL_ERROR" || status === "TIMEOUT") {
+    return <Icon icon={XCircle} size={12} />;
+  }
+  if (status === "PAUSED") return <Icon icon={Pause} size={12} />;
+  if (status === "RUNNING" || status === "QUEUED") return <Icon icon={Clock} size={12} />;
+  return <Icon icon={AlertTriangle} size={12} />;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return `${m}m${rs.toString().padStart(2, "0")}s`;
 }
