@@ -39,6 +39,35 @@ export const flowExecutor = {
     }): Promise<FlowExecutorContext> {
         const trigger = input.flowVersion.trigger
         if (input.executionType === ExecutionType.BEGIN) {
+            // === JARVIS PATCH: short-circuit for manual (EMPTY) triggers ===
+            // Upstream unconditionally calls `triggerHelper.executeOnStart`,
+            // which throws `TriggerNameNotSetError` whenever the trigger has
+            // no piece (i.e. type === 'EMPTY' — our user-facing "Manual"
+            // trigger). Replicate the surrounding bookkeeping (initial-state
+            // backup + progress update) and skip straight into the action
+            // chain. The mirror of this patch lives in PATCH_INSERTIONS in
+            // `scripts/sync-activepieces.ts` so future upstream re-syncs
+            // restore it automatically.
+            if ((trigger as { type?: string }).type === 'EMPTY') {
+                void runProgressService.backup({
+                    engineConstants: constants,
+                    flowExecutorContext: executionState,
+                }).catch((err) => {
+                    console.error('[Progress] Initial payload upload failed', err)
+                })
+                await runProgressService.sendUpdate({
+                    engineConstants: constants,
+                    flowExecutorContext: executionState,
+                    stepNameToUpdate: trigger.name,
+                    startTime: dayjs().toISOString(),
+                })
+                return flowExecutor.execute({
+                    action: trigger.nextAction,
+                    executionState,
+                    constants,
+                })
+            }
+            // === END JARVIS PATCH ===
             void runProgressService.backup({
                 engineConstants: constants,
                 flowExecutorContext: executionState,

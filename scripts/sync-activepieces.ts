@@ -254,6 +254,45 @@ const PATCH_INSERTIONS: Record<
         "  server: ServerContext;",
     },
   ],
+  // Upstream's `flow-executor.executeFromTrigger` always calls
+  // `triggerHelper.executeOnStart`, which throws `TriggerNameNotSetError`
+  // when the trigger has no piece (the EMPTY / "Manual" type). Without this
+  // patch, manually-triggered runs from the editor's Run button fail
+  // before step 1. Anchor on the `BEGIN` branch's opening brace and insert
+  // an EMPTY-trigger short-circuit that runs the bookkeeping (initial
+  // backup + sendUpdate) and then walks straight into the action chain.
+  "packages/server/engine/src/lib/handler/flow-executor.ts": [
+    {
+      anchor: /^\s*if \(input\.executionType === ExecutionType\.BEGIN\) \{\s*$/,
+      insert:
+        "            // === JARVIS PATCH: short-circuit for manual (EMPTY) triggers ===\n" +
+        "            // Upstream unconditionally calls `triggerHelper.executeOnStart`,\n" +
+        "            // which throws `TriggerNameNotSetError` whenever the trigger has\n" +
+        "            // no piece (i.e. type === 'EMPTY' -- our user-facing \"Manual\"\n" +
+        "            // trigger). Replicate the surrounding bookkeeping (initial-state\n" +
+        "            // backup + progress update) and skip straight into the action chain.\n" +
+        "            if ((trigger as { type?: string }).type === 'EMPTY') {\n" +
+        "                void runProgressService.backup({\n" +
+        "                    engineConstants: constants,\n" +
+        "                    flowExecutorContext: executionState,\n" +
+        "                }).catch((err) => {\n" +
+        "                    console.error('[Progress] Initial payload upload failed', err)\n" +
+        "                })\n" +
+        "                await runProgressService.sendUpdate({\n" +
+        "                    engineConstants: constants,\n" +
+        "                    flowExecutorContext: executionState,\n" +
+        "                    stepNameToUpdate: trigger.name,\n" +
+        "                    startTime: dayjs().toISOString(),\n" +
+        "                })\n" +
+        "                return flowExecutor.execute({\n" +
+        "                    action: trigger.nextAction,\n" +
+        "                    executionState,\n" +
+        "                    constants,\n" +
+        "                })\n" +
+        "            }\n" +
+        "            // === END JARVIS PATCH ===",
+    },
+  ],
 };
 
 /**
