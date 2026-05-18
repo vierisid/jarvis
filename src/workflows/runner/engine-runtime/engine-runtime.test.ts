@@ -142,17 +142,15 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
     closeWorkflowDb();
   });
 
-  // The success-case end-to-end test (a flow that runs to SUCCEEDED) lives in
-  // phase F's commit, because the engine requires a real piece trigger
-  // (`executeOnStart` casts `trigger` to PieceTrigger and reads triggerName,
-  // throwing TriggerNameNotSetError on EMPTY triggers). At this stage we have
-  // no pieces ported yet, so we exercise the round-trip via a deliberate
-  // engine-side validation error: we send EXECUTE_FLOW with a flow that uses
-  // an EMPTY trigger, and assert the engine reports back the expected
-  // TriggerNameNotSetError. This proves the operation IPC + URL plumbing +
-  // logsUploadUrl auth fallback all work end-to-end.
+  // End-to-end EXECUTE_FLOW round-trip with an EMPTY (manual) trigger and
+  // no actions. Our vendored flow-executor patch short-circuits the
+  // executeOnStart call for EMPTY triggers (see PATCH_INSERTIONS in
+  // scripts/sync-activepieces.ts) so the engine walks straight into the
+  // (empty) action chain and terminates SUCCEEDED. This proves the
+  // operation IPC + URL plumbing + logsUploadUrl auth fallback all work
+  // end-to-end -- the strong signal is the terminal status landing.
   test.skipIf(skipBundleTests)(
-    "EXECUTE_FLOW round-trip surfaces engine validation error on EMPTY trigger",
+    "EXECUTE_FLOW round-trip completes a manual-trigger flow",
     async () => {
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const trigger: FlowTriggerNode = {
@@ -162,7 +160,7 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
       };
       const v = createDraftVersion({
         flowId: flow.id,
-        displayName: "negative-smoke",
+        displayName: "manual-smoke",
         trigger,
       });
       updateDraftVersion(v.id, { trigger, valid: true });
@@ -179,25 +177,17 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
         projectId: DEFAULT_IDS.project,
       });
       try {
-        // The engine completes the operation even when the flow itself fails
-        // validation; the run row reflects the engine's bookkeeping.
-        //
-        // The terminal status this test sees depends on a race between
-        // `executeOperation`'s reply and the engine's `uploadRunLog` call
-        // (a separate socket.io message from engine -> daemon). All four of
-        // these prove the engine processed the operation; the strong signal
-        // is `liveCount() === 1` below. We accept any non-success state:
-        //   - FAILED         : uploadRunLog landed with a terminal failure status
-        //   - INTERNAL_ERROR : engine surfaced an internal error
-        //   - QUEUED         : engine returned before uploadRunLog reached us
-        //   - RUNNING        : engine transitioned to running but didn't reach
-        //                      a terminal status before executeOperation replied
-        //                      (observed under `bun test --bail` parallelism)
+        // The terminal status depends on a race between `executeOperation`'s
+        // reply and the engine's final `uploadRunLog` (independent
+        // socket.io messages). The happy path is SUCCEEDED; we tolerate
+        // the brief in-flight states that can appear before uploadRunLog
+        // lands so this test isn't flaky under `bun test --bail`.
+        //   - SUCCEEDED      : terminal status reached normally
+        //   - QUEUED/RUNNING : engine returned before uploadRunLog reached us
         await handle.executeFlow({ flowVersion: versionFromDb! });
         const persisted = getFlowRun(run.id);
-        expect(["FAILED", "INTERNAL_ERROR", "QUEUED", "RUNNING"]).toContain(persisted!.status);
-        // The engine connected successfully and we exchanged at least one
-        // operation; that's what this test is asserting.
+        expect(["SUCCEEDED", "QUEUED", "RUNNING"]).toContain(persisted!.status);
+        // The engine connected successfully and we exchanged an operation.
         expect(api.registry.liveCount()).toBe(1);
       } finally {
         await handle.release();

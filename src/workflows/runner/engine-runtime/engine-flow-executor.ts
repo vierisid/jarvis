@@ -122,19 +122,30 @@ export class EngineFlowExecutor implements FlowExecutor {
       // streamStepProgress: WEBSOCKET makes the engine emit per-step
       // `updateRunProgress({ step })` calls to the daemon -- the
       // worker-handler accumulates each step's output onto `flow_run.steps`
-      // so the dashboard run-history panel can see per-step results.
-      // Cost: one socket.io message + one DB update per step. For
-      // `TESTING` runs (manual `/run`, run-from-here previews) that's a
-      // good trade. For `PRODUCTION` runs (cron/webhook/event-fired,
-      // potentially every 10s for sub-minute polling triggers) we default
-      // to `NONE` -- only the final `uploadRunLog` writes the run state,
-      // which is enough for the dashboard summary view.
+      // so the run-history panel + canvas overlay can show per-step
+      // results in real time.
+      //
+      // Cost: one socket.io message + one DB UPDATE per step executed.
+      // On Jarvis's local-first, single-user scale this is negligible
+      // (SQLite WAL handles thousands of writes/sec). We use WEBSOCKET
+      // for both TESTING (manual / run-from-here) and PRODUCTION
+      // (cron/webhook/event-fired) runs so a user inspecting a past
+      // cron-fired run gets the same visibility as a manual run.
+      //
+      // Override via `JARVIS_WORKFLOW_STREAM_STEP_PROGRESS=NONE` for
+      // setups that genuinely need to skip the per-step bookkeeping
+      // (e.g. high-frequency polling triggers where the DB churn is
+      // measurable on the operator's profile).
       const env: "PRODUCTION" | "TESTING" =
         ctx.run.environment === "TESTING" ? "TESTING" : "PRODUCTION";
+      const streamStepProgress: "WEBSOCKET" | "NONE" =
+        process.env["JARVIS_WORKFLOW_STREAM_STEP_PROGRESS"] === "NONE"
+          ? "NONE"
+          : "WEBSOCKET";
       const flowOpts: Parameters<typeof handle.executeFlow>[0] = {
         flowVersion: ctx.version,
         runEnvironment: env,
-        streamStepProgress: env === "TESTING" ? "WEBSOCKET" : "NONE",
+        streamStepProgress,
       };
       const executionType = ctx.job.payload.executionType ?? "BEGIN";
       if (executionType === "RESUME") {
