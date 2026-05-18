@@ -17,6 +17,17 @@ function makeManager(projectsDir: string): ProjectManager {
 }
 
 describe('ProjectManager path containment', () => {
+  test('returns null for project ids that resolve outside projects dir', async () => {
+    const projectsDir = await mkdtemp(join(tmpdir(), 'jarvis-sites-'));
+    try {
+      const manager = makeManager(projectsDir);
+
+      expect(manager.getProjectPath('../etc')).toBe(null);
+    } finally {
+      await rm(projectsDir, { recursive: true, force: true });
+    }
+  });
+
   test('blocks sibling directory traversal with a shared prefix', async () => {
     const projectsDir = await mkdtemp(join(tmpdir(), 'jarvis-sites-'));
     try {
