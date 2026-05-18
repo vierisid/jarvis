@@ -125,6 +125,93 @@
 .wf-editor__toast--ok { color: var(--accent-ok, #5eead4); border-color: var(--accent-ok-soft, #134e4a); }
 .wf-editor__toast--warn { color: var(--accent-warn, #fbbf24); border-color: var(--accent-warn-soft, #713f12); }
 
+/* ── Run overlay banner ───────────────────────────────────────────────
+   Surfaced below the running banner when the user clicks "Show on
+   canvas" on a past run. Distinct visual treatment from the running
+   banner because they can both be present at once (live run going while
+   user inspects a different past run). */
+.wf-editor__overlay-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-5);
+  border-bottom: 1px solid var(--rule-soft);
+  background: color-mix(in srgb, var(--accent) 8%, var(--paper-2));
+  border-bottom-color: color-mix(in srgb, var(--accent) 30%, var(--rule-soft));
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+.wf-editor__overlay-banner code {
+  background: var(--paper-3);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+}
+.wf-editor__overlay-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+.wf-editor__overlay-banner--ok .wf-editor__overlay-banner-icon { color: var(--ok); }
+.wf-editor__overlay-banner--warn .wf-editor__overlay-banner-icon { color: var(--warn); }
+.wf-editor__overlay-banner--accent .wf-editor__overlay-banner-icon { color: var(--accent); }
+.wf-editor__overlay-banner-text {
+  flex: 1 1 auto;
+}
+.wf-editor__overlay-banner-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-pill);
+  padding: 2px 10px;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wf-editor__overlay-banner-clear:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+/* ── Per-node run status (overlay mode) ────────────────────────────────
+   Painted by `wf-node--run-<status>` modifier classes. Applied alongside
+   the regular border / unconfigured / orphan modifiers; the run colors
+   take precedence by being later in the cascade. */
+.wf-node--run-succeeded { border-color: var(--ok); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 30%, transparent); }
+.wf-node--run-failed    { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.wf-node--run-paused    { border-color: var(--warn); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); }
+.wf-node--run-running   { border-color: var(--warn); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); animation: wf-node-run-pulse 1.6s ease-in-out infinite; }
+.wf-node--run-skipped   { opacity: 0.6; }
+.wf-node--run-not-reached { opacity: 0.4; filter: grayscale(60%); }
+
+@keyframes wf-node-run-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 30%, transparent); }
+}
+
+/* Small status pip on the right side of the node's head row. */
+.wf-node__run-pip {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.wf-node__run-pip--succeeded { background: var(--ok); }
+.wf-node__run-pip--failed    { background: var(--accent); }
+.wf-node__run-pip--paused    { background: var(--warn); }
+.wf-node__run-pip--running   { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent); }
+.wf-node__run-pip--skipped   { background: var(--ink-3); }
+
 /* ── Sticky "currently running" banner ─────────────────────────────────
    Renders just below the editor header when any run is non-terminal.
    Whole bar is a button -- click jumps the user into the runs panel. */
@@ -354,6 +441,34 @@
 .wf-editor__run--warn .wf-editor__run-icon { color: var(--warn); }
 .wf-editor__run--accent .wf-editor__run-icon { color: var(--accent); }
 .wf-editor__run--neutral .wf-editor__run-icon { color: var(--ink-3); }
+
+/* One-line error preview under the row's status line. Always rendered
+   when a failed step has a message; tooltip carries the full thing. */
+.wf-editor__run-error {
+  margin: 0;
+  padding: 0 var(--s-3) 6px;
+  font-size: 0.72rem;
+  color: var(--accent);
+  line-height: 1.35;
+  /* Clamp to 2 lines so a verbose error doesn't blow up the row. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wf-editor__run-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--s-3) 6px;
+  gap: 4px;
+}
+
+/* Highlighted run row when its overlay is active on the canvas. */
+.wf-editor__run--overlay-active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 
 .wf-editor__run-body {
   padding: var(--s-2) var(--s-3) var(--s-3);

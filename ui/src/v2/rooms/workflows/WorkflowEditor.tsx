@@ -82,6 +82,15 @@ interface StepNodeData extends Record<string, unknown> {
   loopBodyConnected: boolean;
   /** Keyed by branch name. */
   branchConnected: Record<string, boolean>;
+  /**
+   * Per-step status from the currently-overlaid run, or null when no run
+   * is overlaid. Drives the colored border + status pip on the node card.
+   */
+  runStatus: CanvasRunStatus | null;
+  /** Pre-stringified error text for the failed-step tooltip. */
+  runError: string | null;
+  /** ms duration for the step from the overlaid run, if recorded. */
+  runDuration: number | null;
 }
 
 export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
@@ -99,6 +108,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // the full width; the header button shows a count badge so the user
   // notices new runs even when it's hidden.
   const [runsPanelOpen, setRunsPanelOpen] = useState<boolean>(false);
+  // When set, the canvas paints per-node status pips derived from this
+  // run's `steps` map -- the user can see which steps succeeded / failed
+  // / didn't get reached. Clicking a row in the panel toggles this; the
+  // banner at the top of the canvas lets the user exit overlay mode.
+  const [overlayRunId, setOverlayRunId] = useState<string | null>(null);
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   // Anchor for the floating settings popover. Captured at click-time from
   // the originating MouseEvent so the popover opens near the cursor rather
@@ -217,12 +231,26 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   const selectedStep = selectedFlat?.step ?? null;
   const selectedDepth = selectedFlat?.depth ?? 0;
 
+  // Per-step status snapshots for the run currently being overlaid on the
+  // canvas (set via the Runs panel's "Show on canvas" button). Empty when
+  // no run is overlaid -- in that case buildGraph just renders nodes in
+  // their normal idle state. Declared up here so the buildGraph memo can
+  // depend on it; the actual overlayRun object is resolved later for the
+  // banner.
+  const overlaySnapshots = useMemo(() => {
+    if (!overlayRunId) return {};
+    const run = runs.runs.find((r) => r.id === overlayRunId);
+    if (!run) return {};
+    const names = editor.allSteps.map((s) => s.step.name);
+    return buildRunOverlay(run, names);
+  }, [overlayRunId, runs.runs, editor.allSteps]);
+
   // Build the canonical graph from the chain. `baseNodes` reflects the
   // chain's authoritative order; React Flow needs an internal mutable copy
   // so dragged positions update visually without losing reactivity.
   const { nodes: baseNodes, edges } = useMemo(
-    () => buildGraph(editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions),
-    [editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions],
+    () => buildGraph(editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots),
+    [editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
   // Sync incoming chain order changes back into React Flow's internal state.
@@ -513,6 +541,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     () => runs.runs.find((r) => !RUN_TERMINAL_STATUSES.has(r.status)) ?? null,
     [runs.runs],
   );
+  // Resolve the overlay run for the banner. The snapshots used by
+  // buildGraph live above (declared early so the memo can depend on
+  // them); this lookup just gets the run row for banner labelling.
+  const overlayRun = useMemo(
+    () => (overlayRunId ? runs.runs.find((r) => r.id === overlayRunId) ?? null : null),
+    [overlayRunId, runs.runs],
+  );
 
   return (
     <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
@@ -613,6 +648,17 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         />
       ) : null}
 
+      {/* Run overlay banner: when a past run is selected for canvas
+          overlay, surfaces which run + lets the user exit overlay mode.
+          Distinct from the in-flight banner so they can coexist (user
+          viewing run #4's overlay while run #5 is currently running). */}
+      {overlayRun ? (
+        <OverlayBanner
+          run={overlayRun}
+          onClear={() => setOverlayRunId(null)}
+        />
+      ) : null}
+
       <div className="wf-editor__body">
       <section className="wf-editor__canvas" aria-label="Workflow graph">
         {editor.loading ? (
@@ -678,6 +724,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           runs={runs.runs}
           loading={runs.loading}
           error={runs.error}
+          overlayRunId={overlayRunId}
           onClose={() => setRunsPanelOpen(false)}
           onRefresh={() => void runs.refresh()}
           onCancel={async (runId) => {
@@ -687,6 +734,9 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               text: r.ok ? "Cancel queued" : `Cancel failed: ${r.message}`,
             });
             window.setTimeout(() => setActionMessage(null), 2500);
+          }}
+          onToggleOverlay={(runId) => {
+            setOverlayRunId((cur) => (cur === runId ? null : runId));
           }}
         />
       ) : null}
@@ -2483,6 +2533,11 @@ function buildGraph(
   selected: string | null,
   catalog: PieceCatalogEntry[],
   stepPositions: Record<string, { x: number; y: number }>,
+  /**
+   * Per-step snapshot from a selected run. Empty when no run is being
+   * overlaid; populated drives per-node status pips + border tinting.
+   */
+  overlay: Record<string, CanvasStepSnapshot>,
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
   const autoPositions = computeAutoLayout(trigger);
   const buildNodeData = (
@@ -2511,6 +2566,9 @@ function buildGraph(
       outConnected: !!step.nextAction,
       loopBodyConnected: step.type === "LOOP_ON_ITEMS" && !!step.firstLoopAction,
       branchConnected,
+      runStatus: overlay[step.name]?.status ?? null,
+      runError: overlay[step.name]?.errorMessage ?? null,
+      runDuration: overlay[step.name]?.duration ?? null,
     };
   };
 
@@ -2662,6 +2720,9 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     outConnected,
     loopBodyConnected,
     branchConnected,
+    runStatus,
+    runError,
+    runDuration,
   } = data as StepNodeData;
   const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
   const isLoop = step.type === "LOOP_ON_ITEMS";
@@ -2746,9 +2807,20 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     return [{ id: "out", title: "Next step", used: outConnected }];
   })();
 
+  // Pip + tooltip when a run is overlaid on the canvas. The "not-reached"
+  // status doesn't render a pip -- we just fade the node via the CSS
+  // modifier so the user's eye flows to the steps that DID execute.
+  const runPipTitle = (() => {
+    if (!runStatus || runStatus === "not-reached") return null;
+    const parts: string[] = [runStatus.toUpperCase()];
+    if (runDuration !== null) parts.push(formatDuration(runDuration));
+    if (runError) parts.push(`-- ${runError.slice(0, 200)}`);
+    return parts.join(" ");
+  })();
+
   return (
     <div
-      className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""} ${isOrphan ? "wf-node--orphan" : ""}`}
+      className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""} ${isOrphan ? "wf-node--orphan" : ""} ${runStatus ? `wf-node--run-${runStatus}` : ""}`}
     >
       {/* Target ("in"): left edge, every non-trigger node accepts an incoming
           connection from a preceding step's source handle. Orphans accept
@@ -2789,6 +2861,13 @@ function StepNode({ data }: NodeProps): React.ReactElement {
       <div className="wf-node__head">
         <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
         <span className="wf-node__name">{step.displayName ?? step.name}</span>
+        {runPipTitle ? (
+          <span
+            className={`wf-node__run-pip wf-node__run-pip--${runStatus}`}
+            title={runPipTitle}
+            aria-label={runPipTitle}
+          />
+        ) : null}
       </div>
       <div className="wf-node__body">
         {isLoop ? (
@@ -4350,16 +4429,22 @@ function RunsPanel({
   runs,
   loading,
   error,
+  overlayRunId,
   onClose,
   onRefresh,
   onCancel,
+  onToggleOverlay,
 }: {
   runs: FlowRun[];
   loading: boolean;
   error: string | null;
+  /** Id of the run currently being overlaid on the canvas, or null. */
+  overlayRunId: string | null;
   onClose: () => void;
   onRefresh: () => void;
   onCancel: (runId: string) => Promise<void>;
+  /** Click handler that toggles a run's status overlay on the canvas. */
+  onToggleOverlay: (runId: string) => void;
 }): React.ReactElement {
   const activeCount = runs.filter((r) => !RUN_TERMINAL_STATUSES.has(r.status)).length;
   return (
@@ -4391,7 +4476,13 @@ function RunsPanel({
       ) : (
         <ul className="wf-editor__runs-list">
           {runs.map((run) => (
-            <RunRow key={run.id} run={run} onCancel={() => onCancel(run.id)} />
+            <RunRow
+              key={run.id}
+              run={run}
+              overlayActive={overlayRunId === run.id}
+              onCancel={() => onCancel(run.id)}
+              onToggleOverlay={() => onToggleOverlay(run.id)}
+            />
           ))}
         </ul>
       )}
@@ -4401,10 +4492,15 @@ function RunsPanel({
 
 function RunRow({
   run,
+  overlayActive,
   onCancel,
+  onToggleOverlay,
 }: {
   run: FlowRun;
+  /** True when this run is the one currently overlaid on the canvas. */
+  overlayActive: boolean;
   onCancel: () => Promise<void>;
+  onToggleOverlay: () => void;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState<boolean>(false);
   const isTerminal = RUN_TERMINAL_STATUSES.has(run.status);
@@ -4420,8 +4516,26 @@ function RunRow({
         second: "2-digit",
       })
     : "—";
+  // Pull the failed step's error message (if any) so the row can show a
+  // one-line preview without expanding. The error often explains the
+  // failure more clearly than the bare status word ("FAILED" -> "rate
+  // limit hit at 429").
+  const failedStepError = useMemo<string | null>(() => {
+    if (!run.failedStep || !run.steps) return null;
+    const entry = (run.steps as Record<string, unknown>)[run.failedStep.name];
+    if (!entry || typeof entry !== "object") return null;
+    const wrapper = entry as { output?: unknown };
+    const stepOutput = wrapper.output !== undefined ? wrapper.output : entry;
+    const so = stepOutput as { errorMessage?: unknown };
+    return stringifyErrorMessage(so.errorMessage);
+  }, [run.failedStep, run.steps]);
+
   return (
-    <li className={`wf-editor__run wf-editor__run--${RUN_STATUS_TONE[run.status]}`}>
+    <li
+      className={`wf-editor__run wf-editor__run--${RUN_STATUS_TONE[run.status]} ${
+        overlayActive ? "wf-editor__run--overlay-active" : ""
+      }`}
+    >
       <button
         type="button"
         className="wf-editor__run-head"
@@ -4438,6 +4552,26 @@ function RunRow({
         <span className="wf-editor__run-time">{startedAt}</span>
         <span className="wf-editor__run-duration">{duration}</span>
       </button>
+      {/* One-line error preview, shown directly under the status row so
+          the user doesn't have to expand to see what went wrong. Tooltip
+          carries the full message when truncated. */}
+      {failedStepError ? (
+        <p className="wf-editor__run-error" title={failedStepError}>
+          {failedStepError}
+        </p>
+      ) : null}
+      {/* Show-on-canvas toggle. Rendered for every run so the user can
+          inspect any past run's path, not just failed ones. */}
+      <div className="wf-editor__run-actions">
+        <Button
+          variant={overlayActive ? "primary" : "ghost"}
+          size="sm"
+          onClick={onToggleOverlay}
+          title={overlayActive ? "Hide overlay" : "Highlight this run on the canvas"}
+        >
+          {overlayActive ? "Hide on canvas" : "Show on canvas"}
+        </Button>
+      </div>
       {expanded ? (
         <div className="wf-editor__run-body">
           <dl className="wf-editor__run-kv">
@@ -4467,6 +4601,50 @@ function RunRow({
   );
 }
 
+/**
+ * Banner showing which past run is being overlaid on the canvas, with a
+ * close button to exit overlay mode. Sits below the running banner when
+ * both are active (live in-flight + overlaying a past run).
+ */
+function OverlayBanner({
+  run,
+  onClear,
+}: {
+  run: FlowRun;
+  onClear: () => void;
+}): React.ReactElement {
+  const startedAt = run.startTime
+    ? new Date(run.startTime).toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "—";
+  return (
+    <div
+      className={`wf-editor__overlay-banner wf-editor__overlay-banner--${RUN_STATUS_TONE[run.status]}`}
+      role="status"
+    >
+      <span className="wf-editor__overlay-banner-icon" aria-hidden="true">
+        <RunStatusIcon status={run.status} />
+      </span>
+      <span className="wf-editor__overlay-banner-text">
+        Viewing run {startedAt} -- <strong>{run.status}</strong>
+        {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
+      </span>
+      <button
+        type="button"
+        className="wf-editor__overlay-banner-clear"
+        onClick={onClear}
+        title="Exit overlay mode"
+        aria-label="Exit overlay mode"
+      >
+        <Icon icon={X} size={12} /> Exit
+      </button>
+    </div>
+  );
+}
+
 function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElement {
   if (status === "SUCCEEDED") return <Icon icon={CheckCircle2} size={12} />;
   if (status === "FAILED" || status === "INTERNAL_ERROR" || status === "TIMEOUT") {
@@ -4484,6 +4662,111 @@ function formatDuration(ms: number): string {
   const m = Math.floor(s / 60);
   const rs = s % 60;
   return `${m}m${rs.toString().padStart(2, "0")}s`;
+}
+
+/**
+ * Per-step status on a canvas node, derived from `flow_run.steps[stepName]`.
+ *
+ *   succeeded    Step ran and SUCCEEDED -- show a green pip.
+ *   failed       Step ran and FAILED   -- show a red pip + the error.
+ *   paused       Step is awaiting a waitpoint (PAUSED state).
+ *   running      Step is currently in-flight (the run is RUNNING and this
+ *                step has a RUNNING StepOutput entry, OR the run is RUNNING
+ *                and this step is downstream of the latest progress).
+ *   skipped      Step has an entry but didn't execute -- usually a router
+ *                branch that wasn't selected.
+ *   not-reached  Run terminated before this step was reached.
+ */
+export type CanvasRunStatus =
+  | "succeeded"
+  | "failed"
+  | "paused"
+  | "running"
+  | "skipped"
+  | "not-reached";
+
+/**
+ * One step's snapshot pulled from `flow_run.steps`. The worker wraps each
+ * engine-streamed step output in `{ output: <StepOutput> }`, so we unwrap
+ * once here and hand callers a flat shape.
+ */
+export interface CanvasStepSnapshot {
+  status: CanvasRunStatus;
+  /** Stringified error message when status is "failed". */
+  errorMessage: string | null;
+  /** ms spent in this step, if the engine recorded one. */
+  duration: number | null;
+}
+
+/**
+ * Decide a CanvasRunStatus per step name from a run row's `steps` map.
+ * Steps that don't appear in the map get "not-reached"; the run-level
+ * status influences "running" vs "not-reached" so an in-flight run shows
+ * the currently-executing step rather than a sea of grey.
+ */
+export function buildRunOverlay(
+  run: FlowRun | null,
+  stepNames: string[],
+): Record<string, CanvasStepSnapshot> {
+  if (!run || !run.steps) return {};
+  const out: Record<string, CanvasStepSnapshot> = {};
+  const isRunActive = run.status === "RUNNING" || run.status === "QUEUED";
+  for (const name of stepNames) {
+    const entry = (run.steps as Record<string, unknown>)[name];
+    if (!entry || typeof entry !== "object") {
+      // No record yet. For a still-running flow we DON'T know if this
+      // step is upcoming or skipped, but "not-reached" is the honest
+      // default -- it'll flip to "succeeded" once the engine streams
+      // its output. For a terminal run, "not-reached" is correct.
+      out[name] = { status: "not-reached", errorMessage: null, duration: null };
+      continue;
+    }
+    // `{ output: StepOutput }` wrapper added by the worker. Tolerate
+    // already-unwrapped entries (defensive).
+    const wrapper = entry as { output?: unknown };
+    const stepOutput = wrapper.output !== undefined ? wrapper.output : entry;
+    const so = stepOutput as {
+      status?: string;
+      errorMessage?: unknown;
+      duration?: number;
+    };
+    let status: CanvasRunStatus;
+    switch (so.status) {
+      case "SUCCEEDED":
+        status = "succeeded";
+        break;
+      case "FAILED":
+        status = "failed";
+        break;
+      case "PAUSED":
+        status = "paused";
+        break;
+      case "RUNNING":
+        status = isRunActive ? "running" : "not-reached";
+        break;
+      case "STOPPED":
+        status = "skipped";
+        break;
+      default:
+        status = "not-reached";
+    }
+    out[name] = {
+      status,
+      errorMessage: stringifyErrorMessage(so.errorMessage),
+      duration: typeof so.duration === "number" ? so.duration : null,
+    };
+  }
+  return out;
+}
+
+function stringifyErrorMessage(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "string") return raw;
+  try {
+    return JSON.stringify(raw, null, 2);
+  } catch {
+    return String(raw);
+  }
 }
 
 /**
