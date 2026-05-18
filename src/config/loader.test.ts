@@ -2,16 +2,21 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { loadConfig, saveConfig } from './loader.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import { existsSync, statSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
 
-const TEST_CONFIG_DIR = '/tmp/jarvis-test-config';
-const TEST_CONFIG_PATH = join(TEST_CONFIG_DIR, 'config.yaml');
+let TEST_CONFIG_DIR: string;
+let TEST_CONFIG_PATH: string;
+
+async function createTestConfigPath(): Promise<void> {
+  TEST_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'jarvis-test-config-'));
+  TEST_CONFIG_PATH = join(TEST_CONFIG_DIR, 'config.yaml');
+}
 
 describe('Config Loader', () => {
   beforeEach(async () => {
-    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+    await createTestConfigPath();
   });
 
   afterEach(async () => {
@@ -292,7 +297,7 @@ describe('Default Config', () => {
 
 describe('Config Parse Errors', () => {
   beforeEach(async () => {
-    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+    await createTestConfigPath();
   });
 
   afterEach(async () => {
@@ -336,7 +341,7 @@ daemon:
 
 describe('Voice Config', () => {
   beforeEach(async () => {
-    await mkdir(TEST_CONFIG_DIR, { recursive: true });
+    await createTestConfigPath();
   });
 
   afterEach(async () => {

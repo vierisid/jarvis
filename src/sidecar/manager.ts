@@ -6,7 +6,7 @@
  */
 
 import { generateKeyPair, exportJWK, exportPKCS8, exportSPKI, importPKCS8, importSPKI, SignJWT, jwtVerify, createRemoteJWKSet, type JWK } from 'jose';
-import { chmodSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerWebSocket } from 'bun';
@@ -25,6 +25,7 @@ import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
 import { EventScheduler } from './scheduler.ts';
 import { RPCTracker } from './rpc.ts';
 import { SidecarConnection } from './connection.ts';
+import { chmodWithWarning, secureDirectory } from '../util/fs-secure.ts';
 
 const ALG = 'ES256';
 const KEY_DIR_NAME = 'sidecar-keys';
@@ -229,7 +230,7 @@ export class SidecarManager implements Service {
   private async loadOrGenerateKeys(): Promise<void> {
     if (existsSync(this.privateKeyPath) && existsSync(this.publicKeyPath)) {
       await this.loadKeys();
-      this.secureKeyFilePermissions();
+      await this.secureKeyFilePermissions();
       console.log('[SidecarManager] Loaded existing ES256 key pair');
     } else {
       await this.generateKeys();
@@ -242,8 +243,7 @@ export class SidecarManager implements Service {
   }
 
   private async generateKeys(): Promise<void> {
-    mkdirSync(this.keysDir, { recursive: true, mode: 0o700 });
-    chmodSync(this.keysDir, 0o700);
+    await secureDirectory(this.keysDir, 0o700);
 
     const { privateKey, publicKey } = await generateKeyPair(ALG, { extractable: true });
     this.privateKey = privateKey;
@@ -254,8 +254,9 @@ export class SidecarManager implements Service {
     const spki = await exportSPKI(publicKey);
 
     await writeFile(this.privateKeyPath, pkcs8, { mode: 0o600 });
+    // public.pem contains the SPKI public key, so world-readable 0644 is intentional.
     await writeFile(this.publicKeyPath, spki, { mode: 0o644 });
-    this.secureKeyFilePermissions();
+    await this.secureKeyFilePermissions();
   }
 
   private async loadKeys(): Promise<void> {
@@ -266,10 +267,10 @@ export class SidecarManager implements Service {
     this.publicKey = await importSPKI(publicPem, ALG, { extractable: true });
   }
 
-  private secureKeyFilePermissions(): void {
-    try { chmodSync(this.keysDir, 0o700); } catch {}
-    try { chmodSync(this.privateKeyPath, 0o600); } catch {}
-    try { chmodSync(this.publicKeyPath, 0o644); } catch {}
+  private async secureKeyFilePermissions(): Promise<void> {
+    await chmodWithWarning(this.keysDir, 0o700, 'SidecarManager');
+    await chmodWithWarning(this.privateKeyPath, 0o600, 'SidecarManager');
+    await chmodWithWarning(this.publicKeyPath, 0o644, 'SidecarManager');
   }
 
   // --------------- JWKS ---------------

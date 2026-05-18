@@ -1,9 +1,25 @@
 import { describe, expect, test } from 'bun:test';
 import { statSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildEnrollmentUrls, isLocalhostBrainUrl, SidecarManager } from './manager.ts';
+
+function keyPaths(dataDir: string): { keyDir: string; privateKeyPath: string; publicKeyPath: string } {
+  const keyDir = join(dataDir, 'sidecar-keys');
+  return {
+    keyDir,
+    privateKeyPath: join(keyDir, 'private.pem'),
+    publicKeyPath: join(keyDir, 'public.pem'),
+  };
+}
+
+function expectKeyModes(dataDir: string): void {
+  const { keyDir, privateKeyPath, publicKeyPath } = keyPaths(dataDir);
+  expect(statSync(keyDir).mode & 0o777).toBe(0o700);
+  expect(statSync(privateKeyPath).mode & 0o777).toBe(0o600);
+  expect(statSync(publicKeyPath).mode & 0o777).toBe(0o644);
+}
 
 describe('buildEnrollmentUrls', () => {
   test('parses https URL into wss/https pair', () => {
@@ -96,17 +112,37 @@ describe('isLocalhostBrainUrl', () => {
 describe('SidecarManager key storage', () => {
   test('stores the enrollment private key with owner-only permissions', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
-    const manager = new SidecarManager(dataDir);
+    try {
+      const manager = new SidecarManager(dataDir);
 
-    await manager.start();
-    await manager.stop();
+      await manager.start();
+      await manager.stop();
 
-    const keyDir = join(dataDir, 'sidecar-keys');
-    const privateKeyPath = join(keyDir, 'private.pem');
-    const publicKeyPath = join(keyDir, 'public.pem');
+      expectKeyModes(dataDir);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
 
-    expect(statSync(keyDir).mode & 0o777).toBe(0o700);
-    expect(statSync(privateKeyPath).mode & 0o777).toBe(0o600);
-    expect(statSync(publicKeyPath).mode & 0o777).toBe(0o644);
+  test('tightens existing enrollment key permissions on load', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    try {
+      const firstManager = new SidecarManager(dataDir);
+      await firstManager.start();
+      await firstManager.stop();
+
+      const { keyDir, privateKeyPath, publicKeyPath } = keyPaths(dataDir);
+      await chmod(keyDir, 0o777);
+      await chmod(privateKeyPath, 0o644);
+      await chmod(publicKeyPath, 0o666);
+
+      const secondManager = new SidecarManager(dataDir);
+      await secondManager.start();
+      await secondManager.stop();
+
+      expectKeyModes(dataDir);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 });

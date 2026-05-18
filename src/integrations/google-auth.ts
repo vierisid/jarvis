@@ -9,17 +9,11 @@
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, existsSync } from 'node:fs';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, writeFile } from 'node:fs/promises';
+import { secureParentDirectory } from '../util/fs-secure.ts';
 
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
-
-async function secureParentDirectory(filePath: string): Promise<void> {
-  const dir = path.dirname(filePath);
-  if (dir === '.' || dir === '') return;
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
-}
 
 export type GoogleTokens = {
   access_token: string;

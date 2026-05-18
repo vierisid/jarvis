@@ -1,22 +1,16 @@
 import YAML from 'yaml';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, writeFile } from 'node:fs/promises';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG } from './types.ts';
+import { secureParentDirectory } from '../util/fs-secure.ts';
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith('~/')) {
     return join(homedir(), filepath.slice(2));
   }
   return filepath;
-}
-
-async function secureParentDirectory(filePath: string): Promise<void> {
-  const dir = dirname(filePath);
-  if (dir === '.' || dir === '') return;
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
 }
 
 function deepMerge(target: any, source: any): any {
