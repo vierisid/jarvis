@@ -1,11 +1,17 @@
 /**
  * `/v1/jarvis/llm/chat` -- backs the `jarvis-ask` piece's `ask` action.
  *
- * The piece-side action posts `{ prompt, system?, parseJson? }` and expects
- * back `{ text, parsed? }`. Implementation here is a thin wrapper around a
- * `LlmChatFn` injected via `SandboxApiServices.llmChat`; the real LLM client
- * is provided by the daemon. Keeping the function pluggable lets tests
- * substitute a deterministic fake.
+ * The piece-side action posts `{ prompt, system?, overrideSystem?,
+ * parseJson? }` and expects back `{ text, parsed? }`. Implementation
+ * here is a thin wrapper around a `LlmChatFn` injected via
+ * `SandboxApiServices.llmChat`; the real LLM client is provided by the
+ * daemon. Keeping the function pluggable lets tests substitute a
+ * deterministic fake.
+ *
+ * System-prompt semantics (decided in the daemon backend, not here):
+ *   - default                   : Jarvis identity + role + personality
+ *   - `system` set              : Jarvis prompt + "\n\n" + `system`
+ *   - `system` + overrideSystem : `system` only (Jarvis context dropped)
  *
  * The endpoint is auth-gated like the rest of `/v1/*` (Bearer engineToken).
  * It is not exposed externally -- only the engine subprocess hits it.
@@ -16,6 +22,13 @@ import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from
 export interface LlmChatRequest {
   prompt: string;
   system?: string;
+  /**
+   * When true, the `system` field replaces the Jarvis system prompt
+   * entirely. When false / unset, `system` is appended to the Jarvis
+   * prompt. Default off so the common case ("ask Jarvis to do X") still
+   * carries the Jarvis identity.
+   */
+  overrideSystem?: boolean;
   parseJson?: boolean;
 }
 
@@ -49,6 +62,7 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     }
     const body: LlmChatRequest = { prompt: raw.prompt };
     if (typeof raw.system === "string") body.system = raw.system;
+    if (raw.overrideSystem === true) body.overrideSystem = true;
     if (raw.parseJson === true) body.parseJson = true;
     const reply = await deps.llmChat(body, {
       runId: ctx.claims.runId,

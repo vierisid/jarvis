@@ -1653,6 +1653,36 @@
 }
 .wf-props__field-help--error { color: var(--accent-warn, #fbbf24); }
 
+/* Inline "?" glyph that lives next to a field label (used on boolean
+   fields today). Hover shows the description via the native title
+   tooltip; the glyph itself is a small rounded badge in muted tone. */
+.wf-props__field-helper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border: 1px solid var(--rule-soft);
+  border-radius: 50%;
+  font-family: var(--font-sans);
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  background: var(--paper-2);
+  cursor: help;
+  user-select: none;
+  line-height: 1;
+}
+.wf-props__field-helper:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+.wf-props__field-helper:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .wf-props__field input[type="number"],
 .wf-props__field textarea {
   background: var(--paper-3);

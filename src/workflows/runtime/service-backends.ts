@@ -91,18 +91,34 @@ export function buildSandboxServiceBackends(
 ): SandboxApiServices {
   const llmClient = new JarvisLlmClient(opts.llmManager);
   const llmChat: LlmChatFn = async (req) => {
-    // System-prompt precedence:
-    //   1. The piece's explicit `system` field wins -- user knows best.
-    //   2. Otherwise inject Jarvis's full identity + role + personality
-    //      via `buildJarvisSystemPrompt`. Without this the LLM has no
-    //      idea it's Jarvis and answers as the bare base model (we hit
-    //      this with local Ollama: Qwen would introduce itself as Qwen).
-    //   3. If no prompt builder is wired, send no system message.
-    const system =
-      req.system ??
-      (opts.buildJarvisSystemPrompt
-        ? opts.buildJarvisSystemPrompt(req.prompt)
-        : undefined);
+    // System-prompt composition:
+    //   - overrideSystem=true       : use `req.system` only. Jarvis
+    //                                 context (role, personality, vault
+    //                                 knowledge) is dropped. Picked when
+    //                                 the user wants generic LLM behaviour
+    //                                 (text transforms, summarisation of
+    //                                 inputs that shouldn't be coloured
+    //                                 by Jarvis's identity).
+    //   - `req.system` set, default : Jarvis prompt + "\n\n" + req.system.
+    //                                 Lets the user steer the reply (e.g.
+    //                                 "respond in JSON") while keeping the
+    //                                 Jarvis identity.
+    //   - no `req.system`           : Jarvis prompt alone. Default for
+    //                                 plain "ask Jarvis" steps.
+    //   - no prompt builder wired   : whatever the piece sent (or nothing).
+    //                                 Defensive fallback for tests / pre-
+    //                                 agent-service bootstrap windows.
+    const jarvisSystem = opts.buildJarvisSystemPrompt
+      ? opts.buildJarvisSystemPrompt(req.prompt)
+      : undefined;
+    let system: string | undefined;
+    if (req.overrideSystem) {
+      system = req.system;
+    } else if (req.system && jarvisSystem) {
+      system = `${jarvisSystem}\n\n${req.system}`;
+    } else {
+      system = req.system ?? jarvisSystem;
+    }
     const reply = await llmClient.chat({
       prompt: req.prompt,
       ...(system !== undefined ? { system } : {}),

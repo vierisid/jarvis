@@ -3520,6 +3520,22 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
           onChange={(e) => onChange(e.target.checked)}
         />
         {labelEl}
+        {/* Inline ? glyph: tooltip shows the description on hover so the
+            user doesn't have to read the help line below. Click handler
+            is a stop-propagation no-op so tapping the glyph doesn't
+            toggle the checkbox. */}
+        {field.description ? (
+          <span
+            className="wf-props__field-helper"
+            role="button"
+            tabIndex={0}
+            title={field.description}
+            aria-label={field.description}
+            onClick={(e) => e.preventDefault()}
+          >
+            ?
+          </span>
+        ) : null}
         {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
       </label>
     );

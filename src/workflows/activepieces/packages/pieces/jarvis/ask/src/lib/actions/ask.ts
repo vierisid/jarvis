@@ -27,8 +27,16 @@ export const askAction = createAction({
     }),
     system: Property.LongText({
       displayName: "System",
-      description: "Optional system message prefacing the conversation.",
+      description:
+        "Extra system instructions APPENDED to the standard Jarvis system prompt. Use this to bias the reply (e.g. \"answer in JSON\"). Turn on Override to replace the Jarvis prompt entirely instead.",
       required: false,
+    }),
+    overrideSystem: Property.Checkbox({
+      displayName: "Override Jarvis system prompt",
+      description:
+        "When ON, the System field above becomes the ONLY system prompt -- Jarvis's identity, role, personality, and vault context are not sent. Use for generic LLM tasks (text transforms, summarisation of plain inputs) where Jarvis context would bias the reply. Leave OFF (default) when you want the model to answer as Jarvis.",
+      required: false,
+      defaultValue: false,
     }),
     parseJson: Property.Checkbox({
       displayName: "Parse JSON",
@@ -43,6 +51,7 @@ export const askAction = createAction({
       prompt: context.propsValue["prompt"],
     };
     if (context.propsValue["system"]) body["system"] = context.propsValue["system"];
+    if (context.propsValue["overrideSystem"]) body["overrideSystem"] = true;
     if (context.propsValue["parseJson"]) body["parseJson"] = true;
 
     const response = await fetch(url, {
