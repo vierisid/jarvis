@@ -883,6 +883,10 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           }
           sampleData={editor.version?.sampleData ?? {}}
           catalog={editor.catalog}
+          // `allSteps` carries FlatStep wrappers; the variable picker
+          // wants bare FlowStepNode[] so it can match siblings on
+          // (piece, action). Map at the boundary.
+          allSteps={editor.allSteps.map((fs) => fs.step)}
         >
           <PropertiesPanel
             step={selectedStep}
@@ -1145,6 +1149,7 @@ function NodeSettingsPopover({
   predecessors,
   sampleData,
   catalog,
+  allSteps,
   children,
 }: {
   anchor: { x: number; y: number };
@@ -1153,6 +1158,12 @@ function NodeSettingsPopover({
   sampleData: Record<string, unknown>;
   /** Piece catalog -- used by the variable picker to fall back to declared output shapes. */
   catalog: PieceCatalogEntry[];
+  /**
+   * Every step in the version. Lets the picker pull the output shape
+   * from a sibling step that shares the same (piece, action) when this
+   * step has no captured data of its own.
+   */
+  allSteps: FlowStepNode[];
   children: React.ReactNode;
 }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null);
@@ -1236,8 +1247,8 @@ function NodeSettingsPopover({
   }, [onClose]);
 
   const variableRows = useMemo(
-    () => buildVariableRows(predecessors, sampleData, catalog),
-    [predecessors, sampleData, catalog],
+    () => buildVariableRows(predecessors, sampleData, catalog, allSteps),
+    [predecessors, sampleData, catalog, allSteps],
   );
 
   return (

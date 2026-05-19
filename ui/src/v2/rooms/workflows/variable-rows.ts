@@ -3,12 +3,17 @@
  * in the floating "Insert variable" panel.
  *
  * Per-step resolution order:
- *   1. persisted sampleData[step.name] -- user-pinned or run-captured
- *      (the most authoritative source: the user either typed it or a
- *      successful run wrote it through `mergeRunOutputsIntoSampleData`).
+ *   1. persisted sampleData[step.name] -- user-pinned or run-captured for
+ *      THIS specific step (the most authoritative source).
  *   2. declared output from the piece catalog -- `action.outputSample`
  *      (Jarvis extension to AP) or `trigger.sampleData` (upstream-native).
- *   3. fallback to a single `(output)` row that inserts the bare
+ *      Acts as the author's "this is what my action returns" contract.
+ *   3. persisted sampleData from a SIBLING step that shares the same
+ *      (pieceName, actionName) / (pieceName, triggerName). Lets a second
+ *      "Send email" step inherit the shape captured from the first one
+ *      without having to be re-run -- the output shape of a given action
+ *      is usually identical across instances.
+ *   4. fallback to a single `(output)` row that inserts the bare
  *      `{{step.name}}` template; the user can drill in by hand.
  *
  * Lives in its own module so the picker logic is testable without
@@ -32,6 +37,13 @@ export function buildVariableRows(
   predecessors: FlowStepNode[],
   sampleData: Record<string, unknown>,
   catalog: PieceCatalogEntry[],
+  /**
+   * Every step in the current version (in any order). Used for the
+   * sibling-shape fallback: a second instance of the same action
+   * inherits the shape captured from the first. Pass an empty array to
+   * disable the sibling tier (e.g. tests that don't need it).
+   */
+  allSteps: FlowStepNode[] = [],
 ): VariableRow[] {
   const rows: VariableRow[] = [];
   // Most-recent first: the chain comes out trigger-first from
@@ -40,7 +52,10 @@ export function buildVariableRows(
   for (const step of ordered) {
     const captured = sampleData[step.name];
     const declared = lookupDeclaredOutput(step, catalog);
-    const usable = pickUsableSample(captured, declared);
+    const sibling = pickUsableSample(captured, declared)
+      ? undefined
+      : lookupSiblingShape(step, allSteps, sampleData);
+    const usable = pickUsableSample(captured, declared) ?? pickUsableSample(sibling, undefined);
     if (usable) {
       for (const key of Object.keys(usable)) {
         rows.push({
@@ -51,8 +66,8 @@ export function buildVariableRows(
         });
       }
     } else {
-      // No usable shape -- offer the whole-step template; the user can
-      // drill in with `.field` manually.
+      // No usable shape anywhere -- offer the whole-step template; the
+      // user can drill in with `.field` manually.
       rows.push({ step, field: "", label: "(output)", template: `{{${step.name}}}` });
     }
   }
@@ -91,6 +106,65 @@ export function lookupDeclaredOutput(
     return action?.outputSample;
   }
   return undefined;
+}
+
+/**
+ * Find another step in the flow that shares the same piece + sub-action
+ * with `step` and has a usable sampleData entry; return that entry. The
+ * output shape of a given action is usually identical across instances,
+ * so capturing on step_1 (gmail.send_email) is enough to make step_2
+ * (also gmail.send_email) show field-level rows.
+ *
+ * Skips:
+ *   - the step itself (sampleData[step.name] is the direct-match tier
+ *     and was already checked by the caller)
+ *   - steps with a different piece or sub-action
+ *   - LOOP / ROUTER / EMPTY (no piece identity to match on)
+ *   - siblings whose own sampleData is missing or non-object
+ *
+ * Returns the first match in iteration order; with the usual auto-capture
+ * pattern (most-recently-run steps are most likely to have data), this is
+ * good enough -- we don't try to pick a "best" sibling.
+ */
+export function lookupSiblingShape(
+  step: FlowStepNode,
+  allSteps: FlowStepNode[],
+  sampleData: Record<string, unknown>,
+): unknown {
+  const id = stepActionId(step);
+  if (!id) return undefined;
+  for (const other of allSteps) {
+    if (other.name === step.name) continue;
+    const otherId = stepActionId(other);
+    if (!otherId || otherId.piece !== id.piece || otherId.sub !== id.sub || otherId.kind !== id.kind) continue;
+    const sample = sampleData[other.name];
+    if (sample && typeof sample === "object" && !Array.isArray(sample)) {
+      const obj = sample as Record<string, unknown>;
+      if (Object.keys(obj).length > 0) return obj;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Identity of an action / trigger for sibling matching. Two steps are
+ * "the same action" when their `{ kind, piece, sub }` triples match.
+ */
+function stepActionId(step: FlowStepNode): { kind: "PIECE" | "PIECE_TRIGGER"; piece: string; sub: string } | null {
+  const settings = step.settings as
+    | { pieceName?: unknown; actionName?: unknown; triggerName?: unknown }
+    | undefined;
+  const piece = typeof settings?.pieceName === "string" ? settings.pieceName : null;
+  if (!piece) return null;
+  if (step.type === "PIECE_TRIGGER") {
+    const sub = typeof settings?.triggerName === "string" ? settings.triggerName : null;
+    return sub ? { kind: "PIECE_TRIGGER", piece, sub } : null;
+  }
+  if (step.type === "PIECE") {
+    const sub = typeof settings?.actionName === "string" ? settings.actionName : null;
+    return sub ? { kind: "PIECE", piece, sub } : null;
+  }
+  return null;
 }
 
 /**

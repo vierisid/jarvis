@@ -125,4 +125,83 @@ describe("buildVariableRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.label).toBe("(output)");
   });
+
+  describe("sibling-step shape sharing", () => {
+    test("step inherits shape from a previously-captured same-action sibling", () => {
+      const a1 = piece({ name: "step_1", pieceName: "gmail", actionName: "execute_http" });
+      const a2 = piece({ name: "step_2", pieceName: "gmail", actionName: "execute_http" });
+      // The picker is rendered for some downstream step looking at a2 as
+      // a predecessor; only a1 has been run and captured.
+      const rows = buildVariableRows(
+        [a2],
+        { step_1: { statusCode: 200, body: "ok" } },
+        [gmail],
+        [a1, a2],
+      );
+      expect(rows.map((r) => r.field).sort()).toEqual(["body", "statusCode"]);
+      // Templates point at a2 (the predecessor being rendered), not a1.
+      expect(rows.every((r) => r.template.startsWith("{{step_2."))).toBe(true);
+    });
+
+    test("declared outputSample beats sibling capture", () => {
+      const a1 = piece({ name: "step_1", pieceName: "gmail", actionName: "send_email" });
+      const a2 = piece({ name: "step_2", pieceName: "gmail", actionName: "send_email" });
+      // a1 was run and captured a slightly different shape; gmail.send_email
+      // declares outputSample = {messageId, threadId, labelIds}. The author's
+      // declared contract wins over a sibling capture for a2.
+      const rows = buildVariableRows(
+        [a2],
+        { step_1: { messageId: "abc", customLeak: true } },
+        [gmail],
+        [a1, a2],
+      );
+      expect(rows.map((r) => r.field).sort()).toEqual(["labelIds", "messageId", "threadId"]);
+    });
+
+    test("does not bleed across different actions of the same piece", () => {
+      const sendA = piece({ name: "step_1", pieceName: "gmail", actionName: "send_email" });
+      const httpA = piece({ name: "step_2", pieceName: "gmail", actionName: "execute_http" });
+      // step_1 captured, step_2 is a different action -- must NOT inherit.
+      const rows = buildVariableRows(
+        [httpA],
+        { step_1: { messageId: "abc" } },
+        // No declared outputSample on execute_http; with no sibling, we
+        // expect the (output) fallback.
+        [gmail],
+        [sendA, httpA],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(output)");
+    });
+
+    test("does not bleed across different pieces", () => {
+      const gmailHttp = piece({ name: "step_1", pieceName: "gmail", actionName: "execute_http" });
+      const ghostHttp = piece({ name: "step_2", pieceName: "ghost", actionName: "execute_http" });
+      const rows = buildVariableRows(
+        [ghostHttp],
+        { step_1: { statusCode: 200 } },
+        [gmail],
+        [gmailHttp, ghostHttp],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(output)");
+    });
+
+    test("trigger siblings would match if there were multiple (defensive)", () => {
+      // Triggers can't appear twice in a flow today, but the same matching
+      // logic applies. Confirm it doesn't accidentally treat a trigger as
+      // a sibling of an action with the same name.
+      const trig = piece({ name: "trigger", pieceName: "gmail", triggerName: "execute_http" });
+      const act = piece({ name: "step_1", pieceName: "gmail", actionName: "execute_http" });
+      const rows = buildVariableRows(
+        [act],
+        { trigger: { from: "alice" } },
+        [gmail],
+        [trig, act],
+      );
+      // Kind differs (PIECE_TRIGGER vs PIECE), so no inheritance.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(output)");
+    });
+  });
 });
