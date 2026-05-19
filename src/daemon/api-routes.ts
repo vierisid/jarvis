@@ -56,6 +56,7 @@ import {
 import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { isWithin } from '../util/path.ts';
 
 // --- Security helpers ---
 
@@ -67,13 +68,6 @@ function escapeHtml(str: string): string {
 /** Sanitize a single path segment — strip directory separators and dot-dot sequences */
 function sanitizePathSegment(segment: string): string {
   return path.basename(segment.replace(/\.\./g, ''));
-}
-
-/** Validate that a resolved path is within the expected base directory */
-function isWithinBase(resolvedPath: string, baseDir: string): boolean {
-  const normalizedBase = path.resolve(baseDir) + path.sep;
-  const normalizedPath = path.resolve(resolvedPath);
-  return normalizedPath.startsWith(normalizedBase) || normalizedPath === path.resolve(baseDir);
 }
 
 /** Escape SQL LIKE wildcard characters in user input */
@@ -1519,7 +1513,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           const diskPath = path.resolve(baseDir, safeName);
           // Verify resolved path stays within the content directory
-          if (!isWithinBase(diskPath, baseDir)) {
+          if (!isWithin(diskPath, path.resolve(baseDir))) {
             return error('Invalid filename', 400);
           }
 
@@ -1570,7 +1564,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const filePath = path.resolve(baseDir, safeContentId, safeFilename);
 
         // Verify resolved path stays within the content directory
-        if (!isWithinBase(filePath, baseDir)) {
+        if (!isWithin(filePath, path.resolve(baseDir))) {
           return error('Invalid path', 400);
         }
 
@@ -2681,7 +2675,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // points to brain-local disk. Serve from there as a fallback.
         if (!capture.sidecar_id) {
           const jarvisDir = path.join(os.homedir(), '.jarvis');
-          if (!isWithinBase(capture.image_path, jarvisDir)) {
+          if (!isWithin(path.resolve(capture.image_path), path.resolve(jarvisDir))) {
             return error('Image not found', 404);
           }
           try {

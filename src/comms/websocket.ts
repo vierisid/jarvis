@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from 'bun';
 import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
+import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
@@ -334,14 +335,14 @@ export class WebSocketServer {
           let filePath: string;
 
           if (pathname === '/' || pathname === '/index.html') {
-            filePath = path.join(self.staticDir, 'index.html');
+            filePath = path.resolve(self.staticDir, 'index.html');
           } else {
             // Serve JS/CSS/assets — resolve and validate within staticDir
             filePath = path.resolve(self.staticDir, '.' + pathname);
           }
 
           // Prevent path traversal outside staticDir
-          if (!filePath.startsWith(path.resolve(self.staticDir) + path.sep) && filePath !== path.resolve(self.staticDir, 'index.html')) {
+          if (!isWithin(filePath, path.resolve(self.staticDir))) {
             return new Response('Forbidden', { status: 403 });
           }
 
@@ -359,7 +360,7 @@ export class WebSocketServer {
         if (self.publicDir) {
           const publicPath = path.resolve(self.publicDir, '.' + pathname);
           // Prevent path traversal outside publicDir
-          if (!publicPath.startsWith(path.resolve(self.publicDir) + path.sep)) {
+          if (!isWithin(publicPath, path.resolve(self.publicDir))) {
             return new Response('Forbidden', { status: 403 });
           }
           const publicFile = Bun.file(publicPath);

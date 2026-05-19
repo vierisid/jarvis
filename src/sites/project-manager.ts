@@ -10,7 +10,7 @@ import { TEMPLATES, generateMakefile, scaffoldBunReact } from './templates.ts';
 import { join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync, statSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { isWithin } from './path-utils.ts';
+import { isWithin } from '../util/path.ts';
 
 const META_FILE = '.jarvis-project.json';
 
