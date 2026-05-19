@@ -1370,6 +1370,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return true;
     }
 
+    // Workflow-creation requests are better handled by the chat agent
+    // through the `manage_workflow` tool: the LLM can iterate on the
+    // composer's validation errors, name the flow, follow up with
+    // publish, etc. The voice path keeps the room_action route because
+    // a voice user can't easily iterate on tool output. Text users get
+    // the full tool loop.
+    if (
+      intent.room_action?.action === 'create_from_nl' ||
+      (intent.verb === 'create' && intent.object?.type === 'workflow')
+    ) {
+      return false;
+    }
+
     if (intent.room_action) {
       const ra = intent.room_action;
       // Auto-open the target room first so the body's `useRoomActions`

@@ -31,6 +31,7 @@ import {
 import { WorkflowEditor } from "./WorkflowEditor";
 import { Button, Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
+import { useRoomActions } from "../useRoomActionBus";
 import {
   useWorkflowsData,
   type Flow,
@@ -105,6 +106,29 @@ export function WorkflowsRoomBody(): React.ReactElement {
       window.setTimeout(() => setActionMessage(null), 3000);
     }
   };
+
+  // Voice / text-classifier `create_from_nl` room action. With an empty
+  // prompt this is "just give me a new blank workflow" -- same path as the
+  // header button. With a non-empty prompt the user described what the
+  // flow should do; we can't compose from here (no LLM client in the UI),
+  // so we still open a fresh draft and surface a hint pointing them at the
+  // chat agent (which calls `manage_workflow:compose`). Text chat is
+  // already routed there directly by ws-service.
+  useRoomActions("workflows", (action, args) => {
+    if (action !== "create_from_nl") return false;
+    const prompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
+    void (async () => {
+      await handleCreate();
+      if (prompt) {
+        setActionMessage({
+          tone: "ok",
+          text: `Empty workflow created. To have Jarvis build "${prompt}" for you, ask in chat: "Make a workflow that ${prompt}".`,
+        });
+        window.setTimeout(() => setActionMessage(null), 6000);
+      }
+    })();
+    return true;
+  });
 
   return (
     <div className="wf-room">
