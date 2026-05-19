@@ -109,7 +109,17 @@ func SaveConfig(cfg *SidecarConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(configFile, data, 0600); err != nil {
+	// O_NOFOLLOW prevents a hostile symlink at configFile from redirecting
+	// the write to an unrelated target (e.g. ~/.bash_history).
+	f, err := os.OpenFile(configFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNoFollow, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Chmod(configFile, 0600)

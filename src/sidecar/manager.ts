@@ -7,7 +7,6 @@
 
 import { generateKeyPair, exportJWK, exportPKCS8, exportSPKI, importPKCS8, importSPKI, SignJWT, jwtVerify, createRemoteJWKSet, type JWK } from 'jose';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
@@ -25,7 +24,7 @@ import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
 import { EventScheduler } from './scheduler.ts';
 import { RPCTracker } from './rpc.ts';
 import { SidecarConnection } from './connection.ts';
-import { chmodWithWarning, secureDirectory } from '../util/fs-secure.ts';
+import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 
 const ALG = 'ES256';
 const KEY_DIR_NAME = 'sidecar-keys';
@@ -253,9 +252,9 @@ export class SidecarManager implements Service {
     const pkcs8 = await exportPKCS8(privateKey);
     const spki = await exportSPKI(publicKey);
 
-    await writeFile(this.privateKeyPath, pkcs8, { mode: 0o600 });
+    await secureWriteFile(this.privateKeyPath, pkcs8, 0o600, 'SidecarManager');
     // public.pem contains the SPKI public key, so world-readable 0644 is intentional.
-    await writeFile(this.publicKeyPath, spki, { mode: 0o644 });
+    await secureWriteFile(this.publicKeyPath, spki, 0o644, 'SidecarManager');
     await this.secureKeyFilePermissions();
   }
 

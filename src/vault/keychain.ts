@@ -8,7 +8,7 @@
  */
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { constants as fsConstants, existsSync, readFileSync, mkdirSync, chmodSync, openSync, writeSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -20,8 +20,28 @@ const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
 function ensureDir(): void {
-  if (!existsSync(JARVIS_DIR)) {
-    mkdirSync(JARVIS_DIR, { recursive: true });
+  mkdirSync(JARVIS_DIR, { recursive: true, mode: 0o700 });
+  try { chmodSync(JARVIS_DIR, 0o700); } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[Keychain] Failed to chmod ${JARVIS_DIR} to 700: ${message}`);
+  }
+}
+
+/**
+ * Write a secret file with O_NOFOLLOW so the call fails (ELOOP) if the path
+ * is a symlink, preventing redirection to an attacker-controlled target.
+ */
+function writeSecretFileSync(path: string, data: string | Buffer, mode: number): void {
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
+  const fd = openSync(path, flags, mode);
+  try {
+    writeSync(fd, data as never);
+  } finally {
+    closeSync(fd);
+  }
+  try { chmodSync(path, mode); } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[Keychain] Failed to chmod ${path} to ${mode.toString(8)}: ${message}`);
   }
 }
 
@@ -32,8 +52,7 @@ function getOrCreateKey(): Buffer {
     return Buffer.from(hex, 'hex');
   }
   const key = randomBytes(32);
-  writeFileSync(KEY_PATH, key.toString('hex'), { mode: 0o600 });
-  try { chmodSync(KEY_PATH, 0o600); } catch {}
+  writeSecretFileSync(KEY_PATH, key.toString('hex'), 0o600);
   return key;
 }
 
@@ -72,8 +91,7 @@ function saveSecrets(secrets: Record<string, string>): void {
   const key = getOrCreateKey();
   const json = JSON.stringify(secrets);
   const encrypted = encrypt(key, json);
-  writeFileSync(SECRETS_PATH, encrypted, { mode: 0o600 });
-  try { chmodSync(SECRETS_PATH, 0o600); } catch {}
+  writeSecretFileSync(SECRETS_PATH, encrypted, 0o600);
 }
 
 export function getSecret(name: string): string | null {

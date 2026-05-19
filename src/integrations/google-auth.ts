@@ -9,8 +9,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, existsSync } from 'node:fs';
-import { chmod, writeFile } from 'node:fs/promises';
-import { secureParentDirectory } from '../util/fs-secure.ts';
+import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
 
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -65,8 +64,7 @@ export class GoogleAuth {
   async saveTokens(tokens: GoogleTokens): Promise<void> {
     this.tokens = tokens;
     await secureParentDirectory(this.tokensPath);
-    await writeFile(this.tokensPath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
-    await chmod(this.tokensPath, 0o600);
+    await secureWriteFile(this.tokensPath, JSON.stringify(tokens, null, 2), 0o600, 'GoogleAuth');
   }
 
   /**
