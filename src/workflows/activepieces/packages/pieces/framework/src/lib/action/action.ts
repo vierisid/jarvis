@@ -35,6 +35,19 @@ type CreateActionParams<PieceAuth extends PieceAuthProperty | PieceAuthProperty[
   test?: ActionRunner<ExtractPieceAuthPropertyTypeForMethods<PieceAuth>, ActionProps>
   requireAuth?: boolean
   errorHandlingOptions?: ErrorHandlingOptionsParam
+  /**
+   * Jarvis-only extension to upstream Activepieces (not part of the public
+   * AP framework API). Optional declaration of the action's output shape:
+   * the same JSON the action would return on a successful run. The visual
+   * editor's variable picker reads this so users can wire `{{step.field}}`
+   * references without first running the action to capture sample data.
+   * Mirrors `createTrigger().sampleData`, which AP already supports.
+   *
+   * Leave undefined when the output is dynamic (HTTP request piece, SQL
+   * piece, LLM piece with parseJson). For API-wrapping actions the author
+   * should ship a representative example.
+   */
+  outputSample?: unknown
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,6 +61,7 @@ export class IAction<PieceAuth extends PieceAuthProperty | PieceAuthProperty[] |
     public readonly test: ActionRunner<ExtractPieceAuthPropertyTypeForMethods<PieceAuth>, ActionProps>,
     public readonly requireAuth: boolean,
     public readonly errorHandlingOptions: ErrorHandlingOptionsParam,
+    public readonly outputSample: unknown,
   ) { }
 }
 
@@ -80,5 +94,6 @@ export const createAction = <
         defaultValue: false,
       }
     },
+    params.outputSample,
   )
 }

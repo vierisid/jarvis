@@ -16,6 +16,9 @@ import {
   getLatestDraft,
   listVersions,
   lockVersion,
+  mergeRunOutputsIntoSampleData,
+  setSampleDataEntry,
+  SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES,
   updateDraftVersion,
 } from "./flow-version";
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "./flow-run";
@@ -275,5 +278,109 @@ describe("app-connection repo", () => {
     });
     deleteConnection(c.id);
     expect(getConnection(c.id)).toBeNull();
+  });
+});
+
+describe("mergeRunOutputsIntoSampleData (auto-capture)", () => {
+  // Helper: create a flow + DRAFT version we can capture outputs into.
+  function newDraft(): string {
+    const f = createFlow();
+    const v = createDraftVersion({
+      flowId: f.id,
+      displayName: "auto-capture-test",
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" },
+    });
+    return v.id;
+  }
+
+  test("writes object outputs into empty cells", () => {
+    const versionId = newDraft();
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, {
+      step_1: { output: { id: 42, name: "alice" } },
+      step_2: { output: { ok: true } },
+    });
+    expect(written.sort()).toEqual(["step_1", "step_2"]);
+    expect(skipped).toEqual([]);
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData?.step_1).toEqual({ id: 42, name: "alice" });
+    expect(v.sampleData?.step_2).toEqual({ ok: true });
+  });
+
+  test("accepts both wrapped {output} envelopes and bare outputs", () => {
+    const versionId = newDraft();
+    mergeRunOutputsIntoSampleData(versionId, {
+      wrapped: { output: { a: 1 } },
+      bare: { b: 2 },
+    });
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData?.wrapped).toEqual({ a: 1 });
+    expect(v.sampleData?.bare).toEqual({ b: 2 });
+  });
+
+  test("does not clobber user-pinned cells", () => {
+    const versionId = newDraft();
+    setSampleDataEntry(versionId, "step_1", { user: "pinned" });
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, {
+      step_1: { output: { from: "run" } },
+      step_2: { output: { fresh: true } },
+    });
+    expect(written).toEqual(["step_2"]);
+    expect(skipped).toEqual([{ stepName: "step_1", reason: "already populated" }]);
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData?.step_1).toEqual({ user: "pinned" });
+    expect(v.sampleData?.step_2).toEqual({ fresh: true });
+  });
+
+  test("skips primitives, arrays, and undefined outputs", () => {
+    const versionId = newDraft();
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, {
+      string_step: { output: "hello" },
+      number_step: { output: 7 },
+      array_step: { output: [1, 2, 3] },
+      undef_step: { output: undefined },
+    });
+    expect(written).toEqual([]);
+    expect(skipped.map((s) => s.stepName).sort()).toEqual([
+      "array_step",
+      "number_step",
+      "string_step",
+      "undef_step",
+    ]);
+    for (const s of skipped) expect(s.reason).toBe("output not a plain object");
+  });
+
+  test("skips outputs larger than the cap", () => {
+    const versionId = newDraft();
+    // Build an object whose JSON serializes > cap. A 300KB string field
+    // overshoots the 256KB cap comfortably.
+    const huge = { blob: "x".repeat(SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES + 50_000) };
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, {
+      big_step: { output: huge },
+      small_step: { output: { ok: true } },
+    });
+    expect(written).toEqual(["small_step"]);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]!.stepName).toBe("big_step");
+    expect(skipped[0]!.reason).toMatch(/exceeds .* cap/);
+  });
+
+  test("noop on LOCKED versions", () => {
+    const versionId = newDraft();
+    lockVersion(versionId);
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, {
+      step_1: { output: { a: 1 } },
+    });
+    expect(written).toEqual([]);
+    expect(skipped).toEqual([]);
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData).toBeNull();
+  });
+
+  test("noop on missing versions", () => {
+    const { written, skipped } = mergeRunOutputsIntoSampleData("missing-id", {
+      step_1: { output: { a: 1 } },
+    });
+    expect(written).toEqual([]);
+    expect(skipped).toEqual([]);
   });
 });

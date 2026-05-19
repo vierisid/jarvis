@@ -218,6 +218,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               displayName: a.displayName,
               description: a.description,
               inputSchema: a.inputSchema ?? null,
+              // Optional declared output sample (Jarvis extension to AP).
+              // Surfaced to the dashboard so the variable picker can show
+              // field-level rows for actions that have never been run yet.
+              ...(a.outputSample !== undefined ? { outputSample: a.outputSample } : {}),
             })),
             triggers: p.triggers
               ? Object.values(p.triggers).map((t) => ({
@@ -225,6 +229,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                   displayName: t.displayName,
                   description: t.description,
                   inputSchema: t.inputSchema ?? null,
+                  // Triggers carry the upstream-native `sampleData`.
+                  ...(t.sampleData !== undefined ? { sampleData: t.sampleData } : {}),
+                  // And, for symmetry / future-proofing, the action-side
+                  // `outputSample` if a trigger author chose to declare both.
+                  ...(t.outputSample !== undefined ? { outputSample: t.outputSample } : {}),
                 }))
               : [],
           }));

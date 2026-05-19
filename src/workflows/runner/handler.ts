@@ -17,7 +17,11 @@
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
-import { getFlowVersion, type FlowVersion } from "../db/repos/flow-version";
+import {
+  getFlowVersion,
+  mergeRunOutputsIntoSampleData,
+  type FlowVersion,
+} from "../db/repos/flow-version";
 
 export const RUN_FLOW = "RUN_FLOW";
 
@@ -176,6 +180,21 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         stepsCount: result.stepsCount,
         finishTime: now(),
       });
+      // Auto-capture: write each step's output into the version's
+      // sampleData map for cells that are currently empty. Lets the
+      // variable picker in the editor surface real field names after a
+      // single successful run, without forcing the user to copy/paste
+      // step outputs into the sample-data textarea by hand. User-pinned
+      // fixtures and LOCKED versions are left untouched -- see
+      // `mergeRunOutputsIntoSampleData` for the full skip list.
+      try {
+        mergeRunOutputsIntoSampleData(run.flowVersionId, result.steps);
+      } catch (mergeErr) {
+        // Non-fatal: the run already SUCCEEDED. Log and move on.
+        console.warn(
+          `[run-flow ${runId}] sampleData auto-capture failed: ${(mergeErr as Error).message}`,
+        );
+      }
     } catch (e) {
       const ts = now();
       if (e instanceof FlowExecutionError) {

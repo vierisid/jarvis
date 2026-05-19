@@ -45,9 +45,26 @@ export interface PieceCatalogAction {
   displayName: string;
   description: string;
   inputSchema?: PieceInputSchema;
+  /**
+   * Optional declared output sample: the same JSON shape the action returns
+   * on a successful run. Surfaced by the piece author via
+   * `createAction({ outputSample: ... })` (Jarvis extension to upstream AP).
+   * The visual editor's variable picker falls back to this when no captured
+   * sample data exists for the step. Leave undefined for dynamic-output
+   * actions (HTTP request, SQL, LLM with parseJson).
+   */
+  outputSample?: unknown;
 }
 
-export type PieceCatalogTrigger = PieceCatalogAction;
+export interface PieceCatalogTrigger extends PieceCatalogAction {
+  /**
+   * Triggers declare their sample shape natively in upstream AP via
+   * `createTrigger({ sampleData })`. The catalog surfaces it under the same
+   * name. Independent of `outputSample` so we don't lose either source
+   * during a round-trip.
+   */
+  sampleData?: unknown;
+}
 
 export interface PieceCatalogEntry {
   /** Upstream package name -- e.g. `@jarvispieces/piece-jarvis-ask`. */
@@ -398,6 +415,9 @@ export interface RawActionOrTrigger {
   displayName?: string;
   description?: string;
   props?: Record<string, RawProp>;
+  /** Triggers carry `sampleData`; our action extension carries `outputSample`. Both optional. */
+  sampleData?: unknown;
+  outputSample?: unknown;
 }
 
 export interface RawProp {
@@ -426,7 +446,7 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   if (m.triggers) {
     const triggers: Record<string, PieceCatalogTrigger> = {};
     for (const [key, raw] of Object.entries(m.triggers)) {
-      triggers[key] = rawActionToCatalogAction(key, raw);
+      triggers[key] = rawActionToCatalogAction(key, raw, /* isTrigger */ true);
     }
     out.triggers = triggers;
   }
@@ -436,14 +456,25 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
 function rawActionToCatalogAction(
   fallbackName: string,
   raw: RawActionOrTrigger,
-): PieceCatalogAction {
-  const out: PieceCatalogAction = {
+  isTrigger = false,
+): PieceCatalogAction & { sampleData?: unknown } {
+  const out: PieceCatalogAction & { sampleData?: unknown } = {
     name: typeof raw.name === "string" && raw.name.length > 0 ? raw.name : fallbackName,
     displayName: typeof raw.displayName === "string" ? raw.displayName : fallbackName,
     description: typeof raw.description === "string" ? raw.description : "",
   };
   if (raw.props) {
     out.inputSchema = propsToInputSchema(raw.props);
+  }
+  // Carry through declared output samples. Actions use `outputSample`
+  // (Jarvis extension); triggers use upstream `sampleData`. Both can be
+  // any JSON value -- we don't validate the shape here. Editor consumers
+  // skip non-object samples (the variable picker needs top-level keys).
+  if (raw.outputSample !== undefined) {
+    out.outputSample = raw.outputSample;
+  }
+  if (isTrigger && raw.sampleData !== undefined) {
+    out.sampleData = raw.sampleData;
   }
   return out;
 }

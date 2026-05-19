@@ -140,6 +140,15 @@ export interface PieceCatalogActionOrTrigger {
   displayName: string;
   description: string;
   inputSchema: PieceInputSchema | null;
+  /**
+   * Optional declared output for the action or trigger. Used by the
+   * variable picker to surface field-level rows even before the step has
+   * been run. Actions populate `outputSample` (Jarvis extension to AP);
+   * triggers populate the upstream-native `sampleData`. The picker reads
+   * either -- both carry the same kind of JSON shape.
+   */
+  outputSample?: unknown;
+  sampleData?: unknown;
 }
 
 export interface PieceCatalogEntry {

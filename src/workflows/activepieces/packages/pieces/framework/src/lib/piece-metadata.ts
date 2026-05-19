@@ -51,6 +51,12 @@ export const ActionBase = z.object({
   description: z.string(),
   props: PiecePropertyMap,
   requireAuth: z.boolean(),
+  // Jarvis-only extension to upstream Activepieces. Mirrors the
+  // long-standing `sampleData` on TriggerBase: an optional declaration of
+  // the action's output shape so the visual editor's variable picker
+  // can offer `{{step.field}}` references before the action has been
+  // run. Leave undefined for dynamic-output actions.
+  outputSample: z.unknown().optional(),
   errorHandlingOptions: ErrorHandlingOptionsParam.optional(),
 })
 
@@ -61,6 +67,7 @@ export type ActionBase = {
   props: PiecePropertyMap,
   requireAuth: boolean;
   errorHandlingOptions?: ErrorHandlingOptionsParam;
+  outputSample?: unknown;
 }
 
 export const TriggerBase = z.object({

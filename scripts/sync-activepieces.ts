@@ -236,7 +236,7 @@ const STRIP_EXPORT_LINES: Record<string, RegExp[]> = {
  */
 const PATCH_INSERTIONS: Record<
   string,
-  Array<{ anchor: RegExp; insert: string }>
+  Array<{ anchor: RegExp; insert: string; position?: "before" | "after" }>
 > = {
   // Polling triggers need `server.{token,apiUrl}` to call back into the
   // daemon's /v1/jarvis/* endpoints with the engineToken. The engine
@@ -252,6 +252,66 @@ const PATCH_INSERTIONS: Record<
         "  // for POLLING; we surface it here so polling triggers can call back to the\n" +
         "  // daemon's `/v1/jarvis/*` endpoints with the engineToken without unsafe casts.\n" +
         "  server: ServerContext;",
+    },
+  ],
+  // Jarvis-only extension: optional `outputSample` declaration on actions.
+  // Mirrors the long-standing `sampleData` on triggers; lets the visual
+  // editor's variable picker offer `{{step.field}}` references without
+  // first running the action. See the patch notes inside the inserted
+  // blocks for rationale. Three insertions cover (1) the params type,
+  // (2) the IAction constructor signature, (3) the createAction wiring.
+  "packages/pieces/framework/src/lib/action/action.ts": [
+    {
+      anchor: /^\s*errorHandlingOptions\?: ErrorHandlingOptionsParam\s*$/,
+      insert:
+        "  // === JARVIS PATCH: optional outputSample declaration ===\n" +
+        "  // Optional declaration of the action's output shape: the same JSON\n" +
+        "  // the action would return on a successful run. The visual editor's\n" +
+        "  // variable picker reads this so users can wire `{{step.field}}`\n" +
+        "  // references without first running the action to capture sample data.\n" +
+        "  // Mirrors `createTrigger().sampleData`. Leave undefined when output is\n" +
+        "  // dynamic (HTTP request piece, SQL piece, LLM with parseJson).\n" +
+        "  outputSample?: unknown\n" +
+        "  // === END JARVIS PATCH ===",
+    },
+    {
+      anchor: /^\s*public readonly errorHandlingOptions: ErrorHandlingOptionsParam,\s*$/,
+      insert:
+        "    // === JARVIS PATCH: outputSample (see CreateActionParams) ===\n" +
+        "    public readonly outputSample: unknown,\n" +
+        "    // === END JARVIS PATCH ===",
+    },
+    {
+      anchor: /^\s*\)\s*$/,
+      position: "before",
+      insert:
+        "    // === JARVIS PATCH: forward outputSample to the IAction instance ===\n" +
+        "    params.outputSample,\n" +
+        "    // === END JARVIS PATCH ===",
+    },
+  ],
+  // Jarvis-only extension: outputSample on ActionBase metadata too, so the
+  // piece catalog (which reads PieceMetadata.actions) can surface the
+  // declared sample. Two insertions cover the zod schema and the TS type.
+  "packages/pieces/framework/src/lib/piece-metadata.ts": [
+    {
+      // Anchored on the line ABOVE errorHandlingOptions: the zod
+      // `errorHandlingOptions:` line is shared with TriggerBase below, so
+      // we can't anchor on it directly (would match twice). `requireAuth:
+      // z.boolean(),` is unique to ActionBase. Field order inside z.object
+      // doesn't change the runtime schema.
+      anchor: /^\s*requireAuth: z\.boolean\(\),\s*$/,
+      insert:
+        "  // === JARVIS PATCH: outputSample (see action.ts) ===\n" +
+        "  outputSample: z.unknown().optional(),\n" +
+        "  // === END JARVIS PATCH ===",
+    },
+    {
+      anchor: /^\s*errorHandlingOptions\?: ErrorHandlingOptionsParam;\s*$/,
+      insert:
+        "  // === JARVIS PATCH: outputSample (see action.ts) ===\n" +
+        "  outputSample?: unknown;\n" +
+        "  // === END JARVIS PATCH ===",
     },
   ],
   // Upstream's `flow-executor.executeFromTrigger` always calls
@@ -385,9 +445,18 @@ for (const [relPath, patches] of Object.entries(PATCH_INSERTIONS)) {
   const out: string[] = [];
   const matched = patches.map(() => 0);
   for (const line of lines) {
+    // Pre-anchor insertions: insert ahead of the matching line so the
+    // anchor itself stays in place. Used when the only unique anchor
+    // available is structurally AFTER the desired insertion point.
+    for (let i = 0; i < patches.length; i++) {
+      if (patches[i]!.position === "before" && patches[i]!.anchor.test(line)) {
+        out.push(patches[i]!.insert);
+        matched[i] = (matched[i] ?? 0) + 1;
+      }
+    }
     out.push(line);
     for (let i = 0; i < patches.length; i++) {
-      if (patches[i]!.anchor.test(line)) {
+      if ((patches[i]!.position ?? "after") === "after" && patches[i]!.anchor.test(line)) {
         out.push(patches[i]!.insert);
         matched[i] = (matched[i] ?? 0) + 1;
       }

@@ -42,6 +42,7 @@ import {
   type PieceInputField,
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep } from "./tree";
+import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
@@ -881,6 +882,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               : []
           }
           sampleData={editor.version?.sampleData ?? {}}
+          catalog={editor.catalog}
         >
           <PropertiesPanel
             step={selectedStep}
@@ -1121,55 +1123,10 @@ function insertAtCursor(
   }, 0);
 }
 
-/**
- * Build a flat list of "output rows" from a chain of predecessor steps.
- * Recent steps come first ({@code reverse()}); within each step, we list
- * one row per top-level key of its sample data. Steps with no sample
- * data show a single "(output)" row that inserts the whole-step template.
- */
-interface VariableRow {
-  /** The step that produces this output. */
-  step: FlowStepNode;
-  /** Field key (`"name"`) -- empty for whole-output rows. */
-  field: string;
-  /** Display label shown in the picker; matches `field` or "(output)". */
-  label: string;
-  /** Full template inserted into the input: `{{stepName.field}}` or `{{stepName}}`. */
-  template: string;
-}
-
-function buildVariableRows(
-  predecessors: FlowStepNode[],
-  sampleData: Record<string, unknown>,
-): VariableRow[] {
-  const rows: VariableRow[] = [];
-  // Most-recent first: the chain comes out trigger-first from
-  // pathToStep, but the user wants the closest predecessor on top.
-  const ordered = [...predecessors].reverse();
-  for (const step of ordered) {
-    const sample = sampleData[step.name];
-    if (sample && typeof sample === "object" && !Array.isArray(sample)) {
-      const entries = Object.keys(sample as Record<string, unknown>);
-      if (entries.length === 0) {
-        rows.push({ step, field: "", label: "(output)", template: `{{${step.name}}}` });
-      } else {
-        for (const key of entries) {
-          rows.push({
-            step,
-            field: key,
-            label: key,
-            template: `{{${step.name}.${key}}}`,
-          });
-        }
-      }
-    } else {
-      // No sample data, array-typed, or primitive -- offer the
-      // whole-step template; the user can drill in with `.field` manually.
-      rows.push({ step, field: "", label: "(output)", template: `{{${step.name}}}` });
-    }
-  }
-  return rows;
-}
+// `buildVariableRows` + the picker-resolution helpers live in
+// `./variable-rows` so they can be unit-tested without mounting the
+// editor's React tree. The `VariableRow` shape is the row payload the
+// floating panel renders.
 
 /**
  * Floating settings panel anchored to the click location. Portal-rendered
@@ -1187,12 +1144,15 @@ function NodeSettingsPopover({
   onClose,
   predecessors,
   sampleData,
+  catalog,
   children,
 }: {
   anchor: { x: number; y: number };
   onClose: () => void;
   predecessors: FlowStepNode[];
   sampleData: Record<string, unknown>;
+  /** Piece catalog -- used by the variable picker to fall back to declared output shapes. */
+  catalog: PieceCatalogEntry[];
   children: React.ReactNode;
 }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null);
@@ -1276,8 +1236,8 @@ function NodeSettingsPopover({
   }, [onClose]);
 
   const variableRows = useMemo(
-    () => buildVariableRows(predecessors, sampleData),
-    [predecessors, sampleData],
+    () => buildVariableRows(predecessors, sampleData, catalog),
+    [predecessors, sampleData, catalog],
   );
 
   return (

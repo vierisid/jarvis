@@ -379,6 +379,95 @@ export function setSampleDataEntry(
 }
 
 /**
+ * Maximum serialized size for a single entry written via
+ * `mergeRunOutputsIntoSampleData`. Matches the soft cap used by the
+ * per-step PATCH endpoint (`SAMPLE_DATA_ENTRY_MAX_BYTES` in routes.ts) so
+ * auto-capture can never produce a sampleData entry the user couldn't
+ * have saved by hand. Anything larger is dropped with a warn.
+ */
+export const SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Merge step outputs from a successful run into the version's sampleData
+ * map, but only for cells that are currently empty. Designed to be called
+ * after a run finishes SUCCEEDED so the variable picker can offer real
+ * field names without the user manually pinning sample data.
+ *
+ * Skips:
+ *   - LOCKED versions (no edits allowed)
+ *   - Cells already populated (user-pinned fixtures take precedence)
+ *   - Outputs that aren't plain objects (primitives / arrays don't give
+ *     the picker top-level keys to surface)
+ *   - Outputs whose serialized form exceeds the per-entry cap
+ *
+ * `runSteps` is `Record<stepName, StepOutput-like>` where each value may
+ * be a `{ output: ... }` envelope (the wrapped engine shape) or the bare
+ * output (already-unwrapped or user-supplied). We accept either.
+ *
+ * Returns the names that were actually written so callers can log.
+ */
+export function mergeRunOutputsIntoSampleData(
+  id: string,
+  runSteps: Record<string, unknown>,
+): { written: string[]; skipped: Array<{ stepName: string; reason: string }> } {
+  const existing = getFlowVersionRow(id);
+  const written: string[] = [];
+  const skipped: Array<{ stepName: string; reason: string }> = [];
+  if (!existing) return { written, skipped };
+  if (existing.state === "LOCKED") return { written, skipped };
+
+  const current = existing.sample_data
+    ? (JSON.parse(existing.sample_data) as Record<string, unknown>)
+    : {};
+  let mutated = false;
+
+  for (const [stepName, raw] of Object.entries(runSteps)) {
+    if (stepName in current) {
+      skipped.push({ stepName, reason: "already populated" });
+      continue;
+    }
+    // Pull the inner `output` field if this is a wrapped StepOutput,
+    // otherwise treat the value itself as the output (defensive against
+    // schema variants).
+    const output =
+      raw && typeof raw === "object" && !Array.isArray(raw) && "output" in (raw as Record<string, unknown>)
+        ? (raw as { output: unknown }).output
+        : raw;
+    if (!output || typeof output !== "object" || Array.isArray(output)) {
+      skipped.push({ stepName, reason: "output not a plain object" });
+      continue;
+    }
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(output);
+    } catch (e) {
+      skipped.push({ stepName, reason: `serialize failed: ${(e as Error).message}` });
+      continue;
+    }
+    if (serialized.length > SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES) {
+      skipped.push({
+        stepName,
+        reason: `serialized ${serialized.length}B exceeds ${SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES}B cap`,
+      });
+      continue;
+    }
+    current[stepName] = output;
+    written.push(stepName);
+    mutated = true;
+  }
+
+  if (mutated) {
+    const json = Object.keys(current).length === 0 ? null : JSON.stringify(current);
+    db().run(`UPDATE flow_version SET sample_data = ?, updated = ? WHERE id = ?`, [
+      json,
+      now(),
+      id,
+    ]);
+  }
+  return { written, skipped };
+}
+
+/**
  * Replace the entire sample-data map. Pass `null` to clear. DRAFT-only.
  */
 export function replaceSampleData(
