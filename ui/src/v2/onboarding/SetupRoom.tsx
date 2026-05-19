@@ -198,7 +198,10 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
   // Settings → Channels.
   const [sttChoice, setSttChoice] = useState<STTChoice>("skip");
   const [sttKey, setSttKey] = useState("");
-  const [sttLocalEndpoint, setSttLocalEndpoint] = useState("http://localhost:8189");
+  // Matches LocalWhisperSTT's constructor default in src/comms/voice.ts so
+  // a user who accepts the suggested endpoint hits a working whisper.cpp
+  // server out of the box. Keep these in sync if either changes.
+  const [sttLocalEndpoint, setSttLocalEndpoint] = useState("http://localhost:8080");
   const [sttLocalServer, setSttLocalServer] = useState<LocalSTTServer>("whisper_cpp");
 
   // ── TTS screen state ───────────────────────────────────────────────
@@ -267,6 +270,16 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
   };
 
   const llmReady = testResult?.ok === true;
+
+  // Gate the STT Continue button so we never persist a cloud provider with
+  // no key (which fails at first transcription) or a local endpoint of "".
+  // Skip is always ready — it just omits the stt block from the payload.
+  const sttReady =
+    sttChoice === "skip"
+      ? true
+      : sttChoice === "local"
+        ? sttLocalEndpoint.trim() !== ""
+        : sttKey.trim() !== "";
 
   const handleFinish = async () => {
     setSaving(true);
@@ -630,7 +643,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
             </p>
 
             <div className="v2-setup__tts-grid" role="radiogroup">
-              <STTCard
+              <ChoiceCard
                 id="skip"
                 active={sttChoice === "skip"}
                 onClick={() => setSttChoice("skip")}
@@ -638,7 +651,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 title="Skip for now"
                 body="Text only. Wire up STT later from Settings."
               />
-              <STTCard
+              <ChoiceCard
                 id="openai"
                 active={sttChoice === "openai"}
                 onClick={() => setSttChoice("openai")}
@@ -646,7 +659,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 title="OpenAI Whisper"
                 body="Cloud Whisper. Accurate, needs an OpenAI API key."
               />
-              <STTCard
+              <ChoiceCard
                 id="groq"
                 active={sttChoice === "groq"}
                 onClick={() => setSttChoice("groq")}
@@ -654,7 +667,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 title="Groq Whisper"
                 body="Fastest hosted Whisper. Needs a Groq API key."
               />
-              <STTCard
+              <ChoiceCard
                 id="local"
                 active={sttChoice === "local"}
                 onClick={() => setSttChoice("local")}
@@ -696,7 +709,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     className="v2-setup__input"
                     value={sttLocalEndpoint}
                     onChange={(e) => setSttLocalEndpoint(e.target.value)}
-                    placeholder="http://localhost:8189"
+                    placeholder="http://localhost:8080"
                     autoComplete="off"
                   />
                 </div>
@@ -729,6 +742,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 variant="primary"
                 size="md"
                 onClick={() => setScreen("tts")}
+                disabled={!sttReady}
               >
                 Continue
                 <Icon icon={ArrowRight} size="sm" />
@@ -744,7 +758,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
             </p>
 
             <div className="v2-setup__tts-grid" role="radiogroup">
-              <TTSCard
+              <ChoiceCard
                 id="off"
                 active={ttsChoice === "off"}
                 onClick={() => setTtsChoice("off")}
@@ -752,7 +766,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 title="No voice"
                 body="Text replies only. Lightest option."
               />
-              <TTSCard
+              <ChoiceCard
                 id="edge"
                 active={ttsChoice === "edge"}
                 onClick={() => setTtsChoice("edge")}
@@ -760,7 +774,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 title="Edge TTS"
                 body="Free, clean, ships with Jarvis. Pick a voice below."
               />
-              <TTSCard
+              <ChoiceCard
                 id="elevenlabs"
                 active={ttsChoice === "elevenlabs"}
                 onClick={() => setTtsChoice("elevenlabs")}
@@ -852,7 +866,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-function TTSCard({
+function ChoiceCard({
   active,
   onClick,
   icon,
@@ -884,15 +898,3 @@ function TTSCard({
   );
 }
 
-// Visually identical to TTSCard — kept separate so future STT-only chrome
-// (e.g. a "fastest" badge on Groq) doesn't have to thread props through TTS.
-function STTCard(props: {
-  active: boolean;
-  onClick: () => void;
-  icon: LucideIcon;
-  title: string;
-  body: string;
-  id: string;
-}) {
-  return <TTSCard {...props} />;
-}

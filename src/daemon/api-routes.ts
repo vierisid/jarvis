@@ -1112,7 +1112,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     /**
-     * Atomic Phase A setup endpoint. Saves LLM + TTS config + flips
+     * Atomic Phase A setup endpoint. Saves LLM + STT + TTS config + flips
      * the `onboarding.setup_completed_at` flag in one shot, then hot-
      * reloads the LLM providers and TTS provider so the next chat
      * message goes through real services without a daemon restart.
@@ -1123,6 +1123,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      *       primary: "anthropic" | "openai" | ... ,
      *       <provider>: { api_key?: string, model?: string, base_url?: string }
      *     },
+     *     stt: {
+     *       provider: "openai" | "groq" | "local" | "sarvam",
+     *       openai?:  { api_key?: string, model?: string },
+     *       groq?:    { api_key?: string, model?: string },
+     *       sarvam?:  { api_key?: string, model?: string, language?: string },
+     *       local?:   { endpoint: string, model?: string,
+     *                   server_type?: "whisper_cpp" | "openai_compatible" },
+     *     },
      *     tts: {
      *       enabled: boolean,
      *       provider?: "edge" | "elevenlabs" | "sarvam",
@@ -1132,9 +1140,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      *     }
      *   }
      *
-     * Either field is optional; missing means "use current/default".
-     * The TTS block is required to be present (even if just `{enabled:false}`)
-     * so the user explicitly chose during the setup screen.
+     * Each field is optional; missing means "use current/default". The TTS
+     * block is required to be present (even if just `{enabled:false}`) so
+     * the user explicitly chose during the setup screen; STT is fully
+     * optional (omit when the user picks "skip"). Sub-blocks are merged
+     * via the shared mergeSTTConfig/mergeTTSConfig helpers so existing
+     * api_keys are preserved when the patch omits them.
      */
     '/api/onboarding/setup': {
       POST: async (req: Request) => {
@@ -1152,39 +1163,26 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
           }
 
-          // 2. STT settings — mirrors /api/config/stt POST semantics so
-          //    the onboarding form can persist a Whisper choice (cloud or
-          //    local) without restart. STT itself is consumed at the next
-          //    transcription request, so no hot-swap is needed.
+          // 2. STT settings — mirrors /api/config/stt POST semantics via
+          //    the shared mergeSTTConfig helper. STT is consumed at the
+          //    next transcription request, so no hot-swap is needed.
           if (body.stt) {
             const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
+            const { mergeSTTConfig } = await import('./config-merge.ts');
             const fresh = await lc();
-            if (!fresh.stt) fresh.stt = { provider: 'openai' };
-            const sttBody = { ...(body.stt as Record<string, unknown>) };
-            for (const p of ['openai', 'groq', 'sarvam'] as const) {
-              const incoming = sttBody[p] as Record<string, unknown> | undefined;
-              const existing = (fresh.stt as any)[p];
-              if (incoming) {
-                (fresh.stt as any)[p] = {
-                  ...existing,
-                  ...incoming,
-                  api_key: (incoming.api_key as string) || existing?.api_key || '',
-                };
-                delete sttBody[p];
-              }
-            }
-            fresh.stt = { ...fresh.stt, ...sttBody } as any;
+            fresh.stt = mergeSTTConfig(fresh.stt, body.stt);
             await sc(fresh);
             ctx.config.stt = fresh.stt;
           }
 
-          // 3. TTS settings — same path as /api/config/tts POST. Inline
-          //    the relevant write since the TTS endpoint is large; we
-          //    don't need provider hot-swap UI feedback here.
+          // 3. TTS settings — mirrors /api/config/tts POST via the shared
+          //    mergeTTSConfig helper, then hot-reloads the provider so the
+          //    post-setup "Welcome to Jarvis" reply is spoken immediately.
           if (body.tts) {
             const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
+            const { mergeTTSConfig } = await import('./config-merge.ts');
             const fresh = await lc();
-            fresh.tts = { ...fresh.tts, ...(body.tts as any) };
+            fresh.tts = mergeTTSConfig(fresh.tts, body.tts);
             await sc(fresh);
             ctx.config.tts = fresh.tts;
             // Hot-reload TTS provider when possible so the post-setup
@@ -1200,7 +1198,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             }
           }
 
-          // 3. Flip the setup-completed flag.
+          // 4. Flip the setup-completed flag.
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
           const fresh = await loadConfig();
           const now = Date.now();
@@ -1215,7 +1213,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           await saveConfig(fresh);
           ctx.config.onboarding = fresh.onboarding;
 
-          // 4. Bring the LLM-dependent services (bgAgent, commitment
+          // 5. Bring the LLM-dependent services (bgAgent, commitment
           //    executor, awareness) online in-process. Without this the
           //    user would have to restart the daemon — fatal UX on
           //    Docker / VPS. Failure here is non-fatal: chat still works
@@ -1836,27 +1834,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { mergeSTTConfig } = await import('./config-merge.ts');
           const freshConfig = await loadConfig();
 
-          if (!freshConfig.stt) freshConfig.stt = { provider: 'openai' };
-          const stt = freshConfig.stt;
-
-          // Preserve keys for each provider if not provided in the update
-          const providers = ['openai', 'groq', 'sarvam'] as const;
-          for (const p of providers) {
-            const incoming = body[p] as Record<string, unknown> | undefined;
-            const existing = stt[p];
-            if (incoming) {
-              stt[p] = {
-                ...existing,
-                ...incoming,
-                api_key: (incoming.api_key as string) || (existing as any)?.api_key || '',
-              } as any;
-              delete body[p];
-            }
-          }
-
-          freshConfig.stt = { ...stt, ...body } as any;
+          freshConfig.stt = mergeSTTConfig(freshConfig.stt, body);
           await saveConfig(freshConfig);
           ctx.config.stt = freshConfig.stt;
           return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
@@ -1896,39 +1877,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { mergeTTSConfig } = await import('./config-merge.ts');
           const freshConfig = await loadConfig();
 
-          if (!freshConfig.tts) freshConfig.tts = { enabled: false };
-
-          // Deep-merge elevenlabs sub-object to preserve API key across saves
-          const incomingEl = body.elevenlabs as Record<string, unknown> | undefined;
-          const existingEl = freshConfig.tts?.elevenlabs;
-          delete body.elevenlabs;
-
-          freshConfig.tts = { ...freshConfig.tts, ...body } as any;
-
-          if (incomingEl) {
-            freshConfig.tts!.elevenlabs = {
-              ...existingEl,
-              ...incomingEl,
-              // Keep existing API key if new one not provided
-              api_key: (incomingEl.api_key as string) || existingEl?.api_key || '',
-            } as any;
-          }
-
-          const incomingSarvam = body.sarvam as Record<string, unknown> | undefined;
-          const existingSarvam = freshConfig.tts?.sarvam;
-          delete body.sarvam;
-
-          if (incomingSarvam) {
-            freshConfig.tts!.sarvam = {
-              ...existingSarvam,
-              ...incomingSarvam,
-              // Keep existing API key if new one not provided
-              api_key: (incomingSarvam.api_key as string) || existingSarvam?.api_key || '',
-            } as any;
-          }
-
+          freshConfig.tts = mergeTTSConfig(freshConfig.tts, body);
           await saveConfig(freshConfig);
           ctx.config.tts = freshConfig.tts;
 
