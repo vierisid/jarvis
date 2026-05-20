@@ -96,6 +96,8 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 	if caps[CapSubPebble] && subPebble != nil {
 		registry["sub_pebble.spawn"] = makeSubPebbleSpawnHandler(subPebble)
 		registry["sub_pebble.set_state"] = makeSubPebbleSetStateHandler(subPebble)
+		registry["sub_pebble.set_color"] = makeSubPebbleSetColorHandler(subPebble)
+		registry["sub_pebble.set_expanded"] = makeSubPebbleSetExpandedHandler(subPebble)
 		registry["sub_pebble.set_label"] = makeSubPebbleSetLabelHandler(subPebble)
 		registry["sub_pebble.close"] = makeSubPebbleCloseHandler(subPebble)
 		registry["sub_pebble.close_all"] = makeSubPebbleCloseAllHandler(subPebble)

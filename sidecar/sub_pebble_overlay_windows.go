@@ -49,6 +49,24 @@ const (
 	// window itself.
 	subPebbleAnchorX = pebbleWindowW - subPebbleRightMargin
 	subPebbleAnchorY = pebbleAnchorY
+
+	// Phase B — bubble dimensions and offset. The bubble is a paper card
+	// that appears to the LEFT of the disc when the sub-pebble is expanded.
+	// Stacks vertically with: agent name eyebrow, task line, elapsed,
+	// optional result. Width is generous enough to read a sentence-length
+	// task; height tall enough for a 3-line clamp on the result.
+	subPebbleBubbleW       = 230
+	subPebbleBubbleH       = 130
+	subPebbleBubbleOffset  = 14 // gap between disc edge and bubble's right edge
+	subPebbleBubbleAnchorY = 20 // top of bubble relative to disc's y axis (-20 = bubble starts 20 px above disc center)
+
+	// "open full" button — Phase B+ click target inside the bubble that
+	// spawns a native window with the full task result. Anchored to the
+	// bubble's bottom-right.
+	subPebbleButtonW      = 92
+	subPebbleButtonH      = 20
+	subPebbleButtonInsetR = 10 // gap from bubble right edge to button right edge
+	subPebbleButtonInsetB = 8  // gap from bubble bottom to button bottom
 )
 
 // ─────────────────────────── Color palette ──────────────────────────────────
@@ -77,16 +95,42 @@ func subPebbleRGB(c SubPebbleColor) (r, g, b uint8) {
 // ─────────────────────────── Service ────────────────────────────────────────
 
 type subPebbleEntry struct {
-	id      string
-	color   SubPebbleColor
-	state   atomic.Value // PebbleState
-	label   atomic.Value // string
+	id    string
+	color atomic.Value // SubPebbleColor — atomic so Failed can recolor on the fly
+	state atomic.Value // PebbleState
+	label atomic.Value // string  — agent name (always set at spawn; used as bubble header)
+	task  atomic.Value // string  — current task line (set lazily by daemon on expand)
+	result   atomic.Value // string  — result preview for completed/failed (set on expand)
+	elapsedS atomic.Int64 // last-known elapsed seconds for the bubble counter
+	expanded atomic.Bool  // bubble visibility
+	lastHit  atomic.Int32 // last WM_NCHITTEST resolution (subHitDisc/Button/None)
 	slot    int
 	hwnd    uintptr
 	stopCh  chan struct{}
 	doneCh  chan struct{}
 	frameTick uint64
 }
+
+// Global HWND → entry registry. The WndProc is a free function that the OS
+// calls back into; this map lets it find the entry that owns the message.
+// Sync.Map handles the tiny amount of concurrency from spawn / close races.
+var subPebbleByHwnd sync.Map // hwnd uintptr -> *subPebbleEntry
+
+// Click callback fired when the user clicks a sub-pebble disc. Set by the
+// sidecar's RPC layer (registered in client.go) so the daemon hears about it.
+var subPebbleClickCallback atomic.Value // func(id string)
+
+// Open-full callback fired when the user clicks the "open full" button
+// inside the bubble. Daemon spawns a panel with the full task result.
+var subPebbleOpenFullCallback atomic.Value // func(id string)
+
+// Hit-area sentinel stored on each entry so WM_LBUTTONUP can route the
+// click to the right callback based on what WM_NCHITTEST resolved to.
+const (
+	subHitNone   int32 = 0
+	subHitDisc   int32 = 1
+	subHitButton int32 = 2
+)
 
 type subPebbleServiceWindows struct {
 	mu    sync.Mutex
@@ -114,13 +158,15 @@ func (s *subPebbleServiceWindows) Spawn(spec SubPebbleSpec) error {
 	}
 	entry := &subPebbleEntry{
 		id:     spec.ID,
-		color:  spec.Color,
 		slot:   spec.Slot,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
 	}
+	entry.color.Store(spec.Color)
 	entry.state.Store(spec.State)
 	entry.label.Store(spec.Label)
+	entry.task.Store("")
+	entry.result.Store("")
 	s.items[spec.ID] = entry
 	s.mu.Unlock()
 
@@ -137,6 +183,42 @@ func (s *subPebbleServiceWindows) SetState(id string, state PebbleState) error {
 		return fmt.Errorf("sub-pebble %q not found", id)
 	}
 	entry.state.Store(state)
+	return nil
+}
+
+// SetColor recolors an existing sub-pebble. Used so the daemon can swap a
+// task to vermilion when it fails (since color is otherwise stable across
+// lifecycle to support muscle-memory recall).
+func (s *subPebbleServiceWindows) SetColor(id string, color SubPebbleColor) error {
+	s.mu.Lock()
+	entry, ok := s.items[id]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("sub-pebble %q not found", id)
+	}
+	entry.color.Store(color)
+	return nil
+}
+
+// SetExpanded toggles the click-to-inspect bubble. When expanded, the next
+// paint cycle draws a paper card to the left of the disc with the supplied
+// content. agent/task/result/elapsed can all be empty.
+func (s *subPebbleServiceWindows) SetExpanded(id string, expanded bool, agent, task, result string, elapsedS int) error {
+	s.mu.Lock()
+	entry, ok := s.items[id]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("sub-pebble %q not found", id)
+	}
+	if agent != "" {
+		entry.label.Store(agent)
+	}
+	if task != "" {
+		entry.task.Store(task)
+	}
+	entry.result.Store(result)
+	entry.elapsedS.Store(int64(elapsedS))
+	entry.expanded.Store(expanded)
 	return nil
 }
 
@@ -167,6 +249,16 @@ func (s *subPebbleServiceWindows) Close(id string) error {
 	return nil
 }
 
+// OnClick registers the global callback fired when the user clicks a
+// sub-pebble disc. The WndProc reads this via subPebbleClickCallback.
+func (s *subPebbleServiceWindows) OnClick(callback func(id string)) {
+	subPebbleClickCallback.Store(callback)
+}
+
+func (s *subPebbleServiceWindows) OnOpenFull(callback func(id string)) {
+	subPebbleOpenFullCallback.Store(callback)
+}
+
 func (s *subPebbleServiceWindows) CloseAll() error {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.items))
@@ -195,7 +287,11 @@ func (s *subPebbleServiceWindows) runOverlay(entry *subPebbleEntry) {
 		return
 	}
 	entry.hwnd = hwnd
+	// Register HWND → entry so the shared WndProc can find this entry when
+	// the OS delivers WM_NCHITTEST / WM_LBUTTONUP for this window.
+	subPebbleByHwnd.Store(hwnd, entry)
 	defer func() {
+		subPebbleByHwnd.Delete(hwnd)
 		procDestroyWindow.Call(hwnd)
 		entry.hwnd = 0
 	}()
@@ -278,7 +374,10 @@ func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (ui
 	// ERROR_CLASS_ALREADY_EXISTS is fine on re-registration.
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
-	exStyle := uintptr(pblWsExLayered | pblWsExTransparent | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
+	// Phase B: drop WS_EX_TRANSPARENT so the window can catch clicks. The
+	// WndProc returns HTTRANSPARENT for non-disc pixels so the rest of the
+	// 360×220 frame still passes mouse events through to whatever's behind.
+	exStyle := uintptr(pblWsExLayered | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
 	style := uintptr(pblWsPopup | pblWsVisible)
 
 	// Initial window position — compute once at create time so the window
@@ -328,15 +427,106 @@ func (s *subPebbleServiceWindows) slotPosition(slot int) (int, int) {
 	return winX, winY
 }
 
+const (
+	wmNcHitTest   = 0x0084
+	wmLButtonUp   = 0x0202
+	htTransparent = ^uintptr(0) // -1 — tells the OS to pass the click to the window underneath
+	htClient      = 1
+)
+
+// hitRadiusPx is the click hit-area radius around the disc center. Slightly
+// larger than the visible disc (9 px) so users don't have to land dead-on.
+const hitRadiusPx = 16
+
 func subPebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == pblWmDestroy {
+	switch msg {
+	case wmNcHitTest:
+		entryAny, ok := subPebbleByHwnd.Load(hwnd)
+		if !ok {
+			return htTransparent
+		}
+		entry := entryAny.(*subPebbleEntry)
+		sx := int(int16(lParam & 0xFFFF))
+		sy := int(int16((lParam >> 16) & 0xFFFF))
+		winX, winY := slotPositionForEntry(entry)
+		localX := sx - winX
+		localY := sy - winY
+
+		// Bubble interactive zones (only when expanded):
+		//   1. "open full" button — a small rect in the bubble's bottom-right
+		//   2. anywhere else inside the bubble — generic HTCLIENT so the
+		//      cursor stays grabbed (otherwise the bubble closes when the
+		//      cursor leaves the disc on its way to the button).
+		if entry.expanded.Load() {
+			bx0, by0, bx1, by1 := subPebbleBubbleRect()
+			// Button is anchored to the bubble's bottom-right with a small inset.
+			bxR0 := bx1 - subPebbleButtonInsetR - subPebbleButtonW
+			byR0 := by1 - subPebbleButtonInsetB - subPebbleButtonH
+			bxR1 := bxR0 + subPebbleButtonW
+			byR1 := byR0 + subPebbleButtonH
+			if localX >= bxR0 && localX <= bxR1 && localY >= byR0 && localY <= byR1 {
+				entry.lastHit.Store(subHitButton)
+				return htClient
+			}
+			if localX >= bx0 && localX <= bx1 && localY >= by0 && localY <= by1 {
+				entry.lastHit.Store(subHitNone) // inside bubble but not on button — swallow click w/o action
+				return htClient
+			}
+		}
+
+		// Disc area.
+		dx := localX - subPebbleAnchorX
+		dy := localY - subPebbleAnchorY
+		if dx*dx+dy*dy <= hitRadiusPx*hitRadiusPx {
+			entry.lastHit.Store(subHitDisc)
+			return htClient
+		}
+		entry.lastHit.Store(subHitNone)
+		return htTransparent
+
+	case wmLButtonUp:
+		entryAny, ok := subPebbleByHwnd.Load(hwnd)
+		if !ok {
+			return 0
+		}
+		entry := entryAny.(*subPebbleEntry)
+		hit := entry.lastHit.Load()
+		entry.lastHit.Store(subHitNone)
+		switch hit {
+		case subHitDisc:
+			if cbAny := subPebbleClickCallback.Load(); cbAny != nil {
+				if cb, ok := cbAny.(func(string)); ok && cb != nil {
+					go cb(entry.id)
+				}
+			}
+		case subHitButton:
+			if cbAny := subPebbleOpenFullCallback.Load(); cbAny != nil {
+				if cb, ok := cbAny.(func(string)); ok && cb != nil {
+					go cb(entry.id)
+				}
+			}
+		}
+		return 0
+
+	case pblWmDestroy:
 		// Don't PostQuitMessage here — each sub-pebble shares the
-		// process-wide message loop with every other overlay. We just
-		// let DefWindowProc handle it; the goroutine exits via its
-		// stopCh, which is the source of truth for lifecycle.
+		// process-wide message loop with every other overlay.
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
 	return r
+}
+
+// slotPositionForEntry mirrors subPebbleServiceWindows.slotPosition but is a
+// free function so the WndProc (which has no service receiver in scope) can
+// call it. Slot is stable for the entry's lifetime so we don't need a lock.
+func slotPositionForEntry(entry *subPebbleEntry) (int, int) {
+	right, _, ok := subPebbleScreenBounds()
+	if !ok {
+		right = 1920
+	}
+	winX := right - subPebbleAnchorX - subPebbleRightMargin
+	winY := subPebbleTopMargin + entry.slot*subPebbleSlotSpacing - subPebbleAnchorY
+	return winX, winY
 }
 
 // ─────────────────────────── Paint pipeline ─────────────────────────────────
@@ -379,8 +569,20 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 	}
 
 	state, _ := entry.state.Load().(PebbleState)
+	color, _ := entry.color.Load().(SubPebbleColor)
 	entry.frameTick++
-	s.drawSubPebble(pixels, entry.color, state, entry.frameTick)
+	if entry.expanded.Load() {
+		s.drawSubPebbleBubble(pixels, color, entry)
+	}
+	s.drawSubPebble(pixels, color, state, entry.frameTick)
+	// Bubble text overlay — GDI DrawText, run after the bubble fill so
+	// the glyphs sit on opaque (alpha=255) pixels. Alpha repair clamps
+	// glyph alpha to 255 to match the bubble body (same trick the main
+	// pebble uses).
+	if entry.expanded.Load() {
+		s.drawSubPebbleBubbleText(memDC, entry)
+		repairSubPebbleBubbleAlpha(pixels)
+	}
 
 	const acSrcOver = 0x00
 	const acSrcAlpha = 0x01

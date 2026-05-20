@@ -51,9 +51,18 @@ type SubPebbleService interface {
 	// Returns an error if the ID isn't currently spawned.
 	SetState(id string, state PebbleState) error
 
-	// SetLabel updates the cached label for the sub-pebble. Used now for
-	// debug logging; Phase B's click-to-inspect bubble will read it.
+	// SetColor recolors a sub-pebble. Used to swap to vermilion when a
+	// task fails since the spawn color is otherwise stable across the
+	// agent's lifetime.
+	SetColor(id string, color SubPebbleColor) error
+
+	// SetLabel updates the cached label for the sub-pebble.
 	SetLabel(id string, label string) error
+
+	// SetExpanded toggles the click-to-inspect bubble. Daemon supplies
+	// the agent name, task line, result preview, and elapsed seconds so
+	// the sidecar can render them without re-querying.
+	SetExpanded(id string, expanded bool, agent, task, result string, elapsedS int) error
 
 	// Close destroys a single sub-pebble overlay. Idempotent.
 	Close(id string) error
@@ -61,6 +70,17 @@ type SubPebbleService interface {
 	// CloseAll destroys every active sub-pebble. Called on sidecar
 	// shutdown so we don't leak overlay windows.
 	CloseAll() error
+
+	// OnClick registers a callback invoked when the user clicks a
+	// sub-pebble disc. The callback receives the clicked sub-pebble's
+	// id. Threading: runs on a fresh goroutine — receivers should not
+	// block.
+	OnClick(callback func(id string))
+
+	// OnOpenFull registers a callback invoked when the user clicks the
+	// "open full" button inside the expanded bubble. The daemon spawns a
+	// dedicated native window with the full task result.
+	OnOpenFull(callback func(id string))
 }
 
 // NewSubPebbleService returns the platform-specific implementation. Each

@@ -42,6 +42,48 @@ func makeSubPebbleSetStateHandler(svc SubPebbleService) RPCHandler {
 	}
 }
 
+// sub_pebble.set_color — recolor a sub-pebble (used to swap to vermilion
+// on failure). Params: { "id": string, "color": string }
+func makeSubPebbleSetColorHandler(svc SubPebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		id, _ := params["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("missing required parameter: id")
+		}
+		color, _ := params["color"].(string)
+		if color == "" {
+			return nil, fmt.Errorf("missing required parameter: color")
+		}
+		if err := svc.SetColor(id, SubPebbleColor(color)); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"id": id, "color": color}}, nil
+	}
+}
+
+// sub_pebble.set_expanded — toggle the click-to-inspect bubble.
+// Params: { id, expanded, agent?, task?, result?, elapsed_s? }
+func makeSubPebbleSetExpandedHandler(svc SubPebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		id, _ := params["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("missing required parameter: id")
+		}
+		expanded, _ := params["expanded"].(bool)
+		agent, _ := params["agent"].(string)
+		task, _ := params["task"].(string)
+		result, _ := params["result"].(string)
+		elapsedS := 0
+		if v, ok := params["elapsed_s"].(float64); ok {
+			elapsedS = int(v)
+		}
+		if err := svc.SetExpanded(id, expanded, agent, task, result, elapsedS); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"id": id, "expanded": expanded}}, nil
+	}
+}
+
 // sub_pebble.set_label — update a sub-pebble's label (used by the Phase B
 // bubble; for now just stashed). Params: { "id": string, "label": string }
 func makeSubPebbleSetLabelHandler(svc SubPebbleService) RPCHandler {

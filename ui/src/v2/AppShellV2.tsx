@@ -8,6 +8,7 @@ import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
+import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
 import "./v2.css";
 import "./ui/primitives.css";
 
@@ -53,6 +54,18 @@ export function AppShellV2() {
           <PanelRoomActionBridge />
           <Body mode="expanded" />
         </RoomActionBusProvider>
+      </div>
+    );
+  }
+
+  // Task-result mode: spawned by the sub-pebble's "open full" button so
+  // the user can read a long sub-agent response. Standalone — no AppShell,
+  // no voice handlers, just the result body. Reads the task id from the
+  // hash.
+  if (route.kind === "task") {
+    return (
+      <div className="jarvis-v2-root jarvis-v2-task-mode">
+        <TaskResultRoom taskId={route.id} />
       </div>
     );
   }
