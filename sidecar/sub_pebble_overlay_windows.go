@@ -104,7 +104,27 @@ type subPebbleEntry struct {
 	elapsedS atomic.Int64 // last-known elapsed seconds for the bubble counter
 	expanded atomic.Bool  // bubble visibility
 	lastHit  atomic.Int32 // last WM_NCHITTEST resolution (subHitDisc/Button/None)
-	slot    int
+
+	// Slot is the logical row on the rail. Mutable so close-induced reflow
+	// (Phase C2) can shift the index; paint reads it each frame so the
+	// target position updates automatically.
+	slot atomic.Int32
+
+	// Animated current position — eases toward the slot's target each frame
+	// with a 0.18 follow factor (matches the main pebble's cursor follow).
+	// Seeded from the cursor at spawn time so new sub-pebbles "fly out"
+	// from where the user summoned them rather than popping in cold.
+	// Live render + hit-test both read these atomics so clicks work mid-
+	// animation. Stored as int32 micro-degrees (×100) to keep atomic without
+	// boxing through atomic.Value — a int32 is plenty for screen coords.
+	curX atomic.Int32 // window top-left X (px)
+	curY atomic.Int32 // window top-left Y (px)
+
+	// Multi-monitor anchor (C3) — right edge of the monitor this sub-pebble
+	// was spawned on. Stable for the entry's lifetime so a user dragging
+	// the cursor to another monitor doesn't relocate existing sub-pebbles.
+	monitorRight atomic.Int32
+
 	hwnd    uintptr
 	stopCh  chan struct{}
 	doneCh  chan struct{}
@@ -158,15 +178,35 @@ func (s *subPebbleServiceWindows) Spawn(spec SubPebbleSpec) error {
 	}
 	entry := &subPebbleEntry{
 		id:     spec.ID,
-		slot:   spec.Slot,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
 	}
+	entry.slot.Store(int32(spec.Slot))
 	entry.color.Store(spec.Color)
 	entry.state.Store(spec.State)
 	entry.label.Store(spec.Label)
 	entry.task.Store("")
 	entry.result.Store("")
+	// C3 — anchor to whatever monitor the cursor is on so multi-monitor
+	// setups feel right (each sub-pebble stays on its spawn monitor).
+	monRight, monLeft := monitorRightUnderCursor()
+	entry.monitorRight.Store(int32(monRight))
+	// C1 — seed the animated position from the current cursor location
+	// so the new sub-pebble "flies out" toward its slot. paint() eases
+	// from this start point to the slot target each frame.
+	cx, cy, errC := platformGetCursorPos()
+	if errC != nil {
+		// Cursor unreachable — start at the slot directly. No fly-out, but
+		// the disc still appears in place.
+		wx, wy := s.slotPosition(entry)
+		entry.curX.Store(int32(wx))
+		entry.curY.Store(int32(wy))
+	} else {
+		// Window top-left such that disc anchor lands at cursor.
+		entry.curX.Store(int32(cx - subPebbleAnchorX))
+		entry.curY.Store(int32(cy - subPebbleAnchorY))
+	}
+	_ = monLeft
 	s.items[spec.ID] = entry
 	s.mu.Unlock()
 
@@ -238,6 +278,18 @@ func (s *subPebbleServiceWindows) Close(id string) error {
 	entry, ok := s.items[id]
 	if ok {
 		delete(s.items, id)
+	}
+	// C2 — slot reflow. Every remaining sub-pebble whose slot was below
+	// (visually further down) the closed one shifts up by one. Each
+	// entry's paint loop already eases curY toward the new slot target,
+	// so the visual reflow happens automatically over the next ~10 frames.
+	if ok {
+		closedSlot := entry.slot.Load()
+		for _, other := range s.items {
+			if other.slot.Load() > closedSlot {
+				other.slot.Add(-1)
+			}
+		}
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -339,6 +391,82 @@ func (s *subPebbleServiceWindows) pumpMessages() {
 
 // ─────────────────────────── Window creation ────────────────────────────────
 
+func absDelta(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// monitorRightUnderCursor returns the right edge X (and left edge X) of the
+// monitor that contains the current cursor position. Used at sub-pebble
+// spawn time so multi-monitor setups anchor the sub-pebble to whichever
+// display the user was looking at, not always the primary. Falls back to
+// the primary monitor on any error.
+func monitorRightUnderCursor() (right, left int) {
+	cx, cy, err := platformGetCursorPos()
+	if err != nil {
+		if r, _, ok := subPebbleScreenBounds(); ok {
+			return r, 0
+		}
+		return 1920, 0
+	}
+	rect, ok := monitorRectFromPoint(cx, cy)
+	if !ok {
+		if r, _, ok := subPebbleScreenBounds(); ok {
+			return r, 0
+		}
+		return 1920, 0
+	}
+	return rect.Right, rect.Left
+}
+
+// Win32 RECT for monitor info.
+type monRect struct {
+	Left, Top, Right, Bottom int
+}
+
+// procMonitorFromPoint + procGetMonitorInfoW from user32.
+var (
+	procMonitorFromPoint = pebbleUser32.NewProc("MonitorFromPoint")
+	procGetMonitorInfoW  = pebbleUser32.NewProc("GetMonitorInfoW")
+)
+
+// MonitorFromPoint returns the monitor handle for the monitor containing
+// the given point. dwFlags = MONITOR_DEFAULTTONEAREST = 2 — returns the
+// nearest monitor when the point is between displays.
+func monitorRectFromPoint(x, y int) (monRect, bool) {
+	type point struct{ X, Y int32 }
+	pt := point{X: int32(x), Y: int32(y)}
+	const monitorDefaultToNearest = 2
+	// MonitorFromPoint takes the POINT struct by value, packed into a
+	// uintptr (8 bytes on x64 — both int32s fit).
+	pPacked := uintptr(uint32(pt.X)) | (uintptr(uint32(pt.Y)) << 32)
+	hMon, _, _ := procMonitorFromPoint.Call(pPacked, monitorDefaultToNearest)
+	if hMon == 0 {
+		return monRect{}, false
+	}
+	// MONITORINFO struct layout: cbSize, rcMonitor (Left,Top,Right,Bottom int32), rcWork, dwFlags.
+	type monInfo struct {
+		CbSize    uint32
+		RcMonitor [4]int32
+		RcWork    [4]int32
+		DwFlags   uint32
+	}
+	mi := monInfo{}
+	mi.CbSize = uint32(unsafe.Sizeof(mi))
+	ok, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi)))
+	if ok == 0 {
+		return monRect{}, false
+	}
+	return monRect{
+		Left:   int(mi.RcMonitor[0]),
+		Top:    int(mi.RcMonitor[1]),
+		Right:  int(mi.RcMonitor[2]),
+		Bottom: int(mi.RcMonitor[3]),
+	}, true
+}
+
 // subPebbleScreenBounds returns the primary monitor's right edge + top.
 // We anchor to the primary monitor so the rail is predictable across
 // multi-monitor setups (the user can re-anchor later via a setting).
@@ -380,10 +508,12 @@ func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (ui
 	exStyle := uintptr(pblWsExLayered | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
 	style := uintptr(pblWsPopup | pblWsVisible)
 
-	// Initial window position — compute once at create time so the window
-	// appears at the right slot immediately. Subsequent paints don't move
-	// the window; the slot is fixed for the sub-pebble's lifetime (Phase A).
-	winX, winY := s.slotPosition(entry.slot)
+	// Initial window position — seeded from the entry's curX/curY which
+	// is either at the cursor (fly-out spawn) or already at the slot
+	// (fallback when cursor lookup failed). Paint loop eases toward the
+	// slot target each frame from here.
+	winX := int(entry.curX.Load())
+	winY := int(entry.curY.Load())
 
 	hwnd, _, err := procCreateWindowExW.Call(
 		exStyle,
@@ -414,14 +544,19 @@ func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (ui
 
 // slotPosition computes the top-left of a 360×220 layered window so that
 // the disc (anchored at subPebbleAnchorX, subPebbleAnchorY within the
-// window) lands at the right edge of the primary monitor at the correct
-// vertical slot.
-func (s *subPebbleServiceWindows) slotPosition(slot int) (int, int) {
-	right, _, ok := subPebbleScreenBounds()
-	if !ok {
-		// Fallback: anchor to a reasonable default.
-		right = 1920
+// window) lands at the right edge of the entry's spawn monitor at the
+// correct vertical slot.
+func (s *subPebbleServiceWindows) slotPosition(entry *subPebbleEntry) (int, int) {
+	right := int(entry.monitorRight.Load())
+	if right <= 0 {
+		// Fallback: primary monitor right edge.
+		if r, _, ok := subPebbleScreenBounds(); ok {
+			right = r
+		} else {
+			right = 1920
+		}
 	}
+	slot := int(entry.slot.Load())
 	winX := right - subPebbleAnchorX - subPebbleRightMargin
 	winY := subPebbleTopMargin + slot*subPebbleSlotSpacing - subPebbleAnchorY
 	return winX, winY
@@ -448,7 +583,7 @@ func subPebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr 
 		entry := entryAny.(*subPebbleEntry)
 		sx := int(int16(lParam & 0xFFFF))
 		sy := int(int16((lParam >> 16) & 0xFFFF))
-		winX, winY := slotPositionForEntry(entry)
+		winX, winY := liveWindowPosition(entry)
 		localX := sx - winX
 		localY := sy - winY
 
@@ -516,17 +651,12 @@ func subPebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr 
 	return r
 }
 
-// slotPositionForEntry mirrors subPebbleServiceWindows.slotPosition but is a
-// free function so the WndProc (which has no service receiver in scope) can
-// call it. Slot is stable for the entry's lifetime so we don't need a lock.
-func slotPositionForEntry(entry *subPebbleEntry) (int, int) {
-	right, _, ok := subPebbleScreenBounds()
-	if !ok {
-		right = 1920
-	}
-	winX := right - subPebbleAnchorX - subPebbleRightMargin
-	winY := subPebbleTopMargin + entry.slot*subPebbleSlotSpacing - subPebbleAnchorY
-	return winX, winY
+// liveWindowPosition returns the LIVE rendered window top-left (curX,curY),
+// not the slot target. WndProc uses this so hit-testing tracks the disc as
+// it animates from cursor to slot (Phase C1). slot is read via atomic so
+// it's safe from the message thread.
+func liveWindowPosition(entry *subPebbleEntry) (int, int) {
+	return int(entry.curX.Load()), int(entry.curY.Load())
 }
 
 // ─────────────────────────── Paint pipeline ─────────────────────────────────
@@ -592,13 +722,24 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 		SourceConstantAlpha: 255,
 		AlphaFormat:         acSrcAlpha,
 	}
-	winPt := pblPoint{X: 0, Y: 0} // ignored when SWP_NOMOVE-style flag set
-	// We still must pass winPt to UpdateLayeredWindow; values are honored
-	// (ULW does NOT have a "no move" flag). Recompute from the slot so a
-	// future "re-flow on close" can move the window by tweaking slot.
-	wx, wy := s.slotPosition(entry.slot)
-	winPt.X = int32(wx)
-	winPt.Y = int32(wy)
+	// C1 — ease the animated position toward the slot target each frame.
+	// 0.18 follow factor matches the main pebble's cursor lag for a
+	// consistent visual language. When curX/Y has converged, this becomes
+	// a no-op so we're not paying for math we don't need.
+	tx, ty := s.slotPosition(entry)
+	cx := float64(entry.curX.Load())
+	cy := float64(entry.curY.Load())
+	const followFactor = 0.18
+	cx += (float64(tx) - cx) * followFactor
+	cy += (float64(ty) - cy) * followFactor
+	// Snap to target once close enough so we don't render fractional pixel
+	// jitter forever.
+	if absDelta(cx-float64(tx)) < 0.5 && absDelta(cy-float64(ty)) < 0.5 {
+		cx, cy = float64(tx), float64(ty)
+	}
+	entry.curX.Store(int32(cx))
+	entry.curY.Store(int32(cy))
+	winPt := pblPoint{X: int32(cx), Y: int32(cy)}
 	winSz := pblSize{CX: pebbleWindowW, CY: pebbleWindowH}
 	srcPt := pblPoint{X: 0, Y: 0}
 

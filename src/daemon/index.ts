@@ -1677,9 +1677,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const closeOne = async (cand: Cand, label: string): Promise<void> => {
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close', { id: cand.id });
+            const closedSlot = used.get(cand.id);
             used.delete(cand.id);
             subPebbleExpanded.delete(cand.id);
             subPebbleSidecar.delete(cand.id);
+            // C2 — slot reflow to keep daemon's slot table aligned with
+            // the sidecar's. Each surviving sub-pebble above slot `closedSlot`
+            // shifts up by one so the next nextSlot() pick doesn't collide.
+            if (closedSlot !== undefined) {
+              for (const [otherId, slot] of used.entries()) {
+                if (slot > closedSlot) used.set(otherId, slot - 1);
+              }
+            }
             await speakConfirmation(sidecarId, `Closed the ${label} background agent.`, ctrl);
           } catch (err) {
             console.warn(`[sub-pebble] close ${cand.id} failed:`, err);
@@ -1736,15 +1745,63 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return false;
       };
 
+      // Keyword routing table — each specialist id maps to phrases that
+      // strongly suggest it. Scoring counts how many distinct keywords from
+      // each set appear in the (lowercased) task text. Multi-word phrases
+      // count as one match. Highest-scoring specialist wins; ties broken
+      // by listing order (more-specific specialists first).
+      //
+      // Keys are the actual role ids from roles/specialists/*.yaml
+      // (hyphen-separated). Edit this table when adding a new specialist.
+      const SPECIALIST_KEYWORDS: Array<{ id: string; words: string[] }> = [
+        { id: 'software-engineer', words: ['code', 'codebase', 'bug', 'refactor', 'debug', 'function', 'implement', 'compile', 'unit test', 'pull request', 'merge', 'git', 'typescript', 'python', 'rust', 'golang', 'api', 'sdk', 'library', 'framework'] },
+        { id: 'legal-advisor',     words: ['legal', 'contract', 'nda', 'terms of service', 'privacy policy', 'gdpr', 'hipaa', 'soc 2', 'compliance', 'license', 'copyright', 'trademark', 'lawsuit', 'patent', 'liability', 'agreement', 'clause'] },
+        { id: 'financial-analyst', words: ['budget', 'revenue', 'profit', 'p&l', 'roi', 'cost', 'pricing', 'cash flow', 'forecast', 'expense', 'invoice', 'financial', 'finance', 'tax', 'accounting'] },
+        { id: 'data-analyst',      words: ['data', 'analyze', 'analysis', 'chart', 'graph', 'metric', 'statistic', 'query', 'dataset', 'csv', 'spreadsheet', 'sql', 'dashboard', 'visualization', 'trend', 'distribution'] },
+        { id: 'marketing-strategist', words: ['marketing', 'campaign', 'ad', 'ads', 'advertising', 'brand', 'branding', 'growth', 'seo', 'funnel', 'audience', 'positioning', 'launch strategy', 'go to market', 'gtm', 'conversion'] },
+        { id: 'content-writer',    words: ['write', 'draft', 'article', 'blog', 'post', 'copy', 'caption', 'newsletter', 'press release', 'tagline', 'headline', 'script', 'rewrite', 'edit copy'] },
+        { id: 'customer-support',  words: ['ticket', 'support', 'complaint', 'refund', 'customer issue', 'help desk', 'reply to customer', 'escalation', 'apology', 'response template'] },
+        { id: 'hr-specialist',     words: ['hire', 'recruit', 'interview', 'onboarding', 'job description', 'candidate', 'employee', 'salary', 'compensation', 'performance review'] },
+        { id: 'project-coordinator', words: ['deadline', 'milestone', 'schedule', 'sprint', 'gantt', 'project plan', 'timeline', 'kickoff', 'stand up', 'kanban', 'roadmap'] },
+        { id: 'system-administrator', words: ['server', 'sysadmin', 'deploy', 'config', 'docker', 'kubernetes', 'k8s', 'nginx', 'apache', 'devops', 'ci', 'cd', 'pipeline', 'firewall', 'ssh'] },
+        { id: 'research-analyst',  words: ['research', 'investigate', 'compare', 'summarize', 'overview', 'survey', 'look up', 'find out', 'explore', 'benchmark', 'evaluate', 'review options', 'best', 'top', 'recommend'] },
+      ];
+
+      // pickSpecialistForTask returns the best-fit specialist id for a
+      // free-form task description. Scores by keyword hits, falls back to
+      // research-analyst (the most generic) when nothing scores. Final
+      // fallback to the first available specialist when research-analyst
+      // isn't in the catalog either.
+      const pickSpecialistForTask = (task: string, specialists: Map<string, unknown>): string => {
+        const t = task.toLowerCase();
+        let bestId = '';
+        let bestScore = 0;
+        for (const entry of SPECIALIST_KEYWORDS) {
+          if (!specialists.has(entry.id)) continue;
+          let score = 0;
+          for (const w of entry.words) {
+            // Word-bounded match so "graph" doesn't fire for "paragraph",
+            // and multi-word phrases match as a single hit.
+            const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+            if (re.test(t)) score++;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestId = entry.id;
+          }
+        }
+        if (bestId) return bestId;
+        if (specialists.has('research-analyst')) return 'research-analyst';
+        return Array.from(specialists.keys())[0] ?? '';
+      };
+
       // tryHandleBackgroundIntent — match "in the background, X" /
       // "background: X" / "spawn a background agent to X" and route X
       // through taskManager.launch as a backgrounded sub-agent. The
       // taskManager lifecycle subscription above will spawn the matching
       // sub-pebble on the rail. Skips the LLM entirely — fast path.
       //
-      // Specialist pick: defaults to `research_analyst` if present (most
-      // general); falls back to the first specialist in the registry.
-      // Future smarter routing can pattern-match keywords → specialist id.
+      // Specialist pick: keyword-routed via pickSpecialistForTask above.
       const tryHandleBackgroundIntent = async (
         sidecarId: string,
         userText: string,
@@ -1773,16 +1830,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           taskManager: taskManagerLocal,
         };
 
-        // Pick a specialist: prefer research_analyst, fall back to the
-        // first registered one so this works on any role catalog.
-        let specialistId = 'research_analyst';
-        if (!specialists.has(specialistId)) {
-          specialistId = Array.from(specialists.keys())[0] ?? '';
-        }
+        // Smart routing — pick the specialist whose keyword set best
+        // matches the task. Falls back to research-analyst (the most
+        // generic) when nothing scores. Logs the decision so the user
+        // can see why it picked what it picked.
+        const specialistId = pickSpecialistForTask(task, specialists);
         if (!specialistId) {
           await speakConfirmation(sidecarId, "No specialists are configured.", ctrl);
           return true;
         }
+        console.log(`[background-intent] routed task "${task.slice(0, 60)}…" → ${specialistId}`);
 
         try {
           const spawned = spawnPersistentAgent(deps, specialistId);
