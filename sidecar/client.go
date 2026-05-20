@@ -391,6 +391,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 		}
 
+		// W6-T2 — long-press on pebble disc emits pebble.blind_toggle.
+		// Daemon flips awareness.enabled in config + dispatches set_blinded.
+		c.pebble.OnBlindToggle(func() {
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "pebble.blind_toggle",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{},
+			}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[pebble] failed to emit blind_toggle event: %v", err)
+			} else {
+				log.Printf("[pebble] blind_toggle emitted")
+			}
+		})
+
 		c.pebble.OnSummon(func() {
 			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
 			summonEvt := SidecarEvent{

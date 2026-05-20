@@ -67,6 +67,16 @@ type PebbleService interface {
 	// LLM tags — Clicky-style "click here" UX.
 	PointAt(x, y int, label string, durationMs int) error
 
+	// SetEye toggles the eye glyph that visualises awareness/OCR firing.
+	// Daemon turns it on when sidecar emits a screen_capture event,
+	// clears it after a short timeout. Safe before Spawn.
+	SetEye(active bool) error
+
+	// SetBlinded marks awareness as hard-paused. The pebble dims and
+	// shows a struck-through eye. Persists across SetState. Safe before
+	// Spawn (value just stashed).
+	SetBlinded(blinded bool) error
+
 	// Close hides + destroys the overlay. Idempotent.
 	Close() error
 
@@ -85,6 +95,11 @@ type PebbleService interface {
 	// palette hotkey (Ctrl+K). Same threading and non-blocking contract as
 	// OnSummon. The callback drives the daemon's palette open/close flow.
 	OnPalette(callback func())
+
+	// OnBlindToggle (W6-T2) registers a callback fired when the user
+	// long-presses the pebble disc. The daemon flips awareness.enabled
+	// in config and dispatches pebble.set_blinded.
+	OnBlindToggle(callback func())
 }
 
 // NewPebbleService returns the platform-specific implementation. Defined in

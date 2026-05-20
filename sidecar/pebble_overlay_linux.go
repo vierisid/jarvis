@@ -475,6 +475,10 @@ func (s *pebbleServiceLinux) PointAt(_, _ int, _ string, _ int) error {
 	return nil
 }
 
+// SetEye / SetBlinded — W6 stubs on Linux. GTK draw loop port pending.
+func (s *pebbleServiceLinux) SetEye(_ bool) error     { return nil }
+func (s *pebbleServiceLinux) SetBlinded(_ bool) error { return nil }
+
 func (s *pebbleServiceLinux) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil
@@ -493,5 +497,11 @@ func (s *pebbleServiceLinux) OnSummon(callback func()) {
 func (s *pebbleServiceLinux) OnPalette(callback func()) {
 	// Linux palette hotkey is gated on the X11 hotkey port (T8b/T19b
 	// Linux work) — stubbed for now.
+	_ = callback
+}
+
+// OnBlindToggle — W6 stub on Linux. Long-press detection needs GTK
+// button-event handler ported.
+func (s *pebbleServiceLinux) OnBlindToggle(callback func()) {
 	_ = callback
 }

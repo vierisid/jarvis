@@ -538,6 +538,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             palette_hotkey: 'ctrl+k',
           });
           console.log(`[ambient-ui] Native pebble spawned on ${sidecar.id}:`, result);
+          // W6 — push initial blinded state so the eye-strike glyph
+          // matches awareness.enabled across daemon restarts.
+          const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
+          sidecarManager.dispatchRPC(sidecar.id, 'pebble.set_blinded', { blinded: !awarenessEnabled })
+            .catch(() => { /* sidecar might not have the cap yet */ });
         } catch (err) {
           spawnedOn.delete(sidecar.id);
           console.warn(`[ambient-ui] Failed to spawn native pebble on ${sidecar.id}:`, err);
@@ -812,6 +817,55 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // gone (its process exited or the connection died).
       sidecarManager.onSidecarDisconnected((sidecarId) => {
         subPebbleSlots.delete(sidecarId);
+      });
+
+      // W6-T2 — long-press on pebble disc toggles "blinded" state. Flips
+      // awareness.enabled in config (persists), starts/stops the awareness
+      // service in place (no daemon restart), and pushes the visual state
+      // to every connected pebble. Speaks a confirmation through TTS.
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'pebble.blind_toggle') return;
+        try {
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const wasEnabled = fresh.awareness?.enabled ?? true;
+          const nextEnabled = !wasEnabled;
+          if (fresh.awareness) fresh.awareness.enabled = nextEnabled;
+          await saveConfig(fresh);
+          (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
+          // Toggle live awareness service if it exists.
+          if (awarenessService) awarenessService.toggle(nextEnabled);
+          // Push visual: blinded = !enabled.
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !nextEnabled })
+            .catch(() => { /* sidecar may have detached */ });
+          const ack = nextEnabled
+            ? "Awareness back on. I can see your screen again."
+            : "Awareness off. I can't see anything until you toggle it back.";
+          await speakConfirmation(sidecarId, ack, { cancelled: false });
+          console.log(`[ambient-ui] blind toggle → awareness.enabled=${nextEnabled}`);
+        } catch (err) {
+          console.warn('[ambient-ui] blind_toggle failed:', err);
+        }
+      });
+
+      // W6-T1 — pebble eye glyph fires when sidecar emits a screen_capture
+      // event (awareness/OCR ticked). Debounced: each fresh capture
+      // restarts the 800 ms timer so a burst of captures keeps the glyph
+      // lit continuously. Failures are swallowed — the visual indicator
+      // is best-effort.
+      const eyeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'screen_capture') return;
+        // Fire-and-forget; cap concurrency on the wire.
+        sidecarManager.dispatchRPC(sidecarId, 'pebble.set_eye', { active: true })
+          .catch(() => { /* sidecar may not have pebble cap */ });
+        const existing = eyeTimers.get(sidecarId);
+        if (existing) clearTimeout(existing);
+        eyeTimers.set(sidecarId, setTimeout(() => {
+          sidecarManager.dispatchRPC(sidecarId, 'pebble.set_eye', { active: false })
+            .catch(() => { /* ignore */ });
+          eyeTimers.delete(sidecarId);
+        }, 800));
       });
 
       // pebble.summon — first press starts listening, second press dismisses.
@@ -1363,7 +1417,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // this the LLM is guessing coordinates from app conventions; with
       // it, it can pick the actual pixel location of the button. Returns
       // null on timeout/failure (best-effort).
-      const NEEDS_SCREENSHOT = /\b(where|show me|show where|point (?:to|at)|guide (?:me )?to|find (?:me )?(?:the )?|highlight|locate|tell me where|how (?:do I|to)\s+(?:open|get to|find|see|access|click|reach|use|run|do|start|enable|disable|turn on|turn off))\b/i;
+      const NEEDS_SCREENSHOT = /\b(where|show me|show where|point (?:to|at)|guide (?:me )?to|find (?:me )?(?:the )?|highlight|locate|tell me where|how (?:do I|to)\s+(?:open|get to|find|see|access|click|reach|use|run|do|start|enable|disable|turn on|turn off)|what'?s? (?:on|on my) (?:my )?screen|what (?:am I|are we) looking at|what (?:do you|can you) see|what'?s? (?:this|happening here)|describe (?:my |the )?screen|read (?:my |the )?screen)\b/i;
       type ScreenshotInfo = {
         base64: string;
         mediaType: string;
