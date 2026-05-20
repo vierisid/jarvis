@@ -145,6 +145,15 @@ type pebbleServiceWindows struct {
 	// paint() overrides the cursor-follow target with (pointX, pointY) so the
 	// pebble eases to a fixed screen coordinate. Previous state + bubble text
 	// are stashed and restored when the duration elapses.
+	// W6-T1 — eye glyph activates when awareness/OCR is firing. Daemon
+	// toggles via pebble.set_eye; sidecar paints a small accent eye next
+	// to the pebble while true. Auto-clears after the daemon's timeout.
+	eyeActive atomic.Bool
+
+	// W6-T2 — blinded means awareness is hard-paused. Pebble dims and
+	// shows a struck-through eye. Toggled via pebble.set_blinded.
+	blinded atomic.Bool
+
 	pointing     atomic.Bool
 	pointX       atomic.Int32
 	pointY       atomic.Int32
@@ -156,6 +165,12 @@ type pebbleServiceWindows struct {
 	// `current` chases `target = cursor + offset` each frame.
 	curX float64
 	curY float64
+
+	// Last rendered window screen-position, stored as int32 atomics so the
+	// message thread (WM_NCHITTEST) can read it without racing the paint
+	// goroutine. paint() writes these every frame after the ease update.
+	renderedX atomic.Int32
+	renderedY atomic.Int32
 
 	// frameTick increments each paint and feeds time-based animations
 	// (idle breathing, listening/speaking waveform bars, thinking dot
@@ -180,18 +195,35 @@ type pebbleServiceWindows struct {
 	// from there.
 	summonCallback func()
 
+	// W6-T2 — click tracking on the disc. WM_LBUTTONDOWN records the
+	// timestamp; WM_LBUTTONUP compares to decide short-click (summon)
+	// vs long-press (blind toggle). Atomic so the message thread doesn't
+	// race the paint goroutine.
+	clickDownMs    atomic.Int64
+	cursorOnDisc   atomic.Bool // set by WM_NCHITTEST so paint can pause cursor follow
+
 	// paletteCallback is invoked each time the user fires the palette
 	// hotkey (Ctrl+K). Set via OnPalette(); the daemon spawns/dismisses
 	// the palette panel from there.
 	paletteCallback func()
 }
 
-// NewPebbleService returns the Windows-native pebble service.
+// NewPebbleService returns the Windows-native pebble service. Stores a
+// package-level pointer so the shared WndProc can resolve the service
+// without per-message lookup (only one main pebble per process).
 func NewPebbleService() PebbleService {
 	s := &pebbleServiceWindows{}
 	s.state.Store(PebbleIdle)
 	s.bubbleText.Store("")
+	pebbleServiceInstance = s
 	return s
+}
+
+// OnBlindToggle registers a callback invoked when the user long-presses
+// the pebble disc. The daemon listens for this via a SidecarEvent emitted
+// from client.go and flips awareness.enabled in config.
+func (s *pebbleServiceWindows) OnBlindToggle(callback func()) {
+	pebbleBlindToggleCallback.Store(callback)
 }
 
 func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
@@ -310,6 +342,16 @@ func (s *pebbleServiceWindows) SetState(state PebbleState) error {
 
 func (s *pebbleServiceWindows) SetText(text string) error {
 	s.bubbleText.Store(text)
+	return nil
+}
+
+func (s *pebbleServiceWindows) SetEye(active bool) error {
+	s.eyeActive.Store(active)
+	return nil
+}
+
+func (s *pebbleServiceWindows) SetBlinded(blinded bool) error {
+	s.blinded.Store(blinded)
 	return nil
 }
 
@@ -469,7 +511,11 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 	// — critical for the OS compositor to set up DComp properly. Setting
 	// these flags AFTER creation (which is what the webview path tried) is
 	// what caused the white-box issue.
-	exStyle := uintptr(pblWsExLayered | pblWsExTransparent | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
+	// W6-T2: drop WS_EX_TRANSPARENT so the window can catch clicks on the
+	// disc (long-press = blind toggle). WM_NCHITTEST returns HTTRANSPARENT
+	// for everything outside the disc + bubble so the rest of the 360×220
+	// frame still passes mouse events through to whatever's behind.
+	exStyle := uintptr(pblWsExLayered | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
 	style := uintptr(pblWsPopup | pblWsVisible)
 	x := int32(0)
 	y := int32(0)
@@ -506,16 +552,85 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 	return hwnd, nil
 }
 
-// pebbleWndProc — the only message we explicitly handle is WM_DESTROY (post
-// quit so the message pump exits). Everything else goes to DefWindowProc.
+// pebbleWndProc handles WM_NCHITTEST (disc-only clicks) + WM_LBUTTONDOWN/UP
+// (W6-T2 short-click summon vs long-press blind toggle) + WM_DESTROY.
+// There's only ever one main pebble per process so the service pointer
+// can be stored in a package-level var (pebbleServiceInstance) for the
+// WndProc to consult.
+const (
+	pblWmNcHitTest     = 0x0084
+	pblWmLButtonDown   = 0x0201
+	pblWmLButtonUp     = 0x0202
+	pblHtTransparent   = ^uintptr(0)
+	pblHtClient        = 1
+	pblLongPressMs     = 500
+	pblDiscHitRadius   = 18
+)
+
+var pebbleServiceInstance *pebbleServiceWindows
+
 func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == pblWmDestroy {
+	svc := pebbleServiceInstance
+	switch msg {
+	case pblWmNcHitTest:
+		if svc == nil {
+			return pblHtTransparent
+		}
+		sx := int(int16(lParam & 0xFFFF))
+		sy := int(int16((lParam >> 16) & 0xFFFF))
+		winX := int(svc.renderedX.Load())
+		winY := int(svc.renderedY.Load())
+		localX := sx - winX
+		localY := sy - winY
+		dx := localX - pebbleAnchorX
+		dy := localY - pebbleAnchorY
+		if dx*dx+dy*dy <= pblDiscHitRadius*pblDiscHitRadius {
+			svc.cursorOnDisc.Store(true)
+			return pblHtClient
+		}
+		svc.cursorOnDisc.Store(false)
+		return pblHtTransparent
+
+	case pblWmLButtonDown:
+		if svc != nil {
+			svc.clickDownMs.Store(time.Now().UnixMilli())
+		}
+		return 0
+
+	case pblWmLButtonUp:
+		if svc == nil {
+			return 0
+		}
+		down := svc.clickDownMs.Swap(0)
+		if down == 0 {
+			return 0
+		}
+		dur := time.Now().UnixMilli() - down
+		if dur >= pblLongPressMs {
+			// Long-press = blind toggle. Fire the dedicated callback.
+			if cbAny := pebbleBlindToggleCallback.Load(); cbAny != nil {
+				if cb, ok := cbAny.(func()); ok && cb != nil {
+					go cb()
+				}
+			}
+		} else {
+			// Short click = summon (same as Ctrl+Space hotkey).
+			svc.onSummonHotkey()
+		}
+		return 0
+
+	case pblWmDestroy:
 		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
 	return r
 }
+
+// pebbleBlindToggleCallback is fired on long-press. Set via OnBlindToggle()
+// from client.go; the daemon listens for the resulting SidecarEvent and
+// flips awareness.enabled in config + dispatches pebble.set_blinded.
+var pebbleBlindToggleCallback atomic.Value // func()
 
 // ─────────────────────────── Paint pipeline ─────────────────────────────────
 
@@ -559,6 +674,21 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 			followFactor = 0.42
 		}
 	}
+	// W6-T2 — freeze cursor follow when the user's cursor is on the disc
+	// so they can actually click without the pebble running away. We
+	// re-verify each frame using the live cursor position rather than
+	// trusting WM_NCHITTEST alone: once the cursor leaves the window
+	// entirely the OS stops sending hit-test messages, so a stale
+	// cursorOnDisc=true would keep the pebble frozen indefinitely.
+	{
+		dxDisc := cx - int(s.curX)
+		dyDisc := cy - int(s.curY)
+		onDisc := dxDisc*dxDisc+dyDisc*dyDisc <= pblDiscHitRadius*pblDiscHitRadius
+		s.cursorOnDisc.Store(onDisc)
+		if onDisc {
+			followFactor = 0
+		}
+	}
 	s.curX += (tgtX - s.curX) * followFactor
 	s.curY += (tgtY - s.curY) * followFactor
 	s.frameTick++
@@ -567,6 +697,10 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	// centre) lands at (s.curX, s.curY) — the eased cursor + offset.
 	winX := int32(s.curX - pebbleAnchorX)
 	winY := int32(s.curY - pebbleAnchorY)
+	// Stash for the message thread (WM_NCHITTEST) so it can do disc-area
+	// hit-test math without racing the paint goroutine.
+	s.renderedX.Store(winX)
+	s.renderedY.Store(winY)
 
 	// Create memory DC + 32-bit DIB
 	screenDC, _, _ := procGetDC.Call(0)
@@ -618,6 +752,13 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 		s.drawBubbleText(memDC, state, bubbleY1)
 		repairBubbleTextAlpha(pixels, bubbleY1)
 	}
+	// W6-T4 — outward halo around disc when JARVIS is remotely controlling
+	// (PointAt active). Drawn before the eye glyph so the glyph sits on
+	// top of the halo, not under it.
+	s.drawControllingHalo(pixels)
+	// W6 — eye glyph (awareness firing + privacy-blinded indicators).
+	// Drawn last so it sits on top of disc/pill regardless of state.
+	s.drawEyeGlyph(pixels)
 
 	// UpdateLayeredWindow — moves AND repaints the window in one call.
 	// The blend function with AC_SRC_ALPHA tells the OS to honour the

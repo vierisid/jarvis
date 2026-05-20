@@ -522,3 +522,128 @@ func roundedRectAA(x, y, x0, y0, x1, y1, r float64) float64 {
 	}
 	return 0.5 - d
 }
+
+// drawControllingHalo (W6-T4) — when the pebble is in "pointing" mode
+// (PointAt is active during desktop_click animations), paint a brief
+// vermilion outward halo around the disc so the user reads the motion
+// as "JARVIS reaching out to click" rather than ambient cursor follow.
+// Pulses for the duration of the point.
+func (s *pebbleServiceWindows) drawControllingHalo(pixels []uint32) {
+	if !s.pointing.Load() {
+		return
+	}
+	cx := float64(pebbleAnchorX)
+	cy := float64(pebbleAnchorY)
+	// 1.2s cycle, 30%–60% alpha — never fully solid so the disc itself
+	// stays the focal point.
+	const cycleFrames = 75
+	phase := float64(s.frameTick%cycleFrames) / float64(cycleFrames)
+	v := phase * 2
+	if v > 1 {
+		v = 2 - v
+	}
+	alpha := uint8(77 + 76*v)
+	// Two-ring halo at radii 11 and 14 — gives the "broadcasting"
+	// double-ring feel without a big visual footprint.
+	strokeCircle(pixels, cx, cy, 11.5, 1.0, premultiply(alpha, pebbleAccentR, pebbleAccentG, pebbleAccentB))
+	strokeCircle(pixels, cx, cy, 14.0, 1.0, premultiply(alpha/2, pebbleAccentR, pebbleAccentG, pebbleAccentB))
+}
+
+// drawEyeGlyph (W6-T1/T2) — paints a small ambient indicator next to the
+// pebble disc that says whether JARVIS can currently see the screen.
+//
+//   eyeActive && !blinded → pulsing accent (vermilion) eye → "I just saw"
+//   blinded               → muted ink-3 eye with a struck-through line
+//   neither               → no glyph
+//
+// Geometry: ~8 px wide oval lens with a 2 px iris dot. Positioned to the
+// upper-right of the disc anchor so the bubble (which drops below) never
+// overlaps. All drawn into the same DIB the rest of the pebble renders to.
+func (s *pebbleServiceWindows) drawEyeGlyph(pixels []uint32) {
+	blinded := s.blinded.Load()
+	eye := s.eyeActive.Load()
+	if !eye && !blinded {
+		return
+	}
+
+	// Anchor: ~12 px above the disc, 14 px right of disc center.
+	ex := float64(pebbleAnchorX) + 14.0
+	ey := float64(pebbleAnchorY) - 10.0
+	const lensRX = 4.5 // horizontal radius
+	const lensRY = 2.6 // vertical radius (oval is wider than tall)
+	const irisR = 1.4
+
+	// Pick color: blinded = ink-3 (muted), active = accent (vermilion).
+	var r, g, b uint8
+	if blinded {
+		r, g, b = pebbleInk3R, pebbleInk3G, pebbleInk3B
+	} else {
+		r, g, b = pebbleAccentR, pebbleAccentG, pebbleAccentB
+	}
+
+	// 1) Lens outline — approximated as an oval via two arcs of strokeCircle
+	//    at slightly different radii (simple but readable at this size).
+	//    Stroke at ex,ey with the larger radius for the body.
+	strokeCircle(pixels, ex, ey, lensRX, 1.0, premultiply(220, r, g, b))
+
+	// 2) Iris dot — solid circle in the center. When eyeActive, pulse
+	//    its alpha for a subtle "just saw" beacon.
+	irisAlpha := uint8(220)
+	if eye && !blinded {
+		// 1.2 s cycle, 70%–100% alpha.
+		const cycleFrames = 75
+		phase := float64(s.frameTick%cycleFrames) / float64(cycleFrames)
+		v := phase * 2
+		if v > 1 {
+			v = 2 - v
+		}
+		irisAlpha = uint8(178 + 77*v)
+	}
+	fillCircle(pixels, ex, ey, irisR, premultiply(irisAlpha, r, g, b))
+
+	// 3) Strike-through (only when blinded) — a thin diagonal line over
+	//    the lens. Sample pixels along the diagonal and write a 1-px
+	//    accent line so the user knows awareness is OFF.
+	if blinded {
+		// Diagonal from (ex-lensRX-1, ey+lensRY+1) to (ex+lensRX+1, ey-lensRY-1).
+		x0 := ex - lensRX - 1.5
+		y0 := ey + lensRY + 1.5
+		x1 := ex + lensRX + 1.5
+		y1 := ey - lensRY - 1.5
+		strokeLine(pixels, x0, y0, x1, y1, 1.0, premultiply(255, pebbleAccentR, pebbleAccentG, pebbleAccentB))
+	}
+}
+
+// strokeLine paints a 1-px-thick line between two points using a simple
+// pixel-by-pixel rasterizer. Good enough for the eye glyph's strike-through
+// at this scale — full AA isn't worth the complexity for one diagonal.
+func strokeLine(pixels []uint32, x0, y0, x1, y1, _ float64, col uint32) {
+	dx := x1 - x0
+	dy := y1 - y0
+	steps := int(maxAbs(dx, dy)) + 1
+	if steps < 2 {
+		return
+	}
+	for i := 0; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		px := int(x0 + dx*t + 0.5)
+		py := int(y0 + dy*t + 0.5)
+		if px < 0 || px >= pebbleWindowW || py < 0 || py >= pebbleWindowH {
+			continue
+		}
+		pixels[py*pebbleWindowW+px] = blendOver(pixels[py*pebbleWindowW+px], col)
+	}
+}
+
+func maxAbs(a, b float64) float64 {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	if a > b {
+		return a
+	}
+	return b
+}

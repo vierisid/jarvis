@@ -25,6 +25,14 @@ func (s *pebbleServiceStub) SetText(text string) error {
 	return nil
 }
 
+func (s *pebbleServiceStub) SetEye(active bool) error {
+	return nil
+}
+
+func (s *pebbleServiceStub) SetBlinded(blinded bool) error {
+	return nil
+}
+
 func (s *pebbleServiceStub) PointAt(_, _ int, _ string, _ int) error {
 	return nil
 }
@@ -39,4 +47,8 @@ func (s *pebbleServiceStub) OnSummon(callback func()) {
 
 func (s *pebbleServiceStub) OnPalette(callback func()) {
 	// no-op — palette hotkey is Windows-only for now
+}
+
+func (s *pebbleServiceStub) OnBlindToggle(callback func()) {
+	// no-op — long-press detection is Windows-only for now
 }

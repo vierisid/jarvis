@@ -124,6 +124,32 @@ func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 	}
 }
 
+// pebble.set_eye (W6-T1) — flash the awareness eye glyph. Daemon
+// turns it on when sidecar emits a screen_capture event and clears it
+// after ~800 ms. Params: { "active": bool }
+func makePebbleSetEyeHandler(svc PebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		active, _ := params["active"].(bool)
+		if err := svc.SetEye(active); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"active": active}}, nil
+	}
+}
+
+// pebble.set_blinded (W6-T2) — mark awareness as hard-paused. The pebble
+// shows a struck-through eye glyph. Daemon also persists awareness.enabled
+// to the config so the state survives restart. Params: { "blinded": bool }
+func makePebbleSetBlindedHandler(svc PebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		blinded, _ := params["blinded"].(bool)
+		if err := svc.SetBlinded(blinded); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"blinded": blinded}}, nil
+	}
+}
+
 // pebble.point_at — animate the pebble to (x, y) on screen with a
 // label callout. Used by T8's `[POINT:x,y:label]` LLM tags.
 // Params: { "x": int, "y": int, "label": string, "duration_ms": int (optional, default 3000) }
