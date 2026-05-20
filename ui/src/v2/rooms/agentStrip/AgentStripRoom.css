@@ -1,7 +1,7 @@
 /* Background agent strip — ambient native window, dense vertical list.
-   Lives at ~280×400 and tracks every async sub-agent task the daemon
-   has in flight. Never scrolls horizontally; vertical scrollbar appears
-   only when the list overflows. */
+   Lives at ~290×440 (configurable) as an always-on-top floating panel.
+   Riso treatment: paper ground, hairline borders, hard offset shadows,
+   mono uppercase eyebrows, vermilion-on-paper for failures. */
 
 .agent-strip {
   display: flex;
@@ -12,105 +12,206 @@
   color: var(--ink);
   font-family: var(--font-sans);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ── Header ─────────────────────────────────────────────────── */
 
 .agent-strip__head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  padding: var(--s-4) var(--s-4) var(--s-3);
+  gap: var(--s-3);
+  padding: 14px 16px 10px;
   border-bottom: var(--hair);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-3);
   flex: 0 0 auto;
+  background: var(--paper);
+}
+
+.agent-strip__head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-strip__head-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--ink-3);
+  opacity: 0.45;
+  flex: 0 0 auto;
+  transition: background 200ms ease, opacity 200ms ease;
+}
+
+.agent-strip__head-pulse--on {
+  background: #E5A91E;
+  opacity: 1;
+  animation: agent-strip-pulse 1.6s ease-in-out infinite;
 }
 
 .agent-strip__title {
-  font-weight: 500;
-  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .agent-strip__count {
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--ink-3);
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  font-weight: 500;
 }
+
+.agent-strip__count-sep {
+  color: var(--ink-3);
+  margin: 0 2px;
+}
+
+/* ── List ───────────────────────────────────────────────────── */
 
 .agent-strip__list {
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--s-1) 0;
-}
-
-.agent-strip__empty {
-  padding: var(--s-6) var(--s-4);
-  text-align: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  letter-spacing: 0.08em;
-}
-
-.agent-strip__card {
-  padding: var(--s-3) var(--s-4);
-  border-bottom: var(--hair-soft);
+  padding: 10px 12px 4px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
 }
 
-.agent-strip__card:last-child {
-  border-bottom: none;
+.agent-strip__list::-webkit-scrollbar {
+  width: 6px;
+}
+.agent-strip__list::-webkit-scrollbar-thumb {
+  background: var(--ink-4, rgba(0, 0, 0, 0.12));
+  border-radius: 3px;
+}
+.agent-strip__list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Empty state ────────────────────────────────────────────── */
+
+.agent-strip__empty {
+  padding: 28px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+}
+
+.agent-strip__empty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--ink-3);
+  opacity: 0.45;
+  animation: agent-strip-breathe 2.4s ease-in-out infinite;
+  margin-bottom: 4px;
+}
+
+@keyframes agent-strip-breathe {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50%      { opacity: 0.7;  transform: scale(1.15); }
+}
+
+.agent-strip__empty-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-strip__empty-line {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-2);
+  text-align: center;
+  font-style: italic;
+  line-height: 1.4;
+  max-width: 220px;
+}
+
+/* ── Task card ──────────────────────────────────────────────── */
+
+.agent-strip__card {
+  background: #FFFDF7;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  padding: 10px 12px 11px;
+  box-shadow: 2px 2px 0 0 rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.agent-strip__card--running {
+  border-color: rgba(229, 169, 30, 0.45);
+  box-shadow: 2px 2px 0 0 rgba(229, 169, 30, 0.22);
 }
 
 .agent-strip__card--completed {
-  opacity: 0.62;
+  border-color: rgba(74, 124, 63, 0.28);
 }
 
 .agent-strip__card--failed {
   background: rgba(194, 58, 42, 0.04);
+  border-color: rgba(194, 58, 42, 0.32);
+  box-shadow: 2px 2px 0 0 rgba(194, 58, 42, 0.18);
 }
 
 .agent-strip__row {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: 9px;
 }
 
 .agent-strip__name {
   flex: 1 1 auto;
-  font-size: var(--text-sm);
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: -0.01em;
 }
 
 .agent-strip__elapsed {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: 11px;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
+  letter-spacing: 0.02em;
 }
 
 .agent-strip__task {
-  font-size: var(--text-xs);
+  font-size: 12px;
   color: var(--ink-2);
-  line-height: 1.35;
+  line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-left: 14px;
+  padding-left: 17px; /* aligns under the agent name (8px dot + 9px gap) */
 }
 
-/* Status dots — small, deliberate. */
+/* ── Status dots ────────────────────────────────────────────── */
+
 .agent-strip__dot {
   width: 8px;
   height: 8px;
@@ -126,7 +227,7 @@
 }
 
 @keyframes agent-strip-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 169, 30, 0.5); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 169, 30, 0.55); }
   50%      { box-shadow: 0 0 0 5px rgba(229, 169, 30, 0); }
 }
 
@@ -141,36 +242,209 @@
 .agent-strip__dot--idle {
   background: transparent;
   border: 1px solid var(--ink-3);
+  width: 7px;
+  height: 7px;
 }
 
-/* Idle group — collapsed visual weight; tells you they exist without
-   competing with running tasks for attention. */
-.agent-strip__idle-group {
-  margin-top: var(--s-3);
-  padding: var(--s-2) var(--s-4) var(--s-3);
-  border-top: var(--hair);
+/* ── Progress bar (running only) ────────────────────────────── */
+
+.agent-strip__progress {
+  margin-top: 2px;
+  margin-left: 17px;
+  height: 2px;
+  background: rgba(229, 169, 30, 0.16);
+  border-radius: 1px;
+  overflow: hidden;
+  position: relative;
 }
 
-.agent-strip__idle-label {
+.agent-strip__progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    rgba(229, 169, 30, 0) 0%,
+    rgba(229, 169, 30, 0.95) 50%,
+    rgba(229, 169, 30, 0) 100%
+  );
+  animation: agent-strip-progress 1.6s linear infinite;
+}
+
+@keyframes agent-strip-progress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* ── Result preview ─────────────────────────────────────────── */
+
+.agent-strip__result {
+  margin-top: 4px;
+  margin-left: 17px;
+  padding: 8px 10px 9px;
+  background: rgba(0, 0, 0, 0.025);
+  border-left: 2px solid rgba(74, 124, 63, 0.55);
+  border-radius: 0 4px 4px 0;
+}
+
+.agent-strip__card--failed .agent-strip__result {
+  background: rgba(194, 58, 42, 0.05);
+  border-left-color: var(--accent);
+}
+
+.agent-strip__result--empty {
+  border-left-color: var(--ink-3);
+}
+
+.agent-strip__result-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 3px;
+}
+
+.agent-strip__card--failed .agent-strip__result-eyebrow {
+  color: var(--accent);
+}
+
+.agent-strip__result-body {
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-strip__result--expanded .agent-strip__result-body {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  display: block;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.agent-strip__result-body--muted {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.agent-strip__result-toggle {
+  margin-top: 5px;
+  background: none;
+  border: none;
+  padding: 0;
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-3);
-  margin-bottom: var(--s-2);
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.agent-strip__result-toggle:hover {
+  color: var(--ink);
+}
+
+/* ── Idle footer (collapsible) ──────────────────────────────── */
+
+.agent-strip__idle-group {
+  flex: 0 0 auto;
+  border-top: var(--hair);
+  background: rgba(0, 0, 0, 0.018);
+}
+
+.agent-strip__idle-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  transition: color 120ms ease;
+}
+
+.agent-strip__idle-toggle:hover {
+  color: var(--ink-2);
+}
+
+.agent-strip__idle-chev {
+  font-size: 11px;
+  width: 10px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.agent-strip__idle-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+.agent-strip__last-update {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  text-transform: lowercase;
+  color: var(--ink-3);
+  flex: 0 0 auto;
+}
+
+.agent-strip__idle-list {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 14px 10px;
+  gap: 2px;
 }
 
 .agent-strip__idle {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
-  padding: 2px 0;
+  gap: 8px;
+  padding: 3px 0;
 }
 
 .agent-strip__idle-name {
-  font-size: var(--text-xs);
-  color: var(--ink-3);
+  font-size: 12px;
+  color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+
+.agent-strip__idle-spec {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+  flex: 1 1 auto;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Last-update only footer (no idle agents) ───────────────── */
+
+.agent-strip__last-update-bar {
+  flex: 0 0 auto;
+  border-top: var(--hair);
+  padding: 6px 14px;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.018);
 }

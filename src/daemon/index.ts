@@ -25,6 +25,7 @@ import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
+import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
@@ -550,6 +551,114 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         pendingSummons.delete(sidecarId);
       });
 
+      // ─────────────────────────── Sub-pebble rail ───────────────────────────
+      // Phase A — when a sub-agent task launches via taskManager, dispatch a
+      // sub_pebble.spawn to every connected sidecar that advertises the
+      // sub_pebble capability. On completion / failure, flip its state. Task
+      // ids are the sub-pebble ids so updates address the right overlay.
+      //
+      // Slot allocation: per-sidecar map of taskId -> slot. On launch we pick
+      // the lowest unused slot (so closing a middle one doesn't leave a gap
+      // on the next spawn). Color picks round-robin from a 6-element palette
+      // keyed off the task id hash so the same task always wears the same
+      // color across paint cycles.
+      const subPebbleSlots = new Map<string, Map<string, number>>(); // sidecarId -> (taskId -> slot)
+      const SUB_PEBBLE_PALETTE: string[] = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'];
+      const colorForTask = (taskId: string): string => {
+        let hash = 0;
+        for (let i = 0; i < taskId.length; i++) hash = ((hash << 5) - hash + taskId.charCodeAt(i)) | 0;
+        return SUB_PEBBLE_PALETTE[Math.abs(hash) % SUB_PEBBLE_PALETTE.length] ?? 'amber';
+      };
+      const nextSlot = (sidecarId: string): number => {
+        const used = subPebbleSlots.get(sidecarId);
+        if (!used) return 0;
+        const taken = new Set(used.values());
+        for (let i = 0; i < 32; i++) if (!taken.has(i)) return i;
+        return used.size; // fallback past 32 simultaneous, unlikely
+      };
+      const subPebbleCapableSidecars = (): string[] => {
+        const ids: string[] = [];
+        for (const sc of sidecarManager.listSidecars()) {
+          if (sc.connected && (sc.capabilities ?? []).includes('sub_pebble')) ids.push(sc.id);
+        }
+        return ids;
+      };
+
+      // taskManager is initialized inside agentService.start(), which the
+      // service registry runs AFTER this ambient block. Poll until it
+      // appears, then attach the lifecycle listener. Bounded to ~20s so
+      // we don't spin forever on a daemon that failed to start agents.
+      const attachSubPebbleListener = async (): Promise<void> => {
+        const deadline = Date.now() + 20_000;
+        let taskManager = agentService.getTaskManager();
+        while (!taskManager && Date.now() < deadline) {
+          await new Promise<void>(r => setTimeout(r, 200));
+          taskManager = agentService.getTaskManager();
+        }
+        if (!taskManager) {
+          console.warn('[sub-pebble] taskManager never appeared — sub-pebble rail disabled');
+          return;
+        }
+        taskManager.subscribeLifecycle(async (event, task) => {
+          const sidecarIds = subPebbleCapableSidecars();
+          if (sidecarIds.length === 0) {
+            console.log(`[sub-pebble] ${event} task=${task.id} — no sub_pebble-capable sidecars connected, skipping`);
+            return;
+          }
+          for (const sidecarId of sidecarIds) {
+            try {
+              if (event === 'launch') {
+                const slot = nextSlot(sidecarId);
+                let used = subPebbleSlots.get(sidecarId);
+                if (!used) { used = new Map(); subPebbleSlots.set(sidecarId, used); }
+                used.set(task.id, slot);
+                await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.spawn', {
+                  id: task.id,
+                  color: colorForTask(task.id),
+                  slot,
+                  label: task.agentName,
+                  state: 'working',
+                });
+                console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
+              } else if (event === 'complete' || event === 'fail') {
+                const state = event === 'complete' ? 'idle' : 'idle'; // both end states render solid; failed uses vermilion via initial color override below
+                if (event === 'fail') {
+                  // Force vermilion + the new state — recolor by re-spawning
+                  // (sub-pebble Spawn is idempotent so this would no-op).
+                  // Cleaner option: a sub_pebble.set_color RPC. For Phase A
+                  // we just flip state; the original color stays. The user
+                  // can tell completed vs failed from the agent strip room.
+                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
+                    id: task.id, state,
+                  });
+                } else {
+                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
+                    id: task.id, state,
+                  });
+                }
+                console.log(`[sub-pebble] ${event} task=${task.id}`);
+                // Per the design rule: sub-pebbles stay until the user
+                // explicitly closes them ("close this sub-agent" or click).
+                // No auto-close here.
+              }
+            } catch (err) {
+              console.warn(`[sub-pebble] ${event} dispatch on ${sidecarId} failed:`, err);
+            }
+          }
+        });
+        console.log('[sub-pebble] subscribed to taskManager lifecycle events');
+      };
+      // Fire-and-forget: the poll loop above runs in the background so
+      // daemon startup isn't blocked. Errors get logged.
+      void attachSubPebbleListener();
+
+      // When a sidecar disconnects, drop its slot table so the next reconnect
+      // starts fresh. Sub-pebbles on the disconnected sidecar are already
+      // gone (its process exited or the connection died).
+      sidecarManager.onSidecarDisconnected((sidecarId) => {
+        subPebbleSlots.delete(sidecarId);
+      });
+
       // pebble.summon — first press starts listening, second press dismisses.
       // The actual voice work (STT → LLM → TTS) runs once the audio session
       // completes (audioSessions.onComplete below), since that's when we
@@ -846,20 +955,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       //   • focus|where did it go|bring it back — focus last-spawned panel
       // "It / the window / that" pronouns refer to the most-recently-
       // spawned panel for this sidecar, tracked in `lastPanelBySidecar`.
-      type RoomMeta = { aliases: string[]; title: string; w: number; h: number };
+      type RoomMeta = { aliases: string[]; title: string; w: number; h: number; alwaysOnTop?: boolean };
       const ROOMS: Record<string, RoomMeta> = {
-        settings:   { aliases: ['settings', 'preferences'],                title: 'Settings',   w: 560, h: 600 },
-        workflows:  { aliases: ['workflows', 'workflow', 'flows'],         title: 'Workflows',  w: 900, h: 600 },
-        memory:     { aliases: ['memory', 'vault', 'knowledge'],           title: 'Memory',     w: 480, h: 700 },
-        tools:      { aliases: ['tools', 'tool catalog', 'tool catalogue'],title: 'Tools',      w: 560, h: 600 },
-        agents:     { aliases: ['agents', 'agent monitor'],                title: 'Agents',     w: 600, h: 600 },
-        authority:  { aliases: ['authority', 'approvals', 'permissions'],  title: 'Authority',  w: 480, h: 600 },
-        logs:       { aliases: ['logs', 'log stream', 'log'],              title: 'Logs',       w: 800, h: 500 },
-        calendar:   { aliases: ['calendar', 'schedule'],                   title: 'Calendar',   w: 720, h: 600 },
-        goals:      { aliases: ['goals', 'okrs', 'goal'],                  title: 'Goals',      w: 600, h: 600 },
-        tasks:      { aliases: ['tasks', 'todos', 'task list', 'task'],    title: 'Tasks',      w: 500, h: 600 },
-        content:    { aliases: ['content', 'content pipeline', 'notes'],   title: 'Content',    w: 800, h: 600 },
-        workspaces: { aliases: ['workspaces', 'workspace', 'sites'],       title: 'Workspaces', w: 800, h: 600 },
+        settings:    { aliases: ['settings', 'preferences'],                title: 'Settings',    w: 560, h: 600 },
+        workflows:   { aliases: ['workflows', 'workflow', 'flows'],         title: 'Workflows',   w: 900, h: 600 },
+        memory:      { aliases: ['memory', 'vault', 'knowledge'],           title: 'Memory',      w: 480, h: 700 },
+        tools:       { aliases: ['tools', 'tool catalog', 'tool catalogue'],title: 'Tools',       w: 560, h: 600 },
+        agents:      { aliases: ['agents', 'agent monitor'],                title: 'Agents',      w: 600, h: 600 },
+        agent_strip: { aliases: ['agent strip', 'agents strip', 'agent panel', 'agent dock', 'background agents'], title: 'Agent Strip', w: 290, h: 440, alwaysOnTop: true },
+        authority:   { aliases: ['authority', 'approvals', 'permissions'],  title: 'Authority',   w: 480, h: 600 },
+        logs:        { aliases: ['logs', 'log stream', 'log'],              title: 'Logs',        w: 800, h: 500 },
+        calendar:    { aliases: ['calendar', 'schedule'],                   title: 'Calendar',    w: 720, h: 600 },
+        goals:       { aliases: ['goals', 'okrs', 'goal'],                  title: 'Goals',       w: 600, h: 600 },
+        tasks:       { aliases: ['tasks', 'todos', 'task list', 'task'],    title: 'Tasks',       w: 500, h: 600 },
+        content:     { aliases: ['content', 'content pipeline', 'notes'],   title: 'Content',     w: 800, h: 600 },
+        workspaces:  { aliases: ['workspaces', 'workspace', 'sites'],       title: 'Workspaces',  w: 800, h: 600 },
       };
 
       // Match aliases longest-first so "tool catalog" wins over "tools" when
@@ -1035,7 +1145,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               title: meta.title,
               bounds: boundsForRoom(key, meta.w, meta.h),
               resizable: true,
-              always_on_top: false,
+              always_on_top: meta.alwaysOnTop ?? false,
               multi_instance: false,
             });
             const id = (result && typeof result === 'object' && 'id' in (result as object))
@@ -1363,6 +1473,66 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!ctrl.cancelled) await setState(sidecarId, 'idle', '');
       };
 
+      // tryHandleBackgroundIntent — match "in the background, X" /
+      // "background: X" / "spawn a background agent to X" and route X
+      // through taskManager.launch as a backgrounded sub-agent. The
+      // taskManager lifecycle subscription above will spawn the matching
+      // sub-pebble on the rail. Skips the LLM entirely — fast path.
+      //
+      // Specialist pick: defaults to `research_analyst` if present (most
+      // general); falls back to the first specialist in the registry.
+      // Future smarter routing can pattern-match keywords → specialist id.
+      const tryHandleBackgroundIntent = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        // Match the trigger phrase + capture everything after.
+        const re = /\b(?:in the background[,:]?\s*|background[,:]?\s+|spawn (?:a |an )?background\s+(?:agent|task)\s+(?:to\s+|that\s+)?)(.+)/i;
+        const m = re.exec(userText);
+        if (!m) return false;
+        const task = (m[1] ?? '').trim();
+        if (task.length < 3) return false;
+
+        const orchestrator = agentService.getOrchestrator();
+        const taskManagerLocal = agentService.getTaskManager();
+        const llmManager = agentService.getLLMManager();
+        const specialists = agentService.getSpecialists();
+        if (!orchestrator || !taskManagerLocal || !llmManager || !specialists || specialists.size === 0) {
+          await speakConfirmation(sidecarId, "I can't start a background agent right now.", ctrl);
+          return true;
+        }
+
+        const deps = {
+          orchestrator,
+          llmManager,
+          specialists,
+          taskManager: taskManagerLocal,
+        };
+
+        // Pick a specialist: prefer research_analyst, fall back to the
+        // first registered one so this works on any role catalog.
+        let specialistId = 'research_analyst';
+        if (!specialists.has(specialistId)) {
+          specialistId = Array.from(specialists.keys())[0] ?? '';
+        }
+        if (!specialistId) {
+          await speakConfirmation(sidecarId, "No specialists are configured.", ctrl);
+          return true;
+        }
+
+        try {
+          const spawned = spawnPersistentAgent(deps, specialistId);
+          await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context: '' });
+          await speakConfirmation(sidecarId, `Got it. Running in the background.`, ctrl);
+          console.log(`[ambient-ui] background-intent: spawned ${specialistId} for "${task.slice(0, 60)}"`);
+        } catch (err) {
+          console.warn('[ambient-ui] background-intent dispatch failed:', err);
+          await speakConfirmation(sidecarId, "I couldn't start that background task.", ctrl);
+        }
+        return true;
+      };
+
       // tryHandlePanelIntent looks for "open|show|launch <room>" or
       // "close|hide|dismiss <room>" anywhere in the user text. On match
       // it dispatches the right panel RPC, speaks a short confirmation
@@ -1462,7 +1632,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               title: meta.title,
               bounds: boundsForRoom(key, meta.w, meta.h),
               resizable: true,
-              always_on_top: false,
+              always_on_top: meta.alwaysOnTop ?? false,
               multi_instance: false,
             });
             // panel.spawn returns { id: "<panel-id>" } — track it so
@@ -1732,6 +1902,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (await tryHandleInPanelAction(sidecarId, userText, ctrl)) {
           console.log(`[ambient-ui] in-panel-action fast path took ${Date.now() - cycleStart}ms`);
+          return;
+        }
+        if (await tryHandleBackgroundIntent(sidecarId, userText, ctrl)) {
+          console.log(`[ambient-ui] background-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandlePanelIntent(sidecarId, userText, ctrl)) {

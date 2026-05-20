@@ -6,7 +6,7 @@ import {
   type PendingClarifier,
   type PendingRepeatBack,
 } from "../../hooks/useWebSocket";
-import type { Impact, ObjectType, ThreadItem } from "./types";
+import type { Impact, ObjectType, ThreadItem, ThreadRoomKey } from "./types";
 
 /**
  * useLiveThread — Phase 3B adapter.
@@ -150,11 +150,16 @@ export function useLiveThread() {
    */
   const openRoomWindow = useCallback(
     (key: RoomKey) => {
-      const savedLayout = layoutStore.getLayout(key);
+      // agent_strip is a sidecar-only floating panel — never rendered as
+      // a thread room-window. Silently ignore so callers (palette, voice)
+      // can pass any RoomKey without first-class branching.
+      if (key === "agent_strip") return;
+      const threadKey = key as ThreadRoomKey;
+      const savedLayout = layoutStore.getLayout(threadKey);
       setRoomWindows((prev) => {
-        const existing = prev.find((w) => w.roomKey === key);
+        const existing = prev.find((w) => w.roomKey === threadKey);
         if (existing) {
-          const others = prev.filter((w) => w.roomKey !== key);
+          const others = prev.filter((w) => w.roomKey !== threadKey);
           const now = Date.now();
           return [
             ...others,
@@ -173,7 +178,7 @@ export function useLiveThread() {
           {
             kind: "room-window",
             id: `room-${now}-${Math.random().toString(36).slice(2, 8)}`,
-            roomKey: key,
+            roomKey: threadKey,
             state: "inline",
             layout: savedLayout,
             t: formatTime(now),

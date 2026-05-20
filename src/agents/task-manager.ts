@@ -35,8 +35,33 @@ export type LaunchOptions = {
   onComplete?: (task: AsyncTask) => void;
 };
 
+export type TaskLifecycleEvent = 'launch' | 'complete' | 'fail';
+export type TaskLifecycleListener = (event: TaskLifecycleEvent, task: AsyncTask) => void;
+
 export class AgentTaskManager {
   private tasks = new Map<string, AsyncTask>();
+  private listeners = new Set<TaskLifecycleListener>();
+
+  /**
+   * Subscribe to lifecycle events (launch / complete / fail) for every task
+   * that flows through this manager. Returns an unsubscribe function.
+   * Used by the daemon's ambient UI to spawn / update / close sub-pebble
+   * overlays as background work runs.
+   */
+  subscribeLifecycle(listener: TaskLifecycleListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(event: TaskLifecycleEvent, task: AsyncTask): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event, task);
+      } catch (err) {
+        console.error('[TaskManager] lifecycle listener error:', err);
+      }
+    }
+  }
 
   /**
    * Launch a sub-agent task in the background. Returns task ID immediately.
@@ -58,6 +83,7 @@ export class AgentTaskManager {
     };
 
     this.tasks.set(taskId, asyncTask);
+    this.emit('launch', asyncTask);
 
     // Fire runSubAgent without awaiting — runs in background
     runSubAgent({
@@ -72,6 +98,7 @@ export class AgentTaskManager {
       asyncTask.completedAt = Date.now();
       asyncTask.result = result;
       console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
+      this.emit('complete', asyncTask);
       onComplete?.(asyncTask);
     }).catch((err) => {
       asyncTask.status = 'failed';
@@ -83,6 +110,7 @@ export class AgentTaskManager {
         tokensUsed: { input: 0, output: 0 },
       };
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
+      this.emit('fail', asyncTask);
       onComplete?.(asyncTask);
     });
 

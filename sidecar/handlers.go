@@ -19,7 +19,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func()) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func()) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -93,6 +93,14 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		_ = regions // wired via direct closure in client.go (needs sendFn)
 	}
 
+	if caps[CapSubPebble] && subPebble != nil {
+		registry["sub_pebble.spawn"] = makeSubPebbleSpawnHandler(subPebble)
+		registry["sub_pebble.set_state"] = makeSubPebbleSetStateHandler(subPebble)
+		registry["sub_pebble.set_label"] = makeSubPebbleSetLabelHandler(subPebble)
+		registry["sub_pebble.close"] = makeSubPebbleCloseHandler(subPebble)
+		registry["sub_pebble.close_all"] = makeSubPebbleCloseAllHandler(subPebble)
+	}
+
 	// Administrative handlers — not gated by capability
 	registry["get_config"] = makeGetConfigHandler(cfg)
 	registry["update_config"] = makeUpdateConfigHandler(cfg, onReloaded)
@@ -142,6 +150,7 @@ func makeRunCommandHandler(cfg *SidecarConfig) RPCHandler {
 		} else {
 			cmd = exec.CommandContext(ctx, shell, "-c", command)
 		}
+		hideSubprocessWindow(cmd)
 		cmd.Dir = cwd
 
 		var stdoutBuf, stderrBuf strings.Builder
@@ -270,6 +279,7 @@ func runCmd(name string, args []string, input string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	hideSubprocessWindow(cmd) // critical on Windows GUI builds — see subprocess_windows.go
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
