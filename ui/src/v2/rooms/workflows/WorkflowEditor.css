@@ -1465,6 +1465,48 @@
   font-size: 0.95rem;
   color: var(--ink);
 }
+
+/* Click-to-edit step title in the properties panel header. Mirrors
+   the workflow-title pattern from the editor chrome: hover tint as the
+   affordance, swap to an inset input on click. */
+.wf-props__title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink);
+  cursor: text;
+  padding: 1px 6px;
+  margin-left: -6px;
+  border-radius: var(--r-2);
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-props__title:hover {
+  background: var(--paper-3);
+}
+.wf-props__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wf-props__title-input {
+  margin: 0;
+  margin-left: -6px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--paper-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  padding: 1px 6px;
+  outline: none;
+  min-width: 120px;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
 .wf-props__header p {
   margin: 2px 0 var(--s-3);
   font-size: 0.75rem;
@@ -1481,6 +1523,7 @@
   background: var(--rule-soft);
   margin: var(--s-3) 0;
 }
+
 
 .wf-props__field {
   display: flex;

@@ -140,7 +140,17 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // at the recorded screen coords; picking a piece spawns an orphan step
   // at the matching flow coords for the user to wire in via a handle drag.
   const [libraryPicker, setLibraryPicker] = useState<
-    | { screen: { x: number; y: number }; flow: { x: number; y: number } }
+    | {
+        screen: { x: number; y: number };
+        flow: { x: number; y: number };
+        /**
+         * When set, the picker is in "replace mode": the chosen piece
+         * configures the named step in place (preserving its position
+         * and chain connections) instead of spawning a fresh orphan.
+         * Used when the user clicks an unconfigured (empty) PIECE step.
+         */
+        replaceStepName?: string;
+      }
     | null
   >(null);
   const closeLibraryPicker = useCallback((): void => setLibraryPicker(null), []);
@@ -448,13 +458,22 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       // popover should also disable interaction visually but defending
       // here too in case a stale event sneaks through.
       if (pendingInstall) return;
+      // Replace-mode (clicking an empty piece) only makes sense for a
+      // piece-action pick. Control-flow nodes have a different identity
+      // and can't be slotted into a PIECE shell; route them to a new
+      // orphan instead of silently swapping types.
+      const replaceStepName = libraryPicker.replaceStepName ?? null;
       if (entry.kind === "control-flow") {
         editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
         closeLibraryPicker();
         return;
       }
       if (entry.kind === "piece-action") {
-        editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
+        if (replaceStepName) {
+          editor.setStepPiece(replaceStepName, entry.piece.name, entry.action.name);
+        } else {
+          editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
+        }
         closeLibraryPicker();
         return;
       }
@@ -508,7 +527,11 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             window.setTimeout(() => setActionMessage(null), 4000);
             return;
           }
-          editor.createOrphanStep(flow, piece.name, action.name);
+          if (replaceStepName) {
+            editor.setStepPiece(replaceStepName, piece.name, action.name);
+          } else {
+            editor.createOrphanStep(flow, piece.name, action.name);
+          }
           closeLibraryPicker();
           setActionMessage({ tone: "ok", text: `${displayName}: ${action.displayName}` });
           window.setTimeout(() => setActionMessage(null), 2500);
@@ -714,11 +737,37 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
                 // doesn't make sense in that context.
                 setRunDetail({ stepName: n.id, anchor });
                 closePopover();
-              } else {
-                setSelectedStepName(n.id);
-                setPopoverAnchor(anchor);
-                closeRunDetail();
+                return;
               }
+              // Empty PIECE steps (created by "Add step after" / loop +
+              // / branch +) have no piece configured yet. The settings
+              // panel has nothing meaningful to show for them since the
+              // piece + action are fixed at creation time; route the
+              // click straight into the library picker in replace mode
+              // so the user can pick a piece. `setStepPiece` mutates in
+              // place, preserving the step's connections and position.
+              const stepData = (n.data ?? {}) as { step?: FlowStepNode };
+              const step = stepData.step;
+              const isEmptyPiece =
+                step?.type === "PIECE" &&
+                (!step.settings?.pieceName || !step.settings.actionName);
+              if (isEmptyPiece) {
+                const flowPos = rfInstanceRef.current?.screenToFlowPosition({
+                  x: event.clientX,
+                  y: event.clientY,
+                }) ?? { x: 0, y: 0 };
+                setLibraryPicker({
+                  screen: anchor,
+                  flow: flowPos,
+                  replaceStepName: n.id,
+                });
+                closePopover();
+                closeRunDetail();
+                return;
+              }
+              setSelectedStepName(n.id);
+              setPopoverAnchor(anchor);
+              closeRunDetail();
             }}
             onPaneClick={() => {
               closePopover();
@@ -895,7 +944,6 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             isTopLevel={selectedDepth === 0}
             containerKind={selectedFlat?.containerKind}
             catalog={editor.catalog}
-            onSetPiece={(pieceName, actionName) => editor.setStepPiece(selectedStep.name, pieceName, actionName)}
             onSetTriggerType={(type) => editor.setTriggerType(type)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
@@ -906,7 +954,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               delete input[key];
               editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
             }}
-            onSetDisplayName={(displayName) => editor.updateStep(selectedStep.name, { displayName })}
+            onSetDisplayName={(displayName) => {
+              const trimmed = displayName.trim();
+              // EditableStepName already guards its own commit; we still
+              // defend here so callers other than the widget can't blank
+              // the name accidentally.
+              if (!trimmed) return;
+              editor.updateStep(selectedStep.name, { displayName: trimmed });
+            }}
             onAddStepAfter={() => {
               const created = editor.insertStepAfter(selectedStep.name);
               if (created) setSelectedStepName(created);
@@ -1041,6 +1096,98 @@ function EditableTitle({
       id="wf-editor-title"
       aria-label="Workflow name"
       value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          cancel();
+        }
+      }}
+    />
+  );
+}
+
+/**
+ * Click-to-edit step title used in the properties panel header. Same
+ * UX as `EditableTitle` for the workflow name: the h3 reads as a
+ * button on hover; clicking swaps it for an `<input>` sized to match.
+ * Enter / blur commits, Esc cancels, empty input reverts. Replaces
+ * the separate "Display name" field that used to live in the panel
+ * body.
+ *
+ * Kept distinct from `EditableTitle` (which renders an h2 with
+ * workflow-title styling) so the typographic chrome of the two
+ * locations can diverge without ifs.
+ */
+function EditableStepName({
+  name,
+  fallback,
+  onCommit,
+}: {
+  name: string;
+  /** Step name (id), shown as the input's placeholder when displayName is empty. */
+  fallback: string;
+  onCommit: (next: string) => void;
+}): React.ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(name);
+  }, [name, editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editing]);
+
+  const commit = useCallback((): void => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== name) onCommit(trimmed);
+    else setDraft(name);
+    setEditing(false);
+  }, [draft, name, onCommit]);
+
+  const cancel = useCallback((): void => {
+    setDraft(name);
+    setEditing(false);
+  }, [name]);
+
+  if (!editing) {
+    return (
+      <h3
+        className="wf-props__title"
+        title="Click to rename"
+        role="button"
+        tabIndex={0}
+        onClick={() => setEditing(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setEditing(true);
+          }
+        }}
+      >
+        {name}
+      </h3>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="wf-props__title-input"
+      aria-label="Step name"
+      value={draft}
+      placeholder={fallback}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -2933,12 +3080,12 @@ interface PropertiesPanelProps {
   sampleData: unknown | undefined;
   /** True when the loaded version is LOCKED -- disables sample-data editing + test. */
   isLocked: boolean;
-  onSetPiece: (pieceName: string, actionName: string) => void;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
+  /** Commit a new display name for this step. Called by EditableStepName in the panel header. */
   onSetDisplayName: (displayName: string) => void;
   onAddStepAfter: () => void;
   onDelete: () => void;
@@ -2962,7 +3109,6 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     hasNextAction,
     isTopLevel,
     catalog,
-    onSetPiece,
     onSetTriggerType,
     onSetErrorHandling,
     onSetInput,
@@ -2984,34 +3130,17 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const isLoop = step.type === "LOOP_ON_ITEMS";
   const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
-  const subActions = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
-
-  // Find the selected sub-action's metadata. If it has an inputSchema we
-  // render typed widgets; otherwise the freeform key/value editor stays as
-  // the fallback (pieces without a declared schema still work).
+  // Look up the selected sub-action's metadata so the typed-input widgets
+  // below have a schema to render against. We keep this lookup even
+  // though the user can no longer pick a different sub-action from the
+  // panel -- the identity-display row above + the input editor still
+  // need it.
   const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
-  const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subActions.find((s) => s.name === subName);
+  const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
+  const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const schema = selectedSubAction?.inputSchema ?? null;
 
   const [newKey, setNewKey] = useState("");
-
-  const onPieceChange = useCallback(
-    (pieceName: string): void => {
-      const target = catalog.find((p) => p.name === pieceName);
-      if (!target) return;
-      const list = isTrigger ? target.triggers : target.actions;
-      const firstSub = list[0]?.name ?? "";
-      onSetPiece(pieceName, firstSub);
-    },
-    [catalog, isTrigger, onSetPiece],
-  );
-
-  const onSubChange = useCallback(
-    (subName: string): void => {
-      if (step.settings?.pieceName) onSetPiece(step.settings.pieceName, subName);
-    },
-    [step.settings?.pieceName, onSetPiece],
-  );
 
   const inputEntries = useMemo(
     () => Object.entries(step.settings?.input ?? {}),
@@ -3021,20 +3150,21 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   return (
     <div className="wf-props">
       <header className="wf-props__header">
-        <h3>{step.displayName ?? step.name}</h3>
+        <EditableStepName
+          name={step.displayName ?? step.name}
+          fallback={step.name}
+          onCommit={onSetDisplayName}
+        />
         <p>
           <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : "Action"}
         </p>
       </header>
 
-      <Field label="Display name">
-        <input
-          type="text"
-          value={step.displayName ?? ""}
-          placeholder={step.name}
-          onChange={(e) => onSetDisplayName(e.target.value)}
-        />
-      </Field>
+      {/* The display name is edited by clicking the title above
+          (same UX as the workflow title in the editor header).
+          The separate "Display name" Field that used to live here is
+          gone -- one place to rename, where the user is already
+          looking. */}
 
       {isTriggerStep ? (
         <Field label="Trigger mode">
@@ -3068,45 +3198,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </p>
       ) : null}
 
-      {!isManual && !isLoop && !isRouter ? (
-        <>
-          <Field label={isTrigger ? "Trigger piece" : "Action piece"}>
-            <select
-              value={step.settings?.pieceName ?? ""}
-              onChange={(e) => onPieceChange(e.target.value)}
-            >
-              <option value="" disabled>
-                — pick a piece —
-              </option>
-              {catalog
-                .filter((p) => (isTrigger ? p.triggers.length > 0 : p.actions.length > 0))
-                .map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.displayName}
-                  </option>
-                ))}
-            </select>
-          </Field>
-
-          {piece ? (
-            <Field label={isTrigger ? "Trigger" : "Action"}>
-              <select
-                value={(isTrigger ? step.settings?.triggerName : step.settings?.actionName) ?? ""}
-                onChange={(e) => onSubChange(e.target.value)}
-              >
-                <option value="" disabled>
-                  — pick {isTrigger ? "a trigger" : "an action"} —
-                </option>
-                {subActions.map((s) => (
-                  <option key={s.name} value={s.name} title={s.description}>
-                    {s.displayName}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : null}
-        </>
-      ) : null}
+      {/* Piece + sub-action identity USED to live here as a read-only
+          row, but the canvas card already shows "<piece> · <action>" in
+          the node body -- repeating it inside the panel is noise. With
+          the row + its "Action" section header gone, inputs flow
+          directly under the panel head (or under the trigger-mode /
+          loop / router sections, whichever applies). */}
 
       {isLoop ? (
         <LoopEditor step={step} onSetLoopItems={onSetLoopItems} onAddStepToLoopBody={onAddStepToLoopBody} />
@@ -3123,14 +3220,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
-      <div className="wf-props__divider" />
-
       {!isLoop && !isRouter ? (
         <div className="wf-props__inputs">
-          <div className="wf-props__inputs-head">
-            <h4>Inputs</h4>
-          </div>
-
+          {/* No "Inputs" section title: the panel only has one
+              configurable block for a piece (the inputs themselves) plus
+              the sample-output editor below, so a section header would
+              just be visual noise. */}
           {schema ? (
             <SchemaInputs
               schema={schema}
