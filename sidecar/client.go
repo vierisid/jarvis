@@ -39,10 +39,11 @@ type SidecarClient struct {
 	sendFn    EventSender        // event sender for observers
 	mu        sync.Mutex         // protects handlers/obsCancel during reload
 
-	panels   PanelService          // native window service (lazily set when CapWindows enabled)
-	pebble   PebbleService         // native pebble overlay (lazily set when CapPebble enabled)
-	playback *AudioPlaybackService // pebble TTS playback (alongside CapPebble)
-	regions  RegionSelectionService // T19 drag-select capture (alongside CapPebble)
+	panels    PanelService          // native window service (lazily set when CapWindows enabled)
+	pebble    PebbleService         // native pebble overlay (lazily set when CapPebble enabled)
+	subPebble SubPebbleService      // per-sub-agent rail overlays (CapSubPebble)
+	playback  *AudioPlaybackService // pebble TTS playback (alongside CapPebble)
+	regions   RegionSelectionService // T19 drag-select capture (alongside CapPebble)
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -62,6 +63,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client.runPreflight()
 	client.panels = maybeNewPanelService(client.availableCaps)
 	client.pebble = maybeNewPebbleService(client.availableCaps)
+	client.subPebble = maybeNewSubPebbleService(client.availableCaps)
 	if client.pebble != nil {
 		// Playback service rides alongside the pebble — same capability gate
 		// (CapPebble) since both are part of the ambient voice loop.
@@ -70,7 +72,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		// makes sense when the ambient UI is active.
 		client.regions = NewRegionSelectionService()
 	}
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.playback, client.regions, client.reloadConfig)
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig)
 	return client, nil
 }
 
@@ -93,6 +95,18 @@ func maybeNewPebbleService(caps []SidecarCapability) PebbleService {
 	for _, c := range caps {
 		if c == CapPebble {
 			return NewPebbleService()
+		}
+	}
+	return nil
+}
+
+// maybeNewSubPebbleService mirrors the above for the multi-overlay sub-pebble
+// service (rail of background-agent indicators). Returns nil if CapSubPebble
+// isn't enabled.
+func maybeNewSubPebbleService(caps []SidecarCapability) SubPebbleService {
+	for _, c := range caps {
+		if c == CapSubPebble {
+			return NewSubPebbleService()
 		}
 	}
 	return nil
@@ -153,6 +167,9 @@ func (c *SidecarClient) Stop() {
 	if c.pebble != nil {
 		_ = c.pebble.Close()
 	}
+	if c.subPebble != nil {
+		_ = c.subPebble.CloseAll()
+	}
 	if c.conn != nil {
 		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
 		c.conn = nil
@@ -199,8 +216,22 @@ func (c *SidecarClient) reloadConfig() {
 		c.regions = nil
 	}
 
+	hasSubPebble := false
+	for _, cap := range c.availableCaps {
+		if cap == CapSubPebble {
+			hasSubPebble = true
+			break
+		}
+	}
+	if hasSubPebble && c.subPebble == nil {
+		c.subPebble = NewSubPebbleService()
+	} else if !hasSubPebble && c.subPebble != nil {
+		_ = c.subPebble.CloseAll()
+		c.subPebble = nil
+	}
+
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.playback, c.regions, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {

@@ -15,7 +15,8 @@ export type SidecarCapability =
   | 'system_info'
   | 'awareness'
   | 'windows'
-  | 'pebble';
+  | 'pebble'
+  | 'sub_pebble';
 
 /** A capability that is enabled in config but unavailable on the system */
 export interface UnavailableCapability {

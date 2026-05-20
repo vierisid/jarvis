@@ -4,6 +4,15 @@
  * through this union regardless of source (voice STT, text composer, daemon reply).
  */
 
+import type { RoomKey } from "../router";
+
+/**
+ * Rooms that can render inline as a thread room-window. Excludes
+ * `agent_strip`, which is a sidecar-only floating panel and never appears
+ * in the dashboard thread.
+ */
+export type ThreadRoomKey = Exclude<RoomKey, "agent_strip">;
+
 export type Impact = "read" | "write" | "destructive" | "external";
 
 export type ObjectType =
@@ -116,20 +125,7 @@ export type ThreadItem =
        */
       kind: "room-window";
       id: string;
-      roomKey:
-        | "workflows"
-        | "memory"
-        | "tools"
-        | "agents"
-        | "authority"
-        | "logs"
-        | "calendar"
-        | "goals"
-        | "tasks"
-        | "content"
-        | "workspaces"
-        | "usage"
-        | "settings";
+      roomKey: ThreadRoomKey;
       state: "inline" | "minimized";
       layout: { mode: "inline" } | {
         mode: "floating";

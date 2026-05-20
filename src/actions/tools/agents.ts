@@ -144,13 +144,28 @@ export function listPersistentAgents(deps: AgentToolDeps) {
     busy: deps.taskManager.isAgentBusy(a.id),
   }));
 
-  const tasks = deps.taskManager.listTasks().map(t => ({
-    task_id: t.id,
-    agent_name: t.agentName,
-    status: t.status,
-    task: t.task.slice(0, 100),
-    elapsed_seconds: Math.round(((t.completedAt ?? Date.now()) - t.startedAt) / 1000),
-  }));
+  const tasks = deps.taskManager.listTasks().map(t => {
+    // Trim and clip the agent's response so the strip can render an inline
+    // preview after completion without flooding the small panel. Strip
+    // markdown noise (asterisks, leading list markers) and collapse
+    // whitespace so the snippet reads cleanly in a 2-line clamp.
+    const rawResponse = t.result?.response ?? '';
+    const cleaned = rawResponse
+      .replace(/^\s*[-*•]\s+/gm, '')
+      .replace(/[*_`]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const result_preview = cleaned ? cleaned.slice(0, 200) : null;
+    return {
+      task_id: t.id,
+      agent_name: t.agentName,
+      status: t.status,
+      task: t.task.slice(0, 200),
+      elapsed_seconds: Math.round(((t.completedAt ?? Date.now()) - t.startedAt) / 1000),
+      completed_at: t.completedAt ?? null,
+      result_preview,
+    };
+  });
 
   return {
     active_agents: agents.length,

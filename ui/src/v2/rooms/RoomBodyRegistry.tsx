@@ -3,6 +3,7 @@ import type { RoomKey } from "../router";
 import { ToolsRoomBody } from "./tools/ToolsRoom";
 import { LogsRoomBody } from "./logs/LogsRoom";
 import { AgentsRoomBody } from "./agents/AgentsRoom";
+import { AgentStripRoomBody } from "./agentStrip/AgentStripRoom";
 import { WorkflowsRoomBody } from "./workflows/WorkflowsRoom";
 import { MemoryRoomBody } from "./memory/MemoryRoom";
 import { AuthorityRoomBody } from "./authority/AuthorityRoom";
@@ -30,6 +31,7 @@ const REGISTRY: Partial<Record<RoomKey, RoomBodyComponent>> = {
   tools: ToolsRoomBody,
   logs: LogsRoomBody,
   agents: AgentsRoomBody,
+  agent_strip: AgentStripRoomBody,
   workflows: WorkflowsRoomBody,
   memory: MemoryRoomBody,
   authority: AuthorityRoomBody,

@@ -15,6 +15,7 @@ const (
 	CapOCR        SidecarCapability = "ocr"
 	CapWindows    SidecarCapability = "windows"
 	CapPebble     SidecarCapability = "pebble"
+	CapSubPebble  SidecarCapability = "sub_pebble"
 )
 
 // AwarenessConfig controls screen and window observer behavior.

@@ -32,7 +32,9 @@ func platformCaptureScreen(outputPath string) error {
 			`$bmp.Save('%s') }`, outputPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "powershell", "-command", psScript).Run()
+	cmd := exec.CommandContext(ctx, "powershell", "-command", psScript)
+	hideSubprocessWindow(cmd)
+	return cmd.Run()
 }
 
 func platformDefaultShell() string {
@@ -74,6 +76,7 @@ func launchChromeIfNeeded(cfg *SidecarConfig) {
 			"--no-first-run",
 			"about:blank",
 		)
+		hideSubprocessWindow(cmd)
 		if err := cmd.Start(); err == nil {
 			log.Printf("[browser] Launched Chrome with CDP on port %d", port)
 			time.Sleep(2 * time.Second) // Give Chrome time to start
@@ -88,7 +91,7 @@ func platformGetActiveWindow() (appName string, windowTitle string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Get foreground window's process name and title using Win32 API via PowerShell
-	out, err := exec.CommandContext(ctx, "powershell.exe", "-command",
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-command",
 		`Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -108,7 +111,9 @@ public class FG {
   }
 }
 '@
-[FG]::Get()`).Output()
+[FG]::Get()`)
+	hideSubprocessWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", ""
 	}

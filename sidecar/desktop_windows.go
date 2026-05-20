@@ -307,6 +307,7 @@ func runPS(script string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", script)
+	hideSubprocessWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

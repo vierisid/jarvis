@@ -156,6 +156,13 @@ const ROOM_META: Record<RoomKey, RoomMeta> = {
     description:
       "All specialist agents at a glance: status, last run, current task, and the delegation hierarchy that connects them.",
   },
+  agent_strip: {
+    title: "Agent Strip",
+    subtitle: "ambient · live task ticker",
+    phaseTag: "W5 — Agent Strip",
+    description:
+      "Always-on-top floating strip of currently-running background agents. Spawn as a panel (voice: 'open agent strip').",
+  },
   workflows: {
     title: "Workflows",
     subtitle: "list · graph · NL builder",
