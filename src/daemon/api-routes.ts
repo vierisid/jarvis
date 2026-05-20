@@ -827,6 +827,38 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Single-task lookup used by the sub-pebble's "open full" panel —
+    // returns the complete task record including raw response + summary
+    // so the panel can render the entire markdown output. Falls back to
+    // 404 when the id is unknown (e.g. cleaned up after 10 min).
+    '/api/agents/tasks/:id': {
+      GET: (req: Request) => {
+        const tm = ctx.agentService.getTaskManager();
+        if (!tm) return error('Task manager not available', 503);
+        const url = new URL(req.url);
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        if (!id) return error('Missing task id', 400);
+        const task = tm.getTask(id);
+        if (!task) return error(`Task ${id} not found`, 404);
+        const elapsedS = Math.round(((task.completedAt ?? Date.now()) - task.startedAt) / 1000);
+        return json({
+          id: task.id,
+          agent_id: task.agentId,
+          agent_name: task.agentName,
+          specialist: task.specialistId,
+          task: task.task,
+          status: task.status,
+          started_at: task.startedAt,
+          completed_at: task.completedAt,
+          elapsed_seconds: elapsedS,
+          response: task.result?.response ?? '',
+          summary: task.summary,
+          tools_used: task.result?.toolsUsed ?? [],
+          tokens_used: task.result?.tokensUsed ?? null,
+        });
+      },
+    },
+
     // --- Personality ---
     '/api/personality': {
       GET: () => json(getPersonality()),

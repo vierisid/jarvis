@@ -23,6 +23,13 @@ export type AsyncTask = {
   startedAt: number;
   completedAt: number | null;
   result: SubAgentResult | null;
+  /**
+   * Concise ambient-display summary of `result.response`, populated by the
+   * daemon shortly after completion via a one-shot LLM call. Used by the
+   * sub-pebble bubble to show a glance-readable version of long responses.
+   * Null until the summary lands (or if summarization failed).
+   */
+  summary: string | null;
 };
 
 export type LaunchOptions = {
@@ -80,6 +87,7 @@ export class AgentTaskManager {
       startedAt: Date.now(),
       completedAt: null,
       result: null,
+      summary: null,
     };
 
     this.tasks.set(taskId, asyncTask);
@@ -122,6 +130,18 @@ export class AgentTaskManager {
    */
   getTask(taskId: string): AsyncTask | undefined {
     return this.tasks.get(taskId);
+  }
+
+  /**
+   * Attach a post-hoc summary to an already-completed task. The daemon
+   * fires this after running the task's response through a one-shot LLM
+   * summarizer so the sub-pebble bubble can show a digestible version of
+   * long outputs.
+   */
+  setSummary(taskId: string, summary: string): void {
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+    task.summary = summary;
   }
 
   /**

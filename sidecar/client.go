@@ -431,6 +431,43 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		})
 		log.Printf("[pebble] OnPalette callback registered")
 
+		// Phase B — sub-pebble disc clicks emit a `sub_pebble.clicked`
+		// event so the daemon can toggle the expand bubble (fetch task
+		// data + dispatch sub_pebble.set_expanded). Click handling is
+		// per-window via WM_NCHITTEST + WM_LBUTTONUP in the sub-pebble
+		// overlay; this is just the transport.
+		if c.subPebble != nil {
+			c.subPebble.OnClick(func(id string) {
+				evt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "sub_pebble.clicked",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "normal",
+					Payload:   map[string]any{"id": id},
+				}
+				if err := sendFn(ctx, evt, nil); err != nil {
+					log.Printf("[sub-pebble] failed to emit clicked event for %s: %v", id, err)
+				} else {
+					log.Printf("[sub-pebble] clicked id=%s — event sent", id)
+				}
+			})
+			c.subPebble.OnOpenFull(func(id string) {
+				evt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "sub_pebble.open_full",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "normal",
+					Payload:   map[string]any{"id": id},
+				}
+				if err := sendFn(ctx, evt, nil); err != nil {
+					log.Printf("[sub-pebble] failed to emit open_full event for %s: %v", id, err)
+				} else {
+					log.Printf("[sub-pebble] open_full id=%s — event sent", id)
+				}
+			})
+			log.Printf("[sub-pebble] OnClick + OnOpenFull callbacks registered")
+		}
+
 		// W3-T1 — panel bounds tracking. The sidecar polls each spawned
 		// panel's window rect at 1 Hz; when bounds change (user drag /
 		// resize / maximize) we forward a `panel.bounds_changed` event

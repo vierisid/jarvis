@@ -584,6 +584,144 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return ids;
       };
 
+      // Phase B — per-sub-pebble expansion state. Daemon owns this so a
+      // click flip can fetch fresh task data before dispatching.
+      const subPebbleExpanded = new Map<string, boolean>(); // taskId -> expanded
+      // Reverse lookup: taskId -> sidecarId so the click handler knows
+      // which sidecar to dispatch the set_expanded RPC to.
+      const subPebbleSidecar = new Map<string, string>(); // taskId -> sidecarId
+
+      // Phase B+ — summarize a completed task's response into ~3 short
+      // sentences so the sub-pebble bubble can show something digestible
+      // even when the agent's raw response is many paragraphs. Stores on
+      // the task via taskManager.setSummary so the dashboard panel route
+      // can read it too. Re-dispatches set_expanded if the bubble is
+      // still open by the time the summary lands.
+      const summarizeTaskAsync = async (taskId: string, sidecarId: string): Promise<void> => {
+        try {
+          const tm = agentService.getTaskManager();
+          const llm = agentService.getLLMManager();
+          if (!tm || !llm) return;
+          const task = tm.getTask(taskId);
+          if (!task || !task.result || !task.result.response) return;
+          const raw = task.result.response.trim();
+          // Skip if response is already short — the bubble can show it directly.
+          if (raw.length < 240) {
+            tm.setSummary(taskId, raw);
+          } else {
+            const t0 = Date.now();
+            const messages = [
+              {
+                role: 'system' as const,
+                content: `You are a summarizer for a small ambient floating display. Compress the agent's response into 2 or 3 short sentences a user can read at a glance. Be specific — keep names, numbers, and key recommendations. No markdown, no bullet points, no preamble like "The agent says". Just the summary itself.`,
+              },
+              {
+                role: 'user' as const,
+                content: `Task: ${task.task}\n\nAgent response:\n${raw.slice(0, 4000)}\n\nSummary:`,
+              },
+            ];
+            const resp = await llm.chat(messages, { max_tokens: 180, temperature: 0.3 });
+            const summary = (resp.content || '').trim();
+            if (summary) {
+              tm.setSummary(taskId, summary);
+              console.log(`[sub-pebble] summary for ${taskId} in ${Date.now() - t0}ms (${summary.length} chars)`);
+            }
+          }
+          // Re-dispatch set_expanded if the bubble is still open so the
+          // user sees the summary land in place.
+          if (subPebbleExpanded.get(taskId)) {
+            const fresh = tm.getTask(taskId);
+            if (!fresh) return;
+            const elapsedS = Math.round(((fresh.completedAt ?? Date.now()) - fresh.startedAt) / 1000);
+            const display = fresh.summary ?? (fresh.result?.response ?? '').replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+            await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_expanded', {
+              id: taskId, expanded: true,
+              agent: fresh.agentName,
+              task: fresh.task.slice(0, 200),
+              result: display,
+              elapsed_s: elapsedS,
+            });
+          }
+        } catch (err) {
+          console.warn(`[sub-pebble] summarize ${taskId} failed:`, err);
+        }
+      };
+
+      // Phase B — sub_pebble.clicked event from sidecar. Toggle the
+      // expanded state and dispatch set_expanded with fresh task data
+      // (label/task/result/elapsed) so the bubble reads what's current,
+      // not what was true at spawn time.
+      // sub_pebble.open_full — user clicked the "open full" button inside
+      // the bubble. Spawn a panel pointing at the dashboard's
+      // `#/_task_<id>` route which renders the task's full response.
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'sub_pebble.open_full') return;
+        const payload = (event.payload ?? {}) as { id?: unknown };
+        const taskId = String(payload.id ?? '');
+        if (!taskId) return;
+        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
+        const url = `http://localhost:${port}/#/_task_${taskId}`;
+        try {
+          const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url,
+            title: 'Sub-agent result',
+            bounds: { x: -1, y: -1, w: 540, h: 640 },
+            resizable: true,
+            always_on_top: false,
+            multi_instance: true, // allow multiple full-result panels open at once
+          });
+          const id = (result && typeof result === 'object' && 'id' in (result as object))
+            ? String((result as { id?: unknown }).id ?? '')
+            : '';
+          if (id) {
+            // Use a synthetic room key so the tracker doesn't collide with
+            // the 13 real rooms; window-state persistence won't fire either
+            // since 'task_full' isn't in the meta table.
+            trackPanel(sidecarId, { id, key: 'task_full', title: 'Sub-agent result' });
+          }
+          console.log(`[sub-pebble] open_full panel spawned for task=${taskId}`);
+        } catch (err) {
+          console.warn(`[sub-pebble] open_full panel.spawn failed for ${taskId}:`, err);
+        }
+      });
+
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'sub_pebble.clicked') return;
+        const payload = (event.payload ?? {}) as { id?: unknown };
+        const id = String(payload.id ?? '');
+        if (!id) return;
+        const tm = agentService.getTaskManager();
+        if (!tm) return;
+        const task = tm.getTask(id);
+        if (!task) {
+          console.warn(`[sub-pebble] click for unknown task id=${id} — skipping`);
+          return;
+        }
+        const next = !(subPebbleExpanded.get(id) ?? false);
+        subPebbleExpanded.set(id, next);
+        const elapsedS = Math.round(((task.completedAt ?? Date.now()) - task.startedAt) / 1000);
+        // Prefer the LLM summary when available (lands a beat after
+        // completion via summarizeTaskAsync). Fall back to a markdown-
+        // stripped slice of the raw response.
+        const rawResult = task.result?.response ?? '';
+        const cleaned = rawResult.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
+        const display = task.summary ?? cleaned.slice(0, 220);
+        const resultPreview = task.status === 'running' ? '' : display;
+        try {
+          await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_expanded', {
+            id,
+            expanded: next,
+            agent: task.agentName,
+            task: task.task.slice(0, 200),
+            result: resultPreview,
+            elapsed_s: elapsedS,
+          });
+          console.log(`[sub-pebble] click id=${id} expanded=${next}`);
+        } catch (err) {
+          console.warn(`[sub-pebble] set_expanded for ${id} failed:`, err);
+        }
+      });
+
       // taskManager is initialized inside agentService.start(), which the
       // service registry runs AFTER this ambient block. Poll until it
       // appears, then attach the lifecycle listener. Bounded to ~20s so
@@ -612,6 +750,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 let used = subPebbleSlots.get(sidecarId);
                 if (!used) { used = new Map(); subPebbleSlots.set(sidecarId, used); }
                 used.set(task.id, slot);
+                subPebbleSidecar.set(task.id, sidecarId);
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.spawn', {
                   id: task.id,
                   color: colorForTask(task.id),
@@ -621,20 +760,36 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 });
                 console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
               } else if (event === 'complete' || event === 'fail') {
-                const state = event === 'complete' ? 'idle' : 'idle'; // both end states render solid; failed uses vermilion via initial color override below
+                // Flip to idle so the pulse stops; failures additionally
+                // recolor to vermilion so the user sees red on the rail.
+                await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
+                  id: task.id, state: 'idle',
+                });
                 if (event === 'fail') {
-                  // Force vermilion + the new state — recolor by re-spawning
-                  // (sub-pebble Spawn is idempotent so this would no-op).
-                  // Cleaner option: a sub_pebble.set_color RPC. For Phase A
-                  // we just flip state; the original color stays. The user
-                  // can tell completed vs failed from the agent strip room.
-                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
-                    id: task.id, state,
+                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_color', {
+                    id: task.id, color: 'vermilion',
                   });
-                } else {
-                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
-                    id: task.id, state,
+                }
+                // If the bubble is currently expanded, push fresh content
+                // so the user sees the result without re-clicking. Summary
+                // lands a beat later via summarizeTaskAsync and re-pushes.
+                if (subPebbleExpanded.get(task.id)) {
+                  const elapsedS = Math.round(((task.completedAt ?? Date.now()) - task.startedAt) / 1000);
+                  const rawResult = task.result?.response ?? '';
+                  const cleaned = rawResult.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
+                  await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_expanded', {
+                    id: task.id, expanded: true,
+                    agent: task.agentName,
+                    task: task.task.slice(0, 200),
+                    result: cleaned.slice(0, 220),
+                    elapsed_s: elapsedS,
                   });
+                }
+                // Kick off the ambient summary (success only — no point
+                // summarizing an error). Fire-and-forget; the summarizer
+                // re-dispatches set_expanded if the bubble is still open.
+                if (event === 'complete') {
+                  void summarizeTaskAsync(task.id, sidecarId);
                 }
                 console.log(`[sub-pebble] ${event} task=${task.id}`);
                 // Per the design rule: sub-pebbles stay until the user
@@ -1473,6 +1628,114 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!ctrl.cancelled) await setState(sidecarId, 'idle', '');
       };
 
+      // tryHandleSubPebbleCloseIntent — close one or more backgrounded
+      // sub-agents by voice. Matches:
+      //   "close (this|that|the) background agent"     → most-recent
+      //   "close all background agents" / "close all"  → every active sub-pebble
+      //   "close the (amber|sage|...) one"             → close by color
+      //   "close the (research|legal|...) one"         → close by agent-name
+      //                                                  substring match
+      //   "dismiss / kill / get rid of" — same verbs
+      // Returns true when handled (skips LLM).
+      const tryHandleSubPebbleCloseIntent = async (
+        sidecarId: string,
+        userText: string,
+        ctrl: { cancelled: boolean },
+      ): Promise<boolean> => {
+        const t = userText.toLowerCase().trim();
+        // Cheap pre-filter — needs a close verb + a backgrounded-agent noun.
+        if (!/\b(close|dismiss|kill|get rid of|cancel)\b/.test(t)) return false;
+        if (!/\b(background|sub.?agent|sub.?pebble|agents?\b)/.test(t) && !/\b(this|that)\b/.test(t)) {
+          return false;
+        }
+
+        const list = panelsBySidecar; // not used here, but reference kept for parity
+        void list;
+
+        // Build the active sub-pebble list from the slot table.
+        const used = subPebbleSlots.get(sidecarId);
+        if (!used || used.size === 0) {
+          await speakConfirmation(sidecarId, "There are no background agents running.", ctrl);
+          return true;
+        }
+        const tm = agentService.getTaskManager();
+        if (!tm) return false;
+
+        // Collect candidates: id + spawn order + color + agentName
+        type Cand = { id: string; slot: number; color: string; agentName: string };
+        const cands: Cand[] = [];
+        for (const [id, slot] of used.entries()) {
+          const task = tm.getTask(id);
+          if (!task) continue;
+          cands.push({ id, slot, color: colorForTask(id), agentName: task.agentName });
+        }
+        if (cands.length === 0) {
+          await speakConfirmation(sidecarId, "There are no background agents to close.", ctrl);
+          return true;
+        }
+
+        const closeOne = async (cand: Cand, label: string): Promise<void> => {
+          try {
+            await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close', { id: cand.id });
+            used.delete(cand.id);
+            subPebbleExpanded.delete(cand.id);
+            subPebbleSidecar.delete(cand.id);
+            await speakConfirmation(sidecarId, `Closed the ${label} background agent.`, ctrl);
+          } catch (err) {
+            console.warn(`[sub-pebble] close ${cand.id} failed:`, err);
+            await speakConfirmation(sidecarId, "I couldn't close that background agent.", ctrl);
+          }
+        };
+
+        // "close all"
+        if (/\b(all|every|everything)\b/.test(t) && /\b(background|sub.?agent|agents?|sub.?pebble)/.test(t)) {
+          try {
+            await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close_all', {});
+            used.clear();
+            await speakConfirmation(sidecarId, `Closed all ${cands.length} background ${cands.length === 1 ? 'agent' : 'agents'}.`, ctrl);
+          } catch (err) {
+            console.warn('[sub-pebble] close_all failed:', err);
+            await speakConfirmation(sidecarId, "I couldn't close them.", ctrl);
+          }
+          return true;
+        }
+
+        // Color match — "close the amber one"
+        const colorWords = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'];
+        for (const cw of colorWords) {
+          if (new RegExp(`\\b${cw}\\b`).test(t)) {
+            const match = cands.find(c => c.color === cw);
+            if (match) {
+              await closeOne(match, cw);
+              return true;
+            }
+          }
+        }
+
+        // Agent-name substring match — "close the research one" → matches
+        // "Research Analyst", "close the legal" → "Legal Advisor".
+        const m = /\bclose (?:the )?([a-z]+)(?:\s+one|\s+agent|\s+background|\s+sub.?agent)?/i.exec(t);
+        if (m && m[1]) {
+          const hint = m[1].toLowerCase();
+          const reserved = new Set(['this', 'that', 'the', 'a', 'an', 'background', 'all', 'every']);
+          if (!reserved.has(hint)) {
+            const match = cands.find(c => c.agentName.toLowerCase().includes(hint));
+            if (match) {
+              await closeOne(match, match.agentName.toLowerCase());
+              return true;
+            }
+          }
+        }
+
+        // "this" / "that" / "the background agent" — close most recent.
+        const newest = cands.slice().sort((a, b) => b.slot - a.slot)[0];
+        if (newest) {
+          await closeOne(newest, 'most recent');
+          return true;
+        }
+        return false;
+      };
+
       // tryHandleBackgroundIntent — match "in the background, X" /
       // "background: X" / "spawn a background agent to X" and route X
       // through taskManager.launch as a backgrounded sub-agent. The
@@ -1902,6 +2165,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (await tryHandleInPanelAction(sidecarId, userText, ctrl)) {
           console.log(`[ambient-ui] in-panel-action fast path took ${Date.now() - cycleStart}ms`);
+          return;
+        }
+        if (await tryHandleSubPebbleCloseIntent(sidecarId, userText, ctrl)) {
+          console.log(`[ambient-ui] sub-pebble-close fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleBackgroundIntent(sidecarId, userText, ctrl)) {

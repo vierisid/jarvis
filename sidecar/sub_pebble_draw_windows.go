@@ -1,0 +1,250 @@
+//go:build windows
+
+package main
+
+import (
+	"fmt"
+	"syscall"
+	"unsafe"
+)
+
+// Bubble inner padding (px from the bubble's outer edges to the text rect).
+const subPebbleBubbleInnerPad = 12
+
+// computed bubble rect inside the 360×220 layered window.
+func subPebbleBubbleRect() (x0, y0, x1, y1 int) {
+	x1 = subPebbleAnchorX - 9 /* disc radius */ - subPebbleBubbleOffset
+	x0 = x1 - subPebbleBubbleW
+	y0 = subPebbleAnchorY - subPebbleBubbleAnchorY
+	y1 = y0 + subPebbleBubbleH
+	return
+}
+
+// drawSubPebbleBubble paints the paper-card background to the left of the
+// disc when entry.expanded is true. Same riso treatment as the main pebble:
+// hard offset shadow, paper fill, hairline tinted border matching the
+// sub-pebble's color (so the connection between card and disc is visible).
+func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color SubPebbleColor, entry *subPebbleEntry) {
+	r, g, b := subPebbleRGB(color)
+	x0, y0, x1, y1 := subPebbleBubbleRect()
+	const radius = 8.0
+	const shadowOffset = 2.0
+
+	// 1) Hard offset shadow.
+	fillRoundedRect(pixels,
+		float64(x0)+shadowOffset, float64(y0)+shadowOffset,
+		float64(x1)+shadowOffset, float64(y1)+shadowOffset,
+		radius,
+		premultiply(28, pebbleInkR, pebbleInkG, pebbleInkB),
+	)
+
+	// 2) Paper fill.
+	fillRoundedRect(pixels,
+		float64(x0), float64(y0), float64(x1), float64(y1), radius,
+		premultiply(255, pebblePaperR, pebblePaperG, pebblePaperB),
+	)
+
+	// 3) Tinted hairline border.
+	strokeRoundedRect(pixels,
+		float64(x0), float64(y0), float64(x1), float64(y1), radius, 1.0,
+		premultiply(178, r, g, b),
+	)
+
+	// 4) "Open full" button — paper pill with hairline tinted border.
+	//    Only drawn when the bubble is expanded (which it always is when
+	//    drawSubPebbleBubble is called, but keep explicit for clarity).
+	bxR0 := x1 - subPebbleButtonInsetR - subPebbleButtonW
+	byR0 := y1 - subPebbleButtonInsetB - subPebbleButtonH
+	bxR1 := bxR0 + subPebbleButtonW
+	byR1 := byR0 + subPebbleButtonH
+	const btnRadius = 4.0
+	// Soft fill — very light tint of the agent color so the button reads
+	// as part of the bubble but obviously interactive.
+	fillRoundedRect(pixels,
+		float64(bxR0), float64(byR0), float64(bxR1), float64(byR1), btnRadius,
+		premultiply(28, r, g, b),
+	)
+	strokeRoundedRect(pixels,
+		float64(bxR0), float64(byR0), float64(bxR1), float64(byR1), btnRadius, 1.0,
+		premultiply(178, r, g, b),
+	)
+	_ = entry
+}
+
+// drawSubPebbleBubbleText writes the agent name (eyebrow), task line, and
+// result/elapsed footer into the bubble area via GDI DrawText. Called after
+// drawSubPebbleBubble so the glyphs sit on the opaque paper fill.
+//
+// Layout (relative to the bubble rect):
+//   y = top + 14    : eyebrow line — "AGENT NAME · 12s" in mono caps, tinted
+//   y = top + 36    : task body — 2-line clamp, Inter Tight ink
+//   y = top + 78    : result line — 2-line clamp, smaller, muted ink (only when present)
+func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *subPebbleEntry) {
+	bx0, by0, bx1, by1 := subPebbleBubbleRect()
+	_ = by1
+
+	agent, _ := entry.label.Load().(string)
+	if agent == "" {
+		agent = "agent"
+	}
+	task, _ := entry.task.Load().(string)
+	result, _ := entry.result.Load().(string)
+	elapsed := int(entry.elapsedS.Load())
+	color, _ := entry.color.Load().(SubPebbleColor)
+	tr, tg, tb := subPebbleRGB(color)
+
+	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
+
+	nullTerm := int32(-1)
+	// Eyebrow — mono uppercase, tinted to the sub-pebble's color.
+	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
+	eyebrowHeight := int32(-10)
+	weightMedium := int32(fwMedium)
+	eyebrowFont, _, _ := procCreateFontW.Call(
+		uintptr(eyebrowHeight),
+		0, 0, 0,
+		uintptr(weightMedium),
+		0, 0, 0,
+		uintptr(ansiCharset),
+		0, 0,
+		uintptr(antialiasedQuality),
+		0,
+		uintptr(unsafe.Pointer(eyebrowFace)),
+	)
+	defer procDeleteObjectGdi.Call(eyebrowFont)
+
+	// Body font (Inter Tight w/ fallback).
+	bodyFont := makeBodyFont()
+	defer procDeleteObjectGdi.Call(bodyFont)
+
+	// Footer font (smaller body, muted color).
+	footerHeight := int32(-10)
+	weightNormal := int32(fwNormal)
+	footerFont, _, _ := procCreateFontW.Call(
+		uintptr(footerHeight),
+		0, 0, 0,
+		uintptr(weightNormal),
+		0, 0, 0,
+		uintptr(ansiCharset),
+		0, 0,
+		uintptr(antialiasedQuality),
+		0,
+		uintptr(unsafe.Pointer(eyebrowFace)), // mono for elapsed/result so digits align
+	)
+	defer procDeleteObjectGdi.Call(footerFont)
+
+	// ── Eyebrow ──────────────────────────────────────────────
+	procSelectObject.Call(memDC, eyebrowFont)
+	procSetTextColor.Call(memDC, uintptr(colorRef(tr, tg, tb)))
+	eyebrowText := fmt.Sprintf("%s · %s", agent, formatSubPebbleElapsed(elapsed))
+	eyebrowStr, _ := syscall.UTF16PtrFromString(eyebrowText)
+	eyebrowRect := pblRect{
+		Left:   int32(bx0 + subPebbleBubbleInnerPad),
+		Top:    int32(by0 + 10),
+		Right:  int32(bx1 - subPebbleBubbleInnerPad),
+		Bottom: int32(by0 + 26),
+	}
+	procDrawTextW.Call(memDC,
+		uintptr(unsafe.Pointer(eyebrowStr)),
+		uintptr(nullTerm),
+		uintptr(unsafe.Pointer(&eyebrowRect)),
+		uintptr(uint32(dtLeft|dtSingleLine|dtEndEllipsis)),
+	)
+
+	// ── Task body ────────────────────────────────────────────
+	if task != "" {
+		procSelectObject.Call(memDC, bodyFont)
+		procSetTextColor.Call(memDC, uintptr(colorRef(pebbleInkR, pebbleInkG, pebbleInkB)))
+		taskStr, _ := syscall.UTF16PtrFromString(task)
+		taskRect := pblRect{
+			Left:   int32(bx0 + subPebbleBubbleInnerPad),
+			Top:    int32(by0 + 30),
+			Right:  int32(bx1 - subPebbleBubbleInnerPad),
+			Bottom: int32(by0 + 72),
+		}
+		procDrawTextW.Call(memDC,
+			uintptr(unsafe.Pointer(taskStr)),
+			uintptr(nullTerm),
+			uintptr(unsafe.Pointer(&taskRect)),
+			uintptr(uint32(dtLeft|dtWordBreak|dtEndEllipsis)),
+		)
+	}
+
+	// ── Result preview (only when present) ───────────────────
+	// Bottom of result text leaves room for the "open full" button row.
+	if result != "" {
+		procSelectObject.Call(memDC, footerFont)
+		procSetTextColor.Call(memDC, uintptr(colorRef(pebbleInk3R, pebbleInk3G, pebbleInk3B)))
+		resultStr, _ := syscall.UTF16PtrFromString(result)
+		resultBottom := by1 - subPebbleButtonInsetB - subPebbleButtonH - 8
+		resultRect := pblRect{
+			Left:   int32(bx0 + subPebbleBubbleInnerPad),
+			Top:    int32(by0 + 76),
+			Right:  int32(bx1 - subPebbleBubbleInnerPad),
+			Bottom: int32(resultBottom),
+		}
+		procDrawTextW.Call(memDC,
+			uintptr(unsafe.Pointer(resultStr)),
+			uintptr(nullTerm),
+			uintptr(unsafe.Pointer(&resultRect)),
+			uintptr(uint32(dtLeft|dtWordBreak|dtEndEllipsis)),
+		)
+	}
+
+	// ── "Open full ↗" button label ───────────────────────────
+	{
+		procSelectObject.Call(memDC, footerFont)
+		tr, tg, tb := subPebbleRGB(color)
+		procSetTextColor.Call(memDC, uintptr(colorRef(tr, tg, tb)))
+		btnText, _ := syscall.UTF16PtrFromString("open full ↗")
+		bxR0 := bx1 - subPebbleButtonInsetR - subPebbleButtonW
+		byR0 := by1 - subPebbleButtonInsetB - subPebbleButtonH
+		btnRect := pblRect{
+			Left:   int32(bxR0),
+			Top:    int32(byR0),
+			Right:  int32(bxR0 + subPebbleButtonW),
+			Bottom: int32(byR0 + subPebbleButtonH),
+		}
+		const dtCenter = 0x00000001
+		const dtVCenter = 0x00000004
+		procDrawTextW.Call(memDC,
+			uintptr(unsafe.Pointer(btnText)),
+			uintptr(nullTerm),
+			uintptr(unsafe.Pointer(&btnRect)),
+			uintptr(uint32(dtCenter|dtVCenter|dtSingleLine)),
+		)
+	}
+}
+
+func formatSubPebbleElapsed(s int) string {
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	return fmt.Sprintf("%dm%02ds", s/60, s%60)
+}
+
+// repairSubPebbleBubbleAlpha clamps glyph alpha to 255 across the bubble's
+// interior so DrawText's broken alpha doesn't leave see-through letters.
+// Same trick as repairBubbleTextAlpha for the main pebble. Insets a couple
+// of pixels past the bubble's corner radius so we don't clobber the
+// rounded-corner transparent pixels.
+func repairSubPebbleBubbleAlpha(pixels []uint32) {
+	x0, y0, x1, y1 := subPebbleBubbleRect()
+	const cornerInset = 10
+	for y := y0 + cornerInset; y < y1-cornerInset; y++ {
+		if y < 0 || y >= pebbleWindowH {
+			continue
+		}
+		for x := x0 + cornerInset; x < x1-cornerInset; x++ {
+			if x < 0 || x >= pebbleWindowW {
+				continue
+			}
+			p := pixels[y*pebbleWindowW+x]
+			if (p>>24)&0xFF == 0xFF {
+				continue
+			}
+			// Glyph pixel — preserve RGB, force alpha = 255.
+			pixels[y*pebbleWindowW+x] = 0xFF000000 | (p & 0x00FFFFFF)
+		}
+	}
+}

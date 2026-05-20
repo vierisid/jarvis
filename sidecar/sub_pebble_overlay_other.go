@@ -21,7 +21,15 @@ func (s *subPebbleServiceStub) SetState(_ string, _ PebbleState) error {
 	return nil
 }
 
+func (s *subPebbleServiceStub) SetColor(_ string, _ SubPebbleColor) error {
+	return nil
+}
+
 func (s *subPebbleServiceStub) SetLabel(_ string, _ string) error {
+	return nil
+}
+
+func (s *subPebbleServiceStub) SetExpanded(_ string, _ bool, _, _, _ string, _ int) error {
 	return nil
 }
 
@@ -32,3 +40,7 @@ func (s *subPebbleServiceStub) Close(_ string) error {
 func (s *subPebbleServiceStub) CloseAll() error {
 	return nil
 }
+
+func (s *subPebbleServiceStub) OnClick(_ func(string)) {}
+
+func (s *subPebbleServiceStub) OnOpenFull(_ func(string)) {}
