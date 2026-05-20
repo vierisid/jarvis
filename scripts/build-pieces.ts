@@ -4,13 +4,16 @@
  * activepieces engine subprocess can load them via dev-pieces mode.
  *
  * Usage:
- *   bun run scripts/build-pieces.ts
+ *   bun run scripts/build-pieces.ts          # build only stale pieces
+ *   bun run scripts/build-pieces.ts --force  # rebuild every piece
  */
 
 import { buildAllJarvisPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
 
+const force = process.argv.includes("--force");
+
 const start = Date.now();
-const results = await buildAllJarvisPieces();
+const results = await buildAllJarvisPieces({ force });
 const elapsed = Date.now() - start;
 
 if (results.length === 0) {
@@ -18,8 +21,14 @@ if (results.length === 0) {
   process.exit(0);
 }
 
+let builtCount = 0;
+let cachedCount = 0;
 for (const r of results) {
-  console.log(`  built ${r.packageName}@${r.pieceVersion}`);
+  const tag = r.cached ? "cached" : "built";
+  console.log(`  ${tag} ${r.packageName}@${r.pieceVersion}`);
   console.log(`    bundle: ${r.bundlePath}`);
+  if (r.cached) cachedCount++; else builtCount++;
 }
-console.log(`\nBuilt ${results.length} piece(s) in ${elapsed} ms.`);
+console.log(
+  `\n${builtCount} rebuilt, ${cachedCount} cached (total ${results.length} piece(s)) in ${elapsed} ms.`,
+);

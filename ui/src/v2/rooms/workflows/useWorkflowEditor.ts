@@ -190,6 +190,61 @@ export function useWorkflowEditor(flowId: string | null) {
   // morph round-trip doesn't lose work.
   const triggerSettingsStashRef = useRef<FlowStepNode["settings"] | null>(null);
 
+  /**
+   * Bounded undo stack. Snapshots `{trigger, orphans, positions}` before
+   * each destructive op (delete, disconnect, drop-into-orphan, piece
+   * replace). Cleared on reload + save -- undo is a within-session aid,
+   * not durable history.
+   *
+   * Stack-based rather than single-slot so successive deletes still let
+   * the user back out one at a time. Capped at 20 entries so a long
+   * editing session doesn't grow memory unboundedly with full subtree
+   * clones.
+   */
+  interface UndoSnapshot {
+    label: string;
+    trigger: FlowStepNode | null;
+    orphans: OrphanStep[];
+    positions: Record<string, NodePosition>;
+  }
+  const UNDO_CAP = 20;
+  const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
+
+  // Snapshot helper. Captures the live state by deep-cloning the tree +
+  // orphan subtrees; positions are a flat object so a shallow copy is
+  // enough. Call BEFORE applying a destructive mutation.
+  const snapshotForUndo = useCallback(
+    (label: string): void => {
+      setUndoStack((prev) => {
+        const next: UndoSnapshot = {
+          label,
+          trigger: draftTrigger ? cloneTrigger(draftTrigger) : null,
+          orphans: draftOrphans.map((o) => ({ ...o, node: cloneTrigger(o.node) })),
+          positions: { ...stepPositions },
+        };
+        const stack = [...prev, next];
+        return stack.length > UNDO_CAP ? stack.slice(-UNDO_CAP) : stack;
+      });
+    },
+    [draftTrigger, draftOrphans, stepPositions],
+  );
+
+  /** Pop the most recent snapshot and restore the editor to it. */
+  const undo = useCallback((): boolean => {
+    let restored = false;
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1]!;
+      setDraftTrigger(last.trigger);
+      setDraftOrphans(last.orphans);
+      setStepPositions(last.positions);
+      setDirty(true);
+      restored = true;
+      return prev.slice(0, -1);
+    });
+    return restored;
+  }, []);
+
   /** Load (or reload) the catalog + version. */
   const reload = useCallback(async (): Promise<void> => {
     if (!flowId) return;
@@ -231,6 +286,10 @@ export function useWorkflowEditor(flowId: string | null) {
       );
       setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
+      // Reload replaces the entire edit buffer with server state; any
+      // in-flight undo history would be against a tree that no longer
+      // exists. Drop it.
+      setUndoStack([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -490,12 +549,13 @@ export function useWorkflowEditor(flowId: string | null) {
    * deleted step was a sub-chain head.
    */
   const deleteStep = useCallback((stepName: string): void => {
+    snapshotForUndo(`delete ${stepName}`);
     setDraftTrigger((prev) => (prev ? removeStep(prev, stepName) : prev));
     // Also drop any matching orphan -- step names are unique across the tree
     // + orphans, so the same name shouldn't appear in both, but defensive.
     setDraftOrphans((prev) => prev.filter((o) => !containsName(o.node, stepName)));
     setDirty(true);
-  }, []);
+  }, [snapshotForUndo]);
 
   /**
    * Wire `sourceName`'s `sourceHandle` to an orphan HEAD `targetName`,
@@ -576,6 +636,12 @@ export function useWorkflowEditor(flowId: string | null) {
       const handle = parseSourceHandle(sourceHandleId);
       if (!handle) return false;
 
+      // Snapshot before either path mutates. We do it unconditionally
+      // (even if the disconnect ultimately fails on a bad handle) only
+      // when we've passed the parseSourceHandle gate, so a noop call
+      // with a malformed handle id doesn't pollute the undo stack.
+      snapshotForUndo(`disconnect ${sourceName}`);
+
       // Tree path: source is reachable from the trigger.
       if (draftTrigger && findStep(draftTrigger, sourceName)) {
         let detached: FlowStepNode | null = null;
@@ -611,7 +677,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setDirty(true);
       return true;
     },
-    [draftTrigger, draftOrphans],
+    [draftTrigger, draftOrphans, snapshotForUndo],
   );
 
   /** Update an orphan's stored canvas position. Called on drag-stop so the
@@ -824,6 +890,11 @@ export function useWorkflowEditor(flowId: string | null) {
 
   const setStepPiece = useCallback(
     (stepName: string, pieceName: string, actionName: string): void => {
+      // Replacing a step's piece overwrites inputs with the new sub-action's
+      // defaults. Snapshot so the user can back out if they picked the
+      // wrong piece (especially common when clicking an empty piece slot
+      // and choosing from the library picker by mistake).
+      snapshotForUndo(`replace ${stepName} with ${pieceName}.${actionName}`);
       mutateAnyStep(stepName, (target) => {
         const isTrigger = target.type === "PIECE_TRIGGER" || target.type === "EMPTY";
         // Look up the chosen sub-action's schema to seed defaults.
@@ -843,7 +914,7 @@ export function useWorkflowEditor(flowId: string | null) {
         target.settings = settings;
       });
     },
-    [catalog, mutateAnyStep],
+    [catalog, mutateAnyStep, snapshotForUndo],
   );
 
   /**
@@ -1050,6 +1121,12 @@ export function useWorkflowEditor(flowId: string | null) {
       // Orphans persist across save -- they're part of the user's editing
       // state and the server now stores them too.
       setDirty(false);
+      // The undo stack is a within-session aid; once the user commits a
+      // save the prior states no longer round-trip cleanly with the
+      // server (versionId may roll, sample data may have diverged).
+      // Drop the stack so undo can't accidentally restore a state the
+      // user already deliberately overwrote.
+      setUndoStack([]);
       return { ok: true, message: "Saved" };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
@@ -1065,6 +1142,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftOrphans([]);
       setStepPositions({});
       setDirty(false);
+      setUndoStack([]);
     }
   }, [version]);
 
@@ -1228,6 +1306,12 @@ export function useWorkflowEditor(flowId: string | null) {
     reset,
     setStepSampleData,
     testStepFromHere,
+    /** Restore the editor to the state immediately before the last destructive op (delete / disconnect / piece replace). Returns true if anything was restored. */
+    undo,
+    /** True when the undo stack has at least one snapshot. Use to gate the undo button / shortcut. */
+    canUndo: undoStack.length > 0,
+    /** Top-of-stack label for tooltip / aria-label purposes. */
+    undoLabel: undoStack.length > 0 ? undoStack[undoStack.length - 1]!.label : null,
   };
 }
 

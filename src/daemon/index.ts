@@ -639,13 +639,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       logWithTimestamp(
         `Workflow engine bootstrap: ${engineBoot.catalog.list().length} piece(s) catalog'd, ${engineBoot.failures.length} failure(s) in ${Date.now() - bootstrapStart}ms`,
       );
+      // Surface the artifact identity so users who forgot to rebuild
+      // after editing a piece or the framework see a stale hash at a
+      // glance. Fix is documented in the build:workflows script.
+      logWithTimestamp(
+        `Workflow engine artifacts: bundle=${engineBoot.bundleHash} catalog-cache-key=${engineBoot.catalogCacheKey.slice(0, 16)} (rebuild: bun run build:workflows)`,
+      );
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       console.error(
         [
           `[Daemon] Workflow engine failed to start (${Date.now() - bootstrapStart}ms): ${err.message}`,
           `         Common causes:`,
-          `           - Engine bundle build failed: rerun \`bun install\` then \`bun run scripts/build-engine.ts\``,
+          `           - Engine bundle / pieces stale or build failed: rerun \`bun install\` then \`bun run build:workflows\``,
           `           - Vendored Activepieces tree out of sync: rerun \`bun run scripts/sync-activepieces.ts\``,
           `           - Disk full or ~/.jarvis/cache unwriteable`,
           `         Workflow features (/api/workflows/*, manage_workflow tool, cron + on_event triggers) are disabled.`,

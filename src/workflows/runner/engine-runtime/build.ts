@@ -31,6 +31,7 @@ import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,7 +39,6 @@ const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "../../../..");
 const VENDOR_PACKAGES = resolve(REPO_ROOT, "src/workflows/activepieces/packages");
 const ENGINE_DIR = resolve(VENDOR_PACKAGES, "server/engine");
-const UPSTREAM_DOC = resolve(REPO_ROOT, "src/workflows/activepieces/UPSTREAM.md");
 
 const CACHE_ROOT = resolve(homedir(), ".jarvis/cache");
 const STAGING_DIR = resolve(CACHE_ROOT, "engine-build");
@@ -108,18 +108,32 @@ function buildStagingPackageJson(): string {
  */
 const PATCHED_VENDOR_SOURCES = [
   "server/engine/src/lib/helper/piece-loader.ts",
+  // Jarvis-only `outputSample` extension on actions + the matching
+  // ActionBase change. Hand-edits to these files (or a sync that
+  // re-applies the patch in a different shape) must invalidate the
+  // engine bundle and, transitively, every piece's compiled output --
+  // otherwise the cached bundle keeps shipping the OLD framework even
+  // though the source on disk has changed.
+  "pieces/framework/src/lib/action/action.ts",
+  "pieces/framework/src/lib/piece-metadata.ts",
 ] as const;
 
 /**
  * Cache key combines the synthesized package.json (which captures dep versions),
- * the UPSTREAM.md pin (which captures the source SHA), and the content of any
- * vendored source files we've patched (so a patch invalidates the cache even
- * when deps + UPSTREAM.md are unchanged).
+ * the vendored upstream pin (tag + SHA shipped as a generated TS constant
+ * by `sync-activepieces.ts`), and the content of any vendored source files
+ * we've patched. The pin replaces a runtime `readFileSync(UPSTREAM.md)`
+ * that crashed on npm-installed daemons -- markdown files get filtered
+ * out by `.npmignore`, but a TS constant ships as code.
  */
-function bundleHash(): string {
+export function bundleHash(): string {
   const pkg = buildStagingPackageJson();
-  const upstream = readFileSync(UPSTREAM_DOC, "utf8");
-  const hasher = createHash("sha256").update(pkg).update("\0").update(upstream);
+  const hasher = createHash("sha256")
+    .update(pkg)
+    .update("\0")
+    .update(UPSTREAM_PIN_TAG)
+    .update("\0")
+    .update(UPSTREAM_PIN_SHA);
   for (const rel of PATCHED_VENDOR_SOURCES) {
     const content = readFileSync(resolve(VENDOR_PACKAGES, rel), "utf8");
     hasher.update("\0").update(rel).update("\0").update(content);
@@ -127,27 +141,40 @@ function bundleHash(): string {
   return hasher.digest("hex").slice(0, 16);
 }
 
-async function ensureStagingInstalled(): Promise<void> {
-  mkdirSync(STAGING_DIR, { recursive: true });
-  const pkgPath = resolve(STAGING_DIR, "package.json");
-  const desired = buildStagingPackageJson();
-  const existing = existsSync(pkgPath) ? readFileSync(pkgPath, "utf8") : null;
-  const haveNodeModules = existsSync(resolve(STAGING_DIR, "node_modules"));
-  if (existing === desired && haveNodeModules) return;
+// Memoized install promise: every caller awaits the SAME pending
+// `bun install` and we never spawn two concurrent installs against the
+// same staging dir. Cleared on rejection so a transient failure can be
+// retried by the next caller.
+let stagingInstallInFlight: Promise<void> | null = null;
 
-  writeFileSync(pkgPath, desired);
+export function ensureStagingInstalled(): Promise<void> {
+  if (stagingInstallInFlight) return stagingInstallInFlight;
+  stagingInstallInFlight = (async (): Promise<void> => {
+    mkdirSync(STAGING_DIR, { recursive: true });
+    const pkgPath = resolve(STAGING_DIR, "package.json");
+    const desired = buildStagingPackageJson();
+    const existing = existsSync(pkgPath) ? readFileSync(pkgPath, "utf8") : null;
+    const haveNodeModules = existsSync(resolve(STAGING_DIR, "node_modules"));
+    if (existing === desired && haveNodeModules) return;
 
-  await new Promise<void>((res, rej) => {
-    const child = spawn("bun", ["install", "--silent"], {
-      cwd: STAGING_DIR,
-      stdio: "inherit",
+    writeFileSync(pkgPath, desired);
+
+    await new Promise<void>((res, rej) => {
+      const child = spawn("bun", ["install", "--silent"], {
+        cwd: STAGING_DIR,
+        stdio: "inherit",
+      });
+      child.on("close", (code) => {
+        if (code === 0) res();
+        else rej(new Error(`bun install (engine staging) exited with code ${code}`));
+      });
+      child.on("error", rej);
     });
-    child.on("close", (code) => {
-      if (code === 0) res();
-      else rej(new Error(`bun install (engine staging) exited with code ${code}`));
-    });
-    child.on("error", rej);
+  })().catch((e) => {
+    stagingInstallInFlight = null;
+    throw e;
   });
+  return stagingInstallInFlight;
 }
 
 export async function buildEngineBundle(opts?: { force?: boolean }): Promise<EngineBundle> {

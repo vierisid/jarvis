@@ -35,6 +35,8 @@
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
     "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
     "check:pieces": "bun run scripts/sync-pieces-catalog.ts --check",
+    "build:workflows": "bun run scripts/build-workflows.ts",
+    "audit:piece-outputs": "bun run scripts/audit-piece-outputs.ts",
     "db:init": "bun run src/vault/schema.ts",
     "setup": "bun run scripts/setup-config.ts",
     "test:llm": "bun run src/llm/test.ts",
@@ -42,7 +44,7 @@
     "setup:google": "bun run src/scripts/google-setup.ts",
     "postinstall": "node scripts/ensure-bun.cjs && (bun run copy:models 2>/dev/null || true)",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
-    "prepublishOnly": "bun run copy:models && bun run build:ui"
+    "prepublishOnly": "bun run copy:models && bun run build:ui && bun run build:workflows"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

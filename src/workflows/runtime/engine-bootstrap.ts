@@ -72,6 +72,21 @@ export interface BootstrapWorkflowEngineResult {
   runtime: EngineRuntime;
   catalog: PieceCatalog;
   failures: PieceExtractionFailure[];
+  /**
+   * Content hash of the engine bundle currently in use. Exposed so the
+   * daemon can log it at startup -- a user who forgot to rebuild after
+   * editing the framework sees a stale hash and knows to rerun
+   * `bun run build:workflows`.
+   */
+  bundleHash: string;
+  /**
+   * Content-hash key used to invalidate the on-disk piece-catalog
+   * cache. Combines the bundle hash with every piece's compiled
+   * output, so any source-level edit forces a fresh extraction. Logged
+   * alongside `bundleHash` so users can confirm cache freshness from
+   * the daemon log alone.
+   */
+  catalogCacheKey: string;
   /** Tear down the SandboxApi server. Call after the worker has stopped. */
   shutdown: () => Promise<void>;
 }
@@ -202,6 +217,8 @@ export async function bootstrapWorkflowEngine(
     runtime,
     catalog,
     failures,
+    bundleHash: cached.hash,
+    catalogCacheKey: cacheKey,
     shutdown: async () => {
       // Kill any pooled idle engine before stopping the SandboxApi -- the
       // engine's HTTP/WS callbacks would otherwise spin against a dead server.

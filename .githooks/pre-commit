@@ -4,8 +4,29 @@ set -e
 echo "[pre-commit] Checking for Activepieces EE-licensed code..."
 bun run scripts/check-no-ee-imports.ts
 
-echo "[pre-commit] Running tests..."
-bun test --bail
+# Bound the test step with a wall-clock timeout. A test that spawns the
+# engine subprocess and forgets to reap it can hang `bun test --bail`
+# indefinitely (observed once in late-May 2026, never reproduced). 240s
+# is roughly 4x the steady-state runtime, leaving headroom for a slow
+# disk / cold cache but cutting off the indefinite case so the commit
+# fails loudly instead of blocking the terminal.
+echo "[pre-commit] Running tests (240s timeout)..."
+set +e
+timeout --kill-after=15s 240s bun test --bail
+rc=$?
+set -e
+if [ "$rc" != "0" ]; then
+  if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+    echo "[pre-commit] FAILED: tests exceeded the 240s timeout."
+    echo "  A test process likely leaked a child (engine bundle?) and stalled."
+    echo "  Suggestion: run \`bun test --bail\` interactively and watch which file hangs;"
+    echo "  if it's an engine test, check its afterAll for missing release()/shutdown()."
+  fi
+  # Sweep stragglers: any orphaned engine subprocess from a hung test
+  # would otherwise survive the hook and confuse the next attempt.
+  pkill -f "engine-bundle" 2>/dev/null || true
+  exit "$rc"
+fi
 
 echo "[pre-commit] Type checking..."
 bunx tsc --noEmit

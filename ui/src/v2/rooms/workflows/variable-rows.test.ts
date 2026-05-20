@@ -222,13 +222,49 @@ describe("buildVariableRows", () => {
       triggers: [],
     };
 
-    test("declared array yields a single iterate row with item count", () => {
+    test("declared array yields iterate row + drill rows for the first element", () => {
       const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
       const rows = buildVariableRows([step], {}, [listy]);
-      expect(rows).toHaveLength(1);
+      // Iterate row first, then one row per first-element key.
       expect(rows[0]!.label).toBe("(3 items)");
       expect(rows[0]!.template).toBe("{{step_1}}");
       expect(rows[0]!.field).toBe("");
+      const drillLabels = rows.slice(1).map((r) => r.label).sort();
+      expect(drillLabels).toEqual(["[0].id", "[0].title"]);
+      const drillTemplates = rows.slice(1).map((r) => r.template).sort();
+      expect(drillTemplates).toEqual(["{{step_1[0].id}}", "{{step_1[0].title}}"]);
+    });
+
+    test("drill rows omitted when first element is a primitive", () => {
+      const primPiece: PieceCatalogEntry = {
+        ...listy,
+        actions: [
+          {
+            ...listy.actions[0]!,
+            outputSample: ["a", "b", "c"],
+          },
+        ],
+      };
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], {}, [primPiece]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(3 items)");
+    });
+
+    test("drill rows omitted when first element is an array (nested)", () => {
+      const nestedPiece: PieceCatalogEntry = {
+        ...listy,
+        actions: [
+          {
+            ...listy.actions[0]!,
+            outputSample: [[1, 2], [3, 4]],
+          },
+        ],
+      };
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], {}, [nestedPiece]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(2 items)");
     });
 
     test("singular label when sample has one element", () => {
@@ -260,9 +296,12 @@ describe("buildVariableRows", () => {
       // output is the source of truth -- and here it's an array.
       const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
       const rows = buildVariableRows([step], { step_1: [{ x: 1 }, { x: 2 }] }, [objLike]);
-      expect(rows).toHaveLength(1);
+      // 1 iterate row + 1 drill row for {x}.
+      expect(rows).toHaveLength(2);
       expect(rows[0]!.label).toBe("(2 items)");
       expect(rows[0]!.template).toBe("{{step_1}}");
+      expect(rows[1]!.label).toBe("[0].x");
+      expect(rows[1]!.template).toBe("{{step_1[0].x}}");
     });
 
     test("empty array falls through to (output)", () => {
@@ -281,7 +320,7 @@ describe("buildVariableRows", () => {
       expect(rows[0]!.label).toBe("(output)");
     });
 
-    test("sibling step's captured array is inherited", () => {
+    test("sibling step's captured array is inherited (with drill rows)", () => {
       const a1 = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
       const a2 = piece({ name: "step_2", pieceName: "listy", actionName: "fetch_all" });
       const noDeclared: PieceCatalogEntry = {
@@ -294,10 +333,14 @@ describe("buildVariableRows", () => {
         [noDeclared],
         [a1, a2],
       );
-      // Sibling captured a 2-element array; a2 inherits the array shape.
-      expect(rows).toHaveLength(1);
+      // Sibling captured a 2-element array; a2 inherits the array shape
+      // AND the drill on the first element's `id` key. Templates point
+      // at a2 (the step being rendered), not a1 (the sibling source).
+      expect(rows).toHaveLength(2);
       expect(rows[0]!.label).toBe("(2 items)");
       expect(rows[0]!.template).toBe("{{step_2}}");
+      expect(rows[1]!.label).toBe("[0].id");
+      expect(rows[1]!.template).toBe("{{step_2[0].id}}");
     });
   });
 });

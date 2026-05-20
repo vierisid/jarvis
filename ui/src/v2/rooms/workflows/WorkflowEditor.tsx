@@ -30,7 +30,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause } from "lucide-react";
+import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -226,6 +226,28 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editorDirty, onClose]);
+
+  // Ctrl/Cmd+Z undoes the most recent destructive op (delete, disconnect,
+  // piece replace). Scoped tight: ignore when the user is typing in a
+  // form field, ignore the redo combo (Shift+Z) because we don't ship
+  // redo, ignore when no snapshot is available.
+  const editorUndo = editor.undo;
+  const editorCanUndo = editor.canUndo;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== "z") return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.shiftKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (!editorCanUndo) return;
+      e.preventDefault();
+      editorUndo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editorUndo, editorCanUndo]);
 
   const onSave = async (): Promise<void> => {
     if (editor.validationGaps.length > 0) {
@@ -640,6 +662,19 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             disabled={Object.keys(editor.stepPositions).length === 0}
           >
             <Icon icon={LayoutGrid} size={14} /> Auto-arrange
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => editor.undo()}
+            disabled={!editor.canUndo}
+            title={
+              editor.canUndo
+                ? `Undo: ${editor.undoLabel ?? "last destructive change"} (Ctrl+Z)`
+                : "Nothing to undo"
+            }
+          >
+            <Icon icon={Undo2} size={14} /> Undo
           </Button>
           <Button variant="ghost" size="sm" onClick={onDiscard} disabled={!editor.dirty}>
             <Icon icon={RotateCcw} size={14} /> Discard
@@ -3286,6 +3321,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         key={step.name}
         stepName={step.name}
         sampleData={props.sampleData}
+        // Declared output from the piece catalog -- exposed so the
+        // section can offer a "Reset to declared" button that clears
+        // the persisted cell (the picker then falls back to the
+        // declared sample). Triggers carry `sampleData`; actions carry
+        // `outputSample` (Jarvis extension). Picker reads either.
+        declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample}
         isLocked={props.isLocked}
         isTriggerStep={isTriggerStep}
         onSetSampleData={props.onSetSampleData}
@@ -3361,6 +3402,7 @@ function ErrorHandlingSection({
  */
 function SampleDataSection({
   sampleData,
+  declaredSample,
   isLocked,
   isTriggerStep,
   onSetSampleData,
@@ -3368,6 +3410,14 @@ function SampleDataSection({
 }: {
   stepName: string;
   sampleData: unknown | undefined;
+  /**
+   * Declared output from the piece catalog (action.outputSample or
+   * trigger.sampleData). When set + the persisted cell is non-empty, a
+   * "Reset to declared" button appears that clears the cell so the
+   * picker falls back to this declared shape. Undefined when the
+   * piece author hasn't declared anything.
+   */
+  declaredSample: unknown | undefined;
   isLocked: boolean;
   isTriggerStep: boolean;
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
@@ -3386,7 +3436,7 @@ function SampleDataSection({
   const [savedText, setSavedText] = useState<string>(incomingText);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [busy, setBusy] = useState<"save" | "test" | "clear" | null>(null);
+  const [busy, setBusy] = useState<"save" | "test" | "clear" | "reset" | null>(null);
 
   // Unsaved-edit indicator: local text diverged from the value we last
   // pushed to the server. Used to nudge the user to save before testing.
@@ -3456,6 +3506,37 @@ function SampleDataSection({
     }
   };
 
+  // "Reset to declared" clears the persisted cell -- same wire op as
+  // `Clear` -- but with copy that explains the fallback. We show this
+  // ONLY when the piece author actually declared something and the
+  // user has pinned a value (an empty cell already uses the declared
+  // sample, so no reset is needed).
+  const handleResetToDeclared = async (): Promise<void> => {
+    setBusy("reset");
+    try {
+      const r = await onSetSampleData(null);
+      if (r.ok) {
+        setText("");
+        setSavedText("");
+        setParseError(null);
+        flash(
+          "ok",
+          "Reset. The variable picker now uses the piece's declared sample.",
+        );
+      } else {
+        flash("warn", r.message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const hasDeclaredSample = declaredSample !== undefined;
+  // "Pinned" means the user actively set a sampleData value that
+  // differs from undefined / empty. A blank cell already falls back to
+  // declared, so the reset button is a no-op there.
+  const hasPinnedCell = sampleData !== undefined;
+
   return (
     <section className="wf-props__sample-data" aria-label="Sample data + test from here">
       <header className="wf-props__sample-header">
@@ -3508,6 +3589,17 @@ function SampleDataSection({
         >
           {busy === "clear" ? "Clearing..." : "Clear"}
         </Button>
+        {hasDeclaredSample && hasPinnedCell ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleResetToDeclared()}
+            disabled={isLocked || busy !== null}
+            title="Drop the pinned sample so the variable picker uses the piece's declared output instead."
+          >
+            {busy === "reset" ? "Resetting..." : "Reset to declared"}
+          </Button>
+        ) : null}
         <Button
           variant="primary"
           size="sm"

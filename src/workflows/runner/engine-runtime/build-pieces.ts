@@ -4,6 +4,7 @@
  *
  *   .../piece-dir/dist/package.json     (with the canonical `name` + `version`)
  *   .../piece-dir/dist/src/index.js     (single CJS bundle)
+ *   .../piece-dir/dist/.source-hash     (content marker for cache skip)
  *
  * The engine's `findInDistFolder` (helper/piece-loader.ts) walks
  * `packages/pieces/**` from its CWD looking for `dist/package.json` whose
@@ -17,12 +18,21 @@
  *   - External: nothing additional. Built-in node modules are external by
  *     default for node target.
  *
- * The build is content-addressed by the synthesized `package.json` plus the
- * piece source mtime, but since piece source changes infrequently we just
- * rebuild on every call. Tests can pass `force: false` to skip if dist exists.
+ * Cache:
+ *   - `pieceHash(pieceDir)` mixes every src/**\/*.ts file's content with the
+ *     piece's package.json AND the engine bundle hash. The engine bundle
+ *     hash carries the framework / shared / common identity, so a sync of
+ *     the vendored tree (which bumps the upstream SHA) invalidates every
+ *     piece cache automatically. A piece-only edit also invalidates only
+ *     that piece's cache.
+ *   - The hash is written to `dist/.source-hash`. On rebuild request, if
+ *     the marker matches AND the compiled bundle still exists, we return
+ *     the cached result without invoking esbuild.
+ *   - Pass `force: true` to bypass the cache (typically from a CLI flag).
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -32,7 +42,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve, basename } from "node:path";
-import { ENGINE_BUILD_PATHS } from "./build";
+import {
+  ENGINE_BUILD_PATHS,
+  bundleHash,
+  ensureStagingInstalled as ensureEngineStagingInstalled,
+} from "./build";
 
 const STAGING_NODE_MODULES = resolve(
   ENGINE_BUILD_PATHS.STAGING_DIR,
@@ -45,6 +59,60 @@ export interface BuildPieceResult {
   packageJsonPath: string;
   packageName: string;
   pieceVersion: string;
+  /** True when the build was skipped because the cache was fresh. */
+  cached: boolean;
+}
+
+export interface BuildPieceOptions {
+  /**
+   * Bypass the per-piece content-hash cache and rebuild unconditionally.
+   * Useful when an upstream change (e.g. a CSS-level edit to the
+   * framework that isn't in PATCHED_VENDOR_SOURCES) needs to flow
+   * through to piece bundles. Default false.
+   */
+  force?: boolean;
+}
+
+/**
+ * Content-hash a piece's source tree + its package.json + the current
+ * engine bundle hash. Any of the three changing invalidates the cache:
+ *   - piece source: the most common case (author edits an action)
+ *   - piece package.json: dep bump or version pin
+ *   - engine bundle hash: the framework / vendored tree changed (the
+ *     bundle inlines pieces-framework + shared via aliasing, so a
+ *     framework edit must invalidate every piece too)
+ */
+function pieceHash(pieceDir: string): string {
+  const hasher = createHash("sha256");
+  hasher.update(bundleHash()).update("\0");
+  const pkgPath = resolve(pieceDir, "package.json");
+  if (existsSync(pkgPath)) {
+    hasher.update(readFileSync(pkgPath)).update("\0");
+  }
+  const srcDir = resolve(pieceDir, "src");
+  if (existsSync(srcDir)) {
+    // Walk the src tree breadth-first, sort children alphabetically so the
+    // hash is stable across filesystems. Only `.ts` / `.tsx` / `.js` /
+    // `.json` files contribute -- compiled artifacts and lockfiles are
+    // not piece source.
+    const stack: string[] = [srcDir];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      const children = readdirSync(dir).sort();
+      for (const name of children) {
+        const full = resolve(dir, name);
+        const s = statSync(full);
+        if (s.isDirectory()) {
+          stack.push(full);
+          continue;
+        }
+        if (!/\.(ts|tsx|js|json)$/.test(name)) continue;
+        hasher.update(full.slice(pieceDir.length)).update("\0");
+        hasher.update(readFileSync(full)).update("\0");
+      }
+    }
+  }
+  return hasher.digest("hex").slice(0, 16);
 }
 
 interface PiecePackageJson {
@@ -55,20 +123,22 @@ interface PiecePackageJson {
 }
 
 async function ensureStagingInstalled(): Promise<void> {
-  // We rely on the engine bundle's staging install for esbuild. If it's
-  // missing the caller should have run `bun run scripts/build-engine.ts`
-  // first. We could install on demand here too but that doubles the cold-
-  // start cost; defer to the existing build script.
-  if (!existsSync(resolve(STAGING_NODE_MODULES, "esbuild"))) {
-    throw new Error(
-      `engine-build staging is missing esbuild; run scripts/build-engine.ts first`,
-    );
-  }
+  // Delegate to the engine bundle's install path. It synthesizes the
+  // staging package.json + runs `bun install` if needed; it's a no-op
+  // when the staging tree is already fresh. Wiring through this avoids
+  // the previous race: bootstrap kicks off `buildEngineBundle()` and
+  // `buildAllJarvisPieces()` in parallel, and if pieces won the race
+  // they used to throw on missing esbuild. Now both paths share the
+  // same install promise (bun install dedupes naturally; consecutive
+  // calls return without re-running once the tree is in place).
+  if (existsSync(resolve(STAGING_NODE_MODULES, "esbuild"))) return;
+  await ensureEngineStagingInstalled();
 }
 
-export async function buildPiece(pieceDir: string): Promise<BuildPieceResult> {
-  await ensureStagingInstalled();
-
+export async function buildPiece(
+  pieceDir: string,
+  opts: BuildPieceOptions = {},
+): Promise<BuildPieceResult> {
   const pkgPath = resolve(pieceDir, "package.json");
   if (!existsSync(pkgPath)) {
     throw new Error(`piece ${pieceDir} is missing package.json`);
@@ -83,9 +153,33 @@ export async function buildPiece(pieceDir: string): Promise<BuildPieceResult> {
   }
 
   const distDir = resolve(pieceDir, "dist");
-  mkdirSync(resolve(distDir, "src"), { recursive: true });
   const bundlePath = resolve(distDir, "src", "index.js");
   const packageJsonPath = resolve(distDir, "package.json");
+  const hashMarker = resolve(distDir, ".source-hash");
+
+  // Cache fast-path: skip esbuild when the hash marker matches the
+  // current source + bundle hash AND the compiled bundle still exists.
+  // The marker is the only artifact we read to decide; the bundle is
+  // the only artifact we re-use. If either is missing, treat as miss.
+  const wantHash = pieceHash(pieceDir);
+  if (!opts.force && existsSync(bundlePath) && existsSync(hashMarker)) {
+    const have = readFileSync(hashMarker, "utf8").trim();
+    if (have === wantHash) {
+      return {
+        pieceDir,
+        bundlePath,
+        packageJsonPath,
+        packageName: pkg.name,
+        pieceVersion: pkg.version,
+        cached: true,
+      };
+    }
+  }
+
+  // Miss path: stage check first (esbuild presence is required for the
+  // actual build below; the cached path above never reaches it).
+  await ensureStagingInstalled();
+  mkdirSync(resolve(distDir, "src"), { recursive: true });
 
   const esbuild = (await import(
     resolve(STAGING_NODE_MODULES, "esbuild/lib/main.js")
@@ -140,20 +234,31 @@ export async function buildPiece(pieceDir: string): Promise<BuildPieceResult> {
     ) + "\n",
   );
 
+  // Stamp the cache marker LAST: the bundle + package.json are now on
+  // disk in their final shape, so a future cache hit reads consistent
+  // artifacts. Writing the marker first would leave a window where a
+  // crash mid-build looks like a fresh cache on the next attempt.
+  writeFileSync(hashMarker, wantHash + "\n");
+
   return {
     pieceDir,
     bundlePath,
     packageJsonPath,
     packageName: pkg.name,
     pieceVersion: pkg.version,
+    cached: false,
   };
 }
 
 /**
  * Build every piece directly under `packages/pieces/jarvis/`. Returns the
  * artifacts in the order discovered (alphabetical by piece dir name).
+ * Each piece skips work when its content-hash marker is fresh; pass
+ * `force: true` to rebuild every piece unconditionally.
  */
-export async function buildAllJarvisPieces(): Promise<BuildPieceResult[]> {
+export async function buildAllJarvisPieces(
+  opts: BuildPieceOptions = {},
+): Promise<BuildPieceResult[]> {
   const root = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis");
   if (!existsSync(root)) return [];
   const out: BuildPieceResult[] = [];
@@ -161,7 +266,7 @@ export async function buildAllJarvisPieces(): Promise<BuildPieceResult[]> {
     const pieceDir = resolve(root, name);
     if (!statSync(pieceDir).isDirectory()) continue;
     if (!existsSync(resolve(pieceDir, "package.json"))) continue;
-    out.push(await buildPiece(pieceDir));
+    out.push(await buildPiece(pieceDir, opts));
   }
   return out;
 }

@@ -66,13 +66,28 @@ export function buildVariableRows(
         });
       }
     } else if (usable?.kind === "array") {
-      // Array output: emit a single row that inserts the whole step
-      // template. Useful as a LOOP_ON_ITEMS source. The label includes
-      // the sample's element count so the user knows roughly what they
-      // get; the actual length at runtime may differ.
+      // Array output: first emit the iterate-all row (the whole step,
+      // for LOOP_ON_ITEMS sources), then drill one level into the
+      // first element's top-level keys so users wiring a fixed index
+      // ({{step[0].field}}) see real labels. The drill rows are
+      // typographically distinct so the user can tell "first item" from
+      // "iterate".
       const len = usable.value.length;
-      const label = `(${len} item${len === 1 ? "" : "s"})`;
-      rows.push({ step, field: "", label, template: `{{${step.name}}}` });
+      const iterateLabel = `(${len} item${len === 1 ? "" : "s"})`;
+      rows.push({ step, field: "", label: iterateLabel, template: `{{${step.name}}}` });
+      const first = usable.value[0];
+      if (first && typeof first === "object" && !Array.isArray(first)) {
+        for (const key of Object.keys(first as Record<string, unknown>)) {
+          rows.push({
+            step,
+            field: key,
+            // Prefix with "[0]." so the user reads the label as a
+            // first-element field, not a wholesale step output key.
+            label: `[0].${key}`,
+            template: `{{${step.name}[0].${key}}}`,
+          });
+        }
+      }
     } else {
       // No usable shape anywhere -- offer the whole-step template; the
       // user can drill in with `.field` manually.
