@@ -17,6 +17,22 @@ export const vaultSearchAction = createAction({
   displayName: "Vault: search entities",
   description:
     "Find vault entities by name fragment and/or type. Returns up to `limit` entities ordered by recency.",
+  // Bare array of VaultEntitySnapshot, ordered most-recent first.
+  // Declared so a LOOP_ON_ITEMS step downstream can pick this step's
+  // output as its iteration source -- the picker reads array-ness and
+  // emits a single "(N items)" row that inserts `{{step}}`. Each
+  // entity carries `id`, `type`, `name`, an entity-specific `properties`
+  // bag, and timestamps.
+  outputSample: [
+    {
+      id: "ent_01HX...",
+      type: "person",
+      name: "Alice Smith",
+      properties: { email: "alice@example.com" },
+      createdAt: 1716200000000,
+      updatedAt: 1716200000000,
+    },
+  ],
   props: {
     query: Property.ShortText({
       displayName: "Name contains",

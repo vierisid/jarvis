@@ -56,8 +56,8 @@ export function buildVariableRows(
       ? undefined
       : lookupSiblingShape(step, allSteps, sampleData);
     const usable = pickUsableSample(captured, declared) ?? pickUsableSample(sibling, undefined);
-    if (usable) {
-      for (const key of Object.keys(usable)) {
+    if (usable?.kind === "object") {
+      for (const key of Object.keys(usable.value)) {
         rows.push({
           step,
           field: key,
@@ -65,6 +65,14 @@ export function buildVariableRows(
           template: `{{${step.name}.${key}}}`,
         });
       }
+    } else if (usable?.kind === "array") {
+      // Array output: emit a single row that inserts the whole step
+      // template. Useful as a LOOP_ON_ITEMS source. The label includes
+      // the sample's element count so the user knows roughly what they
+      // get; the actual length at runtime may differ.
+      const len = usable.value.length;
+      const label = `(${len} item${len === 1 ? "" : "s"})`;
+      rows.push({ step, field: "", label, template: `{{${step.name}}}` });
     } else {
       // No usable shape anywhere -- offer the whole-step template; the
       // user can drill in with `.field` manually.
@@ -138,9 +146,12 @@ export function lookupSiblingShape(
     const otherId = stepActionId(other);
     if (!otherId || otherId.piece !== id.piece || otherId.sub !== id.sub || otherId.kind !== id.kind) continue;
     const sample = sampleData[other.name];
-    if (sample && typeof sample === "object" && !Array.isArray(sample)) {
-      const obj = sample as Record<string, unknown>;
-      if (Object.keys(obj).length > 0) return obj;
+    // Accept the same shapes the picker can render: a non-empty
+    // plain object OR a non-empty array. Other shapes (primitives,
+    // null, empty containers) give the picker nothing to display.
+    if (sample && typeof sample === "object") {
+      if (Array.isArray(sample) && sample.length > 0) return sample;
+      if (!Array.isArray(sample) && Object.keys(sample).length > 0) return sample;
     }
   }
   return undefined;
@@ -168,19 +179,39 @@ function stepActionId(step: FlowStepNode): { kind: "PIECE" | "PIECE_TRIGGER"; pi
 }
 
 /**
- * Pick the first source that's an object with at least one top-level key.
- * Anything else (primitive, array, empty object, undefined) is treated as
- * "no usable shape" so the caller falls through to the `(output)` row.
+ * Discriminated picker result. The variable-row builder produces
+ * different shapes for objects (one row per key) vs arrays (a single
+ * iterate-able row), so the picker discriminates here rather than
+ * forcing the caller to re-detect.
+ */
+export type UsableSample =
+  | { kind: "object"; value: Record<string, unknown> }
+  | { kind: "array"; value: unknown[] };
+
+/**
+ * Pick the first source the picker can render: a non-empty plain
+ * object or a non-empty array. Anything else (primitive, null, empty
+ * container, undefined) returns null so the caller falls through to
+ * the `(output)` row.
+ *
+ * Precedence is by candidate order, not by kind: captured wins over
+ * declared regardless of whether either is an object or an array. A
+ * step whose declared shape is an object but whose captured run output
+ * is an array shows up as an iterable -- the runtime truth beats the
+ * author's intent because the user has a concrete value to wire.
  */
 export function pickUsableSample(
   captured: unknown,
   declared: unknown,
-): Record<string, unknown> | null {
+): UsableSample | null {
   for (const candidate of [captured, declared]) {
-    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-      const obj = candidate as Record<string, unknown>;
-      if (Object.keys(obj).length > 0) return obj;
+    if (!candidate || typeof candidate !== "object") continue;
+    if (Array.isArray(candidate)) {
+      if (candidate.length > 0) return { kind: "array", value: candidate };
+      continue;
     }
+    const obj = candidate as Record<string, unknown>;
+    if (Object.keys(obj).length > 0) return { kind: "object", value: obj };
   }
   return null;
 }

@@ -23,6 +23,16 @@ export const notifyAction = createAction({
   displayName: "Send a Jarvis notification",
   description:
     "Deliver a message through Jarvis's configured channels. Use 'auto' to let Jarvis pick a sensible default given the priority.",
+  // Delivery report: `delivered` lists channel names the notifier
+  // actually reached; `failed` carries one entry per channel that
+  // refused, with the error string for diagnostics. Both are always
+  // present in the response (empty arrays on full success / failure).
+  outputSample: {
+    delivered: ["telegram", "dashboard"],
+    failed: [
+      { channel: "discord", error: "no recipient configured" },
+    ],
+  },
   props: {
     message: Property.LongText({
       displayName: "Message",

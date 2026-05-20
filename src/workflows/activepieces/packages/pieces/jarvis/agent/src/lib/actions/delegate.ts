@@ -23,6 +23,22 @@ export const delegateAction = createAction({
   displayName: "Delegate to a Jarvis sub-agent",
   description:
     "Spawn a sub-agent with a goal and let it plan + call tools to reach it. Returns the agent's final message and the full tool-call trace.",
+  // Variable-picker hint: `finalMessage` is the agent's natural-language
+  // wrap-up (use as the downstream input). `status` is the terminal
+  // verdict. `toolCalls` is the trace; `error` is set only on
+  // `status: "error"`. All four are always present in the wire shape.
+  outputSample: {
+    finalMessage: "Done. I scheduled the follow-up call for Friday at 10am.",
+    toolCalls: [
+      {
+        name: "calendar.create_event",
+        args: '{"title":"Follow-up","start":"2026-05-23T10:00Z"}',
+        result: '{"eventId":"evt_abc123"}',
+      },
+    ],
+    status: "completed",
+    error: null,
+  },
   props: {
     goal: Property.LongText({
       displayName: "Goal",

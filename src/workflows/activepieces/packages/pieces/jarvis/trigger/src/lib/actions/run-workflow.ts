@@ -15,6 +15,13 @@ export const runWorkflowAction = createAction({
   displayName: "Run another workflow",
   description:
     "Trigger a saved workflow by id or name. Returns the started run id. Fire-and-forget; the called workflow runs asynchronously.",
+  // Fire-and-forget: response is just the queued run id. The called
+  // flow's own outputs are NOT available here -- a downstream step
+  // that needs the result must instead poll the run id, or the
+  // called flow can write to a shared store / send a notification.
+  outputSample: {
+    runId: "run_01HX...",
+  },
   props: {
     flowId: Property.ShortText({
       displayName: "Flow id",

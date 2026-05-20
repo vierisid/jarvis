@@ -19,6 +19,17 @@ export const waitForSignalAction = createAction({
   name: "wait_for_signal",
   displayName: "Wait for signal (test)",
   description: "Pauses the flow until the waitpoint URL is hit. Test fixture.",
+  // The action returns one of two shapes depending on which execution
+  // phase we're in: a waitpoint announcement on BEGIN (the run pauses
+  // immediately after), or the resume payload on RESUME (what the
+  // POST to the resumeUrl carried). Downstream steps only ever see
+  // the RESUME shape, so that's what we declare; the BEGIN keys can
+  // be referenced manually via `{{step.waitpointId}}` if needed.
+  outputSample: {
+    resumed: true,
+    resumePayload: { ok: true },
+    label: "wait-for-approval",
+  },
   props: {
     label: Property.ShortText({
       displayName: "Label",

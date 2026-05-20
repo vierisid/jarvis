@@ -19,6 +19,14 @@ export const askAction = createAction({
   name: "ask",
   displayName: "Ask",
   description: "Send a prompt to Jarvis's LLM and receive the reply.",
+  // Variable-picker hint: a successful call always returns `text`; when
+  // `Parse JSON` is on, `parsed` carries the JSON.parse'd reply (else
+  // absent). We surface both so a flow that wires `{{step.parsed}}`
+  // shows up as a row before the action has run.
+  outputSample: {
+    text: "Here's a one-line summary of your inbox: ...",
+    parsed: null,
+  },
   props: {
     prompt: Property.LongText({
       displayName: "Prompt",

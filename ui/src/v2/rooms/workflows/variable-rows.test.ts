@@ -105,18 +105,12 @@ describe("buildVariableRows", () => {
     expect(firstStepIdx).toBeLessThan(triggerIdx);
   });
 
-  test("primitive / array outputs bubble through to (output)", () => {
+  test("primitive captured falls through to declared object", () => {
     const step = piece({ name: "step_1", pieceName: "gmail", actionName: "send_email" });
     // Captured is a primitive -- skip and try declared. Declared is an
     // object, so the picker should use it.
     const rowsPrimitive = buildVariableRows([step], { step_1: "just a string" }, [gmail]);
     expect(rowsPrimitive.map((r) => r.field).sort()).toEqual(["labelIds", "messageId", "threadId"]);
-
-    // Both captured and declared are primitives / arrays => (output) row.
-    const onlyHttp = piece({ name: "step_2", pieceName: "gmail", actionName: "execute_http" });
-    const rowsBoth = buildVariableRows([onlyHttp], { step_2: [1, 2, 3] }, [gmail]);
-    expect(rowsBoth).toHaveLength(1);
-    expect(rowsBoth[0]!.label).toBe("(output)");
   });
 
   test("unknown piece in step yields (output)", () => {
@@ -202,6 +196,108 @@ describe("buildVariableRows", () => {
       // Kind differs (PIECE_TRIGGER vs PIECE), so no inheritance.
       expect(rows).toHaveLength(1);
       expect(rows[0]!.label).toBe("(output)");
+    });
+  });
+
+  describe("array outputs (iterable sources)", () => {
+    // Synthetic catalog entry whose action returns a bare array. Models
+    // pieces like vault.search / awareness.recent / commitments.list.
+    const listy: PieceCatalogEntry = {
+      name: "listy",
+      displayName: "Listy",
+      description: "",
+      actions: [
+        {
+          name: "fetch_all",
+          displayName: "Fetch all",
+          description: "",
+          inputSchema: null,
+          outputSample: [
+            { id: "a", title: "Alpha" },
+            { id: "b", title: "Beta" },
+            { id: "c", title: "Gamma" },
+          ],
+        },
+      ],
+      triggers: [],
+    };
+
+    test("declared array yields a single iterate row with item count", () => {
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], {}, [listy]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(3 items)");
+      expect(rows[0]!.template).toBe("{{step_1}}");
+      expect(rows[0]!.field).toBe("");
+    });
+
+    test("singular label when sample has one element", () => {
+      const onePiece: PieceCatalogEntry = {
+        ...listy,
+        actions: [
+          {
+            ...listy.actions[0]!,
+            outputSample: [{ id: "only" }],
+          },
+        ],
+      };
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], {}, [onePiece]);
+      expect(rows[0]!.label).toBe("(1 item)");
+    });
+
+    test("captured array beats declared object", () => {
+      const objLike: PieceCatalogEntry = {
+        ...listy,
+        actions: [
+          {
+            ...listy.actions[0]!,
+            outputSample: { a: 1, b: 2 },
+          },
+        ],
+      };
+      // Even though the catalog declares an object, the captured run
+      // output is the source of truth -- and here it's an array.
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], { step_1: [{ x: 1 }, { x: 2 }] }, [objLike]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(2 items)");
+      expect(rows[0]!.template).toBe("{{step_1}}");
+    });
+
+    test("empty array falls through to (output)", () => {
+      const empty: PieceCatalogEntry = {
+        ...listy,
+        actions: [
+          {
+            ...listy.actions[0]!,
+            outputSample: [],
+          },
+        ],
+      };
+      const step = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const rows = buildVariableRows([step], {}, [empty]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(output)");
+    });
+
+    test("sibling step's captured array is inherited", () => {
+      const a1 = piece({ name: "step_1", pieceName: "listy", actionName: "fetch_all" });
+      const a2 = piece({ name: "step_2", pieceName: "listy", actionName: "fetch_all" });
+      const noDeclared: PieceCatalogEntry = {
+        ...listy,
+        actions: [{ ...listy.actions[0]!, outputSample: undefined }],
+      };
+      const rows = buildVariableRows(
+        [a2],
+        { step_1: [{ id: "x" }, { id: "y" }] },
+        [noDeclared],
+        [a1, a2],
+      );
+      // Sibling captured a 2-element array; a2 inherits the array shape.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.label).toBe("(2 items)");
+      expect(rows[0]!.template).toBe("{{step_2}}");
     });
   });
 });

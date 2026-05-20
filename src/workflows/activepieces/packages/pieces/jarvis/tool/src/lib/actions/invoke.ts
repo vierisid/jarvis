@@ -16,6 +16,16 @@ export const invokeAction = createAction({
   displayName: "Invoke a Jarvis tool",
   description:
     "Call a registered Jarvis tool by name with the given parameters. Returns the tool's raw result.",
+  // The envelope is always `{ result, toolName }`; the shape of
+  // `result` is the called tool's concern. We declare a string here
+  // as a representative example -- many Jarvis tools return a
+  // human-readable string. For tools that return structured data, the
+  // user can drill in with `{{step.result.<field>}}` after seeing it
+  // captured from a successful run.
+  outputSample: {
+    result: "Saved 3 records to the vault.",
+    toolName: "vault_search",
+  },
   props: {
     toolName: Property.ShortText({
       displayName: "Tool name",

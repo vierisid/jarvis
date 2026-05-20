@@ -13,6 +13,16 @@ export const validateAction = createAction({
   name: "validate",
   displayName: "Validate plumbing",
   description: "Read connection auth + round-trip a value through context.store.",
+  // Plumbing-smoke action: the response is always these four keys.
+  // `accessToken` is null when the connection has no `access_token`
+  // claim; `storeReadBack` should equal `storeValue` on a clean
+  // round-trip (the assertion the test relies on).
+  outputSample: {
+    accessToken: "redacted-bearer-token-string",
+    storeValue: "ping",
+    storeReadBack: "ping",
+    projectId: "DEFAULT_PROJECT",
+  },
   props: {
     storeValue: Property.ShortText({
       displayName: "Value to write/read via context.store",

@@ -16,6 +16,21 @@ export const awarenessRecentAction = createAction({
   displayName: "Awareness: recent activity",
   description:
     "Return recent awareness activities (foreground app, window title, URL, optional summary), most recent first.",
+  // Bare array of AwarenessActivitySnapshot, ordered most-recent first.
+  // Per-entry fields are all nullable (the observer may not have a
+  // window title, or the activity may still be in progress); the
+  // sample shows the typical "browser window with summary" case.
+  outputSample: [
+    {
+      id: "act_01HX...",
+      appName: "Firefox",
+      windowTitle: "GitHub - pull request #42",
+      url: "https://github.com/org/repo/pull/42",
+      startTime: 1716200000000,
+      endTime: 1716200120000,
+      summary: "Reviewed PR #42 (auth refactor)",
+    },
+  ],
   props: {
     limit: Property.Number({
       displayName: "Limit",

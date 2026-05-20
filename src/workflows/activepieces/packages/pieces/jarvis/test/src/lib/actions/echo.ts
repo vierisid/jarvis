@@ -10,6 +10,12 @@ export const echoAction = createAction({
   name: "echo",
   displayName: "Echo",
   description: "Returns the input value verbatim.",
+  // The wrapper key is always `echo`. The inner value is whatever the
+  // user passed in -- we put a representative string here so the
+  // picker has something concrete to label the row.
+  outputSample: {
+    echo: "hello world",
+  },
   props: {
     value: Property.Json({
       displayName: "Value",

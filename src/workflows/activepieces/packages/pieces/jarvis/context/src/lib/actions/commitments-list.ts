@@ -16,6 +16,20 @@ export const commitmentsListAction = createAction({
   name: "commitments_list",
   displayName: "Commitments: list",
   description: "List commitments, optionally filtered by status.",
+  // Bare array of CommitmentSnapshot. `status` is one of
+  // pending|in_progress|completed|failed; `priority` is the user's
+  // tier (low/normal/high); `dueAt` is null when the commitment is
+  // open-ended.
+  outputSample: [
+    {
+      id: "com_01HX...",
+      description: "Reply to Bob about the proposal",
+      status: "pending",
+      dueAt: 1716286400000,
+      priority: "normal",
+      createdAt: 1716200000000,
+    },
+  ],
   props: {
     status: Property.StaticDropdown({
       displayName: "Status",
