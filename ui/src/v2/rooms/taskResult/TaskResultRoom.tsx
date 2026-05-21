@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./TaskResultRoom.css";
 
 type TaskRecord = {
@@ -128,7 +130,13 @@ export function TaskResultRoom({ taskId }: { taskId: string }) {
           )}
         </div>
         {(!task.summary || showRaw) && (
-          <pre className="task-result__response-body">{task.response || "(no output)"}</pre>
+          task.response ? (
+            <div className="task-result__response-body task-result__markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.response}</ReactMarkdown>
+            </div>
+          ) : (
+            <div className="task-result__response-body task-result__response-empty">(no output)</div>
+          )
         )}
       </section>
 

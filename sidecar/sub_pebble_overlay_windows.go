@@ -56,9 +56,13 @@ const (
 	// optional result. Width is generous enough to read a sentence-length
 	// task; height tall enough for a 3-line clamp on the result.
 	subPebbleBubbleW       = 230
-	subPebbleBubbleH       = 130
-	subPebbleBubbleOffset  = 14 // gap between disc edge and bubble's right edge
-	subPebbleBubbleAnchorY = 20 // top of bubble relative to disc's y axis (-20 = bubble starts 20 px above disc center)
+	// Bubble height is dynamic. Compact when only the running placeholder
+	// or short copy is shown; tall when a real result/summary needs room.
+	// Caps at the window height (220 px) minus a small top inset.
+	subPebbleBubbleHCompact = 95
+	subPebbleBubbleHTall    = 180
+	subPebbleBubbleOffset   = 14 // gap between disc edge and bubble's right edge
+	subPebbleBubbleAnchorY  = 20 // top of bubble relative to disc's y axis (-20 = bubble starts 20 px above disc center)
 
 	// "open full" button — Phase B+ click target inside the bubble that
 	// spawns a native window with the full task result. Anchored to the
@@ -593,7 +597,7 @@ func subPebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr 
 		//      cursor stays grabbed (otherwise the bubble closes when the
 		//      cursor leaves the disc on its way to the button).
 		if entry.expanded.Load() {
-			bx0, by0, bx1, by1 := subPebbleBubbleRect()
+			bx0, by0, bx1, by1 := subPebbleBubbleRect(entry)
 			// Button is anchored to the bubble's bottom-right with a small inset.
 			bxR0 := bx1 - subPebbleButtonInsetR - subPebbleButtonW
 			byR0 := by1 - subPebbleButtonInsetB - subPebbleButtonH
@@ -711,7 +715,7 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 	// pebble uses).
 	if entry.expanded.Load() {
 		s.drawSubPebbleBubbleText(memDC, entry)
-		repairSubPebbleBubbleAlpha(pixels)
+		repairSubPebbleBubbleAlpha(pixels, entry)
 	}
 
 	const acSrcOver = 0x00
