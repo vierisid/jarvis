@@ -27,6 +27,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
   - [Table of Contents](#table-of-contents)
   - [🔍 What Makes JARVIS Different](#-what-makes-jarvis-different)
   - [⚡ Quick Start](#-quick-start)
+  - [🪨 Ambient mode (recommended)](#-ambient-mode-recommended)
   - [☁️ Managed Hosting](#️-managed-hosting)
   - [💡 Use Cases](#-use-cases)
   - [📋 Requirements](#-requirements)
@@ -80,6 +81,27 @@ jarvis start -d                   # Start as background daemon
 ```
 
 Open `http://localhost:3142` — the dashboard walks you through LLM provider, voice, and a quick conversational profile interview the first time you visit.
+
+---
+
+## 🪨 Ambient mode (recommended)
+
+JARVIS ships a "dashboard-less" experience built around a small cursor-following pebble. After onboarding, run with:
+
+```bash
+JARVIS_AMBIENT_UI=1 bun run start
+```
+
+What you get:
+
+- **Pebble** — a small paper-toned disc that follows your cursor. Wake-word ("Hey Jarvis"), `Ctrl+Space`, or click summons it. Long-press the disc to blind awareness instantly (privacy toggle); the eye glyph next to it shows when JARVIS is actively reading your screen.
+- **Native windows** — every dashboard room (workflows, memory, settings, …) opens as a real Windows window via voice ("open settings", "show me workflows") or `Ctrl+K`. No browser tab.
+- **Sub-pebble rail** — say "in the background, research X" and a colored sub-pebble flies to the right edge of your screen. Click it to see what the agent is doing; "open full ↗" pops a dedicated result panel.
+- **Voice-first** — "what's on my screen?", "close all background agents", "open the workflows window", "in the background, summarize today's meeting notes" — all routed inline, no LLM round-trip for the common verbs.
+
+Currently **Windows-only** (cross-platform ports planned). The `localhost:3142` dashboard still works as a fallback / debug surface.
+
+For the full architecture story, see [`docs/AMBIENT_UX_PLAN.md`](docs/AMBIENT_UX_PLAN.md).
 
 ---
 

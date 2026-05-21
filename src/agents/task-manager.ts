@@ -185,7 +185,7 @@ export class AgentTaskManager {
   /**
    * Remove completed/failed tasks older than maxAge (default 10 min).
    */
-  cleanup(maxAgeMs = 10 * 60_000): number {
+  cleanup(maxAgeMs = 60 * 60_000): number {
     let removed = 0;
     const now = Date.now();
     for (const [id, task] of this.tasks) {

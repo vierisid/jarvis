@@ -11,12 +11,27 @@ import (
 // Bubble inner padding (px from the bubble's outer edges to the text rect).
 const subPebbleBubbleInnerPad = 12
 
-// computed bubble rect inside the 360×220 layered window.
-func subPebbleBubbleRect() (x0, y0, x1, y1 int) {
+// bubbleHeightForEntry decides bubble height per-entry: tall when there's
+// a real result/summary to display, compact when only the running
+// placeholder is shown. Two-state heuristic — cheaper than full
+// DT_CALCRECT but enough to stop ellipsizing summaries.
+func bubbleHeightForEntry(entry *subPebbleEntry) int {
+	result, _ := entry.result.Load().(string)
+	// Show tall when result is present AND meaningful (not the
+	// "summarizing…" placeholder which is < 20 chars).
+	if len(result) > 20 {
+		return subPebbleBubbleHTall
+	}
+	return subPebbleBubbleHCompact
+}
+
+// computed bubble rect inside the 360×220 layered window. Height varies
+// per entry — pass the entry so we read its current state.
+func subPebbleBubbleRect(entry *subPebbleEntry) (x0, y0, x1, y1 int) {
 	x1 = subPebbleAnchorX - 9 /* disc radius */ - subPebbleBubbleOffset
 	x0 = x1 - subPebbleBubbleW
 	y0 = subPebbleAnchorY - subPebbleBubbleAnchorY
-	y1 = y0 + subPebbleBubbleH
+	y1 = y0 + bubbleHeightForEntry(entry)
 	return
 }
 
@@ -26,7 +41,7 @@ func subPebbleBubbleRect() (x0, y0, x1, y1 int) {
 // sub-pebble's color (so the connection between card and disc is visible).
 func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color SubPebbleColor, entry *subPebbleEntry) {
 	r, g, b := subPebbleRGB(color)
-	x0, y0, x1, y1 := subPebbleBubbleRect()
+	x0, y0, x1, y1 := subPebbleBubbleRect(entry)
 	const radius = 8.0
 	const shadowOffset = 2.0
 
@@ -80,7 +95,7 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color Sub
 //   y = top + 36    : task body — 2-line clamp, Inter Tight ink
 //   y = top + 78    : result line — 2-line clamp, smaller, muted ink (only when present)
 func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *subPebbleEntry) {
-	bx0, by0, bx1, by1 := subPebbleBubbleRect()
+	bx0, by0, bx1, by1 := subPebbleBubbleRect(entry)
 	_ = by1
 
 	agent, _ := entry.label.Load().(string)
@@ -228,8 +243,8 @@ func formatSubPebbleElapsed(s int) string {
 // Same trick as repairBubbleTextAlpha for the main pebble. Insets a couple
 // of pixels past the bubble's corner radius so we don't clobber the
 // rounded-corner transparent pixels.
-func repairSubPebbleBubbleAlpha(pixels []uint32) {
-	x0, y0, x1, y1 := subPebbleBubbleRect()
+func repairSubPebbleBubbleAlpha(pixels []uint32, entry *subPebbleEntry) {
+	x0, y0, x1, y1 := subPebbleBubbleRect(entry)
 	const cornerInset = 10
 	for y := y0 + cornerInset; y < y1-cornerInset; y++ {
 		if y < 0 || y >= pebbleWindowH {

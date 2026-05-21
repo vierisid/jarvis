@@ -625,7 +625,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 content: `Task: ${task.task}\n\nAgent response:\n${raw.slice(0, 4000)}\n\nSummary:`,
               },
             ];
-            const resp = await llm.chat(messages, { max_tokens: 180, temperature: 0.3 });
+            // Route through Groq (or whatever cheap provider is configured)
+            // when available — summaries don't need top-tier reasoning and
+            // sub-cent-per-task makes the always-on summary affordable.
+            // chatWithOverride silently falls back to the default provider
+            // if the requested one isn't registered.
+            const resp = await llm.chatWithOverride(messages, 'groq', { max_tokens: 180, temperature: 0.3 });
             const summary = (resp.content || '').trim();
             if (summary) {
               tm.setSummary(taskId, summary);
@@ -751,9 +756,56 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           for (const sidecarId of sidecarIds) {
             try {
               if (event === 'launch') {
-                const slot = nextSlot(sidecarId);
                 let used = subPebbleSlots.get(sidecarId);
                 if (!used) { used = new Map(); subPebbleSlots.set(sidecarId, used); }
+                // A6 — hard cap at 8 sub-pebbles per sidecar to keep the
+                // rail from overflowing the screen. When at the cap,
+                // close the oldest completed task first (status != running);
+                // if nothing completed, close the literal oldest. This is
+                // ambient UI, not a backlog manager — long-term inspection
+                // happens in the agent strip room.
+                const SUB_PEBBLE_CAP = 8;
+                while (used.size >= SUB_PEBBLE_CAP) {
+                  const tm = agentService.getTaskManager();
+                  // Pick the oldest completed/failed first; fall back to
+                  // oldest of any.
+                  let evictId: string | null = null;
+                  let oldestSlot = -1;
+                  for (const [id, slot] of used.entries()) {
+                    const t = tm?.getTask(id);
+                    if (t && t.status !== 'running') {
+                      if (oldestSlot < 0 || slot > oldestSlot) {
+                        oldestSlot = slot;
+                        evictId = id;
+                      }
+                    }
+                  }
+                  if (!evictId) {
+                    // No completed tasks — evict literal oldest (lowest slot).
+                    let lowestSlot = Infinity;
+                    for (const [id, slot] of used.entries()) {
+                      if (slot < lowestSlot) { lowestSlot = slot; evictId = id; }
+                    }
+                  }
+                  if (!evictId) break; // shouldn't happen
+                  const evictSlot = used.get(evictId);
+                  try {
+                    await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close', { id: evictId });
+                  } catch (err) {
+                    console.warn(`[sub-pebble] cap-evict close ${evictId} failed:`, err);
+                  }
+                  used.delete(evictId);
+                  subPebbleExpanded.delete(evictId);
+                  subPebbleSidecar.delete(evictId);
+                  // Reflow surviving slots (same pattern as voice close).
+                  if (evictSlot !== undefined) {
+                    for (const [otherId, slot] of used.entries()) {
+                      if (slot > evictSlot) used.set(otherId, slot - 1);
+                    }
+                  }
+                  console.log(`[sub-pebble] cap reached — evicted ${evictId}`);
+                }
+                const slot = nextSlot(sidecarId);
                 used.set(task.id, slot);
                 subPebbleSidecar.set(task.id, sidecarId);
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.spawn', {
@@ -776,17 +828,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   });
                 }
                 // If the bubble is currently expanded, push fresh content
-                // so the user sees the result without re-clicking. Summary
-                // lands a beat later via summarizeTaskAsync and re-pushes.
+                // so the user sees the result without re-clicking. For
+                // successful completions, show "summarizing…" instead of
+                // the raw truncated text so the user knows a better
+                // summary is on the way (summarizeTaskAsync re-dispatches
+                // ~1–2 s later with the real summary). For failures, show
+                // the error text immediately since there's no summary
+                // coming.
                 if (subPebbleExpanded.get(task.id)) {
                   const elapsedS = Math.round(((task.completedAt ?? Date.now()) - task.startedAt) / 1000);
                   const rawResult = task.result?.response ?? '';
                   const cleaned = rawResult.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
+                  const placeholder = event === 'complete' && cleaned.length > 240
+                    ? 'summarizing…'
+                    : cleaned.slice(0, 220);
                   await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_expanded', {
                     id: task.id, expanded: true,
                     agent: task.agentName,
                     task: task.task.slice(0, 200),
-                    result: cleaned.slice(0, 220),
+                    result: placeholder,
                     elapsed_s: elapsedS,
                   });
                 }
