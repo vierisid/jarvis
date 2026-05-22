@@ -53,6 +53,18 @@ export interface RunFlowJobPayload {
    */
   sampleData?: Record<string, unknown>;
   /**
+   * Per-step INPUT override applied only when `stepNameToTest` equals one
+   * of the keys. Map `stepName -> input` (a plain object that replaces
+   * that step's `settings.input` for the duration of the run). Lets a
+   * user exercise a step manually with curated parameters without
+   * editing the production-bound input.
+   *
+   * The route narrows this to one entry per test run (only the step
+   * under test), so the engine never accidentally swaps inputs on
+   * neighbouring steps.
+   */
+  sampleInputOverride?: Record<string, Record<string, unknown>>;
+  /**
    * `RESUME` wakes a paused run -- the worker handler skips run-row
    * recreation and the executor sends EXECUTE_FLOW with executionType=RESUME
    * + resumePayload + the prior executionState restored from the run's

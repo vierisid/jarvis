@@ -65,6 +65,7 @@ const STATEMENTS: string[] = [
     engine_listeners TEXT,
     engine_schedule TEXT,
     sample_data TEXT,
+    sample_input TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -242,6 +243,12 @@ function applyAdditiveColumnMigrations(db: Database): void {
     // populated. Editable per-step in the visual editor; NULL means "use the
     // piece's intrinsic sampleData."
     { table: "flow_version", column: "sample_data", ddl: "ALTER TABLE flow_version ADD COLUMN sample_data TEXT" },
+    // sample_input: JSON map { [stepName]: inputOverride } applied by
+    // the engine ONLY during test-from-here runs (stepNameToTest set).
+    // The override replaces that step's `settings.input` so the user can
+    // exercise a step manually with curated parameters without
+    // re-editing the production input. Production runs ignore this map.
+    { table: "flow_version", column: "sample_input", ddl: "ALTER TABLE flow_version ADD COLUMN sample_input TEXT" },
   ];
   for (const m of migrations) {
     const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;

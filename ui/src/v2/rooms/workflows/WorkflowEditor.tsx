@@ -1025,9 +1025,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               if (created) setSelectedStepName(created);
             }}
             sampleData={editor.version?.sampleData?.[selectedStep.name]}
+            sampleInput={editor.version?.sampleInput?.[selectedStep.name]}
             isLocked={editor.version?.state === "LOCKED"}
             onSetSampleData={(output) =>
               editor.setStepSampleData(selectedStep.name, output)
+            }
+            onSetSampleInput={(input) =>
+              editor.setStepSampleInput(selectedStep.name, input)
             }
             onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
           />
@@ -3113,6 +3117,12 @@ interface PropertiesPanelProps {
    * never set.
    */
   sampleData: unknown | undefined;
+  /**
+   * Persisted sample INPUT override for this step. Replaces
+   * `settings.input` during test-from-here runs only. Undefined when
+   * never set.
+   */
+  sampleInput: unknown | undefined;
   /** True when the loaded version is LOCKED -- disables sample-data editing + test. */
   isLocked: boolean;
   onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
@@ -3133,6 +3143,8 @@ interface PropertiesPanelProps {
   onSetBranchConditions: (branchIndex: number, conditions: BranchConditions) => void;
   /** Save the JSON sample output for this step. Pass null to clear. */
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
+  /** Save the JSON sample input override for this step. Pass null to clear. */
+  onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
   /** Trigger a test-from-here run for this step. */
   onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
 }
@@ -3280,21 +3292,6 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </div>
       ) : null}
 
-      {/* Error handling lives on PIECE / CODE steps only -- the engine's
-          retry + continue-on-failure helpers explicitly type-narrow to
-          those. Rendering this for LOOP/ROUTER/EMPTY would mislead the
-          user since their toggles would be ignored at runtime. */}
-      {step.type === "PIECE" && !isTriggerStep ? (
-        <>
-          <div className="wf-props__divider" />
-          <ErrorHandlingSection
-            continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
-            retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
-            onChange={onSetErrorHandling}
-          />
-        </>
-      ) : null}
-
       <div className="wf-props__divider" />
 
       <div className="wf-props__step-actions">
@@ -3313,26 +3310,99 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         ) : null}
       </div>
 
-      <SampleDataSection
-        // `key` resets the section's internal text/state cleanly when the
-        // user switches steps, so the textarea always starts from the new
-        // step's persisted value rather than effect-syncing mid-edit (which
-        // would clobber in-flight typing during a Save round-trip).
-        key={step.name}
+      {/* Advanced settings: error handling toggles, sample input
+          override, sample output, and the test-this-step button live
+          here collapsed so the main panel stays focused on the
+          step's inputs. Default closed -- expansion is per-step but
+          not persisted across reloads (intentional: it's a working
+          state, not a configuration). */}
+      <AdvancedSettings
+        // Key on step name so collapse state resets when the user
+        // navigates to a different step. Otherwise an open Advanced
+        // section on step A would silently carry over to step B even
+        // though the user might not need it there.
+        key={`advanced-${step.name}`}
+        showErrorHandling={step.type === "PIECE" && !isTriggerStep}
+        continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
+        retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
+        onSetErrorHandling={onSetErrorHandling}
         stepName={step.name}
         sampleData={props.sampleData}
+        sampleInput={props.sampleInput}
         // Declared output from the piece catalog -- exposed so the
-        // section can offer a "Reset to declared" button that clears
-        // the persisted cell (the picker then falls back to the
-        // declared sample). Triggers carry `sampleData`; actions carry
-        // `outputSample` (Jarvis extension). Picker reads either.
+        // sample-output editor can offer a "Reset to declared" button.
         declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample}
         isLocked={props.isLocked}
         isTriggerStep={isTriggerStep}
         onSetSampleData={props.onSetSampleData}
+        onSetSampleInput={props.onSetSampleInput}
         onTestFromHere={props.onTestFromHere}
       />
     </div>
+  );
+}
+
+/**
+ * Collapsible "Advanced settings" block. Holds the error-handling
+ * toggles, the sample-input override editor, the sample-output editor,
+ * and the test-this-step button. Kept as a single component (rather
+ * than three sibling collapsibles) so the user has one disclosure
+ * affordance instead of three; the most common case is "I just want
+ * to test this step" which expands the whole block in one click.
+ */
+function AdvancedSettings(props: {
+  showErrorHandling: boolean;
+  continueOnFailure: boolean;
+  retryOnFailure: boolean;
+  onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
+  stepName: string;
+  sampleData: unknown | undefined;
+  sampleInput: unknown | undefined;
+  declaredSample: unknown | undefined;
+  isLocked: boolean;
+  isTriggerStep: boolean;
+  onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
+  onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
+  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="wf-props__advanced">
+      <button
+        type="button"
+        className={`wf-props__advanced-toggle ${open ? "wf-props__advanced-toggle--open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="wf-props__advanced-caret">{open ? "▾" : "▸"}</span>
+        Advanced settings
+      </button>
+      {open ? (
+        <div className="wf-props__advanced-body">
+          {props.showErrorHandling ? (
+            <ErrorHandlingSection
+              continueOnFailure={props.continueOnFailure}
+              retryOnFailure={props.retryOnFailure}
+              onChange={props.onSetErrorHandling}
+            />
+          ) : null}
+          <SampleInputSection
+            sampleInput={props.sampleInput}
+            isLocked={props.isLocked}
+            onSetSampleInput={props.onSetSampleInput}
+          />
+          <SampleDataSection
+            stepName={props.stepName}
+            sampleData={props.sampleData}
+            declaredSample={props.declaredSample}
+            isLocked={props.isLocked}
+            isTriggerStep={props.isTriggerStep}
+            onSetSampleData={props.onSetSampleData}
+            onTestFromHere={props.onTestFromHere}
+          />
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -3388,18 +3458,155 @@ function ErrorHandlingSection({
 }
 
 /**
- * Per-step sample data editor + "Test from here" button. Renders inside the
+ * Per-step sample data editor + "Test this step" button. Renders inside the
  * properties panel below the step-actions row.
  *
  * The textarea holds the JSON for THIS step's sample output -- what the
  * engine would feed to downstream steps that reference {{ stepName.foo }}
- * when running with stepNameToTest. The "Test from here" button fires a
+ * when running with stepNameToTest. The "Test this step" button fires a
  * run with stepNameToTest set to this step name; the engine populates the
- * preceding steps' outputs from the version's persisted sampleData map.
+ * preceding steps' outputs from the version's persisted sampleData map
+ * and applies any sample input override stored for this step.
  *
  * The trigger step also accepts sample data -- that becomes the trigger
  * payload visible to the first action. The button label adapts.
  */
+function SampleInputSection({
+  sampleInput,
+  isLocked,
+  onSetSampleInput,
+}: {
+  sampleInput: unknown | undefined;
+  isLocked: boolean;
+  onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
+}): React.ReactElement {
+  // Same persistence pattern as SampleDataSection but constrained to a
+  // plain object (the server enforces this since the value replaces
+  // `settings.input` at test time).
+  const incomingText = useMemo(
+    () => (sampleInput === undefined ? "" : JSON.stringify(sampleInput, null, 2)),
+    [sampleInput],
+  );
+  const [text, setText] = useState<string>(incomingText);
+  const [savedText, setSavedText] = useState<string>(incomingText);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [busy, setBusy] = useState<"save" | "clear" | null>(null);
+
+  const hasUnsavedEdits = text !== savedText;
+
+  const flash = (tone: "ok" | "warn", t: string): void => {
+    setStatus({ tone, text: t });
+    window.setTimeout(() => setStatus(null), 3000);
+  };
+
+  const handleSave = async (): Promise<void> => {
+    if (text.trim().length === 0) {
+      // Empty input means "clear" -- forward null rather than {} so the
+      // server drops the entry entirely (no override stored).
+      setBusy("save");
+      try {
+        const r = await onSetSampleInput(null);
+        if (r.ok) {
+          setSavedText("");
+          setParseError(null);
+        }
+        flash(r.ok ? "ok" : "warn", r.message);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+      setParseError(null);
+    } catch (e) {
+      setParseError((e as Error).message);
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      setParseError("Sample input must be a JSON object (it replaces settings.input at test time).");
+      return;
+    }
+    setBusy("save");
+    try {
+      const r = await onSetSampleInput(parsed as Record<string, unknown>);
+      if (r.ok) setSavedText(text);
+      flash(r.ok ? "ok" : "warn", r.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleClear = async (): Promise<void> => {
+    if (!window.confirm("Clear this step's sample input override?")) return;
+    setBusy("clear");
+    try {
+      const r = await onSetSampleInput(null);
+      if (r.ok) {
+        setText("");
+        setSavedText("");
+        setParseError(null);
+      }
+      flash(r.ok ? "ok" : "warn", r.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="wf-props__sample-data" aria-label="Sample input override">
+      <header className="wf-props__sample-header">
+        <h4 className="wf-props__sample-title">Sample input</h4>
+        <p className="wf-props__hint">
+          JSON object that replaces this step's input during a Test run. Use to exercise the step
+          with curated parameters without changing the production input. Leave empty to use the
+          step's actual input.
+        </p>
+      </header>
+      <textarea
+        className="wf-props__sample-textarea"
+        rows={5}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder='{"toolName": "get_clipboard"}'
+        disabled={isLocked}
+        spellCheck={false}
+      />
+      {parseError ? <span className="wf-props__sample-err">{parseError}</span> : null}
+      {hasUnsavedEdits ? (
+        <span className="wf-props__sample-status wf-props__sample-status--warn">
+          Unsaved edits -- save before testing or they won't be used.
+        </span>
+      ) : null}
+      {status ? (
+        <span className={`wf-props__sample-status wf-props__sample-status--${status.tone}`}>
+          {status.text}
+        </span>
+      ) : null}
+      <div className="wf-props__sample-actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleSave()}
+          disabled={isLocked || busy !== null}
+        >
+          {busy === "save" ? "Saving..." : "Save sample"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleClear()}
+          disabled={isLocked || busy !== null || text.trim().length === 0}
+        >
+          {busy === "clear" ? "Clearing..." : "Clear"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function SampleDataSection({
   sampleData,
   declaredSample,
@@ -3538,7 +3745,7 @@ function SampleDataSection({
   const hasPinnedCell = sampleData !== undefined;
 
   return (
-    <section className="wf-props__sample-data" aria-label="Sample data + test from here">
+    <section className="wf-props__sample-data" aria-label="Sample output + test this step">
       <header className="wf-props__sample-header">
         <h4 className="wf-props__sample-title">
           Sample {isTriggerStep ? "trigger payload" : "output"}
@@ -3546,7 +3753,7 @@ function SampleDataSection({
         <p className="wf-props__hint">
           {isTriggerStep
             ? "JSON the test run feeds to the trigger. Downstream steps see it as the trigger payload."
-            : "JSON the test run feeds to downstream steps. Lets you run a step in isolation without re-executing the chain."}
+            : "JSON downstream steps see when they reference {{stepName.field}}. Lets you wire flows without first running this step for real."}
         </p>
       </header>
       <textarea
@@ -3611,10 +3818,10 @@ function SampleDataSection({
           title={
             hasUnsavedEdits
               ? "Save your changes first; Test runs the persisted sample data"
-              : "Run only this step using the saved sample data for preceding steps"
+              : "Run JUST this step in isolation using the saved sample input + preceding steps' sample data. Does not run downstream steps."
           }
         >
-          {busy === "test" ? "Queuing..." : "Test from here"}
+          {busy === "test" ? "Queuing..." : "Test this step"}
         </Button>
       </div>
     </section>

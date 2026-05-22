@@ -31,6 +31,7 @@ export interface FlowVersionRow {
   engine_listeners: string | null;
   engine_schedule: string | null;
   sample_data: string | null;
+  sample_input: string | null;
   created: number;
   updated: number;
 }
@@ -82,6 +83,21 @@ export interface FlowVersion {
    * Editable per-step in the visual editor's properties panel.
    */
   sampleData: Record<string, unknown> | null;
+  /**
+   * Per-step sample INPUT override used ONLY during test-from-here runs.
+   * Map `stepName -> input` (an object passed as that step's
+   * `settings.input` for the test run). Production runs ignore this
+   * field; they use the step's persisted input verbatim.
+   *
+   * Useful when the user wants to exercise a step manually with
+   * curated parameters without rewriting the production-bound input
+   * each time -- e.g. testing a "send Telegram" step with a known
+   * chat id without breaking the live binding to a trigger field.
+   *
+   * Editable per-step in the visual editor's properties panel under
+   * Advanced settings.
+   */
+  sampleInput: Record<string, unknown> | null;
   created: number;
   updated: number;
 }
@@ -191,6 +207,9 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
       : null,
     sampleData: row.sample_data
       ? (JSON.parse(row.sample_data) as Record<string, unknown>)
+      : null,
+    sampleInput: row.sample_input
+      ? (JSON.parse(row.sample_input) as Record<string, unknown>)
       : null,
     created: row.created,
     updated: row.updated,
@@ -375,6 +394,45 @@ export function setSampleDataEntry(
   ]);
   const row = getFlowVersionRow(id);
   if (!row) throw new Error(`setSampleDataEntry: row missing after update (id=${id})`);
+  return rowToFlowVersion(row);
+}
+
+/**
+ * Set / clear one step's entry in the per-version `sampleInput` map.
+ * Mirrors `setSampleDataEntry` but writes to the `sample_input` column.
+ * Pass `null` to remove the entry. DRAFT-only.
+ *
+ * The entry is consumed by the engine ONLY during test-from-here runs
+ * (`stepNameToTest === stepName`): it replaces that step's
+ * `settings.input` for that run. Production runs ignore the map.
+ */
+export function setSampleInputEntry(
+  id: string,
+  stepName: string,
+  input: Record<string, unknown> | null,
+): FlowVersion {
+  const existing = getFlowVersionRow(id);
+  if (!existing) throw new Error(`setSampleInputEntry: not found (id=${id})`);
+  if (existing.state === "LOCKED") {
+    throw new Error(`setSampleInputEntry: version ${id} is LOCKED`);
+  }
+  const current = existing.sample_input
+    ? (JSON.parse(existing.sample_input) as Record<string, unknown>)
+    : {};
+  if (input === null) {
+    delete current[stepName];
+  } else {
+    current[stepName] = input;
+  }
+  const json = Object.keys(current).length === 0 ? null : JSON.stringify(current);
+  const updated = now();
+  db().run(`UPDATE flow_version SET sample_input = ?, updated = ? WHERE id = ?`, [
+    json,
+    updated,
+    id,
+  ]);
+  const row = getFlowVersionRow(id);
+  if (!row) throw new Error(`setSampleInputEntry: row missing after update (id=${id})`);
   return rowToFlowVersion(row);
 }
 

@@ -39,6 +39,7 @@ import {
   lockVersion,
   replaceSampleData,
   setSampleDataEntry,
+  setSampleInputEntry,
   updateDraftVersion,
 } from "../db/repos/flow-version";
 import {
@@ -802,6 +803,44 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Per-step sample INPUT (override applied during test-from-here runs).
+    // Mirror of sample-data above but writes to the `sample_input`
+    // column. Same DRAFT-only semantic and per-entry size cap.
+    "/api/workflows/:id/versions/:versionId/sample-input/:stepName": {
+      PATCH: (req) =>
+        trapErrors(async () => {
+          const { versionId, stepName } = (
+            req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
+          ).params;
+          const body = (await req.json().catch(() => ({}))) as { input?: unknown };
+          // `input: null` clears; `input: undefined` (missing) same as null.
+          // Anything else is stored; must be a plain object since it
+          // replaces the step's `settings.input` shape at runtime.
+          const input = body.input === undefined ? null : body.input;
+          if (input !== null) {
+            if (typeof input !== "object" || Array.isArray(input)) {
+              return err(
+                `sample input for "${stepName}" must be a JSON object (replaces settings.input at test time)`,
+                400,
+              );
+            }
+            const serialized = JSON.stringify(input);
+            if (serialized.length > SAMPLE_DATA_ENTRY_MAX_BYTES) {
+              return err(
+                `sample input for "${stepName}" exceeds ${SAMPLE_DATA_ENTRY_MAX_BYTES} bytes (got ${serialized.length})`,
+                413,
+              );
+            }
+          }
+          const v = setSampleInputEntry(
+            versionId,
+            stepName,
+            input as Record<string, unknown> | null,
+          );
+          return ok({ versionId: v.id, sampleInput: v.sampleInput });
+        }),
+    },
+
     "/api/workflows/:id/publish": {
       POST: (req) =>
         trapErrors(async () => {
@@ -870,9 +909,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // test. Production runs (no stepNameToTest) ignore sampleData
           // entirely.
           let sampleData: Record<string, unknown> | undefined;
+          let sampleInputOverride: Record<string, unknown> | undefined;
           if (body.stepNameToTest) {
             const ver = getFlowVersion(versionId);
             if (ver?.sampleData) sampleData = ver.sampleData;
+            // Per-step sample input override: forwarded as a SINGLE
+            // {stepName -> input} entry, not the whole map -- the engine
+            // executor only applies the override for the step under
+            // test, never for other steps even if they have an entry.
+            // Keeping the wire payload narrow means a copy-paste error
+            // in one step's sample input can't bleed into a different
+            // step's test run.
+            const override = ver?.sampleInput?.[body.stepNameToTest];
+            if (override && typeof override === "object" && !Array.isArray(override)) {
+              sampleInputOverride = { [body.stepNameToTest]: override as Record<string, unknown> };
+            }
           }
           enqueue({
             jobType: "RUN_FLOW",
@@ -881,6 +932,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               payload: body.payload ?? {},
               ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
               ...(sampleData ? { sampleData } : {}),
+              ...(sampleInputOverride ? { sampleInputOverride } : {}),
             },
             flowRunId: run.id,
             flowId: id,

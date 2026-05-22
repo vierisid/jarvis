@@ -21,6 +21,7 @@ import type {
 } from "../handler";
 import { FlowExecutionError } from "../handler";
 import { getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
+import type { FlowTriggerNode } from "../../db/repos/flow-version";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "./engine-runtime";
 import { loadExecutionStateFromLog } from "./execution-state-loader";
@@ -142,8 +143,24 @@ export class EngineFlowExecutor implements FlowExecutor {
         process.env["JARVIS_WORKFLOW_STREAM_STEP_PROGRESS"] === "NONE"
           ? "NONE"
           : "WEBSOCKET";
+      // Apply per-step sample input overrides BEFORE building flowOpts.
+      // The override lives on the job payload (see route enqueue) and
+      // replaces the named step's `settings.input` for this run only.
+      // Tests-from-here use this to exercise a step with curated
+      // parameters without rewriting the production-bound input. We
+      // patch a cloned tree so the cached version object stays clean
+      // and other concurrent reads (catalog UI, list endpoint) aren't
+      // observed mutating.
+      let flowVersionForEngine = ctx.version;
+      const overrides = ctx.job.payload.sampleInputOverride;
+      if (overrides && Object.keys(overrides).length > 0) {
+        flowVersionForEngine = {
+          ...ctx.version,
+          trigger: applyInputOverrides(ctx.version.trigger, overrides),
+        };
+      }
       const flowOpts: Parameters<typeof handle.executeFlow>[0] = {
-        flowVersion: ctx.version,
+        flowVersion: flowVersionForEngine,
         runEnvironment: env,
         streamStepProgress,
       };
@@ -286,4 +303,33 @@ function unwrapStepEnvelopes(
     }
   }
   return out;
+}
+
+/**
+ * Return a clone of the trigger tree with `settings.input` replaced on
+ * every step whose name appears in `overrides`. The original tree is
+ * untouched so concurrent readers (catalog UI, list endpoint, etc.)
+ * keep observing the version as stored.
+ *
+ * Walks `nextAction`, LOOP `firstLoopAction`, and ROUTER `children`
+ * recursively. Steps without an override are deep-cloned by reference
+ * to their settings -- safe because we never mutate the result.
+ */
+function applyInputOverrides(
+  root: FlowTriggerNode,
+  overrides: Record<string, Record<string, unknown>>,
+): FlowTriggerNode {
+  const visit = (node: FlowTriggerNode): FlowTriggerNode => {
+    const next: FlowTriggerNode = { ...node };
+    if (node.name in overrides) {
+      next.settings = { ...(node.settings ?? {}), input: { ...overrides[node.name]! } };
+    }
+    if (node.nextAction) next.nextAction = visit(node.nextAction);
+    if (node.firstLoopAction) next.firstLoopAction = visit(node.firstLoopAction);
+    if (Array.isArray(node.children)) {
+      next.children = node.children.map((c) => (c ? visit(c) : c)) as typeof node.children;
+    }
+    return next;
+  };
+  return visit(root);
 }

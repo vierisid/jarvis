@@ -1784,8 +1784,50 @@
   margin: 0 0 var(--s-2) 22px;
 }
 
-/* Per-step sample data editor + Test from here, rendered inside PropertiesPanel
-   below the step-actions row. */
+/* Collapsible "Advanced settings" block. Wraps error handling, sample
+   input/output editors, and the test button so the main properties
+   panel stays focused on the step's regular inputs. */
+.wf-props__advanced {
+  margin-top: var(--s-3);
+  border-top: 1px solid var(--rule-soft);
+  padding-top: var(--s-3);
+}
+.wf-props__advanced-toggle {
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  margin-left: -6px;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-2);
+}
+.wf-props__advanced-toggle:hover {
+  color: var(--ink);
+  background: var(--paper-3);
+}
+.wf-props__advanced-toggle--open {
+  color: var(--ink);
+}
+.wf-props__advanced-caret {
+  font-size: 0.7rem;
+  display: inline-block;
+  width: 10px;
+}
+.wf-props__advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+
+/* Per-step sample data editor + Test this step button, rendered inside
+   the Advanced collapsible. */
 .wf-props__sample-data {
   margin-top: var(--s-3);
   padding-top: var(--s-3);

@@ -102,10 +102,17 @@ export interface FlowVersion {
   notes: unknown[];
   backupFiles: Record<string, string> | null;
   /**
-   * Per-step sample outputs (`stepName -> output`) for the "test from here"
+   * Per-step sample outputs (`stepName -> output`) for the "test this step"
    * path. Editable per step via the properties panel. Null when never set.
    */
   sampleData: Record<string, unknown> | null;
+  /**
+   * Per-step sample INPUT overrides (`stepName -> input`) used only when
+   * the user clicks "Test this step". Replaces that step's
+   * `settings.input` for the test run; the persisted production input
+   * is unaffected. Null when never set.
+   */
+  sampleInput: Record<string, unknown> | null;
   created: number;
   updated: number;
 }
@@ -1183,6 +1190,41 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
+   * Per-step sample INPUT update. Mirrors `setStepSampleData` but
+   * targets the `sample_input` column. Pass `null` to clear. The
+   * server enforces that non-null inputs are plain objects (they
+   * replace `settings.input` shape at test time).
+   */
+  const setStepSampleInput = useCallback(
+    async (stepName: string, input: Record<string, unknown> | null): Promise<ActionResult> => {
+      if (!flowId || !version) return { ok: false, message: "no version loaded" };
+      if (version.state === "LOCKED") {
+        return { ok: false, message: "version is published; create a new draft to edit sample input" };
+      }
+      try {
+        const res = await fetch(
+          `/api/workflows/${flowId}/versions/${version.id}/sample-input/${encodeURIComponent(stepName)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ input }),
+          },
+        );
+        if (!res.ok) {
+          const body = await safeJson(res);
+          return { ok: false, message: body?.error ?? `HTTP ${res.status}` };
+        }
+        const body = (await res.json()) as { sampleInput: Record<string, unknown> | null };
+        setVersion((prev) => (prev ? { ...prev, sampleInput: body.sampleInput } : prev));
+        return { ok: true, message: "Sample input saved" };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [flowId, version],
+  );
+
+  /**
    * Kick off a "test from here" run: enqueues a flow run with
    * `stepNameToTest` set. The engine executes only that step, feeding it
    * preceding-step outputs from the version's persisted sample data. The
@@ -1305,6 +1347,7 @@ export function useWorkflowEditor(flowId: string | null) {
     save,
     reset,
     setStepSampleData,
+    setStepSampleInput,
     testStepFromHere,
     /** Restore the editor to the state immediately before the last destructive op (delete / disconnect / piece replace). Returns true if anything was restored. */
     undo,
