@@ -98,9 +98,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "                                      refine the description with concrete piece/tool names, and call again.",
       "                                      Composed flows are DISABLED; follow up with `publish` once the user",
       "                                      confirms, then optionally `run` to test.",
-      "  create { name }                     Create an EMPTY workflow with a manual trigger (no steps). Use only",
-      "                                      when the user wants a blank canvas to edit in the UI. For \"create a",
-      "                                      workflow that does X\" use `compose`, not `create`.",
+      "  create { name, empty: true }        Create an EMPTY workflow with a manual trigger (no steps). The `empty: true`",
+      "                                      flag is REQUIRED -- without it the tool refuses and tells you to use `compose`.",
+      "                                      Only use this when the user explicitly asked for a blank canvas. If they",
+      "                                      described what the workflow should DO, use `compose` with their request as",
+      "                                      the description; never use `create` for that case.",
       "  list                                Return every workflow's id, name, status, last-updated.",
       "  get { flow }                        Full detail (latest version, published id, recent metadata).",
       "  run { flow, payload? }              Queue a run; returns the run_id.",
@@ -152,6 +154,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: 'Cap for "list_runs" (default 25).',
         required: false,
       },
+      empty: {
+        type: "boolean",
+        description:
+          'Required when calling `create` without a `description`. Confirms "yes, the user wants a blank canvas with no steps." ' +
+          'If the user described what the workflow should do, do NOT pass empty -- call `compose` instead with that description. ' +
+          'Defaults to false.',
+        required: false,
+      },
     },
     execute: async (params) => {
       const action = String(params.action ?? "");
@@ -162,8 +172,38 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return JSON.stringify(actGet(requireFlowParam(params)));
         case "run":
           return JSON.stringify(actRun(requireFlowParam(params), params.payload as Record<string, unknown> | undefined));
-        case "create":
-          return JSON.stringify(actCreate(requireString(params, "name")));
+        case "create": {
+          // Two-step gate to keep small / local LLMs honest:
+          //   - If `description` is passed, reroute to `compose` so the
+          //     workflow gets built out with steps. The verb "create" in
+          //     the user's message lexically matches this action name,
+          //     so weak models pick it even when the user described what
+          //     the flow should do.
+          //   - Otherwise require an explicit `empty: true` flag. Forces
+          //     the caller to confirm "I really want a blank canvas" and
+          //     short-circuits the silent-empty-flow failure mode the
+          //     user reported. The error message walks the agent toward
+          //     the right next call.
+          const name = requireString(params, "name");
+          const description = typeof params["description"] === "string" ? params["description"].trim() : "";
+          if (description.length > 0) {
+            const composed = await actCompose(name, description, deps);
+            return JSON.stringify({
+              ...composed,
+              routedFrom: "create",
+              note: "Rerouted to `compose` because a description was provided. Future calls: use `compose` directly when the user describes what the workflow should do.",
+            });
+          }
+          const empty = params["empty"] === true;
+          if (!empty) {
+            throw new Error(
+              "create: refusing to make an empty workflow without confirmation. " +
+                "If the user described what the workflow should DO, call `compose` with that description. " +
+                'If the user really wants a blank canvas to edit in the UI, retry with empty: true.',
+            );
+          }
+          return JSON.stringify(actCreate(name));
+        }
         case "enable":
           return JSON.stringify(actSetStatus(requireFlowParam(params), "ENABLED", deps));
         case "disable":

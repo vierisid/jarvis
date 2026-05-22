@@ -790,9 +790,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const messages: Array<{ role: "system" | "user"; content: string }> = [];
           if (input.system !== undefined) messages.push({ role: "system", content: input.system });
           messages.push({ role: "user", content: input.prompt });
-          const reply = (await llmManager.chat(messages, {})) as unknown as { text?: unknown };
-          const text = typeof reply.text === "string" ? reply.text : "";
-          return { text };
+          // Composer expects a complete JSON tree describing the flow.
+          // A realistic flow is 500-2000 output tokens; we ask for 4096
+          // to leave room for verbose pieces (long input schemas, many
+          // steps) without surprise truncation. Ollama's default
+          // `num_predict` is 128 -- truncates every compose reply mid-
+          // JSON and crashes parsing with "Unexpected EOF". Other
+          // providers either have higher defaults or ignore the cap.
+          const reply = await llmManager.chat(messages, { max_tokens: 4096 });
+          // `LLMResponse.content` is the assistant-text field; an earlier
+          // version of this adapter read `reply.text` which doesn't
+          // exist on the provider response shape, so every compose
+          // returned "" and JSON.parse crashed with EOF. Stay strict
+          // here -- if the provider ever returns ContentBlock[] for
+          // text-only completions we want to know.
+          const content = typeof reply.content === "string" ? reply.content : "";
+          return { text: content };
         },
       };
       const composerToolRegistry = toolRegistry

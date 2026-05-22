@@ -180,7 +180,9 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');
   lines.push('');
-  lines.push('Use `create { name }` only when the user wants an EMPTY workflow to edit by hand in the UI.');
+  lines.push('Use `create { name, empty: true }` ONLY when the user explicitly asked for a blank canvas to edit by hand in the UI.');
+  lines.push('The tool rejects `create` without `empty: true` (or a `description`) -- this is intentional, to stop weak models from');
+  lines.push('picking `create` just because the verb matches. If you pass `description`, the call silently reroutes to `compose`.');
   lines.push('Use `run { flow, payload? }` to trigger an existing flow; `flow` accepts display name or id.');
   lines.push('Sub-actions: compose / create / list / get / run / enable / disable / publish / delete / list_runs / get_run.');
   lines.push('');

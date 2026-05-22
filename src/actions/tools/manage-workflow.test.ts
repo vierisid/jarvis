@@ -32,7 +32,7 @@ async function call(action: string, params: Record<string, unknown> = {}): Promi
 
 describe("manage_workflow tool", () => {
   test("create then list returns the new flow", async () => {
-    const created = (await call("create", { name: "Morning briefing" })) as { id: string; name: string; status: string };
+    const created = (await call("create", { name: "Morning briefing", empty: true })) as { id: string; name: string; status: string };
     expect(created.name).toBe("Morning briefing");
     expect(created.status).toBe("DISABLED");
 
@@ -41,7 +41,7 @@ describe("manage_workflow tool", () => {
   });
 
   test("get accepts display name (case-insensitive) and id", async () => {
-    const created = (await call("create", { name: "Test Flow" })) as { id: string };
+    const created = (await call("create", { name: "Test Flow", empty: true })) as { id: string };
     const byName = (await call("get", { flow: "test flow" })) as { id: string; latestDraft: { displayName: string } };
     expect(byName.id).toBe(created.id);
     expect(byName.latestDraft.displayName).toBe("Test Flow");
@@ -50,7 +50,7 @@ describe("manage_workflow tool", () => {
   });
 
   test("run enqueues a RUN_FLOW job and returns run_id", async () => {
-    const created = (await call("create", { name: "runme" })) as { id: string };
+    const created = (await call("create", { name: "runme", empty: true })) as { id: string };
     const out = (await call("run", { flow: "runme", payload: { foo: "bar" } })) as { run_id: string; status: string };
     expect(typeof out.run_id).toBe("string");
     expect(out.status).toBe("QUEUED");
@@ -58,7 +58,7 @@ describe("manage_workflow tool", () => {
   });
 
   test("enable / disable round-trip", async () => {
-    await call("create", { name: "toggle" });
+    await call("create", { name: "toggle", empty: true });
     let st = (await call("enable", { flow: "toggle" })) as { status: string };
     expect(st.status).toBe("ENABLED");
     st = (await call("disable", { flow: "toggle" })) as { status: string };
@@ -66,7 +66,7 @@ describe("manage_workflow tool", () => {
   });
 
   test("publish locks the latest draft and ENABLES the flow", async () => {
-    await call("create", { name: "pubme" });
+    await call("create", { name: "pubme", empty: true });
     const published = (await call("publish", { flow: "pubme" })) as {
       status: string;
       publishedVersionId: string | null;
@@ -76,15 +76,15 @@ describe("manage_workflow tool", () => {
   });
 
   test("delete removes the flow", async () => {
-    const created = (await call("create", { name: "doomed" })) as { id: string };
+    const created = (await call("create", { name: "doomed", empty: true })) as { id: string };
     const out = (await call("delete", { flow: "doomed" })) as { id: string; deleted: boolean };
     expect(out).toEqual({ id: created.id, deleted: true });
     await expect(call("get", { flow: "doomed" })).rejects.toThrow(/not found/);
   });
 
   test("list_runs filters by flow ref + caps to limit", async () => {
-    await call("create", { name: "a" });
-    await call("create", { name: "b" });
+    await call("create", { name: "a", empty: true });
+    await call("create", { name: "b", empty: true });
     await call("run", { flow: "a" });
     await call("run", { flow: "a" });
     await call("run", { flow: "b" });
@@ -97,7 +97,7 @@ describe("manage_workflow tool", () => {
   });
 
   test("get_run returns step output", async () => {
-    await call("create", { name: "rr" });
+    await call("create", { name: "rr", empty: true });
     const queued = (await call("run", { flow: "rr" })) as { run_id: string };
     const detail = (await call("get_run", { run_id: queued.run_id })) as { id: string; status: string };
     expect(detail.id).toBe(queued.run_id);
@@ -116,6 +116,49 @@ describe("manage_workflow tool", () => {
 
   test("unknown action throws", async () => {
     await expect(call("nope")).rejects.toThrow(/unknown action "nope"/);
+  });
+
+  test("create without `empty: true` or a description refuses with a hint", async () => {
+    // The gate: weak LLMs frequently pick `create` because the user's
+    // verb says "create", even when they described what the flow should
+    // DO. Without an explicit `empty: true`, we error out and point the
+    // agent at `compose`.
+    await expect(call("create", { name: "should fail" })).rejects.toThrow(
+      /refusing to make an empty workflow without confirmation/,
+    );
+  });
+
+  test("create with a description reroutes to compose", async () => {
+    // Stub LLM produces a one-step flow so we can verify the routing
+    // result was used rather than the empty-flow path.
+    const llm = new StubLlm(
+      JSON.stringify({
+        displayName: "Routed",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-ask",
+              actionName: "ask",
+              input: { prompt: "hi" },
+            },
+          },
+        },
+      }),
+    );
+    const t = createManageWorkflowTool({ llm, pieceRegistry: sampleCatalog() });
+    const out = JSON.parse(
+      (await t.execute({
+        action: "create",
+        name: "Routed",
+        description: "ask the LLM about my inbox",
+      })) as string,
+    ) as { ok: boolean; routedFrom: string };
+    expect(out.ok).toBe(true);
+    expect(out.routedFrom).toBe("create");
   });
 });
 
