@@ -251,6 +251,10 @@ function buildSystemPrompt(catalog: string, toolsText: string): string {
     '        "children": [ { ...subgraph for high... }, { ...subgraph for fallback... } ] }',
     "    Conditions are 2D: outer array = OR, inner = AND. Operators include TEXT_CONTAINS, TEXT_EXACTLY_MATCHES, NUMBER_IS_GREATER_THAN, NUMBER_IS_LESS_THAN, NUMBER_IS_EQUAL_TO, BOOLEAN_IS_TRUE, BOOLEAN_IS_FALSE, EXISTS, DOES_NOT_EXIST, LIST_IS_EMPTY, LIST_IS_NOT_EMPTY, LIST_CONTAINS.",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
+    "  - Field names in `{{step.field}}` MUST exist on that step's declared `output` (see each action / trigger in the catalog).",
+    "    Do not guess fields from the user's wording -- for example, a piece whose output is `{ result: ... }` is referenced as",
+    "    `{{step.result}}`, NOT `{{step.content}}` just because the user said 'content'. If a piece has no declared output, the",
+    "    safe choice is `{{step}}` (the whole output) and let downstream steps drill in.",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
@@ -278,10 +282,15 @@ function renderCatalog(registry: PieceLookup): string {
     for (const trigger of Object.values(piece.triggers ?? {})) {
       lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
       lines.push(...renderSchemaLines(trigger.inputSchema, 6));
+      // Triggers carry the upstream-native `sampleData`; some pieces
+      // also set `outputSample` (Jarvis extension). Either is a valid
+      // hint -- prefer sampleData when present.
+      lines.push(...renderOutputLines((trigger as { sampleData?: unknown; outputSample?: unknown }).sampleData ?? (trigger as { outputSample?: unknown }).outputSample, 6));
     }
     for (const action of Object.values(piece.actions)) {
       lines.push(`    action  ${action.name}: ${action.description}`);
       lines.push(...renderSchemaLines(action.inputSchema, 6));
+      lines.push(...renderOutputLines((action as { outputSample?: unknown }).outputSample, 6));
     }
   }
   // Surface the schedule and webhook primitives the trigger manager understands
@@ -307,6 +316,59 @@ function renderSchemaLines(schema: PieceInputSchema | undefined, indent: number)
   if (!schema) return [];
   const pad = " ".repeat(indent);
   return schema.fields.map((f) => `${pad}- input.${f.name}: ${formatField(f)}`);
+}
+
+/**
+ * Render an action / trigger output sample so the LLM can wire
+ * `{{step.field}}` references against real field names instead of
+ * guessing from the user's wording. Two patterns emitted:
+ *
+ *   - Object sample (most actions): emit `output: { field1: <example>, ... }`.
+ *     The example values are short representative literals (numbers
+ *     keep their value, strings get quoted, nested objects collapse to
+ *     `{...}`, arrays to `[...]`) so the prompt stays compact even for
+ *     wide outputs.
+ *   - Array sample (list-returning pieces): emit `output: [{ field1, ... }]`
+ *     surfacing the first element's keys so the model knows how to
+ *     drill in after a LOOP_ON_ITEMS.
+ *
+ * No output is emitted when the piece didn't declare one (undefined),
+ * keeping the prompt small for pieces still picker-blind.
+ */
+function renderOutputLines(sample: unknown, indent: number): string[] {
+  if (sample === undefined || sample === null) return [];
+  const pad = " ".repeat(indent);
+  if (Array.isArray(sample)) {
+    if (sample.length === 0) return [`${pad}- output: []`];
+    const first = sample[0];
+    if (first && typeof first === "object" && !Array.isArray(first)) {
+      return [`${pad}- output: [${renderObjectInline(first as Record<string, unknown>)}, ...] (array)`];
+    }
+    return [`${pad}- output: [${formatScalar(first)}, ...] (array)`];
+  }
+  if (typeof sample === "object") {
+    return [`${pad}- output: ${renderObjectInline(sample as Record<string, unknown>)}`];
+  }
+  // Primitive output (rare but valid) -- show the value.
+  return [`${pad}- output: ${formatScalar(sample)}`];
+}
+
+function renderObjectInline(obj: Record<string, unknown>): string {
+  const entries = Object.entries(obj).map(([k, v]) => `${k}: ${formatScalar(v)}`);
+  return `{ ${entries.join(", ")} }`;
+}
+
+function formatScalar(v: unknown): string {
+  if (v === null) return "null";
+  if (typeof v === "string") {
+    // Keep examples short -- long string literals just bloat the prompt.
+    const trimmed = v.length > 40 ? v.slice(0, 37) + "..." : v;
+    return JSON.stringify(trimmed);
+  }
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return v.length === 0 ? "[]" : "[...]";
+  if (typeof v === "object") return "{...}";
+  return JSON.stringify(v);
 }
 
 function formatField(f: PieceInputField): string {

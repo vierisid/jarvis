@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
+import { PieceCatalog, type PieceCatalogEntry, type PieceLookup } from "../../workflows/runtime/piece-catalog";
 import type { ComposerLlmClient } from "./workflow-composer";
 
 class StubLlm implements ComposerLlmClient {
@@ -407,6 +408,100 @@ describe("composeFlow", () => {
       const llm = new StubLlm(badReply);
       await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
       expect(llm.calls).toHaveLength(4);
+    });
+  });
+
+  describe("system prompt surfaces output samples", () => {
+    // A catalog whose two actions cover both shapes: an object output
+    // (jarvis-tool.invoke returns { result, toolName }) and a bare-array
+    // output (vault_search returns a list). The composer should render
+    // both so the LLM has real field names instead of guessing.
+    function catalogWithOutputs(): PieceLookup {
+      const entries: PieceCatalogEntry[] = [
+        {
+          name: "jarvis-tool",
+          displayName: "Jarvis: Tool",
+          description: "Invoke a registered Jarvis tool.",
+          actions: {
+            invoke: {
+              name: "invoke",
+              displayName: "Invoke",
+              description: "Call a tool.",
+              inputSchema: { fields: [{ name: "toolName", label: "Tool", type: "string", required: true }] },
+              outputSample: { result: "the actual return value", toolName: "get_clipboard" },
+            },
+          },
+        },
+        {
+          name: "jarvis-context",
+          displayName: "Jarvis: Context",
+          description: "Read vault context.",
+          actions: {
+            vault_search: {
+              name: "vault_search",
+              displayName: "Vault: search",
+              description: "Find entities.",
+              inputSchema: { fields: [{ name: "query", label: "Query", type: "string", required: false }] },
+              outputSample: [
+                { id: "ent_01", type: "person", name: "Alice" },
+              ],
+            },
+          },
+        },
+      ];
+      return new PieceCatalog(entries);
+    }
+
+    test("object outputs surface as inline {field: example} so the LLM sees real key names", async () => {
+      const llm = new StubLlm(
+        JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }),
+      );
+      await composeFlow(
+        { llm, pieceRegistry: catalogWithOutputs() },
+        { name: "X", description: "x" },
+      );
+      const sys = llm.calls[0]?.system ?? "";
+      // The line should mention BOTH top-level keys so a wiring like
+      // `{{step.result}}` is grounded.
+      expect(sys).toMatch(/output: \{ result: ".*", toolName: ".*" \}/);
+    });
+
+    test("array outputs surface as `[{...keys...}, ...]` so loop iteration is discoverable", async () => {
+      const llm = new StubLlm(
+        JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }),
+      );
+      await composeFlow(
+        { llm, pieceRegistry: catalogWithOutputs() },
+        { name: "X", description: "x" },
+      );
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toMatch(/output: \[\{ id: .* \}, \.\.\.\] \(array\)/);
+    });
+
+    test("prompt explicitly warns against guessing field names from user wording", async () => {
+      const llm = new StubLlm(
+        JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }),
+      );
+      await composeFlow(
+        { llm, pieceRegistry: catalogWithOutputs() },
+        { name: "X", description: "x" },
+      );
+      const sys = llm.calls[0]?.system ?? "";
+      // The specific failure mode -- model picks `.content` because the
+      // user said "content" -- is called out by name in the rules.
+      expect(sys).toMatch(/MUST exist on that step's declared `output`/);
+      expect(sys).toMatch(/'content'/);
+    });
+
+    test("pieces without declared outputs emit no `- output:` line", async () => {
+      const llm = new StubLlm(
+        JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }),
+      );
+      // makeRegistry() is the default sampleCatalog which declares no
+      // outputs. The catalog section should NOT contain `- output:` lines.
+      await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys.includes("- output:")).toBe(false);
     });
   });
 });
