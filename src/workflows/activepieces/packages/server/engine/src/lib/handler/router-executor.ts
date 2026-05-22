@@ -167,6 +167,35 @@ export function evaluateConditions(conditionGroups: BranchCondition[][]): boolea
                     andGroup = andGroup && firstValueDoesNotEndWith
                     break
                 }
+                // === JARVIS PATCH: regex operators ===
+                // firstValue is the input string; secondValue is the JS
+                // regex pattern (no slashes, no flags suffix). Use inline
+                // (?i) for case-insensitive etc. -- the condition-level
+                // `caseSensitive` flag is ignored for regex because the
+                // pattern itself carries the modifiers. A malformed
+                // pattern throws an EngineGenericError so the run fails
+                // with a clear reason instead of silently never matching.
+                case BranchOperator.TEXT_MATCHES_REGEX: {
+                    let re: RegExp
+                    try {
+                        re = new RegExp(String(castedCondition.secondValue ?? ''))
+                    } catch (err) {
+                        throw new EngineGenericError('InvalidRegexError', `TEXT_MATCHES_REGEX: invalid pattern ${castedCondition.secondValue}: ${(err as Error).message}`)
+                    }
+                    andGroup = andGroup && re.test(String(castedCondition.firstValue ?? ''))
+                    break
+                }
+                case BranchOperator.TEXT_DOES_NOT_MATCH_REGEX: {
+                    let re: RegExp
+                    try {
+                        re = new RegExp(String(castedCondition.secondValue ?? ''))
+                    } catch (err) {
+                        throw new EngineGenericError('InvalidRegexError', `TEXT_DOES_NOT_MATCH_REGEX: invalid pattern ${castedCondition.secondValue}: ${(err as Error).message}`)
+                    }
+                    andGroup = andGroup && !re.test(String(castedCondition.firstValue ?? ''))
+                    break
+                }
+                // === END JARVIS PATCH ===
                 case BranchOperator.LIST_CONTAINS: {
                     const list = parseAndCoerceListAsArray(castedCondition.firstValue)
                     andGroup = andGroup && list.some((item) =>

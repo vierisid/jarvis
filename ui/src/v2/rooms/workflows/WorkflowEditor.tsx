@@ -4704,6 +4704,12 @@ const OPERATOR_GROUPS: Array<{ label: string; options: Array<{ value: string; la
       { value: "TEXT_DOES_NOT_START_WITH", label: "does not start with" },
       { value: "TEXT_ENDS_WITH", label: "ends with" },
       { value: "TEXT_DOES_NOT_END_WITH", label: "does not end with" },
+      // Regex operators: the secondValue is a JavaScript pattern.
+      // Inline flags via `(?i)` etc.; the per-condition caseSensitive
+      // toggle is ignored at runtime because the pattern carries its
+      // own modifiers.
+      { value: "TEXT_MATCHES_REGEX", label: "matches regex" },
+      { value: "TEXT_DOES_NOT_MATCH_REGEX", label: "does not match regex" },
     ],
   },
   {

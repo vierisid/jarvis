@@ -314,6 +314,80 @@ const PATCH_INSERTIONS: Record<
         "  // === END JARVIS PATCH ===",
     },
   ],
+  // Jarvis-only: TEXT_MATCHES_REGEX + TEXT_DOES_NOT_MATCH_REGEX added
+  // to the BranchOperator enum + the textConditions array + the zod
+  // literal list. Anchored on the last upstream text operator so the
+  // pair lands immediately after.
+  "packages/shared/src/lib/automation/flows/actions/action.ts": [
+    {
+      anchor: /^\s*TEXT_DOES_NOT_END_WITH = 'TEXT_DOES_NOT_END_WITH',\s*$/,
+      insert:
+        "    // === JARVIS PATCH: regex condition operators ===\n" +
+        "    // Inline regex test on a text value (firstValue against secondValue\n" +
+        "    // as a JS pattern). Inline regex flags via `(?i)` etc.; caseSensitive\n" +
+        "    // is ignored. Negation is a separate operator to mirror the rest of\n" +
+        "    // the family.\n" +
+        "    TEXT_MATCHES_REGEX = 'TEXT_MATCHES_REGEX',\n" +
+        "    TEXT_DOES_NOT_MATCH_REGEX = 'TEXT_DOES_NOT_MATCH_REGEX',\n" +
+        "    // === END JARVIS PATCH ===",
+    },
+    {
+      anchor: /^\s*BranchOperator\.TEXT_DOES_NOT_END_WITH,\s*$/,
+      insert:
+        "    // === JARVIS PATCH: regex operators (see BranchOperator enum) ===\n" +
+        "    BranchOperator.TEXT_MATCHES_REGEX,\n" +
+        "    BranchOperator.TEXT_DOES_NOT_MATCH_REGEX,\n" +
+        "    // === END JARVIS PATCH ===",
+    },
+    {
+      anchor: /^\s*z\.literal\(BranchOperator\.TEXT_DOES_NOT_END_WITH\),\s*$/,
+      insert:
+        "    // === JARVIS PATCH: regex operators (see BranchOperator enum) ===\n" +
+        "    z.literal(BranchOperator.TEXT_MATCHES_REGEX),\n" +
+        "    z.literal(BranchOperator.TEXT_DOES_NOT_MATCH_REGEX),\n" +
+        "    // === END JARVIS PATCH ===",
+    },
+  ],
+  // Jarvis-only: case branches for the two regex operators added above.
+  // Anchored on the closing brace of TEXT_DOES_NOT_END_WITH; insert
+  // pushes the new cases right before LIST_CONTAINS so the family
+  // stays grouped.
+  "packages/server/engine/src/lib/handler/router-executor.ts": [
+    {
+      anchor: /^\s*case BranchOperator\.LIST_CONTAINS: \{\s*$/,
+      position: "before",
+      insert:
+        "                // === JARVIS PATCH: regex operators ===\n" +
+        "                // firstValue is the input string; secondValue is the JS\n" +
+        "                // regex pattern (no slashes, no flags suffix). Use inline\n" +
+        "                // (?i) for case-insensitive etc. -- the condition-level\n" +
+        "                // `caseSensitive` flag is ignored for regex because the\n" +
+        "                // pattern itself carries the modifiers. A malformed\n" +
+        "                // pattern throws an EngineGenericError so the run fails\n" +
+        "                // with a clear reason instead of silently never matching.\n" +
+        "                case BranchOperator.TEXT_MATCHES_REGEX: {\n" +
+        "                    let re: RegExp\n" +
+        "                    try {\n" +
+        "                        re = new RegExp(String(castedCondition.secondValue ?? ''))\n" +
+        "                    } catch (err) {\n" +
+        "                        throw new EngineGenericError('InvalidRegexError', `TEXT_MATCHES_REGEX: invalid pattern ${castedCondition.secondValue}: ${(err as Error).message}`)\n" +
+        "                    }\n" +
+        "                    andGroup = andGroup && re.test(String(castedCondition.firstValue ?? ''))\n" +
+        "                    break\n" +
+        "                }\n" +
+        "                case BranchOperator.TEXT_DOES_NOT_MATCH_REGEX: {\n" +
+        "                    let re: RegExp\n" +
+        "                    try {\n" +
+        "                        re = new RegExp(String(castedCondition.secondValue ?? ''))\n" +
+        "                    } catch (err) {\n" +
+        "                        throw new EngineGenericError('InvalidRegexError', `TEXT_DOES_NOT_MATCH_REGEX: invalid pattern ${castedCondition.secondValue}: ${(err as Error).message}`)\n" +
+        "                    }\n" +
+        "                    andGroup = andGroup && !re.test(String(castedCondition.firstValue ?? ''))\n" +
+        "                    break\n" +
+        "                }\n" +
+        "                // === END JARVIS PATCH ===",
+    },
+  ],
   // Upstream's `flow-executor.executeFromTrigger` always calls
   // `triggerHelper.executeOnStart`, which throws `TriggerNameNotSetError`
   // when the trigger has no piece (the EMPTY / "Manual" type). Without this

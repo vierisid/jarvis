@@ -113,6 +113,14 @@ export enum BranchOperator {
     TEXT_DOES_NOT_START_WITH = 'TEXT_DOES_NOT_START_WITH',
     TEXT_ENDS_WITH = 'TEXT_ENDS_WITH',
     TEXT_DOES_NOT_END_WITH = 'TEXT_DOES_NOT_END_WITH',
+    // === JARVIS PATCH: regex condition operators ===
+    // Inline regex test on a text value (firstValue against secondValue
+    // as a JS pattern). Inline regex flags via `(?i)` etc.; caseSensitive
+    // is ignored. Negation is a separate operator to mirror the rest of
+    // the family.
+    TEXT_MATCHES_REGEX = 'TEXT_MATCHES_REGEX',
+    TEXT_DOES_NOT_MATCH_REGEX = 'TEXT_DOES_NOT_MATCH_REGEX',
+    // === END JARVIS PATCH ===
     NUMBER_IS_GREATER_THAN = 'NUMBER_IS_GREATER_THAN',
     NUMBER_IS_LESS_THAN = 'NUMBER_IS_LESS_THAN',
     NUMBER_IS_EQUAL_TO = 'NUMBER_IS_EQUAL_TO',
@@ -147,6 +155,10 @@ export const textConditions = [
     BranchOperator.TEXT_DOES_NOT_START_WITH,
     BranchOperator.TEXT_ENDS_WITH,
     BranchOperator.TEXT_DOES_NOT_END_WITH,
+    // === JARVIS PATCH: regex operators (see BranchOperator enum) ===
+    BranchOperator.TEXT_MATCHES_REGEX,
+    BranchOperator.TEXT_DOES_NOT_MATCH_REGEX,
+    // === END JARVIS PATCH ===
     BranchOperator.LIST_CONTAINS,
     BranchOperator.LIST_DOES_NOT_CONTAIN,
 ]
@@ -160,6 +172,10 @@ const BranchOperatorTextLiterals = [
     z.literal(BranchOperator.TEXT_DOES_NOT_START_WITH),
     z.literal(BranchOperator.TEXT_ENDS_WITH),
     z.literal(BranchOperator.TEXT_DOES_NOT_END_WITH),
+    // === JARVIS PATCH: regex operators (see BranchOperator enum) ===
+    z.literal(BranchOperator.TEXT_MATCHES_REGEX),
+    z.literal(BranchOperator.TEXT_DOES_NOT_MATCH_REGEX),
+    // === END JARVIS PATCH ===
     z.literal(BranchOperator.LIST_CONTAINS),
     z.literal(BranchOperator.LIST_DOES_NOT_CONTAIN),
 ] as const

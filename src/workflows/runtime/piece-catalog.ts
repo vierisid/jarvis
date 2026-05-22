@@ -414,7 +414,16 @@ export async function buildPieceCatalog(
     await handle.release();
   }
 
-  if (opts.cacheFile && opts.cacheKey && failures.length === 0) {
+  // Cache write policy: persist the successful entries even when some
+  // pieces failed. A single broken community piece used to block the
+  // entire cache write, which meant every daemon restart re-spawned
+  // the engine + re-extracted every piece (~2-3s) until the broken
+  // one was uninstalled. The catalog endpoint already returns only
+  // successes (failures are surfaced via the daemon log + audit
+  // script), so persisting the partial set is strictly better than
+  // discarding it. We still skip the write when zero pieces succeeded
+  // -- there's nothing useful to cache.
+  if (opts.cacheFile && opts.cacheKey && out.length > 0) {
     mkdirSync(dirname(opts.cacheFile), { recursive: true });
     const payload: CacheFileShape = { cacheKey: opts.cacheKey, entries: out };
     writeFileSync(opts.cacheFile, JSON.stringify(payload, null, 2) + "\n");

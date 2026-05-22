@@ -116,6 +116,12 @@ const PATCHED_VENDOR_SOURCES = [
   // though the source on disk has changed.
   "pieces/framework/src/lib/action/action.ts",
   "pieces/framework/src/lib/piece-metadata.ts",
+  // Jarvis-only BranchOperator additions (TEXT_MATCHES_REGEX +
+  // negation) and the matching router-executor cases. Hand-edits or
+  // sync re-applications change the bundle hash so the cached engine
+  // doesn't ship the OLD operator list / executor.
+  "shared/src/lib/automation/flows/actions/action.ts",
+  "server/engine/src/lib/handler/router-executor.ts",
 ] as const;
 
 /**

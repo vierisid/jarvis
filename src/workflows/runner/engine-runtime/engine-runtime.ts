@@ -20,7 +20,7 @@
  * layered on without changing the acquire contract.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { EngineContract } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
@@ -365,6 +365,44 @@ interface WarmEngine {
   engineClient: EngineContract;
 }
 
+/**
+ * Walk the vendored Jarvis pieces directory and return each piece's
+ * short alias (the part the engine's `getPieceNameFromAlias` strips
+ * `piece-` from). Used as the default `devPieces` list so adding a
+ * new Jarvis piece doesn't require an engine-runtime edit.
+ *
+ * Failure-tolerant: returns an empty list if the vendor tree is
+ * missing or unreadable, so the runtime still constructs (the engine
+ * will just fail piece extraction with a clearer error than "missing
+ * dir").
+ */
+function discoverJarvisDevPieces(): string[] {
+  const root = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis");
+  if (!existsSync(root)) return [];
+  const out: string[] = [];
+  for (const name of readdirSync(root).sort()) {
+    const dir = resolve(root, name);
+    let s;
+    try { s = statSync(dir); } catch { continue; }
+    if (!s.isDirectory()) continue;
+    const pkgPath = resolve(dir, "package.json");
+    if (!existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: unknown };
+      if (typeof pkg.name === "string" && pkg.name.length > 0) {
+        // Drop the npm scope so the alias matches the format the engine
+        // expects: `@jarvispieces/piece-jarvis-foo` -> `jarvis-foo`.
+        const short = pkg.name.replace(/^@[^/]+\//, "").replace(/^piece-/, "");
+        out.push(short);
+      }
+    } catch {
+      // Malformed package.json -- skip; the engine will surface a clear
+      // PieceNotFoundError if this piece is later referenced.
+    }
+  }
+  return out;
+}
+
 export class EngineRuntime {
   private readonly api: SandboxApi;
   private readonly bundlePath: string;
@@ -415,18 +453,15 @@ export class EngineRuntime {
     // packages/pieces/jarvis/*/dist/package.json without further env setup.
     this.cwd = opts.cwd ?? resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "..");
     // Accept piece names with or without the `piece-` prefix; the engine's
-    // `getPieceNameFromAlias` normalizes by stripping `piece-` so we match
-    // its own behaviour.
-    this.devPieces = opts.devPieces ?? [
-      "jarvis-test",
-      "jarvis-ask",
-      "jarvis-tool",
-      "jarvis-notify",
-      "jarvis-context",
-      "jarvis-agent",
-      "jarvis-trigger",
-      "jarvis-validate",
-    ];
+    // `getPieceNameFromAlias` normalizes by stripping `piece-` so we
+    // match its own behaviour.
+    //
+    // Auto-discover Jarvis pieces from the vendored tree so adding a
+    // new piece (regex, anything-next) doesn't need an edit here. The
+    // hardcoded list was an easy oversight: forgot one entry and the
+    // engine raised PieceNotFoundError at extraction time. Caller can
+    // still override via `opts.devPieces` for tests.
+    this.devPieces = opts.devPieces ?? discoverJarvisDevPieces();
   }
 
   /** Expose for callers that need to resolve files into the same baseCodeDir. */
