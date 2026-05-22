@@ -22,6 +22,7 @@ import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { NVIDIAProvider } from '../llm/nvidia.ts';
 import { OpenAICompatibleProvider } from '../llm/openai-compatible.ts';
+import { LiteLLMProvider } from '../llm/litellm.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -431,6 +432,20 @@ export class AgentService implements Service, IAgentService {
       this.llmManager.registerProvider(provider);
       hasProvider = true;
       console.log('[AgentService] Registered OpenAI-compatible provider');
+    }
+
+    // Register LiteLLM proxy. Needs an explicit base_url so it doesn't
+    // appear active when no proxy is running; the virtual key is
+    // optional for unauthenticated local proxies.
+    if (llm.litellm?.base_url) {
+      const provider = new LiteLLMProvider(
+        llm.litellm.base_url,
+        llm.litellm.model,
+        llm.litellm.api_key,
+      );
+      this.llmManager.registerProvider(provider);
+      hasProvider = true;
+      console.log('[AgentService] Registered LiteLLM provider');
     }
 
     if (!hasProvider) {

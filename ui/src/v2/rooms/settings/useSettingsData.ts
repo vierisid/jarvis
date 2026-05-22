@@ -10,7 +10,8 @@ export type LLMProvider =
   | "ollama"
   | "openrouter"
   | "nvidia"
-  | "openai_compatible";
+  | "openai_compatible"
+  | "litellm";
 
 export const LLM_PROVIDERS: readonly LLMProvider[] = [
   "anthropic",
@@ -21,6 +22,7 @@ export const LLM_PROVIDERS: readonly LLMProvider[] = [
   "openrouter",
   "nvidia",
   "openai_compatible",
+  "litellm",
 ] as const;
 
 export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = {
@@ -32,6 +34,7 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = {
   openrouter: "OpenRouter",
   nvidia: "NVIDIA NIM",
   openai_compatible: "OpenAI-compatible",
+  litellm: "LiteLLM",
 };
 
 export type STTProvider = "openai" | "groq" | "sarvam" | "local";
@@ -48,6 +51,7 @@ export interface LLMConfig {
   openrouter?: { model: string; has_api_key: boolean } | null;
   nvidia?: { model: string; has_api_key: boolean } | null;
   openai_compatible?: { base_url: string; model: string; has_api_key: boolean } | null;
+  litellm?: { base_url: string; model: string; has_api_key: boolean } | null;
 }
 
 export interface ChannelStatus {
@@ -311,8 +315,8 @@ export function useSettingsData() {
       for (const p of LLM_PROVIDERS) {
         const v = (llm as any)[p];
         if (!v) continue;
-        // Ollama and OpenAI-compatible are "configured" by a base_url, not a key.
-        if (p === "ollama" || p === "openai_compatible" || v.has_api_key) {
+        // Ollama, OpenAI-compatible, and LiteLLM are "configured" by a base_url, not a key.
+        if (p === "ollama" || p === "openai_compatible" || p === "litellm" || v.has_api_key) {
           providersWithKey++;
         }
       }
@@ -406,6 +410,22 @@ export function useSettingsData() {
         );
         await refresh();
         return { ok: true, message: r.message || `Ollama base URL updated.` };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
+  const setLiteLLMBaseUrl = useCallback(
+    async (baseUrl: string): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/llm",
+          { litellm: { base_url: baseUrl } },
+        );
+        await refresh();
+        return { ok: true, message: r.message || "LiteLLM base URL updated." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
@@ -764,6 +784,7 @@ export function useSettingsData() {
     setLLMApiKey,
     setOllamaBaseUrl,
     setOpenAICompatibleBaseUrl,
+    setLiteLLMBaseUrl,
     testProvider,
     setTelegram,
     setDiscord,

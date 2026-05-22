@@ -16,6 +16,7 @@ import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenRouterProvider } from '../llm/openrouter.ts';
 import { NVIDIAProvider } from '../llm/nvidia.ts';
 import { OpenAICompatibleProvider } from '../llm/openai-compatible.ts';
+import { LiteLLMProvider } from '../llm/litellm.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import type { LLMManager } from '../llm/manager.ts';
 
@@ -27,6 +28,7 @@ const KEY_GEMINI = 'llm.gemini.api_key';
 const KEY_OPENROUTER = 'llm.openrouter.api_key';
 const KEY_NVIDIA = 'llm.nvidia.api_key';
 const KEY_OPENAI_COMPAT = 'llm.openai_compatible.api_key';
+const KEY_LITELLM = 'llm.litellm.api_key';
 
 // DB setting keys
 const SETTING_PRIMARY = 'llm.primary';
@@ -41,6 +43,8 @@ const SETTING_OPENROUTER_MODEL = 'llm.openrouter.model';
 const SETTING_NVIDIA_MODEL = 'llm.nvidia.model';
 const SETTING_OPENAI_COMPAT_MODEL = 'llm.openai_compatible.model';
 const SETTING_OPENAI_COMPAT_BASE_URL = 'llm.openai_compatible.base_url';
+const SETTING_LITELLM_MODEL = 'llm.litellm.model';
+const SETTING_LITELLM_BASE_URL = 'llm.litellm.base_url';
 
 export type LLMSettingsResponse = {
   primary: string;
@@ -53,6 +57,7 @@ export type LLMSettingsResponse = {
   openrouter: { model: string; has_api_key: boolean } | null;
   nvidia: { model: string; has_api_key: boolean } | null;
   openai_compatible: { base_url: string; model: string; has_api_key: boolean } | null;
+  litellm: { base_url: string; model: string; has_api_key: boolean } | null;
 };
 
 /**
@@ -105,6 +110,20 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
       }
     : null;
 
+  // LiteLLM proxy: requires an explicit base_url to count as configured.
+  // Virtual key is optional (some local proxies run without auth).
+  const dbLiteLLMUrl = getSetting(SETTING_LITELLM_BASE_URL);
+  const dbLiteLLMModel = getSetting(SETTING_LITELLM_MODEL);
+  const liteLLMConfigured = !!(dbLiteLLMUrl || config.llm.litellm?.base_url);
+  const hasLiteLLMKey = hasSecret(KEY_LITELLM) || !!config.llm.litellm?.api_key;
+  const litellm = liteLLMConfigured
+    ? {
+        base_url: dbLiteLLMUrl ?? config.llm.litellm?.base_url ?? '',
+        model: dbLiteLLMModel ?? config.llm.litellm?.model ?? '',
+        has_api_key: hasLiteLLMKey,
+      }
+    : null;
+
   return {
     primary,
     fallback,
@@ -116,6 +135,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     openrouter: { model: openrouterModel, has_api_key: hasOpenrouterKey },
     nvidia: { model: nvidiaModel, has_api_key: hasNvidiaKey },
     openai_compatible,
+    litellm,
   };
 }
 
@@ -135,6 +155,7 @@ export function saveLLMSettings(
     openrouter?: { api_key?: string; model?: string };
     nvidia?: { api_key?: string; model?: string };
     openai_compatible?: { base_url?: string; api_key?: string; model?: string };
+    litellm?: { base_url?: string; api_key?: string; model?: string };
   },
 ): void {
   // Save non-secret settings to DB
@@ -275,6 +296,41 @@ export function saveLLMSettings(
     };
   }
 
+  // LiteLLM. Same independent-field model as openai_compatible — `base_url`,
+  // `model`, and `api_key` can each be saved independently. An explicit
+  // empty `base_url` clears the provider entirely.
+  if (body.litellm) {
+    const trimmedUrl = body.litellm.base_url?.trim();
+    const clearingUrl = body.litellm.base_url !== undefined && !trimmedUrl;
+    if (clearingUrl) {
+      deleteSetting(SETTING_LITELLM_BASE_URL);
+      deleteSetting(SETTING_LITELLM_MODEL);
+      deleteSecret(KEY_LITELLM);
+      config.llm.litellm = undefined;
+    } else {
+      if (trimmedUrl) {
+        setSetting(SETTING_LITELLM_BASE_URL, trimmedUrl);
+      }
+      if (body.litellm.model) {
+        setSetting(SETTING_LITELLM_MODEL, body.litellm.model);
+      }
+      if (body.litellm.api_key) {
+        setSecret(KEY_LITELLM, body.litellm.api_key);
+      }
+      const nextUrl = trimmedUrl ?? config.llm.litellm?.base_url;
+      const nextModel = body.litellm.model ?? config.llm.litellm?.model;
+      const nextKey = body.litellm.api_key ?? getLiteLLMApiKey(config) ?? '';
+      if (nextUrl || nextModel || nextKey) {
+        config.llm.litellm = {
+          ...config.llm.litellm,
+          ...(nextModel ? { model: nextModel } : {}),
+          ...(nextUrl ? { base_url: nextUrl } : {}),
+          ...(nextKey ? { api_key: nextKey } : {}),
+        };
+      }
+    }
+  }
+
   // OpenAI-compatible. Same independent-field model as Ollama: a `base_url`,
   // `model`, and `api_key` can each be saved independently. An explicit
   // empty `base_url` clears the provider entirely.
@@ -359,6 +415,14 @@ function getNvidiaApiKey(config: JarvisConfig): string | null {
  */
 function getOpenAICompatibleApiKey(config: JarvisConfig): string | null {
   return getSecret(KEY_OPENAI_COMPAT) ?? config.llm.openai_compatible?.api_key ?? null;
+}
+
+/**
+ * Resolve the LiteLLM virtual key: keychain > config.yaml.
+ * Optional — unauthenticated local LiteLLM proxies don't require a key.
+ */
+function getLiteLLMApiKey(config: JarvisConfig): string | null {
+  return getSecret(KEY_LITELLM) ?? config.llm.litellm?.api_key ?? null;
 }
 
 /**
@@ -476,6 +540,25 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
       api_key: keychainCompatKey ?? config.llm.openai_compatible?.api_key ?? '',
     };
   }
+
+  // LiteLLM. Mirrors openai_compatible: leave `base_url` undefined when the
+  // user hasn't set one, so a stored key alone doesn't make the provider
+  // appear "configured" in the UI.
+  const dbLiteLLMModel = getSetting(SETTING_LITELLM_MODEL);
+  const dbLiteLLMUrl = getSetting(SETTING_LITELLM_BASE_URL);
+  const keychainLiteLLMKey = getSecret(KEY_LITELLM);
+  if (dbLiteLLMModel || dbLiteLLMUrl || keychainLiteLLMKey) {
+    config.llm.litellm = {
+      ...config.llm.litellm,
+      base_url: (!process.env.JARVIS_LITELLM_URL && dbLiteLLMUrl)
+        ? dbLiteLLMUrl
+        : config.llm.litellm?.base_url,
+      model: dbLiteLLMModel ?? config.llm.litellm?.model,
+      api_key: (!process.env.JARVIS_LITELLM_KEY && keychainLiteLLMKey)
+        ? keychainLiteLLMKey
+        : (config.llm.litellm?.api_key ?? ''),
+    };
+  }
 }
 
 /**
@@ -521,6 +604,14 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
       llm.openai_compatible.api_key,
     ));
     console.log('[LLM] Hot-reloaded OpenAI-compatible provider');
+  }
+  if (llm.litellm?.base_url) {
+    providers.push(new LiteLLMProvider(
+      llm.litellm.base_url,
+      llm.litellm.model,
+      llm.litellm.api_key,
+    ));
+    console.log('[LLM] Hot-reloaded LiteLLM provider');
   }
 
   const fallback = llm.fallback.filter(n => providers.some(p => p.name === n));
@@ -579,6 +670,12 @@ export async function testLLMProvider(
       const model = opts.model ?? config.llm.openai_compatible?.model;
       const key = opts.api_key ?? getOpenAICompatibleApiKey(config) ?? '';
       instance = new OpenAICompatibleProvider(baseUrl, model, key);
+    } else if (opts.provider === 'litellm') {
+      const baseUrl = opts.base_url ?? config.llm.litellm?.base_url;
+      if (!baseUrl) return { ok: false, error: 'Base URL required' };
+      const model = opts.model ?? config.llm.litellm?.model;
+      const key = opts.api_key ?? getLiteLLMApiKey(config) ?? '';
+      instance = new LiteLLMProvider(baseUrl, model, key);
     } else {
       return { ok: false, error: `Unknown provider: ${opts.provider}` };
     }

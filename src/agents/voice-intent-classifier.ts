@@ -267,7 +267,7 @@ settings room ("room": "settings"):
    matches "open the LLM tab", "switch to channels", "go to general settings"
 - "read_status" — args: {}
    matches "read the current status", "what's the LLM config", "what's connected"
-- "set_primary_llm" — args: { "provider": "anthropic"|"openai"|"groq"|"gemini"|"ollama"|"openrouter"|"nvidia" }
+- "set_primary_llm" — args: { "provider": "anthropic"|"openai"|"groq"|"gemini"|"ollama"|"openrouter"|"nvidia"|"litellm" }
    matches "set primary to anthropic", "make openai the default", "switch to ollama"
 - "set_fallback_llm" — args: { "fallback": string[] | string }
    matches "set the fallback chain to openai and ollama", "use openai as fallback"

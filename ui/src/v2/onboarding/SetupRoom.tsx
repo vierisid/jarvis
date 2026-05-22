@@ -23,7 +23,8 @@ type LLMProviderId =
   | "ollama"
   | "openrouter"
   | "nvidia"
-  | "openai_compatible";
+  | "openai_compatible"
+  | "litellm";
 
 const PROVIDERS: ReadonlyArray<{
   id: LLMProviderId;
@@ -107,6 +108,18 @@ const PROVIDERS: ReadonlyArray<{
     // so we leave the list empty and let the "Custom..." path handle it.
     id: "openai_compatible",
     label: "OpenAI-compatible",
+    needsKey: false,
+    needsBaseUrl: true,
+    optionalKey: true,
+    models: [],
+    defaultModel: "",
+  },
+  {
+    // LiteLLM proxy. OpenAI-compatible, but distinct row so users searching
+    // for "LiteLLM" find it and get the right defaults. Models depend on
+    // the aliases configured on the user's proxy, so the list stays empty.
+    id: "litellm",
+    label: "LiteLLM",
     needsKey: false,
     needsBaseUrl: true,
     optionalKey: true,
@@ -222,6 +235,8 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
     // submit an Ollama URL into an OpenAI-compatible setup and vice versa.
     if (id === "ollama") {
       setBaseUrl("http://localhost:11434");
+    } else if (id === "litellm") {
+      setBaseUrl("http://localhost:4000/v1");
     } else if (id === "openai_compatible") {
       setBaseUrl("");
     }
@@ -247,8 +262,8 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
         }
         body.base_url = baseUrl.trim();
       }
-      // openai_compatible: forward the typed key when present (optional).
-      if (providerId === "openai_compatible" && apiKey) {
+      // openai_compatible / litellm: forward the typed key when present (optional).
+      if ((providerId === "openai_compatible" || providerId === "litellm") && apiKey) {
         body.api_key = apiKey;
       }
       const r = await fetch("/api/config/llm/test", {
@@ -399,9 +414,11 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     <span className="v2-setup__provider-meta">
                       {p.id === "openai_compatible"
                         ? "self-hosted"
-                        : p.needsKey
-                          ? "API key"
-                          : "local"}
+                        : p.id === "litellm"
+                          ? "proxy"
+                          : p.needsKey
+                            ? "API key"
+                            : "local"}
                     </span>
                   </button>
                 ))}
@@ -411,7 +428,11 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
             {provider.needsBaseUrl && (
               <div className="v2-setup__field">
                 <label className="v2-setup__label" htmlFor="setup-baseurl">
-                  {providerId === "ollama" ? "Ollama base URL" : "Base URL"}
+                  {providerId === "ollama"
+                    ? "Ollama base URL"
+                    : providerId === "litellm"
+                      ? "LiteLLM proxy URL"
+                      : "Base URL"}
                 </label>
                 <input
                   id="setup-baseurl"
@@ -424,7 +445,9 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                   placeholder={
                     providerId === "ollama"
                       ? "http://localhost:11434"
-                      : "http://localhost:8080/v1"
+                      : providerId === "litellm"
+                        ? "http://localhost:4000/v1"
+                        : "http://localhost:8080/v1"
                   }
                 />
                 {providerId === "openai_compatible" && (
@@ -435,6 +458,15 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     Any server that speaks /v1/chat/completions: llama.cpp,
                     vLLM, LM Studio, TGI, Together, Anyscale. Include the
                     /v1 suffix.
+                  </p>
+                )}
+                {providerId === "litellm" && (
+                  <p
+                    className="v2-setup__hint"
+                    style={{ color: "var(--ink-3)", marginTop: "var(--s-1)" }}
+                  >
+                    URL of your LiteLLM proxy (https://docs.litellm.ai/docs/).
+                    The model below must match an alias defined on the proxy.
                   </p>
                 )}
               </div>
@@ -578,7 +610,9 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     placeholder={
                       providerId === "openai_compatible"
                         ? "model id (whatever your server exposes)"
-                        : "model id (e.g. your local Ollama model name)"
+                        : providerId === "litellm"
+                          ? "model alias from your LiteLLM proxy config"
+                          : "model id (e.g. your local Ollama model name)"
                     }
                     autoComplete="off"
                     style={{

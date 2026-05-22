@@ -80,6 +80,13 @@ export async function runDoctor(): Promise<void> {
 
     if (primary === 'ollama') {
       results.push({ name: 'LLM Provider', status: 'ok', message: `ollama (${providerConfig?.model ?? 'llama3'})` });
+    } else if (primary === 'litellm' || primary === 'openai_compatible') {
+      const url = providerConfig?.base_url;
+      results.push({
+        name: 'LLM Provider',
+        status: url ? 'ok' : 'fail',
+        message: url ? `${primary} (${url})` : `${primary} base URL not set`,
+      });
     } else if (providerConfig?.api_key && providerConfig.api_key !== '') {
       results.push({
         name: 'LLM Provider',
@@ -98,7 +105,7 @@ export async function runDoctor(): Promise<void> {
   if (config) {
     const spin = startSpinner('Testing LLM connectivity...');
     try {
-      const { LLMManager, AnthropicProvider, OpenAIProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider, OpenAICompatibleProvider } = await import('../llm/index.ts');
+      const { LLMManager, AnthropicProvider, OpenAIProvider, GroqProvider, GeminiProvider, OllamaProvider, OpenRouterProvider, OpenAICompatibleProvider, LiteLLMProvider } = await import('../llm/index.ts');
       const manager = new LLMManager();
       const primary = config.llm?.primary ?? 'anthropic';
 
@@ -119,6 +126,12 @@ export async function runDoctor(): Promise<void> {
           config.llm.openai_compatible.base_url,
           config.llm.openai_compatible.model,
           config.llm.openai_compatible.api_key,
+        ));
+      } else if (primary === 'litellm' && config.llm?.litellm?.base_url) {
+        manager.registerProvider(new LiteLLMProvider(
+          config.llm.litellm.base_url,
+          config.llm.litellm.model,
+          config.llm.litellm.api_key,
         ));
       }
 

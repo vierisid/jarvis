@@ -72,6 +72,11 @@ const MODELS: Record<LLMProvider, string[]> = {
   // backends — model names are entirely user-defined, so the dropdown
   // starts empty and the user types or pastes a model id.
   openai_compatible: [],
+  // LiteLLM proxies to 100+ backend providers and uses provider-prefixed
+  // model names (e.g. `gpt-4o`, `anthropic/claude-3-opus`, `gemini/gemini-pro`)
+  // configured on the proxy itself. Leave empty so users type the alias
+  // that matches their proxy config.
+  litellm: [],
 };
 
 export function LLMTab({
@@ -183,7 +188,7 @@ function ProviderRow({
   // For Ollama and OpenAI-compatible "configured" means the user set a
   // base_url. The API key is optional in those flows (local servers often
   // skip auth). All other providers gate on `has_api_key`.
-  const usesBaseUrl = provider === "ollama" || provider === "openai_compatible";
+  const usesBaseUrl = provider === "ollama" || provider === "openai_compatible" || provider === "litellm";
   const hasKey = usesBaseUrl ? !!pCfg?.base_url : !!pCfg?.has_api_key;
   const currentModel: string = pCfg?.model ?? "";
   const currentBaseUrl: string = pCfg?.base_url ?? "";
@@ -275,7 +280,9 @@ function ProviderRow({
     const trimmed = baseUrl.trim();
     const r = provider === "openai_compatible"
       ? await data.setOpenAICompatibleBaseUrl(trimmed)
-      : await data.setOllamaBaseUrl(trimmed);
+      : provider === "litellm"
+        ? await data.setLiteLLMBaseUrl(trimmed)
+        : await data.setOllamaBaseUrl(trimmed);
     onToast(r.message, r.ok ? "ok" : "warn");
     setSaving(false);
   };
@@ -292,9 +299,11 @@ function ProviderRow({
     const m = resolveModel();
     if (m) overrides.model = m;
     if (usesBaseUrl && baseUrl) overrides.baseUrl = baseUrl.trim();
-    // For openai_compatible the freshly-typed key (if any) should be used
-    // for the test request. Ollama doesn't take a key.
-    if (provider === "openai_compatible" && apiKey) overrides.apiKey = apiKey;
+    // For openai_compatible and litellm the freshly-typed key (if any) should
+    // be used for the test request. Ollama doesn't take a key.
+    if ((provider === "openai_compatible" || provider === "litellm") && apiKey) {
+      overrides.apiKey = apiKey;
+    }
     const r = await data.testProvider(provider, overrides);
     setTestResult({ ok: r.ok, text: r.message });
     setTesting(false);
@@ -334,7 +343,9 @@ function ProviderRow({
                   placeholder={
                     provider === "ollama"
                       ? "http://localhost:11434"
-                      : "http://localhost:8080/v1"
+                      : provider === "litellm"
+                        ? "http://localhost:4000/v1"
+                        : "http://localhost:8080/v1"
                   }
                 />
                 {provider === "ollama" && (
@@ -344,6 +355,17 @@ function ProviderRow({
                     onClick={() => setBaseUrl("http://localhost:11434")}
                     disabled={saving}
                     title="Fill in the default localhost URL"
+                  >
+                    Default
+                  </button>
+                )}
+                {provider === "litellm" && (
+                  <button
+                    type="button"
+                    className="v2-set__btn"
+                    onClick={() => setBaseUrl("http://localhost:4000/v1")}
+                    disabled={saving}
+                    title="Fill in the default LiteLLM proxy URL"
                   >
                     Default
                   </button>
@@ -364,6 +386,13 @@ function ProviderRow({
                   Studio, TGI, Together, Anyscale. Include the /v1 suffix.
                 </p>
               )}
+              {provider === "litellm" && (
+                <p className="v2-set__hint">
+                  URL of your LiteLLM proxy (self-hosted or hosted). The model
+                  string must match an alias configured on the proxy
+                  (e.g. `gpt-4o`, `anthropic/claude-3-opus`). Include /v1.
+                </p>
+              )}
             </div>
           )}
 
@@ -371,7 +400,7 @@ function ProviderRow({
             <div className="v2-set__field">
               <label className="v2-set__field-label">
                 API Key
-                {provider === "openai_compatible" && (
+                {(provider === "openai_compatible" || provider === "litellm") && (
                   <span style={{ color: "var(--ink-3)", marginLeft: "var(--s-2)" }}>
                     (optional)
                   </span>
@@ -388,7 +417,9 @@ function ProviderRow({
                       ? "Stored -- leave empty to keep"
                       : provider === "openai_compatible"
                         ? "Optional bearer token"
-                        : "Enter API key"
+                        : provider === "litellm"
+                          ? "Optional LiteLLM virtual key (sk-...)"
+                          : "Enter API key"
                   }
                 />
                 <button
@@ -403,7 +434,9 @@ function ProviderRow({
               <p className="v2-set__hint">
                 {provider === "openai_compatible"
                   ? "Most local servers (llama.cpp, LM Studio) skip auth. Leave empty unless your endpoint requires a bearer token."
-                  : "Keys are stored in the keychain and never echoed back. Voice never sets keys -- use this field directly."}
+                  : provider === "litellm"
+                    ? "Use the LiteLLM virtual key minted on your proxy. Leave empty for unauthenticated local proxies."
+                    : "Keys are stored in the keychain and never echoed back. Voice never sets keys -- use this field directly."}
               </p>
             </div>
           )}

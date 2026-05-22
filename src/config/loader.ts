@@ -93,6 +93,12 @@ function applyEnvOverrides(config: JarvisConfig): void {
     config.llm.nvidia.api_key = env.NVIDIA_API_KEY;
   }
 
+  if (env.JARVIS_LITELLM_URL || env.JARVIS_LITELLM_KEY) {
+    if (!config.llm.litellm) config.llm.litellm = { base_url: 'http://localhost:4000/v1', api_key: '', model: '' };
+    if (env.JARVIS_LITELLM_URL) config.llm.litellm.base_url = env.JARVIS_LITELLM_URL;
+    if (env.JARVIS_LITELLM_KEY) config.llm.litellm.api_key = env.JARVIS_LITELLM_KEY;
+  }
+
   if (env.JARVIS_BRAIN_DOMAIN) {
     config.daemon.brain_domain = env.JARVIS_BRAIN_DOMAIN;
   }

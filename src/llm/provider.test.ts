@@ -5,6 +5,7 @@ import { GroqProvider, relaxOptionalFieldsToNullable } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
+import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
 import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
@@ -38,6 +39,16 @@ describe('LLM Provider Types', () => {
   test('NVIDIAProvider can be instantiated', () => {
     const provider = new NVIDIAProvider('test-key');
     expect(provider.name).toBe('nvidia');
+  });
+
+  test('LiteLLMProvider can be instantiated', () => {
+    const provider = new LiteLLMProvider('http://localhost:4000/v1', 'gpt-4o', 'sk-test');
+    expect(provider.name).toBe('litellm');
+  });
+
+  test('LiteLLMProvider defaults to localhost:4000', () => {
+    const provider = new LiteLLMProvider();
+    expect(provider.name).toBe('litellm');
   });
 });
 
