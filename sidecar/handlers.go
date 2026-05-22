@@ -85,6 +85,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["pebble.set_state"] = makePebbleSetStateHandler(pebble)
 		registry["pebble.set_eye"] = makePebbleSetEyeHandler(pebble)
 		registry["pebble.set_blinded"] = makePebbleSetBlindedHandler(pebble)
+		registry["pebble.set_answer_overflow"] = makePebbleSetAnswerOverflowHandler(pebble)
 		registry["pebble.point_at"] = makePebblePointAtHandler(pebble)
 		if playback != nil {
 			registry["pebble.play_audio"] = makePebblePlayAudioHandler(playback)

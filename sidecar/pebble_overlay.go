@@ -72,6 +72,13 @@ type PebbleService interface {
 	// clears it after a short timeout. Safe before Spawn.
 	SetEye(active bool) error
 
+	// SetAnswerOverflow tells the pebble that the current speaking response
+	// is too long to fully fit in the bubble. The sidecar paints an
+	// "open full ↗" button; on click it emits pebble.open_answer with
+	// `answerID` so the daemon can spawn a markdown panel. Empty string
+	// clears the button. Safe before Spawn.
+	SetAnswerOverflow(answerID string) error
+
 	// SetBlinded marks awareness as hard-paused. The pebble dims and
 	// shows a struck-through eye. Persists across SetState. Safe before
 	// Spawn (value just stashed).
@@ -100,6 +107,12 @@ type PebbleService interface {
 	// long-presses the pebble disc. The daemon flips awareness.enabled
 	// in config and dispatches pebble.set_blinded.
 	OnBlindToggle(callback func())
+
+	// OnAnswerOpen registers a callback fired when the user clicks the
+	// "open full ↗" button on the speaking bubble. The callback receives
+	// the answer id that SetAnswerOverflow was called with. Threading:
+	// runs on a fresh goroutine.
+	OnAnswerOpen(callback func(answerID string))
 }
 
 // NewPebbleService returns the platform-specific implementation. Defined in

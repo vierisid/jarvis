@@ -391,6 +391,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 		}
 
+		// Long-answer overflow — click on the "open full ↗" button emits
+		// pebble.open_answer with the answer id stored via SetAnswerOverflow.
+		c.pebble.OnAnswerOpen(func(answerID string) {
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "pebble.open_answer",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{"answer_id": answerID},
+			}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[pebble] failed to emit open_answer event: %v", err)
+			} else {
+				log.Printf("[pebble] open_answer id=%s emitted", answerID)
+			}
+		})
+
 		// W6-T2 — long-press on pebble disc emits pebble.blind_toggle.
 		// Daemon flips awareness.enabled in config + dispatches set_blinded.
 		c.pebble.OnBlindToggle(func() {

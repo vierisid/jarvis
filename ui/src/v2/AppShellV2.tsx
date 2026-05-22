@@ -9,6 +9,7 @@ import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
 import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
+import { AnswerRoom } from "./rooms/answer/AnswerRoom";
 import "./v2.css";
 import "./ui/primitives.css";
 
@@ -66,6 +67,17 @@ export function AppShellV2() {
     return (
       <div className="jarvis-v2-root jarvis-v2-task-mode">
         <TaskResultRoom taskId={route.id} />
+      </div>
+    );
+  }
+
+  // Answer-overflow mode: spawned when the user clicks "open full ↗" on
+  // the pebble speaking bubble. Renders the full LLM response as markdown
+  // so long answers stay readable without TTS.
+  if (route.kind === "answer") {
+    return (
+      <div className="jarvis-v2-root jarvis-v2-task-mode">
+        <AnswerRoom answerId={route.id} />
       </div>
     );
   }

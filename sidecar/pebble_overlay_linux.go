@@ -476,8 +476,9 @@ func (s *pebbleServiceLinux) PointAt(_, _ int, _ string, _ int) error {
 }
 
 // SetEye / SetBlinded — W6 stubs on Linux. GTK draw loop port pending.
-func (s *pebbleServiceLinux) SetEye(_ bool) error     { return nil }
-func (s *pebbleServiceLinux) SetBlinded(_ bool) error { return nil }
+func (s *pebbleServiceLinux) SetEye(_ bool) error              { return nil }
+func (s *pebbleServiceLinux) SetBlinded(_ bool) error          { return nil }
+func (s *pebbleServiceLinux) SetAnswerOverflow(_ string) error { return nil }
 
 func (s *pebbleServiceLinux) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
@@ -503,5 +504,9 @@ func (s *pebbleServiceLinux) OnPalette(callback func()) {
 // OnBlindToggle — W6 stub on Linux. Long-press detection needs GTK
 // button-event handler ported.
 func (s *pebbleServiceLinux) OnBlindToggle(callback func()) {
+	_ = callback
+}
+
+func (s *pebbleServiceLinux) OnAnswerOpen(callback func(string)) {
 	_ = callback
 }

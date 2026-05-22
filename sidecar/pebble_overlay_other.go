@@ -29,6 +29,10 @@ func (s *pebbleServiceStub) SetEye(active bool) error {
 	return nil
 }
 
+func (s *pebbleServiceStub) SetAnswerOverflow(_ string) error {
+	return nil
+}
+
 func (s *pebbleServiceStub) SetBlinded(blinded bool) error {
 	return nil
 }
@@ -51,4 +55,8 @@ func (s *pebbleServiceStub) OnPalette(callback func()) {
 
 func (s *pebbleServiceStub) OnBlindToggle(callback func()) {
 	// no-op — long-press detection is Windows-only for now
+}
+
+func (s *pebbleServiceStub) OnAnswerOpen(_ func(string)) {
+	// no-op — bubble overflow button is Windows-only for now
 }
