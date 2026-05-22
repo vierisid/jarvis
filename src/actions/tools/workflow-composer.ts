@@ -82,9 +82,43 @@ export interface ComposeDeps {
    * service as a piece.
    */
   toolNames?: string[];
+  /**
+   * Cap on the LLM attempts inside one compose call. Each failed parse or
+   * validation feeds back into the next attempt so the model can self-correct
+   * without round-tripping through the calling agent. Default 4. Tests can
+   * lower this to 1 to assert single-shot behavior; production should leave
+   * it at the default to absorb weak-model noise.
+   */
+  maxAttempts?: number;
 }
 
-/** Build + validate a draft flow from a description. */
+/**
+ * Build + validate a draft flow from a description.
+ *
+ * Architecturally this is a small sub-agent loop: a single LLM client
+ * runs up to `maxAttempts` rounds with the SAME big system prompt
+ * (piece catalog, tool listing, format rules) and a USER prompt that
+ * starts as the original request and becomes a feedback patch on
+ * subsequent rounds. The calling agent (manage_workflow) sees only
+ * the final outcome -- success or the last failure -- so it doesn't
+ * pay context for the back-and-forth.
+ *
+ * Why a loop rather than returning each error to the caller:
+ *   - Small / locally-hosted LLMs (Qwen3, DeepSeek-R1) often need 2-3
+ *     tries to produce valid JSON. The main agent doesn't have the
+ *     catalog in its context, so it can't usefully refine the request;
+ *     looping HERE with the catalog already in scope is cheaper and
+ *     produces better results.
+ *   - The intermediate noise ("parse error", "step references unknown
+ *     piece") stays inside this function; the main agent's
+ *     conversation history doesn't fill with retry artifacts.
+ *
+ * Why not always loop indefinitely:
+ *   - A genuinely impossible request (e.g., "send a fax") would burn
+ *     attempts without converging. Cap is cheap insurance.
+ *   - Latency: each attempt is a full LLM round-trip (1-10s on local
+ *     models). Hard cap keeps the user-visible delay bounded.
+ */
 export async function composeFlow(
   deps: ComposeDeps,
   req: ComposeRequest,
@@ -95,27 +129,89 @@ export async function composeFlow(
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderToolNames(deps.toolNames);
   const system = buildSystemPrompt(catalogText, toolsText);
-  const prompt = `User description: ${req.description.trim()}\n\nReturn ONLY the JSON object. No prose, no markdown fences.`;
 
-  let raw: string;
-  try {
-    const reply = await deps.llm.chat({ system, prompt });
-    raw = reply.text.trim();
-  } catch (e) {
-    return { ok: false, errors: [`LLM call failed: ${(e as Error).message}`], rawResponse: null };
+  // Initial prompt: the user's description verbatim. Retry prompts
+  // replace this with a feedback patch derived from the previous
+  // failure (see below).
+  let prompt = `User description: ${req.description.trim()}\n\nReturn ONLY the JSON object. No prose, no markdown fences.`;
+  const maxAttempts = deps.maxAttempts ?? 4;
+  let lastRaw: string | null = null;
+  let lastErrors: string[] = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let raw: string;
+    try {
+      const reply = await deps.llm.chat({ system, prompt });
+      raw = reply.text.trim();
+      lastRaw = raw;
+    } catch (e) {
+      // LLM call failure (network, provider unavailable) -- retrying
+      // won't help. Bail out immediately rather than burning attempts.
+      return {
+        ok: false,
+        errors: [`LLM call failed: ${(e as Error).message}`],
+        rawResponse: lastRaw,
+      };
+    }
+
+    let parsed: unknown;
+    let parseError: string | null = null;
+    try {
+      parsed = JSON.parse(stripJsonFence(raw));
+    } catch (e) {
+      const len = raw.length;
+      const tail = raw.slice(Math.max(0, len - 80));
+      parseError =
+        `${(e as Error).message} (rawResponse: ${len} chars, ends "..${tail.replace(/\n/g, "\\n")}")`;
+    }
+
+    if (parseError) {
+      lastErrors = [`response was not valid JSON: ${parseError}`];
+      if (attempt >= maxAttempts) break;
+      // Feedback prompt: tell the model what was wrong and ask for a
+      // clean JSON object. Keep it short -- system prompt still
+      // carries the catalog + format rules.
+      prompt =
+        `Your previous reply could not be parsed as JSON. Error: ${parseError}\n\n` +
+        `Return ONLY a single valid JSON object now. No prose, no markdown fences, no <think> blocks. ` +
+        `Use the schema and rules from the system prompt.`;
+      logAttempt(attempt, "parse-error", parseError);
+      continue;
+    }
+
+    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name);
+    if (validation.ok) {
+      if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
+      return { ok: true, flow: validation.flow, rawResponse: raw };
+    }
+
+    lastErrors = validation.errors;
+    if (attempt >= maxAttempts) break;
+    // Validation feedback: enumerate the specific failures so the
+    // model can target them. Keep wording mechanical -- chatty
+    // critique tends to make weak models over-correct elsewhere.
+    prompt =
+      `Your previous JSON failed validation:\n` +
+      validation.errors.map((e) => `  - ${e}`).join("\n") +
+      `\n\nReturn a new JSON object that fixes ALL of these issues. ` +
+      `Keep the parts that were correct. Output ONLY the JSON, no prose.`;
+    logAttempt(attempt, "validation-error", validation.errors.join("; "));
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(raw));
-  } catch (e) {
-    return { ok: false, errors: [`response was not valid JSON: ${(e as Error).message}`], rawResponse: raw };
-  }
+  logAttempt(maxAttempts, "exhausted", lastErrors.join("; "));
+  return { ok: false, errors: lastErrors, rawResponse: lastRaw };
+}
 
-  const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name);
-  if (!validation.ok) return { ok: false, errors: validation.errors, rawResponse: raw };
-
-  return { ok: true, flow: validation.flow, rawResponse: raw };
+/**
+ * Single-line telemetry for the compose loop. Stays under console.log
+ * (not a dedicated logger) so test runs don't spam unless explicitly
+ * inspected. Daemon operators see this in stdout when a compose
+ * struggles, which is enough signal to know whether the model needs
+ * tuning vs the user's request is genuinely impossible.
+ */
+function logAttempt(attempt: number, status: string, detail: string | null): void {
+  const tail = detail ? ` (${detail.length > 120 ? detail.slice(0, 117) + "..." : detail})` : "";
+  console.log(`[compose] attempt ${attempt} ${status}${tail}`);
 }
 
 /* ---------------------------------------------------------- system prompt */
@@ -366,7 +462,29 @@ function validateStep(
     return step;
   }
 
-  const piece = registry.get(pieceName);
+  // Resolve short names to canonical npm names. The system prompt
+  // tells the LLM to use forms like `jarvis-trigger` and `jarvis-tool`
+  // (because that's the short identity humans use), but the catalog
+  // is keyed by the full npm package name like
+  // `@jarvispieces/piece-jarvis-trigger`. Without this resolution the
+  // composer would lose every Jarvis-piece flow on a validation error
+  // even though the LLM picked the right piece.
+  //
+  // Resolution: try the exact name first; on miss walk the catalog
+  // for any piece whose name ends with `/piece-<short>` or is exactly
+  // `<short>`. Ambiguity (multiple matches) keeps the original miss
+  // semantic -- safer than silently picking one.
+  let piece = registry.get(pieceName);
+  if (!piece) {
+    const matches = registry
+      .list()
+      .filter((p) => p.name === pieceName || p.name.endsWith(`/piece-${pieceName}`));
+    if (matches.length === 1) {
+      piece = matches[0]!;
+      // Persist the canonical name so the engine sees it at runtime.
+      if (step.settings) step.settings = { ...step.settings, pieceName: piece.name };
+    }
+  }
   if (!piece) {
     errors.push(`step "${name}" references unknown piece "${pieceName}"`);
     return step;
@@ -427,9 +545,38 @@ function walkInnerChain(
   }
 }
 
+/**
+ * Best-effort cleanup of an LLM reply before JSON.parse:
+ *
+ *   1. Strip <think>...</think> blocks. Reasoning models (Qwen3, DeepSeek-R1,
+ *      o1-style) emit a long chain-of-thought before the answer. If the
+ *      closing tag is missing (response truncated mid-thought), drop
+ *      everything from `<think>` onward.
+ *   2. Strip surrounding markdown code fences when the whole reply is
+ *      wrapped in ```json ... ```.
+ *   3. Last-resort extract: find the first `{` and the last `}` and
+ *      return the slice between them. Catches replies that have prose
+ *      before/after the JSON without a fence.
+ */
 function stripJsonFence(text: string): string {
-  const trimmed = text.trim();
-  const m = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(trimmed);
-  if (m && typeof m[1] === "string") return m[1].trim();
-  return trimmed;
+  let s = text.trim();
+  // Reasoning-block strip. We try the well-formed pair first; if the
+  // closing tag is missing the response truncated mid-thought and the
+  // JSON never started -- drop everything we got so JSON.parse errors
+  // with "Unexpected end of input" instead of a confusing "Unexpected
+  // token <".
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  if (s.startsWith("<think>") && !s.includes("</think>")) {
+    s = "";
+  }
+  const fence = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(s);
+  if (fence && typeof fence[1] === "string") s = fence[1].trim();
+  // Last-resort: extract the outermost {...} block. Only kicks in when
+  // s isn't already a JSON object (cheap startsWith check).
+  if (!s.startsWith("{")) {
+    const start = s.indexOf("{");
+    const end = s.lastIndexOf("}");
+    if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  }
+  return s;
 }
