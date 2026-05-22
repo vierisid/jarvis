@@ -890,6 +890,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Pebble long-answer panel — when a JARVIS response overflows the
+    // speaking bubble, the daemon registers it in the answer store and
+    // the sidecar shows an "open full ↗" button. Click spawns a panel
+    // at `#/_answer_<id>` which fetches from this endpoint.
+    '/api/pebble/answers/:id': {
+      GET: async (req: Request) => {
+        const { pebbleAnswerStore } = await import('./answer-store.ts');
+        const url = new URL(req.url);
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        if (!id) return error('Missing answer id', 400);
+        const record = pebbleAnswerStore.get(id);
+        if (!record) return error(`Answer ${id} not found`, 404);
+        return json(record);
+      },
+    },
+
     // --- Personality ---
     '/api/personality': {
       GET: () => json(getPersonality()),

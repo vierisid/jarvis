@@ -137,6 +137,21 @@ func makePebbleSetEyeHandler(svc PebbleService) RPCHandler {
 	}
 }
 
+// pebble.set_answer_overflow — flag the speaking bubble as overflowing
+// the visible cap so the sidecar paints an "open full ↗" button. Daemon
+// also passes the answer id the user will fetch when they click.
+// Empty answer_id clears the button.
+// Params: { "answer_id": string }
+func makePebbleSetAnswerOverflowHandler(svc PebbleService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		answerID, _ := params["answer_id"].(string)
+		if err := svc.SetAnswerOverflow(answerID); err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: map[string]any{"answer_id": answerID}}, nil
+	}
+}
+
 // pebble.set_blinded (W6-T2) — mark awareness as hard-paused. The pebble
 // shows a struck-through eye glyph. Daemon also persists awareness.enabled
 // to the config so the state survives restart. Params: { "blinded": bool }

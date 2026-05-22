@@ -187,10 +187,12 @@ func (s *pebbleServiceWindows) drawBubble(pixels []uint32, dark bool, bubbleY1 f
 	// Bubble bounds: top + width are fixed; bottom comes from the caller
 	// (auto-fit). cornerR + shadow keep the riso aesthetic identical
 	// regardless of card height.
+	// Bubble bounds derived from the constants in pebble_text_windows.go
+	// so width changes in one place propagate everywhere.
 	const (
-		bubbleX0 = 12.0
-		bubbleY0 = 50.0
-		bubbleX1 = 340.0
+		bubbleX0 = float64(pebbleBubbleX0)
+		bubbleY0 = float64(pebbleBubbleY0)
+		bubbleX1 = float64(pebbleBubbleX1)
 		cornerR  = 6.0
 		shadow   = 4.0 // riso 4×4 hard offset shadow
 	)
@@ -646,4 +648,59 @@ func maxAbs(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// Open-full button (long-answer overflow) — sits in the bottom-right of
+// the speaking bubble when SetAnswerOverflow was called with a non-empty
+// id. WndProc reads these constants to compute the hit-test area.
+const (
+	pebbleAnswerBtnW       = 108
+	pebbleAnswerBtnH       = 22
+	pebbleAnswerBtnInsetR  = 10
+	pebbleAnswerBtnInsetB  = 8
+	pebbleAnswerBtnXLeft   = pebbleBubbleX1 - pebbleAnswerBtnInsetR - pebbleAnswerBtnW
+	pebbleAnswerBtnXRight  = pebbleBubbleX1 - pebbleAnswerBtnInsetR
+)
+
+// pebbleAnswerBtnTop computes the button top Y given the current bubble
+// bottom (which is dynamic via computeBubbleBottom). Same math used by
+// paint and WndProc so they always agree.
+func pebbleAnswerBtnTop(bubbleY1 int32) int32 {
+	return bubbleY1 - pebbleAnswerBtnInsetB - pebbleAnswerBtnH
+}
+
+// drawAnswerOverflowButton — paper / dark pill with a tinted hairline
+// border, anchored at the bubble's bottom-right. Only called when overflow
+// is set. dark mirrors the speaking state (so the pill blends).
+func (s *pebbleServiceWindows) drawAnswerOverflowButton(pixels []uint32, dark bool, bubbleY1 int32) {
+	answerID, _ := s.answerOverflowID.Load().(string)
+	if answerID == "" {
+		return
+	}
+	btnY0 := pebbleAnswerBtnTop(bubbleY1)
+	btnY1 := btnY0 + pebbleAnswerBtnH
+	const radius = 5.0
+
+	// Subtle accent-tinted fill so the button reads as interactive.
+	tintR, tintG, tintB := pebbleAccentR, pebbleAccentG, pebbleAccentB
+	fillAlpha := uint8(36)
+	borderAlpha := uint8(220)
+	if dark {
+		// Speaking variant: dark card needs a lighter tint that reads on ink.
+		tintR, tintG, tintB = pebblePaperR, pebblePaperG, pebblePaperB
+		fillAlpha = 32
+		borderAlpha = 200
+	}
+	fillRoundedRect(pixels,
+		float64(pebbleAnswerBtnXLeft), float64(btnY0),
+		float64(pebbleAnswerBtnXRight), float64(btnY1),
+		radius,
+		premultiply(fillAlpha, tintR, tintG, tintB),
+	)
+	strokeRoundedRect(pixels,
+		float64(pebbleAnswerBtnXLeft), float64(btnY0),
+		float64(pebbleAnswerBtnXRight), float64(btnY1),
+		radius, 1.0,
+		premultiply(borderAlpha, tintR, tintG, tintB),
+	)
 }

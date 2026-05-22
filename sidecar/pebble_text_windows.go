@@ -39,16 +39,18 @@ const (
 )
 
 // Bubble layout constants — keep in sync with drawBubble in pebble_draw_windows.go.
+// Bubble grew (W: 328→436, H cap: 200→440) so multi-paragraph answers fit
+// without ellipsis; window also grew correspondingly in pebble_overlay_windows.go.
 const (
 	pebbleBubbleX0      = 12
 	pebbleBubbleY0      = 50
-	pebbleBubbleX1      = 340
+	pebbleBubbleX1      = 448
 	pebbleBubbleBodyX0  = 26  // body text left, with 14 px inner pad from the card
-	pebbleBubbleBodyX1  = 326 // body text right, with 14 px inner pad
+	pebbleBubbleBodyX1  = 434 // body text right, with 14 px inner pad
 	pebbleBubbleBodyY0  = 84  // body text top, after the JARVIS eyebrow row
 	pebbleBubbleBottomP = 12  // padding under the body text before the bubble border
 	pebbleBubbleY1Min   = 108 // bubble bottom for a single short line — keeps the card from looking pinched
-	pebbleBubbleY1Max   = 200 // window-imposed cap — keeps card inside the layered window
+	pebbleBubbleY1Max   = 440 // window-imposed cap — keeps card inside the layered window
 )
 
 // CreateFont quality presets.
@@ -288,4 +290,59 @@ func repairBubbleTextAlpha(pixels []uint32, bubbleY1 int32) {
 			pixels[row+x] |= 0xFF000000
 		}
 	}
+}
+
+// drawAnswerOverflowButtonText — "open full ↗" label centred inside the
+// button. Tinted vermilion on the paper card, paper on the dark (speaking)
+// card so it reads against both.
+func (s *pebbleServiceWindows) drawAnswerOverflowButtonText(memDC uintptr, dark bool, bubbleY1 int32) {
+	answerID, _ := s.answerOverflowID.Load().(string)
+	if answerID == "" {
+		return
+	}
+	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
+
+	// JetBrains Mono for the label — small, uppercase-feel via tracking.
+	face, _ := syscall.UTF16PtrFromString("JetBrains Mono")
+	height := int32(-11)
+	weight := int32(fwMedium)
+	font, _, _ := procCreateFontW.Call(
+		uintptr(height),
+		0, 0, 0,
+		uintptr(weight),
+		0, 0, 0,
+		uintptr(ansiCharset),
+		0, 0,
+		uintptr(antialiasedQuality),
+		0,
+		uintptr(unsafe.Pointer(face)),
+	)
+	defer procDeleteObjectGdi.Call(font)
+	procSelectObject.Call(memDC, font)
+
+	var col uint32
+	if dark {
+		col = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
+	} else {
+		col = colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
+	}
+	procSetTextColor.Call(memDC, uintptr(col))
+
+	str, _ := syscall.UTF16PtrFromString("open full ↗")
+	btnY0 := pebbleAnswerBtnTop(bubbleY1)
+	r := pblRect{
+		Left:   int32(pebbleAnswerBtnXLeft),
+		Top:    btnY0,
+		Right:  int32(pebbleAnswerBtnXRight),
+		Bottom: btnY0 + pebbleAnswerBtnH,
+	}
+	const dtCenter = 0x00000001
+	const dtVCenter = 0x00000004
+	nullTerm := int32(-1)
+	procDrawTextW.Call(memDC,
+		uintptr(unsafe.Pointer(str)),
+		uintptr(nullTerm),
+		uintptr(unsafe.Pointer(&r)),
+		uintptr(uint32(dtCenter|dtVCenter|dtSingleLine)),
+	)
 }

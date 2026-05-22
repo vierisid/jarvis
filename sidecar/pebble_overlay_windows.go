@@ -150,6 +150,13 @@ type pebbleServiceWindows struct {
 	// to the pebble while true. Auto-clears after the daemon's timeout.
 	eyeActive atomic.Bool
 
+	// Long-answer overflow — when set to a non-empty answer id, the
+	// speaking bubble paints an "open full ↗" button below the body.
+	// Click on the button emits pebble.open_answer with this id so the
+	// daemon can spawn a markdown panel. Cleared at the start of each
+	// new response cycle.
+	answerOverflowID atomic.Value // string
+
 	// W6-T2 — blinded means awareness is hard-paused. Pebble dims and
 	// shows a struck-through eye. Toggled via pebble.set_blinded.
 	blinded atomic.Bool
@@ -171,6 +178,11 @@ type pebbleServiceWindows struct {
 	// goroutine. paint() writes these every frame after the ease update.
 	renderedX atomic.Int32
 	renderedY atomic.Int32
+
+	// Bottom of the speaking bubble in window-local coords, captured each
+	// paint when the bubble is visible. WM_NCHITTEST uses it to compute
+	// the "open full" button rect (which anchors to bubbleY1 - inset).
+	lastBubbleY1 atomic.Int32
 
 	// frameTick increments each paint and feeds time-based animations
 	// (idle breathing, listening/speaking waveform bars, thinking dot
@@ -201,6 +213,7 @@ type pebbleServiceWindows struct {
 	// race the paint goroutine.
 	clickDownMs    atomic.Int64
 	cursorOnDisc   atomic.Bool // set by WM_NCHITTEST so paint can pause cursor follow
+	cursorOnAnswer atomic.Bool // set when cursor is over the "open full" button so click routing knows
 
 	// paletteCallback is invoked each time the user fires the palette
 	// hotkey (Ctrl+K). Set via OnPalette(); the daemon spawns/dismisses
@@ -224,6 +237,10 @@ func NewPebbleService() PebbleService {
 // from client.go and flips awareness.enabled in config.
 func (s *pebbleServiceWindows) OnBlindToggle(callback func()) {
 	pebbleBlindToggleCallback.Store(callback)
+}
+
+func (s *pebbleServiceWindows) OnAnswerOpen(callback func(answerID string)) {
+	pebbleAnswerOpenCallback.Store(callback)
 }
 
 func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
@@ -347,6 +364,11 @@ func (s *pebbleServiceWindows) SetText(text string) error {
 
 func (s *pebbleServiceWindows) SetEye(active bool) error {
 	s.eyeActive.Store(active)
+	return nil
+}
+
+func (s *pebbleServiceWindows) SetAnswerOverflow(answerID string) error {
+	s.answerOverflowID.Store(answerID)
 	return nil
 }
 
@@ -484,8 +506,12 @@ func (s *pebbleServiceWindows) pumpMessages() {
 // pinned at (pebbleAnchorX, pebbleAnchorY) within the window, and the
 // window is positioned so that anchor lands at (cursor + offset).
 const (
-	pebbleWindowW = 360
-	pebbleWindowH = 220
+	// Window is sized to hold the disc PLUS a generous bubble area that
+	// drops below — large enough for multi-paragraph responses without
+	// ellipsizing. The disc still anchors near the top-left so cursor-
+	// follow math is unchanged from the smaller-window design.
+	pebbleWindowW = 460
+	pebbleWindowH = 480
 	pebbleAnchorX = 40
 	pebbleAnchorY = 28
 )
@@ -582,6 +608,26 @@ func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		winY := int(svc.renderedY.Load())
 		localX := sx - winX
 		localY := sy - winY
+
+		// Long-answer "open full ↗" button — only present while the
+		// speaking/listening bubble is visible AND answerOverflowID is
+		// non-empty. Check before disc so the button wins when it
+		// overlaps the disc's bubble area.
+		bubbleY1 := svc.lastBubbleY1.Load()
+		if bubbleY1 > 0 {
+			if answerID, _ := svc.answerOverflowID.Load().(string); answerID != "" {
+				btnY0 := int(pebbleAnswerBtnTop(bubbleY1))
+				btnY1 := btnY0 + pebbleAnswerBtnH
+				if localX >= pebbleAnswerBtnXLeft && localX <= pebbleAnswerBtnXRight &&
+					localY >= btnY0 && localY <= btnY1 {
+					svc.cursorOnDisc.Store(false)
+					svc.cursorOnAnswer.Store(true)
+					return pblHtClient
+				}
+			}
+		}
+		svc.cursorOnAnswer.Store(false)
+
 		dx := localX - pebbleAnchorX
 		dy := localY - pebbleAnchorY
 		if dx*dx+dy*dy <= pblDiscHitRadius*pblDiscHitRadius {
@@ -603,6 +649,19 @@ func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		down := svc.clickDownMs.Swap(0)
 		if down == 0 {
+			return 0
+		}
+		// Answer-overflow button — fire the open-answer callback regardless
+		// of click duration. The button is a separate target from the disc
+		// so we route based on which area was last hit-tested.
+		if svc.cursorOnAnswer.Load() {
+			if answerID, _ := svc.answerOverflowID.Load().(string); answerID != "" {
+				if cbAny := pebbleAnswerOpenCallback.Load(); cbAny != nil {
+					if cb, ok := cbAny.(func(string)); ok && cb != nil {
+						go cb(answerID)
+					}
+				}
+			}
 			return 0
 		}
 		dur := time.Now().UnixMilli() - down
@@ -631,6 +690,10 @@ func pebbleWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 // from client.go; the daemon listens for the resulting SidecarEvent and
 // flips awareness.enabled in config + dispatches pebble.set_blinded.
 var pebbleBlindToggleCallback atomic.Value // func()
+
+// pebbleAnswerOpenCallback fires when the user clicks the speaking-bubble
+// "open full ↗" button. Passes the answer id stored via SetAnswerOverflow.
+var pebbleAnswerOpenCallback atomic.Value // func(answerID string)
 
 // ─────────────────────────── Paint pipeline ─────────────────────────────────
 
@@ -751,6 +814,13 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	if state == PebbleListening || state == PebbleSpeaking {
 		s.drawBubbleText(memDC, state, bubbleY1)
 		repairBubbleTextAlpha(pixels, bubbleY1)
+		// Long-answer overflow button — only meaningful while bubble shows.
+		s.drawAnswerOverflowButton(pixels, state == PebbleSpeaking, bubbleY1)
+		s.drawAnswerOverflowButtonText(memDC, state == PebbleSpeaking, bubbleY1)
+		repairBubbleTextAlpha(pixels, bubbleY1)
+		s.lastBubbleY1.Store(bubbleY1)
+	} else {
+		s.lastBubbleY1.Store(0)
 	}
 	// W6-T4 — outward halo around disc when JARVIS is remotely controlling
 	// (PointAt active). Drawn before the eye glyph so the glyph sits on

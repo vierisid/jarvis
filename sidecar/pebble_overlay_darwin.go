@@ -490,8 +490,9 @@ func (s *pebbleServiceDarwin) PointAt(_, _ int, _ string, _ int) error {
 
 // SetEye / SetBlinded — W6 stubs on macOS. Cocoa rendering needs the
 // glyphs ported to the C draw loop (W6 follow-up).
-func (s *pebbleServiceDarwin) SetEye(_ bool) error     { return nil }
-func (s *pebbleServiceDarwin) SetBlinded(_ bool) error { return nil }
+func (s *pebbleServiceDarwin) SetEye(_ bool) error              { return nil }
+func (s *pebbleServiceDarwin) SetBlinded(_ bool) error          { return nil }
+func (s *pebbleServiceDarwin) SetAnswerOverflow(_ string) error { return nil }
 
 func (s *pebbleServiceDarwin) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
@@ -517,5 +518,9 @@ func (s *pebbleServiceDarwin) OnPalette(callback func()) {
 // OnBlindToggle — W6 stub on macOS. Long-press detection needs the
 // Cocoa NSView mouse-event handler ported.
 func (s *pebbleServiceDarwin) OnBlindToggle(callback func()) {
+	_ = callback
+}
+
+func (s *pebbleServiceDarwin) OnAnswerOpen(callback func(string)) {
 	_ = callback
 }

@@ -84,12 +84,12 @@ Open `http://localhost:3142` — the dashboard walks you through LLM provider, v
 
 ---
 
-## 🪨 Ambient mode (recommended)
+## 🪨 Ambient mode
 
-JARVIS ships a "dashboard-less" experience built around a small cursor-following pebble. After onboarding, run with:
+JARVIS ships a "dashboard-less" experience built around a small cursor-following pebble — **on by default** after onboarding. Just run:
 
 ```bash
-JARVIS_AMBIENT_UI=1 bun run start
+bun run start
 ```
 
 What you get:
@@ -100,6 +100,8 @@ What you get:
 - **Voice-first** — "what's on my screen?", "close all background agents", "open the workflows window", "in the background, summarize today's meeting notes" — all routed inline, no LLM round-trip for the common verbs.
 
 Currently **Windows-only** (cross-platform ports planned). The `localhost:3142` dashboard still works as a fallback / debug surface.
+
+> **Opt out:** set `JARVIS_AMBIENT_UI=0` to disable the pebble + sidecar voice loop (useful for headless servers, CI, or users who only want the web dashboard).
 
 For the full architecture story, see [`docs/AMBIENT_UX_PLAN.md`](docs/AMBIENT_UX_PLAN.md).
 

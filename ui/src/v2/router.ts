@@ -39,7 +39,8 @@ export type V2Route =
   | { kind: "room"; key: RoomKey }
   | { kind: "panel"; key: RoomKey }
   | { kind: "palette" }
-  | { kind: "task"; id: string };
+  | { kind: "task"; id: string }
+  | { kind: "answer"; id: string };
 
 const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "workflows",
@@ -79,6 +80,10 @@ export function getV2Route(): V2Route {
     const id = hash.slice("_task_".length);
     if (id) return { kind: "task", id };
   }
+  if (hash.startsWith("_answer_")) {
+    const id = hash.slice("_answer_".length);
+    if (id) return { kind: "answer", id };
+  }
   return { kind: "home" };
 }
 
@@ -101,6 +106,7 @@ export function navigateV2(route: V2Route): void {
   else if (route.kind === "room") hash = `#/_room_${route.key}`;
   else if (route.kind === "panel") hash = `#/_panel_${route.key}`;
   else if (route.kind === "task") hash = `#/_task_${route.id}`;
+  else if (route.kind === "answer") hash = `#/_answer_${route.id}`;
   if (window.location.hash !== hash) {
     window.location.hash = hash;
   }

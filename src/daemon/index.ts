@@ -450,7 +450,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // demo cycle (listening → thinking → speaking → idle) so we can
     // verify all the state renderers end-to-end. Real voice/LLM
     // integration replaces the timer logic in a follow-up ticket.
-    if (process.env.JARVIS_AMBIENT_UI === '1') {
+    // Ambient UI (pebble + sub-pebbles + voice-driven panels) is the
+    // default daily-driver experience as of Phase 2. Set
+    // `JARVIS_AMBIENT_UI=0` to fall back to dashboard-only mode (useful
+    // for headless servers, CI, or users who only want the web UI).
+    if (process.env.JARVIS_AMBIENT_UI !== '0') {
       const spawnedOn = new Set<string>();
 
       // Per-sidecar in-flight summon control. Tracks whether a summon is
@@ -756,6 +760,35 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // expanded state and dispatch set_expanded with fresh task data
       // (label/task/result/elapsed) so the bubble reads what's current,
       // not what was true at spawn time.
+      // pebble.open_answer — user clicked the "open full ↗" button on the
+      // speaking bubble. Spawn a panel pointing at `#/_answer_<id>` which
+      // renders the full LLM response as markdown.
+      sidecarManager.onEvent(async (sidecarId, event) => {
+        if (event.event_type !== 'pebble.open_answer') return;
+        const payload = (event.payload ?? {}) as { answer_id?: unknown };
+        const answerID = String(payload.answer_id ?? '');
+        if (!answerID) return;
+        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
+        const url = `http://localhost:${port}/#/_answer_${answerID}`;
+        try {
+          const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url,
+            title: 'JARVIS answer',
+            bounds: { x: -1, y: -1, w: 540, h: 640 },
+            resizable: true,
+            always_on_top: false,
+            multi_instance: true,
+          });
+          const id = (result && typeof result === 'object' && 'id' in (result as object))
+            ? String((result as { id?: unknown }).id ?? '')
+            : '';
+          if (id) trackPanel(sidecarId, { id, key: 'answer_full', title: 'JARVIS answer' });
+          console.log(`[pebble] open_answer panel spawned for answer=${answerID}`);
+        } catch (err) {
+          console.warn(`[pebble] open_answer panel.spawn failed for ${answerID}:`, err);
+        }
+      });
+
       // sub_pebble.open_full — user clicked the "open full" button inside
       // the bubble. Spawn a panel pointing at the dashboard's
       // `#/_task_<id>` route which renders the task's full response.
@@ -2447,6 +2480,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
 
         await setState(sidecarId, 'thinking', '');
+        // Clear any stale overflow button from the previous response
+        // before this one starts streaming. Best-effort; sidecar without
+        // pebble cap silently ignores.
+        sidecarManager.dispatchRPC(sidecarId, 'pebble.set_answer_overflow', { answer_id: '' })
+          .catch(() => { /* ignore */ });
 
         let firstTokenAt = 0;
         let firstAudioDispatchAt = 0;
@@ -2678,6 +2716,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         await setState(sidecarId, 'speaking', fullText);
         try { wsService.broadcastHeartbeat(fullText); } catch { /* dashboard may not be open */ }
 
+        // Long-answer overflow — if the response is too long to comfortably
+        // fit in the speaking bubble, register it in the answer store and
+        // ask the sidecar to paint an "open full ↗" button. Threshold matches
+        // roughly what the 200 px bubble cap can hold without ellipsizing.
+        const OVERFLOW_CHARS = 600;
+        if (fullText.length > OVERFLOW_CHARS) {
+          try {
+            const { pebbleAnswerStore } = await import('./answer-store.ts');
+            const record = pebbleAnswerStore.register(userText, fullText);
+            await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_answer_overflow', {
+              answer_id: record.id,
+            }).catch(() => { /* sidecar may not have pebble cap */ });
+            console.log(`[pebble] long answer registered (${fullText.length} chars) → ${record.id}`);
+          } catch (err) {
+            console.warn('[pebble] failed to register long answer:', err);
+          }
+        }
+
         // Wait for all pending TTS synths to settle so totalAudioMs is final.
         await Promise.allSettled(pendingTTS);
 
@@ -2695,9 +2751,31 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Hold speaking state until the last queued clip finishes. The
         // sidecar's queue worker plays clips back-to-back; lastPlaybackEnd
         // tracks our best estimate of when the last clip's audio ends.
-        const remainingMs = Math.max(0, lastPlaybackEnd - Date.now());
+        //
+        // When TTS is off (totalAudioMs === 0), the bubble would otherwise
+        // close immediately — too fast to read the answer. Hold it open for
+        // a text-length-derived reading window so no-TTS users get time
+        // to actually read what JARVIS said. User can dismiss anytime by
+        // pressing the summon hotkey (Ctrl+Space).
+        let readingHoldMs = 0;
+        if (totalAudioMs === 0 && fullText.length > 0) {
+          // ~60 ms/char gives skim time; clamp 6–30 s so short answers
+          // don't linger and very long ones don't trap the rail forever.
+          readingHoldMs = Math.min(30_000, Math.max(6_000, fullText.length * 60));
+          console.log(`[ambient-ui] no TTS — holding bubble ${readingHoldMs}ms for reading`);
+        }
+        const remainingMs = Math.max(
+          readingHoldMs,
+          lastPlaybackEnd - Date.now(),
+        );
         if (remainingMs > 0) {
-          await new Promise<void>(r => setTimeout(r, remainingMs));
+          // Sleep in 100 ms slices so dismissal (ctrl.cancelled) cuts
+          // through the hold without waiting the full timeout.
+          const sliceMs = 100;
+          for (let waited = 0; waited < remainingMs; waited += sliceMs) {
+            if (ctrl.cancelled) return;
+            await new Promise<void>(r => setTimeout(r, sliceMs));
+          }
         }
         if (ctrl.cancelled) return;
 
