@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ConnectionMeta } from "./useConnections";
 import {
   addStepToHead as treeAddStepToHead,
   allReachableNames,
@@ -158,12 +159,31 @@ export interface PieceCatalogActionOrTrigger {
   sampleData?: unknown;
 }
 
+/**
+ * Piece-level auth declaration. Present on integrations that need a
+ * connection (gmail, slack, telegram-bot, github); absent on
+ * connection-less pieces (jarvis-ask, schedule, code, webhook). The
+ * editor renders a connection picker when this is set.
+ */
+export interface PieceCatalogAuth {
+  type:
+    | "OAUTH2"
+    | "PLATFORM_OAUTH2"
+    | "CLOUD_OAUTH2"
+    | "SECRET_TEXT"
+    | "BASIC_AUTH"
+    | "CUSTOM_AUTH";
+  displayName?: string;
+  description?: string;
+}
+
 export interface PieceCatalogEntry {
   name: string;
   displayName: string;
   description: string;
   actions: PieceCatalogActionOrTrigger[];
   triggers: PieceCatalogActionOrTrigger[];
+  auth?: PieceCatalogAuth;
 }
 
 interface ActionResult {
@@ -190,6 +210,16 @@ export function useWorkflowEditor(flowId: string | null) {
   // tree nodes; sent to the server as `uiMeta.positions` on save so the
   // editor reopens at the layout the user left.
   const [stepPositions, setStepPositions] = useState<Record<string, NodePosition>>({});
+  // Connections cache. Mirrors `/api/workflows/connections` so the editor
+  // can render a connection picker and auto-fill the first matching
+  // connection when a piece is added. Refreshed on editor open and on
+  // every catalog reload (which is also triggered by Library installs).
+  // We don't subscribe to connection mutations from elsewhere -- the
+  // connections panel uses its own hook -- so a user who creates a
+  // connection in the dashboard needs the editor's catalog reload to
+  // pick it up. Good enough for the common flow (open editor, see
+  // existing connections); the reload button covers the edge case.
+  const [connections, setConnections] = useState<ConnectionMeta[]>([]);
   const ignoreNextLoadRef = useRef(false);
 
   // Stash for trigger settings while the user is in EMPTY (manual) mode.
@@ -258,14 +288,26 @@ export function useWorkflowEditor(flowId: string | null) {
     setLoading(true);
     setError(null);
     try {
-      const [catalogRes, detailRes] = await Promise.all([
+      const [catalogRes, detailRes, connRes] = await Promise.all([
         fetch("/api/workflows/pieces"),
         fetch(`/api/workflows/${flowId}`),
+        // Fetch connections in parallel so the editor can render the
+        // connection picker on first paint without a follow-up round
+        // trip. Failure is non-fatal -- the picker just renders empty
+        // and the user re-enters credentials, same as before this
+        // wiring landed.
+        fetch("/api/workflows/connections"),
       ]);
       if (!catalogRes.ok) throw new Error(`pieces -> ${catalogRes.status}`);
       if (!detailRes.ok) throw new Error(`flow detail -> ${detailRes.status}`);
       const catalogList = (await catalogRes.json()) as PieceCatalogEntry[];
       setCatalog(catalogList);
+      if (connRes.ok) {
+        const connBody = (await connRes.json()) as { connections: ConnectionMeta[] };
+        setConnections(Array.isArray(connBody.connections) ? connBody.connections : []);
+      } else {
+        setConnections([]);
+      }
 
       const detail = (await detailRes.json()) as {
         flow: { id: string };
@@ -910,6 +952,23 @@ export function useWorkflowEditor(flowId: string | null) {
           ? piece?.triggers.find((t) => t.name === actionName)
           : piece?.actions.find((a) => a.name === actionName);
         const seed = applySchemaDefaults(target.settings?.input ?? {}, sub?.inputSchema ?? null);
+        // Auto-fill the first available connection for pieces that
+        // require auth. The user can override via the connection
+        // picker; this just spares them the "I added a piece and now
+        // it has no connection set" friction. Activepieces references
+        // the chosen connection from `settings.input.auth` as a
+        // `{{connections.<externalId>}}` template -- the engine
+        // resolves it at run time. Matching is by pieceName; if no
+        // connection exists yet the field stays empty and the picker
+        // shows "(no connection set)".
+        if (piece?.auth) {
+          const match = connections.find(
+            (c) => c.pieceName === pieceName && c.status === "ACTIVE",
+          );
+          if (match && seed["auth"] === undefined) {
+            seed["auth"] = `{{connections.${match.externalId}}}`;
+          }
+        }
 
         const settings: NonNullable<FlowStepNode["settings"]> = {
           ...(target.settings ?? {}),
@@ -921,7 +980,7 @@ export function useWorkflowEditor(flowId: string | null) {
         target.settings = settings;
       });
     },
-    [catalog, mutateAnyStep, snapshotForUndo],
+    [catalog, connections, mutateAnyStep, snapshotForUndo],
   );
 
   /**
@@ -1309,6 +1368,8 @@ export function useWorkflowEditor(flowId: string | null) {
 
   return {
     catalog,
+    /** Connections cached at editor load. Used to populate the connection picker + auto-fill new steps. */
+    connections,
     version,
     draftTrigger,
     draftOrphans,

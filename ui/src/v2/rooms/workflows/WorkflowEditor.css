@@ -1784,6 +1784,37 @@
   margin: 0 0 var(--s-2) 22px;
 }
 
+/* Connection picker. Shown for pieces with top-level `auth`. The
+   chosen connection is stored as `{{connections.<externalId>}}` in
+   `settings.input.auth`; the engine resolves it at runtime. */
+.wf-props__connection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--s-3);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.wf-props__connection select {
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 4px 6px;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-2);
+}
+.wf-props__connection-type {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  text-transform: lowercase;
+}
+.wf-props__connection-empty {
+  font-style: italic;
+  color: var(--accent-warn, #fbbf24);
+}
+
 /* Collapsible "Advanced settings" block. Wraps error handling, sample
    input/output editors, and the test button so the main properties
    panel stays focused on the step's regular inputs. */

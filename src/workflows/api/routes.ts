@@ -214,6 +214,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             name: p.name,
             displayName: p.displayName,
             description: p.description,
+            // Piece-level auth declaration -- when present, the editor
+            // renders a connection picker so the user picks an
+            // existing connection instead of re-entering credentials.
+            ...(p.auth ? { auth: p.auth } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,

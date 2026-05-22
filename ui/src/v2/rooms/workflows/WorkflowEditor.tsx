@@ -38,12 +38,14 @@ import {
   type FlowStepNode,
   type OrphanStep,
   type PieceCatalogActionOrTrigger,
+  type PieceCatalogAuth,
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
+import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
@@ -979,6 +981,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             isTopLevel={selectedDepth === 0}
             containerKind={selectedFlat?.containerKind}
             catalog={editor.catalog}
+            connections={editor.connections}
             onSetTriggerType={(type) => editor.setTriggerType(type)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
@@ -3111,6 +3114,8 @@ interface PropertiesPanelProps {
   isTopLevel: boolean;
   containerKind?: "loop" | "router";
   catalog: PieceCatalogEntry[];
+  /** Connections list -- drives the connection picker for pieces that declare auth. */
+  connections: ConnectionMeta[];
   /**
    * Persisted sample data for this step (the output the engine will feed to
    * downstream steps when running with `stepNameToTest`). Undefined when
@@ -3156,6 +3161,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     hasNextAction,
     isTopLevel,
     catalog,
+    connections,
     onSetTriggerType,
     onSetErrorHandling,
     onSetInput,
@@ -3264,6 +3270,24 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onRemoveRouterBranch={onRemoveRouterBranch}
           onAddStepToBranch={onAddStepToBranch}
           onSetBranchConditions={onSetBranchConditions}
+        />
+      ) : null}
+
+      {/* Connection picker: shown for pieces that declare top-level
+          `auth`. The chosen connection is stored in
+          `settings.input.auth` as a `{{connections.<externalId>}}`
+          template -- the engine resolves it to the actual secret at
+          run time. Skipped for connectionless pieces (jarvis-ask,
+          schedule, code, webhook). */}
+      {!isLoop && !isRouter && piece?.auth ? (
+        <ConnectionPicker
+          pieceName={piece.name}
+          pieceDisplayName={piece.displayName}
+          authDisplayName={piece.auth.displayName ?? "Connection"}
+          authType={piece.auth.type}
+          connections={connections}
+          currentValue={(step.settings?.input?.["auth"] as string | undefined) ?? ""}
+          onPick={(template) => onSetInput("auth", template)}
         />
       ) : null}
 
@@ -3417,6 +3441,78 @@ function AdvancedSettings(props: {
  *   - `retryOnFailure`: retry with exponential backoff. Cadence is engine
  *     config (max 4 attempts, ~14s total wait); not per-step tunable.
  */
+
+/**
+ * Connection picker for pieces that declare a top-level `auth` field.
+ * Lists every saved connection whose `pieceName` matches the piece in
+ * question; picking one writes `{{connections.<externalId>}}` into the
+ * step's `settings.input.auth`. An "empty" option clears the binding
+ * (the engine then errors at run time, which is the correct signal).
+ *
+ * No inline "Add connection" affordance: connection creation is a
+ * one-time setup in the Connections panel. Surfacing the same flow
+ * here would duplicate the OAuth redirect handling already in that
+ * panel and isn't worth the complexity.
+ */
+function ConnectionPicker({
+  pieceName,
+  pieceDisplayName,
+  authDisplayName,
+  authType,
+  connections,
+  currentValue,
+  onPick,
+}: {
+  pieceName: string;
+  pieceDisplayName: string;
+  authDisplayName: string;
+  authType: PieceCatalogAuth["type"];
+  connections: ConnectionMeta[];
+  currentValue: string;
+  onPick: (template: string) => void;
+}): React.ReactElement {
+  // Filter to ACTIVE connections for this piece. Inactive (MISSING /
+  // ERROR) entries are excluded; they'd parse but fail at runtime, and
+  // a stale UI shouldn't let the user select something broken. The
+  // Connections panel surfaces those for repair.
+  const matching = connections.filter(
+    (c) => c.pieceName === pieceName && c.status === "ACTIVE",
+  );
+  // Extract the external id from the current template, if any. Lets
+  // the dropdown reflect the user's choice on re-open.
+  const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
+  const currentExternalId = m ? m[1]! : "";
+  return (
+    <div className="wf-props__connection">
+      <label className="wf-props__field-label">
+        {authDisplayName}
+        <span className="wf-props__connection-type">({authType})</span>
+      </label>
+      {matching.length === 0 ? (
+        <p className="wf-props__hint wf-props__connection-empty">
+          No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
+          then come back and select it here.
+        </p>
+      ) : (
+        <select
+          value={currentExternalId}
+          onChange={(e) => {
+            const id = e.target.value;
+            onPick(id ? `{{connections.${id}}}` : "");
+          }}
+        >
+          <option value="">-- pick a connection --</option>
+          {matching.map((c) => (
+            <option key={c.id} value={c.externalId}>
+              {c.displayName} ({c.externalId})
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 function ErrorHandlingSection({
   continueOnFailure,
   retryOnFailure,

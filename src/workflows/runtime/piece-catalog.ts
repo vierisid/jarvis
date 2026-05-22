@@ -66,6 +66,36 @@ export interface PieceCatalogTrigger extends PieceCatalogAction {
   sampleData?: unknown;
 }
 
+/**
+ * Piece-level auth declaration, surfaced through the catalog so the
+ * editor can render a connection picker. Activepieces declares this at
+ * the top of `createPiece({ auth: ... })`; pieces without it (CODE,
+ * jarvis-ask, schedule) leave it undefined and the editor renders no
+ * picker. We collapse the upstream `PieceAuthProperty` variants into
+ * the small surface the editor actually needs: the auth type (so the
+ * editor can label the field, e.g. "OAuth connection" vs "API token")
+ * and an optional description (passed verbatim from the piece).
+ */
+export interface PieceCatalogAuth {
+  /**
+   * Wire type. Mirrors AP's `AppConnectionType`:
+   *   OAUTH2 / PLATFORM_OAUTH2 / CLOUD_OAUTH2 -- OAuth flow
+   *   SECRET_TEXT                              -- single API token / API key
+   *   BASIC_AUTH                               -- username + password pair
+   *   CUSTOM_AUTH                              -- arbitrary key/value bag (gmail SMTP, etc.)
+   */
+  type: "OAUTH2" | "PLATFORM_OAUTH2" | "CLOUD_OAUTH2" | "SECRET_TEXT" | "BASIC_AUTH" | "CUSTOM_AUTH";
+  /** Optional human-readable description of what the connection does. */
+  description?: string;
+  /**
+   * Display name of the auth field as the piece author wrote it. The
+   * editor shows this as the picker label so the user can match a
+   * connection to the right piece-side concept (e.g. "Google account",
+   * "Bot token").
+   */
+  displayName?: string;
+}
+
 export interface PieceCatalogEntry {
   /** Upstream package name -- e.g. `@jarvispieces/piece-jarvis-ask`. */
   name: string;
@@ -73,6 +103,13 @@ export interface PieceCatalogEntry {
   description: string;
   actions: Record<string, PieceCatalogAction>;
   triggers?: Record<string, PieceCatalogTrigger>;
+  /**
+   * Piece-level auth declaration. Present when the piece requires a
+   * connection (most third-party integrations -- gmail, slack,
+   * telegram-bot, github). Absent for pieces that don't need auth
+   * (jarvis-ask, schedule, webhook, code).
+   */
+  auth?: PieceCatalogAuth;
 }
 
 /**
@@ -408,6 +445,17 @@ export interface RawPieceMetadata {
   description?: string;
   actions?: Record<string, RawActionOrTrigger>;
   triggers?: Record<string, RawActionOrTrigger>;
+  /**
+   * Top-level piece auth. Activepieces typing on `PieceAuthProperty` is
+   * a discriminated union over OAUTH2 / SECRET_TEXT / BASIC_AUTH /
+   * CUSTOM_AUTH variants; we read it loosely here and project only the
+   * fields the editor needs (`type`, `displayName`, `description`).
+   */
+  auth?: {
+    type?: string;
+    displayName?: string;
+    description?: string;
+  } | null;
 }
 
 export interface RawActionOrTrigger {
@@ -450,7 +498,41 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     }
     out.triggers = triggers;
   }
+  // Project piece.auth into the catalog's auth shape. We only forward
+  // it when the upstream type is one of AppConnectionType's variants;
+  // anything else (NO_AUTH, malformed) is treated as "no auth needed."
+  // The piece's auth.type comes from upstream's PropertyType -- map it
+  // to our AppConnectionType vocabulary so the editor + connection
+  // listing share one name space.
+  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
+    const projected = projectAuthType(m.auth.type);
+    if (projected) {
+      out.auth = {
+        type: projected,
+        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
+        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+      };
+    }
+  }
   return out;
+}
+
+/**
+ * Map upstream's `PropertyType` (which AP uses for piece auth as well
+ * as field types) to the `AppConnectionType` vocabulary used by the
+ * connections panel + connection store. Returns null for property
+ * types that aren't connection-shaped (NO_AUTH, MARKDOWN, etc.).
+ */
+function projectAuthType(t: string): PieceCatalogAuth["type"] | null {
+  switch (t) {
+    case "OAUTH2": return "OAUTH2";
+    case "PLATFORM_OAUTH2": return "PLATFORM_OAUTH2";
+    case "CLOUD_OAUTH2": return "CLOUD_OAUTH2";
+    case "SECRET_TEXT": return "SECRET_TEXT";
+    case "BASIC_AUTH": return "BASIC_AUTH";
+    case "CUSTOM_AUTH": return "CUSTOM_AUTH";
+    default: return null;
+  }
 }
 
 function rawActionToCatalogAction(
