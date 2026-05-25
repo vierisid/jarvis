@@ -32,6 +32,13 @@ import type { ComposerLlmClient } from "./workflow-composer.ts";
  */
 export interface ComposerToolRegistry {
   listNames(category?: string): string[];
+  /**
+   * Optional richer listing: each tool with its parameter schema. When present
+   * the composer surfaces required params to the LLM and validates them, so a
+   * `jarvis-tool:invoke` step can't omit a tool's required param (e.g. `action`)
+   * and 500 at runtime. Falls back to `listNames` when not provided.
+   */
+  listDetailed?(category?: string): ComposerToolSpec[];
 }
 import {
   createFlow,
@@ -57,7 +64,7 @@ import {
 } from "../../workflows/db/repos/flow-run.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
-import { composeFlow, type ComposedFlow, type ComposerSpecialistRole } from "./workflow-composer.ts";
+import { composeFlow, type ComposedFlow, type ComposerSpecialistRole, type ComposerToolSpec } from "./workflow-composer.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -401,7 +408,14 @@ async function actCompose(
     pieceRegistry: deps.pieceRegistry,
   };
   if (deps.toolRegistry) {
-    composeDeps.toolNames = deps.toolRegistry.listNames();
+    // Prefer the richer schema listing so the composer can validate invoke
+    // params; fall back to bare names when the registry doesn't supply it.
+    const detailed = deps.toolRegistry.listDetailed?.();
+    if (detailed && detailed.length > 0) {
+      composeDeps.tools = detailed;
+    } else {
+      composeDeps.toolNames = deps.toolRegistry.listNames();
+    }
   }
   if (deps.specialistRoles) {
     const roles = deps.specialistRoles();

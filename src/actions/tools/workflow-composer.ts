@@ -90,6 +90,38 @@ export interface ComposerSpecialistRole {
 const AGENT_PIECE_SHORT = "jarvis-agent";
 /** The delegate action on the agent piece, whose `role` we constrain. */
 const DELEGATE_ACTION = "delegate";
+/** Canonical short name of the generic tool-invocation piece. */
+const TOOL_PIECE_SHORT = "jarvis-tool";
+/** The invoke action on the tool piece, whose `params` we validate. */
+const INVOKE_ACTION = "invoke";
+/**
+ * Router condition operators whose `secondValue` is a regex pattern. The engine
+ * compiles these with JavaScript `RegExp`, so we validate them the same way --
+ * catching unsupported syntax (e.g. inline flags `(?i)`) at compose time
+ * instead of letting the run hang to a timeout on `InvalidRegexError`.
+ */
+const REGEX_CONDITION_OPERATORS = new Set(["TEXT_MATCHES_REGEX", "TEXT_DOES_NOT_MATCH_REGEX"]);
+
+/** One parameter of a Jarvis tool, as surfaced to the composer. */
+export interface ComposerToolParam {
+  name: string;
+  type: string;
+  required: boolean;
+  description?: string;
+}
+
+/**
+ * A Jarvis tool's invocation contract: its name plus the parameters it accepts.
+ * The composer lists these so the LLM wires `jarvis-tool { toolName, params }`
+ * with the params a tool actually needs, and validates that the required ones
+ * are present -- otherwise the model guesses (e.g. `{ query }` for a tool that
+ * needs `{ action }`) and the step 500s at runtime.
+ */
+export interface ComposerToolSpec {
+  name: string;
+  description?: string;
+  params: ComposerToolParam[];
+}
 
 export interface ComposeDeps {
   llm: ComposerLlmClient;
@@ -101,6 +133,14 @@ export interface ComposeDeps {
    * service as a piece.
    */
   toolNames?: string[];
+  /**
+   * Optional richer tool listing: each tool plus its parameter schema. When
+   * present this supersedes `toolNames` in the prompt (the LLM sees which
+   * params each tool requires) and enables compile-time validation of a
+   * `jarvis-tool:invoke` step's `params`. Falls back to `toolNames` (names
+   * only) when absent.
+   */
+  tools?: ComposerToolSpec[];
   /**
    * Optional set of specialist sub-agent roles. When present the composer
    * (a) lists the valid role ids in the prompt so the LLM picks a real one for
@@ -156,9 +196,16 @@ export async function composeFlow(
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
 
   const catalogText = renderCatalog(deps.pieceRegistry);
-  const toolsText = renderToolNames(deps.toolNames);
+  const toolsText = renderTools(deps.tools, deps.toolNames);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const system = buildSystemPrompt(catalogText, toolsText, rolesText);
+  // Lookup of tool name -> spec for delegate/invoke param validation. Null when
+  // the caller only gave names (or nothing) -- without schemas we can't tell a
+  // missing-required-param from an intentionally-empty one, so we skip the check.
+  const toolSpecs =
+    deps.tools && deps.tools.length > 0
+      ? new Map(deps.tools.map((t) => [t.name, t] as const))
+      : null;
   // Set of valid role ids for delegate-step validation. Null when the caller
   // didn't supply roles -- in that case we can't tell a typo from a real id,
   // so we skip the check rather than reject everything.
@@ -216,7 +263,7 @@ export async function composeFlow(
       continue;
     }
 
-    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds);
+    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
       return { ok: true, flow: validation.flow, rawResponse: raw };
@@ -287,7 +334,17 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
     '          ] },',
     '        "children": [ { ...subgraph for high... }, { ...subgraph for fallback... } ] }',
     "    Conditions are 2D: outer array = OR, inner = AND. Operators include TEXT_CONTAINS, TEXT_EXACTLY_MATCHES, TEXT_MATCHES_REGEX, TEXT_DOES_NOT_MATCH_REGEX, NUMBER_IS_GREATER_THAN, NUMBER_IS_LESS_THAN, NUMBER_IS_EQUAL_TO, BOOLEAN_IS_TRUE, BOOLEAN_IS_FALSE, EXISTS, DOES_NOT_EXIST, LIST_IS_EMPTY, LIST_IS_NOT_EMPTY, LIST_CONTAINS.",
-    "    For regex operators: secondValue is a JS regex pattern (no slashes, no flags suffix); use inline flags like (?i) for case-insensitive.",
+    "    For regex operators: secondValue is a JavaScript RegExp pattern (no slashes, no flags suffix). JS RegExp does NOT support inline",
+    "    flags -- '(?i)', '(?m)', '(?s)' are INVALID and throw at runtime. For case-insensitivity use character classes instead, e.g.",
+    "    '[Nn]o documents found' rather than '(?i)no documents found'. Prefer TEXT_CONTAINS over regex when a plain substring will do.",
+    "    Match the operator to the UPSTREAM STEP'S ACTUAL OUTPUT SHAPE (from its `output` sample in the catalog):",
+    "      * If the value is a LIST/array, use LIST_IS_EMPTY / LIST_IS_NOT_EMPTY to test 'did it return anything' -- never a regex.",
+    "      * If the value is a STRING, use TEXT_CONTAINS / TEXT_EXACTLY_MATCHES against the actual wording.",
+    "      * If the value is a NUMBER, use the NUMBER_* operators; for presence use EXISTS / DOES_NOT_EXIST.",
+    "    NEVER hand-write a regex that assumes a shape the output doesn't have. In particular, do NOT test a STRING output against an",
+    "    empty-array pattern like '^\\s*\\[\\s*\\]\\s*$' -- a human-readable string (e.g. 'No documents found.') will never match it, so",
+    "    the branch evaluates backwards. To check whether a search/list returned results, prefer a step whose output is a real list and",
+    "    use LIST_IS_NOT_EMPTY; if you only have a string, test its actual empty-wording with TEXT_CONTAINS.",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
     "  - Field names in `{{step.field}}` MUST exist on that step's declared `output` (see each action / trigger in the catalog).",
     "    Do not guess fields from the user's wording -- for example, a piece whose output is `{ result: ... }` is referenced as",
@@ -310,12 +367,36 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
   ].filter((s) => s !== "").join("\n");
 }
 
-function renderToolNames(toolNames: string[] | undefined): string {
-  if (!toolNames || toolNames.length === 0) return "";
-  return [
-    "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
-    ...toolNames.map((n) => `  - ${n}`),
-  ].join("\n");
+/**
+ * Render the Jarvis tool listing for the prompt. Prefers the richer `tools`
+ * (name + params, with required ones flagged) so the LLM wires correct
+ * `params`; falls back to a bare name list when only names are available.
+ */
+function renderTools(
+  tools: ComposerToolSpec[] | undefined,
+  toolNames: string[] | undefined,
+): string {
+  if (tools && tools.length > 0) {
+    const header =
+      "Available Jarvis tools (call via `jarvis-tool { toolName, params: { ... } }`; include EVERY param marked REQUIRED):";
+    const lines = [header];
+    for (const t of tools) {
+      lines.push(`  - ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`);
+      for (const p of t.params) {
+        const req = p.required ? ", REQUIRED" : "";
+        const desc = p.description ? ` -- ${firstLine(p.description)}` : "";
+        lines.push(`      param ${p.name} (${p.type}${req})${desc}`);
+      }
+    }
+    return lines.join("\n");
+  }
+  if (toolNames && toolNames.length > 0) {
+    return [
+      "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
+      ...toolNames.map((n) => `  - ${n}`),
+    ].join("\n");
+  }
+  return "";
 }
 
 /**
@@ -460,6 +541,7 @@ function validateComposedFlow(
   registry: PieceLookup,
   fallbackName: string,
   validRoleIds: Set<string> | null,
+  toolSpecs: Map<string, ComposerToolSpec> | null,
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -472,7 +554,7 @@ function validateComposedFlow(
   }
   const errors: string[] = [];
   const knownNames = new Set<string>();
-  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds);
+  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds, toolSpecs);
   if (!trigger) return { ok: false, errors };
 
   // Walk subsequent actions.
@@ -486,7 +568,7 @@ function validateComposedFlow(
       errors.push("flow exceeds 100 steps");
       break;
     }
-    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds);
+    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs);
     if (!step) break;
     last.nextAction = step;
     last = step;
@@ -504,6 +586,7 @@ function validateStep(
   isTrigger: boolean,
   registry: PieceLookup,
   validRoleIds: Set<string> | null,
+  toolSpecs: Map<string, ComposerToolSpec> | null,
 ): ComposedStep | null {
   const name = typeof raw.name === "string" ? raw.name : null;
   if (!name) {
@@ -557,7 +640,13 @@ function validateStep(
       errors.push(`loop "${name}" missing settings.items`);
     }
     const inner = (raw.firstLoopAction as Record<string, unknown> | undefined) ?? null;
-    if (inner) walkInnerChain(inner, errors, knownNames, registry, validRoleIds);
+    // Build AND attach the loop body. Validating it without attaching (the old
+    // bug) left every composed loop with no firstLoopAction -- the engine ran
+    // an empty loop and the editor showed the flow "stopping" at the loop node.
+    if (inner) {
+      const body = buildInnerChain(inner, errors, knownNames, registry, validRoleIds, toolSpecs);
+      if (body) step.firstLoopAction = body;
+    }
     return step;
   }
 
@@ -574,12 +663,21 @@ function validateStep(
     if (childCount !== settings.branches.length) {
       errors.push(`router "${name}" children count (${childCount}) does not match branches count (${settings.branches.length})`);
     }
+    // Compile every regex condition exactly as the engine will (JS RegExp), so
+    // an unsupported pattern (e.g. an inline `(?i)` flag) fails validation here
+    // and feeds the retry loop, rather than throwing InvalidRegexError mid-run
+    // and hanging the flow until the executor timeout.
+    validateRouterRegexes(name, settings.branches, errors);
+    // Build AND attach each branch subgraph, preserving index alignment with
+    // `branches` (a null entry = an empty branch). Same bug as loops: the old
+    // code validated children but never attached them, so every composed
+    // router persisted with no children and the branches did nothing.
     if (Array.isArray(raw.children)) {
-      for (const child of raw.children as Array<unknown>) {
-        if (child && typeof child === "object") {
-          walkInnerChain(child as Record<string, unknown>, errors, knownNames, registry, validRoleIds);
-        }
-      }
+      step.children = (raw.children as Array<unknown>).map((child) =>
+        child && typeof child === "object"
+          ? buildInnerChain(child as Record<string, unknown>, errors, knownNames, registry, validRoleIds, toolSpecs)
+          : null,
+      );
     }
     return step;
   }
@@ -676,32 +774,130 @@ function validateStep(
       }
     }
   }
+
+  // Invoke-params check: a `jarvis-tool:invoke` step names a tool in
+  // `input.toolName` and passes `input.params`. Multi-action tools require an
+  // `action` param (and others); the LLM otherwise guesses params like
+  // `{ query }` and the step 500s with "Required parameter 'X' missing". When
+  // the caller supplied tool schemas, enforce the tool's REQUIRED params so the
+  // miss is caught here and fed back into the retry loop.
+  if (
+    !isTrigger &&
+    subName === INVOKE_ACTION &&
+    toolSpecs &&
+    (piece.name === TOOL_PIECE_SHORT || piece.name.endsWith(`/piece-${TOOL_PIECE_SHORT}`))
+  ) {
+    const toolName = typeof input.toolName === "string" ? input.toolName.trim() : "";
+    if (toolName) {
+      const spec = toolSpecs.get(toolName);
+      if (!spec) {
+        const known = Array.from(toolSpecs.keys()).sort().join(", ");
+        errors.push(
+          `step "${name}" invokes unknown tool "${toolName}". Valid toolName values: ${known}`,
+        );
+      } else {
+        const params =
+          input.params && typeof input.params === "object" && !Array.isArray(input.params)
+            ? (input.params as Record<string, unknown>)
+            : {};
+        const missing = spec.params
+          .filter((p) => p.required)
+          .map((p) => p.name)
+          .filter((pn) => {
+            const v = params[pn];
+            // Present-but-templated ({{...}}) counts as present.
+            return v === undefined || v === null || v === "";
+          });
+        if (missing.length > 0) {
+          const reqList = spec.params
+            .filter((p) => p.required)
+            .map((p) => p.name)
+            .join(", ");
+          errors.push(
+            `step "${name}" invokes tool "${toolName}" but is missing required param(s): ${missing.join(", ")}. ` +
+              `${toolName} requires: ${reqList || "(none)"}. Put them in settings.input.params.`,
+          );
+        }
+      }
+    }
+  }
   return step;
 }
 
 /**
- * Recursively validate an inner chain reachable from a LOOP body or a ROUTER
- * branch. Same logic as the top-level walk but without the trigger-specific
- * checks. Errors are appended to the shared list; the chain link is built
- * up as a side effect via the same `validateStep` machinery.
+ * Compile every regex-operator condition in a router's branches with JS
+ * `RegExp` (the same engine the runtime uses) and report any that don't
+ * compile. Catches the common LLM mistake of inline flags like `(?i)`, which
+ * JS RegExp rejects -- left unchecked it throws InvalidRegexError mid-run and
+ * the flow hangs until the executor timeout. Patterns containing `{{...}}` are
+ * skipped (they resolve at runtime and aren't a static pattern).
  */
-function walkInnerChain(
+function validateRouterRegexes(
+  routerName: string,
+  branches: Array<Record<string, unknown>>,
+  errors: string[],
+): void {
+  for (const branch of branches) {
+    const conditions = (branch as { conditions?: unknown }).conditions;
+    if (!Array.isArray(conditions)) continue;
+    const branchName = typeof branch.branchName === "string" ? branch.branchName : "?";
+    // `conditions` is 2D (OR of ANDs); tolerate a flat 1D array defensively.
+    const groups = conditions.every((g) => Array.isArray(g)) ? conditions : [conditions];
+    for (const group of groups as unknown[][]) {
+      for (const cond of group) {
+        if (!cond || typeof cond !== "object") continue;
+        const c = cond as { operator?: unknown; secondValue?: unknown };
+        if (typeof c.operator !== "string" || !REGEX_CONDITION_OPERATORS.has(c.operator)) continue;
+        if (typeof c.secondValue !== "string" || c.secondValue.includes("{{")) continue;
+        try {
+          new RegExp(c.secondValue);
+        } catch (e) {
+          errors.push(
+            `router "${routerName}" branch "${branchName}" has an invalid regex for ${c.operator}: ` +
+              `"${c.secondValue}" -- ${(e as Error).message}. The engine uses JavaScript RegExp, which does NOT support ` +
+              `inline flags like (?i); use character classes (e.g. [Nn]o) or switch to TEXT_CONTAINS.`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Validate AND build an inner chain reachable from a LOOP body or a ROUTER
+ * branch, returning its head step with the `nextAction` chain wired up (or
+ * null if the head step was invalid). Same logic as the top-level walk but
+ * without the trigger-specific checks. Errors are appended to the shared list.
+ *
+ * Returning the built subtree (rather than validating as a side effect and
+ * discarding it) is what lets the caller attach `firstLoopAction` / `children`
+ * so loop bodies and router branches actually persist.
+ */
+function buildInnerChain(
   head: Record<string, unknown>,
   errors: string[],
   knownNames: Set<string>,
   registry: PieceLookup,
   validRoleIds: Set<string> | null,
-): void {
+  toolSpecs: Map<string, ComposerToolSpec> | null,
+): ComposedStep | null {
   let cursor: Record<string, unknown> | null = head;
+  let first: ComposedStep | null = null;
+  let last: ComposedStep | null = null;
   let depth = 0;
   while (cursor) {
     if (++depth > 100) {
       errors.push("inner subgraph exceeds 100 steps");
-      return;
+      break;
     }
-    validateStep(cursor, errors, knownNames, false, registry, validRoleIds);
+    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs);
+    if (!step) break;
+    if (!first) first = step;
+    if (last) last.nextAction = step;
+    last = step;
     cursor = cursor.nextAction ? (cursor.nextAction as Record<string, unknown>) : null;
   }
+  return first;
 }
 
 /**

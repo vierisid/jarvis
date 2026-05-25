@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
 import { PieceCatalog, type PieceCatalogEntry, type PieceLookup } from "../../workflows/runtime/piece-catalog";
-import type { ComposerLlmClient } from "./workflow-composer";
+import type { ComposerLlmClient, ComposerToolSpec } from "./workflow-composer";
 
 class StubLlm implements ComposerLlmClient {
   public calls: Array<{ prompt: string; system?: string }> = [];
@@ -538,6 +538,326 @@ describe("composeFlow", () => {
         { name: "Delegated", description: "research" },
       );
       expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("jarvis-tool invoke param validation", () => {
+    function toolCatalog(): PieceLookup {
+      const entries: PieceCatalogEntry[] = [
+        {
+          name: "@jarvispieces/piece-jarvis-tool",
+          displayName: "Jarvis: Tool",
+          description: "Invoke a registered Jarvis tool.",
+          actions: {
+            invoke: {
+              name: "invoke",
+              displayName: "Invoke",
+              description: "Call a tool.",
+              inputSchema: {
+                fields: [
+                  { name: "toolName", label: "Tool", type: "string", required: true },
+                  { name: "params", label: "Params", type: "json", required: false },
+                ],
+              },
+            },
+          },
+        },
+      ];
+      return new PieceCatalog(entries);
+    }
+
+    const tools: ComposerToolSpec[] = [
+      {
+        name: "content_pipeline",
+        description: "Manage the content pipeline.",
+        params: [
+          { name: "action", type: "string", required: true, description: "list, get, create, ..." },
+          { name: "id", type: "string", required: false },
+        ],
+      },
+      { name: "vault_search", description: "Search the vault.", params: [{ name: "query", type: "string", required: false }] },
+    ];
+
+    const invokeFlow = (toolName: string, params: Record<string, unknown>) =>
+      JSON.stringify({
+        displayName: "Tooly",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-tool", actionName: "invoke", input: { toolName, params } },
+          },
+        },
+      });
+
+    test("lists each tool's params (required flagged) in the prompt", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow({ llm, pieceRegistry: toolCatalog(), tools }, { name: "X", description: "x" });
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toContain("content_pipeline");
+      expect(sys).toMatch(/param action \(string, REQUIRED\)/);
+    });
+
+    test("rejects an invoke that omits a required param (the content_pipeline/action bug)", async () => {
+      const llm = new StubLlm(invokeFlow("content_pipeline", { query: "tag:project-x" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: toolCatalog(), tools, maxAttempts: 1 },
+        { name: "Tooly", description: "list project-x content" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => /missing required param\(s\): action/.test(e))).toBe(true);
+      }
+    });
+
+    test("self-corrects when the retry supplies the required param", async () => {
+      const llm = new StubLlm([
+        invokeFlow("content_pipeline", { query: "x" }),
+        invokeFlow("content_pipeline", { action: "list" }),
+      ]);
+      const result = await composeFlow(
+        { llm, pieceRegistry: toolCatalog(), tools, maxAttempts: 4 },
+        { name: "Tooly", description: "list content" },
+      );
+      expect(result.ok).toBe(true);
+      expect(llm.calls).toHaveLength(2);
+      expect(llm.calls[1]?.prompt).toMatch(/missing required param/);
+    });
+
+    test("accepts a templated required param value", async () => {
+      const llm = new StubLlm(invokeFlow("content_pipeline", { action: "{{trigger.action}}" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: toolCatalog(), tools },
+        { name: "Tooly", description: "x" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("rejects an unknown toolName", async () => {
+      const llm = new StubLlm(invokeFlow("not_a_tool", { action: "list" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: toolCatalog(), tools, maxAttempts: 1 },
+        { name: "Tooly", description: "x" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => /invokes unknown tool "not_a_tool"/.test(e))).toBe(true);
+      }
+    });
+
+    test("does not enforce params when only tool names are supplied", async () => {
+      // toolNames (no schemas) -> can't validate; back-compat path stays open.
+      const llm = new StubLlm(invokeFlow("content_pipeline", { query: "x" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: toolCatalog(), toolNames: ["content_pipeline"] },
+        { name: "Tooly", description: "x" },
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("router regex condition validation", () => {
+    const routerFlow = (operator: string, secondValue: string) =>
+      JSON.stringify({
+        displayName: "Rx",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "hi" } },
+            nextAction: {
+              name: "router_1",
+              type: "ROUTER",
+              settings: {
+                executionType: "EXECUTE_FIRST_MATCH",
+                branches: [
+                  { branchName: "match", branchType: "CONDITION", conditions: [[{ firstValue: "{{step_1.text}}", operator, secondValue }]] },
+                  { branchName: "fallback", branchType: "FALLBACK" },
+                ],
+              },
+              children: [
+                { name: "b_match", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "hit" } } },
+                null,
+              ],
+            },
+          },
+        },
+      });
+
+    test("rejects an inline-flag regex like (?i)... (the engine throws InvalidRegexError on these)", async () => {
+      const llm = new StubLlm(routerFlow("TEXT_DOES_NOT_MATCH_REGEX", "(?i)no documents found|^\\s*$"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: makeRegistry(), maxAttempts: 1 },
+        { name: "Rx", description: "branch on text" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => /invalid regex/.test(e))).toBe(true);
+        expect(result.errors.some((e) => /inline flags like \(\?i\)/.test(e))).toBe(true);
+      }
+    });
+
+    test("self-corrects to a valid pattern on retry", async () => {
+      const llm = new StubLlm([
+        routerFlow("TEXT_MATCHES_REGEX", "(?i)urgent"),
+        routerFlow("TEXT_MATCHES_REGEX", "[Uu]rgent"),
+      ]);
+      const result = await composeFlow(
+        { llm, pieceRegistry: makeRegistry(), maxAttempts: 4 },
+        { name: "Rx", description: "branch on urgency" },
+      );
+      expect(result.ok).toBe(true);
+      expect(llm.calls).toHaveLength(2);
+      expect(llm.calls[1]?.prompt).toMatch(/invalid regex/);
+    });
+
+    test("accepts a valid JS regex pattern", async () => {
+      const llm = new StubLlm(routerFlow("TEXT_MATCHES_REGEX", "[Uu]rgent|important"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: makeRegistry() },
+        { name: "Rx", description: "branch on urgency" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("skips a templated regex value (resolved at runtime)", async () => {
+      const llm = new StubLlm(routerFlow("TEXT_MATCHES_REGEX", "{{trigger.pattern}}"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: makeRegistry() },
+        { name: "Rx", description: "dynamic pattern" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("prompt warns that inline regex flags are unsupported", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toMatch(/does NOT support inline/i);
+    });
+  });
+
+  describe("control-flow bodies survive validation", () => {
+    test("LOOP_ON_ITEMS keeps its firstLoopAction body (and the chain inside it)", async () => {
+      const reply = JSON.stringify({
+        displayName: "Loopy",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "list things" } },
+            nextAction: {
+              name: "loop_1",
+              type: "LOOP_ON_ITEMS",
+              settings: { items: "{{step_1.text}}" },
+              firstLoopAction: {
+                name: "body_1",
+                type: "PIECE",
+                settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "{{loop_1.item}}" } },
+                nextAction: {
+                  name: "body_2",
+                  type: "PIECE",
+                  settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "{{loop_1.item}}" } },
+                },
+              },
+            },
+          },
+        },
+      });
+      const result = await composeFlow(
+        { llm: new StubLlm(reply), pieceRegistry: makeRegistry() },
+        { name: "Loopy", description: "loop over things" },
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const loop = result.flow.trigger.nextAction?.nextAction;
+        expect(loop?.type).toBe("LOOP_ON_ITEMS");
+        // The whole point of the fix: the body is present, not dropped.
+        expect(loop?.firstLoopAction?.name).toBe("body_1");
+        expect(loop?.firstLoopAction?.nextAction?.name).toBe("body_2");
+      }
+    });
+
+    test("ROUTER keeps its children subgraphs (one per branch, nulls preserved)", async () => {
+      const reply = JSON.stringify({
+        displayName: "Routey",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "router_1",
+            type: "ROUTER",
+            settings: {
+              executionType: "EXECUTE_FIRST_MATCH",
+              branches: [
+                { branchName: "hit", branchType: "CONDITION", conditions: [[{ firstValue: "{{trigger.x}}", operator: "TEXT_CONTAINS", secondValue: "y" }]] },
+                { branchName: "fallback", branchType: "FALLBACK" },
+              ],
+            },
+            children: [
+              {
+                name: "branch_hit",
+                type: "PIECE",
+                settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "matched" } },
+              },
+              null,
+            ],
+          },
+        },
+      });
+      const result = await composeFlow(
+        { llm: new StubLlm(reply), pieceRegistry: makeRegistry() },
+        { name: "Routey", description: "branch on x" },
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const router = result.flow.trigger.nextAction;
+        expect(router?.type).toBe("ROUTER");
+        expect(router?.children).toHaveLength(2);
+        expect(router?.children?.[0]?.name).toBe("branch_hit");
+        expect(router?.children?.[1]).toBeNull();
+      }
+    });
+
+    test("a step after a top-level loop is still reachable", async () => {
+      const reply = JSON.stringify({
+        displayName: "After",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "loop_1",
+            type: "LOOP_ON_ITEMS",
+            settings: { items: "{{trigger.list}}" },
+            firstLoopAction: {
+              name: "body_1",
+              type: "PIECE",
+              settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "{{loop_1.item}}" } },
+            },
+            nextAction: {
+              name: "after_1",
+              type: "PIECE",
+              settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "done" } },
+            },
+          },
+        },
+      });
+      const result = await composeFlow(
+        { llm: new StubLlm(reply), pieceRegistry: makeRegistry() },
+        { name: "After", description: "loop then a final step" },
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const loop = result.flow.trigger.nextAction;
+        expect(loop?.firstLoopAction?.name).toBe("body_1");
+        expect(loop?.nextAction?.name).toBe("after_1");
+      }
     });
   });
 

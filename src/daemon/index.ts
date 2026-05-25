@@ -809,7 +809,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
       };
       const composerToolRegistry = toolRegistry
-        ? { listNames: (cat?: string) => toolRegistry.list(cat).map((t) => t.name) }
+        ? {
+            listNames: (cat?: string) => toolRegistry.list(cat).map((t) => t.name),
+            // Surface each tool's parameter schema so the composer can wire
+            // correct `params` and reject a jarvis-tool:invoke step that omits a
+            // required param (e.g. content_pipeline needs `action`).
+            listDetailed: (cat?: string) =>
+              toolRegistry.list(cat).map((t) => ({
+                name: t.name,
+                description: t.description,
+                params: Object.entries(t.parameters).map(([name, p]) => ({
+                  name,
+                  type: p.type,
+                  required: p.required,
+                  description: p.description,
+                })),
+              })),
+          }
         : undefined;
       const manageWorkflowTool = createManageWorkflowTool({
         triggerManager: triggerManager ?? undefined,
