@@ -27,13 +27,14 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   // ── observer.* ── unified stream from ObserverManager ───────────────────
   {
     type: "observer.clipboard_changed",
-    description: "User copied something. Use to react to URLs, emails, code snippets, etc.",
-    payloadExample: { content: "https://example.com", contentType: "url", length: 19 },
+    description:
+      "User copied something. The payload is just the raw text in `content` -- there is NO type/kind field, so detect what it is by inspecting `content` itself (e.g. regex-match `content` against ^https?:// to decide it's a URL). Do not test for a `contentType`.",
+    payloadExample: { content: "https://example.com", length: 19 },
   },
   {
     type: "observer.file_changed",
-    description: "A watched file or directory changed (created / modified / deleted).",
-    payloadExample: { path: "/tmp/a.txt", change: "modified" },
+    description: "A watched file or directory changed. The kind of change is in `eventType` (created / modified / deleted).",
+    payloadExample: { path: "/home/me/notes.txt", eventType: "modified", filename: "notes.txt", basePath: "/home/me" },
   },
   {
     type: "observer.email_received",
@@ -58,7 +59,7 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   {
     type: "observer.notification_received",
     description: "A D-Bus / native desktop notification was shown.",
-    payloadExample: { app: "Slack", summary: "Message from Alice" },
+    payloadExample: { app: "Slack", title: "Alice", body: "Message from Alice", urgency: "normal" },
   },
 
   // ── commitment.* ── heartbeat sweep over the vault commitments table ─

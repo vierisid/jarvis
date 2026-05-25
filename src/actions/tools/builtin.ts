@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
+import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
@@ -271,6 +272,11 @@ function localClipboardRead(): string {
     return execSync('pbpaste', { encoding: 'utf-8' });
   } else if (os === 'win32') {
     return execSync('powershell -command Get-Clipboard', { encoding: 'utf-8' }).trimEnd();
+  } else if (WSLBridge.isWSL()) {
+    // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
+    // user copies/pastes with -- that's the Windows clipboard. Read it through
+    // Windows interop so workflows see what the user actually copied.
+    return execSync('powershell.exe -NoProfile -Command Get-Clipboard', { encoding: 'utf-8' }).replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
       return execSync('xclip -selection clipboard -o', { encoding: 'utf-8' });
@@ -286,6 +292,12 @@ function localClipboardWrite(content: string): void {
     execSync('pbcopy', { input: content, encoding: 'utf-8' });
   } else if (os === 'win32') {
     execSync('powershell -command Set-Clipboard', { input: content, encoding: 'utf-8' });
+  } else if (WSLBridge.isWSL()) {
+    // Write to the Windows clipboard via interop. `clip.exe` is the simplest
+    // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
+    // xsel would only populate the WSLg X clipboard, which Windows apps and
+    // the desktop sidecar's clipboard observer never see.)
+    execSync('clip.exe', { input: content, encoding: 'utf-8' });
   } else {
     try {
       execSync('xclip -selection clipboard', { input: content, encoding: 'utf-8' });

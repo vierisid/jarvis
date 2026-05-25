@@ -658,6 +658,57 @@ describe("composeFlow", () => {
     });
   });
 
+  describe("internal pieces are excluded from composition", () => {
+    function catalogWithTestPiece(): PieceLookup {
+      const entries: PieceCatalogEntry[] = [
+        {
+          name: "jarvis-ask",
+          displayName: "Jarvis: Ask",
+          description: "Send a prompt to the LLM.",
+          actions: { ask: { name: "ask", displayName: "Ask", description: "Ask.", inputSchema: { fields: [{ name: "prompt", label: "Prompt", type: "long_text", required: true }] } } },
+        },
+        {
+          name: "@jarvispieces/piece-jarvis-test",
+          displayName: "Jarvis: Test",
+          description: "Internal test piece.",
+          actions: { echo: { name: "echo", displayName: "Echo", description: "Echo input.", inputSchema: { fields: [{ name: "value", label: "Value", type: "json", required: false }] } } },
+        },
+      ];
+      return new PieceCatalog(entries);
+    }
+
+    test("jarvis-test is hidden from the prompt catalog", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow({ llm, pieceRegistry: catalogWithTestPiece() }, { name: "X", description: "x" });
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toContain("jarvis-ask");
+      expect(sys).not.toContain("jarvis-test");
+    });
+
+    test("rejects a step that uses jarvis-test:echo even if the model names it directly", async () => {
+      const reply = JSON.stringify({
+        displayName: "X",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-test", actionName: "echo", input: { value: "ignored" } },
+          },
+        },
+      });
+      const result = await composeFlow(
+        { llm: new StubLlm(reply), pieceRegistry: catalogWithTestPiece(), maxAttempts: 1 },
+        { name: "X", description: "x" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => /internal piece "jarvis-test"/.test(e))).toBe(true);
+      }
+    });
+  });
+
   describe("router regex condition validation", () => {
     const routerFlow = (operator: string, secondValue: string) =>
       JSON.stringify({

@@ -102,6 +102,24 @@ const INVOKE_ACTION = "invoke";
  */
 const REGEX_CONDITION_OPERATORS = new Set(["TEXT_MATCHES_REGEX", "TEXT_DOES_NOT_MATCH_REGEX"]);
 
+/**
+ * Internal pieces that exist only for engine smoke-tests / plumbing checks and
+ * must never appear in a real composed flow. They're hidden from the prompt
+ * catalog AND rejected in validation -- the LLM was picking `jarvis-test:echo`
+ * as a no-op fallback step, but echo's `value` is JSON-typed so a placeholder
+ * like "ignored" fails with "Expected JSON" and the run dies. A fallback that
+ * should do nothing is better expressed as an empty branch (null child).
+ */
+const COMPOSER_EXCLUDED_PIECES = new Set(["jarvis-test", "jarvis-validate"]);
+
+/** True if `pieceFullName` is an internal piece the composer must not use. */
+function isComposerExcludedPiece(pieceFullName: string): boolean {
+  for (const short of COMPOSER_EXCLUDED_PIECES) {
+    if (pieceFullName === short || pieceFullName.endsWith(`/piece-${short}`)) return true;
+  }
+  return false;
+}
+
 /** One parameter of a Jarvis tool, as surfaced to the composer. */
 export interface ComposerToolParam {
   name: string;
@@ -429,6 +447,9 @@ function firstLine(s: string): string {
 function renderCatalog(registry: PieceLookup): string {
   const lines: string[] = [];
   for (const piece of registry.list()) {
+    // Internal test/plumbing pieces are never valid in a real flow -- don't
+    // even show them to the model.
+    if (isComposerExcludedPiece(piece.name)) continue;
     lines.push(`- ${piece.name} (${piece.displayName}): ${piece.description}`);
     for (const trigger of Object.values(piece.triggers ?? {})) {
       lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
@@ -719,6 +740,16 @@ function validateStep(
   }
   if (!piece) {
     errors.push(`step "${name}" references unknown piece "${pieceName}"`);
+    return step;
+  }
+
+  // Reject internal test/plumbing pieces even if the model named one directly
+  // (they're hidden from the catalog, but a model can still hallucinate them).
+  if (isComposerExcludedPiece(piece.name)) {
+    errors.push(
+      `step "${name}" uses internal piece "${pieceName}", which isn't available for workflows. ` +
+        `For a branch that should do nothing, leave it empty (a null child) instead of adding a step.`,
+    );
     return step;
   }
 

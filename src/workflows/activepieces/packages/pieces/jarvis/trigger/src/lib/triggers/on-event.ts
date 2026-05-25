@@ -14,17 +14,22 @@
  *   run       -- poll, advance cursor, return events with DEDUPE_KEY_PROPERTY.
  *   test      -- single sample.
  *
- * Latency: the polling cadence defaults to `@every 10s` (sub-minute syntax
- * accepted by Jarvis's CronScheduler). Events surface within ~10 seconds
- * of being published to the daemon's event buffer. To trade latency for
- * fewer engine spawns, configure a slower expression at the trigger
- * settings level (the current value is hardcoded here as a piece-side
- * default; per-flow overrides are a follow-up).
+ * Latency: the polling cadence is once a minute (`* * * * *`). Events surface
+ * within ~60 seconds of being published to the daemon's event buffer.
  *
- * If even 10s is too slow for a use case (voice intents, sub-second
- * reactions), the alternative is bypassing the polling-trigger machinery
- * entirely and having the daemon push events directly into RUN_FLOW jobs --
- * bigger lift, requires an engine-side patch.
+ * Why not sub-minute: Jarvis's own CronScheduler supports an `@every <n>(s|m|h)`
+ * extension, BUT the engine validates a trigger's cron with `cron-validator`'s
+ * `isValidCron` inside `setSchedule` BEFORE Jarvis's scheduler ever sees it --
+ * and that validator only accepts standard 5-field cron, so `@every 10s` throws
+ * InvalidCronExpressionError and the whole ON_ENABLE hook fails with
+ * USER_FAILURE (the trigger never registers). A standard 5-field cron is the
+ * only expression both validators accept, and its finest granularity is one
+ * minute. Going sub-minute would require teaching the engine validator about
+ * the `@every` extension (a vendored-engine patch).
+ *
+ * If 60s is too slow for a use case (voice intents, sub-second reactions), the
+ * alternative is bypassing the polling-trigger machinery entirely and having
+ * the daemon push events directly into RUN_FLOW jobs -- bigger lift.
  */
 
 import {
@@ -35,7 +40,11 @@ import {
 } from "@activepieces/pieces-framework";
 
 const CURSOR_KEY = "jarvis-trigger:on-event:since";
-const POLL_CADENCE_CRON = "@every 10s";
+// Standard 5-field cron (every minute). MUST stay standard cron: the engine's
+// setSchedule rejects non-standard syntax (e.g. `@every 10s`) via isValidCron,
+// which fails ON_ENABLE and prevents the trigger from registering. See the
+// file header for the full rationale.
+const POLL_CADENCE_CRON = "* * * * *";
 
 interface PollResponse {
   events: Array<{
