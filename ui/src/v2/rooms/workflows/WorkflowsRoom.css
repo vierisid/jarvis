@@ -7,6 +7,12 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* Size against this element's own width, not the viewport. The room is
+     rendered inline inside a narrow thread card (.v2-roomwin__body) as well
+     as full-screen, so viewport media queries can't tell "cramped card" from
+     "wide page". Container queries below key off this width instead. */
+  container-type: inline-size;
+  container-name: wfroom;
 }
 
 .wf-room__header {
@@ -24,7 +30,18 @@
 
 .wf-room__actions {
   display: flex;
+  align-items: center;
   gap: var(--s-2);
+}
+
+/* Narrow card: let tabs + actions wrap onto separate lines instead of
+   squeezing the count label into a two-line wrap between the buttons. */
+@container wfroom (max-width: 560px) {
+  .wf-room__header {
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .wf-room__actions { flex-wrap: wrap; }
 }
 
 .wf-toast {
@@ -47,7 +64,9 @@
   min-height: 0;
 }
 
-@media (max-width: 960px) {
+/* Below ~680px the two-pane split gets too tight (detail column clips its
+   stats + run-history columns), so stack list-over-detail. */
+@container wfroom (max-width: 680px) {
   .wf-room__layout { grid-template-columns: 1fr; }
 }
 
@@ -112,6 +131,21 @@
   display: flex;
   gap: var(--s-1);
   flex-shrink: 0;
+}
+
+/* Narrow card: the title + meta + up to 5 action buttons can't sit on one
+   line without colliding. Drop the buttons onto their own row beneath the
+   title/meta and right-align them. */
+@container wfroom (max-width: 560px) {
+  .wf-list__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--s-2);
+  }
+  .wf-list__buttons {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
 }
 
 /* ── empty / placeholder ── */
@@ -250,6 +284,11 @@
   gap: var(--s-2);
 }
 
+/* Let the left group (status chip + failed-step label) absorb the squeeze so
+   the time + duration on the right are always fully visible. */
+.wf-runs__head-left { min-width: 0; }
+.wf-runs__head-right { flex-shrink: 0; }
+
 .wf-runs__time,
 .wf-runs__duration {
   font-size: 0.78rem;
@@ -261,6 +300,10 @@
   font-size: 0.75rem;
   color: var(--ink-3);
   font-style: italic;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wf-runs__paused {
