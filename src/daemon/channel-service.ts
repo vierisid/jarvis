@@ -18,6 +18,10 @@ import { TelegramAdapter } from '../comms/channels/telegram.ts';
 import { DiscordAdapter } from '../comms/channels/discord.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
+
+/** Settings-table key prefix for persisted per-channel broadcast recipients. */
+const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
 
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
@@ -28,7 +32,12 @@ export class ChannelService implements Service {
   private agentService: AgentService;
   private manager: ChannelManager;
   private sttProvider: STTProvider | null = null;
-  /** Track last message sender per channel for proactive broadcasts */
+  /**
+   * Track last message sender per channel for proactive broadcasts / notify.
+   * Persisted to the settings table (see {@link LAST_RECIPIENT_PREFIX}) and
+   * reloaded on start, so a daemon restart doesn't drop the recipient and
+   * silently break notifications until the user re-messages the bot.
+   */
   private lastRecipients = new Map<string, string>();
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
@@ -47,6 +56,11 @@ export class ChannelService implements Service {
     this._status = 'starting';
 
     try {
+      // 0. Restore persisted broadcast recipients so notifications keep
+      //    working across daemon restarts (the in-memory map alone would be
+      //    empty until the user re-messages each bot).
+      this.loadPersistedRecipients();
+
       // 1. Create STT provider if configured
       if (this.config.stt) {
         this.sttProvider = createSTTProvider(this.config.stt);
@@ -180,15 +194,51 @@ export class ChannelService implements Service {
   }
 
   /**
+   * Load broadcast recipients persisted by a previous run. Keys are
+   * `${LAST_RECIPIENT_PREFIX}<channel>`; only non-empty values are restored.
+   */
+  private loadPersistedRecipients(): void {
+    try {
+      const rows = getSettingsByPrefix(LAST_RECIPIENT_PREFIX);
+      let restored = 0;
+      for (const [key, value] of Object.entries(rows)) {
+        const channel = key.slice(LAST_RECIPIENT_PREFIX.length);
+        if (channel && value) {
+          this.lastRecipients.set(channel, value);
+          restored++;
+        }
+      }
+      if (restored > 0) {
+        console.log(`[ChannelService] Restored ${restored} broadcast recipient(s) from settings`);
+      }
+    } catch (err) {
+      // Non-fatal: a missing/locked settings table just means recipients seed
+      // fresh on the next inbound message, the pre-persistence behavior.
+      console.error('[ChannelService] Failed to restore recipients:', err);
+    }
+  }
+
+  /** Record a channel's broadcast recipient both in memory and on disk. */
+  private recordRecipient(channelTag: string, recipientId: string): void {
+    this.lastRecipients.set(channelTag, recipientId);
+    try {
+      setSetting(`${LAST_RECIPIENT_PREFIX}${channelTag}`, recipientId);
+    } catch (err) {
+      // Persistence is best-effort; the in-memory value still works this run.
+      console.error(`[ChannelService] Failed to persist recipient for ${channelTag}:`, err);
+    }
+  }
+
+  /**
    * Core message handler: receives from any channel, routes to AgentService,
    * persists to vault (unified history), returns response.
    */
   private async handleChannelMessage(msg: ChannelMessage): Promise<string> {
     const channelTag = msg.channel; // 'telegram' | 'discord'
 
-    // Track recipient for future broadcasts
+    // Track recipient for future broadcasts (in-memory + persisted).
     const recipientId = String(msg.metadata.chatId ?? msg.metadata.channelId ?? msg.from);
-    this.lastRecipients.set(channelTag, recipientId);
+    this.recordRecipient(channelTag, recipientId);
 
     // Check for approval commands: "approve <id>" or "deny <id>"
     const trimmed = msg.text.trim().toLowerCase();
