@@ -72,6 +72,25 @@ export interface ComposeFail {
 
 export type ComposeResult = ComposeOk | ComposeFail;
 
+/**
+ * Minimal specialist-role shape the composer needs to (a) list valid roles in
+ * the prompt and (b) validate a `delegate` step's `role` against reality. The
+ * daemon maps its richer `RoleDefinition` down to this; tests can pass literals.
+ */
+export interface ComposerSpecialistRole {
+  /** Canonical role id — the value a delegate step's `input.role` must equal. */
+  id: string;
+  /** Human label, used only for the prompt listing. */
+  name?: string;
+  /** Short description, used only for the prompt listing. */
+  description?: string;
+}
+
+/** Canonical short name of the sub-agent delegation piece. */
+const AGENT_PIECE_SHORT = "jarvis-agent";
+/** The delegate action on the agent piece, whose `role` we constrain. */
+const DELEGATE_ACTION = "delegate";
+
 export interface ComposeDeps {
   llm: ComposerLlmClient;
   pieceRegistry: PieceLookup;
@@ -82,6 +101,16 @@ export interface ComposeDeps {
    * service as a piece.
    */
   toolNames?: string[];
+  /**
+   * Optional set of specialist sub-agent roles. When present the composer
+   * (a) lists the valid role ids in the prompt so the LLM picks a real one for
+   * a `jarvis-agent:delegate` step, and (b) rejects any `delegate` step whose
+   * `role` isn't in this set — feeding the mismatch back into the retry loop.
+   * Without this the LLM would guess names like "researcher" that don't exist
+   * (the real id is "research-analyst"), producing a flow that errors on every
+   * run.
+   */
+  specialistRoles?: ComposerSpecialistRole[];
   /**
    * Cap on the LLM attempts inside one compose call. Each failed parse or
    * validation feeds back into the next attempt so the model can self-correct
@@ -128,7 +157,15 @@ export async function composeFlow(
 
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderToolNames(deps.toolNames);
-  const system = buildSystemPrompt(catalogText, toolsText);
+  const rolesText = renderSpecialistRoles(deps.specialistRoles);
+  const system = buildSystemPrompt(catalogText, toolsText, rolesText);
+  // Set of valid role ids for delegate-step validation. Null when the caller
+  // didn't supply roles -- in that case we can't tell a typo from a real id,
+  // so we skip the check rather than reject everything.
+  const validRoleIds =
+    deps.specialistRoles && deps.specialistRoles.length > 0
+      ? new Set(deps.specialistRoles.map((r) => r.id))
+      : null;
 
   // Initial prompt: the user's description verbatim. Retry prompts
   // replace this with a feedback patch derived from the previous
@@ -179,7 +216,7 @@ export async function composeFlow(
       continue;
     }
 
-    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name);
+    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
       return { ok: true, flow: validation.flow, rawResponse: raw };
@@ -216,7 +253,7 @@ function logAttempt(attempt: number, status: string, detail: string | null): voi
 
 /* ---------------------------------------------------------- system prompt */
 
-function buildSystemPrompt(catalog: string, toolsText: string): string {
+function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
     "",
@@ -259,12 +296,17 @@ function buildSystemPrompt(catalog: string, toolsText: string): string {
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
+    rolesText
+      ? "  - To hand a goal to a sub-agent, use the `jarvis-agent` piece's `delegate` action. Its optional `input.role` MUST be one of the specialist role ids listed below VERBATIM (e.g. `research-analyst`, not `researcher`). If none fits, OMIT `role` and the default agent handles it."
+      : "  - To hand a goal to a sub-agent, use the `jarvis-agent` piece's `delegate` action with `input.goal`. Omit `input.role` to use the default agent.",
     "  - Output ONLY the JSON. No markdown. No explanation.",
     "",
     "Available pieces:",
     catalog,
     toolsText ? "" : "",
     toolsText,
+    rolesText ? "" : "",
+    rolesText,
   ].filter((s) => s !== "").join("\n");
 }
 
@@ -274,6 +316,33 @@ function renderToolNames(toolNames: string[] | undefined): string {
     "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
     ...toolNames.map((n) => `  - ${n}`),
   ].join("\n");
+}
+
+/**
+ * List the valid specialist role ids for a `jarvis-agent:delegate` step. The
+ * id is what `input.role` must equal verbatim; the name/description are hints
+ * so the LLM maps the user's intent ("research AI news") to the right id
+ * ("research-analyst") instead of inventing one.
+ */
+function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): string {
+  if (!roles || roles.length === 0) return "";
+  return [
+    "Available specialist sub-agent roles (for `jarvis-agent:delegate` -> `input.role`; use the id verbatim):",
+    ...roles.map((r) => {
+      const desc = r.description ? `: ${firstLine(r.description)}` : "";
+      const label = r.name && r.name !== r.id ? ` (${r.name})` : "";
+      return `  - ${r.id}${label}${desc}`;
+    }),
+  ].join("\n");
+}
+
+/** First non-empty trimmed line of a (possibly multi-line) string. */
+function firstLine(s: string): string {
+  for (const line of s.split("\n")) {
+    const t = line.trim();
+    if (t) return t.length > 100 ? t.slice(0, 97) + "..." : t;
+  }
+  return "";
 }
 
 function renderCatalog(registry: PieceLookup): string {
@@ -390,6 +459,7 @@ function validateComposedFlow(
   raw: unknown,
   registry: PieceLookup,
   fallbackName: string,
+  validRoleIds: Set<string> | null,
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -402,7 +472,7 @@ function validateComposedFlow(
   }
   const errors: string[] = [];
   const knownNames = new Set<string>();
-  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry);
+  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds);
   if (!trigger) return { ok: false, errors };
 
   // Walk subsequent actions.
@@ -416,7 +486,7 @@ function validateComposedFlow(
       errors.push("flow exceeds 100 steps");
       break;
     }
-    const step = validateStep(cursor, errors, knownNames, false, registry);
+    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds);
     if (!step) break;
     last.nextAction = step;
     last = step;
@@ -433,6 +503,7 @@ function validateStep(
   knownNames: Set<string>,
   isTrigger: boolean,
   registry: PieceLookup,
+  validRoleIds: Set<string> | null,
 ): ComposedStep | null {
   const name = typeof raw.name === "string" ? raw.name : null;
   if (!name) {
@@ -486,7 +557,7 @@ function validateStep(
       errors.push(`loop "${name}" missing settings.items`);
     }
     const inner = (raw.firstLoopAction as Record<string, unknown> | undefined) ?? null;
-    if (inner) walkInnerChain(inner, errors, knownNames, registry);
+    if (inner) walkInnerChain(inner, errors, knownNames, registry, validRoleIds);
     return step;
   }
 
@@ -506,7 +577,7 @@ function validateStep(
     if (Array.isArray(raw.children)) {
       for (const child of raw.children as Array<unknown>) {
         if (child && typeof child === "object") {
-          walkInnerChain(child as Record<string, unknown>, errors, knownNames, registry);
+          walkInnerChain(child as Record<string, unknown>, errors, knownNames, registry, validRoleIds);
         }
       }
     }
@@ -581,6 +652,30 @@ function validateStep(
       }
     }
   }
+
+  // Delegate-role check: a `jarvis-agent:delegate` step's optional `role` must
+  // name a specialist that actually exists. The LLM otherwise invents plausible
+  // ids ("researcher") that have no role file, so the flow errors on every run.
+  // Only enforced when the caller supplied the valid set; skipped for templated
+  // values ({{...}}) since those resolve at runtime. `piece` is canonical here
+  // (short names were rewritten above), so match on either form.
+  if (
+    !isTrigger &&
+    subName === DELEGATE_ACTION &&
+    validRoleIds &&
+    (piece.name === AGENT_PIECE_SHORT || piece.name.endsWith(`/piece-${AGENT_PIECE_SHORT}`))
+  ) {
+    const role = input.role;
+    if (typeof role === "string" && role.trim() && !role.includes("{{")) {
+      if (!validRoleIds.has(role.trim())) {
+        const valid = Array.from(validRoleIds).sort().join(", ");
+        errors.push(
+          `step "${name}" delegates to unknown specialist role "${role}". ` +
+            `Use one of these ids verbatim (or omit role for the default agent): ${valid}`,
+        );
+      }
+    }
+  }
   return step;
 }
 
@@ -595,6 +690,7 @@ function walkInnerChain(
   errors: string[],
   knownNames: Set<string>,
   registry: PieceLookup,
+  validRoleIds: Set<string> | null,
 ): void {
   let cursor: Record<string, unknown> | null = head;
   let depth = 0;
@@ -603,7 +699,7 @@ function walkInnerChain(
       errors.push("inner subgraph exceeds 100 steps");
       return;
     }
-    validateStep(cursor, errors, knownNames, false, registry);
+    validateStep(cursor, errors, knownNames, false, registry, validRoleIds);
     cursor = cursor.nextAction ? (cursor.nextAction as Record<string, unknown>) : null;
   }
 }

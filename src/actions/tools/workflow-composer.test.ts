@@ -411,6 +411,136 @@ describe("composeFlow", () => {
     });
   });
 
+  describe("delegate sub-agent role validation", () => {
+    // Catalog keyed by the canonical npm name (like production) so the test
+    // also exercises the short-name -> canonical resolution path.
+    function agentCatalog(): PieceLookup {
+      const entries: PieceCatalogEntry[] = [
+        {
+          name: "@jarvispieces/piece-jarvis-agent",
+          displayName: "Jarvis: Agent",
+          description: "Run a Jarvis sub-agent with a goal.",
+          actions: {
+            delegate: {
+              name: "delegate",
+              displayName: "Delegate",
+              description: "Hand a goal to a sub-agent.",
+              inputSchema: {
+                fields: [
+                  { name: "goal", label: "Goal", type: "long_text", required: true },
+                  { name: "role", label: "Specialist role", type: "string", required: false },
+                ],
+              },
+            },
+          },
+        },
+      ];
+      return new PieceCatalog(entries);
+    }
+
+    const roles = [
+      { id: "research-analyst", name: "Research Analyst", description: "Investigates topics." },
+      { id: "content-writer", name: "Content Writer", description: "Drafts copy." },
+    ];
+
+    const delegateFlow = (role?: string) =>
+      JSON.stringify({
+        displayName: "Delegated",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-agent",
+              actionName: "delegate",
+              input: { goal: "research AI news", ...(role !== undefined ? { role } : {}) },
+            },
+          },
+        },
+      });
+
+    test("lists the valid role ids + a verbatim rule in the system prompt", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles },
+        { name: "X", description: "x" },
+      );
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toContain("Available specialist sub-agent roles");
+      expect(sys).toContain("research-analyst");
+      expect(sys).toContain("content-writer");
+      // The rule steers the model away from invented ids.
+      expect(sys).toMatch(/MUST be one of the specialist role ids/);
+    });
+
+    test("rejects a delegate step whose role isn't a known specialist", async () => {
+      // The exact bug: LLM picks "researcher" (no such role; it's "research-analyst").
+      const llm = new StubLlm(delegateFlow("researcher"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles, maxAttempts: 1 },
+        { name: "Delegated", description: "research AI news and report back" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => /unknown specialist role "researcher"/.test(e))).toBe(true);
+        // The error enumerates the real ids so the retry can self-correct.
+        expect(result.errors.some((e) => /research-analyst/.test(e))).toBe(true);
+      }
+    });
+
+    test("self-corrects to a valid role on retry", async () => {
+      const llm = new StubLlm([delegateFlow("researcher"), delegateFlow("research-analyst")]);
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles, maxAttempts: 4 },
+        { name: "Delegated", description: "research AI news" },
+      );
+      expect(result.ok).toBe(true);
+      expect(llm.calls).toHaveLength(2);
+      expect(llm.calls[1]?.prompt).toMatch(/unknown specialist role "researcher"/);
+    });
+
+    test("accepts a valid role id", async () => {
+      const llm = new StubLlm(delegateFlow("research-analyst"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles },
+        { name: "Delegated", description: "research AI news" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("accepts an omitted role (default agent)", async () => {
+      const llm = new StubLlm(delegateFlow(undefined));
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles },
+        { name: "Delegated", description: "research AI news" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("skips validation for a templated role expression", async () => {
+      // {{trigger.role}} resolves at runtime; we can't check it at compose time.
+      const llm = new StubLlm(delegateFlow("{{trigger.role}}"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog(), specialistRoles: roles },
+        { name: "Delegated", description: "research" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("does not enforce roles when the caller supplies none", async () => {
+      // Without a role set we can't tell a typo from a real id, so a bogus
+      // role passes (back-compat: callers that don't wire roles aren't broken).
+      const llm = new StubLlm(delegateFlow("researcher"));
+      const result = await composeFlow(
+        { llm, pieceRegistry: agentCatalog() },
+        { name: "Delegated", description: "research" },
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
+
   describe("system prompt surfaces output samples", () => {
     // A catalog whose two actions cover both shapes: an object output
     // (jarvis-tool.invoke returns { result, toolName }) and a bare-array

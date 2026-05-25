@@ -819,6 +819,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // that integrate with services that aren't first-class pieces (e.g.,
         // Gmail/Calendar via Jarvis tools).
         ...(composerToolRegistry ? { toolRegistry: composerToolRegistry } : {}),
+        // Surface the discovered specialist roles so a composed delegate step
+        // can only reference a sub-agent that exists (the LLM otherwise guesses
+        // ids like "researcher" that have no role file). Thunk so it reflects
+        // whatever agentService discovered, regardless of init ordering.
+        specialistRoles: () =>
+          Array.from(agentService.getSpecialists().values()).map((r) => ({
+            id: r.id,
+            name: r.name,
+            description: r.description,
+          })),
       });
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);

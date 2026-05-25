@@ -57,7 +57,7 @@ import {
 } from "../../workflows/db/repos/flow-run.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
-import { composeFlow, type ComposedFlow } from "./workflow-composer.ts";
+import { composeFlow, type ComposedFlow, type ComposerSpecialistRole } from "./workflow-composer.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -72,6 +72,13 @@ export interface ManageWorkflowDeps {
    * for asks like "send a Gmail" or "search the vault".
    */
   toolRegistry?: ComposerToolRegistry;
+  /**
+   * Optional. When provided, the composer lists the valid specialist sub-agent
+   * roles in its prompt and rejects a `jarvis-agent:delegate` step whose `role`
+   * isn't one of them. A thunk (not a snapshot) so it reflects specialists
+   * discovered after this tool is constructed. See ComposeDeps.specialistRoles.
+   */
+  specialistRoles?: () => ComposerSpecialistRole[];
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -395,6 +402,10 @@ async function actCompose(
   };
   if (deps.toolRegistry) {
     composeDeps.toolNames = deps.toolRegistry.listNames();
+  }
+  if (deps.specialistRoles) {
+    const roles = deps.specialistRoles();
+    if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
   const result = await composeFlow(composeDeps, { name, description });
 
