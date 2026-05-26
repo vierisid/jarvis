@@ -65,6 +65,7 @@ import { getSidecarManager } from '../actions/tools/sidecar-route.ts';
 import { ConvOrchestrator } from '../agents/conv/conv-orchestrator.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
+import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
 
@@ -89,6 +90,7 @@ export class AgentService implements Service, IAgentService {
   private taskDispatcher: TaskDispatcher | null = null;
   private convOrchestrator: ConvOrchestrator | null = null;
   private convTaskEventListener: ((event: ConvTaskEvent) => void) | null = null;
+  private dialogueCompactor: DialogueCompactor | null = null;
 
   constructor(config: JarvisConfig) {
     this.config = config;
@@ -338,13 +340,13 @@ export class AgentService implements Service, IAgentService {
       throw new Error('Conv orchestrator not initialized');
     }
     const identity = this.buildUserIdentityBlock();
-    const recentDialogue = this.loadRecentDialogue(channel);
+    const recentDialogue = await this.loadRecentDialogue(channel);
     const result = await this.convOrchestrator.processTurn(
       text,
       {
         userIdentity: identity,
         recentDialogue,
-        ambientFacts: this.buildAmbientFactsBlock(),
+        ambientFacts: this.buildAmbientFactsBlock(text),
       },
       this.convTaskEventListener ?? undefined,
     );
@@ -352,23 +354,27 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
-   * Pull the last few messages from the persistent conversation so the conv
-   * LLM has continuity across turns. We keep it small (10 messages by default)
-   * to stay within the conv tier's tight context budget.
+   * Pull recent messages from the persistent conversation for the conv LLM.
+   * When the conversation is long, the DialogueCompactor condenses old turns
+   * into a summary system message and keeps the most-recent N verbatim. This
+   * keeps the conv-tier context budget tight without losing continuity.
    */
-  private loadRecentDialogue(channel: string): LLMMessage[] {
+  private async loadRecentDialogue(channel: string): Promise<LLMMessage[]> {
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
-      const messages = getMessages(recent.conversation.id, { limit: 10 });
-      // Only user/assistant turns are useful for conv continuity. Drop tool
-      // results and system messages which belong to the classic-mode loop.
-      return messages
+      // Pull a wider window than we'll inject so the compactor has material
+      // to summarize. The compactor caps the final list size.
+      const messages = getMessages(recent.conversation.id, { limit: 40 });
+      const dialogue: LLMMessage[] = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         }));
+
+      if (!this.dialogueCompactor) return dialogue.slice(-10);
+      return await this.dialogueCompactor.compact(recent.conversation.id, dialogue);
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
       return [];
@@ -384,9 +390,24 @@ export class AgentService implements Service, IAgentService {
     return parts.join('. ');
   }
 
-  /** Tiny ambient state hint for the conv LLM (counts only, not contents). */
-  private buildAmbientFactsBlock(): string {
-    return ''; // Phase 5 will add commitment counts, due items, etc.
+  /**
+   * Compact ambient state for the conv LLM: knowledge graph facts relevant to
+   * the current message + a tiny commitment summary. The vault retrieval is
+   * already entity-match-driven so it stays empty when the message doesn't
+   * mention anything we remember (zero-cost on small-talk turns).
+   */
+  private buildAmbientFactsBlock(text: string): string {
+    const parts: string[] = [];
+    try {
+      const knowledge = getKnowledgeForMessage(text);
+      if (knowledge && knowledge.trim().length > 0) {
+        parts.push('Relevant knowledge about entities in this message:');
+        parts.push(knowledge);
+      }
+    } catch (err) {
+      console.warn('[AgentService] Failed to retrieve conv ambient knowledge:', err);
+    }
+    return parts.join('\n');
   }
 
   /**
@@ -565,6 +586,7 @@ export class AgentService implements Service, IAgentService {
     if (this.llmManager.hasConversationTier()) {
       this.taskRegistry = new TaskRegistry();
       this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry);
+      this.dialogueCompactor = new DialogueCompactor(this.llmManager);
       const persona = this.buildPersona();
       this.convOrchestrator = new ConvOrchestrator(
         this.llmManager,
