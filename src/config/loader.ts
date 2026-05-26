@@ -172,6 +172,38 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   return config;
 }
 
+/**
+ * If config.llm.tiers has no entries, derive a `medium` tier from the legacy
+ * `primary` field so the new tier-aware manager has something to resolve to.
+ * Idempotent: skipped when any tier is already configured.
+ *
+ * Call this AFTER any source that may mutate `llm.primary` (env vars, DB
+ * settings merge) so the derived medium tier matches the final primary.
+ */
+export function migrateLegacyLLMConfig(config: JarvisConfig): void {
+  const llm = config.llm;
+  if (!llm.tiers) llm.tiers = {};
+
+  const anyTierSet =
+    llm.tiers.conversation || llm.tiers.high || llm.tiers.medium || llm.tiers.low;
+
+  if (!anyTierSet && llm.primary) {
+    const providerBlock = (llm as Record<string, unknown>)[llm.primary] as
+      | { model?: string }
+      | undefined;
+    llm.tiers.medium = {
+      provider: llm.primary,
+      ...(providerBlock?.model ? { model: providerBlock.model } : {}),
+    };
+  }
+
+  if (llm.fallback && llm.fallback.length > 0 && !anyTierSet) {
+    console.warn(
+      '[Config] `llm.fallback` is deprecated. Configure `llm.tiers.{low,medium,high,conversation}` instead - tier fall-up replaces the fallback chain.',
+    );
+  }
+}
+
 export async function saveConfig(
   config: JarvisConfig,
   configPath?: string

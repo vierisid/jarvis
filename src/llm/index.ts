@@ -21,3 +21,11 @@ export { LiteLLMProvider } from './litellm.ts';
 
 // Manager
 export { LLMManager } from './manager.ts';
+
+// Tiers
+export type { Tier, TierAssignment, TierMap, TierResolution } from './tiers.ts';
+export { TIERS, TIER_FALLBACK, resolveTier, validateTierMap } from './tiers.ts';
+
+// Usage tracking
+export type { UsageRecord, DailyUsageRow } from './usage.ts';
+export { recordUsage, setUsageDatabase, getDailyRollup } from './usage.ts';

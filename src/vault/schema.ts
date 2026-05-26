@@ -745,4 +745,27 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_agent_id ON agent_activity(agent_id, timestamp DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_timestamp ON agent_activity(timestamp DESC)`);
+
+  // LLM usage tracking: every chatTier/streamTier call appends one row so
+  // future cost analysis can attribute consumption to a subsystem (chat,
+  // heartbeat, voice_intent, extractor, suggestion_engine, ...) on a given
+  // tier and model. No caps or enforcement at this layer.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS llm_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      tier TEXT NOT NULL,
+      resolved_tier TEXT NOT NULL,
+      subsystem TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      latency_ms INTEGER NOT NULL DEFAULT 0,
+      error_code TEXT
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_subsystem ON llm_usage(subsystem, ts DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_tier ON llm_usage(tier, ts DESC)`);
 }

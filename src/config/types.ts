@@ -4,6 +4,16 @@ export type HeartbeatConfig = {
   aggressiveness: 'passive' | 'moderate' | 'aggressive';
 };
 
+/**
+ * System-level cron expressions. Published as `cron.<name>` events on the
+ * shared event bus so other subsystems can react instead of polling.
+ */
+export type SystemCronConfig = {
+  morning?: string;   // default "0 7 * * *"
+  evening?: string;   // default "0 20 * * *"
+  hourly?: string;    // default "37 * * * *"
+};
+
 export type GoogleConfig = {
   client_id: string;
   client_secret: string;
@@ -258,6 +268,11 @@ export type JarvisConfig = {
   desktop?: DesktopConfig;
   awareness?: AwarenessConfig;
   llm: {
+    /**
+     * Legacy multi-provider fallback chain. Still honored but superseded by
+     * `tiers` below. If `tiers` is unset at load time, the loader derives a
+     * `medium` tier from `primary` so existing configs keep working.
+     */
     primary: string;  // provider name
     fallback: string[];
     anthropic?: { api_key: string; model?: string };
@@ -269,6 +284,20 @@ export type JarvisConfig = {
     nvidia?: { api_key: string; model?: string };
     openai_compatible?: { base_url?: string; api_key?: string; model?: string };
     litellm?: { base_url?: string; api_key?: string; model?: string };
+    /**
+     * Tier -> (provider, optional model override) map. Presence of any tier
+     * here puts the manager in tier-routing mode. The `conversation` tier in
+     * particular is the switch that enables the router-first architecture - if
+     * unset, the system stays in classic single-orchestrator mode.
+     *
+     * Task tiers (low/medium/high) fall up: low -> medium -> high.
+     */
+    tiers?: {
+      conversation?: { provider: string; model?: string };
+      high?: { provider: string; model?: string };
+      medium?: { provider: string; model?: string };
+      low?: { provider: string; model?: string };
+    };
   };
   personality: {
     core_traits: string[];
@@ -286,6 +315,7 @@ export type JarvisConfig = {
   };
   authority: AuthorityConfig;
   heartbeat: HeartbeatConfig;
+  cron?: SystemCronConfig;
   active_role: string;  // role file name
 };
 
@@ -375,6 +405,7 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       api_key: '',
       model: 'meta/llama-3.3-70b-instruct',
     },
+    tiers: {},
   },
   personality: {
     core_traits: [

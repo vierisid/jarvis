@@ -78,6 +78,7 @@ let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
 let workflowEngineShutdown: (() => Promise<void>) | null = null;
+let systemCron: import('./system-cron.ts').SystemCronService | null = null;
 
 /**
  * Parse command line arguments
@@ -166,6 +167,12 @@ async function handleShutdown(signal: string): Promise<void> {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
+    }
+
+    // Stop system cron (publishes cron.* events on the shared bus)
+    if (systemCron) {
+      systemCron.stop();
+      systemCron = null;
     }
 
     // Stop commitment executor
@@ -310,6 +317,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     initDatabase(config.dbPath);
     logWithTimestamp('Database initialized successfully');
 
+    // 2.0. Wire LLM usage tracking to the vault DB so every chatTier/streamTier
+    // call appends an llm_usage row. Best-effort: tracking failures never break
+    // the LLM call itself. Pass a resolver so DB reopens are picked up.
+    const { setUsageDatabase } = await import('../llm/usage.ts');
+    const { getDb } = await import('../vault/schema.ts');
+    setUsageDatabase(() => {
+      try { return getDb(); } catch { return null; }
+    });
+
     // 2.1. Add workflow tables (flow / flow_run / flow_version /
     // app_connection / waitpoint / store_entry / workflow_file /
     // workflow_job / trigger_event) to the shared Jarvis DB. Idempotent.
@@ -325,6 +341,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const { mergeLLMSettingsIntoConfig } = await import('./llm-settings.ts');
     mergeLLMSettingsIntoConfig(jarvisConfig);
     logWithTimestamp('LLM settings loaded from database');
+
+    // 2c. Derive llm.tiers from legacy primary if user hasn't configured tiers.
+    // Run AFTER mergeLLMSettingsIntoConfig so DB-stored primary overrides the
+    // YAML primary before we derive the medium tier.
+    const { migrateLegacyLLMConfig } = await import('../config/loader.ts');
+    migrateLegacyLLMConfig(jarvisConfig);
 
     // 3. Create service registry
     registry = new ServiceRegistry();
@@ -564,6 +586,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sharedEventBus.setObserver((eventType, payload) => {
       workflowEventBuffer.publish(eventType, payload);
     });
+
+    // System cron: publishes `cron.morning` / `cron.evening` / `cron.hourly`
+    // events onto the shared bus. Phase 2 hooks the goal system / commitment
+    // executor / chat-stale watcher onto these so the 15-min heartbeat can
+    // be deleted; for now nothing subscribes and the events are inert.
+    const { SystemCronService } = await import('./system-cron.ts');
+    systemCron = new SystemCronService(sharedEventBus, jarvisConfig.cron);
+    systemCron.start();
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the

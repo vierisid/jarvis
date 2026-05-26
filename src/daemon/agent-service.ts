@@ -467,6 +467,27 @@ export class AgentService implements Service, IAgentService {
       if (registeredFallbacks.length > 0) {
         this.llmManager.setFallbackChain(registeredFallbacks);
       }
+
+      // Configure tier map. Only assignments referencing a registered provider
+      // are accepted - silently dropping unregistered tiers means a partial
+      // config still boots (and falls up to whatever IS registered).
+      if (llm.tiers) {
+        const tierMap: import('../llm/tiers.ts').TierMap = {};
+        for (const [tier, assignment] of Object.entries(llm.tiers) as [
+          import('../llm/tiers.ts').Tier,
+          { provider: string; model?: string } | undefined,
+        ][]) {
+          if (!assignment) continue;
+          if (this.llmManager.getProvider(assignment.provider)) {
+            tierMap[tier] = assignment;
+          } else {
+            console.warn(
+              `[AgentService] Tier '${tier}' references unregistered provider '${assignment.provider}' - skipping.`
+            );
+          }
+        }
+        this.llmManager.setTierMap(tierMap);
+      }
     }
   }
 

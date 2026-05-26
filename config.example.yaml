@@ -18,13 +18,29 @@ daemon:
 #   token: "your-secret-token-here"
 
 llm:
-  # Primary provider to use
+  # ── Legacy single-LLM config (still supported) ──
+  # If you only set `primary`, the system runs in classic single-orchestrator
+  # mode using that provider for everything. The `fallback` chain is
+  # DEPRECATED - tier fall-up (see below) replaces it.
   primary: "anthropic"
-
-  # Fallback providers (tried in order if primary fails)
   fallback:
     - "openai"
     - "ollama"
+
+  # ── Tier routing (opt-in) ──
+  # Map each tier to a (provider, optional model override). When `conversation`
+  # is configured, the router-first architecture activates: a thin conversation
+  # LLM delegates work to the task tiers (low/medium/high) and verbalizes the
+  # results. When `conversation` is unset, the system stays in classic mode
+  # using `medium` (with fall-up to `high`) for all work.
+  #
+  # Tier fall-up: low -> medium -> high. Configure at least `medium` or `high`.
+  #
+  # tiers:
+  #   conversation: { provider: "openai",    model: "gpt-4o-mini" }
+  #   high:         { provider: "anthropic", model: "claude-opus-4-7" }
+  #   medium:       { provider: "anthropic", model: "claude-sonnet-4-6" }
+  #   low:          { provider: "groq",      model: "llama-3.3-70b-versatile" }
 
   # Anthropic (Claude) configuration
   anthropic:
@@ -82,6 +98,14 @@ authority:
   # 4: System changes
   # 5: Full control
   default_level: 3
+
+# System cron triggers. Each fires `cron.<name>` on the shared event bus.
+# Phase 2 will hook the goal system + commitment executor onto these so the
+# 15-minute heartbeat poll can be removed. Defaults shown below.
+# cron:
+#   morning: "0 7 * * *"   # 7am local
+#   evening: "0 20 * * *"  # 8pm local
+#   hourly:  "37 * * * *"  # every hour at :37
 
 # Text-to-Speech (voice output)
 tts:

@@ -616,6 +616,27 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
 
   const fallback = llm.fallback.filter(n => providers.some(p => p.name === n));
   llmManager.replaceProviders(providers, llm.primary, fallback);
+
+  // Re-apply the tier map so any tier-config changes propagate. replaceProviders
+  // already prunes assignments for now-missing providers; this re-applies the
+  // current config's tier shape on top.
+  if (llm.tiers) {
+    const tierMap: import('../llm/tiers.ts').TierMap = {};
+    for (const [tier, assignment] of Object.entries(llm.tiers) as [
+      import('../llm/tiers.ts').Tier,
+      { provider: string; model?: string } | undefined,
+    ][]) {
+      if (assignment && providers.some(p => p.name === assignment.provider)) {
+        tierMap[tier] = assignment;
+      }
+    }
+    try {
+      llmManager.setTierMap(tierMap);
+    } catch (err) {
+      console.warn(`[LLM] Failed to re-apply tier map: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   console.log(`[LLM] Providers active: ${providers.map(p => p.name).join(', ') || 'none'} (primary: ${llm.primary})`);
 }
 
