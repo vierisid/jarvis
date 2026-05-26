@@ -1,509 +1,411 @@
-# J.A.R.V.I.S. Workflow Automation Engine
+# Jarvis Workflow Automation
 
-Complete guide to the workflow automation system — visual builder, natural language creation, 50+ nodes, self-healing execution.
+A contributor-facing guide to the workflow system: what it is, how it runs, and where every moving part lives. Read this before touching anything under `src/workflows/`.
 
-## Table of Contents
+> **Heads up:** this system was rewritten from scratch on the `feat/workflows` branch. The old in-process executor, the 50-node hand-rolled registry, and `src/vault/workflows.ts` are gone. The runtime now sits on a vendored copy of the [Activepieces](https://github.com/activepieces/activepieces) engine spawned as a sandboxed child process. If you find a doc or comment that still describes "topo sort + self-heal + NLBuilder", it's stale; refer to this file.
 
-1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [Architecture](#architecture)
-4. [Node Library](#node-library)
-5. [Trigger System](#trigger-system)
-6. [Execution Engine](#execution-engine)
-7. [Template Expressions](#template-expressions)
-8. [Variables](#variables)
-9. [NL Builder](#nl-builder)
-10. [Auto-Suggestions](#auto-suggestions)
-11. [Dashboard UI](#dashboard-ui)
-12. [Chat Integration](#chat-integration)
-13. [API Reference](#api-reference)
-14. [YAML Export/Import](#yaml-exportimport)
-15. [Testing](#testing)
+## Reading order
 
-## Overview
+A new contributor should read these, in order:
 
-The workflow automation engine provides event-driven automations for JARVIS. Workflows are directed graphs of nodes — triggers, actions, logic, transforms, and error handlers — connected by edges. They run in the background, respond to events, and self-heal when things go wrong.
+1. This file -- the architecture overview and the source-tree map.
+2. [`PIECE_VERIFICATION.md`](./PIECE_VERIFICATION.md) -- the end-to-end "is my piece wired correctly" checklist. Required reading before adding or editing any piece.
+3. [`src/workflows/activepieces/UPSTREAM.md`](../src/workflows/activepieces/UPSTREAM.md) -- which upstream commit we vendor, the license posture, and what we deliberately exclude.
+4. [`src/workflows/pieces-library/README.md`](../src/workflows/pieces-library/README.md) -- how community pieces are curated, signed off, and installed at runtime.
 
-### Key Features
+## What this is
 
-- **50+ built-in nodes** across 5 categories (triggers, actions, logic, transform, error)
-- **4 creation methods**: chat, visual builder, AI sidebar, REST API
-- **Trigger system**: cron, webhook, file watch, screen events, polling, clipboard, process, git, email, calendar
-- **Self-healing execution**: retry → fallback → AI-powered auto-fix
-- **Template engine**: `{{$node["id"].data.field}}` expressions for dynamic data flow
-- **Version history**: every save creates a new version with diff comparison
-- **Real-time monitoring**: WebSocket events for step-by-step execution tracking
-- **Auto-suggestions**: JARVIS analyzes your behavior and proposes automations
+The workflow runtime lets a user describe an automation (in natural language or visually), persist it as a versioned flow, and execute it on a schedule, on a webhook, or on demand. Every flow is a tree of steps. Every step is either an action or a trigger from a piece. A piece is a self-contained npm package that ships an action's `run()` function and the JSON-schema for its inputs.
 
-## Quick Start
+The runtime guarantees:
 
-### 1. Create via chat (fastest)
+- Steps run inside an engine subprocess, never in the daemon's main loop.
+- Step output is checkpointed; a paused flow survives daemon restarts via a zstd execution-state backup.
+- Connection secrets are encrypted at rest with AES-256-GCM.
+- Every piece's metadata (props, output sample, auth shape) is extracted directly from its compiled bundle, not from a hand-maintained registry.
 
-Tell JARVIS in the main chat:
+What it deliberately is NOT:
 
-```
-"Create a workflow that checks my GitHub PRs every morning at 9am
-and sends me a Telegram summary"
-```
-
-JARVIS calls the `manage_workflow` tool, which:
-1. Parses your description via the NL builder
-2. Creates a `WorkflowDefinition` with appropriate nodes and edges
-3. Persists it in the vault
-4. Registers triggers (cron, in this case)
-
-### 2. Create via visual builder
-
-1. Open the dashboard at `http://localhost:3142`
-2. Click **Workflows** in the sidebar
-3. Click **New Workflow**
-4. Drag nodes from the left palette onto the canvas
-5. Connect nodes by dragging from output handles to input handles
-6. Configure nodes in the right panel (Config tab)
-7. Changes auto-save every 2 seconds
-
-### 3. Create via API
-
-```bash
-# Create workflow
-curl -X POST http://localhost:3142/api/workflows \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My Workflow"}'
-
-# Create version with definition
-curl -X POST http://localhost:3142/api/workflows/{id}/versions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "definition": {
-      "nodes": [...],
-      "edges": [...],
-      "settings": { "maxRetries": 3, "timeoutMs": 300000, "onError": "stop" }
-    },
-    "changelog": "Initial version"
-  }'
-
-# Execute
-curl -X POST http://localhost:3142/api/workflows/{id}/execute
-```
+- Not multi-tenant. One daemon, one user. No projects table beyond a hardcoded `default-project` row.
+- Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
+- Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                         Daemon (index.ts)                          │
-│                                                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────┐│
-│  │ WorkflowEngine│  │ TriggerManager│  │ manage_workflow (tool)   ││
-│  │  .execute()  │  │  .register() │  │  chat → NL builder → vault││
-│  └──────┬───────┘  └──────┬───────┘  └───────────────────────────┘│
-│         │                 │                                        │
-│  ┌──────▼───────┐  ┌──────▼───────────────────────────────────┐   │
-│  │  Executor    │  │  Trigger Sources                         │   │
-│  │  .runNode()  │  │  CronScheduler | WebhookManager | Poller │   │
-│  │  .selfHeal() │  │  ObserverBridge | fs.watch              │   │
-│  └──────┬───────┘  └─────────────────────────────────────────┘   │
-│         │                                                         │
-│  ┌──────▼───────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ NodeRegistry │  │ NLBuilder    │  │ AutoSuggest            │  │
-│  │ 50+ nodes    │  │ NL → graph   │  │ patterns → suggestions │  │
-│  └──────────────┘  └──────────────┘  └────────────────────────┘  │
-│                                                                    │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │ Vault (SQLite)                                             │   │
-│  │ workflows | workflow_versions | workflow_executions | vars  │   │
-│  └────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------------------+
+|                       Jarvis daemon (Bun, single process)                    |
+|                                                                              |
+|  Existing services (Agent, Vault, Observers, Channels, ...)                  |
+|        |                                                                     |
+|        v                                                                     |
+|  src/workflows/                                                              |
+|    runtime/                                                                  |
+|      engine-bootstrap.ts: build engine + compile pieces + start SandboxApi   |
+|      service-backends.ts: glues daemon services into /v1/jarvis/* fns        |
+|      event-bus.ts + event-buffer.ts: in-process pub/sub for jarvis-trigger   |
+|      piece-catalog.ts: engine-extracted catalog + on-disk cache              |
+|                                                                              |
+|    sandbox-api/   loopback HTTP+WS server (random port, 127.0.0.1)           |
+|      socket.io /worker/ws + /v1/* HTTP routes                                |
+|        - /v1/worker/{project,app-connections}                                |
+|        - /v1/store-entries, /v1/step-files, /v1/waitpoints                   |
+|        - /v1/engine/populated-flows, /v1/logs/:runId                         |
+|        - /v1/jarvis/{llm,tools,notify,context,agent,events,workflows}        |
+|                                                                              |
+|    runner/                                                                   |
+|      handler.ts: RUN_FLOW JobHandler                                         |
+|      engine-runtime/                                                         |
+|        engine-runtime.ts: spawn + warm pool (idle TTL 5min)                  |
+|        engine-flow-executor.ts: FlowExecutor over EngineHandle               |
+|        flow-version-adapter.ts: Jarvis flow shape -> upstream shape          |
+|        operation-builder.ts: BEGIN / RESUME / EXTRACT_PIECE_METADATA /       |
+|                              EXECUTE_TRIGGER_HOOK                            |
+|      triggers/                                                               |
+|        manager.ts: cron + webhook + ON_ENABLE/ON_DISABLE routing             |
+|        cron.ts: 5-field cron + sub-minute `@every Ns` extension              |
+|        webhook.ts: registers `/api/webhooks/<flowId>`                        |
+|                                                                              |
+|    queue/      SQLite-backed job queue + worker dispatcher                   |
+|    db/         schemas + repos (flow, version, run, connection, store,      |
+|                waitpoint, workflow_file, job) + AES-256-GCM at-rest enc      |
+|    api/        /api/workflows/* HTTP routes                                  |
+|    activepieces/  vendored upstream subset (engine, pieces/framework,        |
+|                   pieces/common, pieces/jarvis/*)                            |
+|    pieces-library/  curated community catalog + installer + reconciler       |
+|    credentials/  JarvisConnectionSource adapters (jarvis:google, etc.)       |
+|                                                                              |
++------------------------------------------------------------------------------+
+                              |
+                  spawn child Bun process (engine bundle)
+                              v
++------------------------------------------------------------------------------+
+| Engine subprocess (one warm process; idle TTL evicts after 5min)             |
+|  AP_EXECUTION_MODE=SANDBOX_PROCESS                                           |
+|  AP_SANDBOX_WS_PORT=...        SANDBOX_ID=...                                |
+|  -> connects to daemon's SandboxApi /worker/ws                               |
+|  -> imports vendored pieces dynamically (dev-pieces mode for Jarvis pieces,  |
+|     node_modules resolution for community pieces)                            |
+|  -> calls back to /v1/* for store, connections, step-files, llm, tools, ... |
++------------------------------------------------------------------------------+
 ```
 
-### Key Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| WorkflowEngine | `src/workflows/engine.ts` | Service interface — load, execute, manage workflows |
-| Executor | `src/workflows/executor.ts` | Node-level execution with topo sort, self-heal |
-| NodeRegistry | `src/workflows/nodes/registry.ts` | 50+ node implementations registered here |
-| TriggerManager | `src/workflows/triggers/manager.ts` | Coordinates all trigger sources |
-| CronScheduler | `src/workflows/triggers/cron.ts` | Cron-based scheduling |
-| WebhookManager | `src/workflows/triggers/webhook.ts` | Inbound HTTP webhooks |
-| PollingEngine | `src/workflows/triggers/poller.ts` | HTTP polling with dedup |
-| ObserverBridge | `src/workflows/triggers/observer-bridge.ts` | Screen/clipboard/process triggers |
-| ScreenConditionEvaluator | `src/workflows/triggers/screen-condition.ts` | Visual condition checking (text, app, LLM) |
-| NLWorkflowBuilder | `src/workflows/nl-builder.ts` | Natural language → WorkflowDefinition |
-| WorkflowAutoSuggest | `src/workflows/auto-suggest.ts` | Behavior pattern → workflow suggestions |
-| TemplateContext | `src/workflows/template.ts` | `{{...}}` expression resolution |
-| VariableScope | `src/workflows/variables.ts` | Execution + persistent variable scoping |
-| Vault | `src/vault/workflows.ts` | SQLite CRUD for workflows, versions, executions |
-
-## Node Library
-
-### Triggers (11)
-
-| Node | Config | Description |
-|------|--------|-------------|
-| `trigger.cron` | `expression` | Cron schedule (e.g., `0 9 * * *`) |
-| `trigger.webhook` | `method`, `secret` | Inbound HTTP endpoint, optional HMAC |
-| `trigger.poll` | `url`, `interval_ms`, `method` | HTTP polling with deduplication |
-| `trigger.manual` | — | Manual execution via dashboard/API |
-| `trigger.file_change` | `path`, `events` | File system create/modify/delete |
-| `trigger.clipboard` | `pattern` | Clipboard content changes |
-| `trigger.process` | `process_name`, `event` | Process start/stop |
-| `trigger.email` | `from_filter`, `subject_filter` | Email received |
-| `trigger.calendar` | `calendar_id`, `minutes_before` | Calendar event approaching |
-| `trigger.screen` | `condition_type`, `text`/`app_name`/`prompt` | Screen condition (text_present, app_active, llm_check) |
-| `trigger.git` | `repo_path`, `events` | Git push/commit events |
-
-### Actions (12)
-
-| Node | Config | Description |
-|------|--------|-------------|
-| `action.send_message` | `channel`, `message` | Send via any channel (chat, Telegram, Discord) |
-| `action.run_tool` | `tool_name`, `params` | Execute any registered JARVIS tool |
-| `action.agent_task` | `task`, `role` | Spawn a sub-agent for complex reasoning |
-| `action.http_request` | `url`, `method`, `headers`, `body` | Full HTTP request |
-| `action.file_write` | `path`, `content`, `mode` | Write/append to file |
-| `action.notification` | `title`, `message`, `channel` | Desktop/channel notification |
-| `action.gmail` | `to`, `subject`, `body` | Send Gmail |
-| `action.calendar_action` | `action`, `title`, `start`, `end` | Create/update calendar events |
-| `action.telegram` | `chat_id`, `message` | Send Telegram message |
-| `action.discord` | `channel_id`, `message` | Send Discord message |
-| `action.shell_command` | `command`, `cwd`, `timeout` | Execute shell command |
-| `action.code_execution` | `code`, `language` | Run JavaScript code |
-
-### Logic (9)
-
-| Node | Config | Description |
-|------|--------|-------------|
-| `logic.if_else` | `condition` | Conditional branch (true/false outputs) |
-| `logic.switch` | `expression`, `cases` | Multi-way branching |
-| `logic.loop` | `items`, `variable` | Iterate over arrays |
-| `logic.delay` | `duration_ms` | Wait for a duration |
-| `logic.merge` | `strategy` | Combine multiple inputs |
-| `logic.race` | — | First-to-complete wins |
-| `logic.variable_set` | `name`, `value`, `scope` | Set a variable |
-| `logic.variable_get` | `name`, `scope` | Read a variable |
-| `logic.template_render` | `template` | Render template string |
-
-### Transform (5)
-
-| Node | Config | Description |
-|------|--------|-------------|
-| `transform.json_parse` | `path` | Parse JSON, optional JSONPath |
-| `transform.csv_parse` | `delimiter`, `has_headers` | Parse CSV data |
-| `transform.regex_match` | `pattern`, `flags` | Extract with regex |
-| `transform.aggregate` | `operation`, `field` | Sum, average, count, min, max |
-| `transform.map_filter` | `map_expression`, `filter_condition` | Map and filter arrays |
-
-### Error Handling (3)
-
-| Node | Config | Description |
-|------|--------|-------------|
-| `error.error_handler` | — | Catch errors from upstream nodes |
-| `error.retry` | `max_retries`, `delay_ms`, `backoff` | Retry with configurable policy |
-| `error.fallback` | `fallback_value` | Provide default value on failure |
-
-## Trigger System
-
-### CronScheduler
-
-Parses cron expressions and schedules recurring jobs. Each cron trigger gets a unique job ID (`{workflowId}:{nodeId}`).
-
-```typescript
-// Cron expression format: minute hour day month weekday
-// Examples:
-"0 9 * * *"      // Daily at 9:00 AM
-"*/15 * * * *"   // Every 15 minutes
-"0 0 * * 1"      // Every Monday at midnight
-```
-
-### WebhookManager
-
-Registers HTTP endpoints at `/api/webhooks/{workflowId}`. Supports:
-- GET and POST methods
-- Optional HMAC-SHA256 signature validation via `secret` config
-- Request body + headers passed as trigger data
-
-### PollingEngine
-
-Polls HTTP endpoints at configurable intervals. Features:
-- Response hash-based deduplication (only fires when response changes)
-- Configurable interval (default: 60 seconds)
-- Request method, headers, body configuration
-
-### ObserverBridge
-
-Bridges the Awareness system (M13) to workflow triggers:
-- **Screen conditions**: text present/absent, app active, LLM visual check
-- **Clipboard**: fires on clipboard content changes
-- **Process**: fires on process start/stop events
-
-Screen conditions use the `ScreenConditionEvaluator` which supports:
-- `text_present` / `text_absent` — instant OCR text matching
-- `app_active` — instant app name matching (partial match supported)
-- `visual_match` — LLM-backed visual description matching
-- `llm_check` — custom LLM prompt for complex conditions
-
-## Execution Engine
-
-### Topological Sort
-
-The executor builds a dependency graph from the workflow edges and processes nodes in topological order. Nodes at the same depth level can run in parallel (controlled by `parallelism` setting: `"parallel"` or `"sequential"`).
-
-### Step Execution
-
-For each node:
-1. Collect output data from all incoming edges
-2. Merge into a single input object
-3. Resolve `{{...}}` template expressions in the node config
-4. Call `node.execute(config, context)` on the node implementation
-5. Store output in the execution context
-6. Route to downstream nodes based on the node's output handle
-
-### Error Handling Modes
-
-| Mode | Behavior |
-|------|----------|
-| `stop` | Halt entire workflow on first node failure |
-| `continue` | Log the error, skip the node, continue with remaining nodes |
-| `self_heal` | After all retries exhausted, send error + config to LLM for auto-fix |
-
-### Self-Heal Flow
-
-```
-Node fails → retry (up to maxRetries) → all retries fail →
-  LLM analyzes: { error, nodeType, config } →
-  LLM returns: { fixedConfig, explanation } →
-  Re-execute with fixedConfig →
-  If success: persist fixedConfig for future runs
-```
-
-### WebSocket Events
-
-During execution, the engine emits real-time events over WebSocket:
-
-```typescript
-type WorkflowEvent = {
-  workflowId: string;
-  executionId: string;
-  type: 'started' | 'step_started' | 'step_completed' | 'step_failed' | 'completed' | 'failed';
-  nodeId?: string;
-  data?: unknown;
-  timestamp: number;
-};
-```
-
-## Template Expressions
-
-Node configs support `{{...}}` template expressions resolved at execution time:
-
-| Expression | Description |
-|-----------|-------------|
-| `{{myVariable}}` | Read an execution variable |
-| `{{$trigger.field}}` | Access trigger output data |
-| `{{$node["node-id"].data.field}}` | Access another node's output |
-| `{{$env.MY_VAR}}` | Read an environment variable |
-| `{{$execution.id}}` | Current execution ID |
-
-Expressions are resolved recursively — nested objects and arrays are traversed.
-
-## Variables
-
-Two scopes:
-
-- **Execution** — in-memory, scoped to a single workflow run. Set via `logic.variable_set` with `scope: "execution"`.
-- **Persistent** — stored in SQLite vault, survive across executions. Set via `logic.variable_set` with `scope: "persistent"` or the Variables API.
-
-```bash
-# Read persistent variables
-curl http://localhost:3142/api/workflows/{id}/variables
-
-# Set persistent variables
-curl -X PATCH http://localhost:3142/api/workflows/{id}/variables \
-  -H "Content-Type: application/json" \
-  -d '{"counter": 42, "lastRun": "2026-03-02"}'
-```
-
-## NL Builder
-
-The `NLWorkflowBuilder` parses natural language descriptions into `WorkflowDefinition` objects. It uses a multi-step LLM pipeline:
-
-1. **Parse intent** — extract trigger type, actions, conditions from the description
-2. **Map to nodes** — select appropriate node types from the registry
-3. **Generate config** — fill in node configs from the description context
-4. **Wire graph** — create edges between nodes in logical order
-5. **Validate** — ensure the definition is well-formed
-
-The builder is used by:
-- The `manage_workflow` tool (chat-driven creation)
-- The NL chat sidebar in the canvas editor
-- The `/api/workflows/nl-chat` endpoint
-
-## Auto-Suggestions
-
-The `WorkflowAutoSuggest` engine accumulates awareness events and detects patterns:
-
-| Pattern | Detection Method | Example |
-|---------|-----------------|---------|
-| App switches | Frequency of A→B pairs (5+ times) | "You switch Chrome→VS Code 15 times/day" |
-| Recurring errors | Error count by app (3+ errors) | "Docker has 7 errors — auto-restart?" |
-| Scheduled behavior | Events clustered by hour (3+ same hour) | "You check Slack at 9am daily — automate?" |
-| Complex patterns | LLM analysis of 100+ events | "You research, then code, then test — pipeline?" |
-
-Suggestions include a `previewDefinition` — a ready-to-use workflow definition that can be accepted with one click. The engine has a 5-minute cooldown between analyses and maintains up to 500 events.
-
-## Dashboard UI
-
-### Workflow List
-
-The Workflows page (`/workflows` route) shows:
-- All workflows with name, status (active/disabled), execution count, last run time
-- Quick actions: Run, Pause/Resume, Delete
-- "New Workflow" button
-
-### Canvas Editor
-
-The visual editor uses ReactFlow and has three panels:
-
-**Left: Node Palette** (collapsible)
-- Nodes organized by category: Triggers, Actions, Logic, Transform, Error Handling
-- Search bar for filtering
-- Drag-and-drop onto canvas
-
-**Center: Canvas**
-- Visual node graph with color-coded nodes
-- Zoom, pan, minimap
-- Connect nodes by dragging between handles
-- Auto-save every 2 seconds
-
-**Right: Tabbed Panel** (collapsible)
-- **Config** — dynamic form generated from node's `configSchema`
-- **Executions** — real-time execution monitoring with step status
-- **Versions** — version history with inline diffs (nodes added/removed/modified)
-- **AI** — NL chat sidebar for conversational workflow editing
-
-## Chat Integration
-
-The `manage_workflow` tool is registered on the primary agent's tool registry. It provides:
-
-```typescript
-type WorkflowToolActions = {
-  create: { name: string; description: string };  // NL → workflow
-  list: {};                                         // List all workflows
-  run: { workflow_id: string };                     // Execute manually
-  delete: { workflow_id: string };                  // Delete workflow
-  enable: { workflow_id: string };                  // Enable + register triggers
-  disable: { workflow_id: string };                 // Disable + unregister triggers
-  describe: { workflow_id: string };                // Get full description
-};
-```
-
-Source: `src/actions/tools/workflows.ts`
-
-## API Reference
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/workflows` | List all workflows |
-| POST | `/api/workflows` | Create workflow |
-| GET | `/api/workflows/:id` | Get workflow |
-| PATCH | `/api/workflows/:id` | Update workflow |
-| DELETE | `/api/workflows/:id` | Delete workflow |
-| GET | `/api/workflows/:id/versions` | Version history |
-| POST | `/api/workflows/:id/versions` | Create version |
-| POST | `/api/workflows/:id/execute` | Run workflow |
-| GET | `/api/workflows/:id/executions` | Execution history |
-| GET | `/api/workflows/:id/variables` | Read persistent variables |
-| PATCH | `/api/workflows/:id/variables` | Set persistent variables |
-| GET | `/api/workflows/:id/export` | YAML export |
-| POST | `/api/workflows/import` | YAML import |
-| GET | `/api/workflows/nodes` | Node catalog (all 50+ nodes) |
-| POST | `/api/workflows/nl-chat` | NL builder chat |
-| GET | `/api/workflows/suggest` | Auto-suggestions |
-| POST | `/api/workflows/suggest/:id/dismiss` | Dismiss a suggestion |
-| GET/POST | `/api/webhooks/:id` | Inbound webhooks |
-
-## YAML Export/Import
-
-Workflows can be exported as YAML for version control, sharing, or backup:
-
-```bash
-# Export
-curl http://localhost:3142/api/workflows/{id}/export
-
-# Import
-curl -X POST http://localhost:3142/api/workflows/import \
-  -H "Content-Type: application/json" \
-  -d '{"yaml": "name: My Workflow\nnodes:\n  ..."}'
-```
-
-## Testing
-
-The workflow system has comprehensive tests:
-
-```bash
-# Run all workflow tests
-bun test src/workflows/
-
-# Run specific test files
-bun test src/workflows/workflows.test.ts       # Core engine tests
-bun test src/workflows/triggers/triggers.test.ts # Trigger system tests
-```
-
-Test coverage includes:
-- Node execution (all 50+ node types)
-- Template expression resolution
-- Variable scoping (execution + persistent)
-- Topological sort and parallel execution
-- Trigger registration/unregistration
-- Cron scheduling and webhook handling
-- Error handling modes (stop, continue, self_heal)
-- YAML serialization/deserialization
-- Version management and diffing
-
-## Source Files
+## Source tree map
 
 ```
 src/workflows/
-├── types.ts              # Core type definitions
-├── engine.ts             # WorkflowEngine service
-├── executor.ts           # Node execution + self-heal
-├── nl-builder.ts         # Natural language → definition
-├── auto-suggest.ts       # Behavior pattern detection
-├── template.ts           # Template expression engine
-├── variables.ts          # Variable scoping
-├── yaml.ts               # YAML export/import
-├── events.ts             # WebSocket event types
-├── nodes/
-│   ├── registry.ts       # Node registry + ExecutionContext
-│   ├── builtin.ts        # Registers all built-in nodes
-│   ├── triggers/         # 11 trigger node implementations
-│   ├── actions/          # 12 action node implementations
-│   ├── logic/            # 9 logic node implementations
-│   ├── transform/        # 5 transform node implementations
-│   └── error/            # 3 error handling node implementations
-├── triggers/
-│   ├── manager.ts        # TriggerManager (coordinates all sources)
-│   ├── cron.ts           # CronScheduler
-│   ├── webhook.ts        # WebhookManager
-│   ├── poller.ts         # PollingEngine
-│   ├── observer-bridge.ts # Awareness integration
-│   └── screen-condition.ts # Visual condition evaluator
-├── workflows.test.ts     # Core tests
-└── triggers/triggers.test.ts # Trigger tests
+  activepieces/                 Vendored Activepieces source. See UPSTREAM.md.
+    LICENSE.activepieces        MIT license preserved verbatim.
+    UPSTREAM.md                 Pinned commit + license posture + exclusions.
+    packages/
+      shared/                   Upstream shared types (BranchOperator, etc.)
+      pieces/
+        framework/              Upstream `createPiece`, `createAction`, `Property`
+        common/                 Upstream helpers (http, auth)
+        jarvis/                 Our pieces (ask, tool, notify, context, agent,
+                                trigger, regex, test, validate)
+      server/engine/            Upstream engine source (we build this into a CJS
+                                bundle and spawn it as a child process)
 
-src/vault/workflows.ts    # SQLite persistence (CRUD)
-src/vault/schema.ts       # DB schema (tables)
-src/actions/tools/workflows.ts # manage_workflow chat tool
-src/daemon/api-routes.ts  # REST API endpoints
-src/daemon/index.ts       # Daemon wiring
+  runtime/                      Daemon-side orchestration above the engine
+    engine-bootstrap.ts         Daemon startup: build bundle, compile pieces,
+                                spin up SandboxApi, build PieceCatalog
+    service-backends.ts         Wraps LLMManager / ToolRegistry / ChannelService
+                                / etc. into the function shape /v1/jarvis/*
+                                routes expect
+    piece-catalog.ts            Engine-extracted catalog + on-disk cache at
+                                `~/.jarvis/cache/piece-metadata.json`
+    piece-input.ts              Sample-input override clone applied before
+                                handing inputs to the engine
+    event-bus.ts                Pub/sub used by `jarvis-trigger:on_event`
+    event-buffer.ts             Recent-event ring buffer surfaced over /v1
+    test-fixtures.ts            Catalog snapshot used by composer tests
+    test-fixtures-drift.test.ts Drift test: rebuild catalog vs committed fixture
 
-ui/src/pages/WorkflowsPage.tsx           # Workflow list page
-ui/src/components/workflows/
-├── WorkflowList.tsx      # Workflow list component
-├── WorkflowCanvas.tsx    # ReactFlow canvas editor
-├── WorkflowNode.tsx      # Custom node component
-├── NodePalette.tsx       # Draggable node sidebar
-├── NodeProperties.tsx    # Dynamic config form
-├── ExecutionMonitor.tsx  # Real-time execution view
-├── VersionHistory.tsx    # Version list with diff
-└── NLChatSidebar.tsx     # AI chat panel
+  sandbox-api/                  Loopback HTTP+WS API the engine subprocess hits
+    server.ts                   Bootstraps Fastify + socket.io on 127.0.0.1
+    config.ts                   Random-port + bearer-token engine token
+    engine-token.ts             Token mint + verify (engine -> daemon auth)
+    sandbox-registry.ts         Maps sandboxId -> runId/flowId for /v1 routes
+    rpc.ts + worker-rpc.ts      WorkerContract bridge (engine -> daemon RPC)
+    routes/                     One file per /v1 surface:
+      connections.ts            Encrypted app_connection CRUD
+      files.ts                  /v1/step-files binary uploads/downloads
+      flows.ts                  /v1/engine/populated-flows (resolves a runtime
+                                version + execution context for the engine)
+      jarvis-agent.ts           /v1/jarvis/agent  -> agent-delegator
+      jarvis-context.ts         /v1/jarvis/context -> vault/awareness/commitments
+      jarvis-events.ts          /v1/jarvis/events -> event buffer poll
+      jarvis-llm.ts             /v1/jarvis/llm    -> LLMManager.chat
+      jarvis-notify.ts          /v1/jarvis/notify -> ChannelService + desktop
+      jarvis-tools.ts           /v1/jarvis/tools  -> ToolRegistry.invoke
+      jarvis-workflows.ts       /v1/jarvis/workflows -> workflow runner
+      logs.ts                   /v1/logs/:runId zstd execution-state backup
+      store.ts                  /v1/store-entries (engine's KV store)
+      waitpoints.ts             /v1/waitpoints + /api/webhooks/waitpoints/:id
+
+  runner/                       Things that run a flow
+    handler.ts                  RUN_FLOW JobHandler -- the worker's entry point
+    engine-runtime/
+      build.ts                  Builds the engine into a CJS bundle. The bundle
+                                is content-addressed; cache lives in
+                                `~/.jarvis/cache/engine/<hash>/`
+      build-pieces.ts           Walks packages/pieces/jarvis/* and esbuilds each
+                                into `~/.jarvis/cache/pieces/<hash>/<short>/`.
+                                Content-hash skip on rebuild.
+      engine-runtime.ts         Spawns + warms the engine subprocess; manages
+                                the single-slot pool with 5min idle TTL
+      engine-flow-executor.ts   Implements FlowExecutor by routing every step
+                                through EngineHandle.executeFlow
+      flow-version-adapter.ts   Maps our FlowVersion DB row -> upstream's shape
+      operation-builder.ts      BEGIN / RESUME / EXTRACT_PIECE_METADATA /
+                                EXECUTE_TRIGGER_HOOK / EXECUTE_PROPERTY
+      execution-state-loader.ts Rehydrates RESUME state from the zstd backup
+      code-materialize.ts       CODE pieces materialize source onto disk for
+                                the engine to require()
+      spawn.ts                  Low-level child_process spawn helpers
+    triggers/
+      manager.ts                Coordinator: enable/disable a flow's triggers,
+                                routes to cron / webhook / engine
+      cron.ts                   5-field cron + `@every 10s` sub-minute parser
+      webhook.ts                `/api/webhooks/<flowId>` registry
+
+  queue/                        SQLite-backed job queue
+    worker.ts                   WorkflowWorker: drains jobs, calls handler.ts
+    queue.test.ts               Drain semantics + race-tolerant terminal-status
+
+  db/                           Persistence
+    schema.ts                   All SQLite tables (flow, flow_version,
+                                flow_run, app_connection, store_entry,
+                                waitpoint, workflow_file, workflow_job)
+    encryption.ts               AES-256-GCM at-rest for app_connection.value
+    repos/                      One file per table; thin CRUD over kysely
+
+  api/                          HTTP routes mounted under /api/workflows/*
+    routes.ts                   Route table + handlers (see "API surface" below)
+
+  pieces-library/               Curated community-pieces catalog + installer
+    catalog.ts                  Tiered registry (Verified / Community)
+    catalog-generated.ts        Auto-synced from npm (do not edit)
+    catalog-overrides.ts        Hand-maintained verified set + pins
+    installer.ts                Writes ~/.jarvis/pieces/installed.json, runs
+                                bun install, extracts metadata
+    reconciler.ts               Idempotent reconcile (install/uninstall delta)
+
+  credentials/                  JarvisConnectionSource adapters that bridge
+                                Jarvis's existing OAuth/state into pieces
+    adapter.ts                  Registry of sources by `jarvis:*` external id
+    google-source.ts            jarvis:google -> existing Google OAuth tokens
+    telegram-source.ts          jarvis:telegram -> daemon's bot token
+
+  jarvis-pieces/                Daemon-side service shims invoked by /v1/jarvis
+    agent-delegator.ts          Backs jarvis-agent.delegate (M7 sub-agent loop)
+    context-provider.ts         Backs jarvis-context (vault/awareness reads)
+    llm-client.ts               Backs jarvis-ask via LLMManager.chat
+    notifier.ts                 Backs jarvis-notify -- per-channel routing
+    tool-registry.ts            Backs jarvis-tool -- invoke a Jarvis tool
+    workflow-runner.ts          Backs jarvis-trigger.run_workflow
+
+ui/src/v2/rooms/workflows/      The visual editor and runs panel
+  WorkflowsRoom.tsx             List view; run history; new workflow
+  WorkflowEditor.tsx            xyflow canvas + settings popovers
+  useWorkflowEditor.ts          Editor state machine; persistence; auto-layout
+  useFlowRuns.ts                Runs panel state + adaptive polling
+  useConnections.ts             Connection management
+  useLibrary.ts                 Pieces library install/uninstall
+  tree.ts                       Tree algebra (insert/delete/wire branches)
+  variable-rows.ts              Predecessor-output variable picker source
 ```
+
+Build scripts and tooling:
+
+```
+scripts/
+  build-engine.ts               Builds the engine bundle into a content-hashed
+                                dir in ~/.jarvis/cache/engine/<hash>/
+  build-pieces.ts               Builds every Jarvis-authored piece (content-hash
+                                cached)
+  build-workflows.ts            Umbrella: bundle + pieces
+  sync-activepieces.ts          Pulls a pinned upstream SHA into the vendored
+                                tree and re-applies the PATCH_INSERTIONS layer
+  sync-pieces-catalog.ts        Refreshes catalog-generated.ts from npm; run by
+                                .github/workflows/sync-pieces-catalog.yml
+  audit-piece-outputs.ts        Reports which actions declare outputSample (the
+                                shape the variable picker depends on)
+  check-no-ee-imports.ts        CI guard: refuses any /ee/ path from the vendor
+                                tree
+  rotate-encryption-key.ts      Decrypt-old + re-encrypt-new + atomic keychain
+                                swap for the workflow encryption key
+```
+
+## Bootstrap flow
+
+When the daemon starts, `src/workflows/runtime/engine-bootstrap.ts` runs in parallel with the other services. The sequence:
+
+1. `buildEngineBundle()` checks `~/.jarvis/cache/engine/<hash>/main.js`. If the hash matches current sources, returns immediately. Otherwise rebuilds (~700ms cold) and caches.
+2. `buildAllJarvisPieces()` walks `packages/pieces/jarvis/*` and esbuilds each piece into its dist dir. Unchanged pieces skip on hash hit (~2ms each).
+3. `SandboxApi.listen()` binds a random port on `127.0.0.1` and starts Fastify + socket.io.
+4. `EngineRuntime.acquire()` is left to the worker (lazy spawn on first job). The pool holds one warm engine after release; idle TTL evicts after 5 min.
+5. `PieceCatalog.build()` runs `EXTRACT_PIECE_METADATA` for every known piece (Jarvis + installed community). Failures don't block successful entries: partial cache writes persist what extracted. The cache key includes `CATALOG_SCHEMA_VERSION` so daemon-side projection changes invalidate it.
+6. The bootstrap returns an `{ engineRuntime, pieceCatalog, sandboxApi }` triple that the daemon hands to `WorkflowWorker`, `TriggerManager`, and the API routes.
+
+If bootstrap fails (e.g. esbuild error in a piece), the daemon logs a warning and falls back to "no workflows" mode -- the rest of Jarvis comes up clean. The Workflows room shows an empty-catalog notice.
+
+## Runtime walkthrough -- one flow run
+
+Following a single run from a user click to a SUCCEEDED row:
+
+1. User clicks **Run** in the editor. UI calls `POST /api/workflows/:id/run`.
+2. `flowRunRepo.create()` writes a `flow_run` row in PENDING state; `jobQueueRepo.enqueue()` adds a `RUN_FLOW` job.
+3. The worker drains the job. `RUN_FLOW` resolves the flow version, materializes any CODE pieces onto disk, then calls `EngineFlowExecutor.executeFlow()`.
+4. `EngineRuntime.acquire()` either picks up the warm engine or spawns a fresh one. Spawn passes `AP_SANDBOX_WS_PORT` + an engine token in env.
+5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerNotify.updateStepProgress` events back over the WS for every step boundary.
+6. The UI's runs panel polls `/api/workflows/:id/runs` adaptively (faster while a run is RUNNING). The overlay on the canvas reflects the latest step status.
+7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
+
+If a step calls `context.run.pause()` (e.g. waiting on a webhook), the engine sends PAUSED + the zstd backup. The daemon writes a `waitpoint` row and the run hangs. A later `POST /api/webhooks/waitpoints/:id` enqueues a `RESUME` job; the worker loads the backup, restores execution state via `execution-state-loader.ts`, and the engine picks up exactly where it paused.
+
+## Pieces
+
+Two flavors:
+
+- **Jarvis-authored** pieces live in `src/workflows/activepieces/packages/pieces/jarvis/`. They use the same `createPiece` / `createAction` API as upstream Activepieces. They're auto-discovered: drop a directory with a valid `package.json` and the next daemon restart finds it, builds it, and surfaces it in the library.
+- **Community** pieces ship as npm packages. They install at runtime via the pieces library UI -- the installer writes `~/.jarvis/pieces/installed.json`, runs `bun install`, and asks the engine to extract metadata. They are picked from a curated catalog (Verified or Community tier).
+
+Before adding or editing any piece, walk the checklist in [`PIECE_VERIFICATION.md`](./PIECE_VERIFICATION.md). That doc covers the 8 stages from source shape to test layers.
+
+For the community-pieces curation flow (how a piece reaches the Verified tier, sync action, version pinning), read [`src/workflows/pieces-library/README.md`](../src/workflows/pieces-library/README.md).
+
+## Triggers
+
+`TriggerManager` reconciles which triggers are active for which published flow. Three trigger types:
+
+| Source | How it's wired |
+|---|---|
+| `schedule` (legacy alias `cron`) | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `{flowId}:{triggerName}`. |
+| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire; pieces that need HMAC verify inside their handler. |
+| Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
+
+Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.
+
+## API surface
+
+Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/workflows` | List flows |
+| POST | `/api/workflows` | Create flow |
+| GET | `/api/workflows/:id` | Get flow + latest version |
+| PATCH | `/api/workflows/:id` | Rename / publish status |
+| DELETE | `/api/workflows/:id` | Delete flow + cascade |
+| GET | `/api/workflows/:id/versions` | Version history |
+| POST | `/api/workflows/:id/versions` | New draft version |
+| GET | `/api/workflows/:id/versions/:vid` | Get version |
+| POST | `/api/workflows/:id/versions/:vid/lock` | Publish + register triggers |
+| POST | `/api/workflows/:id/versions/:vid/sample-data/:step` | Set per-step sample output |
+| POST | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set per-step sample input override |
+| POST | `/api/workflows/:id/publish` | Publish latest draft |
+| POST | `/api/workflows/:id/run` | Enqueue run; accepts `stepNameToTest` for run-from-here |
+| GET | `/api/workflows/:id/runs` | Run history |
+| GET | `/api/workflows/pieces` | Engine-extracted catalog |
+| GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
+| POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
+| DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
+| GET | `/api/workflows/connections` | List connections (no secrets) |
+| POST | `/api/workflows/connections` | Create / update connection (encrypted) |
+| DELETE | `/api/workflows/connections/:id` | Delete + revoke |
+| GET | `/api/workflows/triggers` | Active trigger registrations |
+| GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
+| ANY | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in |
+| POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit) |
+
+The engine subprocess hits `/v1/*` on the same daemon (the SandboxApi). Those routes are documented in the `sandbox-api/routes/` files; users never call them.
+
+## NL composer and `manage_workflow`
+
+The primary agent has a `manage_workflow` tool registered (`src/actions/tools/manage-workflow.ts`). It exposes:
+
+- `list`, `get`, `delete`, `enable`, `disable`, `publish` -- straight CRUD over flows.
+- `run` -- resolve a flow by name or id and enqueue a `RUN_FLOW`.
+- `create` -- create an empty draft (requires `empty: true` or reroutes to compose if `description` is set).
+- `compose` -- iterative sub-agent loop. Drives a planner LLM to produce a `FlowVersion` body, validates it against the engine-extracted piece schemas, retries up to 4 times with feedback prompts if validation fails. Reads each action's `outputSample` so the LLM can wire concrete field names.
+
+Source: `src/actions/tools/manage-workflow.ts` and `src/actions/tools/workflow-composer.ts`. The composer's role profile lives in `roles/specialists/workflow-default.yaml`.
+
+## Visual editor (UI)
+
+Lives in `ui/src/v2/rooms/workflows/`. Built on `@xyflow/react`.
+
+Notable behaviors a contributor should know:
+
+- The canvas is horizontal (root on the left, downstream to the right).
+- Editor state is owned by `useWorkflowEditor.ts`; tree algebra (insert/delete/wire branches) is a pure module at `tree.ts` with its own test file.
+- LOOP body and ROUTER branches render as indented sub-graphs on the canvas. The tree-aware auto-layout distributes router branches symmetrically around the parent.
+- Inputs accept `{{step.field}}` templates and render them as chips inline.
+- The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
+- Per-step sample input override is stored in `flow_version_ui_meta.sample_input` and applied by `piece-input.ts` before sending inputs to the engine. Used by the "test this step" affordance.
+- Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
+- Connection picker auto-fills the first available connection for the piece's auth type.
+- The runs panel polls adaptively (250ms while a run is RUNNING, 5s when idle).
+
+## Persistence and encryption
+
+All workflow tables live in `~/.jarvis/jarvis.db` (the same SQLite file as the rest of Jarvis). Schema: `src/workflows/db/schema.ts`. Repos: `src/workflows/db/repos/`.
+
+Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1:<iv>:<tag>:<ciphertext>`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env) or `~/.jarvis/cache/workflow-encryption.key` (auto-generated, `chmod 0600`). Legacy plaintext rows are accepted transparently for backwards compat.
+
+To rotate the key, run `scripts/rotate-encryption-key.ts`. It decrypts every row with the old key, re-encrypts with the new key, and atomically swaps the keychain. It refuses to run while the daemon is up (checks the daemon lock file).
+
+Run state is checkpointed via zstd. When a flow pauses, the engine sends `uploadRunLog(<zstd-state>)`; on resume, `execution-state-loader.ts` decompresses and hands it back via the BEGIN operation as `RESUME` state. This is why a paused workflow survives a daemon restart cleanly.
+
+## Build, cache, and sync
+
+The whole runtime depends on a content-addressed cache chain. Understanding it is essential for debugging "why isn't my change picked up":
+
+- **Engine bundle hash** mixes the synthesized package.json (esbuild deps), the `UPSTREAM_PIN_SHA`, and every file in `PATCHED_VENDOR_SOURCES` (see `src/workflows/runner/engine-runtime/build.ts`). Editing a patched vendor file flips the hash; a fresh bundle goes to `~/.jarvis/cache/engine/<new-hash>/`.
+- **Piece bundle hash** mixes the piece's source tree hash with the engine bundle hash. Framework changes invalidate every piece automatically.
+- **Catalog cache key** mixes the bundle hashes of every piece + `CATALOG_SCHEMA_VERSION`. Bump the constant in `piece-catalog.ts` if you change the projection format. Cache lives at `~/.jarvis/cache/piece-metadata.json`.
+
+To re-sync with a newer upstream Activepieces release, edit `UPSTREAM_PIN_TAG` + `UPSTREAM_PIN_SHA` in `src/workflows/activepieces/upstream-pin.ts` and run `bun run scripts/sync-activepieces.ts`. The script pulls the new SHA, re-applies every entry in `PATCH_INSERTIONS`, and fails loudly if any anchor goes missing.
+
+The CI guard `scripts/check-no-ee-imports.ts` runs on pre-commit and on every PR. It refuses any import or vendored path that touches Activepieces' `/ee/` (Enterprise License) tree.
+
+## Testing
+
+Three test layers, run from cheap to expensive:
+
+1. **Unit + integration tests** -- the bulk. Cover repos, queue, tree algebra, composer parser, catalog projection, drift, etc. Run with `bun test src/workflows/`.
+2. **Engine-extract tests against real pieces** -- gated. Set `JARVIS_GATED_REAL_PIECE_TESTS=1` to opt in. They actually install a piece (e.g. Gmail) and run `EXTRACT_PIECE_METADATA` against it; useful in CI but pricey locally.
+3. **End-to-end engine tests** -- gated by `JARVIS_TEST_ENGINE_BUILD=1`. Build the engine bundle, spawn it, run real flows from BEGIN to terminal status. Includes the RESUME-from-paused suite (`end-to-end-resume.test.ts`) and the Phase L plumbing smoke (`end-to-end-l.test.ts`).
+
+The drift test (`runtime/test-fixtures-drift.test.ts`) compares the live engine-extracted catalog against a committed snapshot. If you change a piece's surface, regenerate the fixture and commit it.
+
+## Common contributor tasks
+
+| Task | Where to start | Cross-links |
+|---|---|---|
+| Add a new Jarvis piece | Drop a directory under `packages/pieces/jarvis/<name>/` | [`PIECE_VERIFICATION.md`](./PIECE_VERIFICATION.md) |
+| Verify a piece works end-to-end | Walk the 8-stage checklist | [`PIECE_VERIFICATION.md`](./PIECE_VERIFICATION.md) |
+| Add a community piece to the Verified tier | Edit `catalog-overrides.ts` -> `VERIFIED` | [`pieces-library/README.md`](../src/workflows/pieces-library/README.md) |
+| Patch a vendored upstream file | Add an entry to `PATCH_INSERTIONS` in `scripts/sync-activepieces.ts` + register the file in `PATCHED_VENDOR_SOURCES` (so the bundle hash invalidates) | [`UPSTREAM.md`](../src/workflows/activepieces/UPSTREAM.md) |
+| Upgrade Activepieces | Edit `UPSTREAM_PIN_*` constants, run `sync-activepieces.ts`, fix any drift the patch layer reports | [`UPSTREAM.md`](../src/workflows/activepieces/UPSTREAM.md) |
+| Add a new `/v1/jarvis/*` service | Add a route file under `sandbox-api/routes/`, wire it into `server.ts`, wire the backend into `service-backends.ts` | (this file -- "Source tree map") |
+| Bump the catalog projection | Bump `CATALOG_SCHEMA_VERSION` in `piece-catalog.ts` so existing caches invalidate | (this file -- "Build, cache, and sync") |
+| Run the engine-extract test against a real piece | `JARVIS_GATED_REAL_PIECE_TESTS=1 bun test src/workflows/runner/engine-runtime/extract-piece-metadata.test.ts` | (this file -- "Testing") |
+| Add a new connection source for `jarvis:*` external ids | Implement a `JarvisConnectionSource`, register in `src/workflows/credentials/adapter.ts` | (this file -- "Source tree map") |
+| Debug a stuck or weird run | Inspect `flow_run.status` + `waitpoint` rows, then `~/.jarvis/cache/run-logs/<runId>.zst` for the engine's last execution state | (this file -- "Persistence and encryption") |
+
+## Glossary
+
+- **Piece** -- an npm package that ships actions and/or triggers. Examples: `@jarvispieces/piece-jarvis-ask`, `@activepieces/piece-gmail`.
+- **Flow** -- a workflow as the user sees it. Has a name, a published state, and many versions.
+- **Flow version** -- an immutable snapshot of a flow's tree. Triggers reference a specific version.
+- **Flow run** -- one execution of a flow version. Has a status (PENDING / RUNNING / SUCCEEDED / FAILED / PAUSED) and a checkpointed execution state.
+- **Connection** -- a stored credential bound to a piece's auth shape. Encrypted at rest.
+- **Engine** -- the vendored Activepieces flow executor, built as a CJS bundle and spawned as a child Bun process.
+- **Engine subprocess** -- one instance of the engine, running with a unique sandbox id and engine token. Held in a single-slot warm pool with a 5min idle TTL.
+- **`outputSample`** -- a literal sample object an action declares to describe its return shape. The variable picker reads from this; the LLM composer reads from this. Required on every action.
+- **`PATCHED_VENDOR_SOURCES`** -- the explicit list of vendored upstream files we patch in this fork. Editing any of them must flip the engine bundle hash.
+- **`CATALOG_SCHEMA_VERSION`** -- a string mixed into the piece-metadata cache key. Bump it whenever you change the catalog projection format.
+- **`SANDBOX_PROCESS`** -- the engine execution mode we use. Child-process IPC, no `isolated-vm`.

@@ -36,6 +36,8 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
     - [One-liner](#one-liner)
     - [Manual](#manual)
   - [🚀 Usage](#-usage)
+    - [Updating](#updating)
+    - [Removing JARVIS](#removing-jarvis)
   - [🖥️ Sidecar Setup](#️-sidecar-setup)
     - [1. Install the sidecar](#1-install-the-sidecar)
     - [2. Enroll in the dashboard](#2-enroll-in-the-dashboard)
@@ -427,12 +429,20 @@ See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
 
 ## 📖 Documentation
 
+General:
+
 - [VISION.md](VISION.md) — Full roadmap and milestone specifications
-- [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) — LLM provider configuration
-- [docs/WORKFLOW_AUTOMATION.md](docs/WORKFLOW_AUTOMATION.md) — Workflow engine guide
+- [config.example.yaml](config.example.yaml) — Full configuration reference
+- [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) — LLM provider configuration and routing
 - [docs/VAULT_EXTRACTOR.md](docs/VAULT_EXTRACTOR.md) — Memory and knowledge vault
 - [docs/PERSONALITY_ENGINE.md](docs/PERSONALITY_ENGINE.md) — Personality and role system
-- [config.example.yaml](config.example.yaml) — Full configuration reference
+
+Workflows (contributor reading order):
+
+- [docs/WORKFLOW_AUTOMATION.md](docs/WORKFLOW_AUTOMATION.md) — Architecture, source-tree map, and runtime walkthrough. Start here.
+- [docs/PIECE_VERIFICATION.md](docs/PIECE_VERIFICATION.md) — 8-stage checklist to verify a piece end-to-end. Required before adding or editing any piece.
+- [src/workflows/activepieces/UPSTREAM.md](src/workflows/activepieces/UPSTREAM.md) — Pinned Activepieces SHA, license posture, vendored exclusions
+- [src/workflows/pieces-library/README.md](src/workflows/pieces-library/README.md) — How community pieces are curated and installed at runtime
 
 ---
 
