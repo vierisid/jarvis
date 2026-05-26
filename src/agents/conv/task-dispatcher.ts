@@ -108,16 +108,8 @@ export class TaskDispatcher {
   }
 
   private buildTaskMessages(request: TaskRequest): LLMMessage[] {
-    const systemParts: string[] = [TEMPLATE_PROMPTS[request.template]];
-    if (request.constraints && request.constraints.length > 0) {
-      systemParts.push('', 'Constraints:');
-      for (const c of request.constraints) systemParts.push(`- ${c}`);
-    }
-    if (request.context) {
-      systemParts.push('', 'Context:', request.context);
-    }
     return [
-      { role: 'system', content: systemParts.join('\n') },
+      { role: 'system', content: TEMPLATE_PROMPTS[request.template] },
       { role: 'user', content: request.intent },
     ];
   }

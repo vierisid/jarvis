@@ -128,8 +128,6 @@ export class ConvOrchestrator {
           tier: args.tier,
           template: args.template,
           intent: args.intent,
-          constraints: args.constraints,
-          context: args.context,
         };
 
         // Dispatch produces a result envelope. We notify the caller as the

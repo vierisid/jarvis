@@ -23,7 +23,7 @@ export const CONV_TOOLS: LLMTool[] = [
   {
     name: 'delegate',
     description:
-      "Delegate work to a task tier. Use this when the user's request needs real action (research, code, planning, writing, tool execution). The task tier will run with its own tools and return a result envelope you can verbalize to the user. Pick the smallest tier that can handle the work: low for trivial extraction/classification, medium for general tool work, high for complex multi-step reasoning. Returns a task_id you can reference for status checks.",
+      "Delegate work to a task tier. Use this when the user's request needs real action (research, code, planning, writing, tool execution). The task tier will run with its own tools and return a result envelope you can verbalize to the user. Pick the smallest tier that can handle the work: low for trivial extraction/classification, medium for general tool work, high for complex multi-step reasoning. Returns a task_id you can reference for status checks. Fold any constraints (budget, tone, format, scope) directly into the `intent` sentence.",
     parameters: {
       type: 'object',
       required: ['tier', 'template', 'intent'],
@@ -40,16 +40,7 @@ export const CONV_TOOLS: LLMTool[] = [
         },
         intent: {
           type: 'string',
-          description: 'One-line goal sentence the task tier sees first. Be specific.',
-        },
-        constraints: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Optional refinements like budget caps, tone, format, scope.',
-        },
-        context: {
-          type: 'string',
-          description: 'Optional extra context the task tier needs that isn\'t in the intent itself.',
+          description: 'One-line goal sentence the task tier sees first. Be specific. Include any constraints (budget, tone, scope, format) inline rather than passing them separately.',
         },
       },
     },

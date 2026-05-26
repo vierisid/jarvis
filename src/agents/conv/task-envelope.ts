@@ -33,15 +33,15 @@ export type TaskStatus =
 
 /**
  * What the conversation LLM passes when delegating. The `intent` field is
- * the one-line goal sentence the task tier sees first. Constraints and
- * context are optional refinements.
+ * the one-line goal sentence the task tier sees first - it should contain
+ * any constraints (budget, tone, scope) folded inline. Phase 4 also had
+ * separate `constraints` / `context` fields but small models tend to
+ * mis-serialize arrays as strings, so we keep the schema minimal.
  */
 export type TaskRequest = {
   tier: Exclude<Tier, 'conversation'>;
   template: TaskTemplate;
   intent: string;
-  constraints?: string[];
-  context?: string;
 };
 
 /**
