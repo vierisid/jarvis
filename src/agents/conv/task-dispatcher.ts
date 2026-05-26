@@ -39,7 +39,10 @@ export type TaskRunner = (args: {
   tier: TaskRequest['tier'];
   subsystem: string;
   template: TaskTemplate;
+  /** Conv LLM's paraphrased intent - used as routing hint / system context. */
   intent: string;
+  /** User's verbatim message - this is what the task tier sees as the user prompt. */
+  originalMessage: string;
   signal: AbortSignal;
 }) => Promise<string>;
 
@@ -77,6 +80,9 @@ export class TaskDispatcher {
         subsystem,
         template: request.template,
         intent: request.intent,
+        // Fall back to the intent when no original message was attached
+        // (e.g., tests, programmatic delegations).
+        originalMessage: request.original_message ?? request.intent,
         signal: abort.signal,
       });
 

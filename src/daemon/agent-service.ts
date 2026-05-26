@@ -673,12 +673,15 @@ export class AgentService implements Service, IAgentService {
       // task tiers run with the full tool registry, role prompt, authority
       // gating, and Jarvis-specific feature knowledge. The only difference
       // vs classic mode is which LLM tier handles the work.
-      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({ tier, subsystem, template, intent, signal }) => {
+      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({ tier, subsystem, template, intent, originalMessage, signal }) => {
         if (signal.aborted) return '';
-        const baseSystem = this.buildFullSystemPrompt('conv', intent);
+        const baseSystem = this.buildFullSystemPrompt('conv', originalMessage);
         const templateNote = TaskDispatcher.templatePromptFor(template);
-        const systemPrompt = `${baseSystem}\n\n${templateNote}`;
-        return await this.orchestrator.processMessage(systemPrompt, intent, tier, subsystem);
+        // Attach the conv LLM's routing intent as system context so the task
+        // tier sees both the user's verbatim ask AND the conv's framing -
+        // but the user's words are the primary signal.
+        const systemPrompt = `${baseSystem}\n\n${templateNote}\n\nConversation routing note: ${intent}`;
+        return await this.orchestrator.processMessage(systemPrompt, originalMessage, tier, subsystem);
       };
       this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
       this.dialogueCompactor = new DialogueCompactor(this.llmManager);

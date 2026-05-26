@@ -41,7 +41,19 @@ export type TaskStatus =
 export type TaskRequest = {
   tier: Exclude<Tier, 'conversation'>;
   template: TaskTemplate;
+  /**
+   * One-line goal the conv LLM extracted from the user's message. Used as a
+   * routing hint and added to the task tier's system context, but the task
+   * tier actually sees the user's ORIGINAL verbatim message as its user
+   * prompt (see TaskRunner). This avoids losing Jarvis-specific cues that
+   * a paraphrasing conv LLM might strip out.
+   */
   intent: string;
+  /**
+   * The user's verbatim message. Set by the conv orchestrator when it
+   * builds a TaskRequest; the runner uses it as the task tier's user prompt.
+   */
+  original_message?: string;
 };
 
 /**

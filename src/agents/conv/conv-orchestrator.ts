@@ -60,6 +60,8 @@ export type ConvStreamEvent =
   | { type: 'done'; tasksRun: string[] };
 
 export class ConvOrchestrator {
+  private currentUserMessage = '';
+
   constructor(
     private readonly llm: LLMManager,
     private readonly registry: TaskRegistry,
@@ -110,6 +112,10 @@ export class ConvOrchestrator {
     ];
 
     const tasksRun: string[] = [];
+    // Remember the user's verbatim message so we can attach it to every
+    // delegate request - the task tier sees what the user actually said,
+    // not the conv LLM's paraphrase.
+    this.currentUserMessage = userMessage;
 
     for (let iteration = 0; iteration < MAX_CONV_ITERATIONS; iteration++) {
       const response = await this.llm.chatTier('conversation', 'conv_orchestrator', messages, {
@@ -179,6 +185,9 @@ export class ConvOrchestrator {
           tier: args.tier,
           template: args.template,
           intent: args.intent,
+          // Attach the user's verbatim message so the task tier sees what
+          // the user actually said, not the conv LLM's paraphrase.
+          original_message: this.currentUserMessage || undefined,
         };
 
         // Dispatch produces a result envelope. We notify the caller as the
@@ -330,9 +339,16 @@ export class ConvOrchestrator {
       '- For code: "Let me read the file first and figure out where to make the change."',
       '- For planning: "I\'ll sketch out the workflow steps - back shortly with a plan."',
       '',
-      'When a task completes you receive a result envelope. Verbalize the summary ' +
-      'naturally in your own voice - don\'t paste raw output. If the task failed, ' +
-      'tell the user briefly and offer next steps.',
+      'IMPORTANT - verbalizing task results:',
+      'When a task completes you receive a result envelope with a `summary`. ' +
+      'Your verbalization MUST be faithful to that summary - report what the ' +
+      'task tier actually did/found, not what you think the answer should be. ' +
+      'Do NOT substitute your own knowledge. Do NOT invent details that aren\'t ' +
+      'in the summary. If the summary mentions Jarvis features (workflows, ' +
+      'commitments, goals), say so - do not suggest generic alternatives like ' +
+      '"you could write a Python script" when the task already used a Jarvis ' +
+      'tool. If the task failed or returned poor output, tell the user briefly ' +
+      'and offer to retry rather than papering over it with your own guess.',
     );
 
     return parts.join('\n');
