@@ -9,7 +9,7 @@
 import { join } from 'node:path';
 import type { Service, ServiceStatus } from './services.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import type { LLMStreamEvent } from '../llm/provider.ts';
+import type { LLMStreamEvent, LLMMessage } from '../llm/provider.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { PersonalityModel } from '../personality/model.ts';
 
@@ -62,6 +62,11 @@ import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import { getSidecarManager } from '../actions/tools/sidecar-route.ts';
+import { ConvOrchestrator } from '../agents/conv/conv-orchestrator.ts';
+import { TaskRegistry } from '../agents/conv/task-registry.ts';
+import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
+import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
+import { getRecentConversation, getMessages } from '../vault/conversations.ts';
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -78,6 +83,12 @@ export class AgentService implements Service, IAgentService {
   private researchQueue: ResearchQueue | null = null;
   private taskManager: AgentTaskManager | null = null;
   private authorityEngine: AuthorityEngine | null = null;
+  // Phase 4: conv-tier infrastructure. Constructed lazily when the
+  // conversation tier is configured. Null in classic single-orchestrator mode.
+  private taskRegistry: TaskRegistry | null = null;
+  private taskDispatcher: TaskDispatcher | null = null;
+  private convOrchestrator: ConvOrchestrator | null = null;
+  private convTaskEventListener: ((event: ConvTaskEvent) => void) | null = null;
 
   constructor(config: JarvisConfig) {
     this.config = config;
@@ -285,11 +296,23 @@ export class AgentService implements Service, IAgentService {
 
   /**
    * Non-streaming message handler. Returns full response string.
+   *
+   * Routing:
+   *   - If `llm.tiers.conversation` is configured AND the ConvOrchestrator has
+   *     been initialized, the router-first path runs: the conv LLM owns
+   *     dialogue and emits delegate() tool calls that drive task tiers.
+   *   - Otherwise the classic orchestrator runs (full role prompt, all tools,
+   *     ReAct loop on the medium tier).
    */
   async handleMessage(text: string, channel: string = 'websocket'): Promise<string> {
-    const systemPrompt = this.buildFullSystemPrompt(channel, text);
+    let response: string;
 
-    const response = await this.orchestrator.processMessage(systemPrompt, text);
+    if (this.convOrchestrator) {
+      response = await this.handleMessageConv(text, channel);
+    } else {
+      const systemPrompt = this.buildFullSystemPrompt(channel, text);
+      response = await this.orchestrator.processMessage(systemPrompt, text);
+    }
 
     // Run extraction and learning in parallel (non-blocking but tracked)
     Promise.allSettled([
@@ -302,6 +325,84 @@ export class AgentService implements Service, IAgentService {
     ]);
 
     return response;
+  }
+
+  /**
+   * Router-first message handler. Builds a tight conv-tier context (user
+   * identity + recent dialogue) and lets the conv LLM decide whether to
+   * delegate or answer directly.
+   */
+  private async handleMessageConv(text: string, channel: string = 'websocket'): Promise<string> {
+    if (!this.convOrchestrator) {
+      // Should be unreachable - caller checks this.convOrchestrator first.
+      throw new Error('Conv orchestrator not initialized');
+    }
+    const identity = this.buildUserIdentityBlock();
+    const recentDialogue = this.loadRecentDialogue(channel);
+    const result = await this.convOrchestrator.processTurn(
+      text,
+      {
+        userIdentity: identity,
+        recentDialogue,
+        ambientFacts: this.buildAmbientFactsBlock(),
+      },
+      this.convTaskEventListener ?? undefined,
+    );
+    return result.text;
+  }
+
+  /**
+   * Pull the last few messages from the persistent conversation so the conv
+   * LLM has continuity across turns. We keep it small (10 messages by default)
+   * to stay within the conv tier's tight context budget.
+   */
+  private loadRecentDialogue(channel: string): LLMMessage[] {
+    try {
+      const recent = getRecentConversation(channel);
+      if (!recent) return [];
+      const messages = getMessages(recent.conversation.id, { limit: 10 });
+      // Only user/assistant turns are useful for conv continuity. Drop tool
+      // results and system messages which belong to the classic-mode loop.
+      return messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }));
+    } catch (err) {
+      console.warn('[AgentService] Failed to load recent dialogue:', err);
+      return [];
+    }
+  }
+
+  /** One-line identity facts the conv LLM sees in every turn. */
+  private buildUserIdentityBlock(): string {
+    const parts: string[] = [];
+    const name = this.config.user?.name;
+    if (name) parts.push(`Name: ${name}`);
+    parts.push(`Local time: ${new Date().toLocaleString()}`);
+    return parts.join('. ');
+  }
+
+  /** Tiny ambient state hint for the conv LLM (counts only, not contents). */
+  private buildAmbientFactsBlock(): string {
+    return ''; // Phase 5 will add commitment counts, due items, etc.
+  }
+
+  /**
+   * Wire a listener for task lifecycle events emitted by the conv orchestrator.
+   * The daemon's WS service uses this to surface status pills in the UI.
+   */
+  setConvTaskEventListener(listener: (event: ConvTaskEvent) => void): void {
+    this.convTaskEventListener = listener;
+  }
+
+  /**
+   * Expose the task registry for diagnostics / API endpoints. Null when
+   * running in classic mode.
+   */
+  getTaskRegistry(): TaskRegistry | null {
+    return this.taskRegistry;
   }
 
   // --- Private methods ---
@@ -457,6 +558,40 @@ export class AgentService implements Service, IAgentService {
         this.llmManager.setTierMap(tierMap);
       }
     }
+
+    // Phase 4: initialize conv-tier infrastructure ONLY when the user has
+    // configured llm.tiers.conversation. Otherwise we stay in classic
+    // single-orchestrator mode (and handleMessage uses this.orchestrator).
+    if (this.llmManager.hasConversationTier()) {
+      this.taskRegistry = new TaskRegistry();
+      this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry);
+      const persona = this.buildPersona();
+      this.convOrchestrator = new ConvOrchestrator(
+        this.llmManager,
+        this.taskRegistry,
+        this.taskDispatcher,
+        persona,
+      );
+      console.log('[AgentService] Conversation tier configured - router-first mode active.');
+    } else {
+      console.log('[AgentService] No conversation tier - classic orchestrator mode.');
+    }
+  }
+
+  /**
+   * Build the conversation persona string injected into the conv-tier system
+   * prompt. Reads from `config.personality` so users can customize tone
+   * without touching code.
+   */
+  private buildPersona(): string {
+    const p = this.config.personality;
+    const traits = (p?.core_traits ?? []).join(', ');
+    const name = p?.assistant_name ?? 'JARVIS';
+    return [
+      `You are ${name}, the user's conversational assistant.`,
+      traits ? `Core traits: ${traits}.` : '',
+      'Be concise, natural, and direct. Anticipate needs without being intrusive.',
+    ].filter(Boolean).join(' ');
   }
 
   private loadActiveRole(): RoleDefinition {

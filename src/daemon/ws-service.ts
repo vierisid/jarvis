@@ -698,6 +698,32 @@ export class WebSocketService implements Service {
   }
 
   /**
+   * Broadcast a conv-tier task lifecycle event to all connected clients. The
+   * UI uses these to render status pills like `[research running - 14s]`
+   * while a delegated task is in flight, and to flash a "result ready" hint
+   * when the task completes after the user has moved on.
+   *
+   * Event payload shape: { type: 'task_started'|'task_completed'|'task_failed'|'task_cancelled',
+   *                         task_id, template, intent, status, elapsedMs, summary? }
+   */
+  broadcastTaskEvent(event: {
+    type: 'task_started' | 'task_completed' | 'task_failed' | 'task_cancelled';
+    task_id: string;
+    template: string;
+    intent: string;
+    status: string;
+    elapsedMs: number;
+    summary?: string;
+  }): void {
+    const message: WSMessage = {
+      type: 'task_event',
+      payload: event,
+      timestamp: Date.now(),
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  /**
    * Format a FileEntry tree into a compact text listing.
    */
   private formatFileTree(entry: { name: string; path: string; type: 'file' | 'directory'; children?: { name: string; type: 'file' | 'directory' }[] }): string {

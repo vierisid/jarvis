@@ -391,6 +391,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       wsService.broadcastSubAgentProgress(event);
     });
 
+    // 6b'. Phase 4: surface conv-tier task lifecycle events to the UI so it can
+    // render status pills while a delegated task is in flight. No-op when the
+    // user has not configured llm.tiers.conversation (classic orchestrator mode).
+    agentService.setConvTaskEventListener((event) => {
+      wsService.broadcastTaskEvent({
+        type: event.type,
+        task_id: event.record.id,
+        template: event.record.request.template,
+        intent: event.record.request.intent,
+        status: event.record.status,
+        elapsedMs: Date.now() - event.record.startedAt,
+        summary: 'envelope' in event ? event.envelope.summary : undefined,
+      });
+    });
+
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     // Brain URL precedence: env > config.yaml > default fallback. The loader

@@ -22,6 +22,11 @@ export type WSMessage = {
       // session live/closed/error for the UI indicator; `realtime_transcript`
       // streams user/assistant transcript text. See docs/GPT_REALTIME_2_INTEGRATION.md.
       | 'realtime_status' | 'realtime_transcript'
+      // Conv-tier task lifecycle event. Payload:
+      //   { type: 'task_started' | 'task_completed' | 'task_failed' | 'task_cancelled',
+      //     task_id, template, intent, status, elapsedMs, summary? }
+      // UI renders status pills + flashes "result ready" interjections.
+      | 'task_event'
       // Emitted when a pending voice confirmation (clarifier / repeat-back)
       // expires from the server-side TTL sweep. Payload: { id: string }.
       // Clients should dismiss the corresponding card from their UI.
