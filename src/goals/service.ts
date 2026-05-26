@@ -80,13 +80,27 @@ export class GoalService implements Service {
       return;
     }
 
+    // Idempotency guard. Cron.schedule auto-cancels duplicates by id, but
+    // eventBus.subscribe creates a fresh subscription each call - without
+    // this guard a re-start would double accountability/health checks.
+    if (this._status === 'running' || this._status === 'starting') {
+      console.log('[GoalService] start() called while already running - ignoring');
+      return;
+    }
+
     this._status = 'starting';
 
     // Morning/evening rhythm: fire once at the start hour of each window using
     // a dedicated cron job. The previous 60s timer was a polling approximation
     // of "trigger sometime within the window"; once-at-start is more precise.
-    const morningHour = (this.config.morning_window?.start ?? 7) | 0;
-    const eveningHour = (this.config.evening_window?.start ?? 20) | 0;
+    // Clamp to a valid cron hour (0-23) so an out-of-range config value falls
+    // back to a sane default rather than failing the schedule call.
+    const clampHour = (h: number, fallback: number): number => {
+      const n = Math.floor(h);
+      return Number.isFinite(n) && n >= 0 && n <= 23 ? n : fallback;
+    };
+    const morningHour = clampHour(this.config.morning_window?.start ?? 7, 7);
+    const eveningHour = clampHour(this.config.evening_window?.start ?? 20, 20);
 
     try {
       this.cron.schedule('goals:morning', `0 ${morningHour} * * *`, () => {
@@ -108,10 +122,11 @@ export class GoalService implements Service {
       console.error('[GoalService] Failed to schedule evening cron:', err);
     }
 
-    // Accountability + health refresh: piggyback on cron.hourly so escalation
-    // weeks and deadline-relative health transitions update on a steady
-    // cadence. Per-goal accountability also fires on score changes (see
-    // scoreGoal()).
+    // Accountability + global health sweep: piggyback on cron.hourly so
+    // escalation-by-weeks and deadline-ratio-driven health transitions update
+    // on a steady cadence. Per-goal health is ALSO recalculated immediately
+    // when scoreGoal() runs (see below) so a score change reflects in health
+    // without waiting for the next hourly tick.
     if (this.eventBus) {
       this.unsubscribers.push(
         this.eventBus.subscribe('cron.hourly', () => {

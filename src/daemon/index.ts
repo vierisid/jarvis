@@ -70,7 +70,6 @@ export interface DaemonConfig {
 let shutdownInProgress = false;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
-let heartbeatTimer: Timer | null = null;  // legacy slot, kept for shutdown handler compat; no longer assigned
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
@@ -163,12 +162,6 @@ async function handleShutdown(signal: string): Promise<void> {
   console.log(`\n[Daemon] Received ${signal}, shutting down gracefully...`);
 
   try {
-    // Clear heartbeat timer
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-
     // Stop system cron (publishes cron.* events on the shared bus)
     if (systemCron) {
       systemCron.stop();
@@ -1448,21 +1441,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     healthMonitor.start(config.healthCheckInterval);
 
     // 12. The 15-min heartbeat that called bgAgent.handleHeartbeat() has been
-    // deleted. It was the single largest idle LLM cost in the daemon. Its
-    // responsibilities have been redistributed:
+    // deleted. It was the single largest idle LLM cost in the daemon. What
+    // changed for each thing the heartbeat used to do:
     //   - commitment.overdue / commitment.due_soon workflow events:
     //       now emitted by CommitmentExecutor on state transitions (one-shot
-    //       per id rather than every 15 min).
-    //   - critical/high commitment routing to EventReactor:
-    //       still handled by the executor's discovery sweep + the existing
-    //       EventReactor paths for observer-emitted events.
-    //   - generic "review your responsibilities" LLM prompt:
-    //       removed. Phase 4 will reintroduce purposeful background work via
+    //       per id rather than every 15 min). Better semantics for on_event
+    //       triggers; no behavior change for any current subscriber.
+    //   - EventReactor.react() calls on each commitment event (LLM):
+    //       REMOVED. CommitmentExecutor fires its own MANDATORY execution
+    //       prompt when the cancel deadline elapses, which is the same LLM
+    //       work without the duplicate "react" step the heartbeat added.
+    //   - Coalesced low-priority events flushed to the LLM:
+    //       REMOVED. Observer events still route through the reactor at the
+    //       moment they're classified critical/high; low-priority events no
+    //       longer get a periodic summary digest. EventReactor's per-event
+    //       handling for observer events (file/clipboard/process/etc.)
+    //       continues to work because those paths never went through the
+    //       heartbeat - they were already event-driven.
+    //   - Generic "review your responsibilities" LLM prompt:
+    //       REMOVED. Phase 4 will reintroduce purposeful background work via
     //       the conversation-tier orchestrator if it proves needed.
     //
-    // `heartbeatConfig` (interval_minutes, active_hours, aggressiveness) is
-    // still read for the executor's aggressiveness field. The interval and
-    // active_hours fields are now ignored.
+    // `heartbeatConfig.aggressiveness` is still read by CommitmentExecutor.
+    // `heartbeatConfig.interval_minutes` and `active_hours` are now ignored.
 
     logWithTimestamp(`JARVIS daemon running on port ${config.port}`);
     console.log('');
