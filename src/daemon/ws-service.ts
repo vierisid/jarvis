@@ -1184,6 +1184,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         }
       }
 
+      // If StreamRelay already broadcast the error to all clients (including
+      // this requester), don't emit a second error WSMessage as the handler
+      // return value - the user would see the same error twice.
+      const broadcastFlag = (error as Error & { _streamErrorBroadcast?: boolean })?._streamErrorBroadcast;
+      if (broadcastFlag) {
+        return undefined;
+      }
+
       const message = error instanceof Error ? error.message : 'Chat processing failed';
       return {
         type: 'error',

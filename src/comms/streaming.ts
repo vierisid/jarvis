@@ -126,9 +126,13 @@ export class StreamRelay {
       }
 
       if (streamError) {
-        // Error event was already broadcast above. Throw without re-broadcasting
-        // so the caller's catch path doesn't fire the SAME error a second time.
-        throw new Error(streamError);
+        // Error event was already broadcast above. Throw a marked Error so
+        // the caller's catch path can SKIP sending another error message
+        // (otherwise the user sees the same error twice - once from broadcast,
+        // once from the handler's catch-block reply).
+        const err = new Error(streamError) as Error & { _streamErrorBroadcast?: boolean };
+        err._streamErrorBroadcast = true;
+        throw err;
       }
     } catch (error) {
       console.error('[StreamRelay] Error relaying stream:', error);
