@@ -172,7 +172,7 @@ export interface RoleInfo {
     name: string;
     authority_level: number;
     tools: string[];
-    sub_roles: Array<{ role_id: string; name: string; description: string }>;
+    sub_roles?: Array<{ role_id: string; name: string; description: string }>;
   } | null;
 }
 

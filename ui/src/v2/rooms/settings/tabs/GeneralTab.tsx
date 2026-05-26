@@ -245,13 +245,13 @@ export function GeneralTab({
                 ))}
               </div>
             </div>
-            {role.role.sub_roles.length > 0 && (
+            {(role.role.sub_roles?.length ?? 0) > 0 && (
               <div className="v2-set__field">
                 <span className="v2-set__field-label">
-                  Available specialists ({role.role.sub_roles.length})
+                  Available specialists ({role.role.sub_roles?.length ?? 0})
                 </span>
                 <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-                  {role.role.sub_roles.map((sr) => (
+                  {(role.role.sub_roles ?? []).map((sr) => (
                     <div
                       key={sr.role_id}
                       style={{
