@@ -18,12 +18,14 @@ import type { TaskRegistry } from './task-registry.ts';
 
 const SUMMARY_THRESHOLD_CHARS = 1500;
 
+const TOOL_USE_INSTRUCTION = `IMPORTANT: You have access to real tools listed in your context. USE THEM to do the work - do not just describe what someone could do. If the user asked to create a workflow, use the workflow tools. If they asked to browse the web, use the browser. If they asked to read a file, use file-ops. Generic textual answers about "you could write a Python script" or "here is the general approach" are wrong when the right tool exists in your registry.`;
+
 const TEMPLATE_PROMPTS: Record<TaskTemplate, string> = {
-  research: `[TASK TEMPLATE: RESEARCH] Focus on gathering information from your tools (web, vault, docs). Stay on the user's intent. Cite sources where it matters. End with a clear conclusion the conversation agent can quote.`,
-  code: `[TASK TEMPLATE: CODE] Read existing code first when needed. Write clean, minimal changes. Run tests or builds if available. End with a brief plain-English summary (file paths, key changes).`,
-  plan: `[TASK TEMPLATE: PLAN] Decompose the intent into concrete steps with clear ownership and rough effort. Identify dependencies and risks. Output a structured plan.`,
+  research: `[TASK TEMPLATE: RESEARCH] Gather information using your tools (web search, vault, docs). Stay on the user's intent. Cite sources where it matters. End with a clear conclusion the conversation agent can quote.\n\n${TOOL_USE_INSTRUCTION}`,
+  code: `[TASK TEMPLATE: CODE] Read existing code via file-ops first when needed. Write clean, minimal changes. Run tests or builds if available. End with a brief plain-English summary (file paths, key changes).\n\n${TOOL_USE_INSTRUCTION}`,
+  plan: `[TASK TEMPLATE: PLAN] Decompose the intent into concrete steps with clear ownership and rough effort. If the plan involves Jarvis features (workflows, commitments, goals, browser, sidecar) call the corresponding tools to inspect what already exists before drafting. Output a structured plan.\n\n${TOOL_USE_INSTRUCTION}`,
   write: `[TASK TEMPLATE: WRITE] Draft prose matching the requested format and audience. Prefer clarity over flourish. Return only the drafted content plus a one-line note about choices made.`,
-  general: `[TASK TEMPLATE: GENERAL] Use your tools to accomplish the user's intent. Stay on scope. End with a brief summary.`,
+  general: `[TASK TEMPLATE: GENERAL] Use your tools to accomplish the user's intent. Stay on scope. End with a brief summary.\n\n${TOOL_USE_INSTRUCTION}`,
 };
 
 /**
