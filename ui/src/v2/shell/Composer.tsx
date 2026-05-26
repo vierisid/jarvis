@@ -17,7 +17,7 @@ export function Composer({
   disabled,
 }: ComposerProps) {
   const [value, setValue] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Global `/` opens the command palette directly. Suppressed inside any
   // editable element so it doesn't hijack normal typing — typing `/` in
@@ -37,11 +37,26 @@ export function Composer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onSlash]);
 
+  const resetHeight = () => {
+    const el = inputRef.current;
+    if (el) el.style.height = "auto";
+  };
+
   const submit = () => {
     const text = value.trim();
     if (!text || disabled) return;
     onSubmit?.(text);
     setValue("");
+    resetHeight();
+  };
+
+  const autoGrow = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    // Set to scrollHeight and let CSS max-height clamp the visible size;
+    // overflow-y: auto then handles scrolling past the cap.
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
   };
 
   return (
@@ -53,13 +68,14 @@ export function Composer({
       }}
     >
       <div className="v2-composer__wrap">
-        <input
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={1}
           className="v2-composer__input"
           placeholder={placeholder}
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          onInput={autoGrow}
           onKeyDown={(e) => {
             // Empty input + slash → open palette (same as the pill button
             // and the global hotkey). Mid-text slash types normally so
@@ -67,6 +83,19 @@ export function Composer({
             if (e.key === "/" && value.length === 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
               e.preventDefault();
               onSlash?.();
+              return;
+            }
+            // Enter submits; Shift+Enter inserts a newline. Textareas don't
+            // submit forms on Enter natively, so handle it here. Skip while
+            // an IME composition is active so confirming a CJK candidate
+            // doesn't accidentally send.
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              submit();
             }
           }}
           disabled={disabled}

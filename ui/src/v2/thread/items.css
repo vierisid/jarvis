@@ -63,6 +63,7 @@
   font-family: var(--font-display);
   font-style: italic;
   color: var(--ink-2);
+  white-space: pre-wrap;
 }
 
 .v2-item__mic {
