@@ -268,11 +268,20 @@ export class AgentService implements Service, IAgentService {
 
   /**
    * Stream a message through the agent. Returns a stream and an onComplete callback.
+   *
+   * Routing mirrors handleMessage(): if a conversation tier is configured, we
+   * run the router-first conv orchestrator and wrap its (non-streaming)
+   * result in a single text + done event so the WebSocket UI keeps working.
+   * Token-level streaming through the conv path is a Phase 6 follow-up.
    */
   streamMessage(text: string, channel: string = 'websocket', siteContext?: string): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
+    if (this.convOrchestrator) {
+      return this.streamMessageConv(text, channel);
+    }
+
     let systemPrompt = this.buildFullSystemPrompt(channel, text);
     if (siteContext) {
       systemPrompt += '\n\n' + siteContext;
@@ -283,6 +292,53 @@ export class AgentService implements Service, IAgentService {
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
       // Run extraction and learning in parallel, wait for both to settle
+      await Promise.allSettled([
+        this.extractKnowledge(text, fullText).catch((err) =>
+          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+        ),
+        this.learnFromInteraction(text, fullText, channel).catch((err) =>
+          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+        ),
+      ]);
+    };
+
+    return { stream, onComplete };
+  }
+
+  /**
+   * Stream path for router-first conv mode. Runs the conv orchestrator
+   * (non-streaming internally) and emits its final text as a single stream
+   * event followed by `done`. The UI keeps its existing stream contract.
+   */
+  private streamMessageConv(text: string, channel: string): {
+    stream: AsyncIterable<LLMStreamEvent>;
+    onComplete: (fullText: string) => Promise<void>;
+  } {
+    const self = this;
+    const stream = (async function* (): AsyncGenerator<LLMStreamEvent> {
+      try {
+        const reply = await self.handleMessageConv(text, channel);
+        if (reply) {
+          yield { type: 'text', text: reply };
+        }
+        yield {
+          type: 'done',
+          response: {
+            content: reply ?? '',
+            tool_calls: [],
+            usage: { input_tokens: 0, output_tokens: 0 },
+            model: 'conv',
+            finish_reason: 'stop',
+          },
+        };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('[AgentService] Conv stream error:', errorMsg);
+        yield { type: 'error', error: errorMsg };
+      }
+    })();
+
+    const onComplete = async (fullText: string): Promise<void> => {
       await Promise.allSettled([
         this.extractKnowledge(text, fullText).catch((err) =>
           console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
