@@ -2687,11 +2687,43 @@ function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: numbe
     return result;
   };
 
+  // Horizontal extent (in columns) of a subtree. Used to place a ROUTER's
+  // after-step (router.nextAction) clear of its branch chains: branches and
+  // the after-router chain sit in SERIES for a router (branches first, then
+  // the merge step to their right), so their spans add; for other nodes the
+  // lateral output (loop body) and the nextAction chain run in parallel rows,
+  // so we take the max.
+  const spanCache = new Map<string, number>();
+  const span = (node: FlowStepNode | undefined | null): number => {
+    if (!node) return 0;
+    const cached = spanCache.get(node.name);
+    if (cached !== undefined) return cached;
+    let result: number;
+    if (node.type === "ROUTER" && Array.isArray(node.children)) {
+      let maxBranch = 0;
+      for (const c of node.children) if (c) maxBranch = Math.max(maxBranch, span(c));
+      const after = node.nextAction ? span(node.nextAction) : 0;
+      result = 1 + maxBranch + after;
+    } else {
+      const lateral =
+        node.type === "LOOP_ON_ITEMS" && node.firstLoopAction ? span(node.firstLoopAction) : 0;
+      const next = node.nextAction ? span(node.nextAction) : 0;
+      result = 1 + Math.max(lateral, next);
+    }
+    spanCache.set(node.name, result);
+    return result;
+  };
+
   const gridPositions: Record<string, { col: number; row: number }> = {};
   const layout = (node: FlowStepNode | undefined | null, col: number, row: number): void => {
     if (!node || gridPositions[node.name]) return;
     gridPositions[node.name] = { col, row };
 
+    // Column the chain continuation (nextAction) lands in. Normally the next
+    // column; for a router it must clear the branch chains (which occupy
+    // col+1 onward) so the merge step doesn't overlap a branch on the
+    // router's own row.
+    let nextActionCol = col + 1;
     if (node.type === "ROUTER" && Array.isArray(node.children)) {
       const branches = node.children.filter((c): c is FlowStepNode => !!c);
       if (branches.length > 0) {
@@ -2702,12 +2734,15 @@ function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: numbe
         // CENTRE row = cursor + (h - 1) / 2; advance cursor by `h` for
         // the next branch.
         let cursor = row - (totalH - 1) / 2;
+        let maxBranchSpan = 0;
         for (let i = 0; i < branches.length; i++) {
           const h = branchHeights[i] || 1;
           const centre = cursor + (h - 1) / 2;
           layout(branches[i], col + 1, centre);
+          maxBranchSpan = Math.max(maxBranchSpan, span(branches[i]));
           cursor += h;
         }
+        nextActionCol = col + 1 + maxBranchSpan;
       }
     }
     if (node.type === "LOOP_ON_ITEMS" && node.firstLoopAction) {
@@ -2716,7 +2751,7 @@ function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: numbe
       layout(node.firstLoopAction, col + 1, row + chainH);
     }
     if (node.nextAction) {
-      layout(node.nextAction, col + 1, row);
+      layout(node.nextAction, nextActionCol, row);
     }
   };
 
@@ -2865,17 +2900,12 @@ function buildGraph(
   const knownNames = new Set(allFlatEntries.map((s) => s.step.name));
   for (const entry of allFlatEntries) {
     const step = entry.step;
-    // ROUTER nodes don't render a separate "out" handle -- after-router
-    // composition lives inside each branch's chain. Emitting an edge to
-    // a non-existent source handle would leave xyflow routing from the
-    // node centre, which looks broken; skip the edge entirely. Any
-    // existing `router.nextAction` in the data model survives the
-    // round-trip (we don't mutate it), it's just not drawn.
-    if (
-      step.nextAction &&
-      knownNames.has(step.nextAction.name) &&
-      step.type !== "ROUTER"
-    ) {
+    // Every step's `nextAction` is the chain continuation -- including a
+    // ROUTER's (the engine runs router.nextAction after the matched branch,
+    // see flow-executor). Routers render a dedicated "out" handle (below the
+    // branch handles) so this edge attaches cleanly and "after the router"
+    // steps are visible + editable rather than silently undrawn.
+    if (step.nextAction && knownNames.has(step.nextAction.name)) {
       edges.push({
         id: `${step.name}->${step.nextAction.name}`,
         source: step.name,
@@ -2994,7 +3024,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
       ];
     }
     if (isRouter) {
-      return branches.map((b, i) => {
+      const branchHandles = branches.map((b, i) => {
         const name = b?.branchName ?? `branch_${i}`;
         // Tooltip: prefer the branch name; for an unnamed CONDITION
         // branch fall back to a short rendering of its first
@@ -3015,6 +3045,11 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           used: !!branchConnected[name],
         };
       });
+      // Plus an "out" handle for the step that runs AFTER the router (the
+      // merge/continuation). The engine executes router.nextAction once the
+      // matched branch finishes; without this handle that step couldn't be
+      // wired or seen on the canvas.
+      return [...branchHandles, { id: "out", title: "After router", used: outConnected }];
     }
     return [{ id: "out", title: "Next step", used: outConnected }];
   })();

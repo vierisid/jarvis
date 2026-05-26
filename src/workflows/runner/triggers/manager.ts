@@ -114,6 +114,12 @@ export class TriggerManager {
    * settlement so register/unregister/refresh are observed in order.
    */
   private readonly inFlight: Map<string, Promise<void>> = new Map();
+  /**
+   * Flows with an engine poll currently running. Guards against pile-ups when a
+   * poll outlives its cron interval (every-minute tick + a slow poll would
+   * otherwise stack overlapping engine spawns).
+   */
+  private readonly pollingInFlight: Set<string> = new Set();
 
   constructor(deps: TriggerManagerDeps) {
     this.bus = deps.eventBus;
@@ -503,23 +509,77 @@ export class TriggerManager {
   }
 
   /**
-   * Engine-managed trigger fire: cron callback enqueues RUN_FLOW with
-   * `executeTrigger=true`. The engine's executor invokes the trigger's
-   * `run()` to produce one or more real payloads, then walks the action
-   * chain per payload.
+   * Engine-managed trigger fire (polling sources, e.g. jarvis-trigger
+   * on_event). On each cron tick we run the trigger's RUN hook to POLL for new
+   * events, then enqueue exactly one flow run per returned event.
+   *
+   * Why not the old way: previously this blindly enqueued a run with
+   * `executeTrigger=true` every tick, so a poll that found NO new events still
+   * walked the entire action chain with an empty trigger payload. That misfired
+   * every event workflow on every idle minute -- emails classified with no
+   * body, clipboard flows routing to fallback, etc. Polling here and only
+   * enqueuing per real event means "no new events -> no run".
+   *
+   * Each returned item is the trigger's output shape (for on_event:
+   * `{ id, eventType, payload, timestamp, _dedupe_key }`) and is passed through
+   * as the run's trigger payload (executeTrigger=false) so `{{trigger.payload.*}}`
+   * resolves. The trigger's `run()` advances its own `context.store` cursor, so
+   * events aren't re-delivered on the next poll.
    */
-  private fireEngineTrigger(flowId: string, versionId: string, source: string): void {
+  private async fireEngineTrigger(flowId: string, versionId: string, source: string): Promise<void> {
+    const engine = this.engineRuntime;
+    if (!engine) return;
+    // Skip if a prior poll for this flow is still running (slow poll vs. fast
+    // cron); the next tick will pick up anything missed.
+    if (this.pollingInFlight.has(flowId)) return;
+    const version = getFlowVersion(versionId);
+    if (!version) {
+      this.log(`flow ${flowId} (engine-${source}): version ${versionId} not found; skipping poll`);
+      return;
+    }
+
+    this.pollingInFlight.add(flowId);
+    let items: unknown[];
     try {
+      const handle = await engine.acquire({
+        runId: `poll-${flowId}-${Date.now().toString(36)}`,
+        projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
+      });
+      try {
+        // RUN hook = "poll the trigger and return its items" without executing
+        // the flow. For a POLLING trigger this calls `run()` and hands back
+        // whatever it yielded.
+        const response = (await handle.executeTriggerHook("RUN", {
+          flowVersion: toUpstreamFlowVersion(version),
+        })) as { output?: unknown[] } | undefined;
+        items = Array.isArray(response?.output) ? response.output : [];
+      } finally {
+        await handle.release();
+      }
+    } catch (e) {
+      this.log(`flow ${flowId} (engine-${source}) poll failed: ${(e as Error).message}`);
+      return;
+    } finally {
+      this.pollingInFlight.delete(flowId);
+    }
+
+    if (items.length === 0) return; // no new events -> no run (the whole point)
+    for (const item of items) {
       this.enqueueFlowRun({
         flowId,
         versionId,
         kind: "engine",
-        payload: {},
-        executeTrigger: true,
+        // Pass the event through verbatim as the trigger payload. Objects are
+        // used as-is; a bare value (rare) is wrapped so the payload stays an
+        // object for the engine's variable resolver.
+        payload:
+          item && typeof item === "object" && !Array.isArray(item)
+            ? (item as Record<string, unknown>)
+            : { value: item },
+        executeTrigger: false,
       });
-    } catch (e) {
-      this.log(`flow ${flowId} (engine-${source}) fire failed: ${(e as Error).message}`);
     }
+    this.log(`flow ${flowId} (engine-${source}): polled ${items.length} event(s) -> ${items.length} run(s)`);
   }
 
   /**

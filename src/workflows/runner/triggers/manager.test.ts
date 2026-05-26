@@ -408,8 +408,15 @@ class FakeCronScheduler {
   }
 }
 
+/**
+ * Let a `void`-ed async cron callback settle. `fireEngineTrigger` is now async
+ * (it polls the engine's RUN hook before enqueuing), so the cron callback's
+ * promise resolves a few turns after `FakeCronScheduler.fire` returns.
+ */
+const settle = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 describe("TriggerManager: engine-managed triggers (Phase J)", () => {
-  test("ON_ENABLE: calls engine, persists schedule, registers cron, RUN_FLOW carries executeTrigger=true", async () => {
+  test("ON_ENABLE persists schedule + registers cron; a cron tick polls the RUN hook and enqueues one run per event", async () => {
     const { flowId, versionId } = publishFlowWithTrigger("engine-managed", {
       name: "trigger",
       type: "PIECE_TRIGGER",
@@ -426,6 +433,14 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
         calls.push({ hookType });
         if (hookType === "ON_ENABLE") {
           return { listeners: [], scheduleOptions: { cronExpression: "*/2 * * * *" } };
+        }
+        if (hookType === "RUN") {
+          // Poll yields one event -> the manager should enqueue one run.
+          return {
+            output: [
+              { id: "e1", eventType: "awareness.context_changed", payload: { app: "x" }, timestamp: 1, _dedupe_key: "e1" },
+            ],
+          };
         }
         return {};
       },
@@ -451,8 +466,11 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
 
     const queueBefore = queueStats();
     fakeCron.fire(`flow:${flowId}`);
+    await settle();
     const queueAfter = queueStats();
     expect(queueAfter.queued).toBe(queueBefore.queued + 1);
+    // The tick polled via the RUN hook (not a blind executeTrigger run).
+    expect(calls.some((c) => c.hookType === "RUN")).toBe(true);
 
     const persisted = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
     expect(persisted.engineSchedule?.cronExpression).toBe("*/2 * * * *");
@@ -638,55 +656,8 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
         if (hookType === "ON_ENABLE") {
           return { listeners: [], scheduleOptions: { cronExpression: "*/5 * * * *" } };
         }
-        return {};
-      },
-      async release() {},
-    };
-    const fakeEngine = {
-      acquire: async () => fakeHandle,
-    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
-    const fakeCron = new FakeCronScheduler();
-    const tm = new TriggerManager({
-      eventBus: new WorkflowEventBus(),
-      engineRuntime: fakeEngine,
-      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
-      log: silent,
-    });
-    await tm.start();
-    fakeCron.fire(`flow:${engineFlowId}`);
-
-    // Legacy schedule trigger -> `trigger:cron`.
-    const { flowId: cronFlowId } = publishFlowWithTrigger("triggeredby-cron", {
-      name: "trigger",
-      type: "PIECE_TRIGGER",
-      settings: { pieceName: "schedule", input: { cron_expression: "0 9 * * *" } },
-    });
-    await tm.refresh(cronFlowId);
-    fakeCron.fire(`flow:${cronFlowId}`);
-
-    const runs = (await import("../../db/repos/flow-run")).listRuns({ limit: 50 });
-    const engineRun = runs.find((r) => r.flowId === engineFlowId);
-    const cronRun = runs.find((r) => r.flowId === cronFlowId);
-    expect(engineRun?.triggeredBy).toBe("trigger:engine");
-    expect(cronRun?.triggeredBy).toBe("trigger:cron");
-    // Engine run carries executeTrigger=true on its job payload; legacy doesn't.
-    void engineVersionId;
-  });
-
-  test("RUN_FLOW payload's executeTrigger flag round-trips through the queue", async () => {
-    const { flowId } = publishFlowWithTrigger("executetrigger-roundtrip", {
-      name: "trigger",
-      type: "PIECE_TRIGGER",
-      settings: {
-        pieceName: "jarvis-trigger",
-        triggerName: "on_event",
-        input: { eventType: "x" },
-      },
-    });
-    const fakeHandle = {
-      async executeTriggerHook(hookType: string) {
-        if (hookType === "ON_ENABLE") {
-          return { listeners: [], scheduleOptions: { cronExpression: "*/7 * * * *" } };
+        if (hookType === "RUN") {
+          return { output: [{ id: "ev", eventType: "x", payload: {}, timestamp: 1, _dedupe_key: "ev" }] };
         }
         return {};
       },
@@ -703,17 +674,86 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
       log: silent,
     });
     await tm.start();
-    fakeCron.fire(`flow:${flowId}`);
+    fakeCron.fire(`flow:${engineFlowId}`);
+    await settle();
 
-    const { claimNextJob } = await import("../../db/repos/job-queue");
+    // Legacy schedule trigger -> `trigger:cron`.
+    const { flowId: cronFlowId } = publishFlowWithTrigger("triggeredby-cron", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", input: { cron_expression: "0 9 * * *" } },
+    });
+    await tm.refresh(cronFlowId);
+    fakeCron.fire(`flow:${cronFlowId}`);
+
+    const runs = (await import("../../db/repos/flow-run")).listRuns({ limit: 50 });
+    const engineRun = runs.find((r) => r.flowId === engineFlowId);
+    const cronRun = runs.find((r) => r.flowId === cronFlowId);
+    expect(engineRun?.triggeredBy).toBe("trigger:engine");
+    expect(cronRun?.triggeredBy).toBe("trigger:cron");
+    void engineVersionId;
+  });
+
+  test("engine poll enqueues one run per event (payload = event, no executeTrigger); empty poll enqueues nothing", async () => {
+    const { flowId } = publishFlowWithTrigger("executetrigger-roundtrip", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "x" },
+      },
+    });
+    // Drives what the RUN hook returns per tick.
+    let runOutput: unknown[] = [];
+    const fakeHandle = {
+      async executeTriggerHook(hookType: string) {
+        if (hookType === "ON_ENABLE") {
+          return { listeners: [], scheduleOptions: { cronExpression: "*/7 * * * *" } };
+        }
+        if (hookType === "RUN") {
+          return { output: runOutput };
+        }
+        return {};
+      },
+      async release() {},
+    };
+    const fakeEngine = {
+      acquire: async () => fakeHandle,
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+    const fakeCron = new FakeCronScheduler();
+    const tm = new TriggerManager({
+      eventBus: new WorkflowEventBus(),
+      engineRuntime: fakeEngine,
+      cronScheduler: fakeCron as unknown as import("./cron").CronScheduler,
+      log: silent,
+    });
+    await tm.start();
+
+    const { queueStats, claimNextJob } = await import("../../db/repos/job-queue");
+
+    // Empty poll -> no run enqueued (the whole point of the fix).
+    const before = queueStats().queued;
+    runOutput = [];
+    fakeCron.fire(`flow:${flowId}`);
+    await settle();
+    expect(queueStats().queued).toBe(before);
+
+    // Poll with one event -> exactly one run, with the event as the trigger
+    // payload and NO executeTrigger flag (the manager already polled).
+    runOutput = [{ id: "x1", eventType: "x", payload: { hello: "world" }, timestamp: 1, _dedupe_key: "x1" }];
+    fakeCron.fire(`flow:${flowId}`);
+    await settle();
     const job = claimNextJob<{
       runId: string;
       payload?: Record<string, unknown>;
       executeTrigger?: boolean;
     }>();
     expect(job).not.toBeNull();
-    expect(job!.payload.executeTrigger).toBe(true);
     expect(job!.flowId).toBe(flowId);
+    expect(job!.payload.executeTrigger).toBeUndefined();
+    // The event item is passed through verbatim as the run's trigger payload.
+    expect((job!.payload.payload as { payload?: { hello?: string } })?.payload?.hello).toBe("world");
   });
 
   test("engine ON_ENABLE failure is logged; flow stays manually runnable, no crash", async () => {

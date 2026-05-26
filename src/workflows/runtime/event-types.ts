@@ -38,8 +38,17 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   },
   {
     type: "observer.email_received",
-    description: "New Gmail message arrived (requires Google auth). Payload includes subject + sender.",
-    payloadExample: { subject: "Re: launch", from: "alice@example.com", id: "msg_abc" },
+    description:
+      "New Gmail message arrived (requires Google auth). The available content is `snippet` (a short preview) -- there is NO full email body, so feed `snippet` into any classification/summary prompt. Other fields: from, to, subject, date, labels, id, threadId.",
+    payloadExample: {
+      id: "msg_abc",
+      from: "alice@example.com",
+      to: "me@example.com",
+      subject: "Re: launch",
+      date: "2026-05-26T09:00:00Z",
+      snippet: "Hey, can you review the deck before our 2pm? It's blocking the release...",
+      labels: ["INBOX", "IMPORTANT"],
+    },
   },
   {
     type: "observer.calendar_event_starting",

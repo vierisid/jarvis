@@ -447,32 +447,28 @@ export function useWorkflowEditor(flowId: string | null) {
    * Returns the new step's name so the caller can select it.
    */
   const insertStepAfter = useCallback((predecessorName: string): string | null => {
-    let createdName: string | null = null;
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const result = treeInsertStepAfter(prev, predecessorName);
-      if (!result) return prev;
-      createdName = result.newName;
-      return result.tree;
-    });
-    if (createdName) setDirty(true);
-    return createdName;
-  }, []);
+    // Compute synchronously (see disconnectEdgeByHandle): reading `newName` out
+    // of the deferred setDraftTrigger updater is unreliable -- React may run
+    // the updater later, leaving the return null so the caller can't select
+    // the new step and `setDirty` is skipped. treeInsertStepAfter is pure.
+    if (!draftTrigger) return null;
+    const result = treeInsertStepAfter(draftTrigger, predecessorName);
+    if (!result) return null;
+    setDraftTrigger(result.tree);
+    setDirty(true);
+    return result.newName;
+  }, [draftTrigger]);
 
   /** Seed a new PIECE step at the head of a chain. Used when LOOP body or
    *  ROUTER branch is empty (no node to insert after). */
   const addStepToHead = useCallback((scope: ChainScope): string | null => {
-    let createdName: string | null = null;
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const result = treeAddStepToHead(prev, scope);
-      if (!result) return prev;
-      createdName = result.newName;
-      return result.tree;
-    });
-    if (createdName) setDirty(true);
-    return createdName;
-  }, []);
+    if (!draftTrigger) return null;
+    const result = treeAddStepToHead(draftTrigger, scope);
+    if (!result) return null;
+    setDraftTrigger(result.tree);
+    setDirty(true);
+    return result.newName;
+  }, [draftTrigger]);
 
   /**
    * Re-link a chain (top-level, LOOP body, or ROUTER branch) so its action
@@ -621,21 +617,19 @@ export function useWorkflowEditor(flowId: string | null) {
       if (targetIdx < 0) return false;
       const targetOrphan = draftOrphans[targetIdx]!;
 
-      // Tree path: source lives in the connected trigger tree.
+      // Tree path: source lives in the connected trigger tree. Compute
+      // synchronously (see disconnectEdgeByHandle): capturing `connected` from
+      // the deferred setDraftTrigger updater was unreliable -- if it stayed
+      // false the orphan was never removed even though the tree absorbed a
+      // clone of it, leaving the node duplicated (tree + orphan). treeConnectSteps
+      // is pure and refuses an occupied handle by returning null.
       if (draftTrigger && findStep(draftTrigger, sourceName)) {
-        let connected = false;
-        setDraftTrigger((prev) => {
-          if (!prev) return prev;
-          const next = treeConnectSteps(prev, sourceName, handle, targetOrphan.node);
-          if (!next) return prev;
-          connected = true;
-          return next;
-        });
-        if (connected) {
-          setDraftOrphans((prev) => prev.filter((_, i) => i !== targetIdx));
-          setDirty(true);
-        }
-        return connected;
+        const next = treeConnectSteps(draftTrigger, sourceName, handle, targetOrphan.node);
+        if (!next) return false;
+        setDraftTrigger(next);
+        setDraftOrphans((prev) => prev.filter((_, i) => i !== targetIdx));
+        setDirty(true);
+        return true;
       }
 
       // Orphan path: source lives inside one of the OTHER orphan
@@ -691,22 +685,21 @@ export function useWorkflowEditor(flowId: string | null) {
       // with a malformed handle id doesn't pollute the undo stack.
       snapshotForUndo(`disconnect ${sourceName}`);
 
-      // Tree path: source is reachable from the trigger.
+      // Tree path: source is reachable from the trigger. Compute the split
+      // SYNCHRONOUSLY (not inside the setState updater) so the detached head is
+      // available to push into orphans in the same tick. Previously `detached`
+      // was assigned inside the `setDraftTrigger` updater and read right after
+      // the call -- but React defers the updater, so `detached` stayed null,
+      // the orphan was never added, and the whole downstream subtree silently
+      // vanished when you removed an edge. `treeDisconnectEdge` is pure (it
+      // clones), so calling it on the closure's `draftTrigger` is safe.
       if (draftTrigger && findStep(draftTrigger, sourceName)) {
-        let detached: FlowStepNode | null = null;
-        setDraftTrigger((prev) => {
-          if (!prev) return prev;
-          const result = treeDisconnectEdge(prev, sourceName, handle);
-          if (!result) return prev;
-          detached = result.detached;
-          return result.tree;
-        });
-        if (detached) {
-          setDraftOrphans((prev) => [...prev, { node: detached!, x: dropAt.x, y: dropAt.y }]);
-          setDirty(true);
-          return true;
-        }
-        return false;
+        const result = treeDisconnectEdge(draftTrigger, sourceName, handle);
+        if (!result) return false;
+        setDraftTrigger(result.tree);
+        setDraftOrphans((prev) => [...prev, { node: result.detached, x: dropAt.x, y: dropAt.y }]);
+        setDirty(true);
+        return true;
       }
 
       // Orphan path: source is inside an orphan subtree. Disconnect there
