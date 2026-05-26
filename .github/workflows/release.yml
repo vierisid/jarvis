@@ -146,12 +146,23 @@ jobs:
   publish-sidecar:
     needs: [build-sidecar, build-docker, build-ocr-helper]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports Trusted Publishing
+        run: npm install -g npm@latest
 
       - name: Download all sidecar binaries
         uses: actions/download-artifact@v5
@@ -204,9 +215,6 @@ jobs:
             sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
           done
 
-      - name: Setup npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-
       - name: Publish platform packages
         run: |
           FLAGS=""
@@ -233,12 +241,23 @@ jobs:
   publish-brain:
     needs: [test, build-docker]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports Trusted Publishing
+        run: npm install -g npm@latest
 
       - run: bun install
 
@@ -252,9 +271,6 @@ jobs:
       - name: Build UI
         run: bun run prepublishOnly
 
-      - name: Setup npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-
       - name: Publish to npm
         run: |
           FLAGS=""
@@ -263,8 +279,11 @@ jobs:
           npm publish --access public $FLAGS
 
   # ─── Create GitHub Release with binaries ───────────────────────
+  # Gated by publish-docker, which is itself gated by publish-sidecar and
+  # publish-brain. So if any npm publish or the docker push fails, no GH
+  # release is created and no Discord ping fires.
   github-release:
-    needs: [build-sidecar, build-docker, build-ocr-helper]
+    needs: [publish-docker, build-sidecar, build-ocr-helper]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -341,8 +360,11 @@ jobs:
           ls -lh release/
 
   # ─── Build and push Docker images ──────────────────────────────
+  # Gated by the npm publishes — if any npm publish fails, docker never
+  # pushes. Keeps the release atomic from the user-visible side: a Docker
+  # image tagged vX.Y.Z always has matching @usejarvis/* npm versions.
   publish-docker:
-    needs: build-docker
+    needs: [publish-sidecar, publish-brain]
     runs-on: ubuntu-latest
     permissions:
       contents: read
