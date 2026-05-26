@@ -125,7 +125,11 @@ export class LLMManager {
   }
 
   private formatFailure(providerName: string, errors: string[]): string {
-    return `Provider '${providerName}' failed after ${LLMManager.MAX_RETRIES_PER_PROVIDER} attempts:\n${errors.map((error) => `  ${error}`).join('\n')}`;
+    // Report actual attempt count (non-retriable errors break the retry loop
+    // early; we shouldn't claim "after 3 attempts" if we only tried once).
+    const n = errors.length;
+    const word = n === 1 ? 'attempt' : 'attempts';
+    return `Provider '${providerName}' failed after ${n} ${word}:\n${errors.map((error) => `  ${error}`).join('\n')}`;
   }
 
   /**
