@@ -14,6 +14,7 @@ import { getDueCommitments, getUpcoming, updateCommitmentStatus } from '../vault
 import type { Commitment } from '../vault/commitments.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
+import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
 
 export type Aggressiveness = 'passive' | 'moderate' | 'aggressive';
 
@@ -37,10 +38,19 @@ const CANCEL_WINDOW: Record<Aggressiveness, number> = {
 export class CommitmentExecutor {
   private agentService: IAgentService | null = null;
   private broadcast: BroadcastFn | null = null;
+  private eventBus: WorkflowEventBus | null = null;
+  /** Commitments for which we've already emitted commitment.overdue / due_soon. */
+  private notifiedIds: Set<string> = new Set();
   private pending: Map<string, ExecutionState> = new Map();
   private executedIds: Set<string> = new Set();
   private checkTimer: Timer | null = null;
-  private tickTimer: Timer | null = null;
+  /**
+   * Per-pending execution-fire timers. Replaces the global 5s polling tick:
+   * each announcement schedules its own setTimeout at the exact cancel deadline,
+   * so we fire precisely instead of within a 5s window and burn no CPU while
+   * waiting.
+   */
+  private executeTimers: Map<string, Timer> = new Map();
   private aggressiveness: Aggressiveness;
   private running = false;
 
@@ -56,26 +66,31 @@ export class CommitmentExecutor {
     this.broadcast = fn;
   }
 
+  /**
+   * Wire the workflow event bus so the executor can publish
+   * `commitment.due_soon` / `commitment.overdue` events for `on_event`
+   * workflow triggers. Previously the 15-min heartbeat did this; pushing it
+   * here lets us delete the heartbeat entirely.
+   */
+  setEventBus(bus: WorkflowEventBus): void {
+    this.eventBus = bus;
+  }
+
   start(): void {
     if (this.running) return;
     this.running = true;
 
-    // Check for due commitments every 60 seconds
+    // Discovery sweep: catches commitments created by code paths that don't
+    // explicitly call into the executor. Every 60s is cheap (one SQL query,
+    // no LLM). Per-pending execution timing uses setTimeout, not polling.
     this.checkTimer = setInterval(() => {
       this.checkAndAnnounce();
     }, 60_000);
 
-    // Tick pending executions every 5 seconds
-    this.tickTimer = setInterval(() => {
-      this.tickExecutions().catch((err) =>
-        console.error('[Executor] Tick error:', err)
-      );
-    }, 5_000);
-
     // Run an immediate check
     this.checkAndAnnounce();
 
-    console.log(`[Executor] Started (mode: ${this.aggressiveness})`);
+    console.log(`[Executor] Started (mode: ${this.aggressiveness}, discovery=60s, fire=per-pending setTimeout)`);
   }
 
   stop(): void {
@@ -84,16 +99,16 @@ export class CommitmentExecutor {
       clearInterval(this.checkTimer);
       this.checkTimer = null;
     }
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    for (const t of this.executeTimers.values()) clearTimeout(t);
+    this.executeTimers.clear();
     console.log('[Executor] Stopped');
   }
 
   /**
-   * Check for commitments that are due or due within 2 minutes.
-   * Announce each one as a pending execution.
+   * Check for commitments that are due or due within 2 minutes. Announces
+   * each new candidate for execution and publishes one-shot
+   * `commitment.overdue` / `commitment.due_soon` workflow events so `on_event`
+   * triggers fire on transitions (not every poll).
    */
   checkAndAnnounce(): void {
     try {
@@ -101,14 +116,43 @@ export class CommitmentExecutor {
       const dueNow = getDueCommitments(); // when_due <= now
       const upcoming = getUpcoming(20); // all upcoming with when_due
 
-      // Filter upcoming to those due within 2 minutes
+      // Filter upcoming to those due within 15 minutes (matches the workflow
+      // event semantics that the deleted heartbeat used).
       const dueSoon = upcoming.filter(
-        (c) => c.when_due && c.when_due > now && c.when_due <= now + 2 * 60_000
+        (c) => c.when_due && c.when_due > now && c.when_due <= now + 15 * 60_000,
       );
 
-      const candidates = [...dueNow, ...dueSoon];
+      // Emit bus events first so workflows fire as soon as state transitions.
+      for (const c of dueNow) {
+        if (c.status === 'completed' || c.status === 'failed') continue;
+        if (this.notifiedIds.has(`overdue:${c.id}`)) continue;
+        this.notifiedIds.add(`overdue:${c.id}`);
+        this.eventBus?.publish('commitment.overdue', {
+          id: c.id, what: c.what, when_due: c.when_due, priority: c.priority,
+        });
+      }
+      for (const c of dueSoon) {
+        if (c.status === 'completed' || c.status === 'failed') continue;
+        if (this.notifiedIds.has(`due_soon:${c.id}`)) continue;
+        this.notifiedIds.add(`due_soon:${c.id}`);
+        this.eventBus?.publish('commitment.due_soon', {
+          id: c.id, what: c.what, when_due: c.when_due, priority: c.priority,
+        });
+      }
 
-      for (const commitment of candidates) {
+      // Cap notifiedIds memory the same way executedIds is capped.
+      if (this.notifiedIds.size > 1000) {
+        const arr = Array.from(this.notifiedIds);
+        this.notifiedIds = new Set(arr.slice(arr.length - 500));
+      }
+
+      // Filter to within 2 minutes for actual announcement (existing behavior).
+      const announceCandidates = [
+        ...dueNow,
+        ...upcoming.filter(c => c.when_due && c.when_due > now && c.when_due <= now + 2 * 60_000),
+      ];
+
+      for (const commitment of announceCandidates) {
         // Skip if already announced, executed, or terminal status
         if (this.pending.has(commitment.id)) continue;
         if (this.executedIds.has(commitment.id)) continue;
@@ -145,6 +189,11 @@ export class CommitmentExecutor {
 
     // Clean up
     this.pending.delete(commitmentId);
+    const timer = this.executeTimers.get(commitmentId);
+    if (timer) {
+      clearTimeout(timer);
+      this.executeTimers.delete(commitmentId);
+    }
     return true;
   }
 
@@ -205,42 +254,52 @@ export class CommitmentExecutor {
       priority: 'urgent',
       timestamp: now,
     });
+
+    // Schedule the execution fire precisely at the cancel deadline. Passive
+    // mode never auto-fires (cancelDeadline is Infinity); we skip scheduling.
+    if (state.cancelDeadline !== Infinity) {
+      const delay = Math.max(0, state.cancelDeadline - now);
+      const timer = setTimeout(() => {
+        this.executeTimers.delete(commitment.id);
+        this.fireExecution(commitment.id).catch(err =>
+          console.error(`[Executor] Fire error for ${commitment.id}:`, err),
+        );
+      }, delay);
+      this.executeTimers.set(commitment.id, timer);
+    }
   }
 
-  private async tickExecutions(): Promise<void> {
+  /**
+   * Fire a single pending execution. Called by setTimeout at the cancel
+   * deadline. Replaces the global tickTimer that previously polled every 5s.
+   */
+  private async fireExecution(commitmentId: string): Promise<void> {
+    const state = this.pending.get(commitmentId);
+    if (!state) return;
+    if (state.cancelled || state.executed) {
+      this.pending.delete(commitmentId);
+      return;
+    }
     if (!this.agentService) return;
 
-    const now = Date.now();
+    state.executed = true;
+    this.pending.delete(commitmentId);
+    this.executedIds.add(commitmentId);
 
-    for (const [id, state] of this.pending) {
-      if (state.cancelled || state.executed) {
-        this.pending.delete(id);
-        continue;
-      }
+    // Cap executedIds memory
+    if (this.executedIds.size > 500) {
+      const arr = Array.from(this.executedIds);
+      this.executedIds = new Set(arr.slice(arr.length - 250));
+    }
 
-      // Check if cancel window has expired
-      if (now < state.cancelDeadline) continue;
-
-      // Execute!
-      state.executed = true;
-      this.pending.delete(id);
-      this.executedIds.add(id);
-
-      // Cap executedIds memory
-      if (this.executedIds.size > 500) {
-        const arr = Array.from(this.executedIds);
-        this.executedIds = new Set(arr.slice(arr.length - 250));
-      }
-
+    try {
+      await this.executeCommitment(state);
+    } catch (err) {
+      console.error(`[Executor] Failed to execute "${state.what}":`, err);
       try {
-        await this.executeCommitment(state);
-      } catch (err) {
-        console.error(`[Executor] Failed to execute "${state.what}":`, err);
-        try {
-          const reason = err instanceof Error ? err.message : 'Execution failed';
-          updateCommitmentStatus(state.commitmentId, 'failed', reason);
-        } catch { /* ignore */ }
-      }
+        const reason = err instanceof Error ? err.message : 'Execution failed';
+        updateCommitmentStatus(state.commitmentId, 'failed', reason);
+      } catch { /* ignore */ }
     }
   }
 

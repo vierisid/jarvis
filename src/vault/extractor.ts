@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../llm/provider.ts';
+import type { LLMManager } from '../llm/manager.ts';
 import { createEntity, findEntities } from './entities.ts';
 import { createFact } from './facts.ts';
 import { createRelationship } from './relationships.ts';
@@ -134,10 +134,10 @@ function isValidEntityType(type: string): type is 'person' | 'project' | 'tool' 
 export async function extractAndStore(
   userMessage: string,
   assistantResponse: string,
-  provider?: LLMProvider
+  llm?: LLMManager,
 ): Promise<ExtractionResult> {
-  // If no provider, return empty result
-  if (!provider) {
+  // If no manager, return empty result
+  if (!llm) {
     return {
       entities: [],
       facts: [],
@@ -150,8 +150,9 @@ export async function extractAndStore(
     // Build prompt
     const prompt = buildExtractionPrompt(userMessage, assistantResponse);
 
-    // Call LLM
-    const response = await provider.chat([
+    // Run on the `low` tier - structured extraction with a small, focused
+    // prompt is exactly what cheap/fast models are good at.
+    const response = await llm.chatTier('low', 'vault_extractor', [
       { role: 'user', content: prompt },
     ], {
       temperature: 0.1, // Low temperature for consistent extraction

@@ -240,7 +240,7 @@ export class AgentOrchestrator {
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      const llmResponse: LLMResponse = await this.llmManager.chat(messages, { tools });
+      const llmResponse: LLMResponse = await this.llmManager.chatTier('medium', 'chat_orchestrator', messages, { tools });
 
       if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
         // Add assistant message with tool calls to local messages
@@ -340,7 +340,7 @@ export class AgentOrchestrator {
       let doneResponse: LLMResponse | null = null;
 
       // Stream from LLM
-      for await (const event of this.llmManager.stream(messages, { tools })) {
+      for await (const event of this.llmManager.streamTier('medium', 'chat_orchestrator_stream', messages, { tools })) {
         if (event.type === 'text') {
           accumulatedText += event.text;
           yield event; // Forward text chunks to client
@@ -459,7 +459,7 @@ export class AgentOrchestrator {
       ...primary.getMessages(),
     ];
 
-    const llmResponse: LLMResponse = await this.llmManager.chat(messages);
+    const llmResponse: LLMResponse = await this.llmManager.chatTier('medium', 'chat_orchestrator_subagent', messages);
 
     if (llmResponse.content && llmResponse.content.trim().length > 0) {
       primary.addMessage('assistant', llmResponse.content);

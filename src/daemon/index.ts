@@ -20,7 +20,7 @@ import { WebSocketService } from "./ws-service.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
-import { checkCommitments, classifyEvent } from "./event-classifier.ts";
+import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -70,7 +70,7 @@ export interface DaemonConfig {
 let shutdownInProgress = false;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
-let heartbeatTimer: Timer | null = null;
+let heartbeatTimer: Timer | null = null;  // legacy slot, kept for shutdown handler compat; no longer assigned
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
@@ -998,6 +998,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // 10d. Wire executor broadcast (needs wsServer running) and start
       executor.setBroadcast((msg) => wsService.getServer().broadcast(msg));
+      executor.setEventBus(sharedEventBus);
       wsService.setCommitmentExecutor(executor);
       executor.start();
       commitmentExecutor = executor;
@@ -1351,7 +1352,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           escalation_weeks: { pressure: 1, root_cause: 3, suggest_kill: 4 },
           auto_decompose: true,
           calendar_ownership: false,
-        });
+        }, sharedEventBus);
         goalSvc.setEventCallback((event) => {
           wsService.broadcastGoalEvent(event);
         });
@@ -1446,83 +1447,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 11. Start health monitoring
     healthMonitor.start(config.healthCheckInterval);
 
-    // 12. Set up heartbeat timer with configurable interval and active hours
-    const heartbeatIntervalMs = (heartbeatConfig?.interval_minutes ?? 15) * 60 * 1000;
-    const activeHours = heartbeatConfig?.active_hours ?? { start: 8, end: 23 };
-
-    console.log(`[Daemon] Heartbeat interval: ${heartbeatConfig?.interval_minutes ?? 15} min, active hours: ${activeHours.start}:00-${activeHours.end}:00`);
-
-    const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minute timeout for heartbeat
-    let heartbeatBusy = false;
-    heartbeatTimer = setInterval(async () => {
-      if (heartbeatBusy) {
-        console.log('[Daemon] Skipping heartbeat — previous still running');
-        return;
-      }
-      // Check if within active hours
-      const currentHour = new Date().getHours();
-      if (currentHour < activeHours.start || currentHour >= activeHours.end) {
-        console.log(`[Daemon] Outside active hours (${activeHours.start}-${activeHours.end}), skipping heartbeat`);
-        return;
-      }
-
-      heartbeatBusy = true;
-      console.log('[Daemon] Heartbeat starting...');
-      try {
-        // Check commitments and route critical/high ones to reactor
-        const commitmentEvents = checkCommitments();
-        for (const evt of commitmentEvents) {
-          if (evt.priority === 'critical' || evt.priority === 'high') {
-            reactor.react(evt).catch(err =>
-              console.error('[Daemon] Commitment reaction error:', err)
-            );
-          } else {
-            coalescer.addEvent(evt);
-          }
-          // Republish to the workflow event bus so flows with `on_event`
-          // triggers can react. Map the legacy ObserverEvent.type to the
-          // canonical taxonomy.
-          if (evt.event.type === 'commitment_overdue') {
-            sharedEventBus.publish('commitment.overdue', evt.event.data);
-          } else if (evt.event.type === 'commitment_due_soon') {
-            sharedEventBus.publish('commitment.due_soon', evt.event.data);
-          }
-        }
-
-        // Flush coalesced events for heartbeat
-        const coalescedSummary = coalescer.flush();
-
-        // Setup mode = no bgAgent. Skip the heartbeat entirely.
-        if (!bgAgent) {
-          heartbeatBusy = false;
-          return;
-        }
-
-        // Run heartbeat on BACKGROUND agent with timeout to prevent stuck busy lock
-        const heartbeatPromise = bgAgent.handleHeartbeat(
-          coalescedSummary || undefined
-        );
-        const timeoutPromise = new Promise<null>((resolve) =>
-          setTimeout(() => {
-            console.error('[Daemon] Heartbeat timed out after 5 minutes');
-            resolve(null);
-          }, HEARTBEAT_TIMEOUT_MS)
-        );
-
-        const heartbeatResponse = await Promise.race([heartbeatPromise, timeoutPromise]);
-
-        if (heartbeatResponse) {
-          console.log('[Daemon] Heartbeat response:', heartbeatResponse.slice(0, 200));
-          wsService.broadcastHeartbeat(heartbeatResponse);
-        } else {
-          console.log('[Daemon] Heartbeat returned no response (busy or timed out)');
-        }
-      } catch (err) {
-        console.error('[Daemon] Heartbeat error:', err);
-      } finally {
-        heartbeatBusy = false;
-      }
-    }, heartbeatIntervalMs);
+    // 12. The 15-min heartbeat that called bgAgent.handleHeartbeat() has been
+    // deleted. It was the single largest idle LLM cost in the daemon. Its
+    // responsibilities have been redistributed:
+    //   - commitment.overdue / commitment.due_soon workflow events:
+    //       now emitted by CommitmentExecutor on state transitions (one-shot
+    //       per id rather than every 15 min).
+    //   - critical/high commitment routing to EventReactor:
+    //       still handled by the executor's discovery sweep + the existing
+    //       EventReactor paths for observer-emitted events.
+    //   - generic "review your responsibilities" LLM prompt:
+    //       removed. Phase 4 will reintroduce purposeful background work via
+    //       the conversation-tier orchestrator if it proves needed.
+    //
+    // `heartbeatConfig` (interval_minutes, active_hours, aggressiveness) is
+    // still read for the executor's aggressiveness field. The interval and
+    // active_hours fields are now ignored.
 
     logWithTimestamp(`JARVIS daemon running on port ${config.port}`);
     console.log('');

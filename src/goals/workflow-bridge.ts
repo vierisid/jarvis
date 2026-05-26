@@ -66,10 +66,10 @@ export function registerGoalWorkflows(
   goalWorkflows: GoalWorkflowDefinition[],
   triggerManager: { fireTrigger: (workflowId: string, triggerType: string, data?: Record<string, unknown>) => void },
 ): void {
-  // Note: The actual cron scheduling is handled by the GoalService's own timers
-  // (checkDailyRhythm runs every 60s and checks the time window).
-  // This function exists for future use when we want to create
-  // full workflow graph executions for morning/evening routines.
+  // Note: GoalService schedules its own cron jobs (goals:morning / goals:evening)
+  // derived from config.goals.morning_window / evening_window. This bridge
+  // function exists for future use when we want to create full workflow graph
+  // executions for morning/evening routines.
   //
   // For now, we just log the available workflows.
   for (const wf of goalWorkflows) {

@@ -5,8 +5,11 @@ import { AccountabilityEngine } from './accountability.ts';
 import * as vault from '../vault/goals.ts';
 import type { GoalEvent } from './events.ts';
 
-// Mock LLM manager
-const mockLLM = {
+// Mock LLM manager. chatTier delegates to chat so the tier-routing migration
+// is transparent to these tests.
+const mockLLM: any = {
+  chatTier: async (_tier: string, _sub: string, messages: any[], opts?: any) =>
+    mockLLM.chat(messages, opts),
   chat: async (messages: any[], _opts?: any) => {
     const lastMsg = messages[messages.length - 1];
     const content = typeof lastMsg.content === 'string' ? lastMsg.content : '';

@@ -88,9 +88,11 @@ Be brief and direct. No preamble.`,
     ];
 
     try {
-      const response = await this.llm.chat(
+      const response = await this.llm.chatTier(
+        'medium',
+        'awareness_general',
         [{ role: 'user', content }],
-        { max_tokens: 300 }
+        { max_tokens: 300 },
       );
       return response.content;
     } catch (err) {
@@ -139,9 +141,11 @@ Be concise. 2-3 sentences max.`,
     ];
 
     try {
-      const response = await this.llm.chat(
+      const response = await this.llm.chatTier(
+        'medium',
+        'awareness_delta',
         [{ role: 'user', content }],
-        { max_tokens: 200 }
+        { max_tokens: 200 },
       );
       return response.content;
     } catch (err) {
@@ -172,9 +176,11 @@ Be concise. 2-3 sentences max.`,
     const content: ContentBlock[] = [imageBlock, { type: 'text', text: prompt }];
 
     try {
-      const response = await this.llm.chat(
+      const response = await this.llm.chatTier(
+        'medium',
+        'awareness_struggle',
         [{ role: 'user', content }],
-        { max_tokens: 600 }
+        { max_tokens: 600 },
       );
       return response.content;
     } catch (err) {
@@ -281,7 +287,10 @@ Provide clear, actionable guidance.`,
     const ocrSample = sampleOcrTexts.slice(0, 5).map((t, i) => `[${i + 1}] ${t.slice(0, 200)}`).join('\n');
 
     try {
-      const response = await this.llm.chat(
+      // Session summary is a text-only structured extraction - use low tier.
+      const response = await this.llm.chatTier(
+        'low',
+        'awareness_session_summary',
         [{
           role: 'user',
           content: `Summarize this activity session:

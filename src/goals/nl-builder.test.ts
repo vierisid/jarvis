@@ -4,8 +4,11 @@ import { NLGoalBuilder, type GoalProposal } from './nl-builder.ts';
 import { GoalEstimator } from './estimator.ts';
 import * as vault from '../vault/goals.ts';
 
-// Mock LLM manager — returns canned responses
-const mockLLM = {
+// Mock LLM manager - returns canned responses. chatTier delegates to chat
+// so the tier-routing migration is transparent to these tests.
+const mockLLM: any = {
+  chatTier: async (_tier: string, _sub: string, messages: any[], opts?: any) =>
+    mockLLM.chat(messages, opts),
   chat: async (messages: any[], _opts?: any) => {
     const lastMsg = messages[messages.length - 1];
     const content = typeof lastMsg.content === 'string' ? lastMsg.content : '';

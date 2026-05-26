@@ -13,22 +13,27 @@ import type { LLMResponse, LLMToolCall } from '../llm/provider.ts';
 // `llm.chat`, so we can satisfy the type with a tiny shim.
 function fakeLLM(responses: LLMResponse[]): LLMManager {
   const queue = [...responses];
+  const chat = async (): Promise<LLMResponse> => {
+    const next = queue.shift();
+    if (!next) {
+      // Default tail response: text-only with no tool calls. Lets tests
+      // rely on responses[] without padding the array for inner-loop edge cases.
+      return {
+        content: '…',
+        tool_calls: [],
+        usage: { input_tokens: 0, output_tokens: 0 },
+        model: 'fake',
+        finish_reason: 'stop',
+      };
+    }
+    return next;
+  };
   return {
-    chat: async (): Promise<LLMResponse> => {
-      const next = queue.shift();
-      if (!next) {
-        // Default tail response: text-only with no tool calls. Lets tests
-        // rely on responses[] without padding the array for inner-loop edge cases.
-        return {
-          content: '…',
-          tool_calls: [],
-          usage: { input_tokens: 0, output_tokens: 0 },
-          model: 'fake',
-          finish_reason: 'stop',
-        };
-      }
-      return next;
-    },
+    chat,
+    // The interviewer routes through chatTier (conversation tier when
+    // configured, else medium). Both paths land here.
+    chatTier: async () => chat(),
+    hasConversationTier: () => false,
   } as unknown as LLMManager;
 }
 
@@ -158,6 +163,11 @@ describe('runInterviewTurn — happy path', () => {
         chatCalled = true;
         return textResponse('should not be called');
       },
+      chatTier: async () => {
+        chatCalled = true;
+        return textResponse('should not be called');
+      },
+      hasConversationTier: () => false,
     } as unknown as LLMManager;
 
     const result = await runInterviewTurn(session, llm, 'hello?');
@@ -193,6 +203,11 @@ describe('runInterviewTurn — MAX_INTERVIEW_TURNS safeguard', () => {
         chatCalled = true;
         return textResponse('this should not be reached');
       },
+      chatTier: async () => {
+        chatCalled = true;
+        return textResponse('this should not be reached');
+      },
+      hasConversationTier: () => false,
     } as unknown as LLMManager;
 
     const result = await runInterviewTurn(session, llm, "and another thing...");

@@ -843,7 +843,7 @@ export async function classifyVoiceIntent(
   ];
 
   try {
-    const response = await llm.chat(messages, { temperature: 0, max_tokens: 400 });
+    const response = await llm.chatTier('low', 'voice_intent', messages, { temperature: 0, max_tokens: 400 });
     return parseIntent(response.content ?? '', text);
   } catch (err) {
     console.warn('[VoiceIntent] Classifier failed, falling back to permissive:', err);

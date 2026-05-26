@@ -217,12 +217,20 @@ export async function runInterviewTurn(
   // optional silent tool calls). If the agent emits ONLY tool calls
   // with no prose, loop again so we always have something to speak.
   for (let inner = 0; inner < 4; inner++) {
-    const response = await llm.chat(session.messages, {
-      tools: INTERVIEWER_TOOLS,
-      tool_choice: 'auto',
-      temperature: 0.6,
-      max_tokens: 800,
-    });
+    // Onboarding is conversational - prefer the conversation tier when
+    // configured, falling back through the standard tier chain. Phase 4 will
+    // migrate this to the router-first conversation flow proper.
+    const response = await llm.chatTier(
+      llm.hasConversationTier() ? 'conversation' : 'medium',
+      'onboarding_interviewer',
+      session.messages,
+      {
+        tools: INTERVIEWER_TOOLS,
+        tool_choice: 'auto',
+        temperature: 0.6,
+        max_tokens: 800,
+      },
+    );
 
     // Persist the assistant turn (text + tool_use) so the LLM sees its
     // own previous tool calls on the next iteration.

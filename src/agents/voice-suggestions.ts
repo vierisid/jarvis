@@ -77,7 +77,7 @@ export async function generateVoiceSuggestions(
   ];
 
   try {
-    const response = await llm.chat(messages, { temperature: 0.4, max_tokens: 200 });
+    const response = await llm.chatTier('low', 'voice_suggestions', messages, { temperature: 0.4, max_tokens: 200 });
     const raw = (response.content ?? '').split('\n');
     const cleaned: string[] = [];
     for (const line of raw) {

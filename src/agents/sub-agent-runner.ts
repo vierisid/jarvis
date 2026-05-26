@@ -236,7 +236,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   try {
     // Tool execution loop
     for (let iteration = 0; iteration < maxIterations; iteration++) {
-      const llmResponse: LLMResponse = await llmManager.chat(messages, { tools });
+      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;

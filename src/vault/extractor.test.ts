@@ -11,6 +11,18 @@ import { findFacts } from './facts.ts';
 import { findRelationships } from './relationships.ts';
 import { findCommitments } from './commitments.ts';
 import type { LLMProvider, LLMMessage, LLMOptions, LLMResponse } from '../llm/provider.ts';
+import { LLMManager } from '../llm/manager.ts';
+
+/**
+ * Wrap a mock LLMProvider in a real LLMManager wired to the `medium` tier,
+ * matching how extractAndStore expects to be invoked.
+ */
+function makeManager(provider: LLMProvider): LLMManager {
+  const m = new LLMManager();
+  m.registerProvider(provider);
+  m.setTierMap({ medium: { provider: provider.name } });
+  return m;
+}
 
 describe('Vault Extractor', () => {
   beforeEach(() => {
@@ -138,7 +150,7 @@ describe('Vault Extractor', () => {
       const result = await extractAndStore(
         'Alice is working on Project Phoenix',
         'Got it!',
-        mockProvider
+        makeManager(mockProvider),
       );
 
       expect(result.entities).toHaveLength(2);
@@ -182,7 +194,7 @@ describe('Vault Extractor', () => {
       await extractAndStore(
         "Bob's email is bob@example.com",
         'Noted!',
-        mockProvider
+        makeManager(mockProvider),
       );
 
       // Verify fact was stored
@@ -225,7 +237,7 @@ describe('Vault Extractor', () => {
       await extractAndStore(
         'Alice manages Bob',
         'Understood!',
-        mockProvider
+        makeManager(mockProvider),
       );
 
       // Verify relationship was stored
@@ -268,7 +280,7 @@ describe('Vault Extractor', () => {
       await extractAndStore(
         'Remind me about the meeting on March 15',
         'Will do!',
-        mockProvider
+        makeManager(mockProvider),
       );
 
       // Verify commitment was stored
@@ -309,10 +321,10 @@ describe('Vault Extractor', () => {
       };
 
       // First extraction
-      await extractAndStore('Charlie lives in NYC', 'Got it!', mockProvider);
+      await extractAndStore('Charlie lives in NYC', 'Got it!', makeManager(mockProvider));
 
       // Second extraction with same entity
-      await extractAndStore('Charlie works remotely', 'Noted!', mockProvider);
+      await extractAndStore('Charlie works remotely', 'Noted!', makeManager(mockProvider));
 
       // Should only have one Charlie entity
       const entities = findEntities({ name: 'Charlie' });
@@ -346,7 +358,7 @@ describe('Vault Extractor', () => {
         },
       };
 
-      await extractAndStore('Test', 'Test', mockProvider);
+      await extractAndStore('Test', 'Test', makeManager(mockProvider));
 
       // Entity should not be created
       const entities = findEntities({});

@@ -11,6 +11,8 @@ import type { GoalEvent } from './events.ts';
 import type { GoalConfig } from '../config/types.ts';
 import type { Goal, GoalLevel, GoalStatus, GoalHealth } from './types.ts';
 import type { DailyRhythm } from './rhythm.ts';
+import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
+import { CronScheduler } from '../lib/cron-scheduler.ts';
 import * as vault from '../vault/goals.ts';
 
 export class GoalService implements Service {
@@ -20,14 +22,28 @@ export class GoalService implements Service {
   private eventCallback: ((event: GoalEvent) => void) | null = null;
   private chatCallback: ((text: string) => void) | null = null;
   private rhythm: DailyRhythm | null = null;
+  private eventBus: WorkflowEventBus | null = null;
 
-  // Timers
-  private rhythmTimer: Timer | null = null;        // daily rhythm check (60s)
-  private accountabilityTimer: Timer | null = null; // accountability check (5min)
-  private healthTimer: Timer | null = null;         // health recalc (15min)
+  // Cron scheduler for morning/evening rhythm fire times derived from the
+  // goal's own morning_window/evening_window config (which may differ from
+  // the system-wide cron.morning/cron.evening defaults).
+  private readonly cron = new CronScheduler();
 
-  constructor(config: GoalConfig) {
+  // Subscriptions to the shared event bus (cron.hourly handles accountability
+  // + health refresh that depend on elapsed time). Stored so stop() can unsub.
+  private unsubscribers: Array<() => void> = [];
+
+  constructor(config: GoalConfig, eventBus?: WorkflowEventBus) {
     this.config = config;
+    this.eventBus = eventBus ?? null;
+  }
+
+  /**
+   * Inject the shared event bus after construction. Used by the daemon when
+   * the bus is built after GoalService but before start().
+   */
+  setEventBus(bus: WorkflowEventBus): void {
+    this.eventBus = bus;
   }
 
   /**
@@ -66,37 +82,65 @@ export class GoalService implements Service {
 
     this._status = 'starting';
 
-    // Daily rhythm check — runs every 60s to detect morning/evening windows
-    this.rhythmTimer = setInterval(() => {
-      this.checkDailyRhythm().catch(err =>
-        console.error('[GoalService] Rhythm check error:', err)
-      );
-    }, 60_000);
+    // Morning/evening rhythm: fire once at the start hour of each window using
+    // a dedicated cron job. The previous 60s timer was a polling approximation
+    // of "trigger sometime within the window"; once-at-start is more precise.
+    const morningHour = (this.config.morning_window?.start ?? 7) | 0;
+    const eveningHour = (this.config.evening_window?.start ?? 20) | 0;
 
-    // Accountability check — runs every 5min for escalation monitoring
-    this.accountabilityTimer = setInterval(() => {
-      this.checkAccountability().catch(err =>
-        console.error('[GoalService] Accountability check error:', err)
-      );
-    }, 5 * 60_000);
+    try {
+      this.cron.schedule('goals:morning', `0 ${morningHour} * * *`, () => {
+        this.runMorningPlan().catch(err =>
+          console.error('[GoalService] Morning plan error:', err),
+        );
+      });
+    } catch (err) {
+      console.error('[GoalService] Failed to schedule morning cron:', err);
+    }
 
-    // Health recalculation — runs every 15min
-    this.healthTimer = setInterval(() => {
-      this.recalculateAllHealth().catch(err =>
-        console.error('[GoalService] Health recalc error:', err)
+    try {
+      this.cron.schedule('goals:evening', `0 ${eveningHour} * * *`, () => {
+        this.runEveningReview().catch(err =>
+          console.error('[GoalService] Evening review error:', err),
+        );
+      });
+    } catch (err) {
+      console.error('[GoalService] Failed to schedule evening cron:', err);
+    }
+
+    // Accountability + health refresh: piggyback on cron.hourly so escalation
+    // weeks and deadline-relative health transitions update on a steady
+    // cadence. Per-goal accountability also fires on score changes (see
+    // scoreGoal()).
+    if (this.eventBus) {
+      this.unsubscribers.push(
+        this.eventBus.subscribe('cron.hourly', () => {
+          this.checkAccountability().catch(err =>
+            console.error('[GoalService] Accountability check error:', err),
+          );
+          this.recalculateAllHealth().catch(err =>
+            console.error('[GoalService] Health recalc error:', err),
+          );
+        }),
       );
-    }, 15 * 60_000);
+    } else {
+      console.warn(
+        '[GoalService] No event bus wired - accountability/health will only update on score changes',
+      );
+    }
 
     this._status = 'running';
-    console.log('[GoalService] Started (rhythm=60s, accountability=5min, health=15min)');
+    console.log(
+      `[GoalService] Started (morning=0 ${morningHour} * * *, evening=0 ${eveningHour} * * *, accountability+health=cron.hourly)`,
+    );
   }
 
   async stop(): Promise<void> {
     this._status = 'stopping';
 
-    if (this.rhythmTimer) { clearInterval(this.rhythmTimer); this.rhythmTimer = null; }
-    if (this.accountabilityTimer) { clearInterval(this.accountabilityTimer); this.accountabilityTimer = null; }
-    if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null; }
+    this.cron.cancelAll();
+    for (const unsub of this.unsubscribers) unsub();
+    this.unsubscribers = [];
 
     this._status = 'stopped';
     console.log('[GoalService] Stopped');
@@ -145,6 +189,13 @@ export class GoalService implements Service {
         data: { score: goal.score, reason, source },
         timestamp: Date.now(),
       });
+      // Health depends on score+deadline, so a score change can change health
+      // immediately. Previously this was caught by the 15-min healthTimer; now
+      // we recalc just this goal on the score-change event.
+      const newHealth = this.calculateHealth(goal);
+      if (newHealth !== goal.health) {
+        this.updateHealth(goal.id, newHealth);
+      }
     }
     return goal;
   }
@@ -210,72 +261,66 @@ export class GoalService implements Service {
    * Check if we're in a morning or evening window and trigger check-ins.
    * Calls DailyRhythm to generate the plan/review and sends the message to chat.
    */
-  private async checkDailyRhythm(): Promise<void> {
-    const now = new Date();
-    const hour = now.getHours();
+  /**
+   * Run the morning plan via DailyRhythm. Skipped if already run today.
+   * Triggered by the goals:morning cron job.
+   */
+  private async runMorningPlan(): Promise<void> {
+    if (vault.getTodayCheckIn('morning_plan')) return;
+    if (!this.rhythm) return;
 
-    const morningWindow = this.config.morning_window ?? { start: 7, end: 9 };
-    const eveningWindow = this.config.evening_window ?? { start: 20, end: 22 };
-
-    // Check morning window
-    if (hour >= morningWindow.start && hour < morningWindow.end) {
-      const existing = vault.getTodayCheckIn('morning_plan');
-      if (!existing) {
-        console.log('[GoalService] Morning plan window — running morning plan');
-        if (this.rhythm) {
-          try {
-            const result = await this.rhythm.runMorningPlan();
-            if (this.chatCallback) {
-              const parts: string[] = [];
-              parts.push(`**Morning Plan**\n`);
-              parts.push(result.message);
-              if (result.warnings.length > 0) {
-                parts.push(`\n\n**Warnings:**`);
-                for (const w of result.warnings) parts.push(`- ${w}`);
-              }
-              if (result.focusAreas.length > 0) {
-                parts.push(`\n\n**Focus Areas:**`);
-                for (const f of result.focusAreas) parts.push(`- ${f}`);
-              }
-              if (result.dailyActions.length > 0) {
-                parts.push(`\n\n**Today's Actions:**`);
-                for (const a of result.dailyActions) parts.push(`- ${a}`);
-              }
-              this.chatCallback(parts.join('\n'));
-            }
-          } catch (err) {
-            console.error('[GoalService] Morning plan failed:', err);
-          }
+    console.log('[GoalService] Morning cron fired - running morning plan');
+    try {
+      const result = await this.rhythm.runMorningPlan();
+      if (this.chatCallback) {
+        const parts: string[] = [];
+        parts.push(`**Morning Plan**\n`);
+        parts.push(result.message);
+        if (result.warnings.length > 0) {
+          parts.push(`\n\n**Warnings:**`);
+          for (const w of result.warnings) parts.push(`- ${w}`);
         }
+        if (result.focusAreas.length > 0) {
+          parts.push(`\n\n**Focus Areas:**`);
+          for (const f of result.focusAreas) parts.push(`- ${f}`);
+        }
+        if (result.dailyActions.length > 0) {
+          parts.push(`\n\n**Today's Actions:**`);
+          for (const a of result.dailyActions) parts.push(`- ${a}`);
+        }
+        this.chatCallback(parts.join('\n'));
       }
+    } catch (err) {
+      console.error('[GoalService] Morning plan failed:', err);
     }
+  }
 
-    // Check evening window
-    if (hour >= eveningWindow.start && hour < eveningWindow.end) {
-      const existing = vault.getTodayCheckIn('evening_review');
-      if (!existing) {
-        console.log('[GoalService] Evening review window — running evening review');
-        if (this.rhythm) {
-          try {
-            const result = await this.rhythm.runEveningReview();
-            if (this.chatCallback) {
-              const parts: string[] = [];
-              parts.push(`**Evening Review**\n`);
-              parts.push(result.message);
-              parts.push(`\n\n${result.assessment}`);
-              if (result.scoreUpdates.length > 0) {
-                parts.push(`\n\n**Score Updates:**`);
-                for (const u of result.scoreUpdates) {
-                  parts.push(`- ${u.reason} (${u.newScore.toFixed(1)})`);
-                }
-              }
-              this.chatCallback(parts.join('\n'));
-            }
-          } catch (err) {
-            console.error('[GoalService] Evening review failed:', err);
+  /**
+   * Run the evening review via DailyRhythm. Skipped if already run today.
+   * Triggered by the goals:evening cron job.
+   */
+  private async runEveningReview(): Promise<void> {
+    if (vault.getTodayCheckIn('evening_review')) return;
+    if (!this.rhythm) return;
+
+    console.log('[GoalService] Evening cron fired - running evening review');
+    try {
+      const result = await this.rhythm.runEveningReview();
+      if (this.chatCallback) {
+        const parts: string[] = [];
+        parts.push(`**Evening Review**\n`);
+        parts.push(result.message);
+        parts.push(`\n\n${result.assessment}`);
+        if (result.scoreUpdates.length > 0) {
+          parts.push(`\n\n**Score Updates:**`);
+          for (const u of result.scoreUpdates) {
+            parts.push(`- ${u.reason} (${u.newScore.toFixed(1)})`);
           }
         }
+        this.chatCallback(parts.join('\n'));
       }
+    } catch (err) {
+      console.error('[GoalService] Evening review failed:', err);
     }
   }
 

@@ -747,12 +747,9 @@ export class AgentService implements Service, IAgentService {
   }
 
   private async extractKnowledge(userMessage: string, assistantResponse: string): Promise<void> {
-    // Get the primary provider for extraction
-    const provider = this.llmManager.getProvider(this.config.llm.primary)
-      ?? this.llmManager.getProvider('anthropic')
-      ?? this.llmManager.getProvider('openai');
-
-    await extractAndStore(userMessage, assistantResponse, provider);
+    // The extractor uses the `low` tier internally - it's structured
+    // extraction work that doesn't need the conversation model's smarts.
+    await extractAndStore(userMessage, assistantResponse, this.llmManager);
   }
 
   private async learnFromInteraction(

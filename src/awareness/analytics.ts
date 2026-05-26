@@ -388,7 +388,9 @@ export class BehaviorAnalytics {
     const bestDay = [...dailyBreakdown].sort((a, b) => b.focusScore - a.focusScore)[0];
 
     try {
-      const response = await this.llm.chat(
+      const response = await this.llm.chatTier(
+        'low',
+        'awareness_weekly_insights',
         [{
           role: 'user',
           content: `Analyze this weekly productivity data and give 3-4 brief insights:
@@ -434,7 +436,9 @@ Give actionable insights as a JSON array of strings.`,
     ).join('; ');
 
     try {
-      const response = await this.llm.chat(
+      const response = await this.llm.chatTier(
+        'low',
+        'awareness_daily_takeaways',
         [{
           role: 'user',
           content: `Analyze this daily productivity data and give 3-5 brief takeaways:

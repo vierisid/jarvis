@@ -87,7 +87,7 @@ export class AccountabilityEngine {
     ];
 
     try {
-      const response = await this.llmManager.chat(prompt, {
+      const response = await this.llmManager.chatTier('medium', 'goal_escalation_message', prompt, {
         temperature: 0.5,
         max_tokens: 500,
       });
@@ -140,7 +140,7 @@ Plus 1-2 context-specific options.`,
     ];
 
     try {
-      const response = await this.llmManager.chat(prompt, {
+      const response = await this.llmManager.chatTier('medium', 'goal_replan_options', prompt, {
         temperature: 0.3,
         max_tokens: 1500,
       });

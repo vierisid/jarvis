@@ -154,7 +154,7 @@ Respond with ONLY valid JSON: { "hours": number, "confidence": number (0-1), "re
     ];
 
     try {
-      const response = await this.llmManager.chat(prompt, {
+      const response = await this.llmManager.chatTier('low', 'goal_estimator', prompt, {
         temperature: 0.2,
         max_tokens: 500,
       });

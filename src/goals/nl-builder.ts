@@ -58,7 +58,7 @@ export class NLGoalBuilder {
       },
     ];
 
-    const response = await this.llmManager.chat(prompt, {
+    const response = await this.llmManager.chatTier('medium', 'nl_goal_builder', prompt, {
       temperature: 0.3,
       max_tokens: 4000,
     });
@@ -89,7 +89,7 @@ export class NLGoalBuilder {
       },
     ];
 
-    const response = await this.llmManager.chat(prompt, {
+    const response = await this.llmManager.chatTier('medium', 'nl_goal_builder', prompt, {
       temperature: 0.3,
       max_tokens: 4000,
     });
@@ -118,7 +118,7 @@ export class NLGoalBuilder {
       { role: 'user' as const, content: message },
     ];
 
-    const response = await this.llmManager.chat(messages, {
+    const response = await this.llmManager.chatTier('medium', 'nl_goal_chat', messages, {
       temperature: 0.4,
       max_tokens: 3000,
     });

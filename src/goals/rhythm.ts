@@ -73,7 +73,7 @@ export class DailyRhythm {
     ];
 
     try {
-      const response = await this.llmManager.chat(prompt, {
+      const response = await this.llmManager.chatTier('medium', 'goal_morning_plan', prompt, {
         temperature: 0.4,
         max_tokens: 2000,
       });
@@ -147,7 +147,7 @@ export class DailyRhythm {
     ];
 
     try {
-      const response = await this.llmManager.chat(prompt, {
+      const response = await this.llmManager.chatTier('medium', 'goal_evening_review', prompt, {
         temperature: 0.4,
         max_tokens: 2000,
       });

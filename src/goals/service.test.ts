@@ -57,14 +57,17 @@ describe('GoalService', () => {
     expect(events[0]!.type).toBe('goal_updated');
   });
 
-  test('scoreGoal emits goal_scored event', () => {
+  test('scoreGoal emits goal_scored event (and goal_health_changed when health shifts)', () => {
     const goal = service.createGoal('Scored', 'key_result');
     events = [];
 
     service.scoreGoal(goal.id, 0.5, 'halfway');
-    expect(events.length).toBe(1);
-    expect(events[0]!.type).toBe('goal_scored');
-    expect(events[0]!.data.score).toBe(0.5);
+    // goal_scored always fires; goal_health_changed may also fire if the
+    // score change shifts the computed health bucket (it does for a fresh
+    // 'on_track' goal scored to 0.5 with no deadline -> 'at_risk').
+    const scored = events.find(e => e.type === 'goal_scored');
+    expect(scored).toBeDefined();
+    expect(scored!.data.score).toBe(0.5);
   });
 
   test('updateStatus emits correct event type', () => {
