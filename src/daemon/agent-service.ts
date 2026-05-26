@@ -304,38 +304,6 @@ export class AgentService implements Service, IAgentService {
     return response;
   }
 
-  /**
-   * Handle periodic heartbeat with full tool access.
-   * Accepts optional coalesced event summary to include in the prompt.
-   * Uses processMessage() so the agent can take action (browse, run commands, etc.).
-   */
-  async handleHeartbeat(coalescedEvents?: string): Promise<string | null> {
-    if (!this.role) return null;
-
-    const systemPrompt = this.buildHeartbeatPrompt(coalescedEvents);
-
-    // Build the heartbeat "user message" that triggers the agent
-    const parts: string[] = ['[HEARTBEAT] Periodic check-in. Review your responsibilities and take action.'];
-
-    if (coalescedEvents) {
-      parts.push('');
-      parts.push(coalescedEvents);
-    }
-
-    const heartbeatMessage = parts.join('\n');
-
-    try {
-      const response = await this.orchestrator.processMessage(systemPrompt, heartbeatMessage);
-      if (response && response.trim().length > 0) {
-        return response;
-      }
-      return null;
-    } catch (err) {
-      console.error('[AgentService] Heartbeat processing error:', err);
-      return null;
-    }
-  }
-
   // --- Private methods ---
 
   private registerProviders(): void {
@@ -577,47 +545,6 @@ export class AgentService implements Service, IAgentService {
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
     return `${rolePrompt}\n\n${personalityPrompt}`;
-  }
-
-  private buildHeartbeatPrompt(coalescedEvents?: string): string {
-    if (!this.role) return '';
-
-    const context = this.buildPromptContext();
-    const rolePrompt = buildSystemPrompt(this.role, context);
-
-    const parts = [rolePrompt, '', '# Heartbeat Check', this.role.heartbeat_instructions];
-
-    if (coalescedEvents) {
-      parts.push('', '# Recent System Events', coalescedEvents);
-    }
-
-    // Inject commitment execution instructions
-    parts.push('', '# COMMITMENT EXECUTION');
-    parts.push('If any commitments are overdue or due soon, EXECUTE them now using your tools.');
-    parts.push('Do not just mention them — actually perform the work. Use browse, terminal, file operations as needed.');
-
-    // Inject background research instructions when idle
-    if (this.researchQueue && this.researchQueue.queuedCount() > 0) {
-      const next = this.researchQueue.getNext();
-      if (next) {
-        parts.push('', '# BACKGROUND RESEARCH');
-        parts.push(`You have a research topic queued: "${next.topic}"`);
-        parts.push(`Reason: ${next.reason}`);
-        parts.push(`Research ID: ${next.id}`);
-        parts.push('If nothing urgent needs your attention, research this topic now.');
-        parts.push('Use your browser and tools to gather information, then use the research_queue tool with action "complete" to save your findings.');
-      }
-    } else {
-      parts.push('', '# IDLE MODE');
-      parts.push('No research topics queued. If nothing urgent, you may:');
-      parts.push('- Check news or trends relevant to the user');
-      parts.push('- Review and organize pending tasks');
-      parts.push('- Or simply report "All clear" if nothing needs attention');
-    }
-
-    parts.push('', '# Important', 'You have full tool access during this heartbeat. If you need to take action (browse the web, run commands, check files), DO IT. Be proactive and aggressive about helping.');
-
-    return parts.join('\n');
   }
 
   private buildPromptContext(userMessage?: string): PromptContext {

@@ -31,20 +31,22 @@ for (const [id, role] of roles) {
 
   console.log(`\nStats:`);
   console.log(`  - Responsibilities: ${role.responsibilities.length}`);
-  console.log(`  - Autonomous Actions: ${role.autonomous_actions.length}`);
-  console.log(`  - Approval Required: ${role.approval_required.length}`);
+  console.log(`  - Autonomous Actions: ${role.autonomous_actions?.length ?? 0}`);
+  console.log(`  - Approval Required: ${role.approval_required?.length ?? 0}`);
   console.log(`  - Tools: ${role.tools.length}`);
-  console.log(`  - KPIs: ${role.kpis.length}`);
-  console.log(`  - Sub-roles: ${role.sub_roles.length}`);
+  console.log(`  - KPIs: ${role.kpis?.length ?? 0}`);
+  console.log(`  - Sub-roles: ${role.sub_roles?.length ?? 0}`);
   console.log(`  - Allowed Actions: ${permissions.allowed.length}`);
   console.log(`  - Denied Actions: ${permissions.denied.length}`);
 
-  console.log(`\nCommunication Style:`);
-  console.log(`  - Tone: ${role.communication_style.tone}`);
-  console.log(`  - Verbosity: ${role.communication_style.verbosity}`);
-  console.log(`  - Formality: ${role.communication_style.formality}`);
+  if (role.communication_style) {
+    console.log(`\nCommunication Style:`);
+    console.log(`  - Tone: ${role.communication_style.tone}`);
+    console.log(`  - Verbosity: ${role.communication_style.verbosity}`);
+    console.log(`  - Formality: ${role.communication_style.formality}`);
+  }
 
-  if (role.sub_roles.length > 0) {
+  if (role.sub_roles && role.sub_roles.length > 0) {
     console.log(`\nCan spawn:`);
     role.sub_roles.forEach(sub => {
       console.log(`  - ${sub.name} (budget: ${sub.max_budget_per_task})`);

@@ -30,8 +30,6 @@ import { buildSystemPrompt, type PromptContext } from '../roles/prompt-builder.t
 import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { getRecentObservations } from '../vault/observations.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { getRecentConversation, getMessages } from '../vault/conversations.ts';
-import { getActiveGoalsSummary } from '../vault/retrieval.ts';
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -125,37 +123,6 @@ export class BackgroundAgentService implements Service, IAgentService {
   }
 
   /**
-   * Handle periodic heartbeat with full tool access.
-   * Returns null if busy (non-blocking for the caller).
-   */
-  async handleHeartbeat(coalescedEvents?: string): Promise<string | null> {
-    if (this.busy) {
-      console.log('[BackgroundAgent] Skipping heartbeat — already busy');
-      return null;
-    }
-
-    this.busy = true;
-    try {
-      const systemPrompt = this.buildHeartbeatPrompt(coalescedEvents);
-      const parts: string[] = ['[HEARTBEAT] Periodic check-in. Review your responsibilities and take action.'];
-      if (coalescedEvents) {
-        parts.push('', coalescedEvents);
-      }
-
-      const response = await this.orchestrator.processMessage(systemPrompt, parts.join('\n'));
-      if (response && response.trim().length > 0) {
-        return response;
-      }
-      return null;
-    } catch (err) {
-      console.error('[BackgroundAgent] Heartbeat error:', err);
-      return null;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  /**
    * Handle a reactive event message (from EventReactor / CommitmentExecutor).
    */
   async handleMessage(text: string, channel: string = 'system'): Promise<string> {
@@ -183,131 +150,6 @@ export class BackgroundAgentService implements Service, IAgentService {
     if (!this.role) return '';
     const context = this.buildPromptContext();
     return buildSystemPrompt(this.role, context);
-  }
-
-  /**
-   * Get the last N messages from the most recent chat conversation.
-   * Returns formatted chat transcript and staleness info.
-   */
-  private getRecentChatContext(messageCount: number = 20): {
-    transcript: string | null;
-    lastUserMessageAt: number | null;
-    lastAssistantMessageAt: number | null;
-    minutesSinceLastUserMessage: number | null;
-  } {
-    try {
-      const recent = getRecentConversation('websocket');
-      if (!recent) return { transcript: null, lastUserMessageAt: null, lastAssistantMessageAt: null, minutesSinceLastUserMessage: null };
-
-      const messages = getMessages(recent.conversation.id, { limit: messageCount });
-      if (messages.length === 0) return { transcript: null, lastUserMessageAt: null, lastAssistantMessageAt: null, minutesSinceLastUserMessage: null };
-
-      // Find timestamps for staleness detection
-      const now = Date.now();
-      let lastUserAt: number | null = null;
-      let lastAssistantAt: number | null = null;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]!;
-        if (!lastUserAt && msg.role === 'user') lastUserAt = msg.created_at;
-        if (!lastAssistantAt && msg.role === 'assistant') lastAssistantAt = msg.created_at;
-        if (lastUserAt && lastAssistantAt) break;
-      }
-
-      // Format transcript
-      const lines = messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => {
-          const time = new Date(m.created_at).toLocaleTimeString();
-          const role = m.role === 'user' ? 'USER' : 'JARVIS';
-          // Truncate long messages to keep context manageable
-          const content = m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content;
-          return `[${time}] ${role}: ${content}`;
-        });
-
-      return {
-        transcript: lines.join('\n'),
-        lastUserMessageAt: lastUserAt,
-        lastAssistantMessageAt: lastAssistantAt,
-        minutesSinceLastUserMessage: lastUserAt ? Math.round((now - lastUserAt) / 60_000) : null,
-      };
-    } catch (err) {
-      console.error('[BackgroundAgent] Error loading chat context:', err);
-      return { transcript: null, lastUserMessageAt: null, lastAssistantMessageAt: null, minutesSinceLastUserMessage: null };
-    }
-  }
-
-  private buildHeartbeatPrompt(coalescedEvents?: string): string {
-    if (!this.role) return '';
-
-    const context = this.buildPromptContext();
-    const rolePrompt = buildSystemPrompt(this.role, context);
-
-    const parts = [rolePrompt, '', '# Heartbeat Check', this.role.heartbeat_instructions];
-
-    // --- RECENT CHAT CONTEXT ---
-    const chat = this.getRecentChatContext(20);
-    if (chat.transcript) {
-      parts.push('', '# RECENT CHAT (last 20 messages)');
-      parts.push('Review this conversation for unfulfilled promises, unanswered questions, or implicit commitments.');
-      parts.push('');
-      parts.push(chat.transcript);
-
-      // Staleness warning
-      if (chat.minutesSinceLastUserMessage !== null && chat.minutesSinceLastUserMessage >= 120) {
-        parts.push('');
-        parts.push(`⚠ CONVERSATION STALE: Last user message was ${chat.minutesSinceLastUserMessage} minutes ago.`);
-        parts.push('Consider a gentle proactive check-in if appropriate during active hours.');
-      }
-
-      // Detect if JARVIS was last to speak (may have promised something)
-      if (chat.lastAssistantMessageAt && chat.lastUserMessageAt && chat.lastAssistantMessageAt > chat.lastUserMessageAt) {
-        parts.push('');
-        parts.push('NOTE: JARVIS was the last to speak. Check if that last message contained any promises, "I\'ll do X" statements, or tasks that may not have been completed.');
-      }
-    }
-
-    // --- ACTIVE GOALS ---
-    try {
-      const goalsSummary = getActiveGoalsSummary();
-      if (goalsSummary) {
-        parts.push('', '# ACTIVE GOALS');
-        parts.push('Cross-reference these with the recent chat. If goals were discussed but not updated, flag it.');
-        parts.push('');
-        parts.push(goalsSummary);
-      }
-    } catch (err) {
-      console.error('[BackgroundAgent] Error loading goals summary:', err);
-    }
-
-    if (coalescedEvents) {
-      parts.push('', '# Recent System Events', coalescedEvents);
-    }
-
-    parts.push('', '# COMMITMENT EXECUTION');
-    parts.push('If any commitments are overdue or due soon, EXECUTE them now using your tools.');
-    parts.push('Do not just mention them — actually perform the work. Use browse, terminal, file operations as needed.');
-
-    if (this.researchQueue && this.researchQueue.queuedCount() > 0) {
-      const next = this.researchQueue.getNext();
-      if (next) {
-        parts.push('', '# BACKGROUND RESEARCH');
-        parts.push(`You have a research topic queued: "${next.topic}"`);
-        parts.push(`Reason: ${next.reason}`);
-        parts.push(`Research ID: ${next.id}`);
-        parts.push('If nothing urgent needs your attention, research this topic now.');
-        parts.push('Use your browser and tools to gather information, then use the research_queue tool with action "complete" to save your findings.');
-      }
-    } else {
-      parts.push('', '# IDLE MODE');
-      parts.push('No research topics queued. If nothing urgent, you may:');
-      parts.push('- Check news or trends relevant to the user');
-      parts.push('- Review and organize pending tasks');
-      parts.push('- Or simply report "All clear" if nothing needs attention');
-    }
-
-    parts.push('', '# Important', 'You have full tool access during this heartbeat. If you need to take action (browse the web, run commands, check files), DO IT. Be proactive and aggressive about helping.');
-
-    return parts.join('\n');
   }
 
   private buildPromptContext(): PromptContext {

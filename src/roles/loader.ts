@@ -57,38 +57,40 @@ export function validateRole(role: unknown): role is RoleDefinition {
 
   const r = role as Record<string, unknown>;
 
-  // Check required string fields
+  // Required fields - load-bearing for prompt building and authority gating.
   if (typeof r.id !== 'string' || !r.id) return false;
   if (typeof r.name !== 'string' || !r.name) return false;
   if (typeof r.description !== 'string' || !r.description) return false;
-  if (typeof r.heartbeat_instructions !== 'string' || !r.heartbeat_instructions) return false;
-
-  // Check required arrays
   if (!Array.isArray(r.responsibilities)) return false;
-  if (!Array.isArray(r.autonomous_actions)) return false;
-  if (!Array.isArray(r.approval_required)) return false;
-  if (!Array.isArray(r.kpis)) return false;
-  if (!Array.isArray(r.sub_roles)) return false;
   if (!Array.isArray(r.tools)) return false;
-
-  // Validate authority_level
   if (typeof r.authority_level !== 'number') return false;
   if (r.authority_level < 1 || r.authority_level > 10) return false;
-
-  // Validate string arrays
   if (!r.responsibilities.every((item) => typeof item === 'string')) return false;
-  if (!r.autonomous_actions.every((item) => typeof item === 'string')) return false;
-  if (!r.approval_required.every((item) => typeof item === 'string')) return false;
   if (!r.tools.every((item) => typeof item === 'string')) return false;
 
-  // Validate KPIs
-  if (!r.kpis.every(validateKPI)) return false;
-
-  // Validate communication_style
-  if (!validateCommunicationStyle(r.communication_style)) return false;
-
-  // Validate sub_roles
-  if (!r.sub_roles.every(validateSubRoleTemplate)) return false;
+  // Optional fields - validate shape only if present.
+  if (r.autonomous_actions !== undefined) {
+    if (!Array.isArray(r.autonomous_actions)) return false;
+    if (!r.autonomous_actions.every((item) => typeof item === 'string')) return false;
+  }
+  if (r.approval_required !== undefined) {
+    if (!Array.isArray(r.approval_required)) return false;
+    if (!r.approval_required.every((item) => typeof item === 'string')) return false;
+  }
+  if (r.kpis !== undefined) {
+    if (!Array.isArray(r.kpis)) return false;
+    if (!r.kpis.every(validateKPI)) return false;
+  }
+  if (r.communication_style !== undefined && !validateCommunicationStyle(r.communication_style)) {
+    return false;
+  }
+  if (r.heartbeat_instructions !== undefined && typeof r.heartbeat_instructions !== 'string') {
+    return false;
+  }
+  if (r.sub_roles !== undefined) {
+    if (!Array.isArray(r.sub_roles)) return false;
+    if (!r.sub_roles.every(validateSubRoleTemplate)) return false;
+  }
 
   return true;
 }

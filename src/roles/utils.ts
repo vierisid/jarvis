@@ -99,7 +99,7 @@ export function canSpawnRole(
   role: RoleDefinition,
   subRoleId: string
 ): boolean {
-  return role.sub_roles.some(sr => sr.role_id === subRoleId);
+  return (role.sub_roles ?? []).some(sr => sr.role_id === subRoleId);
 }
 
 /**
@@ -130,7 +130,7 @@ export function validateRoleHierarchy(
 
   for (const [id, role] of roles) {
     // Check if sub-roles exist
-    for (const subRole of role.sub_roles) {
+    for (const subRole of role.sub_roles ?? []) {
       if (!roles.has(subRole.role_id)) {
         errors.push(
           `Role '${id}' references non-existent sub-role '${subRole.role_id}'`
@@ -179,9 +179,9 @@ export function getRoleStats(roles: Map<string, RoleDefinition>): {
   for (const role of roles.values()) {
     totalAuthority += role.authority_level;
     totalTools += role.tools.length;
-    totalKPIs += role.kpis.length;
+    totalKPIs += role.kpis?.length ?? 0;
 
-    if (role.sub_roles.length > 0) {
+    if ((role.sub_roles?.length ?? 0) > 0) {
       rolesWithSubRoles++;
     }
 

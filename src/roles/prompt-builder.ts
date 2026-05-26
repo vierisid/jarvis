@@ -36,54 +36,50 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   }
   sections.push('');
 
-  // Autonomous Actions
-  sections.push('# Autonomous Actions (do without asking)');
-  if (role.autonomous_actions.length > 0) {
+  // Autonomous Actions (only if present and non-empty)
+  if (role.autonomous_actions && role.autonomous_actions.length > 0) {
+    sections.push('# Autonomous Actions (do without asking)');
     for (const action of role.autonomous_actions) {
       sections.push(`- ${action}`);
     }
-  } else {
-    sections.push('- None. Always ask for permission before taking any action.');
+    sections.push('');
   }
-  sections.push('');
 
-  // Approval Required
-  sections.push('# Approval Required (always ask first)');
-  if (role.approval_required.length > 0) {
+  // Approval Required (only if present and non-empty)
+  if (role.approval_required && role.approval_required.length > 0) {
+    sections.push('# Approval Required (always ask first)');
     for (const action of role.approval_required) {
       sections.push(`- ${action}`);
     }
-  } else {
-    sections.push('- N/A');
+    sections.push('');
   }
-  sections.push('');
 
-  // Communication Style
-  sections.push('# Communication Style');
-  sections.push(`Tone: ${role.communication_style.tone}.`);
-  sections.push(`Verbosity: ${role.communication_style.verbosity}.`);
-  sections.push(`Formality: ${role.communication_style.formality}.`);
-  sections.push('');
+  // Communication Style (only if present)
+  if (role.communication_style) {
+    sections.push('# Communication Style');
+    sections.push(`Tone: ${role.communication_style.tone}. Verbosity: ${role.communication_style.verbosity}. Formality: ${role.communication_style.formality}.`);
+    sections.push('');
+  }
+  // Task-acknowledgment rule is universal (not role-specific) - keep it.
   sections.push('**Task Acknowledgment**: When asked to perform a task that requires tool use, ALWAYS give a brief acknowledgment first (e.g., "On it.", "Let me check.", "I\'ll look into that.") before using any tools. Never silently start executing tools — the user should know you understood their request.');
   sections.push('');
 
-  // KPIs
-  sections.push('# Key Performance Indicators (KPIs)');
-  if (role.kpis.length > 0) {
-    sections.push('| KPI | Metric | Target | Check Interval |');
-    sections.push('|-----|--------|--------|----------------|');
+  // KPIs (only if present and non-empty) - rarely load-bearing, slim form.
+  if (role.kpis && role.kpis.length > 0) {
+    sections.push('# Key Performance Indicators');
     for (const kpi of role.kpis) {
-      sections.push(`| ${kpi.name} | ${kpi.metric} | ${kpi.target} | ${kpi.check_interval} |`);
+      sections.push(`- ${kpi.name}: ${kpi.metric} (target: ${kpi.target})`);
     }
-  } else {
-    sections.push('- No specific KPIs defined.');
+    sections.push('');
   }
-  sections.push('');
 
-  // Heartbeat Instructions
-  sections.push('# Heartbeat Instructions');
-  sections.push(role.heartbeat_instructions);
-  sections.push('');
+  // Heartbeat Instructions (only if present) - dead with the heartbeat removal,
+  // but kept for roles that may still want to inject behavior text.
+  if (role.heartbeat_instructions) {
+    sections.push('# Heartbeat Instructions');
+    sections.push(role.heartbeat_instructions);
+    sections.push('');
+  }
 
   // Available Tools
   sections.push('# Available Tools');
@@ -101,13 +97,13 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   sections.push('- request_approval (authority) — always available; see Intent Gating below');
   sections.push('');
 
-  // Sub-roles (if any)
-  if (role.sub_roles.length > 0) {
+  // Sub-roles (only if present and non-empty). Static role-level sub_roles are
+  // largely advisory - the actual available specialist list comes from the
+  // dynamic context.availableSpecialists block below.
+  if (role.sub_roles && role.sub_roles.length > 0) {
     sections.push('# Sub-Roles You Can Spawn');
     for (const subRole of role.sub_roles) {
       sections.push(`- **${subRole.name}** (${subRole.role_id}): ${subRole.description}`);
-      sections.push(`  - Reports to: ${subRole.reports_to}`);
-      sections.push(`  - Max budget per task: ${subRole.max_budget_per_task}`);
     }
     sections.push('');
   }

@@ -153,7 +153,7 @@ export class AgentOrchestrator {
       ),
       denied_tools: parent.agent.authority.denied_tools,
       max_token_budget: Math.floor(parent.agent.authority.max_token_budget / 2),
-      can_spawn_children: role.sub_roles.length > 0,
+      can_spawn_children: (role.sub_roles?.length ?? 0) > 0,
     };
 
     const agent = new AgentInstance(role, {
@@ -164,10 +164,14 @@ export class AgentOrchestrator {
 
     this.hierarchy.addAgent(agent);
 
-    // Add system message with role context for sub-agents
+    // Add system message with role context for sub-agents. Communication
+    // style is optional - only inject the line when the role declares one.
+    const styleLine = role.communication_style
+      ? `\n\nCommunication style: ${role.communication_style.tone} tone, ${role.communication_style.verbosity} verbosity, ${role.communication_style.formality} formality.`
+      : '';
     agent.addMessage(
       'system',
-      `You are ${role.name}, spawned by ${parent.agent.role.name}. ${role.description}\n\nResponsibilities:\n${role.responsibilities.map((r) => `- ${r}`).join('\n')}\n\nYou report to: ${parent.agent.role.name}\n\nCommunication style: ${role.communication_style.tone} tone, ${role.communication_style.verbosity} verbosity, ${role.communication_style.formality} formality.`
+      `You are ${role.name}, spawned by ${parent.agent.role.name}. ${role.description}\n\nResponsibilities:\n${role.responsibilities.map((r) => `- ${r}`).join('\n')}\n\nYou report to: ${parent.agent.role.name}.${styleLine}`,
     );
 
     return agent;

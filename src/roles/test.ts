@@ -25,8 +25,8 @@ try {
   console.log(`   Authority Level: ${role.authority_level}`);
   console.log(`   Responsibilities: ${role.responsibilities.length}`);
   console.log(`   Tools: ${role.tools.length}`);
-  console.log(`   KPIs: ${role.kpis.length}`);
-  console.log(`   Sub-roles: ${role.sub_roles.length}`);
+  console.log(`   KPIs: ${role.kpis?.length ?? 0}`);
+  console.log(`   Sub-roles: ${role.sub_roles?.length ?? 0}`);
 } catch (error) {
   console.error('❌ Failed to load role:', error);
   process.exit(1);

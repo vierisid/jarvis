@@ -32,7 +32,7 @@ function getDefaultAuthority(role: RoleDefinition): AuthorityBounds {
     allowed_tools: role.tools,
     denied_tools: [],
     max_token_budget: 100000,
-    can_spawn_children: role.sub_roles.length > 0,
+    can_spawn_children: (role.sub_roles?.length ?? 0) > 0,
   };
 }
 
