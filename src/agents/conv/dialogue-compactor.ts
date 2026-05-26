@@ -35,8 +35,14 @@ export class DialogueCompactor {
 
   constructor(
     private readonly llm: LLMManager,
-    private readonly keepRecent: number = 8,
-    private readonly compactionThreshold: number = 14,
+    // Keep the last 20 turns (~10 user + 10 assistant pairs) verbatim. Modern
+    // conv-tier models (gpt-4o-mini, claude haiku, llama 3.x) have 128K+
+    // context, so this is cheap and lets the conv LLM follow multi-turn
+    // threads without leaning on the summarizer for everything.
+    private readonly keepRecent: number = 20,
+    // Only compact when the conversation is genuinely long. Below this we
+    // pass everything through verbatim - no summarizer call, no head bucket.
+    private readonly compactionThreshold: number = 40,
   ) {}
 
   /**

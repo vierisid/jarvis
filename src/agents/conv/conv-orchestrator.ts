@@ -335,7 +335,7 @@ export class ConvOrchestrator {
     // it needs to verbalize follow-ups. Even with the full summary, ANY
     // request for specifics not already in the summary MUST be delegated
     // (see "CRITICAL: You have NO direct knowledge" above).
-    const recent = this.registry.recentResults(3);
+    const recent = this.registry.recentResults(5);
     if (recent.length > 0) {
       parts.push('# Recent Task Results');
       for (const t of recent) {

@@ -448,8 +448,10 @@ export class AgentService implements Service, IAgentService {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
       // Pull a wider window than we'll inject so the compactor has material
-      // to summarize. The compactor caps the final list size.
-      const messages = getMessages(recent.conversation.id, { limit: 40 });
+      // to summarize when the conversation is long. The compactor caps the
+      // final list size (last 20 verbatim by default; older bucketed into a
+      // background-built summary when conversation exceeds 40 messages).
+      const messages = getMessages(recent.conversation.id, { limit: 80 });
       const dialogue: LLMMessage[] = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({
