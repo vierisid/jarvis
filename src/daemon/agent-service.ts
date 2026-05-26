@@ -328,23 +328,22 @@ export class AgentService implements Service, IAgentService {
         const recentDialogue = await self.loadRecentDialogue(channel);
         const ambient = self.buildAmbientFactsBlock(text);
 
+        // Task lifecycle events go through the listener IN REAL TIME (during
+        // the dispatcher's await), independent of the text stream. The
+        // generator below yields only text/done events.
+        const taskListener = self.convTaskEventListener ?? undefined;
+
         for await (const event of self.convOrchestrator.streamTurn(text, {
           userIdentity: identity,
           recentDialogue,
           ambientFacts: ambient,
-        })) {
+        }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
             // the later verbalization on the client side.
             const chunk = (fullText && !fullText.endsWith('\n') ? '\n\n' : '') + event.text;
             fullText += chunk;
             yield { type: 'text', text: chunk };
-          } else if (event.type === 'task') {
-            // Surface task lifecycle to the UI via the broadcast listener
-            // (configured externally by the daemon). This is independent
-            // of the text stream - text events update the chat, task
-            // events update status pills.
-            self.convTaskEventListener?.(event.event);
           }
           // 'done' is implicit - the generator ends.
         }

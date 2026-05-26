@@ -395,12 +395,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // render status pills while a delegated task is in flight. No-op when the
     // user has not configured llm.tiers.conversation (classic orchestrator mode).
     agentService.setConvTaskEventListener((event) => {
+      // Derive a stable `status` from the event TYPE so it matches what the
+      // event actually represents (the record's mutable `status` field may
+      // have advanced by the time this fires - e.g., a snapshotted
+      // task_started event shouldn't claim status='completed').
+      const statusForEvent =
+        event.type === 'task_started' ? 'running' :
+        event.type === 'task_completed' ? 'completed' :
+        event.type === 'task_failed' ? 'failed' :
+        'cancelled';
       wsService.broadcastTaskEvent({
         type: event.type,
         task_id: event.record.id,
         template: event.record.request.template,
         intent: event.record.request.intent,
-        status: event.record.status,
+        status: statusForEvent,
         elapsedMs: Date.now() - event.record.startedAt,
         summary: 'envelope' in event ? event.envelope.summary : undefined,
       });

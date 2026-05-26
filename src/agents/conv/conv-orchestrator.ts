@@ -96,13 +96,15 @@ export class ConvOrchestrator {
   /**
    * Streaming variant of processTurn. Yields each piece of assistant text
    * as it becomes available (acknowledgment alongside a delegate call,
-   * then later the verbalization of the result) plus task lifecycle events.
-   * The caller is expected to relay text events to the user immediately so
-   * the assistant feels responsive during slow delegations.
+   * then later the verbalization of the result). Task lifecycle events fire
+   * via the `onTaskEvent` callback in REAL TIME (not buffered), so the UI
+   * can update status pills as `task_started` -> running ms -> `task_completed`
+   * rather than getting both events together at task end.
    */
   async *streamTurn(
     userMessage: string,
     context: ConvSystemContext,
+    onTaskEvent?: (event: ConvTaskEvent) => void,
   ): AsyncGenerator<ConvStreamEvent> {
     const systemPrompt = this.buildSystemPrompt(context);
     const messages: LLMMessage[] = [
@@ -143,10 +145,18 @@ export class ConvOrchestrator {
         tool_calls: response.tool_calls,
       });
 
-      // Collect task events as the tool calls run, then yield them in stream
-      // order. Each delegate may emit multiple events (started, completed).
-      const eventBuffer: ConvTaskEvent[] = [];
-      const captureEvent = (event: ConvTaskEvent) => eventBuffer.push(event);
+      // Task events go DIRECTLY to the onTaskEvent callback in real time so
+      // the UI can update status pills incrementally (started -> elapsed ->
+      // completed). Each event is snapshotted at the moment it fires so
+      // later record mutations don't mutate historical event payloads.
+      const captureEvent = (event: ConvTaskEvent) => {
+        if (!onTaskEvent) return;
+        // Shallow snapshot of the record so status/updatedAt at this moment
+        // are preserved when the listener reads them later. The request
+        // object is immutable in practice; preserved by reference.
+        const snapshot = { ...event.record };
+        onTaskEvent({ ...event, record: snapshot } as ConvTaskEvent);
+      };
 
       for (const call of response.tool_calls) {
         const result = await this.handleToolCall(call, captureEvent);
@@ -156,9 +166,6 @@ export class ConvOrchestrator {
           tool_call_id: call.id,
           content: JSON.stringify(result.envelope),
         });
-        while (eventBuffer.length > 0) {
-          yield { type: 'task', event: eventBuffer.shift()! };
-        }
       }
     }
 
