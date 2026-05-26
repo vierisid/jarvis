@@ -41,6 +41,16 @@ function mkTurns(n: number): LLMMessage[] {
   return out;
 }
 
+/**
+ * Helper: wait for any in-flight background compactions to settle.
+ * The compactor schedules LLM calls via .then() so we need a microtask flush.
+ */
+async function settle(): Promise<void> {
+  // Two awaits cover the promise chain we use internally.
+  await new Promise(r => setTimeout(r, 0));
+  await new Promise(r => setTimeout(r, 0));
+}
+
 describe('DialogueCompactor', () => {
   it('returns input unchanged when under threshold', async () => {
     const provider = new StubProvider();
@@ -52,46 +62,54 @@ describe('DialogueCompactor', () => {
     expect(provider.callCount).toBe(0);
   });
 
-  it('compacts head and keeps last N verbatim when over threshold', async () => {
+  it('first long-convo turn returns just the tail (no blocking) and schedules background compaction', async () => {
     const provider = new StubProvider();
     const llm = makeManager(provider);
     const compactor = new DialogueCompactor(llm, 8, 14);
     const input = mkTurns(20);
     const out = await compactor.compact('conv1', input);
 
-    // First message is the summary
+    // No summary on first turn - tail only.
+    expect(out.length).toBe(8);
+    expect(out[0]!.content).toBe('turn 12');
+    expect(out[out.length - 1]!.content).toBe('turn 19');
+
+    // The LLM call happened in the background (not blocking the foreground).
+    await settle();
+    expect(provider.callCount).toBe(1);
+  });
+
+  it('subsequent turn uses cached summary + tail', async () => {
+    const provider = new StubProvider();
+    const llm = makeManager(provider);
+    const compactor = new DialogueCompactor(llm, 8, 14);
+
+    await compactor.compact('conv1', mkTurns(20));
+    await settle();
+    expect(provider.callCount).toBe(1);
+
+    // Second call same length - cache hit, no new compaction
+    const out = await compactor.compact('conv1', mkTurns(20));
+    await settle();
+    expect(provider.callCount).toBe(1);
+
     expect(out[0]!.role).toBe('system');
     expect(typeof out[0]!.content === 'string' && out[0]!.content.includes('BULLET SUMMARY')).toBe(true);
-
-    // Followed by the last 8 verbatim turns
-    expect(out.length).toBe(9);
-    expect(out[1]!.content).toBe('turn 12');  // 20 - 8 = head ends at 12
-    expect(out[out.length - 1]!.content).toBe('turn 19');
   });
 
-  it('reuses cached summary when head boundary unchanged', async () => {
-    const provider = new StubProvider();
-    const llm = makeManager(provider);
-    const compactor = new DialogueCompactor(llm, 8, 14);
-    const input = mkTurns(20);
-    await compactor.compact('conv1', input);
-    expect(provider.callCount).toBe(1);
-
-    // Second call with same input -> cache hit
-    await compactor.compact('conv1', input);
-    expect(provider.callCount).toBe(1);
-  });
-
-  it('recompacts when head boundary shifts (new turns push window)', async () => {
+  it('background recompacts when head boundary shifts but foreground stays fast', async () => {
     const provider = new StubProvider();
     const llm = makeManager(provider);
     const compactor = new DialogueCompactor(llm, 8, 14);
 
-    await compactor.compact('conv1', mkTurns(20));  // head=12
+    await compactor.compact('conv1', mkTurns(20));
+    await settle();
     expect(provider.callCount).toBe(1);
 
-    // Add 2 more turns - head boundary shifts from 12 to 14
+    // Add 2 more turns - head boundary shifts
     await compactor.compact('conv1', mkTurns(22));
+    // Foreground used cached summary; recompact runs in background.
+    await settle();
     expect(provider.callCount).toBe(2);
   });
 
@@ -102,20 +120,38 @@ describe('DialogueCompactor', () => {
 
     await compactor.compact('a', mkTurns(20));
     await compactor.compact('b', mkTurns(20));
+    await settle();
     expect(provider.callCount).toBe(2);
   });
 
-  it('invalidate() forces a recompaction', async () => {
+  it('invalidate() drops cache so next call schedules a fresh compaction', async () => {
     const provider = new StubProvider();
     const llm = makeManager(provider);
     const compactor = new DialogueCompactor(llm, 8, 14);
-    const input = mkTurns(20);
 
-    await compactor.compact('conv1', input);
+    await compactor.compact('conv1', mkTurns(20));
+    await settle();
     expect(provider.callCount).toBe(1);
 
     compactor.invalidate('conv1');
-    await compactor.compact('conv1', input);
+    await compactor.compact('conv1', mkTurns(20));
+    await settle();
     expect(provider.callCount).toBe(2);
+  });
+
+  it('does not stampede concurrent compactions for the same conversation', async () => {
+    const provider = new StubProvider();
+    const llm = makeManager(provider);
+    const compactor = new DialogueCompactor(llm, 8, 14);
+
+    // Fire 3 calls in parallel before any settle
+    await Promise.all([
+      compactor.compact('conv1', mkTurns(20)),
+      compactor.compact('conv1', mkTurns(20)),
+      compactor.compact('conv1', mkTurns(20)),
+    ]);
+    await settle();
+    // Only one background compaction should have fired.
+    expect(provider.callCount).toBe(1);
   });
 });
