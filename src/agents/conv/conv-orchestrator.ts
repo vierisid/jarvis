@@ -298,10 +298,9 @@ export class ConvOrchestrator {
     parts.push('- Anything asking for SPECIFICS about real state, even if the result envelope summary mentioned it briefly');
     parts.push('');
     parts.push(
-      'NEVER ask the user for a workflow/file/commitment ID or name as a way to ' +
-      'avoid delegating. If you need that info to act, delegate a lookup task and ' +
-      'have the task tier find it - "the workflow we just created" is enough context ' +
-      'for the task tier to identify it via its tools.',
+      'It IS fine to ask the user for clarifying info when something is genuinely ' +
+      'ambiguous (e.g., which person they mean by "Sarah"). Just don\'t use ' +
+      'clarification as a way to dodge delegating something the tools could answer.',
     );
     parts.push('');
 
