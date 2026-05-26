@@ -48,6 +48,17 @@ export type ConvProcessResult = {
   tasksRun: string[];   // task ids that fired during this turn
 };
 
+/**
+ * Events emitted by streamTurn() as the conversation progresses. Lets the
+ * caller (agent-service) surface intermediate text - in particular the
+ * acknowledgment the conv LLM emits alongside a delegate tool call - to the
+ * user immediately, instead of waiting for the slow task tier to finish.
+ */
+export type ConvStreamEvent =
+  | { type: 'text'; text: string }
+  | { type: 'task'; event: ConvTaskEvent }
+  | { type: 'done'; tasksRun: string[] };
+
 export class ConvOrchestrator {
   constructor(
     private readonly llm: LLMManager,
@@ -66,6 +77,31 @@ export class ConvOrchestrator {
     context: ConvSystemContext,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): Promise<ConvProcessResult> {
+    let fullText = '';
+    const tasksRun: string[] = [];
+    for await (const event of this.streamTurn(userMessage, context)) {
+      if (event.type === 'text') {
+        fullText += (fullText && !fullText.endsWith('\n') ? '\n' : '') + event.text;
+      } else if (event.type === 'task') {
+        onTaskEvent?.(event.event);
+      } else if (event.type === 'done') {
+        tasksRun.push(...event.tasksRun);
+      }
+    }
+    return { text: fullText, tasksRun };
+  }
+
+  /**
+   * Streaming variant of processTurn. Yields each piece of assistant text
+   * as it becomes available (acknowledgment alongside a delegate call,
+   * then later the verbalization of the result) plus task lifecycle events.
+   * The caller is expected to relay text events to the user immediately so
+   * the assistant feels responsive during slow delegations.
+   */
+  async *streamTurn(
+    userMessage: string,
+    context: ConvSystemContext,
+  ): AsyncGenerator<ConvStreamEvent> {
     const systemPrompt = this.buildSystemPrompt(context);
     const messages: LLMMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -83,35 +119,50 @@ export class ConvOrchestrator {
 
       // Conv LLM emitted text only (no tool calls) -> final user-facing reply.
       if (!response.tool_calls || response.tool_calls.length === 0) {
-        return { text: response.content ?? '', tasksRun };
+        if (response.content) yield { type: 'text', text: response.content };
+        yield { type: 'done', tasksRun };
+        return;
       }
 
-      // Conv LLM emitted tool calls. Record the assistant message (with tool
-      // calls) so the next iteration sees what was decided, then handle each
-      // call and append the tool results.
+      // Conv LLM emitted tool calls. If it also wrote any prose (the
+      // acknowledgment - "I'm looking into that"), surface it NOW so the
+      // user gets immediate feedback before the slow task tier starts.
+      if (response.content && response.content.trim().length > 0) {
+        yield { type: 'text', text: response.content };
+      }
+
       messages.push({
         role: 'assistant',
         content: response.content ?? '',
         tool_calls: response.tool_calls,
       });
 
+      // Collect task events as the tool calls run, then yield them in stream
+      // order. Each delegate may emit multiple events (started, completed).
+      const eventBuffer: ConvTaskEvent[] = [];
+      const captureEvent = (event: ConvTaskEvent) => eventBuffer.push(event);
+
       for (const call of response.tool_calls) {
-        const result = await this.handleToolCall(call, onTaskEvent);
+        const result = await this.handleToolCall(call, captureEvent);
         if (result.taskId) tasksRun.push(result.taskId);
         messages.push({
           role: 'tool',
           tool_call_id: call.id,
           content: JSON.stringify(result.envelope),
         });
+        while (eventBuffer.length > 0) {
+          yield { type: 'task', event: eventBuffer.shift()! };
+        }
       }
     }
 
     // Hit the iteration cap - bail with whatever the last response said,
     // or a generic fallback.
-    return {
+    yield {
+      type: 'text',
       text: 'I got stuck routing your request. Could you rephrase or try again?',
-      tasksRun,
     };
+    yield { type: 'done', tasksRun };
   }
 
   private async handleToolCall(
@@ -267,9 +318,21 @@ export class ConvOrchestrator {
 
     parts.push('# Style');
     parts.push(
-      'Speak naturally and concisely. When you delegate, briefly acknowledge ' +
-      'what you\'re looking into before the tool call so the user knows you understood. ' +
-      'When a task completes, verbalize the summary in your own voice - don\'t paste raw output.',
+      'Speak naturally and concisely.',
+      '',
+      'IMPORTANT - acknowledgment while delegating:',
+      'When you call the `delegate` tool, you MUST also output a short, ' +
+      'context-aware acknowledgment sentence in the same response (alongside ' +
+      'the tool call). The user sees this immediately while the task runs ' +
+      'in the background, so it should be specific to what they asked - not ' +
+      'a generic "working on it". Examples:',
+      '- For research: "Pulling up the top CRMs for solo founders now - one moment."',
+      '- For code: "Let me read the file first and figure out where to make the change."',
+      '- For planning: "I\'ll sketch out the workflow steps - back shortly with a plan."',
+      '',
+      'When a task completes you receive a result envelope. Verbalize the summary ' +
+      'naturally in your own voice - don\'t paste raw output. If the task failed, ' +
+      'tell the user briefly and offer next steps.',
     );
 
     return parts.join('\n');

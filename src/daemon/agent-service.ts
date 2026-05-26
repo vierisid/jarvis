@@ -306,9 +306,11 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
-   * Stream path for router-first conv mode. Runs the conv orchestrator
-   * (non-streaming internally) and emits its final text as a single stream
-   * event followed by `done`. The UI keeps its existing stream contract.
+   * Stream path for router-first conv mode. Relays the ConvOrchestrator's
+   * streaming events to the UI: acknowledgment text appears immediately when
+   * the conv LLM emits it alongside a delegate tool call, then the task tier
+   * runs (during which we surface task lifecycle events via the listener),
+   * then the final verbalization text appears.
    */
   private streamMessageConv(text: string, channel: string): {
     stream: AsyncIterable<LLMStreamEvent>;
@@ -316,15 +318,41 @@ export class AgentService implements Service, IAgentService {
   } {
     const self = this;
     const stream = (async function* (): AsyncGenerator<LLMStreamEvent> {
+      if (!self.convOrchestrator) {
+        yield { type: 'error', error: 'Conv orchestrator not initialized' };
+        return;
+      }
+      let fullText = '';
       try {
-        const reply = await self.handleMessageConv(text, channel);
-        if (reply) {
-          yield { type: 'text', text: reply };
+        const identity = self.buildUserIdentityBlock();
+        const recentDialogue = await self.loadRecentDialogue(channel);
+        const ambient = self.buildAmbientFactsBlock(text);
+
+        for await (const event of self.convOrchestrator.streamTurn(text, {
+          userIdentity: identity,
+          recentDialogue,
+          ambientFacts: ambient,
+        })) {
+          if (event.type === 'text') {
+            // Insert a separator so the acknowledgment text doesn't blur into
+            // the later verbalization on the client side.
+            const chunk = (fullText && !fullText.endsWith('\n') ? '\n\n' : '') + event.text;
+            fullText += chunk;
+            yield { type: 'text', text: chunk };
+          } else if (event.type === 'task') {
+            // Surface task lifecycle to the UI via the broadcast listener
+            // (configured externally by the daemon). This is independent
+            // of the text stream - text events update the chat, task
+            // events update status pills.
+            self.convTaskEventListener?.(event.event);
+          }
+          // 'done' is implicit - the generator ends.
         }
+
         yield {
           type: 'done',
           response: {
-            content: reply ?? '',
+            content: fullText,
             tool_calls: [],
             usage: { input_tokens: 0, output_tokens: 0 },
             model: 'conv',
@@ -641,7 +669,18 @@ export class AgentService implements Service, IAgentService {
     // single-orchestrator mode (and handleMessage uses this.orchestrator).
     if (this.llmManager.hasConversationTier()) {
       this.taskRegistry = new TaskRegistry();
-      this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry);
+      // Task runner: route delegations through the primary orchestrator so
+      // task tiers run with the full tool registry, role prompt, authority
+      // gating, and Jarvis-specific feature knowledge. The only difference
+      // vs classic mode is which LLM tier handles the work.
+      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({ tier, subsystem, template, intent, signal }) => {
+        if (signal.aborted) return '';
+        const baseSystem = this.buildFullSystemPrompt('conv', intent);
+        const templateNote = TaskDispatcher.templatePromptFor(template);
+        const systemPrompt = `${baseSystem}\n\n${templateNote}`;
+        return await this.orchestrator.processMessage(systemPrompt, intent, tier, subsystem);
+      };
+      this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
       this.dialogueCompactor = new DialogueCompactor(this.llmManager);
       const persona = this.buildPersona();
       this.convOrchestrator = new ConvOrchestrator(

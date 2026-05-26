@@ -2,6 +2,7 @@ import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
 import { guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
+import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance } from './agent.ts';
 import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
@@ -216,8 +217,19 @@ export class AgentOrchestrator {
   /**
    * Process a user message through the primary agent (non-streaming).
    * Includes the tool execution loop: LLM → tool_calls → execute → re-call → repeat.
+   *
+   * @param tier Which task tier runs the LLM call (default 'medium' for
+   *   classic mode). Conv-tier delegation passes through with the requested
+   *   tier so delegated work uses the full primary tool registry on the
+   *   chosen model.
+   * @param subsystem Usage-tracking label for the tier call.
    */
-  async processMessage(systemPrompt: string, message: string): Promise<string> {
+  async processMessage(
+    systemPrompt: string,
+    message: string,
+    tier: Tier = 'medium',
+    subsystem: string = 'chat_orchestrator',
+  ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
@@ -244,7 +256,7 @@ export class AgentOrchestrator {
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      const llmResponse: LLMResponse = await this.llmManager.chatTier('medium', 'chat_orchestrator', messages, { tools });
+      const llmResponse: LLMResponse = await this.llmManager.chatTier(tier, subsystem, messages, { tools });
 
       if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
         // Add assistant message with tool calls to local messages

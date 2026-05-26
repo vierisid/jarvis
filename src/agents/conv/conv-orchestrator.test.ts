@@ -77,7 +77,13 @@ describe('ConvOrchestrator', () => {
   it('answers directly when conv LLM emits text without tool calls', async () => {
     const provider = new MockProvider([textResponse('Hello there!')]);
     const llm = makeManager(provider);
-    const dispatcher = new TaskDispatcher(llm, registry);
+    // Test runner: just calls the mock LLM directly. In production the
+    // runner routes through the primary orchestrator with all tools.
+    const runner = async ({ tier, subsystem, intent }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; signal: AbortSignal }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: intent }]);
+      return r.content;
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     const result = await conv.processTurn('Hi', {});
@@ -99,7 +105,13 @@ describe('ConvOrchestrator', () => {
       textResponse('Rome is the capital of Italy.'),
     ]);
     const llm = makeManager(provider);
-    const dispatcher = new TaskDispatcher(llm, registry);
+    // Test runner: just calls the mock LLM directly. In production the
+    // runner routes through the primary orchestrator with all tools.
+    const runner = async ({ tier, subsystem, intent }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; signal: AbortSignal }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: intent }]);
+      return r.content;
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     const result = await conv.processTurn('What is the capital of Italy?', {});
@@ -117,7 +129,13 @@ describe('ConvOrchestrator', () => {
       textResponse('That task isn\'t around any more.'),
     ]);
     const llm = makeManager(provider);
-    const dispatcher = new TaskDispatcher(llm, registry);
+    // Test runner: just calls the mock LLM directly. In production the
+    // runner routes through the primary orchestrator with all tools.
+    const runner = async ({ tier, subsystem, intent }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; signal: AbortSignal }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: intent }]);
+      return r.content;
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
     const result = await conv.processTurn('How is that task going?', {});
@@ -133,7 +151,13 @@ describe('ConvOrchestrator', () => {
     }
     const provider = new MockProvider(responses);
     const llm = makeManager(provider);
-    const dispatcher = new TaskDispatcher(llm, registry);
+    // Test runner: just calls the mock LLM directly. In production the
+    // runner routes through the primary orchestrator with all tools.
+    const runner = async ({ tier, subsystem, intent }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; signal: AbortSignal }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: intent }]);
+      return r.content;
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
     const result = await conv.processTurn('stuck', {});
