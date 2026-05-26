@@ -273,28 +273,52 @@ export class ConvOrchestrator {
 
     parts.push('# Your Role');
     parts.push(
-      'You are the conversation layer. You own dialogue and routing. ' +
-      'For anything that needs real action (research, code, planning, writing, tool use), ' +
-      'call the `delegate` tool to send it to a task tier. The task tier runs with its own ' +
-      'tools and returns a structured envelope you can verbalize to the user. ' +
-      'Handle small talk, follow-ups, clarifications, and routing decisions yourself.',
+      'You are the conversation layer. You own dialogue tone and routing decisions. ' +
+      'You do NOT do real work yourself. For anything beyond small talk, you call the ' +
+      '`delegate` tool to send the work to a task tier that has access to all of Jarvis\'s ' +
+      'real tools (workflows, browser, file ops, vault, calendar, commitments, goals, etc.).',
+    );
+    parts.push('');
+
+    parts.push('# CRITICAL: You have NO direct knowledge of Jarvis state');
+    parts.push(
+      'You do not know what workflows exist, what files are in the vault, what commitments ' +
+      'are scheduled, what goals are active, what was built earlier, what the user\'s ' +
+      'calendar looks like, or any other live state. The chat history shows what was ' +
+      'discussed, NOT what is true. To answer any question about real state, you MUST ' +
+      'delegate so the task tier can look it up with tools.',
+    );
+    parts.push('');
+    parts.push('Examples of questions you MUST delegate (not answer from your own knowledge):');
+    parts.push('- "What workflows do I have?"');
+    parts.push('- "What pieces are in the workflow we just made?"');
+    parts.push('- "What did you just create?" / "Show me the steps"');
+    parts.push('- "What\'s on my calendar today?"');
+    parts.push('- "Read me the latest research notes"');
+    parts.push('- Anything asking for SPECIFICS about real state, even if the result envelope summary mentioned it briefly');
+    parts.push('');
+    parts.push(
+      'NEVER ask the user for a workflow/file/commitment ID or name as a way to ' +
+      'avoid delegating. If you need that info to act, delegate a lookup task and ' +
+      'have the task tier find it - "the workflow we just created" is enough context ' +
+      'for the task tier to identify it via its tools.',
     );
     parts.push('');
 
     parts.push('# Delegation Catalog');
     parts.push('Use the `delegate` tool when:');
     parts.push('- The user asks you to FIND or LOOK UP something - tier=medium, template=research');
+    parts.push('- The user asks about real Jarvis state (workflows, files, vault, calendar) - tier=medium, template=general');
     parts.push('- The user asks you to WRITE or REFACTOR code - tier=medium, template=code');
     parts.push('- The user asks for a PLAN, schedule, or decomposition - tier=high, template=plan');
     parts.push('- The user asks to DRAFT prose (email, doc, summary) - tier=medium, template=write');
     parts.push('- The user asks for complex multi-step reasoning - tier=high, template=general');
-    parts.push('- Anything else needing real tool execution - tier=medium, template=general');
+    parts.push('- Anything needing real tool execution or live state lookup - tier=medium, template=general');
     parts.push('');
     parts.push("Do NOT delegate when:");
-    parts.push('- The user is making small talk');
-    parts.push('- The user is asking a follow-up about a recently-completed task (you have the summary)');
-    parts.push('- The user is clarifying or cancelling a task (use check_task / cancel_task)');
-    parts.push("- You already know the answer from this session's context");
+    parts.push('- The user is making small talk (greeting, thanks, mood)');
+    parts.push('- The user is clarifying or cancelling an in-flight task (use check_task / cancel_task)');
+    parts.push('- The user asks who you are / what you can do / how Jarvis works (general capabilities, not specifics)');
     parts.push('');
 
     // In-flight tasks
@@ -308,15 +332,21 @@ export class ConvOrchestrator {
       parts.push('');
     }
 
-    // Last task results
+    // Last task results - shown in full so the conv LLM has the IDs/names
+    // it needs to verbalize follow-ups. Even with the full summary, ANY
+    // request for specifics not already in the summary MUST be delegated
+    // (see "CRITICAL: You have NO direct knowledge" above).
     const recent = this.registry.recentResults(3);
     if (recent.length > 0) {
       parts.push('# Recent Task Results');
       for (const t of recent) {
         if (!t.result) continue;
-        parts.push(`- ${t.id} (${t.status}): ${t.result.summary}`);
+        parts.push(`## Task ${t.id} - ${t.request.template} (${t.status})`);
+        parts.push(`User asked: ${t.request.intent}`);
+        parts.push(`Result:`);
+        parts.push(t.result.summary);
+        parts.push('');
       }
-      parts.push('');
     }
 
     if (context.ambientFacts) {

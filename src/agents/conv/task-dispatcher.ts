@@ -16,7 +16,11 @@ import type { LLMManager } from '../../llm/manager.ts';
 import type { TaskRequest, TaskRecord, TaskResultEnvelope, TaskTemplate } from './task-envelope.ts';
 import type { TaskRegistry } from './task-registry.ts';
 
-const SUMMARY_THRESHOLD_CHARS = 1500;
+// Raised threshold: short task outputs (workflow creation results, code edit
+// summaries, etc.) are typically 1-3K chars and contain IDs/names the conv
+// LLM needs to reference later. Pass them through verbatim rather than risk
+// the summarizer stripping identifiers.
+const SUMMARY_THRESHOLD_CHARS = 3000;
 
 const TOOL_USE_INSTRUCTION = `IMPORTANT: You have access to real tools listed in your context. USE THEM to do the work - do not just describe what someone could do. If the user asked to create a workflow, use the workflow tools. If they asked to browse the web, use the browser. If they asked to read a file, use file-ops. Generic textual answers about "you could write a Python script" or "here is the general approach" are wrong when the right tool exists in your registry.`;
 
@@ -119,13 +123,17 @@ export class TaskDispatcher {
       const condensed = await this.llm.chatTier('low', 'task_summarize', [
         {
           role: 'system',
-          content: `Condense the following task result into 2-4 plain sentences a conversational assistant could read to the user. Preserve concrete facts (names, numbers, file paths). Drop preamble and meta-commentary.`,
+          content:
+            `Condense the task result into a short paragraph (4-6 sentences) the conversational assistant can read to the user. ` +
+            `ALWAYS preserve identifiers verbatim: workflow IDs and names, file paths, commitment IDs, goal IDs, URLs, any other handles the user might need to reference later. ` +
+            `Preserve concrete facts (names, numbers, dates). Drop preamble, meta-commentary, and chain-of-thought. ` +
+            `Do NOT add information that isn't in the task result.`,
         },
         {
           role: 'user',
           content: `User asked: ${request.intent}\n\nTask result:\n${trimmed}`,
         },
-      ], { temperature: 0.1, max_tokens: 400 });
+      ], { temperature: 0.1, max_tokens: 600 });
       return condensed.content?.trim() || trimmed.slice(0, 400);
     } catch {
       return trimmed.slice(0, 400) + (trimmed.length > 400 ? '...' : '');
