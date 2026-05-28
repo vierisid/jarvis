@@ -220,11 +220,19 @@ jobs:
           FLAGS=""
           if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
+          VERSION="${{ steps.version.outputs.VERSION }}"
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            echo "Publishing @usejarvis/sidecar-${platform}... ${FLAGS}"
+            pkg="@usejarvis/sidecar-${platform}"
+            echo "Publishing ${pkg}@${VERSION}... ${FLAGS}"
             cd "sidecar/npm/${platform}"
-            npm publish --access public $FLAGS
+            if ! npm publish --access public $FLAGS; then
+              if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+                echo "${pkg}@${VERSION} is already on npm; treating as success."
+              else
+                exit 1
+              fi
+            fi
             cd "$GITHUB_WORKSPACE"
           done
 
@@ -233,9 +241,17 @@ jobs:
           FLAGS=""
           if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          pkg="@usejarvis/sidecar"
 
           cd sidecar/npm/jarvis-sidecar
-          npm publish --access public $FLAGS
+          if ! npm publish --access public $FLAGS; then
+            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${pkg}@${VERSION} is already on npm; treating as success."
+            else
+              exit 1
+            fi
+          fi
 
   # ─── Publish main brain package to npm ─────────────────────────
   publish-brain:
@@ -276,7 +292,16 @@ jobs:
           FLAGS=""
           if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          npm publish --access public $FLAGS
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          pkg="@usejarvis/brain"
+
+          if ! npm publish --access public $FLAGS; then
+            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${pkg}@${VERSION} is already on npm; treating as success."
+            else
+              exit 1
+            fi
+          fi
 
   # ─── Create GitHub Release with binaries ───────────────────────
   # Gated by publish-docker, which is itself gated by publish-sidecar and
