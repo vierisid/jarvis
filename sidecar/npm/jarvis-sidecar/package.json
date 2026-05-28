@@ -1,7 +1,12 @@
 {
   "name": "@usejarvis/sidecar",
   "version": "0.1.0",
-  "description": "Jarvis sidecar client — connects to the brain and executes RPC requests locally",
+  "description": "Jarvis sidecar client -- connects to the brain and executes RPC requests locally",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vierisid/jarvis.git",
+    "directory": "sidecar/npm/jarvis-sidecar"
+  },
   "bin": {
     "jarvis-sidecar": "bin/jarvis-sidecar"
   },
