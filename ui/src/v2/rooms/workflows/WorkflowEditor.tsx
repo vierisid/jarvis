@@ -982,7 +982,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             containerKind={selectedFlat?.containerKind}
             catalog={editor.catalog}
             connections={editor.connections}
-            onSetTriggerType={(type) => editor.setTriggerType(type)}
+            onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
@@ -3142,6 +3142,40 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 
 /* =========================================================== properties */
 
+/**
+ * Top-level trigger kinds offered by the panel's 4-way picker. Each
+ * entry maps a user-facing kind to the canonical `pieceName` (and
+ * `triggerName` for the event case) so detection from a saved step
+ * and selection from the picker share one source of truth. Order is
+ * rendering order, left to right.
+ */
+const TRIGGER_KINDS: ReadonlyArray<{
+  kind: "manual" | "schedule" | "webhook" | "event";
+  label: string;
+  description: string;
+}> = [
+  { kind: "manual", label: "Manual", description: "Run on demand via POST /api/workflows/:id/run" },
+  { kind: "schedule", label: "Schedule", description: "Fire on a cron expression (e.g. 0 8 * * *)" },
+  { kind: "webhook", label: "Webhook", description: "Fire on inbound HTTP to /api/webhooks/<flow_id>" },
+  { kind: "event", label: "Event", description: "Fire on a Jarvis event (clipboard, email, awareness, ...)" },
+];
+
+/**
+ * Reverse map: given a step, return which of the four kinds it
+ * represents. Used to highlight the active button in the picker.
+ * Falls back to "manual" for an unrecognised piece so the user can
+ * always retarget. Mirror of the (pieceName, triggerName) -> kind
+ * mapping baked into `setTriggerKind` in the editor hook.
+ */
+function detectTriggerKind(step: FlowStepNode): "manual" | "schedule" | "webhook" | "event" {
+  if (step.type === "EMPTY") return "manual";
+  const pn = step.settings?.pieceName;
+  if (pn === "schedule") return "schedule";
+  if (pn === "webhook") return "webhook";
+  if (pn === "@jarvispieces/piece-jarvis-trigger") return "event";
+  return "manual";
+}
+
 interface PropertiesPanelProps {
   step: FlowStepNode;
   isTriggerStep: boolean;
@@ -3165,7 +3199,7 @@ interface PropertiesPanelProps {
   sampleInput: unknown | undefined;
   /** True when the loaded version is LOCKED -- disables sample-data editing + test. */
   isLocked: boolean;
-  onSetTriggerType: (type: "EMPTY" | "PIECE_TRIGGER") => void;
+  onSetTriggerKind: (kind: "manual" | "schedule" | "webhook" | "event") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
   onAddInputKey: (key: string) => void;
@@ -3197,7 +3231,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     isTopLevel,
     catalog,
     connections,
-    onSetTriggerType,
+    onSetTriggerKind,
     onSetErrorHandling,
     onSetInput,
     onAddInputKey,
@@ -3255,34 +3289,32 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           looking. */}
 
       {isTriggerStep ? (
-        <Field label="Trigger mode">
+        <Field label="Trigger">
           <div className="wf-props__segmented" role="radiogroup">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={step.type === "EMPTY"}
-              className={`wf-props__seg ${step.type === "EMPTY" ? "wf-props__seg--on" : ""}`}
-              onClick={() => onSetTriggerType("EMPTY")}
-            >
-              Manual
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={step.type === "PIECE_TRIGGER"}
-              className={`wf-props__seg ${step.type === "PIECE_TRIGGER" ? "wf-props__seg--on" : ""}`}
-              onClick={() => onSetTriggerType("PIECE_TRIGGER")}
-            >
-              Schedule / webhook / event
-            </button>
+            {TRIGGER_KINDS.map((tk) => {
+              const active = tk.kind === detectTriggerKind(step);
+              return (
+                <button
+                  key={tk.kind}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className={`wf-props__seg ${active ? "wf-props__seg--on" : ""}`}
+                  onClick={() => onSetTriggerKind(tk.kind)}
+                  title={tk.description}
+                >
+                  {tk.label}
+                </button>
+              );
+            })}
           </div>
         </Field>
       ) : null}
 
       {isManual ? (
         <p className="wf-props__hint">
-          Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. Switch to
-          "Schedule / webhook / event" above to fire automatically.
+          Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. Pick
+          Schedule, Webhook, or Event above to fire automatically.
         </p>
       ) : null}
 
@@ -4038,6 +4070,29 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
   }
 
   if (field.type === "enum") {
+    // Group options by their `group` attribute (when any option carries
+    // one) so wide dropdowns -- jarvis-trigger:on_event eventType is
+    // the canonical case -- render as <optgroup> sections rather than
+    // a flat 15+ item list. Order: groups appear in first-seen order,
+    // ungrouped options first. Falls back to a flat list when no
+    // option declares a group.
+    const opts = field.options ?? [];
+    const hasGroups = opts.some((o) => typeof o.group === "string" && o.group.length > 0);
+    const groupOrder: string[] = [];
+    const grouped = new Map<string, typeof opts>();
+    const ungrouped: typeof opts = [];
+    for (const o of opts) {
+      const g = typeof o.group === "string" && o.group.length > 0 ? o.group : null;
+      if (g === null) {
+        ungrouped.push(o);
+        continue;
+      }
+      if (!grouped.has(g)) {
+        groupOrder.push(g);
+        grouped.set(g, []);
+      }
+      (grouped.get(g) as typeof opts).push(o);
+    }
     return (
       <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
         {labelEl}
@@ -4046,11 +4101,30 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
           onChange={(e) => onChange(e.target.value || undefined)}
         >
           <option value="">{field.required ? "— select —" : "— none —"}</option>
-          {(field.options ?? []).map((o) => (
-            <option key={o.value} value={o.value} title={o.description}>
-              {o.label}
-            </option>
-          ))}
+          {hasGroups ? (
+            <>
+              {ungrouped.map((o) => (
+                <option key={o.value} value={o.value} title={o.description}>
+                  {o.label}
+                </option>
+              ))}
+              {groupOrder.map((g) => (
+                <optgroup key={g} label={g}>
+                  {(grouped.get(g) ?? []).map((o) => (
+                    <option key={o.value} value={o.value} title={o.description}>
+                      {o.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </>
+          ) : (
+            opts.map((o) => (
+              <option key={o.value} value={o.value} title={o.description}>
+                {o.label}
+              </option>
+            ))
+          )}
         </select>
         {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
       </label>

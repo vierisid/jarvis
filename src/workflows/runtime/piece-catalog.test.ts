@@ -119,6 +119,58 @@ describe("PieceCatalog (unit)", () => {
     expect(typeof clip?.id).toBe("string");
   });
 
+  test("metadataToCatalogEntry promotes on_event's eventType field to an enum populated from WORKFLOW_EVENT_TYPES", async () => {
+    // The piece source declares `eventType` as ShortText because the
+    // option list lives daemon-side, not in the piece bundle. The
+    // projection upgrades it so the editor renders a real dropdown
+    // (the `enum` widget). Options come from the canonical registry;
+    // each option's `description` is the per-event prose used as the
+    // <option title> hover.
+    const entry = metadataToCatalogEntry({
+      name: "@jarvispieces/piece-jarvis-trigger",
+      displayName: "Jarvis: Trigger",
+      description: "",
+      actions: {},
+      triggers: {
+        on_event: {
+          name: "on_event",
+          displayName: "On event",
+          description: "",
+          // Mirrors how the engine sends it: required free-text string.
+          props: {
+            eventType: { type: "SHORT_TEXT", required: true, displayName: "Event type" },
+            filter: { type: "JSON", required: false, displayName: "Filter" },
+          },
+        },
+      },
+    });
+    const eventTypeField = entry.triggers?.["on_event"]?.inputSchema?.fields.find(
+      (f) => f.name === "eventType",
+    );
+    expect(eventTypeField?.type).toBe("enum");
+    const optionValues = eventTypeField?.options?.map((o) => o.value) ?? [];
+    // Spot-check a few representative entries; full registry parity is
+    // implicit because the option set is built directly from it.
+    expect(optionValues).toContain("observer.clipboard_changed");
+    expect(optionValues).toContain("observer.email_received");
+    expect(optionValues).toContain("awareness.context_changed");
+    expect(optionValues).toContain("commitment.due_soon");
+    const { WORKFLOW_EVENT_TYPES } = await import("../runtime/event-types");
+    expect(optionValues.length).toBe(WORKFLOW_EVENT_TYPES.length);
+    const clipboardOption = eventTypeField?.options?.find((o) => o.value === "observer.clipboard_changed");
+    expect(clipboardOption?.description).toMatch(/clipboard/i);
+    // Group field is the source segment of the canonical id so the
+    // editor can render <optgroup>s. Every event-type id is dotted,
+    // so every option carries a group.
+    expect(clipboardOption?.group).toBe("observer");
+    const commitmentOption = eventTypeField?.options?.find((o) => o.value === "commitment.due_soon");
+    expect(commitmentOption?.group).toBe("commitment");
+    expect((eventTypeField?.options ?? []).every((o) => typeof o.group === "string" && o.group.length > 0)).toBe(true);
+    // Unrelated field is untouched -- the upgrade is surgical.
+    const filterField = entry.triggers?.["on_event"]?.inputSchema?.fields.find((f) => f.name === "filter");
+    expect(filterField?.type).toBe("json");
+  });
+
   test("metadataToCatalogEntry does NOT attach dynamicSampleData to unrelated pieces", () => {
     const entry = metadataToCatalogEntry({
       name: "@some/other-piece",

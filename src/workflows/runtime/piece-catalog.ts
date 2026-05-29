@@ -279,8 +279,14 @@ export function discoverPieces(rootDirs: string[]): {
  *   v2 -- added `auth` to PieceCatalogEntry.
  *   v3 -- added `dynamicSampleData` to PieceCatalogTrigger (envelope
  *         resolution for jarvis-trigger:on_event).
+ *   v4 -- promoted jarvis-trigger:on_event's `eventType` input field
+ *         from free-text string to enum (options sourced from
+ *         WORKFLOW_EVENT_TYPES at projection time).
+ *   v5 -- added `group` to enum options (used by the editor's <select>
+ *         to render <optgroup> sections for the on_event eventType
+ *         dropdown).
  */
-export const CATALOG_SCHEMA_VERSION = "3";
+export const CATALOG_SCHEMA_VERSION = "5";
 
 export function computeCatalogCacheKey(opts: {
   bundlePath: string;
@@ -568,9 +574,20 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     // Attach `dynamicSampleData` synthesized from the canonical
     // `WORKFLOW_EVENT_TYPES` registry so picker + composer both see the
     // right shape per event type without duplicating the registry.
+    //
+    // Also rewrite the `eventType` input field from free text (string)
+    // into an `enum` whose options come from the same registry. The
+    // piece source has to declare it as `Property.ShortText` because the
+    // option list lives daemon-side, not in the piece bundle -- so this
+    // is where the upgrade has to land. The editor's enum widget shows
+    // an actual <select> menu, eliminating the "you have to know the
+    // exact event-type string" footgun.
     if (name === JARVIS_ON_EVENT_TRIGGER.piece) {
       const onEvent = triggers[JARVIS_ON_EVENT_TRIGGER.trigger];
-      if (onEvent) onEvent.dynamicSampleData = buildOnEventDynamicSampleData();
+      if (onEvent) {
+        onEvent.dynamicSampleData = buildOnEventDynamicSampleData();
+        upgradeOnEventEventTypeFieldToEnum(onEvent);
+      }
     }
     out.triggers = triggers;
   }
@@ -618,6 +635,40 @@ export function buildOnEventDynamicSampleData(): {
     };
   }
   return { propName: "eventType", samples };
+}
+
+/**
+ * Rewrite the `eventType` input field on the on_event trigger from a
+ * free-text string into an enum populated from `WORKFLOW_EVENT_TYPES`.
+ * In-place so the surrounding projection treats the trigger entry
+ * normally.
+ *
+ * Resilient to schema drift: if the trigger has no `inputSchema`, no
+ * `fields` array, or no `eventType` field at all (which would mean the
+ * piece source was renamed without updating this projection), we leave
+ * the schema untouched and let the field stay free-text. Better to ship
+ * a slightly worse UX than to silently drop a required field.
+ */
+function upgradeOnEventEventTypeFieldToEnum(trigger: PieceCatalogTrigger): void {
+  const fields = trigger.inputSchema?.fields;
+  if (!fields) return;
+  const eventTypeField = fields.find((f) => f.name === "eventType");
+  if (!eventTypeField) return;
+  eventTypeField.type = "enum";
+  eventTypeField.options = WORKFLOW_EVENT_TYPES.map((meta) => ({
+    value: meta.type,
+    // Canonical id as the label too: the LLM composer and downstream
+    // pieces match on the exact string, so showing it verbatim avoids
+    // any user confusion about "what do I write here." The description
+    // is surfaced as a hover tooltip via the editor's <option title>.
+    label: meta.type,
+    description: meta.description,
+    // Group by the source segment of the canonical id
+    // (`observer.clipboard_changed` -> `observer`) so the editor's
+    // <select> can render <optgroup> headers and stay scannable as
+    // the registry grows.
+    group: meta.type.includes(".") ? meta.type.slice(0, meta.type.indexOf(".")) : undefined,
+  }));
 }
 
 /**

@@ -42,8 +42,14 @@ export interface PieceInputField {
   description?: string;
   /** Optional placeholder for text/number widgets. */
   placeholder?: string;
-  /** Choices for enum / multi_enum. Order is rendering order. */
-  options?: ReadonlyArray<{ value: string; label: string; description?: string }>;
+  /**
+   * Choices for enum / multi_enum. Order is rendering order. `group` is
+   * optional; when present, the editor renders matching options inside
+   * a labelled <optgroup>. Used to keep wide option lists scannable
+   * (e.g. `observer.*` / `awareness.*` / `commitment.*` for the
+   * jarvis-trigger:on_event eventType dropdown).
+   */
+  options?: ReadonlyArray<{ value: string; label: string; description?: string; group?: string }>;
   /** Suggested default. Used by the UI when the field is first revealed. */
   default?: unknown;
 }

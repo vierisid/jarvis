@@ -135,7 +135,7 @@ export interface PieceInputField {
   required: boolean;
   description?: string;
   placeholder?: string;
-  options?: Array<{ value: string; label: string; description?: string }>;
+  options?: Array<{ value: string; label: string; description?: string; group?: string }>;
   default?: unknown;
 }
 
@@ -915,30 +915,73 @@ export function useWorkflowEditor(flowId: string | null) {
    * EMPTY stashes the prior settings; switching back restores them so the
    * round-trip doesn't discard the user's piece + input.
    */
-  const setTriggerType = useCallback((type: "EMPTY" | "PIECE_TRIGGER"): void => {
-    setDraftTrigger((prev) => {
-      if (!prev) return prev;
-      const next = cloneTrigger(prev);
-      if (type === "EMPTY") {
-        // Stash anything non-trivial so we can restore on the way back.
-        if (next.settings && (next.settings.pieceName || Object.keys(next.settings.input ?? {}).length > 0)) {
-          triggerSettingsStashRef.current = JSON.parse(JSON.stringify(next.settings));
+  /**
+   * Four-way trigger kind selector. Replaces the old two-step "Manual
+   * vs Piece -> pick a piece" dance with a direct mapping: each kind
+   * sets both `step.type` and the canonical pieceName/triggerName for
+   * that kind in one click.
+   *
+   *   manual   -> EMPTY trigger (POST /run only)
+   *   schedule -> built-in cron primitive (settings.pieceName="schedule")
+   *   webhook  -> built-in HTTP primitive (settings.pieceName="webhook")
+   *   event    -> jarvis-trigger:on_event (Jarvis event bus)
+   *
+   * Stash semantics: when leaving for `manual` we snapshot the
+   * currently-configured settings, so toggling back to the SAME kind
+   * restores them (a common "let me check what manual does, then go
+   * back" flow). On a kind change between non-manual kinds the stash is
+   * dropped -- the previous configuration belongs to a different piece
+   * and would be invalid for the new one.
+   */
+  const setTriggerKind = useCallback(
+    (kind: "manual" | "schedule" | "webhook" | "event"): void => {
+      setDraftTrigger((prev) => {
+        if (!prev) return prev;
+        const next = cloneTrigger(prev);
+        if (kind === "manual") {
+          if (
+            next.settings &&
+            (next.settings.pieceName || Object.keys(next.settings.input ?? {}).length > 0)
+          ) {
+            triggerSettingsStashRef.current = JSON.parse(JSON.stringify(next.settings));
+          }
+          next.type = "EMPTY";
+          next.settings = {};
+          return next;
         }
-        next.type = "EMPTY";
-        next.settings = {};
-      } else {
+        // Non-manual: derive the canonical (pieceName, triggerName) for
+        // the chosen kind. `triggerName` is only relevant for `event`
+        // (schedule/webhook are built-in primitives keyed by pieceName).
+        const target =
+          kind === "schedule"
+            ? { pieceName: "schedule", triggerName: undefined as string | undefined }
+            : kind === "webhook"
+              ? { pieceName: "webhook", triggerName: undefined as string | undefined }
+              : { pieceName: "@jarvispieces/piece-jarvis-trigger", triggerName: "on_event" };
         next.type = "PIECE_TRIGGER";
-        if (triggerSettingsStashRef.current) {
-          next.settings = JSON.parse(JSON.stringify(triggerSettingsStashRef.current));
+        const stash = triggerSettingsStashRef.current;
+        if (stash && stash.pieceName === target.pieceName) {
+          // Returning to the same piece kind after a Manual detour --
+          // restore the prior config verbatim.
+          next.settings = JSON.parse(JSON.stringify(stash));
           triggerSettingsStashRef.current = null;
-        } else if (!next.settings || !next.settings.pieceName) {
-          next.settings = { input: {} };
+        } else {
+          // First time picking this kind (or switching kinds): start
+          // fresh. Drop the stash because it belongs to a different
+          // piece and would be invalid here.
+          triggerSettingsStashRef.current = null;
+          next.settings = {
+            pieceName: target.pieceName,
+            input: {},
+            ...(target.triggerName ? { triggerName: target.triggerName } : {}),
+          };
         }
-      }
-      return next;
-    });
-    setDirty(true);
-  }, []);
+        return next;
+      });
+      setDirty(true);
+    },
+    [],
+  );
 
   const setStepPiece = useCallback(
     (stepName: string, pieceName: string, actionName: string): void => {
@@ -1390,7 +1433,7 @@ export function useWorkflowEditor(flowId: string | null) {
     setStepPiece,
     setStepErrorHandling,
     addErrorHandling,
-    setTriggerType,
+    setTriggerKind,
     insertStepAfter,
     addStepToHead,
     deleteStep,
