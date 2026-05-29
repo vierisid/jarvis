@@ -28,18 +28,19 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   {
     type: "observer.clipboard_changed",
     description:
-      "User copied something. The payload is just the raw text in `content` -- there is NO type/kind field, so detect what it is by inspecting `content` itself (e.g. regex-match `content` against ^https?:// to decide it's a URL). Do not test for a `contentType`.",
+      "User copied something. The clipboard text is at `payload.content` (reference as {{trigger.payload.content}}); also `payload.length`. There is NO type/kind field -- detect what it is by inspecting `payload.content` itself (e.g. regex-match against ^https?:// to decide it's a URL). Do not test for a `contentType`.",
     payloadExample: { content: "https://example.com", length: 19 },
   },
   {
     type: "observer.file_changed",
-    description: "A watched file or directory changed. The kind of change is in `eventType` (created / modified / deleted).",
+    description:
+      "A watched file or directory changed. The path is at `payload.path` ({{trigger.payload.path}}); the kind of change is at `payload.eventType` (created / modified / deleted). Also `payload.filename`, `payload.basePath`.",
     payloadExample: { path: "/home/me/notes.txt", eventType: "modified", filename: "notes.txt", basePath: "/home/me" },
   },
   {
     type: "observer.email_received",
     description:
-      "New Gmail message arrived (requires Google auth). The available content is `snippet` (a short preview) -- there is NO full email body, so feed `snippet` into any classification/summary prompt. Other fields: from, to, subject, date, labels, id, threadId.",
+      "New Gmail message arrived (requires Google auth). The available content is `payload.snippet` ({{trigger.payload.snippet}}, a short preview) -- there is NO full email body, so feed `payload.snippet` into any classification/summary prompt. Other fields: `payload.from`, `payload.to`, `payload.subject`, `payload.date`, `payload.labels`, `payload.id`, `payload.threadId`.",
     payloadExample: {
       id: "msg_abc",
       from: "alice@example.com",
@@ -52,71 +53,80 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   },
   {
     type: "observer.calendar_event_starting",
-    description: "A Google Calendar event is about to start.",
+    description: "A Google Calendar event is about to start. Title at `payload.summary` ({{trigger.payload.summary}}); start time at `payload.start`.",
     payloadExample: { summary: "Standup", start: "2026-05-07T15:00:00Z" },
   },
   {
     type: "observer.process_started",
-    description: "A new process appeared in the process list.",
+    description: "A new process appeared in the process list. Pid at `payload.pid`; name at `payload.name` ({{trigger.payload.name}}).",
     payloadExample: { pid: 1234, name: "node" },
   },
   {
     type: "observer.process_stopped",
-    description: "A previously-running process exited.",
+    description: "A previously-running process exited. Pid at `payload.pid`; name at `payload.name` ({{trigger.payload.name}}).",
     payloadExample: { pid: 1234, name: "node" },
   },
   {
     type: "observer.notification_received",
-    description: "A D-Bus / native desktop notification was shown.",
+    description:
+      "A D-Bus / native desktop notification was shown. Source app at `payload.app` ({{trigger.payload.app}}); also `payload.title`, `payload.body`, `payload.urgency`.",
     payloadExample: { app: "Slack", title: "Alice", body: "Message from Alice", urgency: "normal" },
   },
 
   // ── commitment.* ── heartbeat sweep over the vault commitments table ─
   {
     type: "commitment.due_soon",
-    description: "A commitment is about to come due (typically within the next 30 min).",
+    description:
+      "A commitment is about to come due (typically within the next 30 min). Text at `payload.what` ({{trigger.payload.what}}); id at `payload.id`; due ms at `payload.when_due`.",
     payloadExample: { id: "c_abc", what: "Follow up with vendor", when_due: 1710000000000 },
   },
   {
     type: "commitment.overdue",
-    description: "A commitment passed its due time without being completed.",
+    description:
+      "A commitment passed its due time without being completed. Text at `payload.what` ({{trigger.payload.what}}); id at `payload.id`; due ms at `payload.when_due`.",
     payloadExample: { id: "c_abc", what: "Follow up with vendor", when_due: 1710000000000 },
   },
 
   // ── awareness.* ── from the awareness service (M13) ─────────────────────
   {
     type: "awareness.context_changed",
-    description: "User switched between meaningful contexts (project / app / task).",
+    description:
+      "User switched between meaningful contexts (project / app / task). Active app at `payload.app` ({{trigger.payload.app}}); project at `payload.project`.",
     payloadExample: { app: "VS Code", project: "jarvis" },
   },
   {
     type: "awareness.error_detected",
-    description: "User is hitting an error pattern detected by the awareness service.",
+    description:
+      "User is hitting an error pattern detected by the awareness service. Error text at `payload.excerpt` ({{trigger.payload.excerpt}}); originating app at `payload.app`.",
     payloadExample: { app: "Terminal", excerpt: "fatal: not a git repository" },
   },
   {
     type: "awareness.stuck_detected",
-    description: "User has been on the same window for too long with little change.",
+    description:
+      "User has been on the same window for too long with little change. App at `payload.app`; window title at `payload.windowTitle` ({{trigger.payload.windowTitle}}); duration ms at `payload.durationMs`.",
     payloadExample: { app: "VS Code", windowTitle: "config.ts", durationMs: 600000 },
   },
   {
     type: "awareness.struggle_detected",
-    description: "User is undoing repeatedly or otherwise showing struggle signals.",
+    description:
+      "User is undoing repeatedly or otherwise showing struggle signals. App at `payload.app`; specific signal name at `payload.signal` ({{trigger.payload.signal}}).",
     payloadExample: { app: "VS Code", signal: "repeated_undo" },
   },
   {
     type: "awareness.session_started",
-    description: "A new awareness session began (focus on a project or task).",
+    description: "A new awareness session began (focus on a project or task). Session id at `payload.sessionId`; topic at `payload.topic` (may be null at start).",
     payloadExample: { sessionId: "sess_abc", topic: null },
   },
   {
     type: "awareness.session_ended",
-    description: "An awareness session ended; payload includes its inferred topic + duration.",
+    description:
+      "An awareness session ended. Inferred topic at `payload.topic` ({{trigger.payload.topic}}); duration ms at `payload.durationMs`; session id at `payload.sessionId`.",
     payloadExample: { sessionId: "sess_abc", topic: "jarvis workflows", durationMs: 1800000 },
   },
   {
     type: "awareness.suggestion_ready",
-    description: "Awareness intelligence produced a proactive suggestion for the user.",
+    description:
+      "Awareness intelligence produced a proactive suggestion for the user. Title at `payload.title` ({{trigger.payload.title}}); body at `payload.body`.",
     payloadExample: { title: "Stuck on this error?", body: "Try X." },
   },
 ];

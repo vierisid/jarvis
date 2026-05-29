@@ -364,6 +364,7 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
     "    the branch evaluates backwards. To check whether a search/list returned results, prefer a step whose output is a real list and",
     "    use LIST_IS_NOT_EMPTY; if you only have a string, test its actual empty-wording with TEXT_CONTAINS.",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
+    "  - For jarvis-trigger:on_event, the trigger output is an event envelope shaped { id, eventType, payload, timestamp } -- the actual event data lives under `payload`. Reference payload fields as {{trigger.payload.<field>}}, NOT {{trigger.<field>}}. Example: clipboard text is {{trigger.payload.content}}; an email's subject is {{trigger.payload.subject}}.",
     "  - Field names in `{{step.field}}` MUST exist on that step's declared `output` (see each action / trigger in the catalog).",
     "    Do not guess fields from the user's wording -- for example, a piece whose output is `{ result: ... }` is referenced as",
     "    `{{step.result}}`, NOT `{{step.content}}` just because the user said 'content'. If a piece has no declared output, the",
@@ -475,6 +476,7 @@ function renderCatalog(registry: PieceLookup): string {
   // Workflow event-type catalog (used by jarvis-trigger:on_event flows).
   lines.push("");
   lines.push("Available event types for jarvis-trigger:on_event (settings.input.eventType):");
+  lines.push("  Each event's payload fields below are accessed from downstream steps via {{trigger.payload.<field>}} (the trigger wraps the payload in an envelope -- see the wiring rules above).");
   for (const meta of WORKFLOW_EVENT_TYPES) {
     lines.push(`- ${meta.type}: ${meta.description}`);
     if (meta.payloadExample) {
