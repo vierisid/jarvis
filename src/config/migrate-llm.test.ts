@@ -9,63 +9,81 @@ function makeConfig(overrides: Partial<JarvisConfig['llm']>): JarvisConfig {
   return c;
 }
 
-function readTiers(c: JarvisConfig): NonNullable<JarvisConfig['llm']['tiers']> {
-  return (c.llm.tiers ?? {}) as NonNullable<JarvisConfig['llm']['tiers']>;
-}
-
 describe('migrateLegacyLLMConfig', () => {
-  it('derives medium tier from legacy primary when no tiers set', () => {
+  it('promotes legacy per-provider blocks into providers + derives default from primary', () => {
     const c = makeConfig({
       primary: 'openai',
       openai: { api_key: 'k', model: 'gpt-4o' },
     });
-    c.llm.tiers = undefined;
     migrateLegacyLLMConfig(c);
-    const tiers = readTiers(c);
-    expect(tiers.medium).toBeDefined();
-    expect(tiers.medium!.provider).toBe('openai');
-    expect(tiers.medium!.model).toBe('gpt-4o');
+    expect(c.llm.providers?.openai).toBeDefined();
+    expect(c.llm.providers!.openai!.api_key).toBe('k');
+    // No model in the providers entry - models live in default/tier strings.
+    expect((c.llm.providers!.openai as { model?: string }).model).toBeUndefined();
+    expect(c.llm.default).toBe('openai:gpt-4o');
   });
 
-  it('leaves explicit tiers alone', () => {
+  it('skips legacy promotion when the provider entry already exists in new shape', () => {
     const c = makeConfig({
-      primary: 'openai',
+      providers: { openai: { api_key: 'new-key' } },
+      openai: { api_key: 'legacy-key', model: 'gpt-3.5' },
+    });
+    migrateLegacyLLMConfig(c);
+    // New-shape entry untouched
+    expect(c.llm.providers!.openai!.api_key).toBe('new-key');
+  });
+
+  it('converts legacy tier object form to "name:model" strings', () => {
+    const c = makeConfig({
+      anthropic: { api_key: 'k', model: 'claude-sonnet' },
       tiers: {
-        medium: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        medium: { provider: 'anthropic', model: 'claude-opus' } as never,
       },
     });
     migrateLegacyLLMConfig(c);
-    const tiers = readTiers(c);
-    expect(tiers.medium!.provider).toBe('anthropic');
-    expect(tiers.medium!.model).toBe('claude-sonnet-4-6');
+    expect(c.llm.tiers!.medium).toBe('anthropic:claude-opus');
   });
 
-  it('leaves explicit low/high tiers alone (does not synthesize medium)', () => {
+  it('falls back to provider default model when tier object has no explicit model', () => {
     const c = makeConfig({
-      primary: 'anthropic',
-      tiers: { high: { provider: 'anthropic' } },
+      anthropic: { api_key: 'k', model: 'claude-sonnet' },
+      tiers: { high: { provider: 'anthropic' } as never },
     });
     migrateLegacyLLMConfig(c);
-    const tiers = readTiers(c);
-    // medium not synthesized because high is already set
-    expect(tiers.medium).toBeUndefined();
-    expect(tiers.high!.provider).toBe('anthropic');
+    expect(c.llm.tiers!.high).toBe('anthropic:claude-sonnet');
+  });
+
+  it('preserves explicit tier strings unchanged', () => {
+    const c = makeConfig({
+      tiers: { medium: 'openai:gpt-4o-mini' },
+    });
+    migrateLegacyLLMConfig(c);
+    expect(c.llm.tiers!.medium).toBe('openai:gpt-4o-mini');
+  });
+
+  it('does not derive default when tiers are already configured', () => {
+    const c = makeConfig({
+      primary: 'anthropic',
+      anthropic: { api_key: 'k', model: 'claude' },
+      tiers: { medium: 'openai:gpt-4o' },
+    });
+    migrateLegacyLLMConfig(c);
+    expect(c.llm.default).toBeUndefined();
   });
 
   it('is idempotent across multiple calls', () => {
     const c = makeConfig({ primary: 'anthropic', anthropic: { api_key: 'k', model: 'claude' } });
-    c.llm.tiers = undefined;
     migrateLegacyLLMConfig(c);
-    const snap1 = JSON.stringify(c.llm.tiers);
+    const snap1 = JSON.stringify({ p: c.llm.providers, d: c.llm.default, t: c.llm.tiers });
     migrateLegacyLLMConfig(c);
-    expect(JSON.stringify(c.llm.tiers)).toBe(snap1);
+    expect(JSON.stringify({ p: c.llm.providers, d: c.llm.default, t: c.llm.tiers })).toBe(snap1);
   });
 
-  it('initializes empty tiers object even without primary', () => {
-    const c = makeConfig({ primary: '' });
-    c.llm.tiers = undefined;
+  it('handles missing legacy fields gracefully', () => {
+    const c = makeConfig({});
     migrateLegacyLLMConfig(c);
-    const tiers = readTiers(c);
-    expect(Object.keys(tiers).length).toBe(0);
+    expect(c.llm.providers).toEqual({});
+    expect(c.llm.default).toBeUndefined();
+    expect(c.llm.tiers).toEqual({});
   });
 });

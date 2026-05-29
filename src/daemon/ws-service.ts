@@ -1430,7 +1430,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     }
 
     const llm = this.agentService.getLLMManager();
-    if (!llm.getProvider(this.agentService.getConfig().llm.primary)) {
+    // Just check that at least one provider is registered. The interviewer
+    // routes through llm.chatTier internally which resolves through the
+    // configured default/tiers.
+    if (llm.getProviderNames().length === 0) {
       this.wsServer.sendToClient(ws, {
         type: 'interview_error',
         payload: { message: 'No LLM configured. Finish setup first.' },

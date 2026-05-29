@@ -1,80 +1,54 @@
 /**
- * Manual test file for LLM providers
+ * Manual test file for LLM providers.
  *
  * Run with: bun run src/llm/test.ts
+ *
+ * Reads ~/.jarvis/config.yaml, instantiates each configured provider, and
+ * exercises both non-streaming and streaming chat via the LLMManager.
  */
 
-import { LLMManager, AnthropicProvider, OpenAIProvider, OllamaProvider } from './index.ts';
+import { LLMManager } from './index.ts';
 import { loadConfig } from '../config/index.ts';
+import { registerLLMProviders, configureLLMTiers } from './config-binding.ts';
 
 async function testProviders() {
   console.log('Loading config...');
   const config = await loadConfig();
 
   const manager = new LLMManager();
-
-  // Register providers based on config
-  if (config.llm.anthropic?.api_key) {
-    const anthropic = new AnthropicProvider(
-      config.llm.anthropic.api_key,
-      config.llm.anthropic.model
-    );
-    manager.registerProvider(anthropic);
-    console.log('Registered Anthropic provider');
+  const hasProvider = registerLLMProviders(manager, config.llm.providers ?? {});
+  if (!hasProvider) {
+    console.error('No providers configured.');
+    return;
   }
+  configureLLMTiers(manager, config.llm);
 
-  if (config.llm.openai?.api_key) {
-    const openai = new OpenAIProvider(
-      config.llm.openai.api_key,
-      config.llm.openai.model
-    );
-    manager.registerProvider(openai);
-    console.log('Registered OpenAI provider');
-  }
+  console.log(`Active providers: ${manager.getProviderNames().join(', ')}`);
+  if (config.llm.default) console.log(`Default: ${config.llm.default}`);
 
-  if (config.llm.ollama) {
-    const ollama = new OllamaProvider(
-      config.llm.ollama.base_url,
-      config.llm.ollama.model
-    );
-    manager.registerProvider(ollama);
-    console.log('Registered Ollama provider');
-  }
-
-  // Set primary and fallbacks
-  manager.setPrimary(config.llm.primary);
-  manager.setFallbackChain(config.llm.fallback);
-
-  console.log(`\nPrimary provider: ${config.llm.primary}`);
-  console.log(`Fallback chain: ${config.llm.fallback.join(', ')}\n`);
-
-  // Test basic chat
-  console.log('Testing chat...');
   const messages = [
     { role: 'system' as const, content: 'You are a helpful assistant.' },
     { role: 'user' as const, content: 'Say hello in exactly 5 words.' },
   ];
 
+  console.log('\nTesting chat...');
   try {
-    const response = await manager.chat(messages);
+    const response = await manager.chatTier('medium', 'manual_test', messages);
     console.log('Response:', response.content);
     console.log('Model:', response.model);
     console.log('Usage:', response.usage);
-    console.log('Finish reason:', response.finish_reason);
   } catch (err) {
     console.error('Chat failed:', err);
   }
 
-  // Test streaming
-  console.log('\n\nTesting streaming...');
+  console.log('\nTesting streaming...');
   try {
-    for await (const event of manager.stream(messages)) {
+    for await (const event of manager.streamTier('medium', 'manual_test_stream', messages)) {
       if (event.type === 'text') {
         process.stdout.write(event.text);
       } else if (event.type === 'done') {
         console.log('\n\nStream completed!');
         console.log('Model:', event.response.model);
-        console.log('Usage:', event.response.usage);
       } else if (event.type === 'error') {
         console.error('Stream error:', event.error);
       }

@@ -173,35 +173,117 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
 }
 
 /**
- * If config.llm.tiers has no entries, derive a `medium` tier from the legacy
- * `primary` field so the new tier-aware manager has something to resolve to.
- * Idempotent: skipped when any tier is already configured.
+ * Migrate legacy LLM config shapes into the canonical
+ * `llm.providers` + `llm.default` / `llm.tiers` shape, in-memory.
  *
- * Call this AFTER any source that may mutate `llm.primary` (env vars, DB
- * settings merge) so the derived medium tier matches the final primary.
+ * Handles two layered migrations:
+ *
+ * 1. Legacy per-provider blocks (`llm.anthropic: {api_key, model}`) are
+ *    promoted to `llm.providers.anthropic: {api_key}` and the model is
+ *    captured for later use in tier/default model strings.
+ *
+ * 2. Legacy `llm.primary` + the captured per-provider model are combined
+ *    into either `llm.default` (single-LLM mode) or `llm.tiers.medium`
+ *    (when tiers are partially configured), keeping the old behavior.
+ *
+ * 3. Legacy `llm.tiers.{tier}: {provider, model?}` object form is
+ *    converted to the new string form `"provider:model"`.
+ *
+ * 4. Legacy `llm.fallback` is dropped with a deprecation warning - tier
+ *    fall-up replaces it.
+ *
+ * Idempotent: re-running the migration on an already-migrated config is a
+ * no-op. Call this AFTER any source that may mutate the legacy fields
+ * (env vars, DB settings merge) so the derived shape matches the final state.
  */
 export function migrateLegacyLLMConfig(config: JarvisConfig): void {
   const llm = config.llm;
+  if (!llm.providers) llm.providers = {};
   if (!llm.tiers) llm.tiers = {};
 
+  // Track legacy per-provider models so we can rebuild model strings.
+  const legacyModels: Record<string, string | undefined> = {};
+
+  const promote = (
+    name: string,
+    block: { api_key?: string; base_url?: string; model?: string } | undefined,
+  ) => {
+    if (!block) return;
+    if (block.model) legacyModels[name] = block.model;
+    // Only register the provider if it has usable credentials/endpoint.
+    const hasCreds = (block.api_key && block.api_key.length > 0) || (block.base_url && block.base_url.length > 0);
+    if (!hasCreds) return;
+    if (llm.providers![name]) return;  // explicit new-shape entry wins
+    llm.providers![name] = {
+      ...(block.api_key !== undefined ? { api_key: block.api_key } : {}),
+      ...(block.base_url !== undefined ? { base_url: block.base_url } : {}),
+    };
+  };
+
+  promote('anthropic', llm.anthropic);
+  promote('openai', llm.openai);
+  promote('groq', llm.groq);
+  promote('gemini', llm.gemini);
+  promote('ollama', llm.ollama);
+  promote('openrouter', llm.openrouter);
+  promote('nvidia', llm.nvidia);
+  promote('openai_compatible', llm.openai_compatible);
+  promote('litellm', llm.litellm);
+
+  // Convert any legacy tier object form into string form.
+  for (const tier of ['conversation', 'high', 'medium', 'low'] as const) {
+    const value = llm.tiers[tier] as unknown;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const obj = value as { provider?: string; model?: string };
+      if (obj.provider) {
+        const model = obj.model ?? legacyModels[obj.provider];
+        if (model) {
+          llm.tiers[tier] = `${obj.provider}:${model}`;
+        } else {
+          // Provider without a known model - leave undefined so resolution falls up.
+          delete llm.tiers[tier];
+        }
+      }
+    }
+  }
+
+  // If neither default nor any tier is set, derive single-LLM `default`
+  // from the legacy primary so existing one-LLM configs keep working.
   const anyTierSet =
     llm.tiers.conversation || llm.tiers.high || llm.tiers.medium || llm.tiers.low;
-
-  if (!anyTierSet && llm.primary) {
-    const providerBlock = (llm as Record<string, unknown>)[llm.primary] as
-      | { model?: string }
-      | undefined;
-    llm.tiers.medium = {
-      provider: llm.primary,
-      ...(providerBlock?.model ? { model: providerBlock.model } : {}),
-    };
+  if (!llm.default && !anyTierSet && llm.primary) {
+    const model = legacyModels[llm.primary];
+    if (model) llm.default = `${llm.primary}:${model}`;
   }
 
-  if (llm.fallback && llm.fallback.length > 0 && !anyTierSet) {
+  if (llm.fallback && llm.fallback.length > 0) {
     console.warn(
-      '[Config] `llm.fallback` is deprecated. Configure `llm.tiers.{low,medium,high,conversation}` instead - tier fall-up replaces the fallback chain.',
+      '[Config] `llm.fallback` is deprecated. Configure per-tier models via `llm.tiers.{conversation,high,medium,low}` instead - tier fall-up replaces the fallback chain.',
     );
   }
+}
+
+/**
+ * Strip legacy LLM config fields when writing to disk. We always persist the
+ * canonical `providers` + `default`/`tiers` shape; the legacy per-provider
+ * blocks and `primary`/`fallback` aliases are only read by the loader for
+ * backward compatibility and are no longer authoritative.
+ */
+function stripLegacyLLMFields(config: JarvisConfig): JarvisConfig {
+  const clone = structuredClone(config);
+  const llm = clone.llm as Record<string, unknown>;
+  delete llm.primary;
+  delete llm.fallback;
+  delete llm.anthropic;
+  delete llm.openai;
+  delete llm.groq;
+  delete llm.gemini;
+  delete llm.ollama;
+  delete llm.openrouter;
+  delete llm.nvidia;
+  delete llm.openai_compatible;
+  delete llm.litellm;
+  return clone;
 }
 
 export async function saveConfig(
@@ -211,7 +293,8 @@ export async function saveConfig(
   const path = configPath || expandTilde('~/.jarvis/config.yaml');
 
   try {
-    const yaml = YAML.stringify(config, {
+    const canonical = stripLegacyLLMFields(config);
+    const yaml = YAML.stringify(canonical, {
       indent: 2,
       lineWidth: 100,
       defaultStringType: 'PLAIN',

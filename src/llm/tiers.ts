@@ -67,3 +67,25 @@ export function validateTierMap(tiers: TierMap): string | null {
   }
   return null;
 }
+
+/**
+ * Parse a model reference string of the form "<provider-name>:<model-id>" into
+ * a TierAssignment. The split is on the FIRST colon - model ids may contain
+ * additional colons (rare but real, e.g. some OpenRouter slugs).
+ *
+ * Returns null when the input is empty or doesn't contain a colon - callers
+ * should treat that as "no model configured" for the tier.
+ */
+export function parseModelRef(ref: string | undefined | null): TierAssignment | null {
+  if (!ref || typeof ref !== 'string') return null;
+  const idx = ref.indexOf(':');
+  if (idx <= 0 || idx === ref.length - 1) return null;
+  const provider = ref.slice(0, idx);
+  const model = ref.slice(idx + 1);
+  return { provider, model };
+}
+
+/** Inverse of parseModelRef. */
+export function formatModelRef(assignment: TierAssignment): string {
+  return assignment.model ? `${assignment.provider}:${assignment.model}` : assignment.provider;
+}

@@ -14,15 +14,7 @@ import type { RoleDefinition } from '../roles/types.ts';
 import type { PersonalityModel } from '../personality/model.ts';
 
 import { LLMManager } from '../llm/manager.ts';
-import { AnthropicProvider } from '../llm/anthropic.ts';
-import { OpenAIProvider } from '../llm/openai.ts';
-import { GroqProvider } from '../llm/groq.ts';
-import { GeminiProvider } from '../llm/gemini.ts';
-import { OllamaProvider } from '../llm/ollama.ts';
-import { OpenRouterProvider } from '../llm/openrouter.ts';
-import { NVIDIAProvider } from '../llm/nvidia.ts';
-import { OpenAICompatibleProvider } from '../llm/openai-compatible.ts';
-import { LiteLLMProvider } from '../llm/litellm.ts';
+import { registerLLMProviders, configureLLMTiers } from '../llm/config-binding.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -515,154 +507,14 @@ export class AgentService implements Service, IAgentService {
 
   private registerProviders(): void {
     const { llm } = this.config;
-    let hasProvider = false;
-
-    // Register Anthropic
-    if (llm.anthropic?.api_key) {
-      const provider = new AnthropicProvider(
-        llm.anthropic.api_key,
-        llm.anthropic.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered Anthropic provider');
-    }
-
-    // Register OpenAI
-    if (llm.openai?.api_key) {
-      const provider = new OpenAIProvider(
-        llm.openai.api_key,
-        llm.openai.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered OpenAI provider');
-    }
-
-    // Register Groq
-    if (llm.groq?.api_key) {
-      const provider = new GroqProvider(
-        llm.groq.api_key,
-        llm.groq.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered Groq provider');
-    }
-
-    // Register Gemini
-    if (llm.gemini?.api_key) {
-      const provider = new GeminiProvider(
-        llm.gemini.api_key,
-        llm.gemini.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered Gemini provider');
-    }
-
-    // Register OpenRouter
-    if (llm.openrouter?.api_key) {
-      const provider = new OpenRouterProvider(
-        llm.openrouter.api_key,
-        llm.openrouter.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered OpenRouter provider');
-    }
-
-    // Register NVIDIA
-    if (llm.nvidia?.api_key) {
-      const provider = new NVIDIAProvider(
-        llm.nvidia.api_key,
-        llm.nvidia.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered NVIDIA provider');
-    }
-
-    // Register Ollama only when the user has explicitly set a base_url.
-    // Defaulting to localhost:11434 makes the provider appear active even
-    // when no Ollama server is running, so we require an opt-in URL.
-    if (llm.ollama?.base_url) {
-      const provider = new OllamaProvider(
-        llm.ollama.base_url,
-        llm.ollama.model
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered Ollama provider');
-    }
-
-    // Register OpenAI-compatible (llama.cpp, vLLM, LM Studio, etc.).
-    // Needs an explicit base_url; api_key is optional.
-    if (llm.openai_compatible?.base_url) {
-      const provider = new OpenAICompatibleProvider(
-        llm.openai_compatible.base_url,
-        llm.openai_compatible.model,
-        llm.openai_compatible.api_key,
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered OpenAI-compatible provider');
-    }
-
-    // Register LiteLLM proxy. Needs an explicit base_url so it doesn't
-    // appear active when no proxy is running; the virtual key is
-    // optional for unauthenticated local proxies.
-    if (llm.litellm?.base_url) {
-      const provider = new LiteLLMProvider(
-        llm.litellm.base_url,
-        llm.litellm.model,
-        llm.litellm.api_key,
-      );
-      this.llmManager.registerProvider(provider);
-      hasProvider = true;
-      console.log('[AgentService] Registered LiteLLM provider');
-    }
+    const hasProvider = registerLLMProviders(this.llmManager, llm.providers ?? {});
 
     if (!hasProvider) {
       console.warn('[AgentService] No LLM providers configured. Responses will be placeholders.');
     }
 
-    // Set primary and fallback chain
     if (hasProvider) {
-      try {
-        this.llmManager.setPrimary(llm.primary);
-      } catch {
-        // Primary provider not available, first registered is already primary
-      }
-
-      // Set fallback chain (only for providers that were registered)
-      const registeredFallbacks = llm.fallback.filter(
-        (name) => this.llmManager.getProvider(name) !== undefined
-      );
-      if (registeredFallbacks.length > 0) {
-        this.llmManager.setFallbackChain(registeredFallbacks);
-      }
-
-      // Configure tier map. Only assignments referencing a registered provider
-      // are accepted - silently dropping unregistered tiers means a partial
-      // config still boots (and falls up to whatever IS registered).
-      if (llm.tiers) {
-        const tierMap: import('../llm/tiers.ts').TierMap = {};
-        for (const [tier, assignment] of Object.entries(llm.tiers) as [
-          import('../llm/tiers.ts').Tier,
-          { provider: string; model?: string } | undefined,
-        ][]) {
-          if (!assignment) continue;
-          if (this.llmManager.getProvider(assignment.provider)) {
-            tierMap[tier] = assignment;
-          } else {
-            console.warn(
-              `[AgentService] Tier '${tier}' references unregistered provider '${assignment.provider}' - skipping.`
-            );
-          }
-        }
-        this.llmManager.setTierMap(tierMap);
-      }
+      configureLLMTiers(this.llmManager, llm);
     }
 
     // Phase 4: initialize conv-tier infrastructure ONLY when the user has

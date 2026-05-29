@@ -38,14 +38,18 @@ describe('Config Loader', () => {
   test('can save and load config', async () => {
     const testConfig = structuredClone(DEFAULT_CONFIG);
     testConfig.daemon.port = 9999;
-    testConfig.llm.primary = 'openai';
+    testConfig.llm.providers = { openai: { api_key: 'sk-test' } };
+    testConfig.llm.default = 'openai:gpt-4o-mini';
 
     await saveConfig(testConfig, TEST_CONFIG_PATH);
     expect(existsSync(TEST_CONFIG_PATH)).toBe(true);
 
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.port).toBe(9999);
-    expect(loaded.llm.primary).toBe('openai');
+    expect(loaded.llm.providers?.openai).toBeDefined();
+    expect(loaded.llm.default).toBe('openai:gpt-4o-mini');
+    // Legacy fields should have been stripped on save
+    expect(loaded.llm.primary).toBeUndefined();
   });
 
   test('saves config with owner-only permissions', async () => {
@@ -219,7 +223,7 @@ llm:
     expect(secondText).toBe(firstText);
   });
 
-  test('round-trips channel config and multi-provider fallbacks', async () => {
+  test('round-trips channel config and multi-tier LLM setup', async () => {
     const testConfig = structuredClone(DEFAULT_CONFIG);
     testConfig.channels = {
       telegram: {
@@ -234,15 +238,13 @@ llm:
         guild_id: 'guild-123',
       },
     };
-    testConfig.llm.primary = 'ollama';
-    testConfig.llm.fallback = ['gemini', 'openai'];
-    testConfig.llm.gemini = {
-      api_key: 'gemini-key',
-      model: 'gemini-3-flash-preview',
+    testConfig.llm.providers = {
+      ollama: { base_url: 'http://localhost:11434' },
+      gemini: { api_key: 'gemini-key' },
     };
-    testConfig.llm.ollama = {
-      base_url: 'http://localhost:11434',
-      model: 'llama3.1',
+    testConfig.llm.tiers = {
+      conversation: 'gemini:gemini-3-flash-preview',
+      medium: 'ollama:llama3.1',
     };
 
     await saveConfig(testConfig, TEST_CONFIG_PATH);
@@ -250,10 +252,10 @@ llm:
 
     expect(loaded.channels?.discord?.enabled).toBe(true);
     expect(loaded.channels?.discord?.guild_id).toBe('guild-123');
-    expect(loaded.llm.primary).toBe('ollama');
-    expect(loaded.llm.fallback).toEqual(['gemini', 'openai']);
-    expect(loaded.llm.gemini?.model).toBe('gemini-3-flash-preview');
-    expect(loaded.llm.ollama?.model).toBe('llama3.1');
+    expect(loaded.llm.providers?.ollama?.base_url).toBe('http://localhost:11434');
+    expect(loaded.llm.providers?.gemini?.api_key).toBe('gemini-key');
+    expect(loaded.llm.tiers?.conversation).toBe('gemini:gemini-3-flash-preview');
+    expect(loaded.llm.tiers?.medium).toBe('ollama:llama3.1');
   });
 });
 
@@ -265,8 +267,8 @@ describe('Default Config', () => {
     expect(DEFAULT_CONFIG.daemon.db_path).toBe('~/.jarvis/jarvis.db');
 
     expect(DEFAULT_CONFIG.llm).toBeDefined();
-    expect(DEFAULT_CONFIG.llm.primary).toBe('anthropic');
-    expect(DEFAULT_CONFIG.llm.fallback).toEqual(['openai', 'ollama']);
+    expect(DEFAULT_CONFIG.llm.providers).toBeDefined();
+    expect(DEFAULT_CONFIG.llm.tiers).toBeDefined();
 
     expect(DEFAULT_CONFIG.personality).toBeDefined();
     expect(DEFAULT_CONFIG.personality.core_traits).toBeInstanceOf(Array);
@@ -287,11 +289,11 @@ describe('Default Config', () => {
   });
 
   test('has correct LLM defaults', () => {
-    expect(DEFAULT_CONFIG.llm.anthropic?.model).toBe('claude-sonnet-4-6');
-    expect(DEFAULT_CONFIG.llm.openai?.model).toBe('gpt-5.4');
-    expect(DEFAULT_CONFIG.llm.gemini?.model).toBe('gemini-3-flash-preview');
-    expect(DEFAULT_CONFIG.llm.ollama?.model).toBe('llama3');
-    expect(DEFAULT_CONFIG.llm.ollama?.base_url).toBe('');
+    // Default config ships empty providers + tiers. Users configure their
+    // own providers via the dashboard / config.yaml.
+    expect(DEFAULT_CONFIG.llm.providers).toEqual({});
+    expect(DEFAULT_CONFIG.llm.tiers).toEqual({});
+    expect(DEFAULT_CONFIG.llm.default).toBeUndefined();
   });
 });
 
