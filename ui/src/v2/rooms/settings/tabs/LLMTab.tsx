@@ -1,14 +1,24 @@
-import React, { useEffect, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ChevronRight, Plus, Trash2, ChevronLeft } from "lucide-react";
 import { Icon } from "../../../ui";
 import {
-  LLM_PROVIDERS,
-  LLM_PROVIDER_LABELS,
-  type LLMProvider,
+  KEY_BASED_KINDS,
+  LLM_PROVIDER_KIND_LABELS,
+  LLM_PROVIDER_KINDS,
+  URL_BASED_KINDS,
+  type LLMConfigProviderView,
+  type LLMProviderKind,
+  type LLMTier,
   type SettingsHook,
+  parseModelRef,
 } from "../useSettingsData";
 
-const MODELS: Record<LLMProvider, string[]> = {
+/**
+ * Curated model lists per provider class. Each key is a kind (not a name)
+ * so multiple instances of the same kind share the same dropdown. Empty
+ * arrays mean "type any model id" (openai_compatible / litellm proxies).
+ */
+const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   anthropic: [
     "claude-opus-4-7",
     "claude-opus-4-6",
@@ -18,12 +28,12 @@ const MODELS: Record<LLMProvider, string[]> = {
   ],
   openai: [
     "gpt-5.4",
+    "gpt-5.4-mini",
     "gpt-5.4-thinking",
     "gpt-5.4-pro",
     "gpt-5.3-instant",
     "gpt-5-mini",
     "gpt-5-nano",
-    "gpt-5.1-codex",
     "gpt-4.1",
     "o3",
     "o4-mini",
@@ -56,28 +66,23 @@ const MODELS: Record<LLMProvider, string[]> = {
   openrouter: [
     "anthropic/claude-sonnet-4",
     "anthropic/claude-opus-4",
-    "anthropic/claude-haiku-4",
     "openai/gpt-5.4",
     "openai/o3",
     "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
     "deepseek/deepseek-r1",
     "meta-llama/llama-4-maverick",
     "mistralai/mistral-large",
   ],
-  // NVIDIA models are fetched live from /api/config/llm/nvidia/models when
-  // the row is expanded. These entries are the offline fallback.
-  nvidia: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-8b-instruct", "google/gemma-2-2b-it"],
-  // OpenAI-compatible covers llama.cpp, vLLM, LM Studio, TGI and other
-  // backends — model names are entirely user-defined, so the dropdown
-  // starts empty and the user types or pastes a model id.
+  nvidia: [
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-3.1-8b-instruct",
+    "google/gemma-2-2b-it",
+  ],
   openai_compatible: [],
-  // LiteLLM proxies to 100+ backend providers and uses provider-prefixed
-  // model names (e.g. `gpt-4o`, `anthropic/claude-3-opus`, `gemini/gemini-pro`)
-  // configured on the proxy itself. Leave empty so users type the alias
-  // that matches their proxy config.
   litellm: [],
 };
+
+type Mode = "basic" | "advanced";
 
 export function LLMTab({
   data,
@@ -87,441 +92,646 @@ export function LLMTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const llm = data.llm;
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [mode, setMode] = useState<Mode>("basic");
+
+  // Auto-switch to advanced when ANY tier is configured. Users in classic
+  // single-LLM mode (just `default` set) start in basic.
+  useEffect(() => {
+    if (!llm) return;
+    const anyTier =
+      llm.tiers.conversation ||
+      llm.tiers.high ||
+      llm.tiers.medium ||
+      llm.tiers.low;
+    if (anyTier) setMode("advanced");
+  }, [llm?.tiers.conversation, llm?.tiers.high, llm?.tiers.medium, llm?.tiers.low]);
 
   if (!llm) return <div className="v2-set__empty">Loading LLM config…</div>;
 
   return (
     <div>
-      {/* Primary + fallback */}
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">Routing</h3>
+            <h3 className="v2-set__section-title">Providers</h3>
             <div className="v2-set__section-sub">
-              Primary handles every request; fallbacks step in when it fails.
+              Configure credentials once per provider. Models are picked below.
             </div>
           </div>
         </div>
+        <ProvidersList data={data} onToast={onToast} />
+      </section>
 
+      {mode === "basic" ? (
+        <BasicModelSection data={data} onToast={onToast} onAdvanced={() => setMode("advanced")} />
+      ) : (
+        <AdvancedTiersSection data={data} onToast={onToast} onBack={() => setMode("basic")} />
+      )}
+    </div>
+  );
+}
+
+// ─── Providers list ────────────────────────────────────────────────────────
+
+function ProvidersList({
+  data,
+  onToast,
+}: {
+  data: SettingsHook;
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+}) {
+  const llm = data.llm!;
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [adding, setAdding] = useState(false);
+
+  const names = Object.keys(llm.providers).sort();
+
+  return (
+    <div>
+      {names.length === 0 && !adding && (
+        <div className="v2-set__empty">No providers configured yet.</div>
+      )}
+
+      {names.map((name) => (
+        <ProviderRow
+          key={name}
+          name={name}
+          entry={llm.providers[name]!}
+          data={data}
+          onToast={onToast}
+          expanded={!!expanded[name]}
+          onToggleExpanded={() =>
+            setExpanded((s) => ({ ...s, [name]: !s[name] }))
+          }
+        />
+      ))}
+
+      {adding ? (
+        <NewProviderRow
+          existing={names}
+          data={data}
+          onToast={onToast}
+          onDone={() => setAdding(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          className="v2-set__btn"
+          style={{ marginTop: "var(--s-3)" }}
+          onClick={() => setAdding(true)}
+        >
+          <Icon icon={Plus} size={14} /> Add provider
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ProviderRow({
+  name,
+  entry,
+  data,
+  onToast,
+  expanded,
+  onToggleExpanded,
+}: {
+  name: string;
+  entry: LLMConfigProviderView;
+  data: SettingsHook;
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+}) {
+  const usesUrl = URL_BASED_KINDS.has(entry.kind);
+  const usesKey = KEY_BASED_KINDS.has(entry.kind);
+  const configured = usesUrl ? !!entry.base_url : entry.has_api_key;
+
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(entry.base_url ?? "");
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    setBaseUrl(entry.base_url ?? "");
+  }, [entry.base_url]);
+
+  return (
+    <div className={"v2-set__row " + (expanded ? "v2-set__row--open" : "")}>
+      <button
+        type="button"
+        className="v2-set__row-head"
+        onClick={onToggleExpanded}
+      >
+        <span className="v2-set__row-name">
+          {name}{" "}
+          <span className="v2-set__chip" style={{ marginLeft: 6 }}>
+            kind: {LLM_PROVIDER_KIND_LABELS[entry.kind]}
+          </span>
+        </span>
+        <span className="v2-set__row-state">
+          {configured ? (
+            <span className="v2-set__chip v2-set__chip--ok">configured</span>
+          ) : (
+            <span className="v2-set__chip">not set</span>
+          )}
+          <Icon icon={ChevronRight} size={14} />
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="v2-set__row-body">
+          {usesKey && (
+            <div className="v2-set__field">
+              <label className="v2-set__field-label">API key</label>
+              <input
+                type="password"
+                className="v2-set__input"
+                placeholder={entry.has_api_key ? "•••• stored ••••" : "paste key here"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </div>
+          )}
+          {usesUrl && (
+            <div className="v2-set__field">
+              <label className="v2-set__field-label">Base URL</label>
+              <input
+                type="text"
+                className="v2-set__input"
+                placeholder="http://localhost:11434"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+              />
+            </div>
+          )}
+
+          <div className="v2-set__row-actions" style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+            <button
+              type="button"
+              className="v2-set__btn"
+              disabled={testing}
+              onClick={async () => {
+                setTesting(true);
+                setTestResult(null);
+                const r = await data.testProvider(name, {
+                  kind: entry.kind,
+                  apiKey: apiKey || undefined,
+                  baseUrl: baseUrl || undefined,
+                });
+                setTestResult({ ok: r.ok, text: r.message });
+                setTesting(false);
+              }}
+            >
+              {testing ? "Testing…" : "Test connection"}
+            </button>
+            <button
+              type="button"
+              className="v2-set__btn v2-set__btn--primary"
+              disabled={saving || (!apiKey && baseUrl === (entry.base_url ?? ""))}
+              onClick={async () => {
+                setSaving(true);
+                const input: { kind?: LLMProviderKind; api_key?: string; base_url?: string } = {};
+                if (apiKey) input.api_key = apiKey;
+                if (usesUrl) input.base_url = baseUrl;
+                const r = await data.upsertProvider(name, input);
+                onToast(r.message, r.ok ? "ok" : "warn");
+                if (r.ok) setApiKey("");
+                setSaving(false);
+              }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="v2-set__btn v2-set__btn--danger"
+              style={{ marginLeft: "auto" }}
+              onClick={async () => {
+                if (!confirm(`Remove provider '${name}'? This deletes the stored API key.`)) return;
+                const r = await data.removeProvider(name);
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              <Icon icon={Trash2} size={14} /> Remove
+            </button>
+          </div>
+
+          {testResult && (
+            <div className={"v2-set__hint " + (testResult.ok ? "v2-set__hint--ok" : "v2-set__hint--warn")}>
+              {testResult.text}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewProviderRow({
+  existing,
+  data,
+  onToast,
+  onDone,
+}: {
+  existing: string[];
+  data: SettingsHook;
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState<LLMProviderKind>("anthropic");
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const usesUrl = URL_BASED_KINDS.has(kind);
+  const usesKey = KEY_BASED_KINDS.has(kind);
+  // Suggest name = kind unless user typed something
+  const effectiveName = name.trim() || kind;
+  const duplicate = existing.includes(effectiveName);
+
+  return (
+    <div className="v2-set__row v2-set__row--open">
+      <div className="v2-set__row-body">
         <div className="v2-set__field">
-          <label className="v2-set__field-label">Primary provider</label>
+          <label className="v2-set__field-label">Provider kind</label>
           <select
             className="v2-set__select"
-            value={llm.primary}
-            onChange={async (e) => {
-              const r = await data.setPrimaryLLM(e.target.value as LLMProvider);
-              onToast(r.message, r.ok ? "ok" : "warn");
-            }}
+            value={kind}
+            onChange={(e) => setKind(e.target.value as LLMProviderKind)}
           >
-            {LLM_PROVIDERS.map((p) => (
-              <option key={p} value={p}>
-                {LLM_PROVIDER_LABELS[p]}
+            {LLM_PROVIDER_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {LLM_PROVIDER_KIND_LABELS[k]}
               </option>
             ))}
           </select>
         </div>
 
         <div className="v2-set__field">
-          <label className="v2-set__field-label">Fallback chain</label>
-          <div className="v2-set__chip-row">
-            {LLM_PROVIDERS.filter((p) => p !== llm.primary).map((p) => {
-              const active = llm.fallback.includes(p);
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  className={"v2-set__btn " + (active ? "v2-set__btn--primary" : "")}
-                  onClick={async () => {
-                    const next = active
-                      ? llm.fallback.filter((x) => x !== p)
-                      : [...llm.fallback, p];
-                    const r = await data.setFallbackLLM(next);
-                    onToast(r.message, r.ok ? "ok" : "warn");
-                  }}
-                >
-                  {LLM_PROVIDER_LABELS[p]}
-                </button>
-              );
-            })}
-          </div>
+          <label className="v2-set__field-label">
+            Name <span style={{ opacity: 0.6 }}>(how you reference this in model strings)</span>
+          </label>
+          <input
+            type="text"
+            className="v2-set__input"
+            placeholder={kind}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          {duplicate && (
+            <div className="v2-set__hint v2-set__hint--warn">
+              A provider named &quot;{effectiveName}&quot; already exists. Pick a different name.
+            </div>
+          )}
         </div>
-      </section>
 
-      {/* Per-provider rows */}
-      {LLM_PROVIDERS.map((p) => (
-        <ProviderRow
-          key={p}
-          provider={p}
-          data={data}
-          onToast={onToast}
-          isPrimary={llm.primary === p}
-          isFallback={llm.fallback.includes(p)}
-          expanded={!!expanded[p]}
-          onToggleExpanded={() =>
-            setExpanded((s) => ({ ...s, [p]: !s[p] }))
-          }
-        />
-      ))}
+        {usesKey && (
+          <div className="v2-set__field">
+            <label className="v2-set__field-label">API key</label>
+            <input
+              type="password"
+              className="v2-set__input"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </div>
+        )}
+        {usesUrl && (
+          <div className="v2-set__field">
+            <label className="v2-set__field-label">Base URL</label>
+            <input
+              type="text"
+              className="v2-set__input"
+              placeholder="http://localhost:11434"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div className="v2-set__row-actions" style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+          <button type="button" className="v2-set__btn" onClick={onDone}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="v2-set__btn v2-set__btn--primary"
+            disabled={saving || duplicate || (usesKey && !apiKey) || (usesUrl && !baseUrl)}
+            onClick={async () => {
+              setSaving(true);
+              const input: { kind: LLMProviderKind; api_key?: string; base_url?: string } = { kind };
+              if (apiKey) input.api_key = apiKey;
+              if (baseUrl) input.base_url = baseUrl;
+              const r = await data.upsertProvider(effectiveName, input);
+              onToast(r.message, r.ok ? "ok" : "warn");
+              setSaving(false);
+              if (r.ok) onDone();
+            }}
+          >
+            {saving ? "Saving…" : "Add"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ProviderRow({
-  provider,
+// ─── Basic mode: single model picker ───────────────────────────────────────
+
+function BasicModelSection({
   data,
   onToast,
-  isPrimary,
-  isFallback,
-  expanded,
-  onToggleExpanded,
+  onAdvanced,
 }: {
-  provider: LLMProvider;
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
-  isPrimary: boolean;
-  isFallback: boolean;
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  onAdvanced: () => void;
 }) {
-  const pCfg = data.llm ? (data.llm as any)[provider] : null;
-  // For Ollama and OpenAI-compatible "configured" means the user set a
-  // base_url. The API key is optional in those flows (local servers often
-  // skip auth). All other providers gate on `has_api_key`.
-  const usesBaseUrl = provider === "ollama" || provider === "openai_compatible" || provider === "litellm";
-  const hasKey = usesBaseUrl ? !!pCfg?.base_url : !!pCfg?.has_api_key;
-  const currentModel: string = pCfg?.model ?? "";
-  const currentBaseUrl: string = pCfg?.base_url ?? "";
-
-  // NVIDIA's catalog rotates often, so we fetch the live model list when the
-  // row opens. Falls back to the hardcoded MODELS[provider] entries when the
-  // call fails. The list mixes chat / embedding / vision models — the row's
-  // "Test connection" button is the final guard against picking a non-chat
-  // model.
-  const [liveNvidiaModels, setLiveNvidiaModels] = useState<string[] | null>(null);
-  const [nvidiaFilter, setNvidiaFilter] = useState("");
-  useEffect(() => {
-    if (provider !== "nvidia" || !expanded || liveNvidiaModels !== null) return;
-    let cancelled = false;
-    fetch("/api/config/llm/nvidia/models")
-      .then((r) => r.json())
-      .then((d: { ok: boolean; models?: string[] }) => {
-        if (cancelled) return;
-        setLiveNvidiaModels(d.ok && d.models && d.models.length > 0 ? d.models : []);
-      })
-      .catch(() => {
-        if (!cancelled) setLiveNvidiaModels([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [provider, expanded, liveNvidiaModels]);
-
-  const knownModels =
-    provider === "nvidia" && liveNvidiaModels && liveNvidiaModels.length > 0
-      ? liveNvidiaModels
-      : MODELS[provider];
-  // For openai_compatible the canonical list is empty: every model is a
-  // user-typed id, so the row always starts in "custom" mode unless we
-  // happen to know the model from a prior save.
-  const isCustomModel =
-    (currentModel && !knownModels.includes(currentModel)) ||
-    (knownModels.length === 0 && !currentModel);
-  const initialChoice = isCustomModel
-    ? "custom"
-    : currentModel || knownModels[0] || "custom";
-  const [modelChoice, setModelChoice] = useState<string>(initialChoice);
-  const [customModel, setCustomModel] = useState<string>(
-    isCustomModel ? currentModel : "",
-  );
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(currentBaseUrl);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setModelChoice(
-      isCustomModel ? "custom" : currentModel || knownModels[0] || "custom",
-    );
-    setCustomModel(isCustomModel ? currentModel : "");
-    setBaseUrl(currentBaseUrl);
-  }, [currentModel, currentBaseUrl, isCustomModel, knownModels]);
-
-  const filteredModels =
-    provider === "nvidia" && nvidiaFilter.trim()
-      ? knownModels.filter((m) =>
-          m.toLowerCase().includes(nvidiaFilter.trim().toLowerCase()),
-        )
-      : knownModels;
-
-  const resolveModel = () => (modelChoice === "custom" ? customModel : modelChoice);
-
-  const handleSaveModel = async () => {
-    const m = resolveModel();
-    if (!m) return;
-    setSaving(true);
-    const r = await data.setLLMModel(provider, m);
-    onToast(r.message, r.ok ? "ok" : "warn");
-    setSaving(false);
-  };
-
-  const handleSaveKey = async () => {
-    if (!apiKey) return;
-    setSaving(true);
-    const r = await data.setLLMApiKey(provider, apiKey);
-    if (r.ok) setApiKey("");
-    onToast(r.message, r.ok ? "ok" : "warn");
-    setSaving(false);
-  };
-
-  const handleSaveBaseUrl = async () => {
-    setSaving(true);
-    const trimmed = baseUrl.trim();
-    const r = provider === "openai_compatible"
-      ? await data.setOpenAICompatibleBaseUrl(trimmed)
-      : provider === "litellm"
-        ? await data.setLiteLLMBaseUrl(trimmed)
-        : await data.setOllamaBaseUrl(trimmed);
-    onToast(r.message, r.ok ? "ok" : "warn");
-    setSaving(false);
-  };
-
-  const handleTest = async () => {
-    setTesting(true);
-    setTestResult(null);
-    // Send the *currently-typed* model + baseUrl with the test request
-    // so the user can verify a change before committing it with Save.
-    // Without these overrides the server falls back to the stored config,
-    // which would test the previously-saved model even though the user
-    // already typed a new one in the textbox.
-    const overrides: { model?: string; baseUrl?: string; apiKey?: string } = {};
-    const m = resolveModel();
-    if (m) overrides.model = m;
-    if (usesBaseUrl && baseUrl) overrides.baseUrl = baseUrl.trim();
-    // For openai_compatible and litellm the freshly-typed key (if any) should
-    // be used for the test request. Ollama doesn't take a key.
-    if ((provider === "openai_compatible" || provider === "litellm") && apiKey) {
-      overrides.apiKey = apiKey;
-    }
-    const r = await data.testProvider(provider, overrides);
-    setTestResult({ ok: r.ok, text: r.message });
-    setTesting(false);
-  };
+  const llm = data.llm!;
 
   return (
-    <div className="v2-set__provider" data-primary={isPrimary}>
-      <button type="button" className="v2-set__provider-head" onClick={onToggleExpanded}>
-        <Icon
-          icon={ChevronRight}
-          size="sm"
-          style={{
-            transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
-            transition: "transform var(--dur-fast) var(--ease-out)",
-            color: "var(--ink-3)",
+    <section className="v2-set__section">
+      <div className="v2-set__section-head">
+        <div>
+          <h3 className="v2-set__section-title">Model</h3>
+          <div className="v2-set__section-sub">
+            Pick one model. The system uses it for all work (single-LLM mode).
+          </div>
+        </div>
+      </div>
+
+      <ModelSelector
+        label="Default model"
+        value={llm.default}
+        providers={llm.providers}
+        onChange={async (ref) => {
+          const r = await data.setDefaultModel(ref);
+          onToast(r.message, r.ok ? "ok" : "warn");
+        }}
+      />
+
+      <button
+        type="button"
+        className="v2-set__btn"
+        style={{ marginTop: "var(--s-3)" }}
+        onClick={onAdvanced}
+      >
+        <Icon icon={ChevronRight} size={14} /> Advanced settings (per-tier models)
+      </button>
+    </section>
+  );
+}
+
+// ─── Advanced mode: tier model pickers ─────────────────────────────────────
+
+function AdvancedTiersSection({
+  data,
+  onToast,
+  onBack,
+}: {
+  data: SettingsHook;
+  onToast: (text: string, tone?: "ok" | "warn") => void;
+  onBack: () => void;
+}) {
+  const llm = data.llm!;
+
+  const TIERS: Array<{ id: LLMTier; label: string; sub: string }> = [
+    {
+      id: "conversation",
+      label: "Conversation",
+      sub: "Thin LLM that owns dialogue and routes work to the task tiers. Setting this activates router-first mode.",
+    },
+    {
+      id: "high",
+      label: "High intelligence",
+      sub: "Complex reasoning, planning, deep code work.",
+    },
+    {
+      id: "medium",
+      label: "Medium intelligence",
+      sub: "General tool use, workflow orchestration, structured tasks.",
+    },
+    {
+      id: "low",
+      label: "Low intelligence",
+      sub: "Classification, summarization, fast cheap calls (voice intent, extractor).",
+    },
+  ];
+
+  return (
+    <section className="v2-set__section">
+      <div className="v2-set__section-head">
+        <div>
+          <h3 className="v2-set__section-title">Advanced — per-tier models</h3>
+          <div className="v2-set__section-sub">
+            Different models for different jobs. Tiers without an explicit
+            model fall up: low → medium → high. The basic default below acts
+            as the fallback when no tier is set.
+          </div>
+        </div>
+        <button type="button" className="v2-set__btn" onClick={onBack}>
+          <Icon icon={ChevronLeft} size={14} /> Back to basic
+        </button>
+      </div>
+
+      {TIERS.map((t) => (
+        <div key={t.id} className="v2-set__field">
+          <ModelSelector
+            label={t.label}
+            sub={t.sub}
+            value={llm.tiers[t.id]}
+            providers={llm.providers}
+            allowClear
+            onChange={async (ref) => {
+              const r = await data.setTierModel(t.id, ref);
+              onToast(r.message, r.ok ? "ok" : "warn");
+            }}
+          />
+        </div>
+      ))}
+
+      <div className="v2-set__field" style={{ marginTop: "var(--s-4)" }}>
+        <h4 className="v2-set__section-title">Default (fallback)</h4>
+        <div className="v2-set__section-sub" style={{ marginBottom: "var(--s-2)" }}>
+          Used when a tier has no explicit model and the fall-up chain has nothing either.
+        </div>
+        <ModelSelector
+          label=""
+          value={llm.default}
+          providers={llm.providers}
+          allowClear
+          onChange={async (ref) => {
+            const r = await data.setDefaultModel(ref);
+            onToast(r.message, r.ok ? "ok" : "warn");
           }}
         />
-        <span className={"v2-set__dot " + (hasKey ? "v2-set__dot--ok" : "")} />
-        <span className="v2-set__provider-name">{LLM_PROVIDER_LABELS[provider]}</span>
-        {currentModel && (
-          <span className="v2-set__chip">{currentModel}</span>
+      </div>
+    </section>
+  );
+}
+
+// ─── Model selector (provider + model dropdowns) ───────────────────────────
+
+function ModelSelector({
+  label,
+  sub,
+  value,
+  providers,
+  allowClear,
+  onChange,
+}: {
+  label: string;
+  sub?: string;
+  value: string | null;
+  providers: Record<string, LLMConfigProviderView>;
+  allowClear?: boolean;
+  onChange: (ref: string | null) => void;
+}) {
+  const parsed = useMemo(() => parseModelRef(value), [value]);
+  const providerNames = Object.keys(providers).sort();
+
+  const [selectedProvider, setSelectedProvider] = useState<string>(
+    parsed?.provider ?? providerNames[0] ?? "",
+  );
+  const [selectedModel, setSelectedModel] = useState<string>(parsed?.model ?? "");
+  const [customModel, setCustomModel] = useState<string>(
+    parsed?.model && !providerModels(providers, parsed.provider).includes(parsed.model)
+      ? parsed.model
+      : "",
+  );
+
+  // Sync local state when the backing config changes (e.g. after a save).
+  useEffect(() => {
+    if (parsed) {
+      setSelectedProvider(parsed.provider);
+      const known = providerModels(providers, parsed.provider);
+      if (known.includes(parsed.model)) {
+        setSelectedModel(parsed.model);
+        setCustomModel("");
+      } else {
+        setSelectedModel("__custom__");
+        setCustomModel(parsed.model);
+      }
+    }
+  }, [value]);
+
+  const models = providerModels(providers, selectedProvider);
+  const usesCustomOnly = models.length === 0;
+  const effectiveModel = selectedModel === "__custom__" ? customModel.trim() : selectedModel;
+
+  const commit = (provider: string, model: string) => {
+    if (!provider || !model) return;
+    onChange(`${provider}:${model}`);
+  };
+
+  if (providerNames.length === 0) {
+    return (
+      <div>
+        {label && <label className="v2-set__field-label">{label}</label>}
+        {sub && <div className="v2-set__section-sub">{sub}</div>}
+        <div className="v2-set__hint v2-set__hint--warn">
+          No providers configured. Add one above first.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {label && <label className="v2-set__field-label">{label}</label>}
+      {sub && <div className="v2-set__section-sub" style={{ marginBottom: "var(--s-2)" }}>{sub}</div>}
+      <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <select
+          className="v2-set__select"
+          value={selectedProvider}
+          onChange={(e) => {
+            const next = e.target.value;
+            setSelectedProvider(next);
+            // Reset model when provider changes - the model list is now different.
+            const nextModels = providerModels(providers, next);
+            const defaultModel = nextModels[0] ?? "__custom__";
+            setSelectedModel(defaultModel);
+            setCustomModel("");
+            if (defaultModel !== "__custom__") {
+              commit(next, defaultModel);
+            }
+          }}
+          style={{ flex: "0 0 auto", minWidth: 140 }}
+        >
+          {providerNames.map((n) => (
+            <option key={n} value={n}>
+              {n} ({LLM_PROVIDER_KIND_LABELS[providers[n]!.kind]})
+            </option>
+          ))}
+        </select>
+
+        {usesCustomOnly ? (
+          <input
+            type="text"
+            className="v2-set__input"
+            placeholder="model id"
+            value={customModel}
+            onChange={(e) => setCustomModel(e.target.value)}
+            onBlur={() => customModel && commit(selectedProvider, customModel.trim())}
+            style={{ flex: "1 1 200px" }}
+          />
+        ) : (
+          <select
+            className="v2-set__select"
+            value={selectedModel || models[0] || "__custom__"}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSelectedModel(next);
+              if (next !== "__custom__") {
+                commit(selectedProvider, next);
+              }
+            }}
+            style={{ flex: "1 1 200px" }}
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+            <option value="__custom__">Custom…</option>
+          </select>
         )}
-        {isPrimary && <span className="v2-set__chip v2-set__chip--accent">PRIMARY</span>}
-        {isFallback && !isPrimary && <span className="v2-set__chip">FALLBACK</span>}
-      </button>
 
-      {expanded && (
-        <div className="v2-set__provider-fields">
-          {usesBaseUrl && (
-            <div className="v2-set__field">
-              <label className="v2-set__field-label">Base URL</label>
-              <div style={{ display: "flex", gap: "var(--s-2)" }}>
-                <input
-                  className="v2-set__input"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder={
-                    provider === "ollama"
-                      ? "http://localhost:11434"
-                      : provider === "litellm"
-                        ? "http://localhost:4000/v1"
-                        : "http://localhost:8080/v1"
-                  }
-                />
-                {provider === "ollama" && (
-                  <button
-                    type="button"
-                    className="v2-set__btn"
-                    onClick={() => setBaseUrl("http://localhost:11434")}
-                    disabled={saving}
-                    title="Fill in the default localhost URL"
-                  >
-                    Default
-                  </button>
-                )}
-                {provider === "litellm" && (
-                  <button
-                    type="button"
-                    className="v2-set__btn"
-                    onClick={() => setBaseUrl("http://localhost:4000/v1")}
-                    disabled={saving}
-                    title="Fill in the default LiteLLM proxy URL"
-                  >
-                    Default
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="v2-set__btn"
-                  onClick={handleSaveBaseUrl}
-                  disabled={saving}
-                >
-                  Save
-                </button>
-              </div>
-              {provider === "openai_compatible" && (
-                <p className="v2-set__hint">
-                  Point at any server that speaks the OpenAI Chat Completions
-                  API -- llama.cpp (e.g. http://localhost:8080/v1), vLLM, LM
-                  Studio, TGI, Together, Anyscale. Include the /v1 suffix.
-                </p>
-              )}
-              {provider === "litellm" && (
-                <p className="v2-set__hint">
-                  URL of your LiteLLM proxy (self-hosted or hosted). The model
-                  string must match an alias configured on the proxy
-                  (e.g. `gpt-4o`, `anthropic/claude-3-opus`). Include /v1.
-                </p>
-              )}
-            </div>
-          )}
+        {selectedModel === "__custom__" && !usesCustomOnly && (
+          <input
+            type="text"
+            className="v2-set__input"
+            placeholder="model id"
+            value={customModel}
+            onChange={(e) => setCustomModel(e.target.value)}
+            onBlur={() => customModel && commit(selectedProvider, customModel.trim())}
+            style={{ flex: "1 1 200px" }}
+          />
+        )}
 
-          {(provider !== "ollama") && (
-            <div className="v2-set__field">
-              <label className="v2-set__field-label">
-                API Key
-                {(provider === "openai_compatible" || provider === "litellm") && (
-                  <span style={{ color: "var(--ink-3)", marginLeft: "var(--s-2)" }}>
-                    (optional)
-                  </span>
-                )}
-              </label>
-              <div style={{ display: "flex", gap: "var(--s-2)" }}>
-                <input
-                  className="v2-set__input"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={
-                    hasKey
-                      ? "Stored -- leave empty to keep"
-                      : provider === "openai_compatible"
-                        ? "Optional bearer token"
-                        : provider === "litellm"
-                          ? "Optional LiteLLM virtual key (sk-...)"
-                          : "Enter API key"
-                  }
-                />
-                <button
-                  type="button"
-                  className="v2-set__btn"
-                  onClick={handleSaveKey}
-                  disabled={saving || !apiKey}
-                >
-                  Save
-                </button>
-              </div>
-              <p className="v2-set__hint">
-                {provider === "openai_compatible"
-                  ? "Most local servers (llama.cpp, LM Studio) skip auth. Leave empty unless your endpoint requires a bearer token."
-                  : provider === "litellm"
-                    ? "Use the LiteLLM virtual key minted on your proxy. Leave empty for unauthenticated local proxies."
-                    : "Keys are stored in the keychain and never echoed back. Voice never sets keys -- use this field directly."}
-              </p>
-            </div>
-          )}
-
-          {provider === "nvidia" && (
-            <div className="v2-set__field">
-              <label className="v2-set__field-label">
-                Filter models
-                <span style={{ color: "var(--ink-3)", marginLeft: "var(--s-2)" }}>
-                  ({knownModels.length} from NVIDIA catalog)
-                </span>
-              </label>
-              <input
-                className="v2-set__input"
-                value={nvidiaFilter}
-                onChange={(e) => setNvidiaFilter(e.target.value)}
-                placeholder="e.g. llama, mistral, gemma"
-              />
-              <p className="v2-set__hint">
-                Catalog mixes chat, embedding and vision models. Use Test
-                connection to confirm the chosen model supports chat.
-              </p>
-            </div>
-          )}
-
-          <div className="v2-set__field">
-            <label className="v2-set__field-label">Model</label>
-            <div style={{ display: "flex", gap: "var(--s-2)" }}>
-              {knownModels.length > 0 && (
-                <select
-                  className="v2-set__select"
-                  value={modelChoice}
-                  onChange={(e) => setModelChoice(e.target.value)}
-                  style={{ flex: 1 }}
-                >
-                  {filteredModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                  {provider === "nvidia" && filteredModels.length === 0 && (
-                    <option value="" disabled>
-                      No models match "{nvidiaFilter}"
-                    </option>
-                  )}
-                  <option value="custom">Custom…</option>
-                </select>
-              )}
-              {(modelChoice === "custom" || knownModels.length === 0) && (
-                <input
-                  className="v2-set__input"
-                  value={customModel}
-                  onChange={(e) => setCustomModel(e.target.value)}
-                  placeholder="model id"
-                  style={{ flex: 1 }}
-                />
-              )}
-              <button
-                type="button"
-                className="v2-set__btn v2-set__btn--primary"
-                onClick={handleSaveModel}
-                disabled={saving}
-              >
-                Save model
-              </button>
-            </div>
-          </div>
-
-          <div className="v2-set__provider-actions">
-            <button
-              type="button"
-              className="v2-set__btn"
-              onClick={handleTest}
-              disabled={testing}
-            >
-              {testing ? "Testing…" : "Test connection"}
-            </button>
-            {testResult && (
-              <span className="v2-set__test-result" data-ok={testResult.ok}>
-                {testResult.text}
-              </span>
-            )}
-          </div>
+        {allowClear && value && (
+          <button
+            type="button"
+            className="v2-set__btn"
+            onClick={() => onChange(null)}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {effectiveModel && (
+        <div className="v2-set__hint" style={{ marginTop: "var(--s-2)" }}>
+          Saved as <code>{selectedProvider}:{effectiveModel}</code>
         </div>
       )}
     </div>
   );
+}
+
+function providerModels(
+  providers: Record<string, LLMConfigProviderView>,
+  name: string,
+): string[] {
+  const entry = providers[name];
+  if (!entry) return [];
+  return MODELS_BY_KIND[entry.kind] ?? [];
 }

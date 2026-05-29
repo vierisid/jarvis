@@ -14,7 +14,7 @@ import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
-import { useSettingsData, type LLMProvider, LLM_PROVIDERS } from "./useSettingsData";
+import { useSettingsData } from "./useSettingsData";
 import {
   resetOnboarding,
   type OnboardingResetScope,
@@ -88,7 +88,16 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
           );
         }
         if (tab === "llm" && data.llm) {
-          lines.push(`Primary provider is ${data.llm.primary}; fallback ${data.llm.fallback.join(", ") || "none"}.`);
+          const names = Object.keys(data.llm.providers);
+          const desc = names.length === 0
+            ? "no providers configured"
+            : `${names.length} provider${names.length === 1 ? "" : "s"} configured (${names.join(", ")})`;
+          const model = data.llm.default
+            ? `Default model: ${data.llm.default}.`
+            : data.llm.tiers.conversation
+              ? "Router-first mode (per-tier models configured)."
+              : "No model selected.";
+          lines.push(`${desc}. ${model}`);
         }
         if (tab === "channels" && data.channelCfg && data.ttsCfg) {
           lines.push(
@@ -108,48 +117,32 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
 
       // ── LLM ──
-      case "set_primary_llm": {
-        const provider = String(args.provider).toLowerCase();
-        if (!LLM_PROVIDERS.includes(provider as LLMProvider)) return false;
-        setTab("llm");
-        (async () => {
-          const r = await data.setPrimaryLLM(provider as LLMProvider);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
-      }
-      case "set_fallback_llm": {
-        const fallbackArg = args.fallback ?? args.provider;
-        const list = Array.isArray(fallbackArg)
-          ? fallbackArg.map(String)
-          : typeof fallbackArg === "string"
-            ? fallbackArg.split(",").map((s) => s.trim()).filter(Boolean)
-            : [];
-        if (list.length === 0) return false;
-        setTab("llm");
-        (async () => {
-          const r = await data.setFallbackLLM(list);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
-      }
+      // Voice room-actions for the LLM panel were tied to the legacy
+      // primary/fallback/model triplet. After the provider/model split,
+      // the equivalent is a `provider:model` ref. We surface a single
+      // "set the default model" action for voice; advanced per-tier
+      // configuration stays UI-only since it's rarely voice-driven.
+      case "set_default_model":
       case "set_model": {
-        const provider = String(args.provider).toLowerCase();
-        const model = String(args.model);
-        if (!LLM_PROVIDERS.includes(provider as LLMProvider) || !model) return false;
+        const ref = args.ref
+          ? String(args.ref)
+          : args.provider && args.model
+            ? `${args.provider}:${args.model}`
+            : "";
+        if (!ref || !ref.includes(":")) return false;
         setTab("llm");
         (async () => {
-          const r = await data.setLLMModel(provider as LLMProvider, model);
+          const r = await data.setDefaultModel(ref);
           showToast(r.message, r.ok ? "ok" : "warn");
         })();
         return true;
       }
       case "test_provider": {
-        const provider = String(args.provider).toLowerCase();
-        if (!LLM_PROVIDERS.includes(provider as LLMProvider)) return false;
+        const name = String(args.provider ?? args.name ?? "").trim();
+        if (!name) return false;
         setTab("llm");
         (async () => {
-          const r = await data.testProvider(provider as LLMProvider);
+          const r = await data.testProvider(name);
           showToast(r.message, r.ok ? "ok" : "warn");
         })();
         return true;

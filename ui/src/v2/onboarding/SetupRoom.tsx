@@ -300,14 +300,19 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
     setSaving(true);
     setSaveError(null);
     try {
-      // Build the LLM payload — omit api_key if local provider.
-      const llmBlock: Record<string, unknown> = { primary: providerId };
-      const provBlock: Record<string, unknown> = { model };
-      if (provider.needsKey && apiKey) provBlock.api_key = apiKey;
-      // openai_compatible: api_key is optional, forward when provided.
-      if (provider.optionalKey && apiKey) provBlock.api_key = apiKey;
-      if (provider.needsBaseUrl) provBlock.base_url = baseUrl.trim();
-      llmBlock[providerId] = provBlock;
+      // Build the LLM payload in the new (provider-name + model-ref) shape:
+      //   { providers: { <name>: { kind, api_key?, base_url? } }, default: "name:model" }
+      // The provider name defaults to the kind id for first-time setup
+      // (e.g. "anthropic"). Users with custom names use the dashboard.
+      const providerEntry: Record<string, unknown> = { kind: providerId };
+      if (provider.needsKey && apiKey) providerEntry.api_key = apiKey;
+      if (provider.optionalKey && apiKey) providerEntry.api_key = apiKey;
+      if (provider.needsBaseUrl) providerEntry.base_url = baseUrl.trim();
+
+      const llmBlock: Record<string, unknown> = {
+        providers: { [providerId]: providerEntry },
+        default: `${providerId}:${model}`,
+      };
 
       // Build the TTS payload — explicit choice always sent so the
       // user's "off" decision is recorded, not just defaulted.
