@@ -187,6 +187,78 @@ describe("composeFlow", () => {
     expect(sys).toContain("webhook");
   });
 
+  test("system prompt spells out the {{trigger.payload.<field>}} access path for on_event triggers", async () => {
+    // Guards the headline of the prompt fix: small models were dropping
+    // the `.payload.` prefix and writing {{trigger.content}}. The rule
+    // bullet that prevents this MUST appear verbatim or the regression
+    // surfaces silently in user-facing flows.
+    const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+    await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "anything" },
+    );
+    const sys = llm.calls[0]?.system ?? "";
+    expect(sys).toContain("{{trigger.payload.<field>}}");
+    expect(sys).toContain("jarvis-trigger:on_event");
+    // The wiring example for clipboard text should be present in the
+    // rule bullet to anchor the pattern.
+    expect(sys).toContain("{{trigger.payload.content}}");
+  });
+
+  test("system prompt emits per-eventType output samples when the trigger declares dynamicSampleData", async () => {
+    // The future-proof channel: any trigger whose envelope shape depends
+    // on a configured input value surfaces a per-value sample block in
+    // the catalog. Without this rendering, the LLM only sees the static
+    // sampleData and has to mentally splice the envelope with the
+    // payload-example catalog -- the exact mistake the prompt fix
+    // tries to prevent.
+    const onEventCatalog = new PieceCatalog([
+      {
+        name: "@jarvispieces/piece-jarvis-trigger",
+        displayName: "Jarvis: Trigger",
+        description: "",
+        actions: {},
+        triggers: {
+          on_event: {
+            name: "on_event",
+            displayName: "On event",
+            description: "Fires on a Jarvis event.",
+            sampleData: { id: "s", eventType: "awareness.context_changed", payload: { app: "x" }, timestamp: 0 },
+            dynamicSampleData: {
+              propName: "eventType",
+              samples: {
+                "observer.clipboard_changed": {
+                  id: "s",
+                  eventType: "observer.clipboard_changed",
+                  payload: { content: "https://example.com", length: 19 },
+                  timestamp: 0,
+                },
+                "observer.email_received": {
+                  id: "s",
+                  eventType: "observer.email_received",
+                  payload: { from: "a@b", snippet: "..." },
+                  timestamp: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+    await composeFlow(
+      { llm, pieceRegistry: onEventCatalog },
+      { name: "X", description: "anything" },
+    );
+    const sys = llm.calls[0]?.system ?? "";
+    expect(sys).toContain("output samples by eventType");
+    expect(sys).toContain("observer.clipboard_changed");
+    expect(sys).toContain("observer.email_received");
+    // The rendered sample is the full envelope, not just the payload --
+    // confirms the LLM sees the wrapper it should wire against.
+    expect(sys).toContain('"payload":{"content":"https://example.com","length":19}');
+  });
+
   test("missing description / name is reported up front", async () => {
     const llm = new StubLlm("ignored");
     const a = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: " ", description: "x" });

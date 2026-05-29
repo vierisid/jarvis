@@ -259,11 +259,35 @@ export function discoverPieces(rootDirs: string[]): {
  * cache-rebuild time -- the on-disk catalog cache absorbs the cost across
  * subsequent boots.
  */
+/**
+ * Catalog projection schema version. Mixed into the cache key so any
+ * daemon-side change to the projected `PieceCatalogEntry` shape (new
+ * fields, reshaped existing fields, anything that `metadataToCatalogEntry`
+ * starts emitting differently) invalidates every existing on-disk cache.
+ *
+ * Why this is necessary: the rest of the cache key only hashes the engine
+ * bundle + each piece's compiled `dist/src/index.js`. The projection layer
+ * itself is daemon code; editing it without bumping this constant would
+ * leave every upgraded install silently serving the OLD projected shape
+ * until something forced a piece rebuild.
+ *
+ * BUMP THIS when you change `metadataToCatalogEntry` in a way that adds,
+ * removes, renames, or reshapes any field the editor / composer consumes.
+ *
+ * History:
+ *   v1 -- initial projection.
+ *   v2 -- added `auth` to PieceCatalogEntry.
+ *   v3 -- added `dynamicSampleData` to PieceCatalogTrigger (envelope
+ *         resolution for jarvis-trigger:on_event).
+ */
+export const CATALOG_SCHEMA_VERSION = "3";
+
 export function computeCatalogCacheKey(opts: {
   bundlePath: string;
   pieceRoots: string[];
 }): string {
   const h = createHash("sha256");
+  h.update(`schema\0${CATALOG_SCHEMA_VERSION}\0`);
   h.update("bundle\0");
   hashFileContents(h, opts.bundlePath);
   const { entries } = discoverPieces(opts.pieceRoots);
@@ -271,6 +295,13 @@ export function computeCatalogCacheKey(opts: {
     h.update(`piece\0${e.name}\0${e.version}\0`);
     hashFileContents(h, resolve(e.dir, "dist/src/index.js"));
   }
+  // Mix in the event-type registry so adding/removing an entry in
+  // `WORKFLOW_EVENT_TYPES` invalidates caches automatically. The
+  // jarvis-trigger:on_event projection synthesizes its
+  // `dynamicSampleData` from this registry, so a registry edit IS a
+  // projected-shape edit even though no piece source changed.
+  h.update("event-types\0");
+  h.update(JSON.stringify(WORKFLOW_EVENT_TYPES));
   return h.digest("hex");
 }
 
