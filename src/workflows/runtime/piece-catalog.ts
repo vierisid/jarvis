@@ -306,8 +306,21 @@ export function computeCatalogCacheKey(opts: {
   // jarvis-trigger:on_event projection synthesizes its
   // `dynamicSampleData` from this registry, so a registry edit IS a
   // projected-shape edit even though no piece source changed.
+  //
+  // Canonicalize by sorting on `type` before hashing so a reorder of
+  // the registry (e.g. alphabetizing the source file) doesn't bust
+  // the cache when the projected content didn't actually change. The
+  // projection itself iterates `WORKFLOW_EVENT_TYPES` in declared
+  // order, but that order is invisible to consumers (picker groups
+  // alphabetically inside its <optgroup>s; composer prompt just lists
+  // entries) so cache equivalence by content beats equivalence by
+  // declared order.
   h.update("event-types\0");
-  h.update(JSON.stringify(WORKFLOW_EVENT_TYPES));
+  h.update(
+    JSON.stringify(
+      [...WORKFLOW_EVENT_TYPES].sort((a, b) => a.type.localeCompare(b.type)),
+    ),
+  );
   return h.digest("hex");
 }
 

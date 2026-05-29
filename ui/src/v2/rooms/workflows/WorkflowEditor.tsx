@@ -44,6 +44,7 @@ import {
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
+import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
 import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
@@ -3142,40 +3143,6 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 
 /* =========================================================== properties */
 
-/**
- * Top-level trigger kinds offered by the panel's 4-way picker. Each
- * entry maps a user-facing kind to the canonical `pieceName` (and
- * `triggerName` for the event case) so detection from a saved step
- * and selection from the picker share one source of truth. Order is
- * rendering order, left to right.
- */
-const TRIGGER_KINDS: ReadonlyArray<{
-  kind: "manual" | "schedule" | "webhook" | "event";
-  label: string;
-  description: string;
-}> = [
-  { kind: "manual", label: "Manual", description: "Run on demand via POST /api/workflows/:id/run" },
-  { kind: "schedule", label: "Schedule", description: "Fire on a cron expression (e.g. 0 8 * * *)" },
-  { kind: "webhook", label: "Webhook", description: "Fire on inbound HTTP to /api/webhooks/<flow_id>" },
-  { kind: "event", label: "Event", description: "Fire on a Jarvis event (clipboard, email, awareness, ...)" },
-];
-
-/**
- * Reverse map: given a step, return which of the four kinds it
- * represents. Used to highlight the active button in the picker.
- * Falls back to "manual" for an unrecognised piece so the user can
- * always retarget. Mirror of the (pieceName, triggerName) -> kind
- * mapping baked into `setTriggerKind` in the editor hook.
- */
-function detectTriggerKind(step: FlowStepNode): "manual" | "schedule" | "webhook" | "event" {
-  if (step.type === "EMPTY") return "manual";
-  const pn = step.settings?.pieceName;
-  if (pn === "schedule") return "schedule";
-  if (pn === "webhook") return "webhook";
-  if (pn === "@jarvispieces/piece-jarvis-trigger") return "event";
-  return "manual";
-}
-
 interface PropertiesPanelProps {
   step: FlowStepNode;
   isTriggerStep: boolean;
@@ -3252,6 +3219,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const isLoop = step.type === "LOOP_ON_ITEMS";
   const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
+  // Detect once per render; consumed by the 4-way picker (to pick the
+  // active button) and by the "other" hint below it.
+  const detectedTriggerKind = isTriggerStep ? detectTriggerKind(step) : "manual";
   // Look up the selected sub-action's metadata so the typed-input widgets
   // below have a schema to render against. We keep this lookup even
   // though the user can no longer pick a different sub-action from the
@@ -3292,7 +3262,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         <Field label="Trigger">
           <div className="wf-props__segmented" role="radiogroup">
             {TRIGGER_KINDS.map((tk) => {
-              const active = tk.kind === detectTriggerKind(step);
+              // When the step is a non-canonical PIECE_TRIGGER (community
+              // piece, imported flow, ...) detection returns "other" and
+              // NO button is marked active. The user has to explicitly
+              // click a kind to replace it, instead of the panel silently
+              // implying Manual was the current state.
+              const active = tk.kind === detectedTriggerKind;
               return (
                 <button
                   key={tk.kind}
@@ -3315,6 +3290,17 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         <p className="wf-props__hint">
           Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. Pick
           Schedule, Webhook, or Event above to fire automatically.
+        </p>
+      ) : null}
+
+      {detectedTriggerKind === "other" ? (
+        <p className="wf-props__hint">
+          This trigger uses a custom piece
+          {step.settings?.pieceName ? (
+            <> (<code>{step.settings.pieceName}</code>)</>
+          ) : null}
+          . Pick one of the kinds above to replace it. The current piece configuration will be
+          discarded when you switch -- there's no way to bring it back from here.
         </p>
       ) : null}
 
@@ -4103,11 +4089,6 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
           <option value="">{field.required ? "— select —" : "— none —"}</option>
           {hasGroups ? (
             <>
-              {ungrouped.map((o) => (
-                <option key={o.value} value={o.value} title={o.description}>
-                  {o.label}
-                </option>
-              ))}
               {groupOrder.map((g) => (
                 <optgroup key={g} label={g}>
                   {(grouped.get(g) ?? []).map((o) => (
@@ -4117,6 +4098,21 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
                   ))}
                 </optgroup>
               ))}
+              {/* Stragglers without a group land in a synthetic "Other"
+                  group so they're still labelled rather than floating
+                  unlabelled at the top of the dropdown. Today's only
+                  consumer (on_event eventType) has no ungrouped
+                  options, but this keeps the renderer robust if a
+                  future field ships a partial group set. */}
+              {ungrouped.length > 0 ? (
+                <optgroup label="Other">
+                  {ungrouped.map((o) => (
+                    <option key={o.value} value={o.value} title={o.description}>
+                      {o.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </>
           ) : (
             opts.map((o) => (

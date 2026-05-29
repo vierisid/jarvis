@@ -15,6 +15,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConnectionMeta } from "./useConnections";
 import {
+  detectTriggerKind,
+  makeEmptyStash,
+  transitionTriggerKind,
+  type TriggerKind,
+  type TriggerKindStash,
+} from "./trigger-kinds";
+import {
   addStepToHead as treeAddStepToHead,
   allReachableNames,
   applySchemaDefaults,
@@ -232,10 +239,13 @@ export function useWorkflowEditor(flowId: string | null) {
   const [connections, setConnections] = useState<ConnectionMeta[]>([]);
   const ignoreNextLoadRef = useRef(false);
 
-  // Stash for trigger settings while the user is in EMPTY (manual) mode.
-  // Switching back to PIECE_TRIGGER restores the prior piece + input so a
-  // morph round-trip doesn't lose work.
-  const triggerSettingsStashRef = useRef<FlowStepNode["settings"] | null>(null);
+  // Per-kind stash of prior trigger settings. Switching kinds snapshots the
+  // outgoing kind's settings into this map; switching back to a kind whose
+  // stash is populated restores it verbatim. Closes the silent-discard
+  // hole the prior single-ref design had on direct kind-to-kind hops
+  // (schedule -> webhook would lose the cron). See
+  // `./trigger-kinds.ts:transitionTriggerKind` for the pure semantics.
+  const triggerSettingsStashRef = useRef<TriggerKindStash>(makeEmptyStash());
 
   /**
    * Bounded undo stack. Snapshots `{trigger, orphans, positions}` before
@@ -911,77 +921,41 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
-   * Morph the trigger between EMPTY (manual) and PIECE_TRIGGER. Switching to
-   * EMPTY stashes the prior settings; switching back restores them so the
-   * round-trip doesn't discard the user's piece + input.
-   */
-  /**
-   * Four-way trigger kind selector. Replaces the old two-step "Manual
-   * vs Piece -> pick a piece" dance with a direct mapping: each kind
-   * sets both `step.type` and the canonical pieceName/triggerName for
-   * that kind in one click.
+   * Four-way trigger kind selector. Each kind maps to a canonical
+   * (pieceName, triggerName) pair via `TRIGGER_KINDS`; the transition
+   * itself (including the per-kind stash that lets the user round-trip
+   * without losing config) lives in `./trigger-kinds.ts`.
    *
    *   manual   -> EMPTY trigger (POST /run only)
-   *   schedule -> built-in cron primitive (settings.pieceName="schedule")
-   *   webhook  -> built-in HTTP primitive (settings.pieceName="webhook")
-   *   event    -> jarvis-trigger:on_event (Jarvis event bus)
+   *   schedule -> built-in cron primitive
+   *   webhook  -> built-in HTTP primitive
+   *   event    -> @jarvispieces/piece-jarvis-trigger:on_event
    *
-   * Stash semantics: when leaving for `manual` we snapshot the
-   * currently-configured settings, so toggling back to the SAME kind
-   * restores them (a common "let me check what manual does, then go
-   * back" flow). On a kind change between non-manual kinds the stash is
-   * dropped -- the previous configuration belongs to a different piece
-   * and would be invalid for the new one.
+   * If the current trigger is a non-canonical PIECE_TRIGGER
+   * (community piece, imported flow, etc.), the picker still routes
+   * through `transitionTriggerKind` -- the OUTGOING kind is detected
+   * as `"other"` and its settings aren't stashed (we have no kind to
+   * key them under). The user explicitly clicked a button to switch,
+   * so this is opt-in clobbering, not a silent overwrite.
    */
-  const setTriggerKind = useCallback(
-    (kind: "manual" | "schedule" | "webhook" | "event"): void => {
-      setDraftTrigger((prev) => {
-        if (!prev) return prev;
-        const next = cloneTrigger(prev);
-        if (kind === "manual") {
-          if (
-            next.settings &&
-            (next.settings.pieceName || Object.keys(next.settings.input ?? {}).length > 0)
-          ) {
-            triggerSettingsStashRef.current = JSON.parse(JSON.stringify(next.settings));
-          }
-          next.type = "EMPTY";
-          next.settings = {};
-          return next;
-        }
-        // Non-manual: derive the canonical (pieceName, triggerName) for
-        // the chosen kind. `triggerName` is only relevant for `event`
-        // (schedule/webhook are built-in primitives keyed by pieceName).
-        const target =
-          kind === "schedule"
-            ? { pieceName: "schedule", triggerName: undefined as string | undefined }
-            : kind === "webhook"
-              ? { pieceName: "webhook", triggerName: undefined as string | undefined }
-              : { pieceName: "@jarvispieces/piece-jarvis-trigger", triggerName: "on_event" };
-        next.type = "PIECE_TRIGGER";
-        const stash = triggerSettingsStashRef.current;
-        if (stash && stash.pieceName === target.pieceName) {
-          // Returning to the same piece kind after a Manual detour --
-          // restore the prior config verbatim.
-          next.settings = JSON.parse(JSON.stringify(stash));
-          triggerSettingsStashRef.current = null;
-        } else {
-          // First time picking this kind (or switching kinds): start
-          // fresh. Drop the stash because it belongs to a different
-          // piece and would be invalid here.
-          triggerSettingsStashRef.current = null;
-          next.settings = {
-            pieceName: target.pieceName,
-            input: {},
-            ...(target.triggerName ? { triggerName: target.triggerName } : {}),
-          };
-        }
-        return next;
-      });
-      setDirty(true);
-    },
-    [],
-  );
+  const setTriggerKind = useCallback((kind: TriggerKind): void => {
+    setDraftTrigger((prev) => {
+      if (!prev) return prev;
+      const next = cloneTrigger(prev);
+      const currentKind = detectTriggerKind(prev);
+      const { type, settings, nextStash } = transitionTriggerKind(
+        currentKind,
+        prev.settings,
+        kind,
+        triggerSettingsStashRef.current,
+      );
+      triggerSettingsStashRef.current = nextStash;
+      next.type = type;
+      next.settings = settings;
+      return next;
+    });
+    setDirty(true);
+  }, []);
 
   const setStepPiece = useCallback(
     (stepName: string, pieceName: string, actionName: string): void => {
