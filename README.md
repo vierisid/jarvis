@@ -43,13 +43,10 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
     - [2. Enroll in the dashboard](#2-enroll-in-the-dashboard)
     - [3. Run the sidecar](#3-run-the-sidecar)
   - [🧠 Core Capabilities](#-core-capabilities)
-  - [🎛️ Dashboard](#️-dashboard)
   - [⚙️ Configuration](#️-configuration)
   - [🏗️ Architecture](#️-architecture)
   - [🛠️ Development](#️-development)
     - [Stack](#stack)
-  - [🗺️ Roadmap](#️-roadmap)
-    - [Upcoming](#upcoming)
   - [📖 Documentation](#-documentation)
   - [💬 Community](#-community)
   - [🔒 Security](#-security)
@@ -119,10 +116,6 @@ Visit [opencove.host](https://opencove.host) to get started.
 - **OS (native daemon install)**: macOS, Linux, or WSL
 - **Windows**: use WSL2 for the Bun install, or Docker for the daemon
 - **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
-- Google OAuth credentials (optional — Calendar and Gmail integration)
-- Telegram bot token (optional — notification channel)
-- Discord bot token (optional — notification channel)
-- ElevenLabs API key (optional — premium TTS)
 
 ---
 
@@ -161,10 +154,15 @@ The image is available on [GHCR](https://ghcr.io/vierisid/jarvis). Configuration
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
+```
+
+After opening a new terminal, run:
+
+```bash
 jarvis start
 ```
 
-The install script sets up Bun, clones the repo, and links the `jarvis` CLI. Then run `jarvis start` and finish setup in your browser at `http://localhost:3142`.
+The install script sets up Bun, clones the repo, and links the `jarvis` CLI. Then finish setup in your browser at `http://localhost:3142`.
 
 > **Note:** The one-liner only supports macOS, Linux, and WSL. Native Windows shells such as PowerShell, Git Bash, and CMD should use WSL2 or the Docker install instead.
 
@@ -175,6 +173,7 @@ git clone https://github.com/vierisid/jarvis.git ~/.jarvis/daemon
 cd ~/.jarvis/daemon
 bun install
 bun run build:ui
+bun link
 jarvis start
 ```
 
@@ -291,28 +290,6 @@ Once connected, the sidecar appears as online in the Settings page where you can
 
 ---
 
-## 🎛️ Dashboard
-
-Built with React 19 and Tailwind CSS 4. Served by the daemon at `http://localhost:3142`.
-
-| Page | Purpose |
-|---|---|
-| Chat | Primary conversation interface with streaming |
-| Tasks | Active commitments and background work queue |
-| Content Pipeline | Multi-step content generation and review |
-| Knowledge Graph | Visual vault explorer — entities, facts, relationships |
-| Memory | Raw vault search and inspection |
-| Calendar | Google Calendar integration with scheduling tools |
-| Agent Office | Multi-agent delegation status and role management |
-| Command Center | Tool history, execution logs, proactive notifications |
-| Authority | Approval queue, permission rules, audit trail |
-| Awareness | Live desktop feed, activity timeline, suggestions |
-| Workflows | Visual builder, execution monitor, version history |
-| Goals | OKR dashboard — kanban, timeline, and metrics views |
-| Settings | LLM providers, TTS/STT, channels, behavior config |
-
----
-
 ## ⚙️ Configuration
 
 JARVIS stores its configuration at `~/.jarvis/config.yaml`. Open the dashboard at `http://localhost:3142` after `jarvis start` for guided setup — it walks through LLM provider, voice, and a profile interview the first time. The Settings room lets you tweak channels, personality, and authority later.
@@ -406,32 +383,10 @@ bun run db:init         # Initialize or reset the database
 
 ---
 
-## 🗺️ Roadmap
-
-16 milestones completed — LLM conversations, tool execution, memory vault, browser control, proactive agent, dashboard UI, multi-agent hierarchy, communication channels, native app control, voice interface, authority & autonomy, distribution & onboarding, continuous awareness, workflow automation, plugin ecosystem, and autonomous goal pursuit.
-
-**379 tests passing across 22 test files. ~65,000 lines of TypeScript + Go.**
-
-### Upcoming
-
-| Milestone | Description |
-|---|---|
-| Smart Home | Home Assistant integration |
-| Financial Intelligence | Plaid, portfolio tracking |
-| Mobile Companion | React Native dashboard |
-| Self-Improvement | Autonomous prompt evolution |
-| Multi-Modal | DALL-E 3, full video/image processing |
-| Swarm Intelligence | Multi-device coordination |
-
-See [VISION.md](VISION.md) for the full roadmap with detailed specifications.
-
----
-
 ## 📖 Documentation
 
 General:
 
-- [VISION.md](VISION.md) — Full roadmap and milestone specifications
 - [config.example.yaml](config.example.yaml) — Full configuration reference
 - [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) — LLM provider configuration and routing
 - [docs/VAULT_EXTRACTOR.md](docs/VAULT_EXTRACTOR.md) — Memory and knowledge vault
