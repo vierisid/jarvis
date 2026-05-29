@@ -459,6 +459,21 @@ function renderCatalog(registry: PieceLookup): string {
       // also set `outputSample` (Jarvis extension). Either is a valid
       // hint -- prefer sampleData when present.
       lines.push(...renderOutputLines((trigger as { sampleData?: unknown; outputSample?: unknown }).sampleData ?? (trigger as { outputSample?: unknown }).outputSample, 6));
+      // Dynamic-output triggers: emit a per-value sample block so the
+      // model sees the EXACT envelope it should wire from for each
+      // configured input value (rather than mentally splicing the
+      // generic `sampleData` envelope with a separate payload-example
+      // catalog). This is the future-proof channel -- adding a new
+      // event type to `WORKFLOW_EVENT_TYPES` lights up here too.
+      const dyn = (trigger as {
+        dynamicSampleData?: { propName: string; samples: Record<string, unknown> };
+      }).dynamicSampleData;
+      if (dyn && Object.keys(dyn.samples).length > 0) {
+        lines.push(`      output samples by ${dyn.propName} (the trigger's actual output for each value):`);
+        for (const [value, sample] of Object.entries(dyn.samples)) {
+          lines.push(`        ${value}: ${JSON.stringify(sample)}`);
+        }
+      }
     }
     for (const action of Object.values(piece.actions)) {
       lines.push(`    action  ${action.name}: ${action.description}`);

@@ -92,6 +92,52 @@ describe("workflow API: piece catalog", () => {
     const ask = (body as Array<{ name: string; actions: Array<{ name: string }> }>).find((p) => p.name === "jarvis-ask");
     expect(ask?.actions.map((a) => a.name)).toEqual(["ask"]);
   });
+
+  test("forwards trigger dynamicSampleData so the editor's variable picker can resolve per-input-value samples", async () => {
+    // Construct a catalog whose on_event trigger has the same shape the
+    // projection in metadataToCatalogEntry produces (a per-value sample
+    // map sourced from WORKFLOW_EVENT_TYPES). The route must forward the
+    // field verbatim; previously it stripped it, so the picker only saw
+    // the static `sampleData` and surfaced the wrong fields.
+    const reg = new (
+      await import("../runtime/piece-catalog")
+    ).PieceCatalog([
+      {
+        name: "@jarvispieces/piece-jarvis-trigger",
+        displayName: "Jarvis: Trigger",
+        description: "",
+        actions: {},
+        triggers: {
+          on_event: {
+            name: "on_event",
+            displayName: "On",
+            description: "",
+            sampleData: { id: "s", eventType: "awareness.context_changed", payload: { app: "x" }, timestamp: 0 },
+            dynamicSampleData: {
+              propName: "eventType",
+              samples: {
+                "observer.clipboard_changed": {
+                  id: "s",
+                  eventType: "observer.clipboard_changed",
+                  payload: { content: "https://example.com", length: 19 },
+                  timestamp: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const r = createWorkflowRoutes({ pieceRegistry: reg });
+    const get = r["/api/workflows/pieces"]?.GET;
+    const { status, body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    expect(status).toBe(200);
+    const piece = (body as Array<{ name: string; triggers: Array<{ name: string; dynamicSampleData?: { propName: string; samples: Record<string, unknown> } }> }>)[0];
+    const dyn = piece?.triggers[0]?.dynamicSampleData;
+    expect(dyn?.propName).toBe("eventType");
+    const clip = dyn?.samples["observer.clipboard_changed"] as { payload?: { content?: string } } | undefined;
+    expect(clip?.payload?.content).toBe("https://example.com");
+  });
 });
 
 describe("workflow API: flows", () => {

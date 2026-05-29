@@ -88,6 +88,50 @@ describe("PieceCatalog (unit)", () => {
     expect(entry.triggers?.["on_event"]?.displayName).toBe("On");
   });
 
+  test("metadataToCatalogEntry attaches dynamicSampleData to jarvis-trigger:on_event", () => {
+    // jarvis-trigger's on_event surfaces an envelope whose payload shape
+    // varies with the configured eventType. The projection injects a
+    // synthesized `dynamicSampleData` map sourced from the canonical
+    // `WORKFLOW_EVENT_TYPES` registry so the picker + composer don't
+    // each have to import the registry directly.
+    const entry = metadataToCatalogEntry({
+      name: "@jarvispieces/piece-jarvis-trigger",
+      displayName: "Jarvis: Trigger",
+      description: "",
+      actions: {},
+      triggers: {
+        on_event: { name: "on_event", displayName: "On event", description: "", props: {} },
+      },
+    });
+    const onEvent = entry.triggers?.["on_event"];
+    expect(onEvent?.dynamicSampleData?.propName).toBe("eventType");
+    const samples = onEvent?.dynamicSampleData?.samples ?? {};
+    // Spot-check a representative event: the envelope is full (id +
+    // eventType + payload + timestamp), and the payload mirrors the
+    // registry's payloadExample.
+    const clip = samples["observer.clipboard_changed"] as
+      | { eventType?: string; payload?: { content?: string; length?: number }; timestamp?: number; id?: string }
+      | undefined;
+    expect(clip?.eventType).toBe("observer.clipboard_changed");
+    expect(clip?.payload?.content).toBe("https://example.com");
+    expect(clip?.payload?.length).toBe(19);
+    expect(typeof clip?.timestamp).toBe("number");
+    expect(typeof clip?.id).toBe("string");
+  });
+
+  test("metadataToCatalogEntry does NOT attach dynamicSampleData to unrelated pieces", () => {
+    const entry = metadataToCatalogEntry({
+      name: "@some/other-piece",
+      displayName: "Other",
+      description: "",
+      actions: {},
+      triggers: {
+        on_event: { name: "on_event", displayName: "On event", description: "", props: {} },
+      },
+    });
+    expect(entry.triggers?.["on_event"]?.dynamicSampleData).toBeUndefined();
+  });
+
   test("propsToInputSchema maps every supported PropertyType", () => {
     const schema = propsToInputSchema({
       a_short: { type: "SHORT_TEXT", required: true, displayName: "A" },

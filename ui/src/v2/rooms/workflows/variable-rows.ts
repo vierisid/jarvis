@@ -22,6 +22,15 @@
 
 import type { FlowStepNode, PieceCatalogEntry } from "./useWorkflowEditor";
 
+/**
+ * How many nested object levels the picker drills into. Most workflow event
+ * payloads are 1-2 levels deep; capping prevents a pathological output (or a
+ * sample with a recursive structure) from drowning the picker. Empirically
+ * 3 covers every Jarvis event taxonomy and the upstream piece samples we
+ * ship.
+ */
+const MAX_PICKER_DEPTH = 3;
+
 export interface VariableRow {
   /** The step that produces this output. */
   step: FlowStepNode;
@@ -57,14 +66,7 @@ export function buildVariableRows(
       : lookupSiblingShape(step, allSteps, sampleData);
     const usable = pickUsableSample(captured, declared) ?? pickUsableSample(sibling, undefined);
     if (usable?.kind === "object") {
-      for (const key of Object.keys(usable.value)) {
-        rows.push({
-          step,
-          field: key,
-          label: key,
-          template: `{{${step.name}.${key}}}`,
-        });
-      }
+      emitObjectRows(usable.value, step, "", rows, 0);
     } else if (usable?.kind === "array") {
       // Array output: first emit the iterate-all row (the whole step,
       // for LOOP_ON_ITEMS sources), then drill one level into the
@@ -98,6 +100,56 @@ export function buildVariableRows(
 }
 
 /**
+ * Recursively emit picker rows for every key in `obj`, dot-pathed against
+ * `pathPrefix`. The parent row is always emitted (so the user can wire the
+ * whole sub-object as `{{step.payload}}` when that is what they want); plain
+ * non-empty object values trigger a recursive walk so nested leaves like
+ * `payload.content` become first-class clickable rows.
+ *
+ * Why not flatten only -- the existing picker emitted a row for the parent
+ * key (e.g. `payload`) and many flows rely on wiring the whole object into
+ * a downstream JSON.stringify / jarvis-tool input. Keeping the parent row
+ * preserves that contract; the nested rows are additive.
+ *
+ * Array values are emitted as a single leaf at their path; we deliberately
+ * do not drill into array elements here (the top-level array case in
+ * `buildVariableRows` handles iterate + first-element drill for whole-step
+ * arrays).
+ */
+function emitObjectRows(
+  obj: Record<string, unknown>,
+  step: FlowStepNode,
+  pathPrefix: string,
+  rows: VariableRow[],
+  depth: number,
+): void {
+  for (const key of Object.keys(obj)) {
+    const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+    rows.push({
+      step,
+      field: path,
+      label: path,
+      template: `{{${step.name}.${path}}}`,
+    });
+    const value = obj[key];
+    const isPlainNonEmptyObject =
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length > 0;
+    if (isPlainNonEmptyObject && depth + 1 < MAX_PICKER_DEPTH) {
+      emitObjectRows(
+        value as Record<string, unknown>,
+        step,
+        path,
+        rows,
+        depth + 1,
+      );
+    }
+  }
+}
+
+/**
  * Walk the catalog to find the action / trigger that backs this step and
  * return its declared output sample (if any). Returns undefined for steps
  * that aren't piece-backed (LOOP, ROUTER, EMPTY trigger) or when the piece
@@ -118,9 +170,24 @@ export function lookupDeclaredOutput(
     const triggerName = typeof settings?.triggerName === "string" ? settings.triggerName : null;
     if (!triggerName) return undefined;
     const trigger = piece.triggers.find((t) => t.name === triggerName);
+    if (!trigger) return undefined;
+    // Dynamic-output triggers: the envelope shape depends on a config
+    // value (jarvis-trigger:on_event payload depends on `eventType`).
+    // Resolve the configured prop value, look up the matching sample;
+    // fall back to the static sample when the prop isn't set yet or
+    // its value isn't in the map.
+    const dyn = (trigger as { dynamicSampleData?: { propName: string; samples: Record<string, unknown> } }).dynamicSampleData;
+    if (dyn) {
+      const input = (settings as { input?: Record<string, unknown> })?.input;
+      const propValue = input && typeof input === "object" ? input[dyn.propName] : undefined;
+      if (typeof propValue === "string") {
+        const dynSample = dyn.samples[propValue];
+        if (dynSample !== undefined) return dynSample;
+      }
+    }
     // Triggers carry the upstream `sampleData`. Some pieces also set
     // `outputSample` as a hint for symmetry; either works.
-    return trigger?.sampleData ?? trigger?.outputSample;
+    return trigger.sampleData ?? trigger.outputSample;
   }
   if (step.type === "PIECE") {
     const actionName = typeof settings?.actionName === "string" ? settings.actionName : null;

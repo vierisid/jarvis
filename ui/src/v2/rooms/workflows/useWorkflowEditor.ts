@@ -157,6 +157,16 @@ export interface PieceCatalogActionOrTrigger {
    */
   outputSample?: unknown;
   sampleData?: unknown;
+  /**
+   * Output sample varies with a single input property. Used by triggers
+   * whose envelope shape depends on a config value (jarvis-trigger
+   * `on_event`: payload depends on `eventType`). Picker uses this when
+   * present to resolve the right sample for the step's current settings.
+   */
+  dynamicSampleData?: {
+    propName: string;
+    samples: Record<string, unknown>;
+  };
 }
 
 /**

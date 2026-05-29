@@ -239,6 +239,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                   // And, for symmetry / future-proofing, the action-side
                   // `outputSample` if a trigger author chose to declare both.
                   ...(t.outputSample !== undefined ? { outputSample: t.outputSample } : {}),
+                  // Dynamic-output triggers (jarvis-trigger:on_event):
+                  // forward the per-input-value sample map so the editor's
+                  // variable picker can resolve the right shape for the
+                  // configured value (e.g. payload.content for clipboard,
+                  // payload.snippet for email).
+                  ...(t.dynamicSampleData !== undefined
+                    ? { dynamicSampleData: t.dynamicSampleData }
+                    : {}),
                 }))
               : [],
           }));

@@ -343,4 +343,242 @@ describe("buildVariableRows", () => {
       expect(rows[1]!.template).toBe("{{step_2[0].id}}");
     });
   });
+
+  describe("nested object expansion", () => {
+    test("expands a nested payload object so deep fields are clickable", () => {
+      const step = piece({ name: "trigger", pieceName: "gmail", triggerName: "on_event" });
+      const onEvent: PieceCatalogEntry = {
+        name: "gmail",
+        displayName: "Gmail",
+        description: "",
+        actions: [],
+        triggers: [
+          {
+            name: "on_event",
+            displayName: "On event",
+            description: "",
+            inputSchema: null,
+            // Mirrors jarvis-trigger:on_event's actual envelope.
+            sampleData: {
+              id: "evt_1",
+              eventType: "observer.clipboard_changed",
+              payload: { content: "https://example.com", length: 19 },
+              timestamp: 0,
+            },
+          },
+        ],
+      };
+      const rows = buildVariableRows([step], {}, [onEvent]);
+      // Parent rows stay (so the user can still wire {{trigger.payload}} as
+      // a whole sub-object); leaf rows are added.
+      expect(rows.map((r) => r.label)).toEqual([
+        "id",
+        "eventType",
+        "payload",
+        "payload.content",
+        "payload.length",
+        "timestamp",
+      ]);
+      const contentRow = rows.find((r) => r.label === "payload.content");
+      expect(contentRow?.template).toBe("{{trigger.payload.content}}");
+      expect(contentRow?.field).toBe("payload.content");
+    });
+
+    test("respects the depth cap so a pathological sample stays bounded", () => {
+      const step = piece({ name: "step_1", pieceName: "deep", actionName: "make" });
+      const deep: PieceCatalogEntry = {
+        name: "deep",
+        displayName: "Deep",
+        description: "",
+        actions: [
+          {
+            name: "make",
+            displayName: "Make",
+            description: "",
+            inputSchema: null,
+            // depth 3 == leaf at d.e.f. d.e.f.g should be cut off.
+            outputSample: { a: { b: { c: 1 }, d: { e: { f: { g: "too-deep" } } } } },
+          },
+        ],
+        triggers: [],
+      };
+      const rows = buildVariableRows([step], {}, [deep]);
+      const labels = rows.map((r) => r.label);
+      // MAX_PICKER_DEPTH = 3 caps paths at 3 segments. So `a.b.c` and
+      // `a.d.e` are emitted, but `a.d.e.f` and `a.d.e.f.g` are dropped.
+      expect(labels).toEqual(["a", "a.b", "a.b.c", "a.d", "a.d.e"]);
+      expect(labels.some((l) => l.endsWith(".f"))).toBe(false);
+      expect(labels.some((l) => l.endsWith(".g"))).toBe(false);
+    });
+
+    test("empty nested object emits the parent row only", () => {
+      const step = piece({ name: "step_1", pieceName: "p", actionName: "a" });
+      const p: PieceCatalogEntry = {
+        name: "p",
+        displayName: "P",
+        description: "",
+        actions: [
+          {
+            name: "a",
+            displayName: "A",
+            description: "",
+            inputSchema: null,
+            outputSample: { meta: {}, name: "x" },
+          },
+        ],
+        triggers: [],
+      };
+      const rows = buildVariableRows([step], {}, [p]);
+      expect(rows.map((r) => r.label)).toEqual(["meta", "name"]);
+    });
+
+    test("on_event trigger picks the dynamic sample matching the configured eventType", () => {
+      // The on_event trigger ships a static `sampleData` for awareness.context_changed
+      // (app + title), plus a `dynamicSampleData` map keyed on `eventType`. When
+      // the step configures eventType=observer.clipboard_changed, the picker
+      // must surface the clipboard payload (content/length), not the static one.
+      const onEventCatalog: PieceCatalogEntry = {
+        name: "@jarvispieces/piece-jarvis-trigger",
+        displayName: "Jarvis Trigger",
+        description: "",
+        actions: [],
+        triggers: [
+          {
+            name: "on_event",
+            displayName: "On event",
+            description: "",
+            inputSchema: null,
+            sampleData: {
+              id: "evt_sample",
+              eventType: "awareness.context_changed",
+              payload: { app: "vscode", title: "main.ts" },
+              timestamp: 0,
+            },
+            dynamicSampleData: {
+              propName: "eventType",
+              samples: {
+                "observer.clipboard_changed": {
+                  id: "evt_sample",
+                  eventType: "observer.clipboard_changed",
+                  payload: { content: "https://example.com", length: 19 },
+                  timestamp: 0,
+                },
+                "awareness.context_changed": {
+                  id: "evt_sample",
+                  eventType: "awareness.context_changed",
+                  payload: { app: "vscode", project: "jarvis" },
+                  timestamp: 0,
+                },
+              },
+            },
+          },
+        ],
+      };
+      const step: FlowStepNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "trigger",
+        settings: {
+          pieceName: "@jarvispieces/piece-jarvis-trigger",
+          triggerName: "on_event",
+          input: { eventType: "observer.clipboard_changed" },
+        },
+      } as unknown as FlowStepNode;
+      const rows = buildVariableRows([step], {}, [onEventCatalog]);
+      const labels = rows.map((r) => r.label);
+      // Clipboard payload (content/length) shows up; awareness payload (app/project) doesn't.
+      expect(labels).toEqual([
+        "id",
+        "eventType",
+        "payload",
+        "payload.content",
+        "payload.length",
+        "timestamp",
+      ]);
+      const content = rows.find((r) => r.label === "payload.content");
+      expect(content?.template).toBe("{{trigger.payload.content}}");
+    });
+
+    test("on_event trigger falls back to static sampleData when eventType isn't set", () => {
+      const onEventCatalog: PieceCatalogEntry = {
+        name: "@jarvispieces/piece-jarvis-trigger",
+        displayName: "Jarvis Trigger",
+        description: "",
+        actions: [],
+        triggers: [
+          {
+            name: "on_event",
+            displayName: "On event",
+            description: "",
+            inputSchema: null,
+            sampleData: {
+              id: "evt_sample",
+              eventType: "awareness.context_changed",
+              payload: { app: "vscode", title: "main.ts" },
+              timestamp: 0,
+            },
+            dynamicSampleData: {
+              propName: "eventType",
+              samples: {
+                "observer.clipboard_changed": {
+                  id: "evt_sample",
+                  eventType: "observer.clipboard_changed",
+                  payload: { content: "x", length: 1 },
+                  timestamp: 0,
+                },
+              },
+            },
+          },
+        ],
+      };
+      const step: FlowStepNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "trigger",
+        // No `input.eventType` configured yet.
+        settings: {
+          pieceName: "@jarvispieces/piece-jarvis-trigger",
+          triggerName: "on_event",
+        },
+      } as unknown as FlowStepNode;
+      const rows = buildVariableRows([step], {}, [onEventCatalog]);
+      // Falls back to the static envelope (app/title under payload).
+      expect(rows.map((r) => r.label)).toEqual([
+        "id",
+        "eventType",
+        "payload",
+        "payload.app",
+        "payload.title",
+        "timestamp",
+      ]);
+    });
+
+    test("nested arrays do not get drilled (leaf only at their path)", () => {
+      const step = piece({ name: "step_1", pieceName: "p", actionName: "a" });
+      const p: PieceCatalogEntry = {
+        name: "p",
+        displayName: "P",
+        description: "",
+        actions: [
+          {
+            name: "a",
+            displayName: "A",
+            description: "",
+            inputSchema: null,
+            outputSample: {
+              payload: { labels: ["INBOX", "IMPORTANT"], subject: "hi" },
+            },
+          },
+        ],
+        triggers: [],
+      };
+      const rows = buildVariableRows([step], {}, [p]);
+      // `payload.labels` is a single leaf row; we do not emit `payload.labels[0]`.
+      expect(rows.map((r) => r.label)).toEqual([
+        "payload",
+        "payload.labels",
+        "payload.subject",
+      ]);
+    });
+  });
 });

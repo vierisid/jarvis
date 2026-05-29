@@ -37,8 +37,18 @@ import type {
   PieceInputSchema,
   PieceInputType,
 } from "./piece-input";
+import { WORKFLOW_EVENT_TYPES } from "./event-types";
 
 export type { PieceInputField, PieceInputSchema, PieceInputType } from "./piece-input";
+
+/**
+ * Piece-name + trigger-name pair for jarvis-trigger:on_event. Hoisted so
+ * the dynamic-sample injector and the composer prompt agree on the key.
+ */
+export const JARVIS_ON_EVENT_TRIGGER = {
+  piece: "@jarvispieces/piece-jarvis-trigger",
+  trigger: "on_event",
+} as const;
 
 export interface PieceCatalogAction {
   name: string;
@@ -64,6 +74,23 @@ export interface PieceCatalogTrigger extends PieceCatalogAction {
    * during a round-trip.
    */
   sampleData?: unknown;
+  /**
+   * Output sample varies with a single input property. Some triggers
+   * have an envelope whose effective shape depends on a config value:
+   * jarvis-trigger `on_event` is the canonical case (the `payload`
+   * sub-object changes structure with the `eventType` prop). The picker
+   * and the composer prompt read this to surface the right shape per
+   * configured value instead of a single static example.
+   *
+   * `propName` is the input prop whose value selects a sample;
+   * `samples` maps each known value to the matching full output sample
+   * (envelope included, not just the variable part). Falls back to
+   * `sampleData` when the prop is unset or its value isn't in the map.
+   */
+  dynamicSampleData?: {
+    propName: string;
+    samples: Record<string, unknown>;
+  };
 }
 
 /**
@@ -505,6 +532,15 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     for (const [key, raw] of Object.entries(m.triggers)) {
       triggers[key] = rawActionToCatalogAction(key, raw, /* isTrigger */ true);
     }
+    // jarvis-trigger:on_event is a dynamic-output trigger: its envelope's
+    // `payload` sub-object varies with the configured `eventType` prop.
+    // Attach `dynamicSampleData` synthesized from the canonical
+    // `WORKFLOW_EVENT_TYPES` registry so picker + composer both see the
+    // right shape per event type without duplicating the registry.
+    if (name === JARVIS_ON_EVENT_TRIGGER.piece) {
+      const onEvent = triggers[JARVIS_ON_EVENT_TRIGGER.trigger];
+      if (onEvent) onEvent.dynamicSampleData = buildOnEventDynamicSampleData();
+    }
     out.triggers = triggers;
   }
   // Project piece.auth into the catalog's auth shape. We only forward
@@ -524,6 +560,33 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     }
   }
   return out;
+}
+
+/**
+ * Build the `dynamicSampleData` map for jarvis-trigger:on_event. Each
+ * entry surfaces the full envelope the trigger emits when configured for
+ * that event type -- not just the payload -- so consumers (variable
+ * picker, composer prompt) get an output sample they can wire from
+ * verbatim without splicing the envelope themselves.
+ *
+ * Sourced from `WORKFLOW_EVENT_TYPES` so adding a new event type lights
+ * up everywhere automatically: add it to the registry, restart the
+ * daemon, the picker and the composer both see it.
+ */
+export function buildOnEventDynamicSampleData(): {
+  propName: string;
+  samples: Record<string, unknown>;
+} {
+  const samples: Record<string, unknown> = {};
+  for (const meta of WORKFLOW_EVENT_TYPES) {
+    samples[meta.type] = {
+      id: "evt_sample",
+      eventType: meta.type,
+      payload: meta.payloadExample ?? {},
+      timestamp: 0,
+    };
+  }
+  return { propName: "eventType", samples };
 }
 
 /**
