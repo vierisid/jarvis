@@ -25,6 +25,47 @@ export type ChannelConfig = {
 
 export type WakeEngine = 'openwakeword' | 'webspeech' | 'auto';
 
+/**
+ * OpenAI realtime reasoning-effort ladder. Higher = more deliberate answers at
+ * the cost of latency and tokens. User-selectable in the Voice settings UI.
+ * Default is "low" (OpenAI's default for gpt-realtime-2).
+ */
+export type RealtimeReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * Premium opt-in speech-to-speech voice via OpenAI's Realtime API
+ * (`gpt-realtime-2`). BYO OpenAI key — the user pays OpenAI directly. When
+ * disabled (default) JARVIS uses the standard STT -> text LLM -> TTS pipeline.
+ *
+ * See docs/GPT_REALTIME_2_INTEGRATION.md.
+ */
+export type RealtimeVoiceConfig = {
+  /** Master opt-in. Default false. Env: JARVIS_REALTIME_VOICE. */
+  enabled: boolean;
+  /**
+   * OpenAI API key for the realtime session. If unset, resolution falls back to
+   * the existing `llm.openai.api_key`, then env. Never hard-fails the daemon —
+   * if no key resolves while enabled, JARVIS warns and uses the standard path.
+   */
+  api_key?: string;
+  /** Realtime model id. Default 'gpt-realtime-2'. */
+  model?: string;
+  /** OpenAI realtime voice id (e.g. 'marin', 'cedar'). */
+  voice?: string;
+  /** User-selectable reasoning effort (settings UI). Default 'low'. */
+  reasoning_effort?: RealtimeReasoningEffort;
+  /** Hard cap on a single realtime session length (cost guard). Default 10. */
+  max_session_minutes?: number;
+  /** Optional monthly USD spend ceiling; block new sessions past it. */
+  monthly_budget_usd?: number;
+  /**
+   * Action categories that stay BLOCKED even though realtime auto-approves
+   * everything else (safety backstop for destructive/irreversible tools).
+   * Default empty = truly auto-approve all. See docs Phase 3.
+   */
+  blocked_categories?: string[];
+};
+
 export type VoiceConfig = {
   /**
    * Wake-word engine used by the browser UI.
@@ -35,6 +76,8 @@ export type VoiceConfig = {
    * Env: JARVIS_WAKE_ENGINE
    */
   wake_engine: WakeEngine;
+  /** Premium opt-in realtime speech-to-speech voice (gpt-realtime-2). */
+  realtime?: RealtimeVoiceConfig;
 };
 
 export type STTConfig = {
@@ -268,6 +311,12 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   voice: {
     wake_engine: 'openwakeword',
+    realtime: {
+      enabled: false,
+      model: 'gpt-realtime-2',
+      reasoning_effort: 'low',
+      max_session_minutes: 10,
+    },
   },
   desktop: {
     enabled: true,

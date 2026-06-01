@@ -117,6 +117,15 @@ function applyEnvOverrides(config: JarvisConfig): void {
       console.warn(`[Config] Invalid JARVIS_WAKE_ENGINE="${engine}" — must be openwakeword|webspeech|auto; ignoring.`);
     }
   }
+
+  // Premium realtime voice (gpt-realtime-2). Truthy values enable; "0"/"false"
+  // explicitly disable. See docs/GPT_REALTIME_2_INTEGRATION.md.
+  if (env.JARVIS_REALTIME_VOICE !== undefined) {
+    if (!config.voice) config.voice = { wake_engine: 'openwakeword' };
+    if (!config.voice.realtime) config.voice.realtime = { enabled: false };
+    const v = env.JARVIS_REALTIME_VOICE.trim().toLowerCase();
+    config.voice.realtime.enabled = v !== '' && v !== '0' && v !== 'false' && v !== 'no';
+  }
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
