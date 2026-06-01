@@ -86,6 +86,20 @@ export interface PieceCatalogTrigger extends PieceCatalogAction {
    * `samples` maps each known value to the matching full output sample
    * (envelope included, not just the variable part). Falls back to
    * `sampleData` when the prop is unset or its value isn't in the map.
+   *
+   * KNOWN LIMITATIONS (worth knowing before extending):
+   *   - Single-prop conditional only. A trigger whose shape depends on
+   *     `(secret, eventName)` cannot be expressed with this field; the
+   *     shape would need to grow to `propNames: string[]` + a nested
+   *     `samples` table keyed on the JSON-stringified value tuple. Not
+   *     a refactor to do speculatively -- wait for a real case.
+   *   - One-level discrimination. The selector key is the raw input
+   *     value; no expression evaluation, no computed selectors. If a
+   *     piece needs "this shape when prop value matches a regex," it
+   *     doesn't belong here.
+   *   - String selector values only. Picker / composer compare with
+   *     `===` against `step.settings.input[propName]`; non-string
+   *     prop values fall through to `sampleData`.
    */
   dynamicSampleData?: {
     propName: string;

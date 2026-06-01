@@ -109,8 +109,19 @@ export function detectTriggerKind(step: FlowStepNode): DetectedTriggerKind {
   return KIND_BY_PIECE.get(pieceName) ?? "other";
 }
 
-/** Settings stash, keyed by kind. Lets the user restore prior config
- * when they round-trip through Manual or hop between non-manual kinds. */
+/**
+ * Settings stash, keyed by `TriggerKind`. Lets the user restore prior
+ * config when they round-trip through Manual or hop between non-manual
+ * kinds.
+ *
+ * Contract: the key is the `TriggerKind` enum value, NOT the
+ * `pieceName` or `triggerName`. The stash semantics survive any future
+ * shuffle of the canonical (pieceName, triggerName) pair behind a kind
+ * (e.g. if `jarvis-trigger` grew a second trigger and we reshuffled
+ * which one backs the `event` kind). Restore always looks up by kind,
+ * so the stored settings can't accidentally be applied to a different
+ * piece.
+ */
 export type TriggerKindStash = Record<TriggerKind, FlowStepNode["settings"] | undefined>;
 
 /** Empty stash with all kinds set to `undefined`. */

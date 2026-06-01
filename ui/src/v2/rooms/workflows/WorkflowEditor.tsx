@@ -46,6 +46,7 @@ import { flattenSteps, pathToStep } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
+import { useListNav } from "./use-list-nav";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
 import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
@@ -2375,7 +2376,6 @@ function PieceLibraryPopover({
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<LibraryCategory>("all");
-  const [activeIdx, setActiveIdx] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y });
 
   // Build the unified entry list. Three layers in display order:
@@ -2458,32 +2458,24 @@ function PieceLibraryPopover({
     };
   }, [onClose, installingId]);
 
-  // Keyboard nav: handled via a keydown attached to the popover so it
-  // doesn't fight with the global Esc-closes-editor handler. Enter and
-  // Esc are no-ops while an install is in flight -- same reasoning as the
-  // outside-click guard above.
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        if (!installingId) onClose();
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveIdx((i) => Math.min(rows.length - 1, i + 1));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveIdx((i) => Math.max(0, i - 1));
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        if (installingId) return;
-        const row = rows[activeIdx];
-        if (row) onPick(row);
-      }
+  // Keyboard nav via the shared hook. Enter and Esc are no-ops while
+  // an install is in flight -- same reasoning as the outside-click
+  // guard above (closing mid-install would break the install->reload
+  // ->place handoff). The hook itself doesn't know about install
+  // state, so we guard inside the wrapped callbacks.
+  const {
+    activeIdx,
+    setActiveIdx,
+    onKeyDown,
+  } = useListNav<LibraryEntry>({
+    items: rows,
+    onSelect: (row) => {
+      if (!installingId) onPick(row);
     },
-    [rows, activeIdx, onPick, onClose, installingId],
-  );
+    onClose: () => {
+      if (!installingId) onClose();
+    },
+  });
 
   return createPortal(
     <div
@@ -4279,7 +4271,6 @@ function FlowRefField({
   const [open, setOpen] = useState(false);
   const [flows, setFlows] = useState<FlowPickerEntry[]>([]);
   const [query, setQuery] = useState("");
-  const [activeIdx, setActiveIdx] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -4325,17 +4316,17 @@ function FlowRefField({
   }, [open]);
 
   // Reset transient picker state when the popover closes: clear the
-  // search box / error / active index so the next reopen starts
-  // fresh. Keep `flows` cached: the button label below resolves the
-  // current value's displayName against this list, so wiping it on
-  // close would make the closed-state button read "(unknown flow:
-  // <id>)" until the popover is opened again. The next open
-  // re-fetches and replaces.
+  // search box / error so the next reopen starts fresh. Keep `flows`
+  // cached: the button label below resolves the current value's
+  // displayName against this list, so wiping it on close would make
+  // the closed-state button read "(unknown flow: <id>)" until the
+  // popover is opened again. The next open re-fetches and replaces.
+  // `activeIdx` is managed by `useListNav` below; the hook clamps it
+  // on filter changes automatically.
   useEffect(() => {
     if (open) return;
     setQuery("");
     setError(null);
-    setActiveIdx(0);
   }, [open]);
 
   // Resolve the current value to a displayName for the button label.
@@ -4360,12 +4351,18 @@ function FlowRefField({
     [flows, currentWorkflowId, query],
   );
 
-  // Keep activeIdx clamped to the filtered range so arrow-key nav
-  // never points past the end of the list (e.g. user typed a query
-  // that narrowed past the previous active index).
-  useEffect(() => {
-    if (activeIdx > filtered.length - 1) setActiveIdx(Math.max(0, filtered.length - 1));
-  }, [filtered.length, activeIdx]);
+  // Shared keyboard navigation (Arrow / Enter / Escape). The hook
+  // owns activeIdx clamping on filter changes and the
+  // stopPropagation-on-Escape contract every popover in the editor
+  // needs to keep the outer Esc handler from also firing.
+  const { activeIdx, setActiveIdx, onKeyDown: onListKeyDown } = useListNav({
+    items: filtered,
+    onSelect: (pick) => {
+      onChange(pick.id);
+      setOpen(false);
+    },
+    onClose: () => setOpen(false),
+  });
 
   // Focus the search box when the popover opens for keyboard users.
   useEffect(() => {
@@ -4398,23 +4395,6 @@ function FlowRefField({
     };
   }, [open]);
 
-  function handleListKeyDown(e: React.KeyboardEvent<HTMLElement>): void {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.min(filtered.length - 1, i + 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.max(0, i - 1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const pick = filtered[activeIdx];
-      if (pick) {
-        onChange(pick.id);
-        setOpen(false);
-      }
-    }
-  }
-
   return (
     <div className={`wf-props__field wf-flow-ref ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
@@ -4440,7 +4420,7 @@ function FlowRefField({
               filtered={filtered}
               activeIdx={activeIdx}
               setActiveIdx={setActiveIdx}
-              onKeyDown={handleListKeyDown}
+              onKeyDown={onListKeyDown}
               loading={loading}
               error={error}
               currentId={flowId}

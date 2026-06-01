@@ -244,13 +244,12 @@ export function buildSandboxServiceBackends(
   const workflowsStart: WorkflowsStartFn = async (req, ctx) => {
     const out = await runnerAdapter.start(
       {
-        ...(req.flowId !== undefined ? { flowId: req.flowId } : {}),
-        ...(req.flowName !== undefined ? { flowName: req.flowName } : {}),
+        flowId: req.flowId,
         ...(req.payload !== undefined ? { payload: req.payload } : {}),
       },
-      // Caller's run id lets the adapter reject direct self-recursion
-      // (target flow id matches the caller's). Plumbed in by the
-      // sandbox-api route from `ctx.claims.runId`.
+      // Caller's run id lets the adapter walk the parent-run chain
+      // and refuse cycles. Plumbed in by the sandbox-api route from
+      // `ctx.claims.runId`.
       ctx.runId,
     );
     return { runId: out.runId };

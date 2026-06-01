@@ -12,9 +12,9 @@
  * time so the editor knows to render the picker. Same pattern as the
  * on_event eventType enum upgrade.
  *
- * The daemon endpoint also accepts a legacy `flowName` query for
- * backwards compatibility with flows that were authored against the
- * older two-field surface; this piece only writes `flowId`.
+ * The daemon route at `sandbox-api/routes/jarvis-workflows.ts` is the
+ * source of truth for the request envelope and explains the
+ * `flowName` removal for readers who want the history.
  */
 
 import { createAction, Property } from "@activepieces/pieces-framework";
@@ -53,6 +53,12 @@ export const runWorkflowAction = createAction({
     const flowId = context.propsValue["flow"];
     const payload = context.propsValue["payload"];
 
+    // Pre-migration shape (`settings.input.flowName` / `flowId` from
+    // before the picker landed) has no `flow` key. The error below
+    // surfaces in the step's failure trace; the user re-opens the
+    // step in the editor and picks via the workflow picker. No silent
+    // crash, no daemon-side migration needed -- the failure forces a
+    // re-pick which writes the new shape.
     if (typeof flowId !== "string" || flowId.length === 0) {
       throw new Error("jarvis-trigger.run_workflow: `flow` is required");
     }

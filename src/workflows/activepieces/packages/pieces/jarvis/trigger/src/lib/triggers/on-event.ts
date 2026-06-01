@@ -106,10 +106,24 @@ export const onEventTrigger = createTrigger({
       required: false,
     }),
   },
+  // Generic envelope used by the variable picker / composer prompt
+  // when the user has NOT yet configured an eventType. Once eventType
+  // is set, the catalog projection's `dynamicSampleData` overlay
+  // (built in `runtime/piece-catalog.ts:buildOnEventDynamicSampleData`)
+  // surfaces the matching per-event payload. Don't bias this default
+  // to a specific event type's payload -- it's misleading before the
+  // user has picked.
+  //
+  // The `eventType` string here is INFORMATIONAL only. It's never
+  // consumed as a matcher: the variable picker reads it as a label,
+  // the editor preview shows it verbatim, and the runtime
+  // event-bus subscription uses `propsValue.eventType` (the user-
+  // configured value), not this default. Don't treat this string as
+  // a valid event type or try to discriminate on it.
   sampleData: {
     id: "evt_sample",
-    eventType: "awareness.context_changed",
-    payload: { app: "vscode", title: "main.ts" },
+    eventType: "<see dynamicSampleData for the configured eventType>",
+    payload: {},
     timestamp: 0,
   },
   async onEnable(context) {

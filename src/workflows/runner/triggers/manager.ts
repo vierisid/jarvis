@@ -241,6 +241,18 @@ export class TriggerManager {
       if (this.engineRuntime) {
         return this.registerEngineTrigger(flow, version, trigger);
       }
+      // Engine-less fallback for jarvis-trigger:on_event. In
+      // production the daemon always boots with an engineRuntime
+      // (set during bootstrap), so the branch above short-circuits
+      // every PIECE_TRIGGER flow. The fallback exists ONLY to keep
+      // the event-bus subscription wiring testable without spinning
+      // up a real engine subprocess -- see
+      // `manager.test.ts:"TriggerManager: jarvis-trigger on_event"`.
+      // The piece-name string here is the legacy unscoped alias the
+      // test fixtures use; the editor and the projection layer both
+      // commit to the scoped npm name. Don't add new fallbacks
+      // through this path; new pieces should be tested through the
+      // engine.
       if (pieceName === "jarvis-trigger") {
         return this.registerJarvisEvent(flow.id, versionId, trigger);
       }

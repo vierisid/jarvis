@@ -1,20 +1,19 @@
 /**
  * Adapter: PieceWorkflowRunner over the workflow DB.
  *
- * Resolution rules:
- *   - If `flowId` is given, resolve directly.
- *   - Else if `flowName` is given, search flow_versions by display_name in
- *     the project's flows. Match is case-insensitive exact; no fuzzy match
- *     (workflows the user references by name should resolve unambiguously).
+ * `flowId` is the only resolver supported. The route header at
+ * `src/workflows/sandbox-api/routes/jarvis-workflows.ts` explains why
+ * name-based resolution was dropped; this file is just the
+ * implementation.
  *
  * Runs are enqueued as RUN_FLOW jobs against the same queue the worker
- * already drains, so this just creates a flow_run row, enqueues, and returns
- * the run id.
+ * already drains, so this just creates a flow_run row, enqueues, and
+ * returns the run id.
  *
- * Errors are thrown as `WorkflowRunnerError` with a `.code` so the calling
- * route can map them to specific HTTP statuses (a stale flow id should be
- * a 404, a self-recursion attempt a 409 -- not the same opaque 500 with
- * raw error text).
+ * Errors are thrown as `WorkflowRunnerError` with a `.code` so the
+ * calling route can map them to specific HTTP statuses (a stale flow
+ * id should be a 404, a self-recursion attempt a 409 -- not the same
+ * opaque 500 with raw error text).
  */
 
 import type {
@@ -22,11 +21,19 @@ import type {
   PieceWorkflowStartInput,
   PieceWorkflowStartResult,
 } from "../jarvis-pieces/types";
-import { getFlow, listFlows } from "../db/repos/flow";
+import { getFlow } from "../db/repos/flow";
 import { getFlowVersion, getLatestDraft } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { RUN_FLOW } from "../runner/handler";
+
+/**
+ * Upper bound on how far up the parent-run chain we walk when checking
+ * for cycles. Real workflow nesting users author by hand is shallow
+ * (1-3 levels); the bound guards against a malformed DB row that loops
+ * on `parent_run_id`, not against legitimate deep nesting.
+ */
+const MAX_CYCLE_WALK = 64;
 
 export type WorkflowRunnerErrorCode =
   | "MISSING_REF"
@@ -46,34 +53,48 @@ export class WorkflowRunnerError extends Error {
 export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
   /**
    * Start a workflow. When `callerRunId` is supplied, the adapter
-   * looks up that run's `flowId` and refuses to start the target if
-   * it matches -- direct self-recursion is a classic footgun. Deeper
-   * cycles (A -> B -> A) are not caught here; they'd need a parent
-   * chain walk and a depth cap, which is a later concern.
+   * walks the parent-run chain and refuses to start the target if
+   * any ancestor is already running it -- catches both direct
+   * self-recursion (A -> A) and deeper cycles (A -> B -> A,
+   * A -> B -> C -> A, ...).
    */
   async start(
     input: PieceWorkflowStartInput,
     callerRunId?: string,
   ): Promise<PieceWorkflowStartResult> {
-    if (!input.flowId && !input.flowName) {
-      throw new WorkflowRunnerError("MISSING_REF", "flowId or flowName is required");
+    if (!input.flowId) {
+      throw new WorkflowRunnerError("MISSING_REF", "flowId is required");
     }
-    const flow = input.flowId ? getFlow(input.flowId) : findFlowByName(input.flowName!);
+    const flow = getFlow(input.flowId);
     if (!flow) {
-      const ref = input.flowId ?? input.flowName;
-      throw new WorkflowRunnerError("FLOW_NOT_FOUND", `flow not found: ${ref}`);
+      throw new WorkflowRunnerError("FLOW_NOT_FOUND", `flow not found: ${input.flowId}`);
     }
-    // Direct self-recursion guard: starting the same flow that's
-    // currently executing this `run_workflow` step would loop. The
-    // caller has just clicked their own workflow in the picker (or
-    // the LLM emitted a self-id) -- refuse rather than fan-out.
+    // Recursion guard: walk the parent-run chain and refuse if ANY
+    // ancestor is running the same flow we're about to start. Two
+    // bounds protect against a pathological chain:
+    //   - MAX_CYCLE_WALK -- absolute depth cap (defends against a
+    //     legitimately deep nesting that doesn't include the target).
+    //   - `visited` Set    -- breaks on a back-edge (a parent_run_id
+    //     pointer that loops without including the target). Without
+    //     this we'd waste the full depth budget on every loop; with
+    //     it we terminate the first time we revisit any node.
     if (callerRunId) {
-      const callerRun = getFlowRun(callerRunId);
-      if (callerRun && callerRun.flowId === flow.id) {
-        throw new WorkflowRunnerError(
-          "SELF_RECURSION",
-          `refusing to start flow ${flow.id} from itself (would recurse)`,
-        );
+      const visited = new Set<string>();
+      let cursor: string | null = callerRunId;
+      for (let i = 0; cursor && i < MAX_CYCLE_WALK; i++) {
+        if (visited.has(cursor)) break;
+        visited.add(cursor);
+        const ancestor = getFlowRun(cursor);
+        if (!ancestor) break;
+        if (ancestor.flowId === flow.id) {
+          throw new WorkflowRunnerError(
+            "SELF_RECURSION",
+            i === 0
+              ? `refusing to start flow ${flow.id} from itself (would recurse)`
+              : `refusing to start flow ${flow.id}: it is already running ${i + 1} level(s) up the call chain (would cycle)`,
+          );
+        }
+        cursor = ancestor.parentRunId;
       }
     }
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
@@ -91,6 +112,11 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
       flowVersionId: versionId,
       triggeredBy: "workflow:run_workflow",
       startTime: Date.now(),
+      // Link back to the caller so the recursion guard above can walk
+      // the chain on the NEXT run_workflow firing further down the
+      // chain. Without this every nested run looks like a top-level
+      // run and cycles wouldn't be detectable.
+      parentRunId: callerRunId ?? null,
     });
     enqueue({
       jobType: RUN_FLOW,
@@ -105,23 +131,4 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     });
     return { runId: run.id };
   }
-}
-
-/**
- * Look up a flow by display_name. Display names live on flow_version rows;
- * we walk the project's flows and check the latest draft / published version
- * for a name match.
- */
-function findFlowByName(name: string): ReturnType<typeof getFlow> | null {
-  const target = name.toLowerCase();
-  const flows = listFlows(undefined, { limit: 1000 });
-  for (const flow of flows) {
-    const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
-    if (!versionId) continue;
-    const version = getFlowVersion(versionId);
-    if (version && version.displayName.toLowerCase() === target) {
-      return flow;
-    }
-  }
-  return null;
 }

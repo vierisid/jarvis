@@ -969,7 +969,7 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
     filter?: Record<string, unknown>;
     headOnly?: boolean;
   }>;
-  let startCalls: Array<{ flowId?: string; flowName?: string; payload?: Record<string, unknown> }>;
+  let startCalls: Array<{ flowId: string; payload?: Record<string, unknown> }>;
   let pollReply: {
     events: Array<{
       id: string;
@@ -1125,21 +1125,22 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
     expect(startCalls[0]?.payload).toEqual({ x: 1 });
   });
 
-  test("POST /v1/jarvis/workflows/start accepts flowName instead of flowId", async () => {
-    const r = await authedFetch("/v1/jarvis/workflows/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ flowName: "morning-briefing" }),
-    });
-    expect(r.status).toBe(200);
-    expect(startCalls[0]?.flowName).toBe("morning-briefing");
-  });
-
-  test("POST /v1/jarvis/workflows/start 400 when neither flowId nor flowName given", async () => {
+  test("POST /v1/jarvis/workflows/start 400 when flowId is missing", async () => {
+    // `flowName` resolution was removed when the piece switched to a
+    // single id-only flow_ref. `flowId` is now the only valid input.
     const r = await authedFetch("/v1/jarvis/workflows/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ payload: {} }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/jarvis/workflows/start 400 when flowId is empty", async () => {
+    const r = await authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: "" }),
     });
     expect(r.status).toBe(400);
   });
