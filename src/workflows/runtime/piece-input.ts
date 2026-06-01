@@ -20,6 +20,12 @@
  * Kept Jarvis-native rather than mirroring upstream's full Property API --
  * our UI only needs to discriminate widget kinds, not preserve every
  * upstream affordance.
+ *
+ * KEEP THIS IN SYNC with the mirrored type in
+ * `ui/src/v2/rooms/workflows/useWorkflowEditor.ts` (search for
+ * "PieceInputType"). The duplication keeps the UI bundle independent of
+ * daemon-side modules; each new variant must be added in both places or
+ * the editor will silently fall through to its default branch.
  */
 export type PieceInputType =
   | "string"      // single-line text input
@@ -29,7 +35,8 @@ export type PieceInputType =
   | "enum"        // single-select dropdown
   | "multi_enum"  // multi-select chip list
   | "datetime"    // ISO-8601 date / datetime picker
-  | "json";       // raw JSON textarea
+  | "json"        // raw JSON textarea
+  | "flow_ref";   // workflow picker -- searchable popover, stores a flow id
 
 export interface PieceInputField {
   /** Stable key used in `settings.input`. */

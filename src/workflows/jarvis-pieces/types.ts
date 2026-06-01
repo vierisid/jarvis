@@ -65,9 +65,11 @@ export interface PieceEventBus {
   listEventTypes(): string[];
 }
 
-/** Run a saved workflow by id or name. The runner enqueues a job and returns the run id. */
+/** Run a saved workflow by id or name. The runner enqueues a job and returns the run id.
+ * When `callerRunId` is provided, the runner uses it to refuse direct self-recursion
+ * (target flow id equals the caller's flow id). */
 export interface PieceWorkflowRunner {
-  start(input: PieceWorkflowStartInput): Promise<PieceWorkflowStartResult>;
+  start(input: PieceWorkflowStartInput, callerRunId?: string): Promise<PieceWorkflowStartResult>;
 }
 
 export interface PieceWorkflowStartInput {

@@ -3,7 +3,9 @@
  * and exposes one workflow as the input to another.
  *
  *   trigger: on_event       (polling: subscribe to a Jarvis event type)
- *   action:  run_workflow   (start another saved workflow by id or name)
+ *   action:  run_workflow   (start another saved workflow; the user picks
+ *                            the target via the editor's flow_ref widget,
+ *                            value stored as the destination flow id)
  *
  * Both surfaces call back to the daemon. The trigger uses a stateless poll
  * pattern (the daemon keeps a short-lived recent-events buffer; the trigger

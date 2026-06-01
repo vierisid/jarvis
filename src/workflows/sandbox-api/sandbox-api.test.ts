@@ -1145,6 +1145,91 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
   });
 });
 
+describe("SandboxApi routes (workflows/start error mapping)", () => {
+  // The route maps typed errors (carrying `.code`) into specific HTTP
+  // statuses so the piece's error message derives cleanly from status
+  // instead of grepping the body. Each test below installs a fresh
+  // stub that throws one of the typed errors and asserts the mapping.
+  let api: SandboxApi;
+  let signer: EngineTokenSigner;
+  let registry: SandboxRegistry;
+  let throwError: { code: string; message: string } | null = null;
+
+  async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const id = sampleIdentity();
+    const { token } = await signer.mint(id);
+    registry.register({
+      ...id,
+      engineToken: token,
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+    return fetch(`${api.baseUrl}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: {
+        credentialResolver: new CredentialResolver(),
+        workflowsStart: async () => {
+          if (throwError) {
+            const e = new Error(throwError.message);
+            (e as { code?: string }).code = throwError.code;
+            throw e;
+          }
+          return { runId: "run_xyz" };
+        },
+      },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+  });
+
+  async function start(): Promise<Response> {
+    return authedFetch("/v1/jarvis/workflows/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: "flow_target" }),
+    });
+  }
+
+  test("FLOW_NOT_FOUND -> 404", async () => {
+    throwError = { code: "FLOW_NOT_FOUND", message: "flow not found: flow_target" };
+    const r = await start();
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toContain("flow not found");
+  });
+
+  test("SELF_RECURSION -> 409", async () => {
+    throwError = { code: "SELF_RECURSION", message: "refusing to start flow X from itself" };
+    const r = await start();
+    expect(r.status).toBe(409);
+  });
+
+  test("VERSION_MISSING -> 422", async () => {
+    throwError = { code: "VERSION_MISSING", message: "flow X has no version" };
+    const r = await start();
+    expect(r.status).toBe(422);
+  });
+
+  test("unknown / untyped error falls through to 500", async () => {
+    throwError = { code: "OTHER", message: "boom" };
+    const r = await start();
+    expect(r.status).toBe(500);
+  });
+});
+
 describe("SandboxApi routes (H unconfigured -> 503)", () => {
   let api: SandboxApi;
   let signer: EngineTokenSigner;

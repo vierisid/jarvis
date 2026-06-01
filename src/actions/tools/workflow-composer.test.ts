@@ -259,6 +259,66 @@ describe("composeFlow", () => {
     expect(sys).toContain('"payload":{"content":"https://example.com","length":19}');
   });
 
+  test("flow_ref fields land in the prompt with a 'user picks via editor' hint and pass validation when empty", async () => {
+    // The composer can't know the user's flow list, so a `flow_ref`
+    // field is special: the LLM must emit an empty string for it,
+    // validation must accept that empty value, and the user fills it
+    // in via the editor's flow picker after the flow is composed.
+    const registry = new PieceCatalog([
+      {
+        name: "@jarvispieces/piece-jarvis-trigger",
+        displayName: "Jarvis: Trigger",
+        description: "",
+        actions: {
+          run_workflow: {
+            name: "run_workflow",
+            displayName: "Run another workflow",
+            description: "",
+            inputSchema: {
+              fields: [
+                { name: "flow", label: "Flow", type: "flow_ref", required: true },
+                { name: "payload", label: "Payload", type: "json", required: false },
+              ],
+            },
+            outputSample: { runId: "run_01HX..." },
+          },
+        },
+        triggers: {},
+      },
+    ]);
+    const reply = JSON.stringify({
+      displayName: "X",
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        nextAction: {
+          name: "step_1",
+          type: "PIECE",
+          settings: {
+            pieceName: "@jarvispieces/piece-jarvis-trigger",
+            actionName: "run_workflow",
+            // The model emits an empty string per the prompt hint.
+            // Validation MUST accept this even though the field is
+            // declared required -- otherwise the composer retries and
+            // the LLM eventually hallucinates a flow id to satisfy
+            // validation, which is the failure mode we wanted to
+            // prevent.
+            input: { flow: "" },
+          },
+        },
+      },
+    });
+    const llm = new StubLlm(reply);
+    const result = await composeFlow(
+      { llm, pieceRegistry: registry },
+      { name: "X", description: "run the morning briefing workflow" },
+    );
+    expect(result.ok).toBe(true);
+    const sys = llm.calls[0]?.system ?? "";
+    // Prompt should tell the LLM what to do with flow_ref.
+    expect(sys).toContain("user picks the target workflow via the editor");
+  });
+
   test("missing description / name is reported up front", async () => {
     const llm = new StubLlm("ignored");
     const a = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: " ", description: "x" });

@@ -565,6 +565,14 @@ function formatField(f: PieceInputField): string {
   if (f.options && f.options.length > 0) {
     parts.push(`options=${f.options.map((o) => o.value).join("|")}`);
   }
+  if (f.type === "flow_ref") {
+    // The composer has no way to know which workflows exist on the
+    // user's machine -- any flow id the LLM invents will fail at
+    // run time. Tell it to emit an empty string for this field so
+    // the user picks the target via the editor's flow picker after
+    // the flow is composed.
+    parts.push('emit an empty string ""; user picks the target workflow via the editor');
+  }
   if (f.description) parts.push(f.description);
   return `${parts.join("; ")}`;
 }
@@ -791,6 +799,12 @@ function validateStep(
   if (schema) {
     for (const field of schema.fields) {
       if (!field.required) continue;
+      // `flow_ref` is required at run time but cannot be filled at
+      // compose time: the LLM has no list of valid flow ids on the
+      // user's machine. The editor's flow picker fills it after the
+      // flow is composed. Exempt from this check so the LLM doesn't
+      // hallucinate an id just to satisfy validation.
+      if (field.type === "flow_ref") continue;
       const v = input[field.name];
       const empty = v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
       if (empty) {

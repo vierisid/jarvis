@@ -180,6 +180,20 @@ describe("workflow API: flows", () => {
     expect(enabled.body).toEqual([]);
   });
 
+  test("GET /api/workflows inlines displayName from each flow's latest version", async () => {
+    // The flow_ref picker in the editor depends on this: without
+    // displayName in the list response every workflow would render
+    // as "(unnamed)" in the dropdown. Test pins the inlining so a
+    // future refactor of serializeFlow can't silently drop the field.
+    const post = routes["/api/workflows"]?.POST;
+    await callJson(post, plainReq("POST", "http://x", { displayName: "Morning briefing" }));
+    await callJson(post, plainReq("POST", "http://x", { displayName: "Weekly report" }));
+    const get = routes["/api/workflows"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows"));
+    const names = (body as Array<{ displayName: string | null }>).map((r) => r.displayName).sort();
+    expect(names).toEqual(["Morning briefing", "Weekly report"]);
+  });
+
   test("GET /api/workflows/:id returns flow with latest draft", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(

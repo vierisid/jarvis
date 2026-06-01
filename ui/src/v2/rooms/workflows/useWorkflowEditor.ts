@@ -125,6 +125,13 @@ export interface FlowVersion {
   updated: number;
 }
 
+/**
+ * Mirror of the daemon-side `PieceInputType` declared in
+ * `src/workflows/runtime/piece-input.ts`. KEEP IN SYNC: the catalog
+ * API returns whatever the daemon emits, and the editor falls through
+ * to its default branch (a string-style input) for any unknown value.
+ * Adding a new variant means editing BOTH files.
+ */
 export type PieceInputType =
   | "string"
   | "long_text"
@@ -133,7 +140,8 @@ export type PieceInputType =
   | "enum"
   | "multi_enum"
   | "datetime"
-  | "json";
+  | "json"
+  | "flow_ref";
 
 export interface PieceInputField {
   name: string;

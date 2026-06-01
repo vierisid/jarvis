@@ -1044,15 +1044,25 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
 /**
  * Surface representation of a flow row for the API. Parses metadata JSON and
  * presents booleans where the row uses 0/1.
+ *
+ * `displayName` is inlined from the flow's latest version (published if
+ * available, otherwise latest draft) so list-view clients (the workflows
+ * room, the flow_ref picker in the editor) don't have to do a per-flow
+ * follow-up fetch just to render a name. The lookup is two indexed SELECTs
+ * per flow; the GET /api/workflows handler caps at 100 by default, so the
+ * extra round-trip is in the low milliseconds even on cold cache.
  */
 function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<typeof getFlow>>) {
   if (!row) return null;
+  const versionId = row.published_version_id ?? getLatestDraft(row.id)?.id ?? null;
+  const version = versionId ? getFlowVersion(versionId) : null;
   return {
     id: row.id,
     externalId: row.external_id,
     projectId: row.project_id,
     status: row.status,
     publishedVersionId: row.published_version_id,
+    displayName: version?.displayName ?? null,
     metadata: parseFlowMetadata(row),
     created: row.created,
     updated: row.updated,

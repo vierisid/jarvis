@@ -1,7 +1,20 @@
 /**
- * `run_workflow` action -- POST `{ flowId?, flowName?, payload? }` to
- * `/v1/jarvis/workflows/start`. Either flowId or flowName is required;
- * payload is optional. Fire-and-forget: returns the started run id.
+ * `run_workflow` action -- POST `{ flowId, payload? }` to
+ * `/v1/jarvis/workflows/start`. Fire-and-forget: returns the started
+ * run id.
+ *
+ * Surface: a single `flow` input that holds the target flow's id. The
+ * editor renders this as a searchable workflow picker (see the
+ * `flow_ref` input type and its catalog projection in
+ * `runtime/piece-catalog.ts`). The piece source declares it as
+ * ShortText because the upstream piece framework has no flow-ref
+ * concept; the catalog promotes the field to `flow_ref` at projection
+ * time so the editor knows to render the picker. Same pattern as the
+ * on_event eventType enum upgrade.
+ *
+ * The daemon endpoint also accepts a legacy `flowName` query for
+ * backwards compatibility with flows that were authored against the
+ * older two-field surface; this piece only writes `flowId`.
  */
 
 import { createAction, Property } from "@activepieces/pieces-framework";
@@ -14,7 +27,7 @@ export const runWorkflowAction = createAction({
   name: "run_workflow",
   displayName: "Run another workflow",
   description:
-    "Trigger a saved workflow by id or name. Returns the started run id. Fire-and-forget; the called workflow runs asynchronously.",
+    "Trigger a saved workflow by id. Returns the started run id. Fire-and-forget; the called workflow runs asynchronously.",
   // Fire-and-forget: response is just the queued run id. The called
   // flow's own outputs are NOT available here -- a downstream step
   // that needs the result must instead poll the run id, or the
@@ -23,14 +36,10 @@ export const runWorkflowAction = createAction({
     runId: "run_01HX...",
   },
   props: {
-    flowId: Property.ShortText({
-      displayName: "Flow id",
-      description: "Provide either flowId or flowName.",
-      required: false,
-    }),
-    flowName: Property.ShortText({
-      displayName: "Flow name",
-      required: false,
+    flow: Property.ShortText({
+      displayName: "Flow",
+      description: "Pick a workflow to run.",
+      required: true,
     }),
     payload: Property.Json({
       displayName: "Payload",
@@ -41,16 +50,13 @@ export const runWorkflowAction = createAction({
   },
   async run(context) {
     const url = trimSlash(context.server.apiUrl) + "/v1/jarvis/workflows/start";
-    const flowId = context.propsValue["flowId"];
-    const flowName = context.propsValue["flowName"];
+    const flowId = context.propsValue["flow"];
     const payload = context.propsValue["payload"];
 
-    const body: Record<string, unknown> = {};
-    if (typeof flowId === "string" && flowId.length > 0) body["flowId"] = flowId;
-    if (typeof flowName === "string" && flowName.length > 0) body["flowName"] = flowName;
-    if (!body["flowId"] && !body["flowName"]) {
-      throw new Error("jarvis-trigger.run_workflow: requires flowId or flowName");
+    if (typeof flowId !== "string" || flowId.length === 0) {
+      throw new Error("jarvis-trigger.run_workflow: `flow` is required");
     }
+    const body: Record<string, unknown> = { flowId };
     if (payload !== undefined && payload !== null) {
       if (typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("jarvis-trigger.run_workflow: payload must be a JSON object if provided");

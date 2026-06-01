@@ -73,10 +73,28 @@ export function createJarvisWorkflowsStartRoute(
       }
       out.payload = raw.payload as Record<string, unknown>;
     }
-    const reply = await deps.workflowsStart(out, {
-      runId: ctx.claims.runId,
-      projectId: ctx.claims.projectId,
-    });
-    return json(reply);
+    try {
+      const reply = await deps.workflowsStart(out, {
+        runId: ctx.claims.runId,
+        projectId: ctx.claims.projectId,
+      });
+      return json(reply);
+    } catch (e) {
+      // Typed errors from JarvisWorkflowRunnerAdapter carry a `code`
+      // we can map to a specific HTTP status. Anything else falls
+      // through to a generic 500 -- preserves the prior behavior for
+      // unexpected failures while giving expected user mistakes a
+      // crisp status code that the piece's error message can derive
+      // from cleanly.
+      const code = (e as { code?: unknown }).code;
+      if (typeof code === "string") {
+        const message = e instanceof Error ? e.message : String(e);
+        if (code === "FLOW_NOT_FOUND") return err(message, 404);
+        if (code === "SELF_RECURSION") return err(message, 409);
+        if (code === "VERSION_MISSING") return err(message, 422);
+        if (code === "MISSING_REF") return err(message, 400);
+      }
+      throw e;
+    }
   };
 }

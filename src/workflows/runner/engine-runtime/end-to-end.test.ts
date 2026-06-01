@@ -347,7 +347,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
                     pieceName: PIECE_TRIGGER_NAME,
                     pieceVersion: PIECE_VERSION,
                     actionName: "run_workflow",
-                    input: { flowId: "flow_other", payload: {} },
+                    input: { flow: "flow_other", payload: {} },
                   },
                 },
               },

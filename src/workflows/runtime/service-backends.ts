@@ -241,12 +241,18 @@ export function buildSandboxServiceBackends(
   };
 
   const runnerAdapter = new JarvisWorkflowRunnerAdapter();
-  const workflowsStart: WorkflowsStartFn = async (req) => {
-    const out = await runnerAdapter.start({
-      ...(req.flowId !== undefined ? { flowId: req.flowId } : {}),
-      ...(req.flowName !== undefined ? { flowName: req.flowName } : {}),
-      ...(req.payload !== undefined ? { payload: req.payload } : {}),
-    });
+  const workflowsStart: WorkflowsStartFn = async (req, ctx) => {
+    const out = await runnerAdapter.start(
+      {
+        ...(req.flowId !== undefined ? { flowId: req.flowId } : {}),
+        ...(req.flowName !== undefined ? { flowName: req.flowName } : {}),
+        ...(req.payload !== undefined ? { payload: req.payload } : {}),
+      },
+      // Caller's run id lets the adapter reject direct self-recursion
+      // (target flow id matches the caller's). Plumbed in by the
+      // sandbox-api route from `ctx.claims.runId`.
+      ctx.runId,
+    );
     return { runId: out.runId };
   };
 

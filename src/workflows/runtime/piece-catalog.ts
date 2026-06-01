@@ -285,8 +285,12 @@ export function discoverPieces(rootDirs: string[]): {
  *   v5 -- added `group` to enum options (used by the editor's <select>
  *         to render <optgroup> sections for the on_event eventType
  *         dropdown).
+ *   v6 -- promoted jarvis-trigger:run_workflow's `flow` input from
+ *         `string` to `flow_ref`. Replaces the old flowId+flowName
+ *         pair on the piece source. Editor renders flow_ref as a
+ *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "5";
+export const CATALOG_SCHEMA_VERSION = "6";
 
 export function computeCatalogCacheKey(opts: {
   bundlePath: string;
@@ -582,28 +586,15 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     for (const [key, raw] of Object.entries(m.triggers)) {
       triggers[key] = rawActionToCatalogAction(key, raw, /* isTrigger */ true);
     }
-    // jarvis-trigger:on_event is a dynamic-output trigger: its envelope's
-    // `payload` sub-object varies with the configured `eventType` prop.
-    // Attach `dynamicSampleData` synthesized from the canonical
-    // `WORKFLOW_EVENT_TYPES` registry so picker + composer both see the
-    // right shape per event type without duplicating the registry.
-    //
-    // Also rewrite the `eventType` input field from free text (string)
-    // into an `enum` whose options come from the same registry. The
-    // piece source has to declare it as `Property.ShortText` because the
-    // option list lives daemon-side, not in the piece bundle -- so this
-    // is where the upgrade has to land. The editor's enum widget shows
-    // an actual <select> menu, eliminating the "you have to know the
-    // exact event-type string" footgun.
-    if (name === JARVIS_ON_EVENT_TRIGGER.piece) {
-      const onEvent = triggers[JARVIS_ON_EVENT_TRIGGER.trigger];
-      if (onEvent) {
-        onEvent.dynamicSampleData = buildOnEventDynamicSampleData();
-        upgradeOnEventEventTypeFieldToEnum(onEvent);
-      }
-    }
     out.triggers = triggers;
   }
+  // Apply any Jarvis-specific catalog enrichments after the generic
+  // projection finishes. Today this covers two upgrades on the
+  // jarvis-trigger piece (on_event eventType -> enum, run_workflow
+  // flow -> flow_ref). Centralising the gating keeps the generic
+  // projection above piece-agnostic and gives the next "Jarvis tweak"
+  // a single named home.
+  enrichJarvisCatalogEntry(out);
   // Project piece.auth into the catalog's auth shape. We only forward
   // it when the upstream type is one of AppConnectionType's variants;
   // anything else (NO_AUTH, malformed) is treated as "no auth needed."
@@ -621,6 +612,36 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
     }
   }
   return out;
+}
+
+/**
+ * Apply Jarvis-specific catalog enrichments AFTER the generic
+ * projection in `metadataToCatalogEntry`. Each enrichment is gated by
+ * piece identity and a defensive presence check on the target action /
+ * trigger, so an upstream rename (or a Jarvis-piece source edit that
+ * drops a sub-action) silently no-ops rather than crashing the catalog
+ * build.
+ *
+ * The set of enrichments here is small and well-known:
+ *   - jarvis-trigger:on_event   -- attach `dynamicSampleData` and
+ *                                  promote `eventType` to enum.
+ *   - jarvis-trigger:run_workflow -- promote `flow` to flow_ref.
+ *
+ * To add a new enrichment: add a guarded block here, document the
+ * (piece, target) pair, and bump CATALOG_SCHEMA_VERSION so existing
+ * on-disk caches re-project.
+ */
+export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
+  const onEvent = entry.triggers?.[JARVIS_ON_EVENT_TRIGGER.trigger];
+  if (onEvent) {
+    onEvent.dynamicSampleData = buildOnEventDynamicSampleData();
+    upgradeOnEventEventTypeFieldToEnum(onEvent);
+  }
+  const runWorkflow = entry.actions["run_workflow"];
+  if (runWorkflow) {
+    upgradeRunWorkflowFlowFieldToFlowRef(runWorkflow);
+  }
 }
 
 /**
@@ -682,6 +703,25 @@ function upgradeOnEventEventTypeFieldToEnum(trigger: PieceCatalogTrigger): void 
     // the registry grows.
     group: meta.type.includes(".") ? meta.type.slice(0, meta.type.indexOf(".")) : undefined,
   }));
+}
+
+/**
+ * Rewrite the `flow` input field on jarvis-trigger's `run_workflow`
+ * action from a plain string to `flow_ref`. The editor renders
+ * `flow_ref` as a searchable popover backed by `/api/workflows`, so the
+ * user picks from a list of their workflows by display name instead of
+ * having to remember and type a flow id.
+ *
+ * Same resilience as the on_event enum upgrade: no-op if the input
+ * schema or the `flow` field is missing (defensive against future
+ * piece-source renames).
+ */
+function upgradeRunWorkflowFlowFieldToFlowRef(action: PieceCatalogAction): void {
+  const fields = action.inputSchema?.fields;
+  if (!fields) return;
+  const flowField = fields.find((f) => f.name === "flow");
+  if (!flowField) return;
+  flowField.type = "flow_ref";
 }
 
 /**

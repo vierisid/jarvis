@@ -100,11 +100,10 @@ export function sampleCatalog(): PieceCatalog {
         run_workflow: {
           name: "run_workflow",
           displayName: "Run another workflow",
-          description: "Trigger a saved workflow by id or name.",
+          description: "Trigger a saved workflow.",
           inputSchema: {
             fields: [
-              { name: "flowId", label: "Flow id", type: "string", required: false },
-              { name: "flowName", label: "Flow name", type: "string", required: false },
+              { name: "flow", label: "Flow", type: "flow_ref", required: true },
               { name: "payload", label: "Payload", type: "json", required: false },
             ],
           },

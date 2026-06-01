@@ -171,6 +171,57 @@ describe("PieceCatalog (unit)", () => {
     expect(filterField?.type).toBe("json");
   });
 
+  test("metadataToCatalogEntry promotes run_workflow's `flow` field to flow_ref", () => {
+    // The piece source declares `flow` as ShortText because the upstream
+    // framework has no flow-ref concept. The projection upgrades it so
+    // the editor renders a searchable workflow picker.
+    const entry = metadataToCatalogEntry({
+      name: "@jarvispieces/piece-jarvis-trigger",
+      displayName: "Jarvis: Trigger",
+      description: "",
+      actions: {
+        run_workflow: {
+          name: "run_workflow",
+          displayName: "Run another workflow",
+          description: "",
+          props: {
+            flow: { type: "SHORT_TEXT", required: true, displayName: "Flow" },
+            payload: { type: "JSON", required: false, displayName: "Payload" },
+          },
+        },
+      },
+      triggers: {},
+    });
+    const flowField = entry.actions["run_workflow"]?.inputSchema?.fields.find((f) => f.name === "flow");
+    expect(flowField?.type).toBe("flow_ref");
+    // Adjacent field is untouched -- the upgrade is surgical.
+    const payloadField = entry.actions["run_workflow"]?.inputSchema?.fields.find((f) => f.name === "payload");
+    expect(payloadField?.type).toBe("json");
+  });
+
+  test("metadataToCatalogEntry does NOT promote `flow` fields on unrelated pieces", () => {
+    // A piece that happens to name a string field "flow" should NOT
+    // be promoted to flow_ref. The promotion is keyed on the
+    // (piece, action) pair, not on field name alone.
+    const entry = metadataToCatalogEntry({
+      name: "@some/other-piece",
+      displayName: "Other",
+      description: "",
+      actions: {
+        run_workflow: {
+          name: "run_workflow",
+          displayName: "Run",
+          description: "",
+          props: {
+            flow: { type: "SHORT_TEXT", required: true, displayName: "Flow" },
+          },
+        },
+      },
+      triggers: {},
+    });
+    expect(entry.actions["run_workflow"]?.inputSchema?.fields[0]?.type).toBe("string");
+  });
+
   test("metadataToCatalogEntry does NOT attach dynamicSampleData to unrelated pieces", () => {
     const entry = metadataToCatalogEntry({
       name: "@some/other-piece",
