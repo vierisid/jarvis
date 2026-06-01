@@ -249,20 +249,36 @@ export class ConvOrchestrator {
         if (!args.task_id || !args.input) {
           return { envelope: { error: 'resume_task requires task_id and input' } };
         }
-        const envelope = await this.dispatcher.resume(args.task_id, args.input);
-        const rec = this.registry.get(envelope.task_id);
-        if (rec) {
-          if (envelope.status === 'completed') {
-            onTaskEvent?.({ type: 'task_completed', record: rec, envelope });
-          } else if (envelope.status === 'failed') {
-            onTaskEvent?.({ type: 'task_failed', record: rec, envelope });
-          } else if (envelope.status === 'cancelled') {
-            onTaskEvent?.({ type: 'task_cancelled', record: rec, envelope });
+        const targetId = args.task_id;
+        // Subscribe to registry transitions so the UI sees `task_started`
+        // when the resume re-enters the running state (mirrors delegate's
+        // intermediate-event behavior). Filter by task_id so we only fire
+        // for OUR task even if other tasks transition concurrently.
+        const unsub = this.registry.subscribe((rec) => {
+          if (rec.id === targetId && rec.status === 'running') {
+            onTaskEvent?.({ type: 'task_started', record: rec });
           }
-          // needs_input again - the task paused with a SECOND question. The
-          // conv LLM will see this envelope and ask again.
+        });
+        try {
+          const envelope = await this.dispatcher.resume(targetId, args.input);
+          const rec = this.registry.get(envelope.task_id);
+          if (rec) {
+            if (envelope.status === 'completed') {
+              onTaskEvent?.({ type: 'task_completed', record: rec, envelope });
+            } else if (envelope.status === 'failed') {
+              onTaskEvent?.({ type: 'task_failed', record: rec, envelope });
+            } else if (envelope.status === 'cancelled') {
+              onTaskEvent?.({ type: 'task_cancelled', record: rec, envelope });
+            }
+            // needs_input again - the task paused with a SECOND question. The
+            // conv LLM will see this envelope and ask again. The registry
+            // transition already fired through the subscription above (the
+            // task went running -> needs_input).
+          }
+          return { envelope, taskId: envelope.task_id };
+        } finally {
+          unsub();
         }
-        return { envelope, taskId: envelope.task_id };
       }
 
       default:
