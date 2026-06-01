@@ -22,10 +22,41 @@ export type WSMessage = {
       // session live/closed/error for the UI indicator; `realtime_transcript`
       // streams user/assistant transcript text. See docs/GPT_REALTIME_2_INTEGRATION.md.
       | 'realtime_status' | 'realtime_transcript'
-      // Conv-tier task lifecycle event. Payload:
-      //   { type: 'task_started' | 'task_completed' | 'task_failed' | 'task_cancelled',
-      //     task_id, template, intent, status, elapsedMs, summary? }
-      // UI renders status pills + flashes "result ready" interjections.
+      // Conv-tier task lifecycle event. Fires when the conversation LLM
+      // delegates work to a task tier and during its life: started, then
+      // completed | failed | cancelled. Tasks that pause for clarification
+      // also fire a task_started event when they later resume.
+      //
+      // Payload:
+      //   {
+      //     type: 'task_started' | 'task_completed' | 'task_failed' | 'task_cancelled',
+      //     task_id: string,        // stable id; same across pause + resume
+      //     template: 'research' | 'code' | 'plan' | 'write' | 'general',
+      //     intent: string,         // conv LLM's paraphrase of what to do
+      //     status: 'running' | 'completed' | 'failed' | 'cancelled',
+      //     elapsedMs: number,      // wall-clock since task started
+      //     summary?: string,       // present on completed/failed/cancelled
+      //   }
+      //
+      // Consuming (e.g. for a status pill component):
+      //   const ws = new WebSocket('ws://host:port/ws');
+      //   ws.onmessage = (e) => {
+      //     const msg = JSON.parse(e.data);
+      //     if (msg.type !== 'task_event') return;
+      //     const p = msg.payload;
+      //     switch (p.type) {
+      //       case 'task_started':   pillsByTaskId.set(p.task_id, { template: p.template, intent: p.intent, startedAt: Date.now() }); break;
+      //       case 'task_completed':
+      //       case 'task_failed':
+      //       case 'task_cancelled': pillsByTaskId.delete(p.task_id); break;
+      //     }
+      //   };
+      //
+      // Note: a task can fire task_started multiple times (initial dispatch
+      // + each resume after a needs_input pause). Treat task_started as
+      // "show pill"; treat any terminal event as "hide pill". Pauses
+      // (needs_input) are NOT emitted as task_event - the conv LLM handles
+      // them by asking the user via the regular chat stream.
       | 'task_event'
       // Emitted when a pending voice confirmation (clarifier / repeat-back)
       // expires from the server-side TTL sweep. Payload: { id: string }.

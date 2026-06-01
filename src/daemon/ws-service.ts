@@ -703,8 +703,12 @@ export class WebSocketService implements Service {
    * while a delegated task is in flight, and to flash a "result ready" hint
    * when the task completes after the user has moved on.
    *
-   * Event payload shape: { type: 'task_started'|'task_completed'|'task_failed'|'task_cancelled',
-   *                         task_id, template, intent, status, elapsedMs, summary? }
+   * Full payload contract + consumer example: see the `task_event` comment
+   * on `WSMessage` in `src/comms/websocket.ts`. Briefly:
+   *   - task_started: show/update a pill for this task_id
+   *   - task_completed/failed/cancelled: remove the pill, show summary
+   *   - task_started CAN fire again on the same task_id when a paused task
+   *     resumes (after the conv LLM provided a clarification reply)
    */
   broadcastTaskEvent(event: {
     type: 'task_started' | 'task_completed' | 'task_failed' | 'task_cancelled';
