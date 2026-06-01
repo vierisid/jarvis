@@ -51,6 +51,15 @@ export class AgentOrchestrator {
     return this.toolRegistry;
   }
 
+  /**
+   * Public tool schema for realtime voice sessions. Same shared `LLMTool[]`
+   * the text providers consume (decision #3 — single source of truth).
+   */
+  getRealtimeTools(): LLMTool[] {
+    if (!this.toolRegistry || this.toolRegistry.count() === 0) return [];
+    return this.toolRegistry.list().map(toolDefToLLMTool);
+  }
+
   // --- Authority setters ---
 
   setAuthorityEngine(engine: AuthorityEngine): void {
@@ -592,6 +601,95 @@ export class AgentOrchestrator {
       return result;
     } catch (err) {
       return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * Execute a tool call originating from a premium realtime (gpt-realtime-2)
+   * voice session. Mirrors `executeTool`'s authority gate BUT auto-approves:
+   * a `requiresApproval` decision is treated as granted so the audio loop is
+   * never blocked (decision #2, see docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3).
+   *
+   * Still enforced: emergency state, explicit hard denies, and the
+   * user-configured `blockedCategories` backstop. Every call is written to the
+   * audit trail tagged `channel:'voice'`; an auto-approved call is recorded as
+   * `approval_required` + `executed:true` so the trail shows no human confirmed it.
+   *
+   * Always returns a string (the tool result or an error/denial marker) — the
+   * realtime session feeds this straight back to the model as function output.
+   */
+  async executeRealtimeToolCall(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { blockedCategories?: string[] } = {},
+  ): Promise<string> {
+    if (!this.toolRegistry) return 'Error: No tool registry configured';
+
+    // 1. Emergency check (same as text path).
+    if (this.emergencyController && !this.emergencyController.canExecute()) {
+      const state = this.emergencyController.getState();
+      return `[SYSTEM ${state.toUpperCase()}] Tool execution is currently suspended.`;
+    }
+
+    const primary = this.getPrimary();
+    const tool = this.toolRegistry.get(name);
+    const actionCategory = getActionForTool(name, tool?.category ?? 'unknown');
+
+    const logAudit = (decision: 'allowed' | 'denied' | 'approval_required', executed: boolean) => {
+      if (!primary) return;
+      this.auditTrail?.log({
+        agent_id: primary.id,
+        agent_name: primary.agent.role.name,
+        tool_name: name,
+        action_category: actionCategory,
+        authority_decision: decision,
+        approval_id: null,
+        executed,
+        channel: 'voice',
+      });
+    };
+
+    // 2. User backstop: categories that stay blocked even under auto-approve.
+    if (opts.blockedCategories?.includes(actionCategory)) {
+      logAudit('denied', false);
+      return `[BLOCKED] ${name} (${actionCategory}) is in the realtime blocked-categories list and was not executed.`;
+    }
+
+    // 3. Authority check — hard denies enforced; approval auto-granted.
+    if (this.authorityEngine && primary) {
+      const decision = this.authorityEngine.checkAuthority({
+        agentId: primary.id,
+        agentAuthorityLevel: primary.agent.authority.max_authority_level,
+        agentRoleId: primary.agent.role.id,
+        toolName: name,
+        toolCategory: tool?.category ?? 'unknown',
+        actionCategory,
+        temporaryGrants: this.temporaryGrants,
+      });
+
+      if (!decision.allowed) {
+        logAudit('denied', false);
+        return `[AUTHORITY DENIED] Cannot execute ${name}: ${decision.reason}.`;
+      }
+
+      // requiresApproval -> auto-approved in realtime; audited as such.
+      logAudit(decision.requiresApproval ? 'approval_required' : 'allowed', true);
+    }
+
+    // 4. Execute.
+    try {
+      const raw = await this.toolRegistry.execute(name, args);
+      if (isToolResult(raw)) {
+        // Realtime function output is text; flatten non-text blocks to a tag.
+        return raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+      }
+      let result = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      if (result.length > MAX_TOOL_RESULT_CHARS) {
+        result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
+      }
+      return result;
+    } catch (err) {
+      return `Error executing ${name}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 

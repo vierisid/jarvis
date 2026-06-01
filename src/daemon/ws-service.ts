@@ -36,6 +36,9 @@ import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } fr
 import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
+import { resolveRealtimeVoice, type ResolvedRealtimeVoice } from '../config/realtime.ts';
+import { BrowserAudioTransport } from '../comms/audio-transport.ts';
+import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
@@ -143,6 +146,16 @@ export class WebSocketService implements Service {
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
   private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
+  /**
+   * Premium realtime voice (gpt-realtime-2) sessions, keyed by socket. Present
+   * only when `voice.realtime.enabled` resolves with a key. A realtime session
+   * owns the full duplex audio loop (STT+LLM+TTS in one OpenAI connection), so
+   * the socket's normal `voiceSessions` accumulator is bypassed while it lives.
+   */
+  private realtimeSessions = new Map<
+    ServerWebSocket<unknown>,
+    { session: RealtimeVoiceSession; transport: BrowserAudioTransport; timeout: ReturnType<typeof setTimeout> }
+  >();
   /**
    * Phase B — per-WS onboarding interview sessions. Created on
    * `interview_start`, torn down on disconnect or after the agent
@@ -297,6 +310,8 @@ export class WebSocketService implements Service {
           console.log('[WSService] Client connected');
         },
         onDisconnect: (ws) => {
+          // Tear down any realtime voice session (closes the OpenAI WS + timer).
+          this.closeRealtimeVoice(ws);
           // Clean up every per-socket map so a long-running daemon doesn't
           // accumulate dead-socket entries across reconnects. See
           // cleanupPerSocketMaps for the contract; tested in
@@ -715,6 +730,9 @@ export class WebSocketService implements Service {
 
       case 'voice_start': {
         const { requestId, currentRoom } = msg.payload as { requestId: string; currentRoom?: string };
+        // Premium path: if realtime voice is enabled + keyed, open (or reuse) a
+        // full-duplex realtime session and skip the STT accumulator entirely.
+        if (this.tryStartRealtimeVoice(ws)) return undefined;
         this.voiceSessions.set(ws, {
           requestId,
           chunks: [],
@@ -1148,12 +1166,97 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * Accumulates chunks into the active voice session for this client.
    */
   private async handleVoiceAudio(data: Buffer, ws: ServerWebSocket<unknown>): Promise<void> {
+    // Realtime path: stream the mic frame straight into the OpenAI session.
+    const realtime = this.realtimeSessions.get(ws);
+    if (realtime) {
+      realtime.transport.pushMicChunk(data);
+      return;
+    }
     const session = this.voiceSessions.get(ws);
     if (!session) {
       console.warn('[WSService] Binary audio received with no active voice session');
       return;
     }
     session.chunks.push(data);
+  }
+
+  /**
+   * Open (or reuse) a premium realtime voice session for this socket. Returns
+   * true if realtime handled the `voice_start` (so the caller skips the normal
+   * STT accumulator), false if realtime is disabled/unavailable.
+   *
+   * A single session spans the conversation: `voice_end` is a no-op for
+   * realtime (OpenAI's semantic VAD detects turns), and the session is closed
+   * on disconnect or after `max_session_minutes` (cost guard).
+   */
+  private tryStartRealtimeVoice(ws: ServerWebSocket<unknown>): boolean {
+    if (this.realtimeSessions.has(ws)) return true; // already streaming
+
+    let resolved: ResolvedRealtimeVoice;
+    try {
+      const res = resolveRealtimeVoice(this.agentService.getConfig());
+      if (!res.ok) return false;
+      resolved = res.resolved;
+    } catch (err) {
+      console.warn('[WSService] realtime voice resolve failed, using standard pipeline:', err);
+      return false;
+    }
+
+    const orchestrator = this.agentService.getOrchestrator();
+    const transport = new BrowserAudioTransport({
+      sendAudio: (chunk) => this.wsServer.sendBinary(ws, chunk),
+      signalStopPlayback: () =>
+        this.wsServer.sendToClient(ws, { type: 'tts_end', payload: { bargeIn: true }, timestamp: Date.now() }),
+      // OpenAI requires input rate >= 24kHz; the browser client must capture/
+      // resample to this. Output is also 24kHz PCM.
+      inputSampleRate: 24000,
+      outputSampleRate: 24000,
+    });
+
+    const session = new RealtimeVoiceSession(resolved, transport, {
+      tools: orchestrator.getRealtimeTools(),
+      instructions: this.agentService.buildFullSystemPrompt('voice'),
+      executeToolCall: (name, args) =>
+        orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories }),
+      onTranscript: (t) =>
+        this.wsServer.sendToClient(ws, {
+          type: 'realtime_transcript',
+          payload: { role: t.role, text: t.text, final: t.final },
+          timestamp: Date.now(),
+        }),
+      onError: (err) => {
+        console.error('[WSService] realtime voice error:', err);
+        this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'error', message: err }, timestamp: Date.now() });
+      },
+      onClose: () => this.closeRealtimeVoice(ws),
+    });
+
+    const timeout = setTimeout(() => {
+      console.log('[WSService] realtime session hit max_session_minutes, closing');
+      this.closeRealtimeVoice(ws);
+    }, resolved.maxSessionMinutes * 60_000);
+
+    this.realtimeSessions.set(ws, { session, transport, timeout });
+    session.connect().then(
+      () => this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'live', model: resolved.model }, timestamp: Date.now() }),
+      (err) => {
+        console.error('[WSService] realtime connect failed:', err);
+        this.closeRealtimeVoice(ws);
+      },
+    );
+    return true;
+  }
+
+  /** Tear down a realtime voice session and notify the client. */
+  private closeRealtimeVoice(ws: ServerWebSocket<unknown>): void {
+    const entry = this.realtimeSessions.get(ws);
+    if (!entry) return;
+    this.realtimeSessions.delete(ws);
+    clearTimeout(entry.timeout);
+    try { entry.session.close(); } catch { /* ignore */ }
+    try {
+      this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'closed' }, timestamp: Date.now() });
+    } catch { /* socket may already be gone */ }
   }
 
   /**

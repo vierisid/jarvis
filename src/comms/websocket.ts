@@ -18,6 +18,10 @@ export type WSMessage = {
       | 'workflow_event'
       | 'goal_event'
       | 'site_event'
+      // Premium realtime voice (gpt-realtime-2). `realtime_status` reports
+      // session live/closed/error for the UI indicator; `realtime_transcript`
+      // streams user/assistant transcript text. See docs/GPT_REALTIME_2_INTEGRATION.md.
+      | 'realtime_status' | 'realtime_transcript'
       // Emitted when a pending voice confirmation (clarifier / repeat-back)
       // expires from the server-side TTL sweep. Payload: { id: string }.
       // Clients should dismiss the corresponding card from their UI.
