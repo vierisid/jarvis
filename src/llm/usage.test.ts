@@ -27,7 +27,6 @@ function seed() {
     { msAgo: 240_000,     tier: 'conversation', model: 'gpt-4o-mini',  subsystem: 'conv_orchestrator',   provider: 'openai',    in: 110, out: 55,  latency: 700, err: 'auth' },
     { msAgo: 8 * 86400000,tier: 'medium',       model: 'claude-sonnet',subsystem: 'task_research',       provider: 'anthropic', in: 800, out: 300, latency: 3500 }, // > 7 days ago
   ];
-  const now = Date.now();
   for (const s of samples) {
     recordUsage({
       tier: s.tier,
@@ -40,27 +39,7 @@ function seed() {
       latency_ms: s.latency,
       error_code: s.err,
     });
-    // Backdate the row we just inserted by mutating ts directly.
-    const db = (initDatabase as never as () => never) && undefined; // (silence noUnusedImports)
-    void db;
-    // The recordUsage above stamps Date.now(); for tests we patch via SQL.
-    const d = (globalThis as { __db?: unknown }).__db;
-    void d;
   }
-}
-
-/**
- * Backdate rows by setting their ts to `now - msAgo`. Cleaner than patching
- * the DB between inserts. We do a single UPDATE with row_number windowing
- * isn't supported in bun:sqlite simply, so we use the row index via rowid
- * order.
- */
-function backdateRows(samples: { msAgo: number }[]) {
-  // Acquired via the db helper - get it through the schema module.
-  // We rely on insertion order matching rowid order (bun:sqlite uses
-  // ROWID autoincrement on PRIMARY KEY AUTOINCREMENT).
-  const db = (globalThis as { Bun?: unknown }).Bun ? require('bun:sqlite') : null;
-  void db;
 }
 
 describe('queryUsage', () => {

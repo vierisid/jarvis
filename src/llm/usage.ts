@@ -253,9 +253,25 @@ export function queryUsage(
       };
     }
 
+    // Defense in depth: keyColumn is string-interpolated into the SQL below.
+    // TypeScript enforces the UsageGroupBy union at compile time, but we
+    // still gate at runtime to prevent any untrusted caller from sneaking in
+    // an arbitrary column expression.
+    const ALLOWED_GROUP_COLUMNS: Record<Exclude<UsageGroupBy, 'date' | 'none'>, string> = {
+      tier: 'tier',
+      model: 'model',
+      subsystem: 'subsystem',
+      provider: 'provider',
+    };
     const keyColumn = groupBy === 'date'
       ? `date(ts/1000, 'unixepoch', 'localtime')`
-      : groupBy;
+      : ALLOWED_GROUP_COLUMNS[groupBy];
+    if (!keyColumn) {
+      // Should be unreachable given the typed union and the 'none' branch
+      // above, but stay defensive.
+      console.warn(`[LLMUsage] queryUsage: unknown groupBy '${groupBy}'`);
+      return empty;
+    }
 
     const rows = db
       .query<UsageQueryRow, (string | number)[]>(
