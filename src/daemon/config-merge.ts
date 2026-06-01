@@ -15,7 +15,7 @@
  *    keys, so a UI round-trip never sees the real value.
  *  - Shallow-merge remaining top-level fields (provider, enabled, voice…).
  */
-import type { STTConfig, TTSConfig } from '../config/types.ts';
+import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 type AnyRec = Record<string, unknown>;
 
@@ -83,4 +83,28 @@ export function mergeTTSConfig(
   }
 
   return { ...merged, ...patch } as TTSConfig;
+}
+
+/**
+ * Merge a partial voice patch into the existing config. The `realtime`
+ * sub-block (premium gpt-realtime-2) is deep-merged so a partial update (e.g.
+ * just `reasoning_effort`) doesn't wipe siblings, and its `api_key` is
+ * preserved when the patch omits it or sends an empty string — the GET
+ * endpoint redacts the key, so a UI round-trip never sees the real value.
+ */
+export function mergeVoiceConfig(
+  existing: VoiceConfig | undefined,
+  incoming: AnyRec,
+): VoiceConfig {
+  const base: VoiceConfig = existing ?? { wake_engine: 'openwakeword' };
+  const patch = { ...incoming };
+  const merged: AnyRec = { ...base };
+
+  const incRealtime = patch.realtime as AnyRec | undefined;
+  if (incRealtime) {
+    merged.realtime = mergeCloudSubBlock((base as AnyRec).realtime as AnyRec | undefined, incRealtime);
+    delete patch.realtime;
+  }
+
+  return { ...merged, ...patch } as VoiceConfig;
 }

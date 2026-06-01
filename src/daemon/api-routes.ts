@@ -8,6 +8,7 @@
 import type { HealthMonitor } from './health.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import { resolveRealtimeVoice } from '../config/realtime.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -1894,6 +1895,54 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json({ ok: true, message: 'TTS config saved.' });
         } catch (err) {
           console.error('[API] Error saving TTS config:', err);
+          return error('Invalid request body');
+        }
+      },
+    },
+
+    // --- Voice (wake engine + premium realtime gpt-realtime-2) ---
+    '/api/config/voice': {
+      GET: () => {
+        const voice = ctx.config.voice;
+        const rt = voice?.realtime;
+        // Surface whether realtime would actually resolve (BYO key cascade),
+        // so the UI can show "active / no key" without exposing secrets.
+        let available = false;
+        try {
+          available = resolveRealtimeVoice(ctx.config).ok;
+        } catch { available = false; }
+        return json({
+          wake_engine: voice?.wake_engine ?? 'openwakeword',
+          realtime: {
+            enabled: rt?.enabled ?? false,
+            has_api_key: !!rt?.api_key,
+            model: rt?.model ?? 'gpt-realtime-2',
+            voice: rt?.voice ?? null,
+            reasoning_effort: rt?.reasoning_effort ?? 'low',
+            max_session_minutes: rt?.max_session_minutes ?? 10,
+            monthly_budget_usd: rt?.monthly_budget_usd ?? null,
+            blocked_categories: rt?.blocked_categories ?? [],
+            // true when enabled AND a key resolves (own key, llm.openai, or env).
+            available,
+          },
+        });
+      },
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as Record<string, unknown>;
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { mergeVoiceConfig } = await import('./config-merge.ts');
+          const freshConfig = await loadConfig();
+
+          freshConfig.voice = mergeVoiceConfig(freshConfig.voice, body);
+          await saveConfig(freshConfig);
+          // Update in-memory config so the next voice_start resolves with the
+          // new settings — resolveRealtimeVoice reads ctx.config live, so no
+          // provider hot-reload is needed (unlike TTS/LLM).
+          ctx.config.voice = freshConfig.voice;
+          return json({ ok: true, message: 'Voice config saved.' });
+        } catch (err) {
+          console.error('[API] Error saving voice config:', err);
           return error('Invalid request body');
         }
       },

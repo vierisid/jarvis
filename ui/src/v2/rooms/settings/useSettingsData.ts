@@ -100,6 +100,38 @@ export interface TTSConfig {
   } | null;
 }
 
+export type RealtimeReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface VoiceConfig {
+  wake_engine: string;
+  realtime: {
+    enabled: boolean;
+    has_api_key: boolean;
+    model: string;
+    voice: string | null;
+    reasoning_effort: RealtimeReasoningEffort;
+    max_session_minutes: number;
+    monthly_budget_usd: number | null;
+    blocked_categories: string[];
+    /** true when enabled AND a key resolves (own key, llm.openai, or env). */
+    available: boolean;
+  };
+}
+
+/** Partial patch sent to POST /api/config/voice. */
+export interface VoiceConfigPatch {
+  wake_engine?: string;
+  realtime?: Partial<{
+    enabled: boolean;
+    api_key: string;
+    model: string;
+    voice: string;
+    reasoning_effort: RealtimeReasoningEffort;
+    max_session_minutes: number;
+    monthly_budget_usd: number;
+  }>;
+}
+
 export interface AutostartStatus {
   platform: string;
   manager: string;
@@ -239,6 +271,7 @@ export function useSettingsData() {
   const [channelCfg, setChannelCfg] = useState<ChannelConfig | null>(null);
   const [sttCfg, setSTTCfg] = useState<STTConfig | null>(null);
   const [ttsCfg, setTTSCfg] = useState<TTSConfig | null>(null);
+  const [voiceCfg, setVoiceCfg] = useState<VoiceConfig | null>(null);
   const [autostart, setAutostart] = useState<AutostartStatus | null>(null);
   const [rootCfg, setRootCfg] = useState<RootConfig | null>(null);
   const [personality, setPersonality] = useState<PersonalityModel | null>(null);
@@ -260,6 +293,7 @@ export function useSettingsData() {
         chanCfgR,
         sttR,
         ttsR,
+        voiceR,
         autoR,
         rootR,
         persR,
@@ -273,6 +307,7 @@ export function useSettingsData() {
         getJson<ChannelConfig>("/api/config/channels"),
         getJson<STTConfig>("/api/config/stt"),
         getJson<TTSConfig>("/api/config/tts"),
+        getJson<VoiceConfig>("/api/config/voice"),
         getJson<AutostartStatus>("/api/system/autostart"),
         getJson<RootConfig>("/api/config"),
         getJson<PersonalityModel>("/api/personality"),
@@ -286,6 +321,7 @@ export function useSettingsData() {
       if (chanCfgR) setChannelCfg(chanCfgR);
       if (sttR) setSTTCfg(sttR);
       if (ttsR) setTTSCfg(ttsR);
+      if (voiceR) setVoiceCfg(voiceR);
       if (autoR) setAutostart(autoR);
       if (rootR) setRootCfg(rootR);
       if (persR) setPersonality(persR);
@@ -598,6 +634,23 @@ export function useSettingsData() {
     [refresh, ttsCfg],
   );
 
+  // ── Voice / Premium realtime (config write — /api/config/voice) ─────
+  const setVoiceConfig = useCallback(
+    async (patch: VoiceConfigPatch): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/voice",
+          patch,
+        );
+        await refresh();
+        return { ok: true, message: r.message || "Voice settings saved." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
   // ── Heartbeat (config write — root /api/config) ─────────────────────
   // Note: backend has no dedicated heartbeat endpoint; field-level writes
   // would go through /api/config (POST). This room exposes the read but
@@ -762,6 +815,7 @@ export function useSettingsData() {
     channelCfg,
     sttCfg,
     ttsCfg,
+    voiceCfg,
     autostart,
     rootCfg,
     personality,
@@ -790,6 +844,7 @@ export function useSettingsData() {
     setDiscord,
     setSTTProvider,
     setTTS,
+    setVoiceConfig,
     setHeartbeatInterval,
     setHeartbeatAggressiveness,
     restartDaemon,

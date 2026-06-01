@@ -5,6 +5,7 @@ import {
   Cable,
   Cog,
   MessagesSquare,
+  Mic,
   Server,
   UserCircle2,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { GeneralTab } from "./tabs/GeneralTab";
 import { ProfileTab } from "./tabs/ProfileTab";
 import { LLMTab } from "./tabs/LLMTab";
 import { ChannelsTab } from "./tabs/ChannelsTab";
+import { VoiceTab } from "./tabs/VoiceTab";
 import { IntegrationsTab } from "./tabs/IntegrationsTab";
 import { SidecarTab } from "./tabs/SidecarTab";
 import "./SettingsRoom.css";
@@ -31,6 +33,7 @@ export type SettingsTab =
   | "profile"
   | "llm"
   | "channels"
+  | "voice"
   | "integrations"
   | "sidecar";
 
@@ -39,6 +42,7 @@ const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }>
   { key: "profile", label: "Profile", icon: UserCircle2 },
   { key: "llm", label: "LLM", icon: Bot },
   { key: "channels", label: "Channels", icon: MessagesSquare },
+  { key: "voice", label: "Voice", icon: Mic },
   { key: "integrations", label: "Integrations", icon: Cable },
   { key: "sidecar", label: "Sidecar", icon: Server },
 ];
@@ -387,6 +391,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             {tab === "profile" && <ProfileTab data={data} onToast={showToast} />}
             {tab === "llm" && <LLMTab data={data} onToast={showToast} />}
             {tab === "channels" && <ChannelsTab data={data} onToast={showToast} />}
+            {tab === "voice" && <VoiceTab data={data} onToast={showToast} />}
             {tab === "integrations" && <IntegrationsTab data={data} onToast={showToast} />}
             {tab === "sidecar" && <SidecarTab data={data} onToast={showToast} />}
           </>

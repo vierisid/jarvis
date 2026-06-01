@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
-import { mergeSTTConfig, mergeTTSConfig } from './config-merge.ts';
-import type { STTConfig, TTSConfig } from '../config/types.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig } from './config-merge.ts';
+import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 describe('mergeSTTConfig', () => {
   test('preserves a different provider key when patching only one provider', () => {
@@ -134,5 +134,47 @@ describe('mergeTTSConfig', () => {
     expect(merged.enabled).toBe(true);
     expect(merged.provider).toBe('edge');
     expect(merged.voice).toBe('en-US-AriaNeural');
+  });
+});
+
+describe('mergeVoiceConfig', () => {
+  test('preserves realtime api_key when patch omits it', () => {
+    const existing: VoiceConfig = {
+      wake_engine: 'openwakeword',
+      realtime: { enabled: true, api_key: 'sk-secret', model: 'gpt-realtime-2', reasoning_effort: 'low' },
+    };
+    const merged = mergeVoiceConfig(existing, { realtime: { reasoning_effort: 'high' } });
+    expect(merged.realtime?.api_key).toBe('sk-secret');     // preserved
+    expect(merged.realtime?.reasoning_effort).toBe('high');  // updated
+    expect(merged.realtime?.model).toBe('gpt-realtime-2');   // sibling intact
+  });
+
+  test('empty api_key string does not wipe the stored key', () => {
+    const existing: VoiceConfig = {
+      wake_engine: 'openwakeword',
+      realtime: { enabled: true, api_key: 'sk-secret' },
+    };
+    const merged = mergeVoiceConfig(existing, { realtime: { enabled: false, api_key: '' } });
+    expect(merged.realtime?.api_key).toBe('sk-secret');
+    expect(merged.realtime?.enabled).toBe(false);
+  });
+
+  test('accepts a new api_key when provided', () => {
+    const existing: VoiceConfig = { wake_engine: 'openwakeword', realtime: { enabled: false, api_key: 'old' } };
+    const merged = mergeVoiceConfig(existing, { realtime: { enabled: true, api_key: 'new' } });
+    expect(merged.realtime?.api_key).toBe('new');
+  });
+
+  test('shallow-merges wake_engine without touching realtime', () => {
+    const existing: VoiceConfig = { wake_engine: 'openwakeword', realtime: { enabled: true, api_key: 'k' } };
+    const merged = mergeVoiceConfig(existing, { wake_engine: 'webspeech' });
+    expect(merged.wake_engine).toBe('webspeech');
+    expect(merged.realtime?.enabled).toBe(true);
+  });
+
+  test('initializes from undefined', () => {
+    const merged = mergeVoiceConfig(undefined, { realtime: { enabled: true, api_key: 'k', voice: 'marin' } });
+    expect(merged.wake_engine).toBe('openwakeword');
+    expect(merged.realtime?.voice).toBe('marin');
   });
 });
