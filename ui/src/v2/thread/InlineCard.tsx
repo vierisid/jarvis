@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ArrowUpRight,
+  BarChart3,
   BookMarked,
   Calendar,
   CheckSquare,
@@ -31,6 +32,7 @@ const TYPE_ICON: Record<ObjectType, LucideIcon> = {
   tasks: CheckSquare,
   content: FileText,
   workspaces: Code2,
+  usage: BarChart3,
   settings: Settings,
 };
 
@@ -46,6 +48,7 @@ const TYPE_LABEL: Record<ObjectType, string> = {
   tasks: "Tasks",
   content: "Content",
   workspaces: "Workspaces",
+  usage: "Usage",
   settings: "Settings",
 };
 

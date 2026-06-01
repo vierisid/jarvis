@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  BarChart3,
   BookMarked,
   Calendar,
   CheckSquare,
@@ -55,6 +56,7 @@ const NAV_ICON: Record<PaletteNavEntry["key"], LucideIcon> = {
   tasks: CheckSquare,
   content: FileText,
   workspaces: Code2,
+  usage: BarChart3,
   settings: Cog,
 };
 

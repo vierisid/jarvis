@@ -51,6 +51,10 @@ const SettingsRoom = React.lazy(() =>
   import("./settings/SettingsRoom").then((m) => ({ default: m.SettingsRoom })),
 );
 
+const UsageRoom = React.lazy(() =>
+  import("./usage/UsageRoom").then((m) => ({ default: m.UsageRoom })),
+);
+
 type LazyRoomEntry = {
   Component: React.ComponentType;
   title: string;
@@ -77,6 +81,7 @@ const LAZY_ROOMS: Partial<Record<RoomKey, LazyRoomEntry>> = {
   tasks: { Component: TasksRoom, title: "Tasks", loadingDesc: "Loading your tasks…" },
   content: { Component: ContentRoom, title: "Content", loadingDesc: "Loading the pipeline…" },
   workspaces: { Component: WorkspacesRoom, title: "Workspaces", loadingDesc: "Loading projects…" },
+  usage: { Component: UsageRoom, title: "Usage", loadingDesc: "Loading usage telemetry…" },
   settings: { Component: SettingsRoom, title: "Settings", loadingDesc: "Loading configuration…" },
 };
 
@@ -205,6 +210,13 @@ const ROOM_META: Record<RoomKey, RoomMeta> = {
     phaseTag: "Phase 6.7 — Workspaces Room",
     description:
       "Web app dev environments. Run dev servers, edit files, commit and push to GitHub.",
+  },
+  usage: {
+    title: "Usage",
+    subtitle: "LLM tokens · filterable telemetry",
+    phaseTag: "Phase 6.8 — Usage Room",
+    description:
+      "Track LLM token consumption. Filter by task difficulty (tier), model, task (subsystem), provider, and date range.",
   },
   settings: {
     title: "Settings",

@@ -1364,6 +1364,77 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // --- Usage telemetry ---
+    /**
+     * Filterable LLM usage query. All query params are optional:
+     *   from, to        unix-ms range bounds (default: last 30 days -> now)
+     *   tier            CSV: conversation,high,medium,low
+     *   model           CSV
+     *   subsystem       CSV
+     *   provider        CSV
+     *   errors_only     "true" | "false" | "" (both)
+     *   group_by        tier | model | subsystem | provider | date | none
+     *                   default: model
+     */
+    '/api/usage': {
+      GET: async (req: Request) => {
+        try {
+          const { queryUsage } = await import('../llm/usage.ts');
+          const url = new URL(req.url);
+          const get = (k: string) => url.searchParams.get(k);
+
+          const parseCsv = (v: string | null): string[] | undefined => {
+            if (!v) return undefined;
+            const list = v.split(',').map((s) => s.trim()).filter(Boolean);
+            return list.length > 0 ? list : undefined;
+          };
+          const parseInt64 = (v: string | null): number | undefined => {
+            if (!v) return undefined;
+            const n = Number(v);
+            return Number.isFinite(n) ? n : undefined;
+          };
+          const errorsOnlyRaw = get('errors_only');
+          const errorsOnly = errorsOnlyRaw === 'true' ? true : errorsOnlyRaw === 'false' ? false : undefined;
+          const groupByRaw = get('group_by') ?? 'model';
+          const validGroups = ['tier', 'model', 'subsystem', 'provider', 'date', 'none'] as const;
+          const groupBy = (validGroups as readonly string[]).includes(groupByRaw)
+            ? (groupByRaw as typeof validGroups[number])
+            : 'model';
+
+          const result = queryUsage(
+            {
+              fromMs: parseInt64(get('from')),
+              toMs: parseInt64(get('to')),
+              tiers: parseCsv(get('tier')),
+              models: parseCsv(get('model')),
+              subsystems: parseCsv(get('subsystem')),
+              providers: parseCsv(get('provider')),
+              errorsOnly,
+            },
+            groupBy,
+          );
+          return json(result);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ error: msg, rows: [], total: { calls: 0, input_tokens: 0, output_tokens: 0, total_latency_ms: 0, errors: 0 } });
+        }
+      },
+    },
+
+    /** Distinct filter values + date range present in the DB. Used by the
+     *  Usage room to populate filter dropdowns with only-extant choices. */
+    '/api/usage/filters': {
+      GET: async () => {
+        try {
+          const { listUsageDistinctValues } = await import('../llm/usage.ts');
+          return json(listUsageDistinctValues());
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ error: msg, tiers: [], models: [], subsystems: [], providers: [], earliest_ts: null, latest_ts: null });
+        }
+      },
+    },
+
     // --- Roles ---
     '/api/roles': {
       GET: () => {

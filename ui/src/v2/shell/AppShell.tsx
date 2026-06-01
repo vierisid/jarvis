@@ -52,6 +52,7 @@ function objectTypeToRoomKey(t: ObjectType): RoomKey {
     case "tasks":
     case "content":
     case "workspaces":
+    case "usage":
     case "settings":
       return t;
   }
