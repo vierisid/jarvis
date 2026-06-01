@@ -91,7 +91,9 @@ export type VoiceCallbacks = {
   onTTSStart: (requestId: string, containsWake: boolean) => void;
   /** Mid-turn flip: a later sentence in the same turn contains "Jarvis". */
   onTTSContainsWake?: () => void;
-  onTTSEnd: () => void;
+  /** `bargeIn` — realtime voice sends tts_end{bargeIn:true} when the user
+   *  starts speaking, so the player can flush queued output immediately. */
+  onTTSEnd: (bargeIn?: boolean) => void;
   onError: (message?: string) => void;
 };
 
@@ -486,7 +488,28 @@ export function useWebSocket() {
           return;
         }
         if (msg.type === "tts_end") {
-          voiceCallbacksRef.current?.onTTSEnd();
+          voiceCallbacksRef.current?.onTTSEnd(Boolean(msg.payload?.bargeIn));
+          return;
+        }
+        // Premium realtime voice (gpt-realtime-2) status + live captions.
+        if (msg.type === "realtime_status") {
+          const state = msg.payload?.state;
+          if (state === "error") voiceCallbacksRef.current?.onError(msg.payload?.message);
+          return;
+        }
+        if (msg.type === "realtime_transcript") {
+          // Only surface completed utterances as chat messages.
+          if (msg.payload?.final && msg.payload?.text) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: (msg.payload.role === "assistant" ? "assistant" : "user") as MessageRole,
+                content: msg.payload.text,
+                timestamp: msg.timestamp,
+              },
+            ]);
+          }
           return;
         }
         if (msg.type === "thinking_start") {
