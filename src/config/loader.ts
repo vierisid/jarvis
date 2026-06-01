@@ -264,10 +264,15 @@ export function migrateLegacyLLMConfig(config: JarvisConfig): void {
 }
 
 /**
- * Strip legacy LLM config fields when writing to disk. We always persist the
- * canonical `providers` + `default`/`tiers` shape; the legacy per-provider
- * blocks and `primary`/`fallback` aliases are only read by the loader for
- * backward compatibility and are no longer authoritative.
+ * Strip legacy LLM config fields AND any api_keys in provider entries when
+ * writing to disk. We always persist the canonical `providers` + `default`
+ * / `tiers` shape; the legacy per-provider blocks and `primary`/`fallback`
+ * aliases are only read by the loader for backward compatibility.
+ *
+ * api_keys live in the encrypted keychain. They may transiently appear in
+ * `config.llm.providers.<name>.api_key` (injected by the settings merge so
+ * providers can be instantiated) - those MUST be stripped before YAML write
+ * to prevent leaking secrets to disk in plaintext.
  */
 function stripLegacyLLMFields(config: JarvisConfig): JarvisConfig {
   const clone = structuredClone(config);
@@ -283,6 +288,14 @@ function stripLegacyLLMFields(config: JarvisConfig): JarvisConfig {
   delete llm.nvidia;
   delete llm.openai_compatible;
   delete llm.litellm;
+  if (clone.llm.providers) {
+    for (const name of Object.keys(clone.llm.providers)) {
+      const entry = clone.llm.providers[name];
+      if (entry && 'api_key' in entry) {
+        delete (entry as { api_key?: string }).api_key;
+      }
+    }
+  }
   return clone;
 }
 

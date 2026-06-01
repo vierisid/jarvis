@@ -90,23 +90,50 @@ export function instantiateProvider(name: string, entry: LLMProviderEntry): LLMP
 }
 
 /**
- * Register all configured providers with the manager. Returns true when at
+ * Build provider instances from a config map without touching the manager.
+ * Caller decides how to apply them (registerLLMProviders for first-boot,
+ * atomicReloadProviders for hot-reload).
+ */
+export function buildProviders(
+  providers: Record<string, LLMProviderEntry>,
+): LLMProvider[] {
+  const out: LLMProvider[] = [];
+  for (const [name, entry] of Object.entries(providers)) {
+    if (!entry) continue;
+    const provider = instantiateProvider(name, entry);
+    if (!provider) continue;
+    out.push(provider);
+    console.log(`[LLM] Built provider '${name}' (kind=${entry.kind ?? name})`);
+  }
+  return out;
+}
+
+/**
+ * First-boot path: incrementally register providers with the manager (which
+ * is initially empty so atomicity doesn't matter). Returns true when at
  * least one provider was registered.
  */
 export function registerLLMProviders(
   manager: LLMManager,
   providers: Record<string, LLMProviderEntry>,
 ): boolean {
-  let registered = 0;
-  for (const [name, entry] of Object.entries(providers)) {
-    if (!entry) continue;
-    const provider = instantiateProvider(name, entry);
-    if (!provider) continue;
-    manager.registerProvider(provider);
-    registered++;
-    console.log(`[LLM] Registered provider '${name}' (kind=${entry.kind ?? name})`);
-  }
-  return registered > 0;
+  const built = buildProviders(providers);
+  for (const p of built) manager.registerProvider(p);
+  return built.length > 0;
+}
+
+/**
+ * Hot-reload path: build the new provider list THEN atomic-swap into the
+ * manager. Avoids the empty-providers window that an incremental
+ * clear-then-add would create for in-flight requests.
+ */
+export function atomicReloadProviders(
+  manager: LLMManager,
+  providers: Record<string, LLMProviderEntry>,
+): LLMProvider[] {
+  const built = buildProviders(providers);
+  manager.replaceProviders(built, '', []);
+  return built;
 }
 
 /**

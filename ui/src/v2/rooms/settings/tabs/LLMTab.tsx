@@ -613,6 +613,12 @@ function ModelSelector({
         setSelectedModel("__custom__");
         setCustomModel(parsed.model);
       }
+    } else {
+      // Value cleared (e.g. allowClear button). Reset the model selection
+      // so the UI doesn't keep showing a stale picked model after the
+      // backing config returns null.
+      setSelectedModel("");
+      setCustomModel("");
     }
   }, [value]);
 

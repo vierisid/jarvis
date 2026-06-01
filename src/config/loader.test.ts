@@ -253,7 +253,10 @@ llm:
     expect(loaded.channels?.discord?.enabled).toBe(true);
     expect(loaded.channels?.discord?.guild_id).toBe('guild-123');
     expect(loaded.llm.providers?.ollama?.base_url).toBe('http://localhost:11434');
-    expect(loaded.llm.providers?.gemini?.api_key).toBe('gemini-key');
+    // The provider entry round-trips but the api_key MUST NOT - it's a
+    // secret that lives only in the keychain (see stripLegacyLLMFields).
+    expect(loaded.llm.providers?.gemini).toBeDefined();
+    expect(loaded.llm.providers?.gemini?.api_key).toBeUndefined();
     expect(loaded.llm.tiers?.conversation).toBe('gemini:gemini-3-flash-preview');
     expect(loaded.llm.tiers?.medium).toBe('ollama:llama3.1');
   });

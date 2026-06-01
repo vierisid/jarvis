@@ -22,7 +22,7 @@ import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain
 import type { LLMManager } from '../llm/manager.ts';
 import {
   instantiateProvider,
-  registerLLMProviders,
+  atomicReloadProviders,
   configureLLMTiers,
 } from '../llm/config-binding.ts';
 
@@ -173,13 +173,35 @@ export function saveLLMSettings(
     }
   }
 
-  // Persist non-secret state to DB.
-  setSetting(SETTING_PROVIDERS, JSON.stringify(config.llm.providers));
+  // Persist non-secret state to DB. CRITICAL: strip api_key from every
+  // provider entry before serializing - the in-memory entries carry secrets
+  // injected from the keychain (see mergeLLMSettingsIntoConfig), and the
+  // settings table is plaintext.
+  setSetting(SETTING_PROVIDERS, JSON.stringify(stripSecretsFromProviders(config.llm.providers)));
   setSetting(SETTING_DEFAULT, config.llm.default ?? '');
   setSetting(SETTING_TIER_CONVERSATION, config.llm.tiers.conversation ?? '');
   setSetting(SETTING_TIER_HIGH, config.llm.tiers.high ?? '');
   setSetting(SETTING_TIER_MEDIUM, config.llm.tiers.medium ?? '');
   setSetting(SETTING_TIER_LOW, config.llm.tiers.low ?? '');
+}
+
+/**
+ * Return a copy of the providers map with api_key stripped from every entry.
+ * Used by anything that persists provider entries to a non-encrypted store
+ * (DB settings table, YAML file). The keychain remains the source of truth
+ * for credentials.
+ */
+export function stripSecretsFromProviders(
+  providers: Record<string, LLMProviderEntry> | undefined,
+): Record<string, LLMProviderEntry> {
+  const out: Record<string, LLMProviderEntry> = {};
+  for (const [name, entry] of Object.entries(providers ?? {})) {
+    if (!entry) continue;
+    const { api_key: _omit, ...rest } = entry;
+    void _omit;
+    out[name] = rest;
+  }
+  return out;
 }
 
 // ── mergeLLMSettingsIntoConfig ───────────────────────────────────────────
@@ -318,7 +340,10 @@ function migrateLegacyDBSettings(config: JarvisConfig): void {
  * underlying replaceProviders/setTierMap operations are atomic.
  */
 export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManager): void {
-  // Inject keychain secrets transiently so providers can instantiate.
+  // Build enriched entries with keychain secrets injected so providers can
+  // instantiate. The injection is transient - only the in-memory entries
+  // see it; persisted forms (DB / YAML) get stripped via
+  // stripSecretsFromProviders / stripLegacyLLMFields.
   const providers = config.llm.providers ?? {};
   const enrichedProviders: Record<string, LLMProviderEntry> = {};
   for (const [name, entry] of Object.entries(providers)) {
@@ -327,20 +352,16 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
     enrichedProviders[name] = { ...entry, ...(key ? { api_key: key } : {}) };
   }
 
-  // Atomic swap. We pass `[]` for the legacy primary/fallback args since the
-  // tier system has fully replaced them.
-  llmManager.replaceProviders([], '', []);
-
-  const ok = registerLLMProviders(llmManager, enrichedProviders);
-  if (!ok) {
+  // Atomic single-step swap: build the new provider list, then replaceProviders
+  // does the map swap in one assignment. In-flight requests see EITHER the
+  // old map or the new one, never an empty/partial map.
+  const built = atomicReloadProviders(llmManager, enrichedProviders);
+  if (built.length === 0) {
     console.warn('[LLM] Hot-reload: no providers registered (all entries missing credentials).');
   }
   configureLLMTiers(llmManager, config.llm);
 
-  const names = Object.keys(enrichedProviders).filter(
-    (n) => llmManager.getProvider(n) !== undefined,
-  );
-  console.log(`[LLM] Providers active after hot-reload: ${names.join(', ') || 'none'}`);
+  console.log(`[LLM] Providers active after hot-reload: ${built.map((p) => p.name).join(', ') || 'none'}`);
 }
 
 // ── testLLMProvider ──────────────────────────────────────────────────────
