@@ -245,14 +245,24 @@ export class ConvOrchestrator {
       }
 
       case CONV_TOOL_NAMES.resume_task: {
-        // Phase 4 stub: the task tier doesn't yet support pause/resume mid-stream.
-        // Returning an error tells the conv LLM to handle the clarification
-        // by issuing a fresh delegate with the new context instead.
-        return {
-          envelope: {
-            error: 'resume_task is not yet supported - issue a fresh delegate with the clarified intent instead.',
-          },
-        };
+        const args = call.arguments as { task_id?: string; input?: string };
+        if (!args.task_id || !args.input) {
+          return { envelope: { error: 'resume_task requires task_id and input' } };
+        }
+        const envelope = await this.dispatcher.resume(args.task_id, args.input);
+        const rec = this.registry.get(envelope.task_id);
+        if (rec) {
+          if (envelope.status === 'completed') {
+            onTaskEvent?.({ type: 'task_completed', record: rec, envelope });
+          } else if (envelope.status === 'failed') {
+            onTaskEvent?.({ type: 'task_failed', record: rec, envelope });
+          } else if (envelope.status === 'cancelled') {
+            onTaskEvent?.({ type: 'task_cancelled', record: rec, envelope });
+          }
+          // needs_input again - the task paused with a SECOND question. The
+          // conv LLM will see this envelope and ask again.
+        }
+        return { envelope, taskId: envelope.task_id };
       }
 
       default:
@@ -360,6 +370,19 @@ export class ConvOrchestrator {
       parts.push(context.ambientFacts);
       parts.push('');
     }
+
+    parts.push('# Handling paused tasks');
+    parts.push(
+      'When the `delegate` tool returns an envelope with `status: "needs_input"`, ' +
+      'the task tier paused because it needs more info from the user. The envelope ' +
+      'has a `needs_input.question` field with the specific question. You should:',
+      '1. Ask the user that exact question (verbalize it naturally; don\'t change the meaning).',
+      '2. When the user replies, call `resume_task` with the task_id and the user\'s reply ' +
+      '   as `input`. Do NOT delegate again - resume reuses the work the task tier already did.',
+      '3. The resume returns a new envelope - completed, failed, or another needs_input (if ' +
+      '   the task needs another round of clarification).',
+      '',
+    );
 
     parts.push('# Style');
     parts.push(

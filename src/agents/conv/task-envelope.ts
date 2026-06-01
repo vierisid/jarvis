@@ -88,6 +88,19 @@ export type TaskRecord = {
   result?: TaskResultEnvelope;
   /** Set by the dispatcher; calling .abort() cancels the in-flight task. */
   abortController?: AbortController;
+  /**
+   * When status === 'needs_input', the question the task tier wants the
+   * conversation agent to ask the user. The conv LLM verbalizes this and
+   * captures the user's reply for a subsequent `resume_task` call.
+   */
+  question?: string;
+  /**
+   * Captured task-tier conversation buffer at the moment of pause. The
+   * dispatcher uses this to resume execution by appending the user's reply
+   * as a new user message and re-entering the ReAct loop. Discarded once
+   * the task transitions to a terminal state.
+   */
+  pausedConversation?: unknown[];
 };
 
 export function newTaskId(): string {

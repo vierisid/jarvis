@@ -524,17 +524,35 @@ export class AgentService implements Service, IAgentService {
       this.taskRegistry = new TaskRegistry();
       // Task runner: route delegations through the primary orchestrator so
       // task tiers run with the full tool registry, role prompt, authority
-      // gating, and Jarvis-specific feature knowledge. The only difference
-      // vs classic mode is which LLM tier handles the work.
-      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({ tier, subsystem, template, intent, originalMessage, signal }) => {
-        if (signal.aborted) return '';
+      // gating, and Jarvis-specific feature knowledge. Uses processTaskCall
+      // (not processMessage) so the LLM has access to the
+      // `ask_for_clarification` tool for pause/resume and the conversation
+      // buffer is scoped to one task (not polluting the primary agent's
+      // global history).
+      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({
+        tier,
+        subsystem,
+        template,
+        intent,
+        originalMessage,
+        signal,
+        history,
+      }) => {
         const baseSystem = this.buildFullSystemPrompt('conv', originalMessage);
         const templateNote = TaskDispatcher.templatePromptFor(template);
         // Attach the conv LLM's routing intent as system context so the task
         // tier sees both the user's verbatim ask AND the conv's framing -
         // but the user's words are the primary signal.
         const systemPrompt = `${baseSystem}\n\n${templateNote}\n\nConversation routing note: ${intent}`;
-        return await this.orchestrator.processMessage(systemPrompt, originalMessage, tier, subsystem);
+        const result = await this.orchestrator.processTaskCall({
+          systemPrompt,
+          userMessage: originalMessage,
+          tier,
+          subsystem,
+          history: history as import('../llm/provider.ts').LLMMessage[] | undefined,
+          signal,
+        });
+        return result;
       };
       this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
       this.dialogueCompactor = new DialogueCompactor(this.llmManager);

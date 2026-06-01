@@ -79,9 +79,9 @@ describe('ConvOrchestrator', () => {
     const llm = makeManager(provider);
     // Test runner: just calls the mock LLM directly. In production the
     // runner routes through the primary orchestrator with all tools.
-    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal }) => {
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
       const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
-      return r.content;
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
@@ -107,9 +107,9 @@ describe('ConvOrchestrator', () => {
     const llm = makeManager(provider);
     // Test runner: just calls the mock LLM directly. In production the
     // runner routes through the primary orchestrator with all tools.
-    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal }) => {
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
       const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
-      return r.content;
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
@@ -131,9 +131,9 @@ describe('ConvOrchestrator', () => {
     const llm = makeManager(provider);
     // Test runner: just calls the mock LLM directly. In production the
     // runner routes through the primary orchestrator with all tools.
-    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal }) => {
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
       const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
-      return r.content;
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
@@ -153,9 +153,9 @@ describe('ConvOrchestrator', () => {
     const llm = makeManager(provider);
     // Test runner: just calls the mock LLM directly. In production the
     // runner routes through the primary orchestrator with all tools.
-    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal }) => {
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
       const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
-      return r.content;
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');

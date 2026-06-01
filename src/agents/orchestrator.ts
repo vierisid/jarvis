@@ -17,6 +17,39 @@ import { getActionForTool } from '../authority/tool-action-map.ts';
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
 
+/**
+ * Special tool exposed only on processTaskCall. The orchestrator intercepts
+ * calls to this name and returns a paused state instead of dispatching it
+ * through the tool registry. Lets a task-tier LLM signal "I need more info
+ * from the user before I can continue" without ending the work it's done so
+ * far - the conversation buffer is captured for later resume.
+ */
+const ASK_FOR_CLARIFICATION_TOOL: LLMTool = {
+  name: 'ask_for_clarification',
+  description:
+    "Pause this task and ask the user a clarifying question. Use this ONLY when the user's intent is genuinely ambiguous and a single concrete question would unblock you (e.g., 'Which Sarah - Chen or Park?'). Do not use this for general chit-chat or to avoid making reasonable inferences. When you call this, the task pauses; the conversation agent will read the question to the user and resume your task with the user's answer appended.",
+  parameters: {
+    type: 'object',
+    required: ['question'],
+    properties: {
+      question: {
+        type: 'string',
+        description: 'The exact question to ask the user. Should be specific and answerable in one sentence.',
+      },
+    },
+  },
+};
+
+/**
+ * Result of a task-tier call. Either completed (final assistant text +
+ * the whole conversation buffer) or paused (the LLM called the
+ * `ask_for_clarification` tool; the conversation is captured so the task
+ * can resume from this exact point when the user replies).
+ */
+export type TaskCallResult =
+  | { kind: 'completed'; text: string; conversation: LLMMessage[] }
+  | { kind: 'paused'; question: string; conversation: LLMMessage[] };
+
 export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
   private llmManager: LLMManager | null;
@@ -304,6 +337,115 @@ export class AgentOrchestrator {
     // Add final response to persistent history
     primary.addMessage('assistant', finalText);
     return finalText;
+  }
+
+  /**
+   * Task-tier call with pause/resume semantics. Runs the same tool execution
+   * loop as `processMessage`, but:
+   *   - Does NOT touch the primary agent's persistent history (task tier
+   *     conversations are scoped to a single task, not the global thread).
+   *   - Exposes the `ask_for_clarification` tool to the LLM so it can pause
+   *     execution and request user input.
+   *   - Accepts an optional `history` so a paused task can be resumed by
+   *     re-entering the loop with the saved messages + a new user reply.
+   *
+   * Returns either a completed result (text + final conversation snapshot)
+   * or a paused result (the question + the conversation up to the pause).
+   * In the paused case, the caller stores the conversation on the task
+   * record so a subsequent `resume` can continue from the same buffer.
+   */
+  async processTaskCall(opts: {
+    systemPrompt: string;
+    userMessage: string;
+    tier: Tier;
+    subsystem: string;
+    /** When resuming, pass the conversation captured at the pause + the new user reply. */
+    history?: LLMMessage[];
+    signal?: AbortSignal;
+  }): Promise<TaskCallResult> {
+    if (!this.llmManager) {
+      return { kind: 'completed', text: '[No LLM configured]', conversation: [] };
+    }
+
+    // Build the running conversation buffer. On a fresh call: system + user
+    // message. On resume: prior conversation + a new user message (the
+    // clarification reply).
+    const messages: LLMMessage[] = opts.history
+      ? [...opts.history, { role: 'user', content: opts.userMessage }]
+      : [
+          { role: 'system', content: opts.systemPrompt },
+          { role: 'user', content: opts.userMessage },
+        ];
+
+    // Include the standard tools plus the special clarification tool.
+    const baseTools = this.getLLMTools() ?? [];
+    const tools: LLMTool[] = [...baseTools, ASK_FOR_CLARIFICATION_TOOL];
+
+    let finalText = '';
+
+    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      if (opts.signal?.aborted) {
+        return { kind: 'completed', text: finalText, conversation: messages };
+      }
+
+      const llmResponse: LLMResponse = await this.llmManager.chatTier(
+        opts.tier,
+        opts.subsystem,
+        messages,
+        { tools },
+      );
+
+      if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
+        // First, scan tool calls for `ask_for_clarification` - that breaks
+        // the loop and returns a paused result without executing anything
+        // else in this batch. We DO record the assistant message + the
+        // clarification call in the conversation so resume can replay the
+        // LLM's "I need more info" turn.
+        const clarifyCall = llmResponse.tool_calls.find((tc) => tc.name === ASK_FOR_CLARIFICATION_TOOL.name);
+        if (clarifyCall) {
+          const args = clarifyCall.arguments as { question?: string };
+          const question = (args.question ?? '').trim() || 'I need more information to continue.';
+          messages.push({
+            role: 'assistant',
+            content: llmResponse.content,
+            tool_calls: llmResponse.tool_calls,
+          });
+          // The tool result is a stub that says "asked the user" - lets the
+          // model see what it asked when it resumes.
+          messages.push({
+            role: 'tool',
+            content: `[Paused: asked user "${question}" - resume will append the user's reply.]`,
+            tool_call_id: clarifyCall.id,
+          });
+          return { kind: 'paused', question, conversation: messages };
+        }
+
+        messages.push({
+          role: 'assistant',
+          content: llmResponse.content,
+          tool_calls: llmResponse.tool_calls,
+        });
+
+        for (const tc of llmResponse.tool_calls) {
+          const result = await this.executeTool(tc);
+          messages.push({
+            role: 'tool',
+            content: result,
+            tool_call_id: tc.id,
+          });
+        }
+        continue;
+      }
+
+      finalText = llmResponse.content;
+      if (llmResponse.finish_reason === 'length') {
+        finalText += '\n\n[Response was truncated due to output token limits.]';
+      }
+      messages.push({ role: 'assistant', content: finalText });
+      break;
+    }
+
+    return { kind: 'completed', text: finalText, conversation: messages };
   }
 
   /**

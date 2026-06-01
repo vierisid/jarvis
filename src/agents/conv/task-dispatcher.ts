@@ -33,11 +33,24 @@ const TEMPLATE_PROMPTS: Record<TaskTemplate, string> = {
 };
 
 /**
+ * Result the runner returns. Either the task completed (text + final
+ * conversation buffer for potential re-resume) or it paused awaiting user
+ * input via the `ask_for_clarification` tool.
+ */
+export type TaskRunResult =
+  | { kind: 'completed'; text: string; conversation: unknown[] }
+  | { kind: 'paused'; question: string; conversation: unknown[] };
+
+/**
  * Runner signature: given a (tier, subsystem, template-prefixed prompt,
- * abort signal), execute the work and return the final text the task
- * produced. The AgentService implements this by invoking the primary
- * orchestrator's processMessage with the requested tier - which gives the
- * task tier full access to the role's tools and Jarvis-specific knowledge.
+ * abort signal), execute the work. The AgentService implements this by
+ * invoking the primary orchestrator's `processTaskCall` with the requested
+ * tier - which gives the task tier full access to the role's tools, Jarvis
+ * knowledge, AND the `ask_for_clarification` tool for pause/resume.
+ *
+ * On resume, the runner is invoked again with `history` set to the saved
+ * conversation buffer and `originalMessage` set to the user's clarification
+ * reply. The orchestrator's processTaskCall picks the loop up from there.
  */
 export type TaskRunner = (args: {
   tier: TaskRequest['tier'];
@@ -48,7 +61,9 @@ export type TaskRunner = (args: {
   /** User's verbatim message - this is what the task tier sees as the user prompt. */
   originalMessage: string;
   signal: AbortSignal;
-}) => Promise<string>;
+  /** When resuming, the conversation buffer captured at the previous pause. */
+  history?: unknown[];
+}) => Promise<TaskRunResult>;
 
 export type DispatchOptions = {
   /** Optional channel hint for logging. */
@@ -64,8 +79,9 @@ export class TaskDispatcher {
 
   /**
    * Run a task and return its result envelope. The task transitions through
-   * queued -> running -> completed/failed/cancelled. Registry subscribers
-   * see each transition so the conv orchestrator can surface UI events.
+   * queued -> running -> {needs_input,completed,failed,cancelled}. Registry
+   * subscribers see each transition so the conv orchestrator can surface
+   * UI events.
    */
   async dispatch(request: TaskRequest, _opts?: DispatchOptions): Promise<TaskResultEnvelope> {
     const subsystem = `task_${request.template}`;
@@ -78,23 +94,93 @@ export class TaskDispatcher {
       return this.finalize(record, 'cancelled', 'Task cancelled before it could start.');
     }
 
+    return await this.runAndHandle(record, request, subsystem, abort, {
+      originalMessage: request.original_message ?? request.intent,
+      history: undefined,
+    });
+  }
+
+  /**
+   * Resume a previously-paused task by feeding the user's clarification
+   * reply back into the task tier's conversation. Reuses the saved buffer
+   * so the LLM continues from where it stopped instead of starting over.
+   */
+  async resume(taskId: string, userInput: string): Promise<TaskResultEnvelope> {
+    const record = this.registry.get(taskId);
+    if (!record) {
+      return {
+        task_id: taskId,
+        status: 'failed',
+        summary: `Task ${taskId} not found.`,
+        error: 'not_found',
+      };
+    }
+    if (record.status !== 'needs_input' || !record.pausedConversation) {
+      return {
+        task_id: taskId,
+        status: 'failed',
+        summary: `Task ${taskId} is not waiting for input (status=${record.status}).`,
+        error: 'invalid_state',
+      };
+    }
+
+    const subsystem = record.subsystem;
+    const abort = new AbortController();
+    this.registry.setAbortController(taskId, abort);
+    this.registry.transition(taskId, 'running');
+
+    const history = record.pausedConversation;
+    // Clear so a subsequent failed resume doesn't replay stale state.
+    record.pausedConversation = undefined;
+    record.question = undefined;
+
+    return await this.runAndHandle(record, record.request, subsystem, abort, {
+      originalMessage: userInput,
+      history,
+    });
+  }
+
+  /**
+   * Shared post-runner handling: completed -> summarize + finalize,
+   * paused -> capture conversation + return needs_input envelope, throw ->
+   * mark failed. Used by both dispatch (first run) and resume.
+   */
+  private async runAndHandle(
+    record: TaskRecord,
+    request: TaskRequest,
+    subsystem: string,
+    abort: AbortController,
+    callArgs: { originalMessage: string; history: unknown[] | undefined },
+  ): Promise<TaskResultEnvelope> {
     try {
-      const rawResult = await this.runner({
+      const result = await this.runner({
         tier: request.tier,
         subsystem,
         template: request.template,
         intent: request.intent,
-        // Fall back to the intent when no original message was attached
-        // (e.g., tests, programmatic delegations).
-        originalMessage: request.original_message ?? request.intent,
+        originalMessage: callArgs.originalMessage,
         signal: abort.signal,
+        history: callArgs.history,
       });
 
       if (abort.signal.aborted) {
         return this.finalize(record, 'cancelled', 'Task cancelled during execution.');
       }
 
-      const summary = await this.summarize(record, request, rawResult);
+      if (result.kind === 'paused') {
+        record.question = result.question;
+        record.pausedConversation = result.conversation;
+        const envelope: TaskResultEnvelope = {
+          task_id: record.id,
+          status: 'needs_input',
+          summary: result.question,
+          needs_input: { question: result.question },
+        };
+        this.registry.transition(record.id, 'needs_input', envelope);
+        return envelope;
+      }
+
+      const summary = await this.summarize(record, request, result.text);
       return this.finalize(record, 'completed', summary, record.id);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
