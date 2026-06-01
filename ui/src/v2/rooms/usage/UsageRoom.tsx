@@ -36,15 +36,18 @@ const TIER_LABELS: Record<string, string> = {
   low: "Low",
 };
 
+export type RoomBodyMode = "inline" | "expanded";
+
 export function UsageRoom() {
   return (
     <RoomShell title="Usage" subtitle="LLM token telemetry · filterable" breadcrumb={["Usage"]}>
-      <UsageRoomBody />
+      <UsageRoomBody mode="expanded" />
     </RoomShell>
   );
 }
 
-function UsageRoomBody() {
+export function UsageRoomBody({ mode = "expanded" }: { mode?: RoomBodyMode } = {}) {
+  void mode; // Same layout in both modes for now; reserved for future tweaks.
   const data = useUsageData();
 
   return (
