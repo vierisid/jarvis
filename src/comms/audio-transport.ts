@@ -54,11 +54,22 @@ export type BrowserTransportHooks = {
  * to the browser through the `sendAudio` hook. Playback timing/queueing lives
  * in the browser client; this class is a thin relay.
  */
+/**
+ * Max mic frames buffered while the OpenAI socket is still connecting. At
+ * 24kHz/~5ms frames this is ~3s of audio — enough to capture the user's opening
+ * words during the connect window without growing unbounded.
+ */
+const MAX_PENDING_MIC_FRAMES = 600;
+
 export class BrowserAudioTransport implements AudioTransport {
   readonly inputSampleRate: number;
   readonly outputSampleRate: number;
   private micCb: ((pcm: Buffer) => void) | null = null;
   private hooks: BrowserTransportHooks;
+  // Frames that arrive before the realtime session wires its mic listener (i.e.
+  // while the OpenAI socket is still connecting). Without this they were
+  // dropped, so the user's first words vanished and the turn never registered.
+  private pending: Buffer[] = [];
 
   constructor(hooks: BrowserTransportHooks) {
     this.hooks = hooks;
@@ -70,11 +81,23 @@ export class BrowserAudioTransport implements AudioTransport {
 
   onMicChunk(cb: (pcm: Buffer) => void): void {
     this.micCb = cb;
+    // Flush anything captured during the connect window so no audio is lost.
+    if (this.pending.length > 0) {
+      const queued = this.pending;
+      this.pending = [];
+      for (const frame of queued) cb(frame);
+    }
   }
 
   /** Called by ws-service when a binary mic frame arrives from the browser. */
   pushMicChunk(pcm: Buffer): void {
-    this.micCb?.(pcm);
+    if (this.micCb) {
+      this.micCb(pcm);
+      return;
+    }
+    // Session not connected yet — buffer (bounded) instead of dropping.
+    this.pending.push(pcm);
+    if (this.pending.length > MAX_PENDING_MIC_FRAMES) this.pending.shift();
   }
 
   playback(chunk: Buffer): void {
@@ -91,5 +114,6 @@ export class BrowserAudioTransport implements AudioTransport {
 
   stop(): void {
     this.micCb = null;
+    this.pending = [];
   }
 }

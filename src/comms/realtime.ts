@@ -98,6 +98,10 @@ export function buildSessionUpdate(
       input: {
         // OpenAI requires rate >= MIN_REALTIME_INPUT_RATE (24kHz).
         format: { type: 'audio/pcm', rate: inputSampleRate },
+        // Plain semantic_vad — the low-latency, natural, preamble-friendly
+        // default. (server_vad and eagerness tuning both made it worse.) The
+        // first-turn "doesn't start" was dropped opening audio, fixed by the
+        // transport buffering — not the VAD. Leave this alone.
         turn_detection: { type: 'semantic_vad' },
       },
       output: {
