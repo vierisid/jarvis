@@ -1215,7 +1215,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     const session = new RealtimeVoiceSession(resolved, transport, {
       tools: orchestrator.getRealtimeTools(),
-      instructions: this.agentService.buildFullSystemPrompt('voice'),
+      // Lean voice prompt (~100 tokens) instead of the full ~5.6k-token agent
+      // prompt — the big context was the dominant per-turn latency for simple
+      // questions. Tools stay, so capability is unchanged. See agent-service.
+      instructions: this.agentService.buildRealtimeVoiceInstructions(),
       executeToolCall: (name, args) =>
         orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories }),
       onTranscript: (t) =>

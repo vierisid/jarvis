@@ -143,6 +143,9 @@ export class RealtimeSession {
   private openCb: (() => void) | null = null;
   private closeCb: (() => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
+  // Response-latency instrumentation (user-stopped → first audio).
+  private turnEndedAt = 0;
+  private loggedResponseLatency = false;
 
   constructor(opts: RealtimeSessionOptions) {
     this.opts = opts;
@@ -239,9 +242,21 @@ export class RealtimeSession {
   handleServerEvent(evt: Record<string, unknown>): void {
     const type = evt.type as string;
     switch (type) {
+      case 'input_audio_buffer.speech_stopped': {
+        // User finished talking — start the response-latency clock.
+        this.turnEndedAt = Date.now();
+        this.loggedResponseLatency = false;
+        break;
+      }
       case 'response.output_audio.delta': {
         const delta = evt.delta as string | undefined;
-        if (delta) this.audioCb?.(Buffer.from(delta, 'base64'));
+        if (delta) {
+          if (!this.loggedResponseLatency && this.turnEndedAt > 0) {
+            console.log(`[realtime] response latency: ${Date.now() - this.turnEndedAt}ms (user stopped → first audio)`);
+            this.loggedResponseLatency = true;
+          }
+          this.audioCb?.(Buffer.from(delta, 'base64'));
+        }
         break;
       }
       case 'response.output_audio_transcript.delta': {

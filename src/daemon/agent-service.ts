@@ -514,6 +514,33 @@ export class AgentService implements Service, IAgentService {
    * knowledge / webapp instructions from the vault to inject into the
    * prompt. Pass it for "the user said X" turns; omit for heartbeats.
    */
+  /**
+   * Lean system prompt for premium realtime voice (gpt-realtime-2).
+   *
+   * The full agent prompt is ~5.6k tokens and, with ~32 tool definitions
+   * (~3.4k tokens), made the realtime model digest ~10k tokens of context
+   * before EVERY spoken reply — the dominant per-turn latency (a simple "how
+   * are you" took 1–2s). The realtime model is built for a concise,
+   * conversational prompt, so here we give it just identity + tone + a
+   * live-voice framing (~100 tokens). Tools stay available, so JARVIS can still
+   * act; we only drop the heavyweight role/KPI/commitments/vault context that a
+   * spoken chat doesn't need. This is removal of bloat, NOT a behavioral
+   * directive (no "be brief / don't narrate" — those suppressed preambles and
+   * made it deliberate).
+   */
+  buildRealtimeVoiceInstructions(): string {
+    const name = this.config.personality?.assistant_name?.trim() || this.role?.name || 'JARVIS';
+    const userName = this.config.user?.name?.trim() || getUserProfile()?.answers.preferred_name?.trim();
+    const traits = (this.config.personality?.core_traits ?? []).slice(0, 6).join(', ');
+    return [
+      `You are ${name}${userName ? `, ${userName}'s personal AI assistant` : ', a personal AI assistant'}, in a live, real-time voice conversation.`,
+      'Speak naturally and conversationally, the way a person talks out loud.',
+      traits ? `Your character: ${traits}.` : '',
+      'You can take real actions with your tools whenever the user asks.',
+      `Current time: ${new Date().toISOString()}.`,
+    ].filter(Boolean).join('\n');
+  }
+
   buildFullSystemPrompt(channel: string, userMessage?: string): string {
     if (!this.role) return '';
 
