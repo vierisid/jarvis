@@ -2,3 +2,13 @@
 # Prevents Windows (core.autocrlf=true) checkouts from introducing CRLF,
 # which breaks shebang-based executables (e.g. bin/jarvis.ts) in Linux containers.
 * text=auto eol=lf
+
+# Activepieces is vendored under src/workflows/activepieces/. Mark the tree
+# as vendored so GitHub Linguist excludes it from language stats and
+# Dependabot deprioritizes alerts on its nested package.json files. Only
+# the deps the engine actually installs (see WORKSPACE_PKG_RELS and
+# SECURITY_FLOOR in src/workflows/runner/engine-runtime/build.ts) need
+# security attention; everything else in this tree is upstream code we
+# ship verbatim and don't `npm install`. Bulk-dismiss remaining alerts
+# in the GitHub UI with reason "vulnerable code is not used".
+src/workflows/activepieces/** linguist-vendored=true

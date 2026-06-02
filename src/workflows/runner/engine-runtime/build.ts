@@ -68,10 +68,70 @@ const WORKSPACE_PKG_RELS = [
 ] as const;
 
 /**
+ * Security floor for transitive deps the staging install resolves. When a
+ * vendored manifest pins a dep at a version with a known advisory reachable
+ * from JARVIS (e.g. axios in pieces/common feeds the HTTP node, which webhook
+ * triggers can drive with untrusted internet payloads), pin it here. The floor
+ * is injected into the synthesized staging package.json as a bun `overrides`
+ * entry, which wins over the manifest pin during `bun install`.
+ *
+ * Triage when Dependabot flags a new vendored dep:
+ *
+ *   1. Does the dep appear in any WORKSPACE_PKG_RELS manifest as a non-dev
+ *      dependency? If no -> add to .github/dependabot.yml ignore. The dep
+ *      doesn't ship via this staging install; the alert is noise.
+ *
+ *   2. Is the vulnerability reachable from untrusted input (webhook payloads,
+ *      LLM-generated workflow params, etc.)? If no -> add to ignore with a
+ *      short "not reachable" note.
+ *
+ *   3. If reachable: is upstream already patched in a version we can sync?
+ *      If yes -> bump via upstream sync. If no -> add a SECURITY_FLOOR entry
+ *      here, link the advisory.
+ *
+ * Entries here are FLOORS, not clamps: when upstream's pin catches up to or
+ * exceeds the floor, the override is skipped and the build logs a one-line
+ * notice so the dead entry can be cleaned up by hand. No silent downgrade.
+ */
+const SECURITY_FLOOR: Record<string, string> = {
+  // pieces/common pins axios@1.15.0 exact; the HTTP node uses axios for all
+  // outbound requests. Webhook-triggered workflows can drive that node with
+  // untrusted payload data (URLs, headers), so SSRF/DoS classes in 1.15.x
+  // are reachable in production. 1.16.1 is the first patched release.
+  // GHSA-3g43-6gmg-66jw, GHSA-35jp-ww65-95wh, GHSA-pf86-5x62-jrwf.
+  axios: "1.16.1",
+};
+
+/**
+ * Compare two pinned/range versions for the "floor satisfied?" check.
+ * Tolerantly strips ^ / ~ prefixes and compares numerically. Sufficient for
+ * vendored manifests which use exact pins; if upstream ever switches to
+ * caret ranges we still answer "yes, floor is satisfied" correctly because
+ * we compare against the minimum of the range.
+ */
+function versionMeetsFloor(declared: string, floor: string): boolean {
+  const parse = (v: string): [number, number, number] => {
+    const parts = v.replace(/^[\^~>=<\s]+/, "").split(".");
+    return [
+      parseInt(parts[0] ?? "0", 10) || 0,
+      parseInt(parts[1] ?? "0", 10) || 0,
+      parseInt(parts[2] ?? "0", 10) || 0,
+    ];
+  };
+  const [da, db, dc] = parse(declared);
+  const [fa, fb, fc] = parse(floor);
+  if (da !== fa) return da > fa;
+  if (db !== fb) return db > fb;
+  return dc >= fc;
+}
+
+/**
  * Synthesize the staging-dir package.json: union of every non-workspace dep
  * across the four workspace packages the engine bundle imports, plus esbuild.
- * On version conflict, the latest entry wins -- we'd flag in CI if this ever
- * matters, but in practice the workspace pkgs all share pinned versions.
+ * Applies SECURITY_FLOOR via the `overrides` block when upstream's declared
+ * version sits below the floor. On dep version conflict between manifests,
+ * the latest entry wins -- we'd flag in CI if this ever matters, but in
+ * practice the workspace pkgs all share pinned versions.
  */
 function buildStagingPackageJson(): string {
   const deps: Record<string, string> = {};
@@ -87,12 +147,32 @@ function buildStagingPackageJson(): string {
   }
   deps["esbuild"] = ESBUILD_VERSION;
 
+  const overrides: Record<string, string> = {};
+  for (const [name, floor] of Object.entries(SECURITY_FLOOR)) {
+    const declared = deps[name];
+    if (!declared) {
+      // Dep removed upstream; the floor entry is dead and can be deleted.
+      console.warn(
+        `[engine-build] SECURITY_FLOOR entry '${name}' has no matching dep in vendored manifests; remove it.`,
+      );
+      continue;
+    }
+    if (versionMeetsFloor(declared, floor)) {
+      console.log(
+        `[engine-build] SECURITY_FLOOR '${name}@${floor}' satisfied by upstream '${declared}'; remove entry.`,
+      );
+      continue;
+    }
+    overrides[name] = floor;
+  }
+
   return JSON.stringify(
     {
       name: "jarvis-engine-build-staging",
       private: true,
       type: "commonjs",
       dependencies: deps,
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     },
     null,
     2,
@@ -122,6 +202,13 @@ const PATCHED_VENDOR_SOURCES = [
   // doesn't ship the OLD operator list / executor.
   "shared/src/lib/automation/flows/actions/action.ts",
   "server/engine/src/lib/handler/router-executor.ts",
+  // Jarvis: upstream sets process.env.NODE_TLS_REJECT_UNAUTHORIZED='0'
+  // on every HTTP-node request, which disables TLS verification for the
+  // entire Node process (not just the one request). We strip that line
+  // via STRIP_LINES in sync-activepieces.ts; if a sync ever re-introduces
+  // it, the file content here changes and the bundle hash invalidates so
+  // the cached engine doesn't keep shipping the OLD bypass.
+  "pieces/common/src/lib/http/axios/axios-http-client.ts",
 ] as const;
 
 /**

@@ -209,19 +209,31 @@ const SCRUB_DEPS: Record<string, string[]> = {
 };
 
 /**
- * Strip dangling `export * from '<path>'` lines from barrel files where the
- * referenced path was filtered out by the EE / test-dir filters above. Without
- * this pass the engine bundle build fails to resolve the missing modules.
+ * Strip specific lines from vendored files after sync. Originally introduced
+ * to drop dangling `export * from '<path>'` lines in barrels where the target
+ * dir was filtered out (EE / test-dir filters above); also used to remove
+ * unsafe upstream code (e.g. a global TLS-verification bypass in the HTTP
+ * client) so the next sync can't silently re-introduce it.
  *
  * Each entry is a regex of full lines to remove. Anchored to start-of-line and
- * tolerant of leading whitespace. The barrel file must remain valid TS after
- * removal (i.e., other exports must still be present).
+ * tolerant of leading whitespace. The file must remain valid TS after removal.
+ * Fails loudly if zero matches: that means upstream restructured and the entry
+ * needs revisiting (either the issue is gone or the regex needs updating).
  */
-const STRIP_EXPORT_LINES: Record<string, RegExp[]> = {
+const STRIP_LINES: Record<string, RegExp[]> = {
   // EE re-exports of paths we never copy.
   "packages/shared/src/index.ts": [/^\s*export \* from ['"]\.\/lib\/ee\//],
   // Test-only re-exports of dirs filtered by TEST_DIR_NAMES.
   "packages/pieces/framework/src/lib/index.ts": [/^\s*export \* from ['"]\.\/test['"];?\s*$/],
+  // Upstream's HTTP client sets process.env.NODE_TLS_REJECT_UNAUTHORIZED='0'
+  // on every request, which disables TLS verification process-wide (not just
+  // for that one call). Webhook-triggered workflows make this an MITM hole
+  // on every outbound HTTPS request JARVIS makes. Strip it; if a user
+  // genuinely needs to talk to self-signed endpoints they can set the env
+  // var at the daemon level themselves.
+  "packages/pieces/common/src/lib/http/axios/axios-http-client.ts": [
+    /^\s*process\.env\['NODE_TLS_REJECT_UNAUTHORIZED'\]\s*=\s*'0';\s*$/,
+  ],
 };
 
 /**
@@ -494,20 +506,20 @@ for (const [relPath, depNames] of Object.entries(SCRUB_DEPS)) {
   writeFileSync(dst, JSON.stringify(pkg, null, 2) + "\n");
   info(`scrubbed ${removed} dep(s) from ${relPath}: [${depNames.join(", ")}]`);
 }
-for (const [relPath, patterns] of Object.entries(STRIP_EXPORT_LINES)) {
+for (const [relPath, patterns] of Object.entries(STRIP_LINES)) {
   const dst = join(VENDOR_DIR, relPath);
   if (!existsSync(dst)) {
-    fail(`strip-exports target missing: ${relPath}`);
+    fail(`strip-lines target missing: ${relPath}`);
   }
   const original = readFileSync(dst, "utf8");
   const lines = original.split("\n");
   const kept = lines.filter((line) => !patterns.some((re) => re.test(line)));
   const removed = lines.length - kept.length;
   if (removed === 0) {
-    fail(`strip-exports matched 0 lines in ${relPath} -- did upstream restructure the barrel?`);
+    fail(`strip-lines matched 0 lines in ${relPath} -- did upstream restructure the file or fix the issue?`);
   }
   writeFileSync(dst, kept.join("\n"));
-  info(`stripped ${removed} export line(s) from ${relPath}`);
+  info(`stripped ${removed} line(s) from ${relPath}`);
 }
 for (const [relPath, patches] of Object.entries(PATCH_INSERTIONS)) {
   const dst = join(VENDOR_DIR, relPath);
