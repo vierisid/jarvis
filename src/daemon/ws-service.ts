@@ -39,6 +39,7 @@ import { StreamRelay } from '../comms/streaming.ts';
 import { resolveRealtimeVoice, type ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
@@ -1214,13 +1215,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     });
 
     const session = new RealtimeVoiceSession(resolved, transport, {
-      tools: orchestrator.getRealtimeTools(),
+      // Agent tools + dashboard navigation/in-room-action tools so the model
+      // can drive the UI by voice (open settings, turn off TTS, go back…).
+      tools: [...orchestrator.getRealtimeTools(), ...REALTIME_NAV_TOOLS],
       // Lean voice prompt (~100 tokens) instead of the full ~5.6k-token agent
       // prompt — the big context was the dominant per-turn latency for simple
       // questions. Tools stay, so capability is unchanged. See agent-service.
       instructions: this.agentService.buildRealtimeVoiceInstructions(),
-      executeToolCall: (name, args) =>
-        orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories }),
+      executeToolCall: (name, args) => {
+        // Dashboard nav/in-room actions are handled here (they broadcast to the
+        // dashboard); everything else goes through the auto-approve tool bridge.
+        const nav = this.executeRealtimeNavTool(name, args);
+        if (nav !== null) return Promise.resolve(nav);
+        return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
+      },
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
@@ -1248,6 +1256,50 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
     );
     return true;
+  }
+
+  /**
+   * Execute a dashboard navigation / in-room-action tool called by the realtime
+   * voice model. Returns a short result string for the model to acknowledge, or
+   * null if `name` isn't a navigation tool (so the caller falls through to the
+   * normal tool bridge). Reuses the same broadcast* methods the standard voice
+   * path uses, so the dashboard reacts identically.
+   */
+  private executeRealtimeNavTool(name: string, args: Record<string, unknown>): string | null {
+    if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
+    const reqId = crypto.randomUUID();
+    switch (name) {
+      case 'open_dashboard_room': {
+        const room = String(args.room ?? '');
+        if (!room) return 'No room specified.';
+        this.broadcastRoomNavigation(room as RoomKey, reqId);
+        return `Opened the ${room} room.`;
+      }
+      case 'go_back_to_thread': {
+        this.broadcastNavigateHome(reqId);
+        return 'Back to the thread.';
+      }
+      case 'control_dashboard_window': {
+        const action = String(args.action ?? '');
+        const target = (args.target ? String(args.target) : 'most_recent') as RoomKey | 'most_recent';
+        if (!action) return 'No window action specified.';
+        this.broadcastWindowControl({ action: action as WindowControl['action'], target }, reqId);
+        return `${action} done.`;
+      }
+      case 'dashboard_room_action': {
+        const room = String(args.room ?? '');
+        const action = String(args.action ?? '');
+        if (!room || !action) return 'Room and action are required.';
+        const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
+        // Auto-open the room first (no-op if already open), then dispatch —
+        // mirrors the classifier path so the qualifier isn't dropped.
+        this.broadcastRoomNavigation(room as RoomKey, reqId);
+        this.broadcastRoomAction({ room, action, args: innerArgs }, reqId);
+        return `Done: ${action} in ${room}.`;
+      }
+      default:
+        return null;
+    }
   }
 
   /** Tear down a realtime voice session and notify the client. */
