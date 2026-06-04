@@ -329,8 +329,17 @@ export class RealtimeSession {
         break;
       }
       case 'error': {
-        const e = evt.error as { message?: string } | undefined;
-        this.errorCb?.(e?.message || 'Unknown realtime error');
+        const e = evt.error as { message?: string; code?: string } | undefined;
+        const msg = e?.message || 'Unknown realtime error';
+        // Benign barge-in race: we sent response.cancel after the model had
+        // just finished server-side (its response.done hadn't reached us yet),
+        // so there was nothing left to cancel. Harmless — the response is over.
+        // Swallow it: surfacing it churned the browser session (it reset the
+        // stream on every interrupt → voice_end/voice_start spam).
+        if (e?.code === 'response_cancel_not_active' || /no active response|cancellation failed/i.test(msg)) {
+          break;
+        }
+        this.errorCb?.(msg);
         break;
       }
       default:

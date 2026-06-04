@@ -203,6 +203,21 @@ describe('RealtimeSession lifecycle', () => {
     expect(errs).toEqual(['boom']);
   });
 
+  test('swallows benign barge-in cancel race errors (no active response)', async () => {
+    const { socket, session } = makeSession();
+    const errs: string[] = [];
+    session.onError((e) => errs.push(e));
+    await session.connect();
+    socket.onopen!();
+    // Both the message form and the code form must be swallowed.
+    socket.emit({ type: 'error', error: { message: 'Cancellation failed: no active response found' } });
+    socket.emit({ type: 'error', error: { code: 'response_cancel_not_active', message: 'x' } });
+    expect(errs).toEqual([]);
+    // A real error still surfaces.
+    socket.emit({ type: 'error', error: { message: 'boom' } });
+    expect(errs).toEqual(['boom']);
+  });
+
   test('warns when transport input rate is below the realtime 24kHz minimum', async () => {
     const socket = new FakeSocket();
     const transport = new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 16000 });
