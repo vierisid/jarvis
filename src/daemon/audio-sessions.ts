@@ -67,12 +67,17 @@ export class AudioSessionRegistry {
             pcm = Buffer.from(binary.data, 'base64');
           } catch (err) {
             console.warn('[audio-sessions] failed to decode inline PCM:', err);
-            return;
+            // Fall through with empty PCM. The session was already removed from
+            // `active`, so returning here would strand the caller (pebble stuck
+            // 'working', summon slot held). Firing the listeners with empty PCM
+            // lets the completion path reset the pebble and release the summon.
           }
         } else {
-          // T22 doesn't yet support BinaryDataRef streaming. Logging the
-          // shape so we know to add ref-style handling for longer sessions.
-          console.warn('[audio-sessions] session_end without inline binary; ref-style streams TBD');
+          // No inline PCM. Large captures are normalized to inline upstream
+          // (sidecar connection layer), so reaching here means an empty /
+          // zero-length capture — fall through so the completion path still
+          // resets state.
+          console.warn('[audio-sessions] session_end without inline PCM (empty capture)');
         }
 
         const durationMs = Number(payload?.duration_ms ?? 0);

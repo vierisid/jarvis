@@ -2641,19 +2641,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Snappier ease (followFactor=0.42 in the sidecar) means most
           // of those 3.5 s are spent at the target, not animating.
           let pointDelayMs = 0;
+          // Staggered point_at timers, tracked so a mid-cycle dismissal can
+          // cancel the pending hops instead of flying the pebble around after
+          // it's already returned to idle.
+          const pointTimers: ReturnType<typeof setTimeout>[] = [];
           const onPoint = (rawX: number, rawY: number, label: string) => {
             // Scale image-space coords back to virtual-screen pixels.
             const x = Math.round(rawX * pointScaleX);
             const y = Math.round(rawY * pointScaleY);
             const delay = pointDelayMs;
             pointDelayMs += 4000; // 3.5 s hold + small overlap
-            setTimeout(() => {
+            pointTimers.push(setTimeout(() => {
+              // User dismissed before this staggered hop fired — don't move
+              // the pebble after it's back to idle.
+              if (ctrl.cancelled) return;
               sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
                 x, y, label, duration_ms: 3500,
               }).catch((err) => {
                 console.warn(`[ambient-ui] pebble.point_at(${x},${y}) failed:`, err);
               });
-            }, delay);
+            }, delay));
             const scaledNote = (pointScaleX !== 1 || pointScaleY !== 1)
               ? ` (raw ${rawX},${rawY} × scale ${pointScaleX.toFixed(2)},${pointScaleY.toFixed(2)})`
               : '';
@@ -2662,6 +2669,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           for await (const event of stream) {
             if (ctrl.cancelled) {
               // User dismissed mid-stream. Stop sidecar playback + drain queue.
+              for (const t of pointTimers) clearTimeout(t);
+              pointTimers.length = 0;
               try {
                 await sidecarManager.dispatchRPC(sidecarId, 'pebble.stop_audio', {});
               } catch { /* ignore */ }
