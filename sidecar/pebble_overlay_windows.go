@@ -280,66 +280,10 @@ func (s *pebbleServiceWindows) OnPalette(callback func()) {
 	s.paletteCallback = callback
 }
 
-func (s *pebbleServiceWindows) SetState(state PebbleState) error {
-	if !s.spawned.Load() {
-		return fmt.Errorf("pebble not spawned")
-	}
-	s.state.Store(state)
-	return nil
-}
-
-func (s *pebbleServiceWindows) SetText(text string) error {
-	s.bubbleText.Store(text)
-	return nil
-}
-
-func (s *pebbleServiceWindows) SetEye(active bool) error {
-	s.eyeActive.Store(active)
-	return nil
-}
-
-func (s *pebbleServiceWindows) SetAnswerOverflow(answerID string) error {
-	s.answerOverflowID.Store(answerID)
-	return nil
-}
-
-func (s *pebbleServiceWindows) SetBlinded(blinded bool) error {
-	s.blinded.Store(blinded)
-	return nil
-}
-
-// PointAt animates the pebble to (x, y) and shows `label` in the bubble
-// for `durationMs` milliseconds. Eased physics in paint() handle the
-// actual movement; this just sets the override target + restoration
-// state. Calling PointAt while a previous point is still active resets
-// the timer and target — multiple points in a row "walk" through them.
-func (s *pebbleServiceWindows) PointAt(x, y int, label string, durationMs int) error {
-	if !s.spawned.Load() {
-		return fmt.Errorf("pebble not spawned")
-	}
-	if durationMs <= 0 {
-		durationMs = 3000
-	}
-	// Snapshot the pre-point state ONLY if we're not already pointing.
-	// Re-entrant points (LLM emitted multiple tags) shouldn't keep
-	// re-snapshotting an intermediate "speaking + label" state as the
-	// thing to restore later.
-	if s.pointing.CompareAndSwap(false, true) {
-		ps, _ := s.state.Load().(PebbleState)
-		pt, _ := s.bubbleText.Load().(string)
-		s.prevState.Store(ps)
-		s.prevText.Store(pt)
-	}
-	s.pointX.Store(int32(x))
-	s.pointY.Store(int32(y))
-	s.pointUntilMs.Store(time.Now().Add(time.Duration(durationMs) * time.Millisecond).UnixMilli())
-	// Force the bubble to show with the label as body text. Listening
-	// state has the paper card variant which reads cleanly against any
-	// desktop and matches the riso "calling attention" feel.
-	s.state.Store(PebbleListening)
-	s.bubbleText.Store(label)
-	return nil
-}
+// SetState / SetText / SetEye / SetBlinded / SetAnswerOverflow / PointAt are
+// platform-independent core mutators: they live on pebbleCore (pebble_runtime.go)
+// and reach this service through the embedded core via method promotion, so
+// they are not redefined here.
 
 func (s *pebbleServiceWindows) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {

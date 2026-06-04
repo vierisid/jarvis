@@ -17,6 +17,7 @@ package main
 // Objective-C).
 
 import (
+	"fmt"
 	"log"
 	"runtime"
 	"sync"
@@ -141,6 +142,78 @@ func (c *pebbleCore) advanceFrame() {
 	// Window top-left so the disc anchor lands at the eased position.
 	c.renderedX.Store(int32(c.curX) - pebbleAnchorX)
 	c.renderedY.Store(int32(c.curY) - pebbleAnchorY)
+}
+
+// ─── Shared state mutators ───────────────────────────────────────────────────
+// These only touch pebbleCore, so they live here and are promoted to every
+// platform service that embeds pebbleCore (Windows, and Linux/macOS once
+// migrated). advanceFrame() + present() pick the new state up on the next frame.
+
+// SetState transitions the visible state.
+func (c *pebbleCore) SetState(state PebbleState) error {
+	if !c.spawned.Load() {
+		return fmt.Errorf("pebble not spawned")
+	}
+	c.state.Store(state)
+	return nil
+}
+
+// SetText sets the bubble body line ("" falls back to the per-state placeholder).
+func (c *pebbleCore) SetText(text string) error { c.bubbleText.Store(text); return nil }
+
+// SetEye toggles the awareness/OCR eye glyph.
+func (c *pebbleCore) SetEye(active bool) error { c.eyeActive.Store(active); return nil }
+
+// SetBlinded marks awareness hard-paused (dim + struck-through eye).
+func (c *pebbleCore) SetBlinded(blinded bool) error { c.blinded.Store(blinded); return nil }
+
+// SetAnswerOverflow arms ("" disarms) the speaking bubble's "open full" button.
+func (c *pebbleCore) SetAnswerOverflow(answerID string) error {
+	c.answerOverflowID.Store(answerID)
+	return nil
+}
+
+// PointAt flies the pebble to a fixed screen point for durationMs, showing
+// label, then restores the prior state/text (handled by advanceFrame).
+func (c *pebbleCore) PointAt(x, y int, label string, durationMs int) error {
+	if !c.spawned.Load() {
+		return fmt.Errorf("pebble not spawned")
+	}
+	if durationMs <= 0 {
+		durationMs = 3000
+	}
+	// Snapshot the pre-point state ONLY on the first point of a run, so
+	// re-entrant points (multiple LLM tags) restore the original, not an
+	// intermediate "speaking + label" state.
+	if c.pointing.CompareAndSwap(false, true) {
+		ps, _ := c.state.Load().(PebbleState)
+		pt, _ := c.bubbleText.Load().(string)
+		c.prevState.Store(ps)
+		c.prevText.Store(pt)
+	}
+	c.pointX.Store(int32(x))
+	c.pointY.Store(int32(y))
+	c.pointUntilMs.Store(time.Now().Add(time.Duration(durationMs) * time.Millisecond).UnixMilli())
+	c.state.Store(PebbleListening)
+	c.bubbleText.Store(label)
+	return nil
+}
+
+// pebbleStateToInt maps a PebbleState to the small int the native C/Obj-C
+// renderers use (0=idle, 1=listening, 2=thinking, 3=speaking, 4=working).
+func pebbleStateToInt(s PebbleState) int {
+	switch s {
+	case PebbleListening:
+		return 1
+	case PebbleThinking:
+		return 2
+	case PebbleSpeaking:
+		return 3
+	case PebbleWorking:
+		return 4
+	default:
+		return 0
+	}
 }
 
 // runPebbleLoop owns the overlay for its lifetime on a dedicated OS thread
