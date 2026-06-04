@@ -19,6 +19,80 @@ import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 type AnyRec = Record<string, unknown>;
 
+const VALID_WAKE_ENGINES = ['openwakeword', 'webspeech', 'auto'];
+const VALID_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+/** Upper bound on a single realtime session (minutes) accepted from the API. */
+const MAX_SESSION_MINUTES_LIMIT = 1440;
+
+export type VoicePatchValidation =
+  | { ok: true; patch: AnyRec }
+  | { ok: false; error: string };
+
+/**
+ * Validate an untrusted `/api/config/voice` POST body before it is merged and
+ * persisted. Only fields that are present are checked; unknown top-level keys
+ * are rejected so garbage can't be written to disk. Mirrors the validation
+ * rigor of the other config POST routes (which the original handler lacked).
+ */
+export function validateVoicePatch(body: unknown): VoicePatchValidation {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, error: 'Body must be a JSON object' };
+  }
+  const patch = body as AnyRec;
+
+  for (const key of Object.keys(patch)) {
+    if (key !== 'wake_engine' && key !== 'realtime') {
+      return { ok: false, error: `Unknown voice config field: ${key}` };
+    }
+  }
+
+  if ('wake_engine' in patch) {
+    if (typeof patch.wake_engine !== 'string' || !VALID_WAKE_ENGINES.includes(patch.wake_engine)) {
+      return { ok: false, error: `wake_engine must be one of: ${VALID_WAKE_ENGINES.join(', ')}` };
+    }
+  }
+
+  if ('realtime' in patch) {
+    const rt = patch.realtime;
+    if (typeof rt !== 'object' || rt === null || Array.isArray(rt)) {
+      return { ok: false, error: 'realtime must be an object' };
+    }
+    const r = rt as AnyRec;
+
+    if ('enabled' in r && typeof r.enabled !== 'boolean') {
+      return { ok: false, error: 'realtime.enabled must be a boolean' };
+    }
+    for (const strField of ['api_key', 'model', 'voice'] as const) {
+      if (strField in r && typeof r[strField] !== 'string') {
+        return { ok: false, error: `realtime.${strField} must be a string` };
+      }
+    }
+    if ('reasoning_effort' in r &&
+        (typeof r.reasoning_effort !== 'string' || !VALID_REASONING_EFFORTS.includes(r.reasoning_effort))) {
+      return { ok: false, error: `realtime.reasoning_effort must be one of: ${VALID_REASONING_EFFORTS.join(', ')}` };
+    }
+    if ('max_session_minutes' in r) {
+      const n = r.max_session_minutes;
+      if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0 || n > MAX_SESSION_MINUTES_LIMIT) {
+        return { ok: false, error: `realtime.max_session_minutes must be a number between 1 and ${MAX_SESSION_MINUTES_LIMIT}` };
+      }
+    }
+    if ('monthly_budget_usd' in r) {
+      const n = r.monthly_budget_usd;
+      if (n !== null && (typeof n !== 'number' || !Number.isFinite(n) || n < 0)) {
+        return { ok: false, error: 'realtime.monthly_budget_usd must be a non-negative number or null' };
+      }
+    }
+    if ('blocked_categories' in r) {
+      if (!Array.isArray(r.blocked_categories) || r.blocked_categories.some((c) => typeof c !== 'string')) {
+        return { ok: false, error: 'realtime.blocked_categories must be an array of strings' };
+      }
+    }
+  }
+
+  return { ok: true, patch };
+}
+
 function mergeCloudSubBlock(
   existing: AnyRec | undefined,
   incoming: AnyRec,

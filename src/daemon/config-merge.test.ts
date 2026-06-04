@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig } from './config-merge.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig, validateVoicePatch } from './config-merge.ts';
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 describe('mergeSTTConfig', () => {
@@ -176,5 +176,63 @@ describe('mergeVoiceConfig', () => {
     const merged = mergeVoiceConfig(undefined, { realtime: { enabled: true, api_key: 'k', voice: 'marin' } });
     expect(merged.wake_engine).toBe('openwakeword');
     expect(merged.realtime?.voice).toBe('marin');
+  });
+});
+
+describe('validateVoicePatch', () => {
+  test('accepts a well-formed patch', () => {
+    const res = validateVoicePatch({
+      wake_engine: 'webspeech',
+      realtime: {
+        enabled: true,
+        reasoning_effort: 'high',
+        max_session_minutes: 30,
+        monthly_budget_usd: 25,
+        blocked_categories: ['make_payment'],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test('accepts null monthly_budget_usd (UI "no cap")', () => {
+    expect(validateVoicePatch({ realtime: { monthly_budget_usd: null } }).ok).toBe(true);
+  });
+
+  test('rejects non-object bodies', () => {
+    expect(validateVoicePatch(null).ok).toBe(false);
+    expect(validateVoicePatch([]).ok).toBe(false);
+    expect(validateVoicePatch('nope').ok).toBe(false);
+  });
+
+  test('rejects unknown top-level fields', () => {
+    const res = validateVoicePatch({ haxx: 1 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('Unknown');
+  });
+
+  test('rejects an invalid wake_engine', () => {
+    expect(validateVoicePatch({ wake_engine: 'bogus' }).ok).toBe(false);
+  });
+
+  test('rejects an invalid reasoning_effort', () => {
+    expect(validateVoicePatch({ realtime: { reasoning_effort: 'ludicrous' } }).ok).toBe(false);
+  });
+
+  test('rejects out-of-range or non-numeric max_session_minutes', () => {
+    expect(validateVoicePatch({ realtime: { max_session_minutes: -1 } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: { max_session_minutes: 0 } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: { max_session_minutes: 99999 } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: { max_session_minutes: 'ten' } }).ok).toBe(false);
+  });
+
+  test('rejects a negative budget and non-array blocked_categories', () => {
+    expect(validateVoicePatch({ realtime: { monthly_budget_usd: -5 } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: { blocked_categories: 'notanarray' } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: { blocked_categories: [1, 2] } }).ok).toBe(false);
+  });
+
+  test('rejects wrong-typed enabled / realtime', () => {
+    expect(validateVoicePatch({ realtime: { enabled: 'yes' } }).ok).toBe(false);
+    expect(validateVoicePatch({ realtime: 'nope' }).ok).toBe(false);
   });
 });

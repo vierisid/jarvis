@@ -146,6 +146,13 @@ export class RealtimeSession {
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
   private loggedResponseLatency = false;
+  // True while the model is generating a response (response.created..done).
+  // Gates barge-in cancel so we don't send response.cancel with nothing active
+  // (which OpenAI rejects with an error event).
+  private responseActive = false;
+  // Set on barge-in: suppress any output audio deltas still arriving from the
+  // response we just cancelled, until the next response begins.
+  private suppressOutputAudio = false;
 
   constructor(opts: RealtimeSessionOptions) {
     this.opts = opts;
@@ -248,7 +255,20 @@ export class RealtimeSession {
         this.loggedResponseLatency = false;
         break;
       }
+      case 'response.created': {
+        // A new response is in flight — clear any barge-in suppression so its
+        // audio plays, and arm the cancel gate.
+        this.responseActive = true;
+        this.suppressOutputAudio = false;
+        break;
+      }
+      case 'response.done': {
+        this.responseActive = false;
+        break;
+      }
       case 'response.output_audio.delta': {
+        // Drop deltas from a response we cancelled on barge-in.
+        if (this.suppressOutputAudio) break;
         const delta = evt.delta as string | undefined;
         if (delta) {
           if (!this.loggedResponseLatency && this.turnEndedAt > 0) {
@@ -275,6 +295,15 @@ export class RealtimeSession {
         break;
       }
       case 'input_audio_buffer.speech_started': {
+        // Barge-in: cancel the in-flight response server-side (stops token/audio
+        // billing for speech the user will never hear) and suppress any deltas
+        // still in flight from it. `stopPlayback` (local) is wired via the
+        // callback; without the cancel, OpenAI keeps generating server-side.
+        if (this.responseActive) {
+          this.interrupt();
+          this.responseActive = false;
+          this.suppressOutputAudio = true;
+        }
         this.speechStartedCb?.();
         break;
       }

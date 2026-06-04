@@ -61,7 +61,10 @@ export type RealtimeVoiceConfig = {
   /**
    * Action categories that stay BLOCKED even though realtime auto-approves
    * everything else (safety backstop for destructive/irreversible tools).
-   * Default empty = truly auto-approve all. See docs Phase 3.
+   * When unset, defaults to all `destructive`-impact categories (payments,
+   * deletes, shell exec, installs, settings changes, agent termination) so an
+   * open mic can't trigger them unattended — see DEFAULT_BLOCKED_CATEGORIES.
+   * Set to an explicit array (including `[]`) to override the default. Phase 3.
    */
   blocked_categories?: string[];
 };

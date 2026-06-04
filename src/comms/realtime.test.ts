@@ -163,6 +163,36 @@ describe('RealtimeSession lifecycle', () => {
     expect(stopped).toBe(1);
   });
 
+  test('barge-in cancels the active response and suppresses its trailing audio', async () => {
+    const { socket, session, sentAudio } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    // A response is in flight and producing audio.
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', delta: Buffer.from([1, 2]).toString('base64') });
+    expect(sentAudio).toHaveLength(1);
+    socket.sent = [];
+    // User barges in mid-response.
+    socket.emit({ type: 'input_audio_buffer.speech_started' });
+    expect(socket.sentTypes()).toContain('response.cancel');
+    // Late deltas from the cancelled response are dropped (not played).
+    socket.emit({ type: 'response.output_audio.delta', delta: Buffer.from([3, 4]).toString('base64') });
+    expect(sentAudio).toHaveLength(1);
+    // The next response clears suppression and plays again.
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', delta: Buffer.from([5, 6]).toString('base64') });
+    expect(sentAudio).toHaveLength(2);
+  });
+
+  test('barge-in with no active response does not send response.cancel', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.sent = [];
+    socket.emit({ type: 'input_audio_buffer.speech_started' });
+    expect(socket.sentTypes()).not.toContain('response.cancel');
+  });
+
   test('error events surface via onError', async () => {
     const { socket, session } = makeSession();
     const errs: string[] = [];

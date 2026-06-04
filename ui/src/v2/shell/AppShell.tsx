@@ -140,6 +140,7 @@ function AppShellLive() {
       onTTSContainsWake: voice.handleTTSContainsWake,
       onTTSEnd: voice.handleTTSEnd,
       onError: voice.handleError,
+      onRealtimeClosed: voice.handleRealtimeClosed,
     };
   }, [
     live.voiceCallbacksRef,
@@ -148,6 +149,7 @@ function AppShellLive() {
     voice.handleTTSContainsWake,
     voice.handleTTSEnd,
     voice.handleError,
+    voice.handleRealtimeClosed,
   ]);
 
   // Daemon-driven navigation (voice "open workflows" → navigate_room,

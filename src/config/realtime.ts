@@ -1,4 +1,17 @@
 import type { JarvisConfig, RealtimeReasoningEffort } from './types.ts';
+import { IMPACT_MAP, type ActionCategory } from '../roles/authority.ts';
+
+/**
+ * Safe-by-default backstop for the realtime auto-approve bridge: every action
+ * whose impact is `destructive` (irreversible or costly — payments, deletes,
+ * shell exec, software installs, settings changes, agent termination) stays
+ * BLOCKED unless the user explicitly opts it back in via
+ * `voice.realtime.blocked_categories`. Without this, an open mic + auto-approve
+ * could execute a payment or `rm`-class tool with no human confirmation. See
+ * docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3.
+ */
+export const DEFAULT_BLOCKED_CATEGORIES: string[] = (Object.keys(IMPACT_MAP) as ActionCategory[])
+  .filter((cat) => IMPACT_MAP[cat] === 'destructive');
 
 /**
  * Resolved, ready-to-use realtime voice settings. Produced by
@@ -82,7 +95,11 @@ export function resolveRealtimeVoice(
         typeof rt.monthly_budget_usd === 'number' && rt.monthly_budget_usd > 0
           ? rt.monthly_budget_usd
           : undefined,
-      blockedCategories: Array.isArray(rt.blocked_categories) ? rt.blocked_categories : [],
+      // Unconfigured -> safe destructive-category backstop. An explicit array
+      // (even empty) is the user's deliberate choice and is honored as-is.
+      blockedCategories: Array.isArray(rt.blocked_categories)
+        ? rt.blocked_categories
+        : DEFAULT_BLOCKED_CATEGORIES,
     },
   };
 }

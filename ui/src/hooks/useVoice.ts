@@ -244,6 +244,8 @@ export type UseVoiceReturn = {
   handleTTSContainsWake: () => void;
   handleTTSEnd: () => void;
   handleError: (message?: string) => void;
+  /** Realtime session closed server-side — stop the mic, return to idle. */
+  handleRealtimeClosed: () => void;
   // v2 additions (Phase 4A)
   /** Mute the mic. While muted, wake-word is paused and `startRecording` is a no-op. */
   muted: boolean;
@@ -972,6 +974,19 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     cancelTTSRef.current = cancelTTS;
   }, [cancelTTS]);
 
+  // Server ended the realtime session (max_session_minutes timeout or a
+  // server-side close). The session keeps the mic streaming for fast multi-turn
+  // while it's alive; once it's gone we must stop, or the browser keeps a hot
+  // mic streaming PCM into a session that no longer exists (the server silently
+  // drops it). Distinct from handleError: a normal close returns to idle with
+  // no error flash.
+  const handleRealtimeClosed = useCallback(() => {
+    if (!realtimeActiveRef.current) return;
+    realtimeCtrlRef.current?.stopStreaming();
+    realtimeCtrlRef.current?.flushPlayback();
+    setVoiceState("idle");
+  }, []);
+
   const handleError = useCallback(() => {
     if (realtimeActiveRef.current && realtimeCtrlRef.current) {
       realtimeCtrlRef.current.stopStreaming();
@@ -1377,6 +1392,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     handleTTSContainsWake,
     handleTTSEnd,
     handleError,
+    handleRealtimeClosed,
     muted,
     setMuted,
     micLevel,

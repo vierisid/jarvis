@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { resolveRealtimeVoice } from './realtime.ts';
+import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from './realtime.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import type { JarvisConfig } from './types.ts';
 
@@ -54,8 +54,20 @@ describe('resolveRealtimeVoice', () => {
       expect(res.resolved.model).toBe('gpt-realtime-2');
       expect(res.resolved.reasoningEffort).toBe('low');
       expect(res.resolved.maxSessionMinutes).toBe(10);
-      expect(res.resolved.blockedCategories).toEqual([]);
+      // Safe-by-default: destructive categories blocked when unconfigured.
+      expect(res.resolved.blockedCategories).toEqual(DEFAULT_BLOCKED_CATEGORIES);
+      expect(res.resolved.blockedCategories).toContain('make_payment');
+      expect(res.resolved.blockedCategories).toContain('delete_data');
+      expect(res.resolved.blockedCategories).toContain('execute_command');
     }
+  });
+
+  test('an explicit blocked_categories array (even empty) overrides the default', () => {
+    const config = makeConfig();
+    config.voice!.realtime = { enabled: true, api_key: 'k', blocked_categories: [] };
+    const res = resolveRealtimeVoice(config, {});
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.resolved.blockedCategories).toEqual([]);
   });
 
   test('honors user-selected reasoning effort and rejects invalid', () => {

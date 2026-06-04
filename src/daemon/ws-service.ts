@@ -6,6 +6,8 @@
  */
 
 import type { ServerWebSocket } from 'bun';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { CommitmentExecutor } from './commitment-executor.ts';
@@ -40,6 +42,7 @@ import { resolveRealtimeVoice, type ResolvedRealtimeVoice } from '../config/real
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
+import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
@@ -155,8 +158,14 @@ export class WebSocketService implements Service {
    */
   private realtimeSessions = new Map<
     ServerWebSocket<unknown>,
-    { session: RealtimeVoiceSession; transport: BrowserAudioTransport; timeout: ReturnType<typeof setTimeout> }
+    { session: RealtimeVoiceSession; transport: BrowserAudioTransport; timeout: ReturnType<typeof setTimeout>; startedAt: number }
   >();
+  /**
+   * Lazily-created monthly spend guard for realtime voice. Only used when a
+   * `monthly_budget_usd` is configured; persists to the daemon data dir so the
+   * cap survives restarts. See realtime-budget.ts.
+   */
+  private realtimeBudget: RealtimeBudgetTracker | null = null;
   /**
    * Phase B — per-WS onboarding interview sessions. Created on
    * `interview_start`, torn down on disconnect or after the agent
@@ -1203,6 +1212,24 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return false;
     }
 
+    // Monthly spend guard: refuse new sessions once the estimated budget is
+    // hit. Returns true (caller skips the standard accumulator) but opens no
+    // session — the client's onError handler stops streaming. Falling through
+    // to the standard pipeline would be wrong: the client is already streaming
+    // raw realtime PCM, which the WAV-based path can't consume.
+    if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
+      console.warn('[WSService] realtime monthly budget reached — refusing new session');
+      this.wsServer.sendToClient(ws, {
+        type: 'realtime_status',
+        payload: {
+          state: 'error',
+          message: `Monthly realtime voice budget ($${resolved.monthlyBudgetUsd}) reached. Voice is paused until next month or until you raise the limit in Settings > Voice.`,
+        },
+        timestamp: Date.now(),
+      });
+      return true;
+    }
+
     const orchestrator = this.agentService.getOrchestrator();
     const transport = new BrowserAudioTransport({
       sendAudio: (chunk) => this.wsServer.sendBinary(ws, chunk),
@@ -1247,7 +1274,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.closeRealtimeVoice(ws);
     }, resolved.maxSessionMinutes * 60_000);
 
-    this.realtimeSessions.set(ws, { session, transport, timeout });
+    this.realtimeSessions.set(ws, { session, transport, timeout, startedAt: Date.now() });
     session.connect().then(
       () => this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'live', model: resolved.model }, timestamp: Date.now() }),
       (err) => {
@@ -1302,12 +1329,29 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     }
   }
 
+  /** Lazily build the monthly spend tracker, persisted under the data dir. */
+  private getRealtimeBudget(): RealtimeBudgetTracker {
+    if (!this.realtimeBudget) {
+      const dataDir = this.agentService.getConfig().daemon?.data_dir || join(homedir(), '.jarvis');
+      this.realtimeBudget = RealtimeBudgetTracker.fromFile(join(dataDir, 'realtime-budget.json'));
+    }
+    return this.realtimeBudget;
+  }
+
   /** Tear down a realtime voice session and notify the client. */
   private closeRealtimeVoice(ws: ServerWebSocket<unknown>): void {
     const entry = this.realtimeSessions.get(ws);
     if (!entry) return;
     this.realtimeSessions.delete(ws);
     clearTimeout(entry.timeout);
+    // Record estimated spend against the monthly budget (only meaningful when a
+    // budget is set; recording always is cheap and keeps the cap honest if one
+    // is added mid-month).
+    try {
+      this.getRealtimeBudget().recordSessionSeconds((Date.now() - entry.startedAt) / 1000);
+    } catch (err) {
+      console.warn('[WSService] failed to record realtime spend:', err);
+    }
     try { entry.session.close(); } catch { /* ignore */ }
     try {
       this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'closed' }, timestamp: Date.now() });

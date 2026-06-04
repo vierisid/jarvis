@@ -1931,10 +1931,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = await req.json() as Record<string, unknown>;
           const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const { mergeVoiceConfig } = await import('./config-merge.ts');
-          const freshConfig = await loadConfig();
+          const { mergeVoiceConfig, validateVoicePatch } = await import('./config-merge.ts');
 
-          freshConfig.voice = mergeVoiceConfig(freshConfig.voice, body);
+          const validation = validateVoicePatch(body);
+          if (!validation.ok) return error(validation.error, 400);
+
+          const freshConfig = await loadConfig();
+          freshConfig.voice = mergeVoiceConfig(freshConfig.voice, validation.patch);
           await saveConfig(freshConfig);
           // Update in-memory config so the next voice_start resolves with the
           // new settings — resolveRealtimeVoice reads ctx.config live, so no
