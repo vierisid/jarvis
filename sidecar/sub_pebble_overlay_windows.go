@@ -32,78 +32,25 @@ import (
 
 // ─────────────────────────── Right-rail layout ──────────────────────────────
 
+// Layout geometry, the colour palette, and formatting helpers live in the
+// cross-platform sub_pebble_core.go. Only the disc anchor — which depends on
+// the Windows layered-window size (pebbleWindowW / pebbleAnchorY) — is defined
+// here.
 const (
-	// subPebbleRightMargin is the distance from the disc's centre to the
-	// right edge of the primary monitor. Tightens "this lives on the rail"
-	// without clipping the disc against the bezel.
-	subPebbleRightMargin = 22
-
-	// subPebbleTopMargin / subPebbleSlotSpacing decide the vertical layout.
-	// Slot 0 sits subPebbleTopMargin px from the top; subsequent slots
-	// step down by subPebbleSlotSpacing.
-	subPebbleTopMargin   = 96
-	subPebbleSlotSpacing = 42
-
-	// Disc anchor within the 360×220 window. Right-aligned so the window
-	// can extend leftward for a future bubble without re-positioning the
-	// window itself.
+	// Disc anchor within the 360×220 window. Right-aligned so the window can
+	// extend leftward for the bubble without re-positioning the window itself.
 	subPebbleAnchorX = pebbleWindowW - subPebbleRightMargin
 	subPebbleAnchorY = pebbleAnchorY
-
-	// Phase B — bubble dimensions and offset. The bubble is a paper card
-	// that appears to the LEFT of the disc when the sub-pebble is expanded.
-	// Stacks vertically with: agent name eyebrow, task line, elapsed,
-	// optional result. Width is generous enough to read a sentence-length
-	// task; height tall enough for a 3-line clamp on the result.
-	subPebbleBubbleW       = 230
-	// Bubble height is dynamic. Compact when only the running placeholder
-	// or short copy is shown; tall when a real result/summary needs room.
-	// Caps at the window height (220 px) minus a small top inset.
-	subPebbleBubbleHCompact = 95
-	subPebbleBubbleHTall    = 180
-	subPebbleBubbleOffset   = 14 // gap between disc edge and bubble's right edge
-	subPebbleBubbleAnchorY  = 20 // top of bubble relative to disc's y axis (-20 = bubble starts 20 px above disc center)
-
-	// "open full" button — Phase B+ click target inside the bubble that
-	// spawns a native window with the full task result. Anchored to the
-	// bubble's bottom-right.
-	subPebbleButtonW      = 92
-	subPebbleButtonH      = 20
-	subPebbleButtonInsetR = 10 // gap from bubble right edge to button right edge
-	subPebbleButtonInsetB = 8  // gap from bubble bottom to button bottom
 )
-
-// ─────────────────────────── Color palette ──────────────────────────────────
-
-// subPebbleRGB returns the (R,G,B) accent for a given palette colour. Each
-// is hand-picked to look right against the paper-toned disc + ink border.
-func subPebbleRGB(c SubPebbleColor) (r, g, b uint8) {
-	switch c {
-	case SubPebbleSage:
-		return 0x4A, 0x7C, 0x3F
-	case SubPebbleViolet:
-		return 0x6E, 0x53, 0x9C
-	case SubPebbleVermilion:
-		return 0xC2, 0x3A, 0x2A
-	case SubPebbleMustard:
-		return 0xB7, 0x8A, 0x1E
-	case SubPebbleTeal:
-		return 0x2E, 0x7A, 0x82
-	case SubPebbleAmber:
-		fallthrough
-	default:
-		return 0xE5, 0xA9, 0x1E
-	}
-}
 
 // ─────────────────────────── Service ────────────────────────────────────────
 
 type subPebbleEntry struct {
-	id    string
-	color atomic.Value // SubPebbleColor — atomic so Failed can recolor on the fly
-	state atomic.Value // PebbleState
-	label atomic.Value // string  — agent name (always set at spawn; used as bubble header)
-	task  atomic.Value // string  — current task line (set lazily by daemon on expand)
+	id       string
+	color    atomic.Value // SubPebbleColor — atomic so Failed can recolor on the fly
+	state    atomic.Value // PebbleState
+	label    atomic.Value // string  — agent name (always set at spawn; used as bubble header)
+	task     atomic.Value // string  — current task line (set lazily by daemon on expand)
 	result   atomic.Value // string  — result preview for completed/failed (set on expand)
 	elapsedS atomic.Int64 // last-known elapsed seconds for the bubble counter
 	expanded atomic.Bool  // bubble visibility
@@ -129,9 +76,9 @@ type subPebbleEntry struct {
 	// the cursor to another monitor doesn't relocate existing sub-pebbles.
 	monitorRight atomic.Int32
 
-	hwnd    uintptr
-	stopCh  chan struct{}
-	doneCh  chan struct{}
+	hwnd      uintptr
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 	frameTick uint64
 }
 

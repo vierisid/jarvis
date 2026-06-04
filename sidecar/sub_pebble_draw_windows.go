@@ -8,9 +8,6 @@ import (
 	"unsafe"
 )
 
-// Bubble inner padding (px from the bubble's outer edges to the text rect).
-const subPebbleBubbleInnerPad = 12
-
 // bubbleHeightForEntry decides bubble height per-entry: tall when there's
 // a real result/summary to display, compact when only the running
 // placeholder is shown. Two-state heuristic — cheaper than full
@@ -91,9 +88,10 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color Sub
 // drawSubPebbleBubble so the glyphs sit on the opaque paper fill.
 //
 // Layout (relative to the bubble rect):
-//   y = top + 14    : eyebrow line — "AGENT NAME · 12s" in mono caps, tinted
-//   y = top + 36    : task body — 2-line clamp, Inter Tight ink
-//   y = top + 78    : result line — 2-line clamp, smaller, muted ink (only when present)
+//
+//	y = top + 14    : eyebrow line — "AGENT NAME · 12s" in mono caps, tinted
+//	y = top + 36    : task body — 2-line clamp, Inter Tight ink
+//	y = top + 78    : result line — 2-line clamp, smaller, muted ink (only when present)
 func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *subPebbleEntry) {
 	bx0, by0, bx1, by1 := subPebbleBubbleRect(entry)
 	_ = by1
@@ -229,13 +227,6 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 			uintptr(uint32(dtCenter|dtVCenter|dtSingleLine)),
 		)
 	}
-}
-
-func formatSubPebbleElapsed(s int) string {
-	if s < 60 {
-		return fmt.Sprintf("%ds", s)
-	}
-	return fmt.Sprintf("%dm%02ds", s/60, s%60)
 }
 
 // repairSubPebbleBubbleAlpha clamps glyph alpha to 255 across the bubble's
