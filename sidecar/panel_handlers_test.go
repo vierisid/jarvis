@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -155,7 +156,7 @@ func itoa(n int) string {
 
 func TestPanelSpawnHandler_HappyPath(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc)
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
 
 	res, err := h(map[string]any{
 		"id":            "pebble",
@@ -183,7 +184,7 @@ func TestPanelSpawnHandler_HappyPath(t *testing.T) {
 
 func TestPanelSpawnHandler_MissingURL(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc)
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
 
 	_, err := h(map[string]any{"id": "x"})
 	if err == nil {
@@ -193,7 +194,7 @@ func TestPanelSpawnHandler_MissingURL(t *testing.T) {
 
 func TestPanelSpawnHandler_MissingParams(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc)
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
 
 	_, err := h(nil)
 	if err == nil {
@@ -204,11 +205,40 @@ func TestPanelSpawnHandler_MissingParams(t *testing.T) {
 func TestPanelSpawnHandler_ServiceError(t *testing.T) {
 	svc := newFakePanelService()
 	svc.spawnErr = errors.New("boom")
-	h := makePanelSpawnHandler(svc)
+	h := makePanelSpawnHandler(svc, "ws://x/sidecar/connect", "tok-123")
 
 	_, err := h(map[string]any{"url": "http://x"})
 	if err == nil || err.Error() != "boom" {
 		t.Fatalf("expected service error, got %v", err)
+	}
+}
+
+func TestPanelSpawnHandler_RejectsForeignOrigin(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelSpawnHandler(svc, "wss://brain.example.com/sidecar/connect", "tok-123")
+
+	_, err := h(map[string]any{"id": "x", "url": "https://evil.com/phish"})
+	if err == nil {
+		t.Fatal("expected rejection of non-brain origin, got nil")
+	}
+	if len(svc.spawned) != 0 {
+		t.Errorf("foreign-origin panel must not spawn, got %v", svc.spawned)
+	}
+}
+
+func TestPanelSpawnHandler_InjectsTokenAndKeepsFragment(t *testing.T) {
+	svc := newFakePanelService()
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
+
+	if _, err := h(map[string]any{"id": "ans", "url": "http://localhost:3142/#/_answer_42"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	spec := svc.spawned["ans"]
+	if !strings.Contains(spec.URL, "token=tok-123") {
+		t.Errorf("expected sidecar token injected, got %q", spec.URL)
+	}
+	if !strings.Contains(spec.URL, "#/_answer_42") {
+		t.Errorf("expected hash route preserved, got %q", spec.URL)
 	}
 }
 

@@ -39,10 +39,10 @@ type SidecarClient struct {
 	sendFn    EventSender        // event sender for observers
 	mu        sync.Mutex         // protects handlers/obsCancel during reload
 
-	panels    PanelService          // native window service (lazily set when CapWindows enabled)
-	pebble    PebbleService         // native pebble overlay (lazily set when CapPebble enabled)
-	subPebble SubPebbleService      // per-sub-agent rail overlays (CapSubPebble)
-	playback  *AudioPlaybackService // pebble TTS playback (alongside CapPebble)
+	panels    PanelService           // native window service (lazily set when CapWindows enabled)
+	pebble    PebbleService          // native pebble overlay (lazily set when CapPebble enabled)
+	subPebble SubPebbleService       // per-sub-agent rail overlays (CapSubPebble)
+	playback  *AudioPlaybackService  // pebble TTS playback (alongside CapPebble)
 	regions   RegionSelectionService // T19 drag-select capture (alongside CapPebble)
 }
 
@@ -72,7 +72,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		// makes sense when the ambient UI is active.
 		client.regions = NewRegionSelectionService()
 	}
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig)
+	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig, client.claims.Brain, config.Token)
 	return client, nil
 }
 
@@ -231,7 +231,7 @@ func (c *SidecarClient) reloadConfig() {
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig)
+	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.config.Token)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
@@ -378,13 +378,14 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 					"channels":    pebbleAudioChannels,
 					"format":      "pcm_s16le",
 				},
+				// MimeType is a hint; sendEvent fills Data inline or routes a
+				// large payload through a separate binary frame.
 				Binary: BinaryDataInline{
 					Type:     "inline",
 					MimeType: "audio/pcm",
-					Data:     base64.StdEncoding.EncodeToString(pcm),
 				},
 			}
-			if err := sendFn(ctx, endEvt, nil); err != nil {
+			if err := sendFn(ctx, endEvt, pcm); err != nil {
 				log.Printf("[audio] failed to emit session_end event: %v", err)
 			} else {
 				log.Printf("[audio] streamed session %s to daemon (%d PCM bytes, %.2fs)", sessionID, len(pcm), dur.Seconds())
@@ -570,13 +571,14 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 								"width":        w,
 								"height":       h,
 							},
+							// MimeType is a hint; sendEvent inlines small captures
+							// and routes large ones through a separate binary frame.
 							Binary: BinaryDataInline{
 								Type:     "inline",
 								MimeType: "image/png",
-								Data:     base64.StdEncoding.EncodeToString(pngBytes),
 							},
 						}
-						if err := sendFn(ctx, evt, nil); err != nil {
+						if err := sendFn(ctx, evt, pngBytes); err != nil {
 							log.Printf("[region] failed to emit captured: %v", err)
 						}
 					},
@@ -690,11 +692,55 @@ func (c *SidecarClient) sendResult(ctx context.Context, rpcID string, result *RP
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   payload,
 	}
+	if result != nil && len(result.BinaryRaw) > 0 {
+		// Raw bytes: inline if small, separate binary frame if large.
+		mime := result.BinaryMime
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		if err := c.attachAndSend(ctx, event, result.BinaryRaw, mime); err != nil {
+			log.Printf("[sidecar] failed to send rpc_result %s: %v", rpcID, err)
+		}
+		return
+	}
 	if result != nil && result.Binary != nil {
 		event.Binary = result.Binary
 	}
 
 	c.sendJSON(ctx, event)
+}
+
+// binaryRefThreshold is the size at or above which binary payloads are sent in
+// a separate WebSocket binary frame (ref protocol) instead of inline base64 in
+// the JSON message. Keeps JSON frames small so the inbound size cap stays tight.
+const binaryRefThreshold = 256 * 1024
+
+// attachAndSend attaches binaryData to event using the ref protocol when large
+// or inline base64 when small, then writes it. Shared by sendResult/sendEvent.
+func (c *SidecarClient) attachAndSend(ctx context.Context, event SidecarEvent, binaryData []byte, mime string) error {
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	if len(binaryData) >= binaryRefThreshold {
+		refId := generateRefID()
+		log.Printf("[sidecar] Sending %s via binary ref (%d bytes, ref=%s)", event.EventType, len(binaryData), refId)
+		event.Binary = BinaryDataRef{
+			Type:     "ref",
+			RefID:    refId,
+			MimeType: mime,
+			Size:     len(binaryData),
+		}
+		if err := c.sendJSON(ctx, event); err != nil {
+			return err
+		}
+		return c.sendBinary(ctx, refId, binaryData)
+	}
+	event.Binary = BinaryDataInline{
+		Type:     "inline",
+		MimeType: mime,
+		Data:     base64Encode(binaryData),
+	}
+	return c.sendJSON(ctx, event)
 }
 
 func (c *SidecarClient) sendJSON(ctx context.Context, v any) error {
@@ -719,38 +765,21 @@ func (c *SidecarClient) sendBinary(ctx context.Context, refId string, data []byt
 	return c.conn.Write(ctx, websocket.MessageBinary, frame)
 }
 
-// sendEvent sends a sidecar event, using binary ref protocol for large binary payloads (>=256KB).
+// sendEvent sends a sidecar event. Large binary payloads (>= the inline
+// threshold) travel in a separate WebSocket binary frame; small ones inline as
+// base64. The mime type is taken from any inline Binary descriptor the caller
+// pre-set as a hint, else defaults to image/png (the common screen-capture
+// case). When binaryData is empty the event is sent as-is, preserving any
+// Binary the caller already attached.
 func (c *SidecarClient) sendEvent(ctx context.Context, event SidecarEvent, binaryData []byte) error {
-	const binaryRefThreshold = 256 * 1024
-
-	if len(binaryData) > 0 && len(binaryData) >= binaryRefThreshold {
-		// Use binary ref protocol: send JSON with ref, then binary frame.
-		refId := generateRefID()
-		log.Printf("[sidecar] Sending %s via binary ref (%d bytes, ref=%s)", event.EventType, len(binaryData), refId)
-
-		event.Binary = BinaryDataRef{
-			Type:     "ref",
-			RefID:    refId,
-			MimeType: "image/png",
-			Size:     len(binaryData),
-		}
-
-		if err := c.sendJSON(ctx, event); err != nil {
-			return err
-		}
-		return c.sendBinary(ctx, refId, binaryData)
+	if len(binaryData) == 0 {
+		return c.sendJSON(ctx, event)
 	}
-
-	if len(binaryData) > 0 {
-		// Inline as base64
-		event.Binary = BinaryDataInline{
-			Type:     "inline",
-			MimeType: "image/png",
-			Data:     base64Encode(binaryData),
-		}
+	mime := "image/png"
+	if inl, ok := event.Binary.(BinaryDataInline); ok && inl.MimeType != "" {
+		mime = inl.MimeType
 	}
-
-	return c.sendJSON(ctx, event)
+	return c.attachAndSend(ctx, event, binaryData, mime)
 }
 
 func base64Encode(data []byte) string {

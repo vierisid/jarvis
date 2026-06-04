@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/png" // register PNG decoder for image.Decode
 	"image/jpeg"
+	_ "image/png" // register PNG decoder for image.Decode
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +18,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func()) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func(), brainURL string, sidecarToken string) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -71,7 +70,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 	}
 
 	if caps[CapWindows] && panels != nil {
-		registry["panel.spawn"] = makePanelSpawnHandler(panels)
+		registry["panel.spawn"] = makePanelSpawnHandler(panels, brainURL, sidecarToken)
 		registry["panel.close"] = makePanelCloseHandler(panels)
 		registry["panel.focus"] = makePanelFocusHandler(panels)
 		registry["panel.list"] = makePanelListHandler(panels)
@@ -384,11 +383,8 @@ func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
 			"orig_width":  origW,
 			"orig_height": origH,
 		},
-		Binary: BinaryDataInline{
-			Type:     "inline",
-			MimeType: mime,
-			Data:     base64.StdEncoding.EncodeToString(data),
-		},
+		BinaryRaw:  data,
+		BinaryMime: mime,
 	}, nil
 }
 
@@ -433,12 +429,9 @@ func makeFetchCaptureHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		return &RPCResult{
-			Result: map[string]any{"size": len(data)},
-			Binary: BinaryDataInline{
-				Type:     "inline",
-				MimeType: "image/png",
-				Data:     base64.StdEncoding.EncodeToString(data),
-			},
+			Result:     map[string]any{"size": len(data)},
+			BinaryRaw:  data,
+			BinaryMime: "image/png",
 		}, nil
 	}
 }
@@ -752,8 +745,8 @@ func makeGetConfigHandler(cfg *SidecarConfig) RPCHandler {
 			"capabilities": cfg.Capabilities,
 			"terminal": map[string]any{
 				"blocked_commands": cfg.Terminal.BlockedCommands,
-				"default_shell":   cfg.Terminal.DefaultShell,
-				"timeout_ms":      cfg.Terminal.TimeoutMs,
+				"default_shell":    cfg.Terminal.DefaultShell,
+				"timeout_ms":       cfg.Terminal.TimeoutMs,
 			},
 			"filesystem": map[string]any{
 				"blocked_paths":    cfg.Filesystem.BlockedPaths,
@@ -868,11 +861,11 @@ func makeUpdateConfigHandler(cfg *SidecarConfig, onReloaded func()) RPCHandler {
 func handleGetSystemInfo(params map[string]any) (*RPCResult, error) {
 	hostname, _ := os.Hostname()
 	return &RPCResult{Result: map[string]any{
-		"hostname": hostname,
-		"platform": runtime.GOOS,
-		"arch":     runtime.GOARCH,
-		"cpus":     runtime.NumCPU(),
-		"uptime":   0, // Go stdlib doesn't expose system uptime easily
+		"hostname":   hostname,
+		"platform":   runtime.GOOS,
+		"arch":       runtime.GOARCH,
+		"cpus":       runtime.NumCPU(),
+		"uptime":     0, // Go stdlib doesn't expose system uptime easily
 		"go_version": runtime.Version(),
 	}}, nil
 }

@@ -362,15 +362,10 @@ func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("decode screenshot: %w", err)
 		}
 
-		_ = decoded // decoded bytes available if needed later
-
 		return &RPCResult{
-			Result: map[string]any{"captured": true},
-			Binary: &BinaryDataInline{
-				Type:     "inline",
-				MimeType: "image/png",
-				Data:     ss.Data,
-			},
+			Result:     map[string]any{"captured": true},
+			BinaryRaw:  decoded,
+			BinaryMime: "image/png",
 		}, nil
 	}
 }

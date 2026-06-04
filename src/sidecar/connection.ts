@@ -74,13 +74,22 @@ export class SidecarConnection {
 
     const event = result.event;
 
-    // If event references binary data via ref, wait for the binary frame
+    // If event references binary data via ref, wait for the binary frame, then
+    // normalize it to an inline descriptor. Downstream consumers (rpc_result
+    // handlers, event listeners reading event.binary.data) then see a single
+    // binary shape regardless of whether the sidecar inlined it or sent it as a
+    // separate frame.
     if (event.binary?.type === 'ref') {
-      const refId = event.binary.ref_id;
+      const { ref_id: refId, mime_type: mimeType } = event.binary;
       try {
         const binaryPayload = await this.waitForBinary(refId);
         // Attach resolved binary data to the event payload
         (event.payload as Record<string, unknown>)._binary = binaryPayload;
+        event.binary = {
+          type: 'inline',
+          mime_type: mimeType,
+          data: binaryPayload.toString('base64'),
+        };
       } catch (err) {
         console.warn(`[SidecarConnection:${this.sidecarId}] Binary wait failed for ${refId}:`, err);
         return;

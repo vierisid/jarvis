@@ -54,16 +54,16 @@ type BinaryData interface {
 
 // BinaryDataInline holds inline base64 binary data (e.g. screenshot < 256KB).
 type BinaryDataInline struct {
-	Type     string `json:"type"`      // always "inline"
+	Type     string `json:"type"` // always "inline"
 	MimeType string `json:"mime_type"`
-	Data     string `json:"data"`      // base64-encoded
+	Data     string `json:"data"` // base64-encoded
 }
 
 func (BinaryDataInline) binaryMarker() {}
 
 // BinaryDataRef references binary data sent in a separate WebSocket binary frame.
 type BinaryDataRef struct {
-	Type     string `json:"type"`      // always "ref"
+	Type     string `json:"type"` // always "ref"
 	RefID    string `json:"ref_id"`
 	MimeType string `json:"mime_type"`
 	Size     int    `json:"size"`
@@ -126,9 +126,20 @@ type BrowserConfig struct {
 }
 
 // RPCResult is returned by handlers.
+//
+// Handlers returning binary data should set BinaryRaw/BinaryMime (raw bytes)
+// rather than pre-encoding into Binary. sendResult then inlines small payloads
+// as base64 and routes large ones (>= the inline threshold) through a separate
+// binary WebSocket frame, keeping the JSON message small. Binary remains for
+// callers that have already built an inline descriptor.
 type RPCResult struct {
 	Result any        `json:"result"`
 	Binary BinaryData `json:"binary,omitempty"`
+
+	// BinaryRaw, when non-nil, is the raw binary payload; sendResult chooses
+	// inline-vs-ref transport. Not serialized — it never travels as JSON.
+	BinaryRaw  []byte `json:"-"`
+	BinaryMime string `json:"-"`
 }
 
 // RPCHandler processes an RPC request.

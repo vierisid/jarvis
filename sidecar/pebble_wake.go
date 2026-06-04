@@ -24,7 +24,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"sync"
@@ -82,12 +81,12 @@ type WakeListenerService struct {
 
 	// Segmentation state — written from the malgo callback goroutine,
 	// read by the coordinator goroutine. Mutex-protected.
-	mu             sync.Mutex
-	segBuf         []byte
-	speechSeen     bool
+	mu              sync.Mutex
+	segBuf          []byte
+	speechSeen      bool
 	speechStartedAt time.Time
-	lastSpeechAt   time.Time
-	segStartedAt   time.Time
+	lastSpeechAt    time.Time
+	segStartedAt    time.Time
 }
 
 // NewWakeListenerService wires up a wake listener that uses the given
@@ -289,20 +288,21 @@ func (w *WakeListenerService) maybeEmitSegment(ctx context.Context) {
 		Timestamp: now.UnixMilli(),
 		Priority:  "low",
 		Payload: map[string]any{
-			"segment_id":   segmentID,
-			"speech_ms":    durMs,
-			"total_ms":     totalMs,
-			"sample_rate":  pebbleAudioSampleRate,
-			"channels":     pebbleAudioChannels,
-			"format":       "pcm_s16le",
+			"segment_id":  segmentID,
+			"speech_ms":   durMs,
+			"total_ms":    totalMs,
+			"sample_rate": pebbleAudioSampleRate,
+			"channels":    pebbleAudioChannels,
+			"format":      "pcm_s16le",
 		},
+		// MimeType is a hint; the sender inlines small segments and routes
+		// large ones through a separate binary frame.
 		Binary: BinaryDataInline{
 			Type:     "inline",
 			MimeType: "audio/pcm",
-			Data:     base64.StdEncoding.EncodeToString(pcm),
 		},
 	}
-	if err := w.sender(ctx, evt, nil); err != nil {
+	if err := w.sender(ctx, evt, pcm); err != nil {
 		log.Printf("[wake] failed to emit segment: %v", err)
 	}
 }

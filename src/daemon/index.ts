@@ -36,7 +36,7 @@ import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
-import { SidecarManager } from "../sidecar/manager.ts";
+import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
 import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
@@ -435,6 +435,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const brainDomain = jarvisConfig.daemon.brain_domain ?? `localhost:${config.port}`;
     sidecarManager.setBrainUrl(brainDomain, brainSource);
 
+    // Panel webviews must render the same brain origin the JWT pins: the sidecar
+    // rejects any panel URL whose host differs from its brain claim, and serves
+    // its token only to that origin. Derive the panel origin from the same
+    // brain claim the manager signs so localhost / 127.0.0.1 / remote all agree.
+    const pebbleBrainWs = buildEnrollmentUrls(brainDomain).brainWs;
+    const pebblePanelOrigin = `${pebbleBrainWs.startsWith('wss') ? 'https' : 'http'}://${new URL(pebbleBrainWs).host}`;
+
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
 
@@ -768,8 +775,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const payload = (event.payload ?? {}) as { answer_id?: unknown };
         const answerID = String(payload.answer_id ?? '');
         if (!answerID) return;
-        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
-        const url = `http://localhost:${port}/#/_answer_${answerID}`;
+        const url = `${pebblePanelOrigin}/#/_answer_${answerID}`;
         try {
           const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
             url,
@@ -797,8 +803,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const payload = (event.payload ?? {}) as { id?: unknown };
         const taskId = String(payload.id ?? '');
         if (!taskId) return;
-        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
-        const url = `http://localhost:${port}/#/_task_${taskId}`;
+        const url = `${pebblePanelOrigin}/#/_task_${taskId}`;
         try {
           const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
             url,
@@ -1378,13 +1383,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       orderedAliases.sort((a, b) => b.alias.length - a.alias.length);
 
       const dashboardURL = (key: string): string => {
-        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
         // _panel_<key> renders ONLY the RoomBody inside the spawned native
         // window (no AppShell, no voice handlers) so the pebble's sidecar-
         // side voice loop is the single voice surface — no double voice.
         // Use _room_<key> in the dashboard SPA when the user wants the full
         // takeover with thread + rail context.
-        return `http://localhost:${port}/#/_panel_${key}`;
+        return `${pebblePanelOrigin}/#/_panel_${key}`;
       };
 
       // W3-T3 — restore last-known bounds for a room (voice / palette
@@ -1464,8 +1468,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const PALETTE_W = 460;
       const PALETTE_H = 440;
       const paletteURL = (): string => {
-        const port = (jarvisConfig as { daemon?: { port?: number } }).daemon?.port ?? 3142;
-        return `http://localhost:${port}/#/_palette`;
+        return `${pebblePanelOrigin}/#/_palette`;
       };
       const closePalettePanel = async (sidecarId: string): Promise<void> => {
         const entry = palettePanelBySidecar.get(sidecarId);
@@ -2802,7 +2805,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             const sttStart = Date.now();
             try {
               transcript = (await pebbleSTT.transcribe(wav)).trim();
-              console.log(`[ambient-ui] STT (${Date.now() - sttStart}ms): "${transcript}"`);
+              console.log(`[ambient-ui] STT (${Date.now() - sttStart}ms, ${transcript.length} chars)`);
             } catch (err) {
               console.warn('[ambient-ui] STT error:', err);
             }
@@ -2817,7 +2820,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             pendingSummons.delete(session.sidecarId);
             return;
           }
-          console.log(`[ambient-ui] user said: "${transcript}"`);
+          console.log(`[ambient-ui] user said (${transcript.length} chars)`);
 
           await runResponseCycle(session.sidecarId, transcript, ctrl);
           pendingSummons.delete(session.sidecarId);
@@ -2887,7 +2890,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Most segments — user talking about other things. Quietly drop.
           return;
         }
-        console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT): "${transcript}"`);
+        console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT, ${transcript.length} chars)`);
 
         const command = stripWakePrefix(transcript);
         // Claim the summon slot so the rest of this cycle owns it.

@@ -3,24 +3,67 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 )
 
 // panel.spawn — open a new native panel window. Returns the panel id.
 //
 // Params: full PanelSpec (url required, everything else optional).
 // Result: { "id": "<panel-id>" }
-func makePanelSpawnHandler(svc PanelService) RPCHandler {
+//
+// The brain supplies the URL to render. Before navigating, the sidecar pins it
+// to the brain origin from the enrollment JWT (`brainURL`) and appends its own
+// token, so a panel can only ever render the official brain and its content
+// fetches authenticate over the same identity as the sidecar WebSocket.
+func makePanelSpawnHandler(svc PanelService, brainURL, sidecarToken string) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		spec, err := decodePanelSpec(params)
 		if err != nil {
 			return nil, err
 		}
+		safeURL, err := sanitizePanelURL(spec.URL, brainURL, sidecarToken)
+		if err != nil {
+			return nil, err
+		}
+		spec.URL = safeURL
 		id, err := svc.Spawn(spec)
 		if err != nil {
 			return nil, err
 		}
 		return &RPCResult{Result: map[string]any{"id": string(id)}}, nil
 	}
+}
+
+// sanitizePanelURL enforces that a panel's target URL points at the brain
+// origin carried in the enrollment JWT, then appends the sidecar token so the
+// brain can authenticate the webview's same-origin content fetches.
+//
+// The JWT `brain` claim is a WebSocket URL (ws(s)://host/sidecar/connect); only
+// its host is compared, so http(s) panel URLs on the same host are accepted
+// whether the brain is local (localhost) or remote. A mismatch is rejected
+// rather than silently rendered.
+func sanitizePanelURL(rawURL, brainURL, sidecarToken string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid panel url: %w", err)
+	}
+	allowed, err := url.Parse(brainURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid brain url %q: %w", brainURL, err)
+	}
+	if allowed.Host == "" {
+		return "", fmt.Errorf("brain origin unknown; refusing to render panel %q", rawURL)
+	}
+	if !strings.EqualFold(u.Host, allowed.Host) {
+		return "", fmt.Errorf("panel url host %q is not the brain origin %q", u.Host, allowed.Host)
+	}
+	if sidecarToken != "" {
+		q := u.Query()
+		q.Set("token", sidecarToken)
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
 }
 
 // panel.close — close a panel window by id.

@@ -7,11 +7,12 @@
 import type { SidecarEvent, EventPriority } from './protocol.ts';
 
 // Size limits
-// 16 MB so a base64-encoded screenshot (typically 0.5–4 MB raw → ~0.7–5.5 MB
-// after base64) fits in a single rpc_result payload. Below this and the
-// vision-LLM pipeline (T9 auto-screenshot, T19 region capture) silently
-// drops images.
-export const MAX_JSON_SIZE = 16 * 1024 * 1024;       // 16 MB
+// Large binaries (screenshots, region captures, audio segments) are sent in a
+// separate WebSocket binary frame via the ref protocol once they reach
+// BINARY_INLINE_THRESHOLD, so the JSON message itself stays small. This cap
+// only needs to cover inline (<256 KB) binaries plus JSON result text, with
+// headroom for base64 expansion — not full-resolution images.
+export const MAX_JSON_SIZE = 2 * 1024 * 1024;        // 2 MB
 export const MAX_BINARY_SIZE = 50 * 1024 * 1024;     // 50 MB
 export const BINARY_INLINE_THRESHOLD = 256 * 1024;   // 256 KB
 export const BINARY_REF_ID_LENGTH = 36;               // UUID length

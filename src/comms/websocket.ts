@@ -225,11 +225,23 @@ export class WebSocketServer {
 
         // 1. Auth check (if configured)
         if (self.authToken && !isPublicRoute(pathname, req.method)) {
+          // A request is authorized by EITHER the dashboard token OR a valid
+          // sidecar enrollment JWT. The sidecar spawns panel webviews against
+          // the brain origin and carries its JWT as ?token=, so the panel's
+          // content fetches (/api/pebble/answers, /api/agents/tasks) authenticate
+          // over the same identity as the sidecar WebSocket connection rather
+          // than the dashboard token (which the sidecar does not hold).
+          const accepts = async (tok: string | null): Promise<boolean> => {
+            if (!tok) return false;
+            if (safeCompare(tok, self.authToken!)) return true;
+            if (self.sidecarManager && (await self.sidecarManager.validateToken(tok))) return true;
+            return false;
+          };
           const cookieToken = getCookie(req, 'token');
-          if (!cookieToken || !safeCompare(cookieToken, self.authToken)) {
+          if (!(await accepts(cookieToken))) {
             // Check ?token= query param — set cookie via Set-Cookie and redirect
             const queryToken = url.searchParams.get('token');
-            if (queryToken && safeCompare(queryToken, self.authToken)) {
+            if (await accepts(queryToken)) {
               const cleanParams = new URLSearchParams(url.searchParams);
               cleanParams.delete('token');
               const qs = cleanParams.toString();
