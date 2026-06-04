@@ -77,20 +77,11 @@ func colorRef(r, g, b uint8) uint32 {
 // dynamic text from SetText winning over the per-state placeholder.
 func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
 	dyn, _ := s.bubbleText.Load().(string)
-	switch state {
-	case PebbleListening:
-		if dyn != "" {
-			return dyn
-		}
-		return "listening — go ahead."
-	case PebbleSpeaking:
-		if dyn != "" {
-			return dyn
-		}
-		return "speaking…"
-	default:
-		return ""
+	if dyn != "" && (state == PebbleListening || state == PebbleSpeaking) {
+		return dyn
 	}
+	// Canonical placeholder copy lives in pebble_core.go.
+	return defaultPebbleBodyText(state)
 }
 
 // makeBodyFont builds the body font (13 px Inter Tight, antialiased). The

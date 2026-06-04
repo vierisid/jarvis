@@ -584,13 +584,14 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 // can be stored in a package-level var (pebbleServiceInstance) for the
 // WndProc to consult.
 const (
-	pblWmNcHitTest     = 0x0084
-	pblWmLButtonDown   = 0x0201
-	pblWmLButtonUp     = 0x0202
-	pblHtTransparent   = ^uintptr(0)
-	pblHtClient        = 1
-	pblLongPressMs     = 500
-	pblDiscHitRadius   = 18
+	pblWmNcHitTest   = 0x0084
+	pblWmLButtonDown = 0x0201
+	pblWmLButtonUp   = 0x0202
+	pblHtTransparent = ^uintptr(0)
+	pblHtClient      = 1
+	// Canonical values live in pebble_core.go (shared across platforms).
+	pblLongPressMs   = pebbleLongPressMs
+	pblDiscHitRadius = pebbleDiscHitRadius
 )
 
 var pebbleServiceInstance *pebbleServiceWindows
@@ -714,7 +715,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	if err != nil {
 		return err
 	}
-	followFactor := 0.18
+	followFactor := pebbleFollowFactor
 	tgtX := float64(cx + s.spec.CursorOffsetX)
 	tgtY := float64(cy + s.spec.CursorOffsetY)
 	// T8 — element-pointing override. While active, the pebble eases to
@@ -734,7 +735,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 		} else {
 			tgtX = float64(s.pointX.Load())
 			tgtY = float64(s.pointY.Load())
-			followFactor = 0.42
+			followFactor = pebblePointFollowFactor
 		}
 	}
 	// W6-T2 — freeze cursor follow when the user's cursor is on the disc
