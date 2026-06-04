@@ -699,12 +699,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         return ids;
       };
+      // The machine currently in use — set at the start of each pebble response
+      // cycle. The same JARVIS brain is shared across a user's machines, but
+      // each machine has its own pebble showing what JARVIS does there, so a
+      // background task's sub-pebble belongs to ONE machine (the one it was
+      // launched from) rather than being mirrored onto every connected sidecar.
+      let activePebbleSidecar: string | null = null;
+      const pickSubPebbleSidecar = (): string | null => {
+        const capable = subPebbleCapableSidecars();
+        if (capable.length === 0) return null;
+        if (activePebbleSidecar && capable.includes(activePebbleSidecar)) return activePebbleSidecar;
+        // No recent pebble interaction (e.g. a task spawned outside any pebble
+        // turn): use the sole capable machine if there's exactly one, else give
+        // up rather than guess which machine the user is at.
+        return capable.length === 1 ? capable[0]! : null;
+      };
 
       // Phase B — per-sub-pebble expansion state. Daemon owns this so a
       // click flip can fetch fresh task data before dispatching.
       const subPebbleExpanded = new Map<string, boolean>(); // taskId -> expanded
-      // Reverse lookup: taskId -> sidecarId so the click handler knows
-      // which sidecar to dispatch the set_expanded RPC to.
+      // taskId -> the machine that owns this task's sub-pebble (recorded at
+      // launch). Lifecycle updates (state/summary) route back to this machine
+      // only; each task lives on exactly one machine.
       const subPebbleSidecar = new Map<string, string>(); // taskId -> sidecarId
 
       // Phase B+ — summarize a completed task's response into ~3 short
@@ -886,12 +902,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           return;
         }
         taskManager.subscribeLifecycle(async (event, task) => {
-          const sidecarIds = subPebbleCapableSidecars();
-          if (sidecarIds.length === 0) {
-            console.log(`[sub-pebble] ${event} task=${task.id} — no sub_pebble-capable sidecars connected, skipping`);
+          // Single active machine: a task's sub-pebble lives on ONE machine.
+          // On launch, attach to the machine currently in use; for later events
+          // route to the machine that owns this task (recorded at launch).
+          const sidecarId = event === 'launch'
+            ? pickSubPebbleSidecar()
+            : (subPebbleSidecar.get(task.id) ?? null);
+          if (!sidecarId) {
+            if (event === 'launch') {
+              console.log(`[sub-pebble] launch task=${task.id} — no machine in use, skipping`);
+            }
             return;
           }
-          for (const sidecarId of sidecarIds) {
+          {
             try {
               if (event === 'launch') {
                 let used = subPebbleSlots.get(sidecarId);
@@ -1503,6 +1526,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const region = pendingRegionByPebble.get(sidecarId);
         if (region) { region.ctrl.cancelled = true; pendingRegionByPebble.delete(sidecarId); }
         regionCycleActive.delete(sidecarId);
+        if (activePebbleSidecar === sidecarId) activePebbleSidecar = null;
         // Sub-pebble bookkeeping is keyed by taskId — drop entries this sidecar owned.
         for (const [taskId, owner] of subPebbleSidecar) {
           if (owner === sidecarId) {
@@ -2499,6 +2523,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         opts?: { image?: { base64: string; mediaType: string } },
       ): Promise<void> => {
         const cycleStart = Date.now();
+        // Mark this machine as the one in use so any background task launched
+        // during this turn attaches its sub-pebble here (single active machine).
+        activePebbleSidecar = sidecarId;
 
         // Fast paths (skip the LLM entirely). Skipped when an image is
         // already attached — the region-captured re-entry path lands
