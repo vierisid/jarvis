@@ -1164,6 +1164,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // original transcript while the sidecar overlay runs so the
       // LLM gets the user's question paired with the captured image.
       const pendingRegionByPebble = new Map<string, { userText: string; ctrl: { cancelled: boolean }; startedAt: number }>();
+      // Sidecars whose region.captured is currently running through a response
+      // cycle. onEvent listeners are NOT awaited serially, so a duplicate or
+      // late `region.captured` can land while the first one's async cycle is
+      // still in flight. Without this guard, the naive "no pending region →
+      // reset state" recovery would tear down the live cycle's pebble state and
+      // summon slot mid-answer. We instead keep the pendingRegion entry alive
+      // for the whole cycle and skip re-entry while this set holds the sidecar.
+      const regionCycleActive = new Set<string>();
 
       const tryHandleRegionIntent = async (
         sidecarId: string,
@@ -1494,6 +1502,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (eyeTimer) { clearTimeout(eyeTimer); eyeTimers.delete(sidecarId); }
         const region = pendingRegionByPebble.get(sidecarId);
         if (region) { region.ctrl.cancelled = true; pendingRegionByPebble.delete(sidecarId); }
+        regionCycleActive.delete(sidecarId);
         // Sub-pebble bookkeeping is keyed by taskId — drop entries this sidecar owned.
         for (const [taskId, owner] of subPebbleSidecar) {
           if (owner === sidecarId) {
@@ -3003,13 +3012,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (event.event_type !== 'region.captured') return;
         const pending = pendingRegionByPebble.get(sidecarId);
+        // No pending region for this capture. The region flow already concluded
+        // (a prior captured/cancelled cleaned up, or the sidecar reconnected),
+        // so this is a stray/duplicate event. Deliberately a no-op: we must NOT
+        // reset state or clear pendingSummons here, because at this point the
+        // summon slot is either already cleared or owned by an unrelated
+        // in-flight turn — clearing it would interrupt that turn. The genuine
+        // "stuck in working" cases are handled by keeping pendingRegion alive
+        // for the whole cycle (below) and by the disconnect cleanup handler.
         if (!pending) return;
-        pendingRegionByPebble.delete(sidecarId);
+        // A response cycle is already running for this region. Because onEvent
+        // listeners aren't awaited serially, a duplicate `region.captured` can
+        // land mid-cycle; ignore it rather than tearing down the live cycle.
+        if (regionCycleActive.has(sidecarId)) return;
 
         const binary = event.binary as { type?: string; data?: string; mime_type?: string } | undefined;
         if (!binary || binary.type !== 'inline' || typeof binary.data !== 'string') {
-          await setState(sidecarId, 'idle', '');
+          pendingRegionByPebble.delete(sidecarId);
           pendingSummons.delete(sidecarId);
+          await setState(sidecarId, 'idle', '');
           return;
         }
         const imageBase64 = binary.data;
@@ -3021,6 +3042,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           `${payload.width}x${payload.height}, mime=${mimeType}, prompt="${userText}"`,
         );
         if (ctrl.cancelled) {
+          pendingRegionByPebble.delete(sidecarId);
           pendingSummons.delete(sidecarId);
           return;
         }
@@ -3028,6 +3050,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Frame the question for the LLM: include the original voice
         // text plus a hint that the image is the user's pointer.
         const promptText = `${userText}\n\n(I've attached a screenshot of the area I selected on screen. Look at the image and answer based on what's shown there.)`;
+        // Mark the cycle active and keep the pendingRegion entry until the
+        // finally — together these make a concurrent duplicate capture a no-op
+        // and guarantee state is torn down on every exit (success, error, or
+        // image-validation failure above).
+        regionCycleActive.add(sidecarId);
         try {
           await runResponseCycle(sidecarId, promptText, ctrl, {
             image: { base64: imageBase64, mediaType: mimeType },
@@ -3036,6 +3063,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn('[ambient-ui] region voice cycle error:', err);
           await setState(sidecarId, 'idle', '');
         } finally {
+          regionCycleActive.delete(sidecarId);
+          pendingRegionByPebble.delete(sidecarId);
           pendingSummons.delete(sidecarId);
         }
       });
