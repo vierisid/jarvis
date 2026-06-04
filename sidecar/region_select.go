@@ -22,3 +22,26 @@ type RegionSelectionService interface {
 	// selection is already in progress or the overlay can't be created.
 	Start(onCapture func(png []byte, width, height int), onCancel func()) error
 }
+
+// regionMinDragPx is the smallest drag (px, per axis) treated as a real
+// selection. Anything smaller is an accidental click and cancels the capture.
+// Shared across platforms so the "too small to mean it" feel stays identical.
+const regionMinDragPx = 6
+
+// normalizeRegionRect orders two drag corners into a top-left origin plus
+// width/height. Pure geometry shared by every platform's drag handler.
+func normalizeRegionRect(x0, y0, x1, y1 int) (x, y, w, h int) {
+	if x1 < x0 {
+		x0, x1 = x1, x0
+	}
+	if y1 < y0 {
+		y0, y1 = y1, y0
+	}
+	return x0, y0, x1 - x0, y1 - y0
+}
+
+// regionDragTooSmall reports whether a drag of (w,h) is below the minimum and
+// should be treated as a cancel rather than a capture.
+func regionDragTooSmall(w, h int) bool {
+	return w < regionMinDragPx || h < regionMinDragPx
+}

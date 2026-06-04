@@ -40,22 +40,22 @@ var (
 )
 
 const (
-	regionIDCCross   = 32515
-	regionSRCCOPY    = 0x00CC0020
-	regionWmRButton  = 0x0204
-	regionWmKeyDown  = 0x0100
-	regionWmMouseMv  = 0x0200
-	regionWmLBtnDn   = 0x0201
-	regionWmLBtnUp   = 0x0202
-	regionVkEscape   = 0x1B
+	regionIDCCross  = 32515
+	regionSRCCOPY   = 0x00CC0020
+	regionWmRButton = 0x0204
+	regionWmKeyDown = 0x0100
+	regionWmMouseMv = 0x0200
+	regionWmLBtnDn  = 0x0201
+	regionWmLBtnUp  = 0x0202
+	regionVkEscape  = 0x1B
 )
 
 type regionSelectionWindows struct {
-	mu       sync.Mutex
-	active   atomic.Bool
-	hwnd     uintptr
-	stopCh   chan struct{}
-	doneCh   chan struct{}
+	mu     sync.Mutex
+	active atomic.Bool
+	hwnd   uintptr
+	stopCh chan struct{}
+	doneCh chan struct{}
 
 	// Snapshot of the entire virtual screen taken before the overlay
 	// appears, in BGRA s8 (little-endian uint32 0xAARRGGBB → BGRA bytes).
@@ -66,12 +66,12 @@ type regionSelectionWindows struct {
 	originY    int32 // virtual screen top edge
 
 	// Drag state
-	dragMu    sync.Mutex
-	dragging  bool
-	startX    int32
-	startY    int32
-	curX      int32
-	curY      int32
+	dragMu   sync.Mutex
+	dragging bool
+	startX   int32
+	startY   int32
+	curX     int32
+	curY     int32
 
 	onCapture func([]byte, int, int)
 	onCancel  func()
@@ -331,21 +331,14 @@ func regionWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 func (s *regionSelectionWindows) finishDrag(x0, y0, x1, y1 int32) {
-	if x1 < x0 {
-		x0, x1 = x1, x0
-	}
-	if y1 < y0 {
-		y0, y1 = y1, y0
-	}
-	w := int(x1 - x0)
-	h := int(y1 - y0)
-	if w < 6 || h < 6 {
+	x, y, w, h := normalizeRegionRect(int(x0), int(y0), int(x1), int(y1))
+	if regionDragTooSmall(w, h) {
 		// Treat tiny drags as a cancel (likely accidental click).
 		s.fireCancel()
 		s.signalStop()
 		return
 	}
-	pngBytes, capW, capH, err := s.cropToPNG(int(x0), int(y0), w, h)
+	pngBytes, capW, capH, err := s.cropToPNG(x, y, w, h)
 	if err != nil {
 		log.Printf("[region] crop failed: %v", err)
 		s.fireCancel()
