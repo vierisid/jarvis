@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,20 +26,14 @@ func TestFetchCaptureReadsValidPath(t *testing.T) {
 		t.Fatalf("fetch_capture: %v", err)
 	}
 
-	inline, ok := result.Binary.(BinaryDataInline)
-	if !ok {
-		t.Fatalf("expected BinaryDataInline, got %T", result.Binary)
+	// Large captures are now returned as raw bytes (BinaryRaw); sendResult
+	// inlines or ref-streams them based on size instead of the handler
+	// pre-encoding a BinaryDataInline.
+	if result.BinaryMime != "image/png" {
+		t.Errorf("mime = %q, want image/png", result.BinaryMime)
 	}
-	if inline.MimeType != "image/png" {
-		t.Errorf("mime = %q, want image/png", inline.MimeType)
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(inline.Data)
-	if err != nil {
-		t.Fatalf("base64 decode: %v", err)
-	}
-	if string(decoded) != string(payload) {
-		t.Errorf("payload mismatch")
+	if string(result.BinaryRaw) != string(payload) {
+		t.Errorf("payload mismatch: got %q, want %q", result.BinaryRaw, payload)
 	}
 }
 

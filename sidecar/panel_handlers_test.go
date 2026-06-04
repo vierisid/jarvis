@@ -139,6 +139,11 @@ func (f *fakePanelService) OnBoundsChanged(cb func(id PanelID, x, y, w, h int)) 
 	_ = cb
 }
 
+func (f *fakePanelService) OnClosed(cb func(id PanelID)) {
+	// no-op — the fake never spawns a real window, so it never closes one.
+	_ = cb
+}
+
 // tiny itoa to avoid pulling strconv in this test file
 func itoa(n int) string {
 	if n == 0 {
