@@ -24,6 +24,13 @@ const (
 	pebbleLongPressMs = 500
 	// pebbleDiscHitRadius is the clickable disc radius (px from disc centre).
 	pebbleDiscHitRadius = 18
+
+	// pebbleAnchorX/Y is where the disc centre is drawn within the overlay
+	// window; the window is positioned so this anchor lands at (cursor +
+	// offset). Shared because it's identical across renderers (the window
+	// SIZE differs per platform, but the anchor does not).
+	pebbleAnchorX = 40
+	pebbleAnchorY = 28
 )
 
 // defaultPebbleBodyText is the placeholder bubble copy for a state when no

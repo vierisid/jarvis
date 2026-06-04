@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"runtime"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -132,92 +130,25 @@ type pblBitmapInfo struct {
 // ─────────────────────────── Service ────────────────────────────────────────
 
 type pebbleServiceWindows struct {
-	mu         sync.Mutex
-	state      atomic.Value // PebbleState
-	bubbleText atomic.Value // string — body line; "" means use default per-state copy
-	spec       PebbleSpec
-	hwnd       uintptr
-	stopCh     chan struct{}
-	doneCh     chan struct{}
-	spawned    atomic.Bool
+	// Physics, state, pointing, render state, and lifecycle live in the shared
+	// pebbleCore (sub_pebble-style). Embedded so existing field accesses
+	// (s.state, s.curX, s.renderedX, s.cursorOnDisc, …) promote unchanged and
+	// the shared runtime can drive them. Only the Win32 handles + callbacks are
+	// platform-specific and stay here.
+	pebbleCore
 
-	// T8 — element pointing. While `pointing` is true and now < pointUntilMs,
-	// paint() overrides the cursor-follow target with (pointX, pointY) so the
-	// pebble eases to a fixed screen coordinate. Previous state + bubble text
-	// are stashed and restored when the duration elapses.
-	// W6-T1 — eye glyph activates when awareness/OCR is firing. Daemon
-	// toggles via pebble.set_eye; sidecar paints a small accent eye next
-	// to the pebble while true. Auto-clears after the daemon's timeout.
-	eyeActive atomic.Bool
+	hwnd uintptr
 
-	// Long-answer overflow — when set to a non-empty answer id, the
-	// speaking bubble paints an "open full ↗" button below the body.
-	// Click on the button emits pebble.open_answer with this id so the
-	// daemon can spawn a markdown panel. Cleared at the start of each
-	// new response cycle.
-	answerOverflowID atomic.Value // string
-
-	// W6-T2 — blinded means awareness is hard-paused. Pebble dims and
-	// shows a struck-through eye. Toggled via pebble.set_blinded.
-	blinded atomic.Bool
-
-	pointing     atomic.Bool
-	pointX       atomic.Int32
-	pointY       atomic.Int32
-	pointUntilMs atomic.Int64
-	prevState    atomic.Value // PebbleState
-	prevText     atomic.Value // string
-
-	// Eased rendered position — matches the mock's 0.18 follow factor.
-	// `current` chases `target = cursor + offset` each frame.
-	curX float64
-	curY float64
-
-	// Last rendered window screen-position, stored as int32 atomics so the
-	// message thread (WM_NCHITTEST) can read it without racing the paint
-	// goroutine. paint() writes these every frame after the ease update.
-	renderedX atomic.Int32
-	renderedY atomic.Int32
-
-	// Bottom of the speaking bubble in window-local coords, captured each
-	// paint when the bubble is visible. WM_NCHITTEST uses it to compute
-	// the "open full" button rect (which anchors to bubbleY1 - inset).
-	lastBubbleY1 atomic.Int32
-
-	// frameTick increments each paint and feeds time-based animations
-	// (idle breathing, listening/speaking waveform bars, thinking dot
-	// bounce). Wraps around — only relative phase matters.
-	frameTick uint64
-
-	// hotkeyStop is the cleanup function returned by startHotkeyListener.
-	// Called when the pebble is closed.
-	hotkeyStop func()
-
-	// paletteHotkeyStop is the cleanup function for the Ctrl+K palette
-	// hotkey, when registered via PaletteHotkey.
-	paletteHotkeyStop func()
-
-	// paletteMouseHookStop is the cleanup function for the global
-	// low-level mouse hook that fires the palette on Ctrl+MMB. Same
-	// callback as the keyboard hotkey, just a different trigger.
+	// hotkeyStop / paletteHotkeyStop / paletteMouseHookStop are cleanup
+	// functions for the summon (Ctrl+Space) hotkey, the Ctrl+K palette hotkey,
+	// and the Ctrl+MMB low-level mouse hook respectively. Called on Close.
+	hotkeyStop           func()
+	paletteHotkeyStop    func()
 	paletteMouseHookStop func()
 
-	// summonCallback is invoked each time the user fires the summon
-	// hotkey. Set via OnSummon(); the daemon drives state transitions
-	// from there.
-	summonCallback func()
-
-	// W6-T2 — click tracking on the disc. WM_LBUTTONDOWN records the
-	// timestamp; WM_LBUTTONUP compares to decide short-click (summon)
-	// vs long-press (blind toggle). Atomic so the message thread doesn't
-	// race the paint goroutine.
-	clickDownMs    atomic.Int64
-	cursorOnDisc   atomic.Bool // set by WM_NCHITTEST so paint can pause cursor follow
-	cursorOnAnswer atomic.Bool // set when cursor is over the "open full" button so click routing knows
-
-	// paletteCallback is invoked each time the user fires the palette
-	// hotkey (Ctrl+K). Set via OnPalette(); the daemon spawns/dismisses
-	// the palette panel from there.
+	// summonCallback / paletteCallback are invoked when the user fires the
+	// summon / palette hotkeys; the daemon drives state transitions from there.
+	summonCallback  func()
 	paletteCallback func()
 }
 
@@ -266,7 +197,7 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 	s.doneCh = make(chan struct{})
 	s.mu.Unlock()
 
-	go s.run()
+	go runPebbleLoop(&s.pebbleCore, s)
 	log.Printf("[pebble] spawned (offset %d,%d, hotkey=%q)", s.spec.CursorOffsetX, s.spec.CursorOffsetY, s.spec.SummonHotkey)
 
 	// Register the global summon hotkey — fires the user-supplied callback
@@ -432,46 +363,19 @@ func (s *pebbleServiceWindows) Close() error {
 	return nil
 }
 
-// ─────────────────────────── Run loop ───────────────────────────────────────
+// ─────────────────────────── Platform adapter ───────────────────────────────
+//
+// The frame loop (cursor-follow ease, [POINT:..] override, frame ticker,
+// lifecycle) lives in runPebbleLoop (pebble_runtime.go); Spawn launches it with
+// this service as the pebblePlatform. The methods below are the Win32 primitives
+// it drives: createWindow / pumpMessages / present / destroyWindow.
 
-// run owns the layered window. Locked to its own OS thread because Win32
-// layered windows + GDI+ contexts are thread-affine.
-func (s *pebbleServiceWindows) run() {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	defer close(s.doneCh)
-
-	hwnd, err := s.createWindow()
-	if err != nil {
-		log.Printf("[pebble] createWindow failed: %v", err)
-		return
-	}
-	s.hwnd = hwnd
-	defer func() {
-		procDestroyWindow.Call(hwnd)
+// destroyWindow tears down the layered window. The shared runtime
+// (runPebbleLoop) calls it when the frame loop exits. Implements pebblePlatform.
+func (s *pebbleServiceWindows) destroyWindow() {
+	if s.hwnd != 0 {
+		procDestroyWindow.Call(s.hwnd)
 		s.hwnd = 0
-	}()
-
-	// Initial paint so the window has *some* alpha buffer registered with
-	// the OS compositor (UpdateLayeredWindow is the only way to "show" a
-	// layered window with per-pixel alpha).
-	if err := s.paint(hwnd); err != nil {
-		log.Printf("[pebble] initial paint: %v", err)
-	}
-
-	frame := time.NewTicker(16 * time.Millisecond)
-	defer frame.Stop()
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-frame.C:
-			s.pumpMessages()
-			if err := s.paint(hwnd); err != nil {
-				log.Printf("[pebble] paint: %v", err)
-			}
-		}
 	}
 }
 
@@ -512,11 +416,12 @@ const (
 	// follow math is unchanged from the smaller-window design.
 	pebbleWindowW = 460
 	pebbleWindowH = 480
-	pebbleAnchorX = 40
-	pebbleAnchorY = 28
+	// pebbleAnchorX / pebbleAnchorY are shared in pebble_core.go.
 )
 
-func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
+// createWindow creates the layered overlay window and stores its handle on the
+// service. Implements pebblePlatform; called once by runPebbleLoop.
+func (s *pebbleServiceWindows) createWindow() error {
 	className, _ := syscall.UTF16PtrFromString("JarvisPebbleOverlay")
 	windowName, _ := syscall.UTF16PtrFromString("JARVIS")
 
@@ -562,7 +467,7 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 		0,
 	)
 	if hwnd == 0 {
-		return 0, fmt.Errorf("CreateWindowExW failed: %v", err)
+		return fmt.Errorf("CreateWindowExW failed: %v", err)
 	}
 
 	// Push to topmost group (HWND_TOPMOST) — already in EX style, but
@@ -575,7 +480,8 @@ func (s *pebbleServiceWindows) createWindow() (uintptr, error) {
 	procSetWindowPos.Call(hwnd, pblHwndTopmost, 0, 0, 0, 0,
 		swpNoMove|swpNoSize|swpNoActivate|swpShowWindow)
 
-	return hwnd, nil
+	s.hwnd = hwnd
+	return nil
 }
 
 // pebbleWndProc handles WM_NCHITTEST (disc-only clicks) + WM_LBUTTONDOWN/UP
@@ -710,61 +616,16 @@ var pebbleAnswerOpenCallback atomic.Value // func(answerID string)
 //   - Paper-tone fill with a 1 px hairline border
 //   - State-specific glyph inside (idle: small ink-3 centre dot)
 //   - Subtle breathing animation (opacity oscillation, 4 s cycle)
-func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
-	cx, cy, err := platformGetCursorPos()
-	if err != nil {
-		return err
-	}
-	followFactor := pebbleFollowFactor
-	tgtX := float64(cx + s.spec.CursorOffsetX)
-	tgtY := float64(cy + s.spec.CursorOffsetY)
-	// T8 — element-pointing override. While active, the pebble eases to
-	// the fixed point instead of the cursor. We bump the follow factor
-	// so the pebble snaps to the target in ~150 ms instead of the ~500 ms
-	// the cursor-follow factor produces — gives the user more visible
-	// "stay time" at the target before the duration expires.
-	if s.pointing.Load() {
-		if time.Now().UnixMilli() >= s.pointUntilMs.Load() {
-			s.pointing.Store(false)
-			if ps, ok := s.prevState.Load().(PebbleState); ok {
-				s.state.Store(ps)
-			}
-			if pt, ok := s.prevText.Load().(string); ok {
-				s.bubbleText.Store(pt)
-			}
-		} else {
-			tgtX = float64(s.pointX.Load())
-			tgtY = float64(s.pointY.Load())
-			followFactor = pebblePointFollowFactor
-		}
-	}
-	// W6-T2 — freeze cursor follow when the user's cursor is on the disc
-	// so they can actually click without the pebble running away. We
-	// re-verify each frame using the live cursor position rather than
-	// trusting WM_NCHITTEST alone: once the cursor leaves the window
-	// entirely the OS stops sending hit-test messages, so a stale
-	// cursorOnDisc=true would keep the pebble frozen indefinitely.
-	{
-		dxDisc := cx - int(s.curX)
-		dyDisc := cy - int(s.curY)
-		onDisc := dxDisc*dxDisc+dyDisc*dyDisc <= pblDiscHitRadius*pblDiscHitRadius
-		s.cursorOnDisc.Store(onDisc)
-		if onDisc {
-			followFactor = 0
-		}
-	}
-	s.curX += (tgtX - s.curX) * followFactor
-	s.curY += (tgtY - s.curY) * followFactor
-	s.frameTick++
-
-	// Position the window so the pebble's anchor (where we draw the pebble
-	// centre) lands at (s.curX, s.curY) — the eased cursor + offset.
-	winX := int32(s.curX - pebbleAnchorX)
-	winY := int32(s.curY - pebbleAnchorY)
-	// Stash for the message thread (WM_NCHITTEST) so it can do disc-area
-	// hit-test math without racing the paint goroutine.
-	s.renderedX.Store(winX)
-	s.renderedY.Store(winY)
+//
+// present renders the current frame into a layered window at the core's
+// already-eased position. Implements pebblePlatform; runPebbleLoop calls
+// advanceFrame() (cursor-follow ease, pointing, disc-freeze, frame tick,
+// window top-left) immediately before each present.
+func (s *pebbleServiceWindows) present() error {
+	// Window top-left was computed by the shared advanceFrame() and published
+	// for the message thread; render reads it here.
+	winX := s.renderedX.Load()
+	winY := s.renderedY.Load()
 
 	// Create memory DC + 32-bit DIB
 	screenDC, _, _ := procGetDC.Call(0)
@@ -847,7 +708,7 @@ func (s *pebbleServiceWindows) paint(hwnd uintptr) error {
 	srcPt := pblPoint{X: 0, Y: 0}
 
 	r, _, _ := procUpdateLayeredWindow.Call(
-		hwnd,
+		s.hwnd,
 		screenDC,
 		uintptr(unsafe.Pointer(&winPt)),
 		uintptr(unsafe.Pointer(&winSz)),
