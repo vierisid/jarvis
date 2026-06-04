@@ -283,6 +283,10 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
     return FALSE;
 }
 
+// MIGRATION (shared runtime): REMOVE this whole tick() + its g_timeout_add.
+// The eased physics now live in pebbleCore.advanceFrame() (Go). Replace with a
+// jarvisPebblePresent(x,y,state,frameTick) that g_idle_add's a handler doing
+// gtk_window_move + gtk_widget_queue_draw at the position Go already computed.
 static gboolean tick(gpointer user_data) {
     if (!gPebbleWindow || !gPebbleArea) return G_SOURCE_REMOVE;
 
@@ -344,6 +348,9 @@ static gboolean spawn_idle(gpointer user_data) {
         cairo_region_destroy(empty);
     }
 
+    // MIGRATION (shared runtime): REMOVE this timer — runPebbleLoop (Go) ticks
+    // at 16ms and calls present() each frame. createWindow() should only create
+    // the window; the Go loop drives motion + repaint.
     gTimerId = g_timeout_add(16, tick, NULL);
     return G_SOURCE_REMOVE;
 }
@@ -409,6 +416,80 @@ import (
 	"unsafe"
 )
 
+/*
+=============================================================================
+ MIGRATION: adopt the shared pebbleCore runtime (pebble_runtime.go)  — TODO
+=============================================================================
+This Linux renderer still runs its OWN frame loop + easing inside C (the
+g_timeout_add `tick` below). It works, but it duplicates the motion + pointing
+logic that now lives once in pebbleCore.advanceFrame(). Windows is already
+migrated (pebble_overlay_windows.go); this file should follow so all three
+platforms share one loop + state machine. Nothing here is wired yet — this is
+the roadmap, with the concrete shape of the new adapter.
+
+Target (mirrors pebble_overlay_windows.go). The struct EMBEDS pebbleCore so
+field accesses promote and the shared runtime can drive them:
+
+    type pebbleServiceLinux struct {
+        pebbleCore
+        summonCallback  func()
+        paletteCallback func()
+    }
+
+    func NewPebbleService() PebbleService {
+        // Keep starting the GLib main loop on its own goroutine (gtk_main
+        // below); the shared frame loop runs on a *separate* Go thread and
+        // bridges to GTK via g_idle_add (GTK is not thread-safe).
+        s := &pebbleServiceLinux{}
+        s.state.Store(PebbleIdle); s.bubbleText.Store("")
+        go func() { C.gtk_init(nil, nil); C.gtk_main() }()
+        return s
+    }
+
+    func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
+        if !s.spawned.CompareAndSwap(false, true) { return nil }
+        s.spec = spec
+        if s.spec.CursorOffsetX == 0 && s.spec.CursorOffsetY == 0 { s.spec.CursorOffsetX, s.spec.CursorOffsetY = 22, 26 }
+        if cx, cy, err := platformGetCursorPos(); err == nil { s.curX, s.curY = float64(cx+s.spec.CursorOffsetX), float64(cy+s.spec.CursorOffsetY) }
+        s.stopCh, s.doneCh = make(chan struct{}), make(chan struct{})
+        go runPebbleLoop(&s.pebbleCore, s)
+        return nil
+    }
+
+    // pebblePlatform primitives — all GTK work marshals onto the main loop:
+    func (s *pebbleServiceLinux) createWindow() error { C.jarvisPebbleSpawn(...); return nil } // window ONLY, no timer
+    func (s *pebbleServiceLinux) pumpMessages()       {}                                       // gtk_main pumps for us
+    func (s *pebbleServiceLinux) present() error {
+        // advanceFrame() already eased + published renderedX/renderedY + frameTick.
+        C.jarvisPebblePresent(C.int(s.renderedX.Load()), C.int(s.renderedY.Load()),
+            C.int(pebbleStateInt(s.state.Load())), C.ulonglong(s.frameTick) + eye/blinded/overflow/bodyText args)
+        return nil
+    }
+    func (s *pebbleServiceLinux) destroyWindow() { C.jarvisPebbleClose() }
+
+    // SetState/SetText/PointAt/SetEye/SetBlinded/SetAnswerOverflow STOP calling
+    // C and just store onto the embedded core (s.state, s.bubbleText, s.pointing
+    // /pointX/..., s.eyeActive, ...). present() reads them each frame. This is
+    // what gives Linux PointAt + eye + blinded "for free" — ONCE draw_pebble is
+    // extended to render them (see below).
+
+C-side changes required:
+  - REMOVE `tick`'s easing + cursor read + gtk_window_move, and the
+    `g_timeout_add(16, tick, …)` in spawn_idle — the Go loop ticks now.
+  - REMOVE globals gCurX/gCurY/gFrameTick/gOffsetX/gOffsetY/gTimerId (position +
+    frame come from Go via jarvisPebblePresent).
+  - ADD `void jarvisPebblePresent(int x,int y,int state,unsigned long long tick,…)`
+    that g_idle_add's a handler doing: set gPebbleState/gFrameTick,
+    gtk_window_move(x,y), gtk_widget_queue_draw.
+  - KEEP draw_pebble (renderer) and EXTEND it for eye / blinded / answer-overflow
+    "open full" button / pointing label so it matches the Windows visual set.
+
+Hotkeys (summon/palette) + long-press blind-toggle stay platform-specific
+(hotkeys_linux.go / a GTK button-event handler) and wire into core via OnSummon
+/ OnPalette / OnBlindToggle, exactly as on Windows.
+=============================================================================
+*/
+
 type pebbleServiceLinux struct {
 	spawned        atomic.Bool
 	summonCallback func()
@@ -469,13 +550,16 @@ func (s *pebbleServiceLinux) SetText(text string) error {
 	return nil
 }
 
-// PointAt — T8 stub on Linux. The GTK pebble does its own paint loop;
-// the override-target plumbing isn't ported yet (T8b).
+// PointAt / SetEye / SetBlinded / SetAnswerOverflow — currently no-op stubs on
+// Linux. MIGRATION (shared runtime): once this file embeds pebbleCore, these
+// become one-liners that store onto the core (s.pointing/pointX/pointY/
+// pointUntilMs/prevState/prevText, s.eyeActive, s.blinded, s.answerOverflowID)
+// — identical to pebble_overlay_windows.go — and pebbleCore.advanceFrame() +
+// present() do the rest. They work "for free" once draw_pebble renders the
+// glyphs. See the migration block near the top of this file.
 func (s *pebbleServiceLinux) PointAt(_, _ int, _ string, _ int) error {
 	return nil
 }
-
-// SetEye / SetBlinded — W6 stubs on Linux. GTK draw loop port pending.
 func (s *pebbleServiceLinux) SetEye(_ bool) error              { return nil }
 func (s *pebbleServiceLinux) SetBlinded(_ bool) error          { return nil }
 func (s *pebbleServiceLinux) SetAnswerOverflow(_ string) error { return nil }
