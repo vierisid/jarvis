@@ -167,7 +167,7 @@ export class SidecarManager implements Service {
       });
 
       // Register handlers for each sidecar observer event type
-      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'pebble.summon', 'pebble.palette', 'pebble.blind_toggle', 'pebble.open_answer', 'panel.bounds_changed', 'audio.session_start', 'audio.session_end', 'audio.wake_segment', 'region.captured', 'region.cancelled', 'sub_pebble.clicked', 'sub_pebble.open_full'];
+      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'pebble.summon', 'pebble.palette', 'pebble.blind_toggle', 'pebble.open_answer', 'panel.bounds_changed', 'panel.closed', 'audio.session_start', 'audio.session_end', 'audio.wake_segment', 'region.captured', 'region.cancelled', 'sub_pebble.clicked', 'sub_pebble.open_full'];
       const sidecarEventHandler = async (sidecarId: string, event: SidecarEvent) => {
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);

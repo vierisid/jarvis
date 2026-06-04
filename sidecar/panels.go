@@ -53,13 +53,13 @@ type PanelSpec struct {
 	// to (cursor + offset). The page can pause tracking via the
 	// panel.set_follow RPC when it wants the window to stay put (e.g.
 	// while the bubble is open).
-	FollowCursor  bool        `json:"follow_cursor"`
+	FollowCursor bool `json:"follow_cursor"`
 	// CursorOffsetX/Y is the pixel offset applied to (cursor.x, cursor.y)
 	// when computing the window's top-left position. Defaults to (24, 28)
 	// when both are zero — keeps the cursor above-left of the pebble so
 	// it never sits on top of the visible pixels.
-	CursorOffsetX int         `json:"cursor_offset_x"`
-	CursorOffsetY int         `json:"cursor_offset_y"`
+	CursorOffsetX int `json:"cursor_offset_x"`
+	CursorOffsetY int `json:"cursor_offset_y"`
 	// SummonHotkey, if non-empty, registers a global OS hotkey that
 	// toggles cursor-follow on this panel and dispatches a JS callback
 	// in the page (`window.__pebble_summon` / `window.__pebble_dismiss`)
@@ -117,6 +117,12 @@ type PanelService interface {
 	// (x, y, w, h). Only called once per change; identical consecutive
 	// readings are deduped inside the poll.
 	OnBoundsChanged(cb func(id PanelID, x, y, w, h int))
+	// OnClosed registers a callback fired once when a spawned panel's window
+	// goes away — whether the user closed it or Close() was called. Lets the
+	// daemon untrack panels so its inventory doesn't accumulate stale entries.
+	// Runs from the panel's goroutine after its event loop exits; receivers
+	// should not block.
+	OnClosed(cb func(id PanelID))
 	Stop()
 }
 

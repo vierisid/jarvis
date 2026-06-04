@@ -528,6 +528,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 					log.Printf("[panels] failed to emit bounds_changed for %s: %v", id, err)
 				}
 			})
+			// Emit panel.closed when a panel window goes away (user close or
+			// Close()) so the daemon can untrack it and not accumulate stale
+			// inventory or feed phantom panels to the LLM.
+			c.panels.OnClosed(func(id PanelID) {
+				evt := SidecarEvent{
+					Type:      "sidecar_event",
+					EventType: "panel.closed",
+					Timestamp: time.Now().UnixMilli(),
+					Priority:  "low",
+					Payload: map[string]any{
+						"panel_id": string(id),
+					},
+				}
+				if err := sendFn(ctx, evt, nil); err != nil {
+					log.Printf("[panels] failed to emit panel.closed for %s: %v", id, err)
+				}
+			})
 		}
 
 		// pebble.start_listening — daemon-driven session capture (no

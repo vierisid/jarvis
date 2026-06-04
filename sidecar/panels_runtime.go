@@ -26,9 +26,10 @@ type panelImpl struct {
 // window-flag work (always-on-top, transparent, frameless, click-through) is
 // delegated to applyPlatformFlags which is implemented per OS in panels_<os>.go.
 type panelService struct {
-	mu               sync.Mutex
-	reg              *panelRegistry
-	boundsChangedCb  func(id PanelID, x, y, w, h int)
+	mu              sync.Mutex
+	reg             *panelRegistry
+	boundsChangedCb func(id PanelID, x, y, w, h int)
+	closedCb        func(id PanelID)
 }
 
 // NewPanelService constructs a PanelService that uses webview_go for window
@@ -334,6 +335,12 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
 		wv.Run() // blocks until Terminate() or window closed
 		log.Printf("[panels] spawn(%s): event loop exited", spec.ID)
+		s.mu.Lock()
+		closedCb := s.closedCb
+		s.mu.Unlock()
+		if closedCb != nil {
+			closedCb(spec.ID)
+		}
 	}()
 
 	// Wait briefly for the window to become ready so the caller knows it
@@ -461,3 +468,8 @@ func (s *panelService) OnBoundsChanged(cb func(id PanelID, x, y, w, h int)) {
 	s.mu.Unlock()
 }
 
+func (s *panelService) OnClosed(cb func(id PanelID)) {
+	s.mu.Lock()
+	s.closedCb = cb
+	s.mu.Unlock()
+}

@@ -469,6 +469,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // a second hotkey press.
       const pendingSummons = new Map<string, { cancelled: boolean }>();
 
+      // Per-sidecar guard so the wake-word handler can't race itself: a second
+      // wake segment may arrive while the first is still transcribing, before
+      // pendingSummons is claimed. Set synchronously on entry, cleared in finally.
+      const wakeInFlight = new Set<string>();
+
       // setState pairs the visual state with optional bubble body text. The
       // text wins over the per-state placeholder ("speaking…", "listening —
       // go ahead.") so we can surface the live LLM response instead of the
@@ -1464,6 +1469,40 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // adds a final safety margin.
       const palettePanelBySidecar = new Map<string, { id: string; sidecarId: string }>();
       const lastPaletteCloseAt = new Map<string, number>();
+
+      // Untrack a panel as soon as its window closes (user close button or a
+      // Close() RPC) so the inventory used for voice targeting, bounds
+      // persistence, and LLM context never points at a window that's gone.
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'panel.closed') return;
+        const payload = (event.payload ?? {}) as { panel_id?: string };
+        if (!payload.panel_id) return;
+        untrackPanel(sidecarId, payload.panel_id);
+        const pal = palettePanelBySidecar.get(sidecarId);
+        if (pal && pal.id === payload.panel_id) palettePanelBySidecar.delete(sidecarId);
+      });
+
+      // When a sidecar disconnects, drop the per-sidecar pebble/panel state it
+      // owned so the maps don't grow across reconnects and stale ids aren't
+      // dispatched to a dead connection. (spawnedOn / pendingSummons /
+      // subPebbleSlots are cleared by the dedicated handlers above.)
+      sidecarManager.onSidecarDisconnected((sidecarId) => {
+        panelsBySidecar.delete(sidecarId);
+        palettePanelBySidecar.delete(sidecarId);
+        lastPaletteCloseAt.delete(sidecarId);
+        const eyeTimer = eyeTimers.get(sidecarId);
+        if (eyeTimer) { clearTimeout(eyeTimer); eyeTimers.delete(sidecarId); }
+        const region = pendingRegionByPebble.get(sidecarId);
+        if (region) { region.ctrl.cancelled = true; pendingRegionByPebble.delete(sidecarId); }
+        // Sub-pebble bookkeeping is keyed by taskId — drop entries this sidecar owned.
+        for (const [taskId, owner] of subPebbleSidecar) {
+          if (owner === sidecarId) {
+            subPebbleSidecar.delete(taskId);
+            subPebbleExpanded.delete(taskId);
+          }
+        }
+      });
+
       const PALETTE_REOPEN_COOLDOWN_MS = 350;
       const PALETTE_W = 460;
       const PALETTE_H = 440;
@@ -2861,6 +2900,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // got JARVIS's attention via Ctrl+Space (or a prior wake).
         if (pendingSummons.has(sidecarId)) return;
         if (!pebbleSTT) return;
+        // Claim a synchronous in-flight flag before the first await so a
+        // concurrent wake segment can't start a second response cycle.
+        if (wakeInFlight.has(sidecarId)) return;
+        wakeInFlight.add(sidecarId);
+        try {
 
         const payload = (event.payload as Record<string, unknown> | undefined) ?? {};
         const binary = (event.binary as { type?: string; data?: string } | undefined);
@@ -2926,6 +2970,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           await setState(sidecarId, 'idle', '');
         } finally {
           pendingSummons.delete(sidecarId);
+        }
+
+        } finally {
+          wakeInFlight.delete(sidecarId);
         }
       });
 
