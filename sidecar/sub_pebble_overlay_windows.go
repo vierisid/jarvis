@@ -22,11 +22,9 @@ package main
 import (
 	"fmt"
 	"log"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -45,42 +43,9 @@ const (
 
 // ─────────────────────────── Service ────────────────────────────────────────
 
-type subPebbleEntry struct {
-	id       string
-	color    atomic.Value // SubPebbleColor — atomic so Failed can recolor on the fly
-	state    atomic.Value // PebbleState
-	label    atomic.Value // string  — agent name (always set at spawn; used as bubble header)
-	task     atomic.Value // string  — current task line (set lazily by daemon on expand)
-	result   atomic.Value // string  — result preview for completed/failed (set on expand)
-	elapsedS atomic.Int64 // last-known elapsed seconds for the bubble counter
-	expanded atomic.Bool  // bubble visibility
-	lastHit  atomic.Int32 // last WM_NCHITTEST resolution (subHitDisc/Button/None)
-
-	// Slot is the logical row on the rail. Mutable so close-induced reflow
-	// (Phase C2) can shift the index; paint reads it each frame so the
-	// target position updates automatically.
-	slot atomic.Int32
-
-	// Animated current position — eases toward the slot's target each frame
-	// with a 0.18 follow factor (matches the main pebble's cursor follow).
-	// Seeded from the cursor at spawn time so new sub-pebbles "fly out"
-	// from where the user summoned them rather than popping in cold.
-	// Live render + hit-test both read these atomics so clicks work mid-
-	// animation. Stored as int32 micro-degrees (×100) to keep atomic without
-	// boxing through atomic.Value — a int32 is plenty for screen coords.
-	curX atomic.Int32 // window top-left X (px)
-	curY atomic.Int32 // window top-left Y (px)
-
-	// Multi-monitor anchor (C3) — right edge of the monitor this sub-pebble
-	// was spawned on. Stable for the entry's lifetime so a user dragging
-	// the cursor to another monitor doesn't relocate existing sub-pebbles.
-	monitorRight atomic.Int32
-
-	hwnd      uintptr
-	stopCh    chan struct{}
-	doneCh    chan struct{}
-	frameTick uint64
-}
+// subPebbleEntry and the shared per-overlay run loop (eased fly-out, frame
+// ticker, lifecycle) live in sub_pebble_runtime.go. This file implements the
+// subPebblePlatform contract (window, message pump, paint, slot geometry).
 
 // Global HWND → entry registry. The WndProc is a free function that the OS
 // calls back into; this map lets it find the entry that owns the message.
@@ -161,7 +126,7 @@ func (s *subPebbleServiceWindows) Spawn(spec SubPebbleSpec) error {
 	s.items[spec.ID] = entry
 	s.mu.Unlock()
 
-	go s.runOverlay(entry)
+	go runSubPebbleOverlay(entry, s)
 	log.Printf("[sub-pebble] spawned id=%s color=%s slot=%d state=%s", spec.ID, spec.Color, spec.Slot, spec.State)
 	return nil
 }
@@ -275,47 +240,21 @@ func (s *subPebbleServiceWindows) CloseAll() error {
 	return nil
 }
 
-// ─────────────────────────── Per-overlay loop ───────────────────────────────
+// ─────────────────────────── Platform adapter ───────────────────────────────
+//
+// The per-overlay loop (eased fly-out, ticker, lifecycle) lives in
+// runSubPebbleOverlay (sub_pebble_runtime.go); Spawn launches it with this
+// service as the subPebblePlatform. The methods below are the Win32 primitives
+// it drives: createOverlayWindow / pumpMessages / paint / slotPosition /
+// destroyOverlay.
 
-// runOverlay owns one layered window for one sub-pebble. Locked to its own
-// OS thread because Win32 layered windows + GDI+ contexts are thread-affine.
-func (s *subPebbleServiceWindows) runOverlay(entry *subPebbleEntry) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	defer close(entry.doneCh)
-
-	hwnd, err := s.createOverlayWindow(entry)
-	if err != nil {
-		log.Printf("[sub-pebble] createWindow id=%s failed: %v", entry.id, err)
-		return
-	}
-	entry.hwnd = hwnd
-	// Register HWND → entry so the shared WndProc can find this entry when
-	// the OS delivers WM_NCHITTEST / WM_LBUTTONUP for this window.
-	subPebbleByHwnd.Store(hwnd, entry)
-	defer func() {
-		subPebbleByHwnd.Delete(hwnd)
-		procDestroyWindow.Call(hwnd)
+// destroyOverlay unregisters the entry's window from the hit-test registry and
+// destroys it. Called by the shared runtime when the overlay's loop exits.
+func (s *subPebbleServiceWindows) destroyOverlay(entry *subPebbleEntry) {
+	if entry.hwnd != 0 {
+		subPebbleByHwnd.Delete(entry.hwnd)
+		procDestroyWindow.Call(entry.hwnd)
 		entry.hwnd = 0
-	}()
-
-	if err := s.paint(entry); err != nil {
-		log.Printf("[sub-pebble] initial paint id=%s: %v", entry.id, err)
-	}
-
-	frame := time.NewTicker(16 * time.Millisecond)
-	defer frame.Stop()
-
-	for {
-		select {
-		case <-entry.stopCh:
-			return
-		case <-frame.C:
-			s.pumpMessages()
-			if err := s.paint(entry); err != nil {
-				log.Printf("[sub-pebble] paint id=%s: %v", entry.id, err)
-			}
-		}
 	}
 }
 
@@ -341,13 +280,6 @@ func (s *subPebbleServiceWindows) pumpMessages() {
 }
 
 // ─────────────────────────── Window creation ────────────────────────────────
-
-func absDelta(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
 
 // monitorRightUnderCursor returns the right edge X (and left edge X) of the
 // monitor that contains the current cursor position. Used at sub-pebble
@@ -434,7 +366,7 @@ func subPebbleScreenBounds() (right, top int, ok bool) {
 	return int(int32(w)), 0, true
 }
 
-func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (uintptr, error) {
+func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) error {
 	// Per-instance class isn't needed — Win32 allows N windows of the same
 	// class. Use a sub-pebble-specific class so messages don't get confused
 	// with the main pebble's class.
@@ -480,7 +412,7 @@ func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (ui
 		0,
 	)
 	if hwnd == 0 {
-		return 0, fmt.Errorf("CreateWindowExW failed: %v", err)
+		return fmt.Errorf("CreateWindowExW failed: %v", err)
 	}
 
 	const swpNoMove = 0x0002
@@ -490,7 +422,11 @@ func (s *subPebbleServiceWindows) createOverlayWindow(entry *subPebbleEntry) (ui
 	procSetWindowPos.Call(hwnd, pblHwndTopmost, 0, 0, 0, 0,
 		swpNoMove|swpNoSize|swpNoActivate|swpShowWindow)
 
-	return hwnd, nil
+	entry.hwnd = hwnd
+	// Register HWND → entry so the shared WndProc can find this entry when the
+	// OS delivers WM_NCHITTEST / WM_LBUTTONUP for this window.
+	subPebbleByHwnd.Store(hwnd, entry)
+	return nil
 }
 
 // slotPosition computes the top-left of a 360×220 layered window so that
@@ -673,24 +609,10 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 		SourceConstantAlpha: 255,
 		AlphaFormat:         acSrcAlpha,
 	}
-	// C1 — ease the animated position toward the slot target each frame.
-	// 0.18 follow factor matches the main pebble's cursor lag for a
-	// consistent visual language. When curX/Y has converged, this becomes
-	// a no-op so we're not paying for math we don't need.
-	tx, ty := s.slotPosition(entry)
-	cx := float64(entry.curX.Load())
-	cy := float64(entry.curY.Load())
-	const followFactor = 0.18
-	cx += (float64(tx) - cx) * followFactor
-	cy += (float64(ty) - cy) * followFactor
-	// Snap to target once close enough so we don't render fractional pixel
-	// jitter forever.
-	if absDelta(cx-float64(tx)) < 0.5 && absDelta(cy-float64(ty)) < 0.5 {
-		cx, cy = float64(tx), float64(ty)
-	}
-	entry.curX.Store(int32(cx))
-	entry.curY.Store(int32(cy))
-	winPt := pblPoint{X: int32(cx), Y: int32(cy)}
+	// Position is eased toward the slot target by the shared runtime
+	// (subPebbleEaseToSlot in sub_pebble_runtime.go) before each paint; here we
+	// just render at the current animated position.
+	winPt := pblPoint{X: entry.curX.Load(), Y: entry.curY.Load()}
 	winSz := pblSize{CX: pebbleWindowW, CY: pebbleWindowH}
 	srcPt := pblPoint{X: 0, Y: 0}
 
