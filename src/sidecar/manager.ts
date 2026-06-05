@@ -24,6 +24,7 @@ import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
 import { EventScheduler } from './scheduler.ts';
 import { RPCTracker } from './rpc.ts';
 import { SidecarConnection } from './connection.ts';
+import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 
 const ALG = 'ES256';
@@ -406,8 +407,8 @@ export class SidecarManager implements Service {
     // Persist connection details to DB so they're available even when offline
     const db = getDb();
     db.run(
-      `UPDATE sidecars SET last_seen_at = datetime('now'), hostname = ?, os = ?, platform = ?, capabilities = ? WHERE id = ?`,
-      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.id],
+      `UPDATE sidecars SET last_seen_at = datetime('now'), hostname = ?, os = ?, platform = ?, capabilities = ?, version = ? WHERE id = ?`,
+      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.version, sidecar.id],
     );
     console.log(`[SidecarManager] Sidecar connected: ${sidecar.name} (${sidecar.id})`);
     // Fire both listener flavours — main uses onConnect(id) for routing,
@@ -530,6 +531,38 @@ export class SidecarManager implements Service {
       try {
         const parsed = JSON.parse(message);
         if (parsed.type === 'register') {
+          const reportedVersion = typeof parsed.version === 'string' && parsed.version ? parsed.version : 'dev';
+          const verdict = classifySidecarVersion(reportedVersion);
+
+          if (verdict === 'blocked') {
+            // Hard floor: the sidecar is too old for this brain. Tell it why and
+            // close the socket. We do NOT registerConnection — an incompatible
+            // sidecar must not operate.
+            console.warn(`[SidecarManager] Rejecting sidecar ${sidecarId}: version ${reportedVersion} < required ${SIDECAR_MIN_VERSION}`);
+            try {
+              ws.send(JSON.stringify({
+                type: 'register_rejected',
+                reason: 'incompatible',
+                min: SIDECAR_MIN_VERSION,
+                your_version: reportedVersion,
+              }));
+            } catch { /* socket may already be gone */ }
+            ws.close(4001, 'sidecar version incompatible');
+            return;
+          }
+
+          if (verdict === 'suggested') {
+            // Compatible but below RECOMMENDED — accept and advise an update.
+            try {
+              ws.send(JSON.stringify({
+                type: 'register_ack',
+                update_suggested: true,
+                recommended: SIDECAR_RECOMMENDED_VERSION,
+              }));
+            } catch { /* best-effort */ }
+            console.log(`[SidecarManager] Sidecar ${sidecarId} v${reportedVersion} is below recommended ${SIDECAR_RECOMMENDED_VERSION} — update suggested`);
+          }
+
           const record = this.getSidecar(sidecarId);
           this.registerConnection({
             id: sidecarId,
@@ -537,6 +570,8 @@ export class SidecarManager implements Service {
             hostname: parsed.hostname ?? 'unknown',
             os: parsed.os ?? 'unknown',
             platform: parsed.platform ?? 'unknown',
+            version: reportedVersion,
+            updateStatus: verdict,
             capabilities: parsed.capabilities ?? [],
             unavailableCapabilities: parsed.unavailable_capabilities ?? [],
             connectedAt: new Date(),
@@ -646,6 +681,8 @@ export class SidecarManager implements Service {
       platform: conn?.platform ?? record.platform ?? undefined,
       capabilities: conn?.capabilities ?? parsedCapabilities,
       unavailable_capabilities: conn?.unavailableCapabilities,
+      version: conn?.version ?? record.version ?? undefined,
+      update_status: conn?.updateStatus,
     };
   }
 }

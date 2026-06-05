@@ -258,6 +258,10 @@ export interface SidecarInfo {
   platform?: string;
   capabilities?: string[];
   unavailable_capabilities?: Array<{ name: string; reason: string }>;
+  /** Sidecar's own (brain-decoupled) version, "dev" for local builds */
+  version?: string;
+  /** Compatibility verdict while connected: 'ok' | 'suggested' | 'dev' */
+  update_status?: "ok" | "suggested" | "blocked" | "dev";
 }
 
 export interface UserProfileQuestion {

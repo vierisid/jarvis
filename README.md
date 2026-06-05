@@ -286,6 +286,18 @@ jarvis-sidecar
 
 Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness).
 
+### Versioning & updates
+
+The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer binary from [GitHub Releases](https://github.com/vierisid/jarvis/releases) -- the `sidecar-vX.Y.Z` releases). Run `jarvis-sidecar --version` to see what you have.
+
+On connect, the brain checks the sidecar's version against its compatibility floors and surfaces the result in **Settings -> Sidecar**:
+
+- **OK** -- up to date enough; nothing to do.
+- **Update available** -- still compatible, but the brain recommends a newer sidecar; update when convenient.
+- **Update required** -- too old for this brain; the connection is refused and the sidecar logs an "update required" message. Update the sidecar and restart it.
+
+Local development builds report `dev` and are never blocked.
+
 ---
 
 ## 🧠 Core Capabilities

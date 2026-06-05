@@ -133,6 +133,21 @@ export function SidecarTab({
                 <div className="v2-set__sidecar-meta">
                   {sc.hostname && <span>{sc.hostname}</span>}
                   {sc.os && sc.platform && <span>· {sc.os}/{sc.platform}</span>}
+                  {sc.version && (
+                    <span>
+                      · v{sc.version}
+                      {sc.update_status === "suggested" && (
+                        <span style={{ color: "var(--warn)" }} title="A newer sidecar is recommended for this brain">
+                          {" "}· update available
+                        </span>
+                      )}
+                      {sc.update_status === "dev" && (
+                        <span style={{ opacity: 0.6 }} title="Unstamped local dev build — never version-blocked">
+                          {" "}· dev build
+                        </span>
+                      )}
+                    </span>
+                  )}
                   {sc.capabilities && sc.capabilities.length > 0 && (
                     <span>· {sc.capabilities.join(", ")}</span>
                   )}

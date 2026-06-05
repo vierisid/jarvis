@@ -2,9 +2,12 @@ name: Tests
 on:
   push:
     branches: ["**"]
-    tags-ignore: ["v*"]
+    tags-ignore: ["v*", "sidecar-v*"]
   pull_request:
   workflow_dispatch:
+
+env:
+  GO_VERSION: "1.23"
 
 jobs:
   test:
@@ -18,6 +21,95 @@ jobs:
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun test
       - run: bunx tsc --noEmit
+
+  # ─── Sidecar compile + test gate (cgo) ─────────────────────────
+  # The sidecar is a cgo program (webview_go + GTK overlays). The local
+  # pre-commit hook does NOT run Go, so this is the only automated guard that
+  # the sidecar still builds. Linux native + Windows mingw cross-build cover the
+  # two toolchains verifiable on a Linux runner; darwin builds on release.
+  sidecar-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sidecar/go.sum
+
+      - name: Install Linux UI libraries + mingw
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          for d in /usr/lib/*/pkgconfig; do
+            [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
+            [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
+          done
+
+      - name: Build + vet + test (linux/amd64, cgo)
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go build ./...
+          go test ./...
+
+      - name: Cross-build (windows/amd64, mingw)
+        working-directory: sidecar
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          CC: x86_64-w64-mingw32-gcc
+          CXX: x86_64-w64-mingw32-g++
+        run: |
+          set -euo pipefail
+          export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
+          go build -o /tmp/jarvis-sidecar.exe .
+
+  # ─── PR gate: a shipping sidecar change must bump sidecar/VERSION ──
+  # The sidecar versions independently of the brain (docs/PEBBLE_REVIEW... §7).
+  # Any shipping Go/helper/module change without a VERSION bump fails here.
+  sidecar-version-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Require sidecar/VERSION bump on shipping sidecar changes
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ github.base_ref }}"
+          # Full (non-shallow) fetch so the three-dot diff can find the merge base.
+          git fetch --no-tags origin "$BASE_REF"
+          CHANGED="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+
+          # Shipping = Go (non-test) + go.mod/sum + helpers. Excludes _test.go,
+          # the cross-compile shim (include/**), Makefile, VERSION itself, docs.
+          SHIP="$(printf '%s\n' "$CHANGED" \
+            | grep -E '^sidecar/(.*\.go|go\.mod|go\.sum|helpers/.*)$' \
+            | grep -v '_test\.go$' || true)"
+
+          if [ -z "$SHIP" ]; then
+            echo "No shipping sidecar changes in this PR — version bump not required."
+            exit 0
+          fi
+
+          if printf '%s\n' "$CHANGED" | grep -qx 'sidecar/VERSION'; then
+            echo "Shipping sidecar changes present and sidecar/VERSION was bumped. OK:"
+            printf '%s\n' "$SHIP"
+            exit 0
+          fi
+
+          echo "::error::Shipping sidecar code changed but sidecar/VERSION was NOT bumped."
+          echo "Changed shipping paths:"
+          printf '%s\n' "$SHIP"
+          echo "Bump sidecar/VERSION (patch=bugfix, minor=new capability, major=breaking)."
+          exit 1
 
   # Validate the macOS Vision OCR helper compiles, and publish the universal
   # Mach-O binary as an artifact so operators can grab it without cutting a

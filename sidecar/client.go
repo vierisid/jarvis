@@ -31,6 +31,7 @@ type SidecarClient struct {
 	conn            *websocket.Conn
 	reconnectDelay  time.Duration
 	stopped         bool
+	incompatible    bool // brain hard-blocked us (version < MIN); do not reconnect
 	availableCaps   []SidecarCapability
 	unavailableCaps []UnavailableCapability
 
@@ -144,6 +145,13 @@ func (c *SidecarClient) Start(ctx context.Context) {
 	for !c.stopped {
 		err := c.connectAndServe(ctx)
 		if c.stopped {
+			return
+		}
+		if c.incompatible {
+			// The brain refused us for being too old. Reconnecting would just be
+			// refused again, so stop hammering and leave the loud message up for
+			// the user running the sidecar in a terminal.
+			log.Printf("[sidecar] Not reconnecting — update the sidecar and restart.")
 			return
 		}
 		if err != nil {
@@ -635,11 +643,45 @@ func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 		Hostname:                hostname,
 		OS:                      runtime.GOOS,
 		Platform:                runtime.GOARCH,
+		Version:                 sidecarVersion,
 		Capabilities:            c.availableCaps,
 		UnavailableCapabilities: c.unavailableCaps,
 	}
-	log.Printf("[sidecar] Identified as %s (%s/%s)", msg.Hostname, msg.OS, msg.Platform)
+	log.Printf("[sidecar] Identified as %s (%s/%s) v%s", msg.Hostname, msg.OS, msg.Platform, msg.Version)
 	return c.sendJSON(ctx, msg)
+}
+
+// handleRegisterRejected processes a brain `register_rejected` control frame:
+// the connecting sidecar is below the brain's hard MIN floor. We log a loud,
+// actionable message and flag the client so the reconnect loop stops (an
+// incompatible sidecar must not operate, and retrying would only be refused).
+func (c *SidecarClient) handleRegisterRejected(data []byte) {
+	var msg struct {
+		Reason      string `json:"reason"`
+		Min         string `json:"min"`
+		YourVersion string `json:"your_version"`
+	}
+	_ = json.Unmarshal(data, &msg)
+	c.incompatible = true
+	log.Printf("[sidecar] ====================================================================")
+	log.Printf("[sidecar] INCOMPATIBLE: this brain requires sidecar >= %s, but this is %s.", msg.Min, msg.YourVersion)
+	log.Printf("[sidecar] Update the sidecar (e.g. `bun install -g @usejarvis/sidecar` or")
+	log.Printf("[sidecar] grab the latest from GitHub Releases) and restart it.")
+	log.Printf("[sidecar] ====================================================================")
+}
+
+// handleRegisterAck processes a brain `register_ack`. The brain sends one only
+// when it wants to tell us something (currently: an optional update suggestion
+// when we're between RECOMMENDED and MIN); a plain accept needs no ack.
+func (c *SidecarClient) handleRegisterAck(data []byte) {
+	var msg struct {
+		UpdateSuggested bool   `json:"update_suggested"`
+		Recommended     string `json:"recommended"`
+	}
+	_ = json.Unmarshal(data, &msg)
+	if msg.UpdateSuggested {
+		log.Printf("[sidecar] An update is available (this brain recommends sidecar >= %s; running %s). Still compatible.", msg.Recommended, sidecarVersion)
+	}
 }
 
 func (c *SidecarClient) sendCapabilitiesUpdate(ctx context.Context) error {
@@ -662,6 +704,16 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 		var req RPCRequest
 		if err := json.Unmarshal(data, &req); err != nil {
 			log.Printf("[sidecar] Invalid JSON received")
+			continue
+		}
+		// Brain-originated control frames (compatibility handshake) arrive on the
+		// same socket. Handle them before the RPC fast-path.
+		switch req.Type {
+		case "register_rejected":
+			c.handleRegisterRejected(data)
+			return fmt.Errorf("registration rejected by brain")
+		case "register_ack":
+			c.handleRegisterAck(data)
 			continue
 		}
 		if req.Type != "rpc_request" {

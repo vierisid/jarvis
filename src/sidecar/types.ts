@@ -4,6 +4,8 @@
  * Types for the brain-side sidecar management system.
  */
 
+import type { SidecarUpdateStatus } from './compat.ts';
+
 /** Capabilities a sidecar can advertise */
 export type SidecarCapability =
   | 'terminal'
@@ -41,6 +43,8 @@ export interface SidecarRecord {
   platform: string | null;
   /** JSON-encoded SidecarCapability[] — populated after first connection */
   capabilities: string | null;
+  /** Sidecar's own semver, reported on register ("dev" for local builds) */
+  version: string | null;
 }
 
 /** JWT claims for a sidecar enrollment token */
@@ -67,6 +71,8 @@ export interface SidecarRegistration {
   hostname: string;
   os: string;
   platform: string;
+  /** Sidecar's own semver ("dev" for unstamped local builds) */
+  version?: string;
   capabilities: SidecarCapability[];
   unavailable_capabilities?: UnavailableCapability[];
 }
@@ -85,6 +91,10 @@ export interface ConnectedSidecar {
   hostname: string;
   os: string;
   platform: string;
+  /** Sidecar's own semver reported on register ("dev" for local builds) */
+  version: string;
+  /** Compatibility verdict the brain reached at register (never 'blocked' here — blocked sidecars never register) */
+  updateStatus: SidecarUpdateStatus;
   capabilities: SidecarCapability[];
   unavailableCapabilities: UnavailableCapability[];
   connectedAt: Date;
@@ -112,4 +122,8 @@ export interface SidecarInfo {
   platform?: string;
   capabilities?: SidecarCapability[];
   unavailable_capabilities?: UnavailableCapability[];
+  /** Sidecar's own semver (from the last connection; persisted) */
+  version?: string;
+  /** Compatibility verdict (only while connected): 'ok' | 'suggested' | 'dev' */
+  update_status?: SidecarUpdateStatus;
 }

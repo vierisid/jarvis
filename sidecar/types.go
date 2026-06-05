@@ -83,10 +83,14 @@ type SidecarEvent struct {
 
 // SidecarRegistration is sent on connect.
 type SidecarRegistration struct {
-	Type                    string                  `json:"type"`
-	Hostname                string                  `json:"hostname"`
-	OS                      string                  `json:"os"`
-	Platform                string                  `json:"platform"`
+	Type     string `json:"type"`
+	Hostname string `json:"hostname"`
+	OS       string `json:"os"`
+	Platform string `json:"platform"`
+	// Version is the sidecar's own semver (sidecarVersion, "dev" for unstamped
+	// local builds). The brain classifies it against its MIN/RECOMMENDED floors
+	// to accept / suggest-update / hard-block on register.
+	Version                 string                  `json:"version"`
 	Capabilities            []SidecarCapability     `json:"capabilities"`
 	UnavailableCapabilities []UnavailableCapability `json:"unavailable_capabilities,omitempty"`
 }

@@ -668,6 +668,9 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_name ON sidecars(name)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_token_id ON sidecars(token_id)`);
+  // Sidecar's own (brain-decoupled) version, reported on register. Added later;
+  // ALTER in try/catch is the migration pattern used throughout this file.
+  try { db.run('ALTER TABLE sidecars ADD COLUMN version TEXT'); } catch { /* already present */ }
 
   // Settings table: key-value store for dashboard-managed configuration
   db.run(`

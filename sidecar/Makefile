@@ -1,7 +1,10 @@
 MODULE   := github.com/jarvis/sidecar
-VERSION  := 0.1.0
+# Single source of truth for the sidecar's own (brain-decoupled) version. The
+# VERSION file is read here and injected into the binary via -X; CI asserts the
+# `sidecar-v*` release tag matches it.
+VERSION  := $(shell cat VERSION 2>/dev/null || echo dev)
 BIN_NAME := jarvis-sidecar
-LDFLAGS  := -s -w
+LDFLAGS  := -s -w -X main.sidecarVersion=$(VERSION)
 
 PLATFORMS := \
 	darwin/arm64 \
@@ -132,9 +135,10 @@ npm-publish: npm-pack
 	@echo "Publishing main package..."
 	cd npm/jarvis-sidecar && npm publish --access public
 
-# Update version across all package.json files
+# Update version across the VERSION file (source of truth) + all package.json
 set-version:
 	@if [ -z "$(V)" ]; then echo "Usage: make set-version V=0.2.0"; exit 1; fi
+	@printf '%s\n' "$(V)" > VERSION
 	@for f in npm/*/package.json; do \
 		sed -i 's/"version": ".*"/"version": "$(V)"/' $$f; \
 	done
