@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import { Activity, AlertCircle, BarChart3, Calendar, Filter, RefreshCw, X, type LucideIcon } from "lucide-react";
 import { Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
+import { MultiSelectDropdown } from "./MultiSelectDropdown";
 import {
   useUsageData,
   type UsageFilters,
@@ -161,24 +162,36 @@ function FilterBar({ data }: { data: ReturnType<typeof useUsageData> }) {
         onToggle={(v) => toggleListFilter("tiers", v)}
         renderLabel={(v) => TIER_LABELS[v] ?? v}
       />
-      <ChipFilterRow
-        label="Model"
-        options={options?.models ?? []}
-        selected={filters.models}
-        onToggle={(v) => toggleListFilter("models", v)}
-      />
-      <ChipFilterRow
-        label="Task"
-        options={options?.subsystems ?? []}
-        selected={filters.subsystems}
-        onToggle={(v) => toggleListFilter("subsystems", v)}
-      />
-      <ChipFilterRow
-        label="Provider"
-        options={options?.providers ?? []}
-        selected={filters.providers}
-        onToggle={(v) => toggleListFilter("providers", v)}
-      />
+
+      {/*
+        Model / Task / Provider lists can grow large (20+ entries on a
+        well-used daemon). Render them as dropdowns instead of chip rows so
+        the filter bar stays scannable. Each dropdown self-hides when its
+        option list is empty.
+      */}
+      <div className="v2-usage__filter-row">
+        <MultiSelectDropdown
+          label="Model"
+          options={options?.models ?? []}
+          selected={filters.models}
+          onToggle={(v) => toggleListFilter("models", v)}
+          onClear={() => setFilter("models", [])}
+        />
+        <MultiSelectDropdown
+          label="Task"
+          options={options?.subsystems ?? []}
+          selected={filters.subsystems}
+          onToggle={(v) => toggleListFilter("subsystems", v)}
+          onClear={() => setFilter("subsystems", [])}
+        />
+        <MultiSelectDropdown
+          label="Provider"
+          options={options?.providers ?? []}
+          selected={filters.providers}
+          onToggle={(v) => toggleListFilter("providers", v)}
+          onClear={() => setFilter("providers", [])}
+        />
+      </div>
 
       <div className="v2-usage__filter-row">
         <label className="v2-usage__check">
