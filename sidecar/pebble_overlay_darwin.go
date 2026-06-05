@@ -2,18 +2,22 @@
 
 package main
 
-// Native pebble overlay — macOS.
+// Native pebble overlay — macOS (AppKit NSWindow + NSView, Core Graphics).
 //
-// W2-T11: mirror of pebble_overlay_windows.go using AppKit NSWindow + NSView
-// with Core Graphics drawing. NSWindow has true OS-level transparency
-// natively (clear backgroundColor + isOpaque=false), so no per-pixel-alpha
-// gymnastics are needed — we just override drawRect: and paint with
-// CGContext primitives.
+// W2-T11: mirror of pebble_overlay_windows.go / pebble_overlay_linux.go.
+// NSWindow has true OS-level transparency natively (clear backgroundColor +
+// isOpaque=false), so we just override drawRect: and paint with CGContext.
 //
-// IMPORTANT: AppKit windows + drawing are MAIN THREAD ONLY. The cgo bridge
-// here uses dispatch_async(dispatch_get_main_queue(), ...) for everything
-// that touches NSApp/NSWindow. The pebble's run goroutine pumps a 60fps
-// timer that schedules a redraw on the main thread.
+// Motion + state + the [POINT:..] machine + lifecycle live in the shared
+// pebbleCore runtime (pebble_runtime.go); the frame loop runs on its own
+// goroutine and pushes each eased frame here via jarvisPebblePresent. This file
+// owns only the native window + drawing.
+//
+// IMPORTANT: AppKit windows + drawing are MAIN THREAD ONLY. The cgo bridge here
+// marshals everything that touches NSApp/NSWindow onto the main queue via
+// dispatch_async(dispatch_get_main_queue(), ...). The process's Cocoa main
+// runloop must be running for those blocks to drain (the panels webview service
+// arranges that on macOS, as it did before this migration).
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
@@ -24,22 +28,23 @@ package main
 #include <string.h>
 #include <stdlib.h>
 
-// Forward declaration so the Objective-C category can call back into Go.
-void jarvisPebbleSummonCallback(void);
-
 // Global state shared across the AppKit objects (one pebble per process).
+// Position/easing/offset moved to pebbleCore (Go) — no gCurX/gCurY/gOffset/
+// gTimer here anymore. State + frame tick are pushed every frame by
+// jarvisPebblePresent (the shared Go runtime drives motion); drawRect: reads them.
 static NSWindow*  gPebbleWindow      = nil;
 static NSView*    gPebbleView        = nil;
-static NSTimer*   gPebbleTimer       = nil;
 static int        gPebbleState       = 0; // 0=idle, 1=listening, 2=thinking, 3=speaking, 4=working
-static int        gOffsetX           = 22;
-static int        gOffsetY           = 26;
-static double     gCurX              = 0;
-static double     gCurY              = 0;
 static unsigned long long gFrameTick = 0;
+// Awareness/answer indicators pushed each frame (§5.3): gEye = awareness/OCR
+// firing, gBlinded = awareness hard-paused (struck-through eye), gAnswerOverflow
+// = the speaking bubble should show the "open full" button.
+static int        gEye               = 0;
+static int        gBlinded           = 0;
+static int        gAnswerOverflow    = 0;
 // gPebbleBodyText is the dynamic bubble copy (the live LLM transcript while
-// speaking). Empty falls back to the per-state placeholder ("speaking…",
-// "listening — go ahead.").
+// speaking). nil falls back to the per-state placeholder ("speaking…",
+// "listening — go ahead."). ARC manages the strong reference.
 static NSString*  gPebbleBodyText    = nil;
 
 // Riso colours (matched to the Windows pipeline / mock).
@@ -54,6 +59,69 @@ static const CGFloat kWindowW = 360.0;
 static const CGFloat kWindowH = 220.0;
 static const CGFloat kAnchorX = 40.0;
 static const CGFloat kAnchorY = 28.0;
+
+// draw_eye_cg paints the awareness eye (§5.3): lens outline + iris dot (pulses
+// while awareness fires), muted + struck-through when blinded. Mirrors the
+// Windows drawEyeGlyph / Linux draw_eye_glyph. Drawn on top of the state glyph.
+static void draw_eye_cg(CGContextRef ctx) {
+    if (!gEye && !gBlinded) return;
+    CGFloat ex = kAnchorX + 14.0, ey = kAnchorY - 10.0;
+    const CGFloat lensR = 4.5, irisR = 1.4;
+    CGFloat r, g, b;
+    if (gBlinded) { r = kInk3R; g = kInk3G; b = kInk3B; }
+    else          { r = kAccR;  g = kAccG;  b = kAccB;  }
+
+    CGContextSetRGBStrokeColor(ctx, r, g, b, 220/255.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextStrokeEllipseInRect(ctx, CGRectMake(ex-lensR, ey-lensR, lensR*2, lensR*2));
+
+    CGFloat irisA = 220/255.0;
+    if (gEye && !gBlinded) {
+        int cf = 75;
+        double ph = (double)(gFrameTick % cf) / cf;
+        double v = ph * 2; if (v > 1) v = 2 - v;
+        irisA = (178 + 77*v) / 255.0;
+    }
+    CGContextSetRGBFillColor(ctx, r, g, b, irisA);
+    CGContextFillEllipseInRect(ctx, CGRectMake(ex-irisR, ey-irisR, irisR*2, irisR*2));
+
+    if (gBlinded) {
+        CGContextSetRGBStrokeColor(ctx, kAccR, kAccG, kAccB, 1.0);
+        CGContextSetLineWidth(ctx, 1.0);
+        CGContextMoveToPoint(ctx, ex - lensR - 1.5, ey + lensR + 1.5);
+        CGContextAddLineToPoint(ctx, ex + lensR + 1.5, ey - lensR - 1.5);
+        CGContextStrokePath(ctx);
+    }
+}
+
+// draw_answer_cg paints the "open full ↗" overflow button at the bubble's
+// bottom-right (§5.3). by1 is the auto-fitted bubble bottom.
+static void draw_answer_cg(CGContextRef ctx, CGFloat by1, BOOL speaking) {
+    const CGFloat btnW = 108, btnH = 22, insetR = 10, insetB = 8, kBubbleX1 = 340;
+    CGFloat bxL = kBubbleX1 - insetR - btnW;
+    CGFloat byTop = by1 - insetB - btnH;
+    CGFloat tr = speaking ? kPaperR : kAccR;
+    CGFloat tg = speaking ? kPaperG : kAccG;
+    CGFloat tb = speaking ? kPaperB : kAccB;
+
+    CGRect rect = CGRectMake(bxL, byTop, btnW, btnH);
+    CGPathRef fillPath = CGPathCreateWithRoundedRect(rect, 5.0, 5.0, NULL);
+    CGContextAddPath(ctx, fillPath);
+    CGContextSetRGBFillColor(ctx, tr, tg, tb, speaking ? 32/255.0 : 36/255.0);
+    CGContextFillPath(ctx);
+    CGContextAddPath(ctx, fillPath);
+    CGContextSetRGBStrokeColor(ctx, tr, tg, tb, speaking ? 200/255.0 : 220/255.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextStrokePath(ctx);
+    CGPathRelease(fillPath);
+
+    NSDictionary* attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:tr green:tg blue:tb alpha:1.0],
+    };
+    NSAttributedString* label = [[NSAttributedString alloc] initWithString:@"open full ↗" attributes:attrs];
+    [label drawAtPoint:NSMakePoint(bxL + 12, byTop + 5)];
+}
 
 @interface JarvisPebbleView : NSView
 @end
@@ -96,6 +164,7 @@ static const CGFloat kAnchorY = 28.0;
         CGFloat dotAlpha = 0.5 + 0.5*breathe;
         CGContextSetRGBFillColor(ctx, kInk3R, kInk3G, kInk3B, dotAlpha);
         CGContextFillEllipseInRect(ctx, CGRectMake(cx-dotR, cy-dotR, dotR*2, dotR*2));
+        draw_eye_cg(ctx);
         return;
     }
 
@@ -239,6 +308,8 @@ static const CGFloat kAnchorY = 28.0;
         [body drawWithRect:NSMakeRect(kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawHeight)
                    options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
                    context:nil];
+        if (gAnswerOverflow) draw_answer_cg(ctx, by1, speaking);
+        draw_eye_cg(ctx);
         return;
     }
 
@@ -273,6 +344,7 @@ static const CGFloat kAnchorY = 28.0;
             CGContextSetRGBFillColor(ctx, kInk3R, kInk3G, kInk3B, alpha);
             CGContextFillEllipseInRect(ctx, CGRectMake(startX+i*dotGap-dotR, cy+dy-dotR, dotR*2, dotR*2));
         }
+        draw_eye_cg(ctx);
         return;
     }
 
@@ -299,47 +371,17 @@ static const CGFloat kAnchorY = 28.0;
         CGFloat dotR = 2.5 * pulse;
         CGContextSetRGBFillColor(ctx, kWarmR, kWarmG, kWarmB, 1.0);
         CGContextFillEllipseInRect(ctx, CGRectMake(cx-pillW+5-dotR, cy-dotR, dotR*2, dotR*2));
+        draw_eye_cg(ctx);
         return;
     }
+    draw_eye_cg(ctx);
 }
 @end
 
-// Schedule a frame: poll cursor, ease, reposition window, redraw view.
-// MIGRATION (shared runtime): REMOVE the easing + cursor read below. The Go
-// pebbleCore.advanceFrame() computes the eased top-left; replace this with a
-// jarvisPebblePresent(x,y,state,frameTick) that sets gPebbleState/gFrameTick,
-// setFrameOrigin (KEEP the bottom-left Y-flip from gCurY -> screenH-…), and
-// setNeedsDisplay — all inside dispatch_async(dispatch_get_main_queue(),…).
-static void jarvisPebbleTick(void) {
-    if (!gPebbleWindow || !gPebbleView) return;
-    NSPoint mouse = [NSEvent mouseLocation];
-    // mouseLocation is in screen coords with bottom-left origin; flip to top-left.
-    NSScreen* main = [[NSScreen screens] firstObject];
-    CGFloat screenH = main ? main.frame.size.height : 0;
-    double cursorScreenX = mouse.x;
-    double cursorScreenYFlipped = screenH - mouse.y;
-
-    double tgtX = cursorScreenX + gOffsetX;
-    double tgtY = cursorScreenYFlipped + gOffsetY;
-    const double followFactor = 0.18;
-    gCurX += (tgtX - gCurX) * followFactor;
-    gCurY += (tgtY - gCurY) * followFactor;
-    gFrameTick++;
-
-    // Convert window's top-left target back to bottom-left frame origin.
-    NSPoint topLeft = NSMakePoint(gCurX - kAnchorX, screenH - (gCurY - kAnchorY));
-    NSRect frame = [gPebbleWindow frame];
-    NSPoint origin = NSMakePoint(topLeft.x, topLeft.y - frame.size.height);
-    [gPebbleWindow setFrameOrigin:origin];
-
-    [gPebbleView setNeedsDisplay:YES];
-}
-
-// Called from the Go side via the cgo bridge — runs on main thread.
-static void jarvisPebbleSpawnImpl(int offsetX, int offsetY) {
+// jarvisPebbleSpawnImpl creates the overlay window only — the shared Go loop
+// drives motion + repaint via jarvisPebblePresent. Runs on the main thread.
+static void jarvisPebbleSpawnImpl(void) {
     if (gPebbleWindow != nil) return;
-    gOffsetX = offsetX;
-    gOffsetY = offsetY;
 
     NSRect frame = NSMakeRect(0, 0, kWindowW, kWindowH);
     gPebbleWindow = [[NSWindow alloc] initWithContentRect:frame
@@ -361,68 +403,63 @@ static void jarvisPebbleSpawnImpl(int offsetX, int offsetY) {
     gPebbleView = [[JarvisPebbleView alloc] initWithFrame:frame];
     [gPebbleWindow setContentView:gPebbleView];
 
-    // Seed position at cursor + offset.
-    NSPoint mouse = [NSEvent mouseLocation];
+    [gPebbleWindow makeKeyAndOrderFront:nil];
+    // No NSTimer — runPebbleLoop (Go) ticks at 16ms and calls present() each
+    // frame, which dispatch_async's jarvisPebblePresentImpl onto the main queue.
+}
+
+// jarvisPebblePresentImpl applies one eased frame on the main thread: the shared
+// Go runtime already eased the position (x,y in top-left space) and bumped the
+// frame tick; we push state/tick/text, convert to the bottom-left window origin
+// (Y-flip), and redraw.
+static void jarvisPebblePresentImpl(int x, int y, int state, unsigned long long tick,
+                                    int eye, int blinded, int answerOverflow, NSString* body) {
+    if (!gPebbleWindow || !gPebbleView) return;
+    gPebbleState = state;
+    gFrameTick = tick;
+    gEye = eye;
+    gBlinded = blinded;
+    gAnswerOverflow = answerOverflow;
+    gPebbleBodyText = body; // ARC: nil clears, otherwise retains
+
+    // advanceFrame() publishes renderedX/renderedY in the SAME top-left space
+    // platformGetCursorPos() returns. macOS windows use a bottom-left origin,
+    // so flip Y: origin.y = screenH - y - windowHeight (matches the old tick's
+    // `screenH - (gCurY - kAnchorY) - frameH`, fed from Go's renderedX/Y).
     NSScreen* main = [[NSScreen screens] firstObject];
     CGFloat screenH = main ? main.frame.size.height : 0;
-    gCurX = mouse.x + offsetX;
-    gCurY = (screenH - mouse.y) + offsetY;
+    NSRect wframe = [gPebbleWindow frame];
+    NSPoint origin = NSMakePoint((CGFloat)x, screenH - (CGFloat)y - wframe.size.height);
+    [gPebbleWindow setFrameOrigin:origin];
 
-    [gPebbleWindow makeKeyAndOrderFront:nil];
-
-    // 60fps timer to repaint + reposition.
-    // MIGRATION (shared runtime): REMOVE this NSTimer — runPebbleLoop (Go) ticks
-    // at 16ms and calls present() each frame. createWindow() should only create
-    // the window; the Go loop drives motion + repaint via jarvisPebblePresent.
-    gPebbleTimer = [NSTimer scheduledTimerWithTimeInterval:1.0/60.0
-                                                    target:[NSBlockOperation blockOperationWithBlock:^{
-                                                        jarvisPebbleTick();
-                                                    }]
-                                                  selector:@selector(main)
-                                                  userInfo:nil
-                                                   repeats:YES];
-}
-
-static void jarvisPebbleSetStateImpl(int state) {
-    gPebbleState = state;
-    if (gPebbleView) [gPebbleView setNeedsDisplay:YES];
-}
-
-static void jarvisPebbleSetTextImpl(const char* utf8) {
-    if (utf8 == NULL) {
-        gPebbleBodyText = nil;
-    } else {
-        gPebbleBodyText = [NSString stringWithUTF8String:utf8];
-    }
-    if (gPebbleView) [gPebbleView setNeedsDisplay:YES];
+    [gPebbleView setNeedsDisplay:YES];
 }
 
 static void jarvisPebbleCloseImpl(void) {
-    if (gPebbleTimer) {
-        [gPebbleTimer invalidate];
-        gPebbleTimer = nil;
-    }
     if (gPebbleWindow) {
         [gPebbleWindow orderOut:nil];
         gPebbleWindow = nil;
     }
     gPebbleView = nil;
+    gPebbleBodyText = nil;
 }
 
 // Public C entry points marshalled onto the main thread.
-void jarvisPebbleSpawn(int offsetX, int offsetY) {
-    dispatch_async(dispatch_get_main_queue(), ^{ jarvisPebbleSpawnImpl(offsetX, offsetY); });
+
+// jarvisPebbleSpawn creates the window only.
+void jarvisPebbleSpawn(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ jarvisPebbleSpawnImpl(); });
 }
 
-void jarvisPebbleSetState(int state) {
-    dispatch_async(dispatch_get_main_queue(), ^{ jarvisPebbleSetStateImpl(state); });
-}
-
-void jarvisPebbleSetText(const char* utf8) {
+// jarvisPebblePresent pushes one eased frame from the Go runtime. text may be
+// NULL/empty (drawRect: falls back to the per-state placeholder).
+void jarvisPebblePresent(int x, int y, int state, unsigned long long tick,
+                         int eye, int blinded, int answerOverflow, const char* text) {
     // Copy onto the heap so the Go-side buffer can be freed immediately.
-    char* copy = utf8 ? strdup(utf8) : NULL;
+    char* copy = (text && *text) ? strdup(text) : NULL;
     dispatch_async(dispatch_get_main_queue(), ^{
-        jarvisPebbleSetTextImpl(copy);
+        NSString* body = copy ? [NSString stringWithUTF8String:copy] : nil;
+        jarvisPebblePresentImpl(x, y, state, tick, eye, blinded, answerOverflow, body);
         if (copy) free(copy);
     });
 }
@@ -434,175 +471,144 @@ void jarvisPebbleClose(void) {
 import "C"
 
 import (
-	"sync/atomic"
+	"log"
 	"unsafe"
 )
 
-/*
-=============================================================================
- MIGRATION: adopt the shared pebbleCore runtime (pebble_runtime.go)  — TODO
-=============================================================================
-This macOS renderer still runs its OWN frame loop + easing inside C (the
-NSTimer `tick` below). It works, but duplicates the motion + pointing logic now
-centralised in pebbleCore.advanceFrame(). Windows is already migrated
-(pebble_overlay_windows.go); this file should follow. Nothing is wired yet —
-this is the roadmap. The shape matches the Linux migration note
-(pebble_overlay_linux.go); the only differences are the Cocoa bridge and the
-coordinate flip.
-
-Target. The struct EMBEDS pebbleCore (fields promote; the shared runtime drives
-them):
-
-    type pebbleServiceDarwin struct {
-        pebbleCore
-        summonCallback  func()
-        paletteCallback func()
-    }
-
-    func NewPebbleService() PebbleService {
-        s := &pebbleServiceDarwin{}
-        s.state.Store(PebbleIdle); s.bubbleText.Store("")
-        return s
-    }
-    func (s *pebbleServiceDarwin) Spawn(spec PebbleSpec) error {
-        if !s.spawned.CompareAndSwap(false, true) { return nil }
-        s.spec = spec
-        if s.spec.CursorOffsetX == 0 && s.spec.CursorOffsetY == 0 { s.spec.CursorOffsetX, s.spec.CursorOffsetY = 22, 26 }
-        if cx, cy, err := platformGetCursorPos(); err == nil { s.curX, s.curY = float64(cx+s.spec.CursorOffsetX), float64(cy+s.spec.CursorOffsetY) }
-        s.stopCh, s.doneCh = make(chan struct{}), make(chan struct{})
-        go runPebbleLoop(&s.pebbleCore, s)
-        return nil
-    }
-
-    // pebblePlatform primitives — all AppKit work marshals to the main queue:
-    func (s *pebbleServiceDarwin) createWindow() error { C.jarvisPebbleSpawn(...); return nil } // window ONLY, no NSTimer
-    func (s *pebbleServiceDarwin) pumpMessages()       {}                                       // the Cocoa runloop pumps for us
-    func (s *pebbleServiceDarwin) present() error {
-        C.jarvisPebblePresent(C.int(s.renderedX.Load()), C.int(s.renderedY.Load()),
-            C.int(pebbleStateInt(s.state.Load())), C.ulonglong(s.frameTick) + eye/blinded/overflow/bodyText args)
-        return nil
-    }
-    func (s *pebbleServiceDarwin) destroyWindow() { C.jarvisPebbleClose() }
-
-    // SetState/SetText/PointAt/SetEye/SetBlinded/SetAnswerOverflow STOP calling
-    // C and just store onto the embedded core; present() reads it each frame.
-
-C-side changes required:
-  - REMOVE the NSTimer (`gPebbleTimer = [NSTimer scheduledTimerWithTimeInterval
-    :1.0/60.0 …]`) and the `tick`'s easing + cursor read + setFrameOrigin.
-  - REMOVE globals gCurX/gCurY/gFrameTick/gOffsetX/gOffsetY/gPebbleTimer.
-  - ADD `void jarvisPebblePresent(int x,int y,int state,unsigned long long tick,…)`
-    that dispatch_async(dispatch_get_main_queue(), ^{ … }) does: set
-    gPebbleState/gFrameTick, [gPebbleWindow setFrameOrigin:…], [view setNeedsDisplay:YES].
-  - KEEP drawRect: (renderer) and EXTEND it for eye / blinded / answer-overflow /
-    pointing label.
-
-⚠ COORDINATE GOTCHA: advanceFrame() publishes renderedX/renderedY in the SAME
-top-left space that platformGetCursorPos() returns. macOS windows use a
-bottom-left origin, so jarvisPebblePresent must flip Y when computing
-setFrameOrigin (the old tick did `screenH - (gCurY - kAnchorY)` — keep that
-conversion, just fed from Go's renderedX/renderedY instead of gCurX/gCurY).
-Verify platformGetCursorPos (panels_darwin.go) and the flip agree before
-trusting on-screen position.
-
-Hotkeys (summon/palette) + long-press blind-toggle stay platform-specific
-(hotkeys_darwin.go / an NSView mouse handler) and wire into core via OnSummon
-/ OnPalette / OnBlindToggle, as on Windows.
-=============================================================================
-*/
-
+// pebbleServiceDarwin is the AppKit adapter for the shared pebbleCore runtime
+// (pebble_runtime.go). The shared loop owns motion + state + lifecycle; this
+// file owns only the native window + drawing (the cgo block above) and bridges
+// each frame onto the Cocoa main queue.
 type pebbleServiceDarwin struct {
-	spawned        atomic.Bool
-	summonCallback func()
+	pebbleCore
+	summonCallback    func()
+	paletteCallback   func()
+	hotkeyStop        func() // summon hotkey listener stop
+	paletteHotkeyStop func() // palette hotkey listener stop
 }
 
 func NewPebbleService() PebbleService {
-	return &pebbleServiceDarwin{}
+	// Unlike Linux (which spins its own gtk_main goroutine), macOS relies on the
+	// process's existing Cocoa main runloop (arranged by the panels webview
+	// service) to drain the dispatch_async(main_queue) blocks. No loop to spin
+	// up here.
+	s := &pebbleServiceDarwin{}
+	s.state.Store(PebbleIdle)
+	s.bubbleText.Store("")
+	return s
 }
 
 func (s *pebbleServiceDarwin) Spawn(spec PebbleSpec) error {
 	if !s.spawned.CompareAndSwap(false, true) {
 		return nil
 	}
-	ox := spec.CursorOffsetX
-	oy := spec.CursorOffsetY
-	if ox == 0 && oy == 0 {
-		ox, oy = 22, 26
+	s.spec = spec
+	if s.spec.CursorOffsetX == 0 && s.spec.CursorOffsetY == 0 {
+		s.spec.CursorOffsetX, s.spec.CursorOffsetY = 22, 26
 	}
-	C.jarvisPebbleSpawn(C.int(ox), C.int(oy))
+	// Seed the eased position at the cursor so the pebble doesn't fly in from
+	// the screen corner on the first frame.
+	if cx, cy, err := platformGetCursorPos(); err == nil {
+		s.curX = float64(cx + s.spec.CursorOffsetX)
+		s.curY = float64(cy + s.spec.CursorOffsetY)
+	}
+	s.stopCh = make(chan struct{})
+	s.doneCh = make(chan struct{})
+	go runPebbleLoop(&s.pebbleCore, s)
+
+	// Global hotkeys (§5.4): summon + palette. macOS needs Accessibility trust;
+	// a failed/unfired grab is non-fatal.
+	if s.spec.SummonHotkey != "" {
+		if stop, err := startHotkeyListener(s.spec.SummonHotkey, func() {
+			if s.summonCallback != nil {
+				s.summonCallback()
+			}
+		}); err != nil {
+			log.Printf("[pebble] summon hotkey %q not registered: %v", s.spec.SummonHotkey, err)
+		} else {
+			s.hotkeyStop = stop
+			log.Printf("[pebble] summon hotkey %q registered", s.spec.SummonHotkey)
+		}
+	}
+	if s.spec.PaletteHotkey != "" {
+		if stop, err := startHotkeyListener(s.spec.PaletteHotkey, func() {
+			if s.paletteCallback != nil {
+				s.paletteCallback()
+			}
+		}); err != nil {
+			log.Printf("[pebble] palette hotkey %q not registered: %v", s.spec.PaletteHotkey, err)
+		} else {
+			s.paletteHotkeyStop = stop
+			log.Printf("[pebble] palette hotkey %q registered", s.spec.PaletteHotkey)
+		}
+	}
 	return nil
 }
 
-func (s *pebbleServiceDarwin) SetState(state PebbleState) error {
-	var i C.int
-	switch state {
-	case PebbleListening:
-		i = 1
-	case PebbleThinking:
-		i = 2
-	case PebbleSpeaking:
-		i = 3
-	case PebbleWorking:
-		i = 4
-	default:
-		i = 0
+// ─── pebblePlatform primitives (all AppKit work marshals to the main queue) ──
+
+func (s *pebbleServiceDarwin) createWindow() error { C.jarvisPebbleSpawn(); return nil }
+func (s *pebbleServiceDarwin) pumpMessages()       {} // the Cocoa runloop pumps for us
+
+func (s *pebbleServiceDarwin) present() error {
+	// advanceFrame() already eased + published renderedX/renderedY + frameTick.
+	state, _ := s.state.Load().(PebbleState)
+	text, _ := s.bubbleText.Load().(string)
+	var cstr *C.char
+	if text != "" {
+		cstr = C.CString(text)
+		defer C.free(unsafe.Pointer(cstr))
 	}
-	C.jarvisPebbleSetState(i)
+	answerID, _ := s.answerOverflowID.Load().(string)
+	C.jarvisPebblePresent(
+		C.int(s.renderedX.Load()), C.int(s.renderedY.Load()),
+		C.int(pebbleStateToInt(state)), C.ulonglong(s.frameTick),
+		pebbleBoolToCInt(s.eyeActive.Load()), pebbleBoolToCInt(s.blinded.Load()),
+		pebbleBoolToCInt(answerID != ""), cstr,
+	)
 	return nil
 }
 
-func (s *pebbleServiceDarwin) SetText(text string) error {
-	if text == "" {
-		C.jarvisPebbleSetText(nil)
-		return nil
+// pebbleBoolToCInt maps a Go bool to the 0/1 C.int the renderer flags expect.
+func pebbleBoolToCInt(b bool) C.int {
+	if b {
+		return 1
 	}
-	cstr := C.CString(text)
-	defer C.free(unsafe.Pointer(cstr))
-	C.jarvisPebbleSetText(cstr)
-	return nil
+	return 0
 }
 
-// PointAt / SetEye / SetBlinded / SetAnswerOverflow — currently no-op stubs on
-// macOS. MIGRATION (shared runtime): once this file embeds pebbleCore, these
-// become one-liners that store onto the core (s.pointing/pointX/pointY/
-// pointUntilMs/prevState/prevText, s.eyeActive, s.blinded, s.answerOverflowID)
-// — identical to pebble_overlay_windows.go — and pebbleCore.advanceFrame() +
-// present() do the rest, once drawRect: renders the glyphs. See the migration
-// block near the top of this file.
-func (s *pebbleServiceDarwin) PointAt(_, _ int, _ string, _ int) error {
-	return nil
-}
-func (s *pebbleServiceDarwin) SetEye(_ bool) error              { return nil }
-func (s *pebbleServiceDarwin) SetBlinded(_ bool) error          { return nil }
-func (s *pebbleServiceDarwin) SetAnswerOverflow(_ string) error { return nil }
+func (s *pebbleServiceDarwin) destroyWindow() { C.jarvisPebbleClose() }
 
 func (s *pebbleServiceDarwin) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil
 	}
-	C.jarvisPebbleClose()
+	if s.hotkeyStop != nil {
+		s.hotkeyStop()
+		s.hotkeyStop = nil
+	}
+	if s.paletteHotkeyStop != nil {
+		s.paletteHotkeyStop()
+		s.paletteHotkeyStop = nil
+	}
+	close(s.stopCh)
+	<-s.doneCh
 	return nil
 }
 
-func (s *pebbleServiceDarwin) OnSummon(callback func()) {
-	s.summonCallback = callback
-	// macOS hotkey integration (NSEvent global monitor) lives in the
-	// hotkeys_darwin.go path which is currently a stub. Wiring it to fire
-	// summonCallback is part of the macOS hotkey ticket.
-}
+// SetState / SetText / PointAt / SetEye / SetBlinded / SetAnswerOverflow are
+// promoted from the embedded pebbleCore (pebble_runtime.go); present() pushes
+// the state to the renderer each frame. PointAt now works on macOS. drawRect:
+// renders idle/listening/thinking/speaking/working + bubble text + the eye /
+// blinded strike / answer-overflow button (§5.3). The pointing label is already
+// handled (PointAt sets state=listening + bubbleText=label).
 
-func (s *pebbleServiceDarwin) OnPalette(callback func()) {
-	// macOS palette hotkey is gated on the NSEvent monitor port (macOS
-	// hotkey ticket) — stubbed for now.
-	_ = callback
-}
+func (s *pebbleServiceDarwin) OnSummon(callback func())  { s.summonCallback = callback }
+func (s *pebbleServiceDarwin) OnPalette(callback func()) { s.paletteCallback = callback }
 
-// OnBlindToggle — W6 stub on macOS. Long-press detection needs the
-// Cocoa NSView mouse-event handler ported.
-func (s *pebbleServiceDarwin) OnBlindToggle(callback func()) {
-	_ = callback
-}
-
-func (s *pebbleServiceDarwin) OnAnswerOpen(callback func(string)) {
-	_ = callback
-}
+// OnBlindToggle / OnAnswerOpen — the callbacks are accepted; the summon/palette
+// hotkeys fire via the NSEvent monitor (§5.4). The disc long-press (blind
+// toggle) and answer-button click still need the pebble window to catch input;
+// that input wiring is the documented residual in §5.4.
+func (s *pebbleServiceDarwin) OnBlindToggle(callback func())      { _ = callback }
+func (s *pebbleServiceDarwin) OnAnswerOpen(callback func(string)) { _ = callback }

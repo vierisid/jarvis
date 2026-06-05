@@ -45,6 +45,12 @@ static GtkWidget* gPebbleArea   = NULL;
 // state moved to pebbleCore (Go) — no gCurX/gOffset/gTimer here anymore.
 static int gPebbleState = 0;
 static unsigned long long gFrameTick = 0;
+// Awareness/answer indicators pushed each frame alongside state (§5.3): gEye =
+// awareness/OCR firing, gBlinded = awareness hard-paused (struck-through eye),
+// gAnswerOverflow = the speaking bubble should show the "open full" button.
+static int gEye = 0;
+static int gBlinded = 0;
+static int gAnswerOverflow = 0;
 // gPebbleBodyText is the dynamic body line (live LLM response). Owned by
 // this module — replaced with g_free + g_strdup. NULL means use the
 // per-state placeholder.
@@ -110,6 +116,64 @@ static int measure_text_height(cairo_t* cr, double w, const char* text, const ch
     return ph;
 }
 
+// draw_eye_glyph paints the awareness eye (§5.3): a lens outline + iris dot that
+// pulses while awareness fires, muted + struck-through when blinded. Mirrors the
+// Windows drawEyeGlyph. Drawn on top of whatever state glyph is showing.
+static void draw_eye_glyph(cairo_t* cr) {
+    if (!gEye && !gBlinded) return;
+    double ex = kAnchorX + 14.0, ey = kAnchorY - 10.0;
+    const double lensR = 4.5, irisR = 1.4;
+    double r, g, b;
+    if (gBlinded) { r = kInk3R; g = kInk3G; b = kInk3B; }
+    else          { r = kAccR;  g = kAccG;  b = kAccB;  }
+
+    cairo_set_source_rgba(cr, r, g, b, 220/255.0);
+    cairo_set_line_width(cr, 1.0);
+    cairo_arc(cr, ex, ey, lensR, 0, 2*M_PI);
+    cairo_stroke(cr);
+
+    double irisA = 220/255.0;
+    if (gEye && !gBlinded) {
+        int cf = 75;
+        double ph = (double)(gFrameTick % cf) / cf;
+        double v = ph * 2; if (v > 1) v = 2 - v;
+        irisA = (178 + 77*v) / 255.0;
+    }
+    cairo_set_source_rgba(cr, r, g, b, irisA);
+    cairo_arc(cr, ex, ey, irisR, 0, 2*M_PI);
+    cairo_fill(cr);
+
+    if (gBlinded) {
+        cairo_set_source_rgba(cr, kAccR, kAccG, kAccB, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, ex - lensR - 1.5, ey + lensR + 1.5);
+        cairo_line_to(cr, ex + lensR + 1.5, ey - lensR - 1.5);
+        cairo_stroke(cr);
+    }
+}
+
+// draw_answer_button paints the "open full ↗" overflow button at the bubble's
+// bottom-right (§5.3). by1 is the auto-fitted bubble bottom; speaking picks the
+// light-on-dark tint. Mirrors the Windows drawAnswerOverflowButton geometry.
+static void draw_answer_button(cairo_t* cr, double by1, gboolean speaking) {
+    const double btnW = 108, btnH = 22, insetR = 10, insetB = 8;
+    const double kBubbleX1 = 340;
+    double bxL = kBubbleX1 - insetR - btnW;
+    double byTop = by1 - insetB - btnH;
+    double tr = speaking ? kPaperR : kAccR;
+    double tg = speaking ? kPaperG : kAccG;
+    double tb = speaking ? kPaperB : kAccB;
+
+    rounded_rect(cr, bxL, byTop, btnW, btnH, 5.0);
+    cairo_set_source_rgba(cr, tr, tg, tb, speaking ? 32/255.0 : 36/255.0);
+    cairo_fill(cr);
+    rounded_rect(cr, bxL, byTop, btnW, btnH, 5.0);
+    cairo_set_source_rgba(cr, tr, tg, tb, speaking ? 200/255.0 : 220/255.0);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+    draw_text_layout(cr, bxL + 12, byTop + 4, "open full ↗", "Inter Tight 9", tr, tg, tb);
+}
+
 static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
     // Clear to fully transparent.
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -144,6 +208,7 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
         cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, dotAlpha);
         cairo_arc(cr, cx, cy, dotR, 0, 2*M_PI);
         cairo_fill(cr);
+        draw_eye_glyph(cr);
         return FALSE;
     }
 
@@ -232,6 +297,8 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
         double bodyDrawH = by1 - kBodyY0 - kBubbleBottomP/2.0;
         draw_text_wrapped(cr, kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawH,
                           body, "Inter Tight 11", textR, textG, textB);
+        if (gAnswerOverflow) draw_answer_button(cr, by1, speaking);
+        draw_eye_glyph(cr);
         return FALSE;
     }
 
@@ -259,6 +326,7 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
             cairo_arc(cr, startX+i*dotGap, cy+dy, dotR, 0, 2*M_PI);
             cairo_fill(cr);
         }
+        draw_eye_glyph(cr);
         return FALSE;
     }
 
@@ -280,6 +348,7 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
         cairo_arc(cr, cx-pillW+5, cy, dotR, 0, 2*M_PI);
         cairo_fill(cr);
     }
+    draw_eye_glyph(cr);
     return FALSE;
 }
 
@@ -287,13 +356,21 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
 // already eased the position (x,y) and bumped the frame tick; we just push
 // state/tick/text and move + redraw. Bridged from the frame-loop goroutine via
 // jarvisPebblePresent -> g_idle_add (GTK is main-thread only).
-typedef struct { int x, y, state; unsigned long long tick; gchar* text; } PresentArgs;
+typedef struct {
+    int x, y, state;
+    unsigned long long tick;
+    int eye, blinded, answerOverflow;
+    gchar* text;
+} PresentArgs;
 
 static gboolean present_idle(gpointer data) {
     PresentArgs* a = (PresentArgs*)data;
     if (gPebbleWindow && gPebbleArea) {
         gPebbleState = a->state;
         gFrameTick = a->tick;
+        gEye = a->eye;
+        gBlinded = a->blinded;
+        gAnswerOverflow = a->answerOverflow;
         if (gPebbleBodyText) { g_free(gPebbleBodyText); gPebbleBodyText = NULL; }
         if (a->text) gPebbleBodyText = g_strdup(a->text);
         gtk_window_move(GTK_WINDOW(gPebbleWindow), a->x, a->y);
@@ -364,9 +441,11 @@ void jarvisPebbleSpawn(void) {
 
 // jarvisPebblePresent pushes one eased frame from the Go runtime. text may be
 // NULL/empty (draw_pebble falls back to the per-state placeholder).
-void jarvisPebblePresent(int x, int y, int state, unsigned long long tick, const char* text) {
+void jarvisPebblePresent(int x, int y, int state, unsigned long long tick,
+                         int eye, int blinded, int answerOverflow, const char* text) {
     PresentArgs* a = (PresentArgs*)malloc(sizeof(PresentArgs));
     a->x = x; a->y = y; a->state = state; a->tick = tick;
+    a->eye = eye; a->blinded = blinded; a->answerOverflow = answerOverflow;
     a->text = (text && *text) ? g_strdup(text) : NULL;
     g_idle_add(present_idle, a);
 }
@@ -377,7 +456,10 @@ void jarvisPebbleClose(void) {
 */
 import "C"
 
-import "unsafe"
+import (
+	"log"
+	"unsafe"
+)
 
 // pebbleServiceLinux is the GTK adapter for the shared pebbleCore runtime
 // (pebble_runtime.go). The shared loop owns motion + state + lifecycle; this
@@ -385,8 +467,10 @@ import "unsafe"
 // each frame onto the GTK main loop.
 type pebbleServiceLinux struct {
 	pebbleCore
-	summonCallback  func()
-	paletteCallback func()
+	summonCallback    func()
+	paletteCallback   func()
+	hotkeyStop        func() // summon hotkey listener stop
+	paletteHotkeyStop func() // palette hotkey listener stop
 }
 
 func NewPebbleService() PebbleService {
@@ -396,10 +480,10 @@ func NewPebbleService() PebbleService {
 	s := &pebbleServiceLinux{}
 	s.state.Store(PebbleIdle)
 	s.bubbleText.Store("")
-	go func() {
-		C.gtk_init(nil, nil)
-		C.gtk_main()
-	}()
+	// Start (once) the shared process-wide GTK main loop that also drives the
+	// sub-pebble + region overlays. The shared frame loop (runPebbleLoop) runs on
+	// a separate thread and bridges to GTK via g_idle_add — GTK is main-thread only.
+	ensureGTKMain()
 	return s
 }
 
@@ -420,6 +504,34 @@ func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
 	s.stopCh = make(chan struct{})
 	s.doneCh = make(chan struct{})
 	go runPebbleLoop(&s.pebbleCore, s)
+
+	// Global hotkeys (§5.4): summon (Ctrl+Space) + palette (Ctrl+K). X11 only;
+	// a failed grab logs and is non-fatal (the disc click is the fallback once
+	// pebble input wiring lands).
+	if s.spec.SummonHotkey != "" {
+		if stop, err := startHotkeyListener(s.spec.SummonHotkey, func() {
+			if s.summonCallback != nil {
+				s.summonCallback()
+			}
+		}); err != nil {
+			log.Printf("[pebble] summon hotkey %q not registered: %v", s.spec.SummonHotkey, err)
+		} else {
+			s.hotkeyStop = stop
+			log.Printf("[pebble] summon hotkey %q registered", s.spec.SummonHotkey)
+		}
+	}
+	if s.spec.PaletteHotkey != "" {
+		if stop, err := startHotkeyListener(s.spec.PaletteHotkey, func() {
+			if s.paletteCallback != nil {
+				s.paletteCallback()
+			}
+		}); err != nil {
+			log.Printf("[pebble] palette hotkey %q not registered: %v", s.spec.PaletteHotkey, err)
+		} else {
+			s.paletteHotkeyStop = stop
+			log.Printf("[pebble] palette hotkey %q registered", s.spec.PaletteHotkey)
+		}
+	}
 	return nil
 }
 
@@ -437,9 +549,12 @@ func (s *pebbleServiceLinux) present() error {
 		cstr = C.CString(text)
 		defer C.free(unsafe.Pointer(cstr))
 	}
+	answerID, _ := s.answerOverflowID.Load().(string)
 	C.jarvisPebblePresent(
 		C.int(s.renderedX.Load()), C.int(s.renderedY.Load()),
-		C.int(pebbleStateToInt(state)), C.ulonglong(s.frameTick), cstr,
+		C.int(pebbleStateToInt(state)), C.ulonglong(s.frameTick),
+		boolToCInt(s.eyeActive.Load()), boolToCInt(s.blinded.Load()),
+		boolToCInt(answerID != ""), cstr,
 	)
 	return nil
 }
@@ -450,6 +565,14 @@ func (s *pebbleServiceLinux) Close() error {
 	if !s.spawned.CompareAndSwap(true, false) {
 		return nil
 	}
+	if s.hotkeyStop != nil {
+		s.hotkeyStop()
+		s.hotkeyStop = nil
+	}
+	if s.paletteHotkeyStop != nil {
+		s.paletteHotkeyStop()
+		s.paletteHotkeyStop = nil
+	}
 	close(s.stopCh)
 	<-s.doneCh
 	return nil
@@ -457,15 +580,18 @@ func (s *pebbleServiceLinux) Close() error {
 
 // SetState / SetText / PointAt / SetEye / SetBlinded / SetAnswerOverflow are
 // promoted from the embedded pebbleCore (pebble_runtime.go); present() pushes
-// the state to the renderer each frame. NOTE: draw_pebble currently renders
-// idle/listening/thinking/speaking/working + bubble text; the eye, blinded,
-// answer-overflow button, and pointing label still need adding to the Cairo
-// renderer to fully match the Windows visuals.
+// the state to the renderer each frame. draw_pebble now renders
+// idle/listening/thinking/speaking/working + bubble text + the eye / blinded
+// strike / answer-overflow button (§5.3). The pointing label is already handled
+// (PointAt sets state=listening + bubbleText=label).
 
 func (s *pebbleServiceLinux) OnSummon(callback func())  { s.summonCallback = callback }
 func (s *pebbleServiceLinux) OnPalette(callback func()) { s.paletteCallback = callback }
 
-// OnBlindToggle / OnAnswerOpen — wiring pending the Linux hotkey + GTK
-// button-event ports; the callbacks are accepted but nothing fires them yet.
+// OnBlindToggle / OnAnswerOpen — the callbacks are accepted; the summon/palette
+// hotkeys fire via X11 (§5.4). The disc long-press (blind-toggle) and the
+// answer-button click still need the pebble window to catch input (it is
+// currently fully click-through); that input wiring is the documented residual
+// in docs/PEBBLE_REVIEW_AND_REFACTOR.md §5.4.
 func (s *pebbleServiceLinux) OnBlindToggle(callback func())      { _ = callback }
 func (s *pebbleServiceLinux) OnAnswerOpen(callback func(string)) { _ = callback }
