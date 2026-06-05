@@ -280,35 +280,42 @@
   font-size: var(--text-xs);
 }
 
-/* ── Multi-select dropdown ── */
+/* Multi-select dropdown */
 
 .v2-usage__msdd {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: stretch;
 }
 
 .v2-usage__msdd-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);
-  padding: 4px 10px;
+  padding: 4px var(--s-2);
   font: inherit;
   font-size: var(--text-xs);
   background: var(--paper);
   color: var(--ink-2);
-  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.12));
-  border-radius: 6px;
+  border: var(--hair);
+  border-radius: var(--r-1);
   cursor: pointer;
 }
 
 .v2-usage__msdd-btn:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.03));
+  background: var(--paper-3);
 }
 
 .v2-usage__msdd-btn[data-active="true"] {
   color: var(--ink);
-  border-color: var(--accent-1, #2563eb);
-  background: var(--accent-1-bg, rgba(37, 99, 235, 0.06));
+  border-color: var(--accent);
+  background: var(--paper-2);
+}
+
+.v2-usage__msdd-btn[data-clearable="true"] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 0;
 }
 
 .v2-usage__msdd-label {
@@ -322,8 +329,8 @@
   min-width: 18px;
   height: 18px;
   padding: 0 6px;
-  background: var(--accent-1, #2563eb);
-  color: white;
+  background: var(--accent);
+  color: var(--accent-ink);
   border-radius: 9px;
   font-size: 11px;
   font-weight: 600;
@@ -332,15 +339,24 @@
 .v2-usage__msdd-clear {
   display: inline-flex;
   align-items: center;
+  padding: 0 6px;
+  background: var(--paper);
+  color: var(--ink-3);
+  border: var(--hair);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: var(--r-1);
+  border-bottom-right-radius: var(--r-1);
   cursor: pointer;
-  color: var(--ink-3, var(--ink-2));
-  border-radius: 4px;
-  padding: 1px;
+}
+
+.v2-usage__msdd[data-active="true"] .v2-usage__msdd-clear {
+  border-color: var(--accent);
 }
 
 .v2-usage__msdd-clear:hover {
   color: var(--ink);
-  background: var(--surface-hover, rgba(0, 0, 0, 0.06));
+  background: var(--paper-3);
 }
 
 .v2-usage__msdd-pop {
@@ -351,9 +367,8 @@
   min-width: 220px;
   max-width: 320px;
   background: var(--paper);
-  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.12));
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border: var(--hair);
+  border-radius: var(--r-1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -363,9 +378,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.08));
-  color: var(--ink-3, var(--ink-2));
+  padding: 6px var(--s-2);
+  border-bottom: var(--hair-soft);
+  color: var(--ink-3);
 }
 
 .v2-usage__msdd-search input {
@@ -388,8 +403,8 @@
 }
 
 .v2-usage__msdd-empty {
-  padding: 8px 12px;
-  color: var(--ink-3, var(--ink-2));
+  padding: var(--s-2) var(--s-3);
+  color: var(--ink-3);
   font-size: var(--text-xs);
   text-align: center;
 }
@@ -397,9 +412,9 @@
 .v2-usage__msdd-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   width: 100%;
-  padding: 6px 12px;
+  padding: 6px var(--s-3);
   background: transparent;
   border: 0;
   color: var(--ink);
@@ -410,11 +425,11 @@
 }
 
 .v2-usage__msdd-item:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--paper-3);
 }
 
 .v2-usage__msdd-item[data-active="true"] {
-  background: var(--accent-1-bg, rgba(37, 99, 235, 0.06));
+  background: var(--paper-2);
   font-weight: 500;
 }
 
@@ -424,16 +439,16 @@
   justify-content: center;
   width: 16px;
   height: 16px;
-  border: 1px solid var(--border-strong, rgba(0, 0, 0, 0.25));
-  border-radius: 3px;
-  color: var(--accent-1, #2563eb);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  color: var(--accent);
   flex-shrink: 0;
 }
 
 .v2-usage__msdd-item[data-active="true"] .v2-usage__msdd-check {
-  background: var(--accent-1, #2563eb);
-  border-color: var(--accent-1, #2563eb);
-  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .v2-usage__msdd-text {

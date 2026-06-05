@@ -8,6 +8,10 @@ import { Icon } from "../../ui";
  * opens a popover with a search box + checkable list. Outside-click and ESC
  * close it. When the option list is empty the button is hidden entirely.
  *
+ * The clear-X is a sibling of the toggle button (not nested inside it) so the
+ * markup stays valid HTML and screen readers see two distinct controls. Both
+ * share a single `data-active` flag on the root for joined-button styling.
+ *
  * We deliberately keep this co-located with the Usage room rather than the
  * shared ui/ index: it's tuned to the Usage filter shape (string[] options,
  * string[] selection, toggle semantics) and pulling it general too early
@@ -67,52 +71,42 @@ export function MultiSelectDropdown({
     return options.filter((o) => o.toLowerCase().includes(q));
   }, [options, query]);
 
-  const handleClear = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    onClear();
-  }, [onClear]);
-
   if (options.length === 0) return null;
 
   const count = selected.length;
   const showSearch = options.length > searchableThreshold;
+  const clearable = count > 0;
 
   return (
-    <div className="v2-usage__msdd" ref={rootRef}>
+    <div className="v2-usage__msdd" ref={rootRef} data-active={clearable}>
       <button
         type="button"
         className="v2-usage__msdd-btn"
-        data-active={count > 0}
+        data-active={clearable}
+        data-clearable={clearable}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
         <Icon icon={Filter} size="sm" />
         <span className="v2-usage__msdd-label">{label}</span>
-        {count > 0 && (
+        {clearable && (
           <span className="v2-usage__msdd-count" aria-label={`${count} selected`}>
             {count}
           </span>
         )}
-        {count > 0 && (
-          <span
-            role="button"
-            tabIndex={0}
-            className="v2-usage__msdd-clear"
-            aria-label={`Clear ${label} filter`}
-            onClick={handleClear}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClear();
-              }
-            }}
-          >
-            <Icon icon={X} size="sm" />
-          </span>
-        )}
         <Icon icon={ChevronDown} size="sm" />
       </button>
+      {clearable && (
+        <button
+          type="button"
+          className="v2-usage__msdd-clear"
+          aria-label={`Clear ${label} filter`}
+          onClick={onClear}
+        >
+          <Icon icon={X} size="sm" />
+        </button>
+      )}
       {open && (
         <div className="v2-usage__msdd-pop" role="listbox" aria-multiselectable="true">
           {showSearch && (
@@ -122,7 +116,7 @@ export function MultiSelectDropdown({
                 ref={searchRef}
                 type="text"
                 value={query}
-                placeholder={`Filter ${label.toLowerCase()}…`}
+                placeholder={`Filter ${label.toLowerCase()}...`}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
