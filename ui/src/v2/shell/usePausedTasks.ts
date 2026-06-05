@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TaskEvent } from "../../hooks/useWebSocket";
 
 /**
@@ -21,28 +21,32 @@ export interface PausedTaskSummary {
  * fires - any started/completed/failed/cancelled event can change the set.
  *
  * Pass the live `taskEvents` array from useLiveData() as `events` so the
- * hook stays in sync without opening its own WS connection.
+ * hook stays in sync without opening its own WS connection. The hook tracks
+ * in-flight requests with a counter so rapid event bursts can't let a stale
+ * response overwrite a newer one.
  */
 export function usePausedTasks(events: TaskEvent[]): {
   tasks: PausedTaskSummary[];
-  loading: boolean;
   refresh: () => void;
 } {
   const [tasks, setTasks] = useState<PausedTaskSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const inFlightRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const reqId = ++inFlightRef.current;
     try {
       const r = await fetch("/api/tasks/paused");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = (await r.json()) as { tasks: PausedTaskSummary[] };
+      // Drop the response if a newer request was started while this one was
+      // in flight - otherwise a slow first request could overwrite the
+      // fresher state from a later event.
+      if (reqId !== inFlightRef.current) return;
       setTasks(data.tasks ?? []);
     } catch (err) {
       // Best-effort: if the endpoint isn't reachable we just show no tasks.
       // The banner stays hidden rather than display a confusing error.
       console.warn("[usePausedTasks] fetch failed:", err);
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -51,12 +55,12 @@ export function usePausedTasks(events: TaskEvent[]): {
 
   // Refetch whenever a task event arrives - paused tasks can appear (task
   // pauses mid-conversation) or disappear (task resumes / completes /
-  // cancels). We key on the events array reference so React only reruns on
-  // a new event, not on every render.
+  // cancels). useWebSocket only produces a new events array reference when
+  // an event is appended, so this won't fire on unrelated renders.
   useEffect(() => {
     if (events.length === 0) return;
     refresh();
   }, [events, refresh]);
 
-  return { tasks, loading, refresh };
+  return { tasks, refresh };
 }
