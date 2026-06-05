@@ -15,10 +15,11 @@ and begin bringing pebble / sub_pebble / region_select in line with the
 **decoupling sidecar versioning from the brain + a brain↔sidecar compatibility
 contract** — was added later and is designed (not yet built) in **§7**.
 
-> **⛔ RELEASE BLOCKER (see §8):** the ambient pebble feature made the sidecar a
-> cgo program, but CI still builds it with `CGO_ENABLED=0` — so the release
-> `build-sidecar` job currently **fails on every platform**, and no CI job
-> catches it. This branch **cannot be released** until §8 is done.
+> **✅ Former release blocker (see §8) — FIXED:** the ambient pebble feature made
+> the sidecar a cgo program; CI used to build it with `CGO_ENABLED=0` and failed
+> on every platform. The `build-sidecar` job is now a per-OS `CGO_ENABLED=1`
+> matrix and a PR-time Go compile gate was added. Linux + Windows-cross verified
+> locally; arm64-linux + darwin must still go green on the runners.
 
 ---
 
@@ -243,6 +244,43 @@ suites green.
 
 ## 5. What remains to be done
 
+> **Update — this iteration also implemented §5.1–§5.4** (the native-parity
+> bucket), compile-verified on Linux + Windows-cross; macOS is mirrored but
+> COMPILE-UNVERIFIED here (no Cocoa SDK). What landed:
+>
+> - **§5.1 macOS pebble migration — DONE** (mirrors the Linux `ca241e9` shape):
+>   `pebble_overlay_darwin.go` removed the NSTimer + C-side easing, added
+>   `jarvisPebblePresent(x,y,state,tick,eye,blinded,answerOverflow,text)` on the
+>   main queue (keeps the bottom-left Y-flip), `jarvisPebbleSpawn(void)`; the Go
+>   adapter embeds `pebbleCore` + implements `pebblePlatform`. macOS `PointAt`
+>   now works.
+> - **§5.2 sub_pebble + region_select native renderers — DONE (first cut)**:
+>   `sub_pebble_overlay_linux.go`/`_darwin.go` (+ `_bridge_*` for the click
+>   `//export`) implement `subPebblePlatform` — the colored state disc + slot
+>   easing + reflow + disc-click → OnClick. `region_select_linux.go`/`_darwin.go`
+>   implement the full snapshot → drag → crop → PNG flow (using the shared
+>   `normalizeRegionRect`/`regionDragTooSmall`). The `_other.go` stubs were
+>   narrowed to `!windows && !linux && !darwin`. A single shared GTK main loop
+>   (`gtk_main_linux.go`) now drives pebble + sub-pebble + region. **Residual:**
+>   the sub-pebble expand *bubble* + "open full" button are not drawn on
+>   Linux/macOS yet (SetExpanded records state; disc renders) — mirror the bubble
+>   math in `sub_pebble_draw_windows.go`.
+> - **§5.3 remaining glyphs — DONE**: the eye, blinded strike, and
+>   answer-overflow button now render in both the Cairo (Linux) and Core Graphics
+>   (macOS) pebble renderers; `jarvisPebblePresent` gained `eye/blinded/
+>   answerOverflow` flags.
+> - **§5.4 hotkeys — DONE (global hotkeys); input residual**: Linux X11
+>   `XGrabKey` listener (`hotkeys_linux.go`) + macOS NSEvent global monitor
+>   (`hotkeys_darwin.go`) replace the stubs and are wired into the pebble Spawn
+>   (summon + palette). **Residual:** the pebble window is still click-through, so
+>   the disc long-press (blind-toggle) and the answer-button click are not yet
+>   routed on Linux/macOS — that needs the pebble window to catch input on the
+>   disc + button regions (mirror the sub-pebble's input-shape + click bridge).
+>
+> The original detailed roadmaps below are kept as reference. Items still open:
+> the sub-pebble bubble (§5.2 residual), the pebble disc-click/long-press input
+> (§5.4 residual), and all macOS runtime verification.
+
 ### 5.0 Verification owed (no new code)
 The Windows pebble + sub_pebble shared-runtime migrations and the Linux pebble
 migration are **compile-verified only**. They need **visual/runtime testing**:
@@ -415,33 +453,65 @@ pebble_runtime.go     pebbleCore (state) + advanceFrame (physics/pointing)
                       + runPebbleLoop + pebblePlatform interface
                       + the shared SetState/SetText/PointAt/Set* mutators
 pebble_overlay_windows.go   embeds pebbleCore; implements pebblePlatform (GDI)   [migrated]
-pebble_overlay_linux.go     embeds pebbleCore; implements pebblePlatform (GTK)   [migrated]
-pebble_overlay_darwin.go    still native loop; roadmap in comments               [TODO 5.1]
+pebble_overlay_linux.go     embeds pebbleCore; implements pebblePlatform (GTK)   [migrated; glyphs+hotkeys]
+pebble_overlay_darwin.go    embeds pebbleCore; implements pebblePlatform (Cocoa) [migrated; glyphs+hotkeys; UNVERIFIED]
+
+gtk_main_linux.go     single shared GTK main loop (pebble + sub_pebble + region)
 
 sub_pebble_core.go    layout + palette + formatting
 sub_pebble_runtime.go subPebbleEntry + runSubPebbleOverlay + subPebbleEaseToSlot
                       + subPebblePlatform interface
 sub_pebble_overlay_windows.go  implements subPebblePlatform (GDI)                 [migrated]
-sub_pebble_overlay_other.go    no-op stub for !windows                            [TODO 5.2]
+sub_pebble_overlay_linux.go    implements subPebblePlatform (GTK/Cairo)           [disc done; bubble TODO]
+sub_pebble_overlay_darwin.go   implements subPebblePlatform (Cocoa/CG)            [disc done; bubble TODO; UNVERIFIED]
+sub_pebble_overlay_other.go    no-op stub for !windows && !linux && !darwin
 
 region_select.go      min-drag + rect normalization + RegionSelectionService
 region_select_windows.go  full GDI overlay                                       [done]
-region_select_other.go    no-op stub for !windows                                [TODO 5.2]
+region_select_linux.go    full GTK/Cairo overlay + GdkPixbuf crop                 [done]
+region_select_darwin.go   full Cocoa/CG overlay + CGImage crop                    [done; UNVERIFIED]
+region_select_other.go    no-op stub for !windows && !linux && !darwin
+
+hotkeys_windows.go    RegisterHotKey                                             [done]
+hotkeys_linux.go      X11 XGrabKey listener                                      [done]
+hotkeys_darwin.go     NSEvent global monitor                                     [done; UNVERIFIED]
 
 panels.go / panels_runtime.go / panels_<os>.go   the REFERENCE pattern (all platforms)
 ```
 
-When resuming: start with **5.1 (macOS pebble migration)** — it's mechanical
-given the Linux precedent and unblocks macOS parity; then **5.2** (the net-new
-sub_pebble + region_select native renderers) is the bulk of the remaining work.
+When resuming the native parity work, the open items are: the sub-pebble expand
+**bubble** + "open full" button on Linux/macOS (§5.2 residual), the pebble
+**disc-click / long-press** input on Linux/macOS (§5.4 residual — needs the
+pebble window to catch input on the disc + answer-button regions), and **macOS
+runtime verification** of everything (must be checked on a Mac).
 
 ---
 
-## 7. Sidecar version decoupling & brain↔sidecar compatibility (PLANNED — not yet implemented)
+## 7. Sidecar version decoupling & brain↔sidecar compatibility (IMPLEMENTED)
 
-> Separate workstream added to this iteration. **Nothing below is implemented
-> yet** — this is the agreed design, ready to build. Decisions in this section
-> were made explicitly with the repo owner (recorded inline).
+> Separate workstream added to this iteration. **Implemented** per the design
+> below (decisions made explicitly with the repo owner, recorded inline). The
+> sub-sections are kept as the rationale of record; what landed:
+>
+> - **Go:** `sidecar/VERSION` (seeded `1.0.0`), `sidecar/version.go`
+>   (`var sidecarVersion = "dev"`), Makefile `-X main.sidecarVersion` from VERSION,
+>   `--version` flag, `Version` on `SidecarRegistration` (sent in `client.go`),
+>   and `client.go` handling of the brain's `register_rejected` (stop reconnect)
+>   / `register_ack` (suggested) control frames.
+> - **TS:** `src/sidecar/compat.ts` (`SIDECAR_MIN_VERSION` / `SIDECAR_RECOMMENDED_VERSION`
+>   floors + `classifySidecarVersion` + `compat.test.ts`), `version` threaded
+>   through `types.ts` (registration, `ConnectedSidecar`, `SidecarRecord`,
+>   `SidecarInfo`) + a `version` DB column (schema migration), and the
+>   classify→hard-block(`4001`)/suggest/store logic in `manager.ts`'s register
+>   branch + `toSidecarInfo`. Dashboard: version + "update available/dev" badge
+>   in the v2 `SidecarTab`.
+> - **CI:** see §8 — `build-sidecar` rewritten as the cgo matrix, the brain/
+>   sidecar release flows decoupled (`sidecar-v*` tag + `classify` job), and PR
+>   gates (Go compile/test + VERSION-bump) added to `test.yml`.
+> - **README:** "Versioning & updates" subsection under Sidecar Setup.
+>
+> Seed values: `MIN == RECOMMENDED == 1.0.0` (nothing incompatible yet). Below is
+> the original design text.
 
 ### 7.1 The problem
 
@@ -630,11 +700,20 @@ On `register`, the brain compares the reported sidecar version:
 
 ---
 
-## 8. ⛔ The CI sidecar build is BROKEN on this branch (cgo) — release blocker
+## 8. The CI sidecar build (cgo) — FIXED
 
-> **This must be fixed before the branch can be merged/released.** It is
-> independent of §7 but lands in the same `build-sidecar` job, so do them
-> together. **Not yet fixed.**
+> Was a release blocker (the `build-sidecar` job cross-compiled with
+> `CGO_ENABLED=0` and failed on every platform). **Now fixed**, together with §7:
+>
+> - `release.yml` `build-sidecar` rewritten as the §8.3 per-OS `CGO_ENABLED=1`
+>   matrix: linux-x64 native (webkit/gtk + `.pc` symlinks), linux-arm64 on an
+>   `ubuntu-24.04-arm` runner, win32-x64 mingw cross from Linux (+ `EventToken.h`
+>   shim), darwin arm64/x64 on `macos-latest` (`-target`). Version ldflag added.
+> - `test.yml` gained a `sidecar-build` job (linux native `go vet`/`build`/`test`
+>   + windows mingw cross-build) so a cgo break is caught on PRs, not at release.
+> - **Verified locally here:** linux/amd64 native build + `go test`, and the
+>   windows/amd64 mingw cross-build. **Not verifiable here** (must pass on the
+>   runners): linux-arm64, darwin arm64/x64. The original finding text follows.
 
 ### 8.1 The finding
 
