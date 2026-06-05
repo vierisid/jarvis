@@ -1435,6 +1435,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Paused conv-tier tasks (status === 'needs_input'). Used by the dashboard
+     * to surface pending questions after a daemon restart - durability lands
+     * them back in the registry on boot, this endpoint makes them visible to
+     * the user. The conv LLM separately picks them up via registry context.
+     * Returns an empty list when running in classic mode (no task registry).
+     */
+    '/api/tasks/paused': {
+      GET: () => {
+        const registry = ctx.agentService.getTaskRegistry();
+        if (!registry) return json({ tasks: [] });
+        const tasks = registry.inFlight()
+          .filter((t) => t.status === 'needs_input')
+          .map((t) => ({
+            id: t.id,
+            template: t.request.template,
+            intent: t.request.intent,
+            question: t.question ?? '',
+            started_at: t.startedAt,
+            updated_at: t.updatedAt,
+          }));
+        return json({ tasks });
+      },
+    },
+
     // --- Roles ---
     '/api/roles': {
       GET: () => {

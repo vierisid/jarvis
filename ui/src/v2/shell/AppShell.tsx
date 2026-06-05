@@ -22,6 +22,7 @@ import { useSpacebarPTT } from "../voice/useSpacebarPTT";
 import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
+import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import "./AppShell.css";
 
@@ -933,6 +934,8 @@ function ShellLayout({
           notificationsSlot={notificationsSlot}
         />
       </div>
+
+      <PausedTasksBanner />
 
       <div className="v2-shell__thread">
         <Thread
