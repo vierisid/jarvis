@@ -8,7 +8,7 @@
 import type { HealthMonitor } from './health.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import { resolveRealtimeVoice } from '../config/realtime.ts';
+import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -1921,7 +1921,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             reasoning_effort: rt?.reasoning_effort ?? 'low',
             max_session_minutes: rt?.max_session_minutes ?? 10,
             monthly_budget_usd: rt?.monthly_budget_usd ?? null,
-            blocked_categories: rt?.blocked_categories ?? [],
+            // Report the EFFECTIVE backstop, not the raw field. When unset the
+            // resolver applies DEFAULT_BLOCKED_CATEGORIES, so returning `[]`
+            // here would both misreport ("nothing blocked" while payments/etc.
+            // are blocked) and let a read-modify-write round-trip persist `[]`,
+            // silently disabling the safe default. `default` flags which case
+            // it is so a client can tell "using the default" from an explicit set.
+            blocked_categories: rt?.blocked_categories ?? DEFAULT_BLOCKED_CATEGORIES,
+            blocked_categories_default: rt?.blocked_categories === undefined,
             // true when enabled AND a key resolves (own key, llm.openai, or env).
             available,
           },

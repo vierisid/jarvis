@@ -16,11 +16,14 @@
  *  - Shallow-merge remaining top-level fields (provider, enabled, voice…).
  */
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
+import { IMPACT_MAP } from '../roles/authority.ts';
 
 type AnyRec = Record<string, unknown>;
 
 const VALID_WAKE_ENGINES = ['openwakeword', 'webspeech', 'auto'];
 const VALID_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+/** Known action categories — a blocked-category typo silently blocks nothing. */
+const VALID_ACTION_CATEGORIES = Object.keys(IMPACT_MAP);
 /** Upper bound on a single realtime session (minutes) accepted from the API. */
 const MAX_SESSION_MINUTES_LIMIT = 1440;
 
@@ -86,6 +89,10 @@ export function validateVoicePatch(body: unknown): VoicePatchValidation {
     if ('blocked_categories' in r) {
       if (!Array.isArray(r.blocked_categories) || r.blocked_categories.some((c) => typeof c !== 'string')) {
         return { ok: false, error: 'realtime.blocked_categories must be an array of strings' };
+      }
+      const unknown = r.blocked_categories.filter((c) => !VALID_ACTION_CATEGORIES.includes(c as string));
+      if (unknown.length > 0) {
+        return { ok: false, error: `realtime.blocked_categories has unknown categories: ${unknown.join(', ')}` };
       }
     }
   }

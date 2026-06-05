@@ -1214,15 +1214,18 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     // Monthly spend guard: refuse new sessions once the estimated budget is
     // hit. Returns true (caller skips the standard accumulator) but opens no
-    // session — the client's onError handler stops streaming. Falling through
-    // to the standard pipeline would be wrong: the client is already streaming
-    // raw realtime PCM, which the WAV-based path can't consume.
+    // session. Sent as `closed` (not `error`) + a message so the client stops
+    // the mic via the normal close path and surfaces the reason, rather than a
+    // bare error flash. Falling through to the standard pipeline would be wrong:
+    // the client is already streaming raw realtime PCM, which the WAV-based path
+    // can't consume.
     if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
       console.warn('[WSService] realtime monthly budget reached — refusing new session');
       this.wsServer.sendToClient(ws, {
         type: 'realtime_status',
         payload: {
-          state: 'error',
+          state: 'closed',
+          reason: 'budget',
           message: `Monthly realtime voice budget ($${resolved.monthlyBudgetUsd}) reached. Voice is paused until next month or until you raise the limit in Settings > Voice.`,
         },
         timestamp: Date.now(),

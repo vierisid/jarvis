@@ -124,8 +124,19 @@ triggering an irreversible action unattended.
   bills per token, but no live invoice is available mid-session), persisted per
   month under the data dir (`realtime-budget.ts`), and checked at session start.
   Once the estimate reaches the budget, new sessions are refused with a
-  `realtime_status` error and the standard pipeline is unaffected. This is an
-  approximate guard, not accounting.
+  `realtime_status: { state: 'closed', reason: 'budget', message }` (the client
+  surfaces the message as a system line and stops the mic), and the standard
+  pipeline is unaffected. This is an approximate guard, not accounting:
+  - Spend is only recorded at session close, and `canStart` reads fresh at
+    start, so concurrent sessions (e.g. multiple browser tabs) opened before any
+    close all observe the same pre-spend total and can overshoot the cap. This
+    is accepted for the single-user daemon; close it with an in-memory in-flight
+    reservation if multi-session overshoot ever matters.
+
+`GET /api/config/voice` reports the **effective** `blocked_categories` (the
+applied default when unset) plus `blocked_categories_default: true|false`, so a
+client can't misread the safe default as "nothing blocked" and a read-modify-
+write round-trip can't silently persist `[]` and disable the backstop.
 
 ## 5. Input validation
 

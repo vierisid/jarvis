@@ -1,4 +1,7 @@
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   RealtimeBudgetTracker,
   estimateSessionCostUsd,
@@ -74,5 +77,44 @@ describe('RealtimeBudgetTracker', () => {
     expect(t.canStart(1, NOW)).toBe(false);
     // No cap -> always allowed.
     expect(t.canStart(undefined, NOW)).toBe(true);
+  });
+});
+
+describe('RealtimeBudgetTracker file persistence', () => {
+  const NOW = new Date('2026-06-04T12:00:00Z');
+  const dirs: string[] = [];
+  function tmpFile(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-budget-'));
+    dirs.push(dir);
+    return join(dir, 'nested', 'realtime-budget.json');
+  }
+  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+  test('persists across tracker instances (survives restart) and creates the dir', () => {
+    const path = tmpFile();
+    RealtimeBudgetTracker.fromFile(path).recordSessionSeconds(120, NOW); // $0.60
+    // A fresh tracker reading the same file sees the prior spend.
+    expect(RealtimeBudgetTracker.fromFile(path).getMonthSpend(NOW)).toBeCloseTo(0.60, 6);
+    // And the persisted shape is what we expect.
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ month: '2026-06', spentUsd: 0.60 });
+  });
+
+  test('missing file reads as zero spend', () => {
+    expect(RealtimeBudgetTracker.fromFile(tmpFile()).getMonthSpend(NOW)).toBe(0);
+  });
+
+  test('corrupt or malformed JSON is treated as empty, not a crash', () => {
+    const path = tmpFile();
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, '{ not valid json', 'utf8');
+    const t = RealtimeBudgetTracker.fromFile(path);
+    expect(t.getMonthSpend(NOW)).toBe(0);
+    // Recovers by overwriting with a valid state on the next record.
+    t.recordSessionSeconds(60, NOW);
+    expect(t.getMonthSpend(NOW)).toBeCloseTo(0.30, 6);
+
+    // Wrong-typed fields are also rejected.
+    writeFileSync(path, JSON.stringify({ month: 5, spentUsd: 'lots' }), 'utf8');
+    expect(RealtimeBudgetTracker.fromFile(path).getMonthSpend(NOW)).toBe(0);
   });
 });

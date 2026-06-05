@@ -498,6 +498,20 @@ export function useWebSocket() {
         // Premium realtime voice (gpt-realtime-2) status + live captions.
         if (msg.type === "realtime_status") {
           const state = msg.payload?.state;
+          // Surface any human-readable reason (e.g. budget reached) as a
+          // persistent system line — the v2 orb collapses error→idle and shows
+          // no text, so without this the message would be invisible.
+          if (msg.payload?.message) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "system" as MessageRole,
+                content: msg.payload.message,
+                timestamp: msg.timestamp,
+              },
+            ]);
+          }
           if (state === "error") voiceCallbacksRef.current?.onError(msg.payload?.message);
           // Server tore the session down (timeout/close) — stop the hot mic.
           else if (state === "closed") voiceCallbacksRef.current?.onRealtimeClosed?.();

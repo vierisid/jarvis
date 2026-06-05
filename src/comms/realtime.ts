@@ -343,8 +343,8 @@ export class RealtimeSession {
         break;
       }
       default:
-        // Unhandled event types (session.created/updated, response.done, etc.)
-        // are intentionally ignored.
+        // Unhandled event types (session.created/updated, etc.) are
+        // intentionally ignored.
         break;
     }
   }

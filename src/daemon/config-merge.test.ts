@@ -231,6 +231,15 @@ describe('validateVoicePatch', () => {
     expect(validateVoicePatch({ realtime: { blocked_categories: [1, 2] } }).ok).toBe(false);
   });
 
+  test('rejects unknown action categories but accepts known ones', () => {
+    expect(validateVoicePatch({ realtime: { blocked_categories: ['make_payment', 'delete_data'] } }).ok).toBe(true);
+    const res = validateVoicePatch({ realtime: { blocked_categories: ['make_payment', 'file_delete'] } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('file_delete');
+    // An explicit empty array (disable the backstop) is still allowed.
+    expect(validateVoicePatch({ realtime: { blocked_categories: [] } }).ok).toBe(true);
+  });
+
   test('rejects wrong-typed enabled / realtime', () => {
     expect(validateVoicePatch({ realtime: { enabled: 'yes' } }).ok).toBe(false);
     expect(validateVoicePatch({ realtime: 'nope' }).ok).toBe(false);

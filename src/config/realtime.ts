@@ -10,7 +10,7 @@ import { IMPACT_MAP, type ActionCategory } from '../roles/authority.ts';
  * could execute a payment or `rm`-class tool with no human confirmation. See
  * docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3.
  */
-export const DEFAULT_BLOCKED_CATEGORIES: string[] = (Object.keys(IMPACT_MAP) as ActionCategory[])
+export const DEFAULT_BLOCKED_CATEGORIES: ActionCategory[] = (Object.keys(IMPACT_MAP) as ActionCategory[])
   .filter((cat) => IMPACT_MAP[cat] === 'destructive');
 
 /**
