@@ -477,9 +477,11 @@ change without a version bump is blocked.
    the brain's MIN version, the brain **refuses/closes the connection** with a
    clear reason; the sidecar logs "update required" and does not operate. (Not a
    soft alarm — an incompatible sidecar must not run.)
-3. **Brain `RECOMMENDED` constant only** for "latest available" (no live
-   npm/GitHub query). Fully offline; the brain ships the recommended sidecar
-   version it was released alongside.
+3. **`MIN` and `RECOMMENDED` are brain-owned *floors*, not "the latest sidecar
+   version"** (no live npm/GitHub query). The brain declares the *oldest* sidecar
+   it is happy with; it never needs to know the newest. This is what keeps the
+   releases decoupled without a chicken-and-egg (see §7.3) — a sidecar release
+   never forces a brain release.
 4. **Dedicated `sidecar-v*` release tag.** Pushing `sidecar-vX.Y.Z` publishes the
    sidecar packages (independent of the brain's `v*`); CI checks the tag matches
    `sidecar/VERSION`.
@@ -495,14 +497,27 @@ them):
     worked with. Update optional.
   - **minor** — new sidecar capability; older sidecars still work but miss it.
   - **major** — breaking protocol/behavior change.
-- **The brain's two thresholds** (constants the brain ships), which are what
-  actually get **enforced at runtime**:
+- **The brain's two thresholds** — **brain-owned floors** ("the oldest sidecar
+  I'm happy with"), which are what actually get **enforced at runtime**. The
+  brain bumps these **only when the brain itself changes** for a compat reason,
+  *in the brain release it is already cutting* — it never tracks "the newest
+  sidecar":
   - `SIDECAR_MIN_VERSION` — hard floor. Brain dev bumps this when the brain makes
     a change that genuinely breaks older sidecars (→ "major / update **required**").
-  - `SIDECAR_RECOMMENDED_VERSION` — the latest the brain knows about / prefers.
-    Brain dev bumps this when a brain change works-but-is-buggy with older
-    sidecars, or simply to track the newest sidecar (→ "minor / update
-    **suggested**").
+  - `SIDECAR_RECOMMENDED_VERSION` — "suggest updating if below this." Brain dev
+    bumps this when a brain change works-but-is-buggy with older sidecars
+    (→ "minor / update **suggested**").
+
+> **Why this avoids a chicken-and-egg with decoupled releases.** If RECOMMENDED
+> meant "the latest sidecar version," then every sidecar release would force a
+> brain release just to advertise it. By defining it as a *floor the brain owns*,
+> a sidecar release (1.3.0) needs **no** brain change — a 1.3.0 sidecar is simply
+> `>= RECOMMENDED` → "ok". The brain only bumps the floors when the **brain**
+> changes for compat reasons, which is a brain release happening anyway. Net: the
+> brain advertises **compat-relevant** updates only; **optional (patch) sidecar
+> updates are intentionally NOT nagged about** by the brain (they're optional —
+> users get them via `npm update` / GitHub Releases). The runtime handshake stays
+> the universal signal for the updates that matter.
 
 On `register`, the brain compares the reported sidecar version:
 
@@ -577,14 +592,16 @@ On `register`, the brain compares the reported sidecar version:
   the wrapper's `optionalDependencies` stay exact-pinned to that one version; npm
   installs only the os/cpu match (as today). No structural change.
 - "How users learn about updates":
-  - **Native-binary users (majority)** and **npm users alike**: the **runtime
-    handshake** (§7.3) is the universal signal — the brain tells them
-    suggested/required on every connect.
-  - **npm users additionally**: normal `npm update -g @usejarvis/sidecar` /
-    reinstall pulls the new wrapper + matching platform package. (Optional
-    nicety, not required: the wrapper's `bin/jarvis-sidecar` launcher could do a
-    cached `npm view @usejarvis/sidecar version` and print a one-line "update
-    available" — best-effort, must not block startup or fail offline.)
+  - **Compat-relevant updates (suggested/required)** reach **everyone** —
+    native-binary users (the majority) and npm users — via the **runtime
+    handshake** (§7.3), on every connect. This is the universal signal.
+  - **Optional (patch) updates** are deliberately **not** announced by the brain
+    (they're optional). npm users get them through normal
+    `npm update -g @usejarvis/sidecar` / reinstall; native users via GitHub
+    Releases. (Optional nicety, not required: the wrapper's `bin/jarvis-sidecar`
+    launcher could do a cached `npm view @usejarvis/sidecar version` and print a
+    one-line "update available" — best-effort, must not block startup or fail
+    offline.)
 
 ### 7.5 Initial values / first cut
 - Seed `sidecar/VERSION` at the current effective sidecar version (e.g. `1.0.0`
