@@ -53,9 +53,14 @@ export function setUsageDatabase(resolver: DbResolver | Database): void {
 }
 
 export function recordUsage(rec: UsageRecord): void {
-  const db = resolveDb();
-  if (!db) return;          // tracking is best-effort - never break the call
+  // Tracking is best-effort: a misbehaving resolver (e.g. the production
+  // wiring is `() => getDb()`, which throws when the DB isn't initialized
+  // during a test that never called initDatabase) MUST NOT propagate out of
+  // here and break the calling chatTier/streamTier path. Catch around the
+  // resolver call AND the DB write.
   try {
+    const db = resolveDb();
+    if (!db) return;
     const ts = Date.now();
     db.run(
       `INSERT INTO llm_usage (

@@ -126,3 +126,39 @@ describe('queryUsage', () => {
     expect(r.rows).toEqual([]);
   });
 });
+
+describe('recordUsage resilience', () => {
+  it('swallows a throwing resolver (mirrors production "() => getDb()" with no DB initialized)', () => {
+    // The production wiring uses `() => getDb()` which throws when the DB
+    // isn't initialized. recordUsage MUST stay best-effort and not propagate
+    // - otherwise every chatTier/streamTier call in a test that didn't init
+    // the DB would crash. Regression for the CI failure we hit on the first
+    // pass of realtime usage tracking.
+    closeDb();
+    setUsageDatabase(() => { throw new Error('Database not initialized'); });
+
+    // Silence the expected "[LLMUsage] Failed to record usage" warning; the
+    // assertion below proves the swallow path fired, not the log line.
+    const origWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      expect(() => recordUsage({
+        tier: 'low',
+        resolved_tier: 'low',
+        subsystem: 'test',
+        provider: 'stub',
+        model: 'stub',
+        input_tokens: 1,
+        output_tokens: 1,
+        latency_ms: 1,
+      })).not.toThrow();
+    } finally {
+      console.warn = origWarn;
+      // Reset to a no-op so the resolver doesn't leak into other test files.
+      setUsageDatabase(() => null);
+    }
+    expect(warnings.length).toBe(1);
+    expect(String(warnings[0]![0])).toContain('Failed to record usage');
+  });
+});

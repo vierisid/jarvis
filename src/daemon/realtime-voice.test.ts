@@ -108,7 +108,15 @@ describe('RealtimeVoiceSession usage tracking', () => {
     initDatabase(':memory:');
     setUsageDatabase(() => getDb());
   });
-  afterEach(() => { closeDb(); });
+  afterEach(() => {
+    closeDb();
+    // Reset the global resolver - without this, every other test file that
+    // calls chatTier/streamTier without first initDatabase would see this
+    // file's `() => getDb()` resolver and trip its throw. recordUsage itself
+    // is now defensive (catches resolver throws), but resetting here keeps
+    // process state clean and matches the documented best-effort contract.
+    setUsageDatabase(() => null);
+  });
 
   test('usage events land in llm_usage as conversation/realtime_voice', async () => {
     const { fake, rv } = setup(async () => 'ok');
