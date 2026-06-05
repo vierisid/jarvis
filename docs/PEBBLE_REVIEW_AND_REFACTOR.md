@@ -11,7 +11,9 @@ Branch: `fix/pebble-sidecar-auth-binary` (off the ambient-pebble feature branch)
 Scope of this iteration: review the pebble sidecar work across four axes
 (context, abstraction philosophy, security, correctness), fix what was found,
 and begin bringing pebble / sub_pebble / region_select in line with the
-`panels` "shared runtime + thin per-OS adapter" pattern.
+`panels` "shared runtime + thin per-OS adapter" pattern. A second workstream —
+**decoupling sidecar versioning from the brain + a brain↔sidecar compatibility
+contract** — was added later and is designed (not yet built) in **§7**.
 
 ---
 
@@ -427,3 +429,179 @@ panels.go / panels_runtime.go / panels_<os>.go   the REFERENCE pattern (all plat
 When resuming: start with **5.1 (macOS pebble migration)** — it's mechanical
 given the Linux precedent and unblocks macOS parity; then **5.2** (the net-new
 sub_pebble + region_select native renderers) is the bulk of the remaining work.
+
+---
+
+## 7. Sidecar version decoupling & brain↔sidecar compatibility (PLANNED — not yet implemented)
+
+> Separate workstream added to this iteration. **Nothing below is implemented
+> yet** — this is the agreed design, ready to build. Decisions in this section
+> were made explicitly with the repo owner (recorded inline).
+
+### 7.1 The problem
+
+Today the sidecar version is **coupled to the brain version and carries no
+signal**:
+- `release.yml` triggers on `v*` tags and stamps the **brain tag version** onto
+  the brain package, all **five** sidecar platform packages, *and* the
+  `@usejarvis/sidecar` wrapper. The versions in `sidecar/npm/*/package.json`
+  (`0.1.0`) are placeholders overwritten at publish. So publishing brain `v1.0.0`
+  also publishes sidecars `1.0.0` even with zero sidecar code changes (and vice
+  versa).
+- The Go binary has **no embedded version** (release builds use
+  `-ldflags "-s -w"`, nothing injected).
+- The `register` handshake (`SidecarRegistration` in `sidecar/types.go` /
+  `register` in `src/sidecar/types.ts`) sends hostname/os/platform/capabilities
+  but **no version**. The brain (`src/sidecar/manager.ts`, the `register` branch
+  ~line 532) does **no compatibility check**.
+- The sidecar is **not** a brain dependency. It's installed independently on the
+  user's machine via **two channels**: `bun install -g @usejarvis/sidecar`
+  (npm wrapper → arch package) **or** a native binary from GitHub Releases.
+  **Most users use the native binary; npm is the niche** (some Linux users +
+  some macOS users who prefer npm over the native installer).
+
+Goal: decouple the two release cadences, make the **sidecar's semver encode
+brain-compatibility**, enforce it at runtime, and gate CI so a sidecar code
+change without a version bump is blocked.
+
+### 7.2 Decisions (agreed with repo owner)
+
+1. **One sidecar version across all arches** (NOT per-arch). The Go source is
+   shared and cross-compiled identically to every arch from one commit, so a
+   single `sidecar/VERSION` governs all five platform packages + the wrapper. A
+   platform-specific fix bumps the single version and republishes all arches
+   (unchanged binaries for the rest — harmless). This keeps the npm wrapper
+   mechanism unchanged (single exact-pin version), which dissolves most of the
+   "how does each arch know about updates" worry.
+2. **Hard-block on major incompatibility.** When a connecting sidecar is below
+   the brain's MIN version, the brain **refuses/closes the connection** with a
+   clear reason; the sidecar logs "update required" and does not operate. (Not a
+   soft alarm — an incompatible sidecar must not run.)
+3. **Brain `RECOMMENDED` constant only** for "latest available" (no live
+   npm/GitHub query). Fully offline; the brain ships the recommended sidecar
+   version it was released alongside.
+4. **Dedicated `sidecar-v*` release tag.** Pushing `sidecar-vX.Y.Z` publishes the
+   sidecar packages (independent of the brain's `v*`); CI checks the tag matches
+   `sidecar/VERSION`.
+
+### 7.3 The compatibility model (how the semver maps to behavior)
+
+Two distinct things — keep them separate (the owner's original framing conflated
+them):
+
+- **The sidecar's own semver** (`sidecar/VERSION`), bumped by sidecar-dev
+  discipline whenever shipping sidecar code changes:
+  - **patch** — internal/bugfix, fully back-compatible with brains it already
+    worked with. Update optional.
+  - **minor** — new sidecar capability; older sidecars still work but miss it.
+  - **major** — breaking protocol/behavior change.
+- **The brain's two thresholds** (constants the brain ships), which are what
+  actually get **enforced at runtime**:
+  - `SIDECAR_MIN_VERSION` — hard floor. Brain dev bumps this when the brain makes
+    a change that genuinely breaks older sidecars (→ "major / update **required**").
+  - `SIDECAR_RECOMMENDED_VERSION` — the latest the brain knows about / prefers.
+    Brain dev bumps this when a brain change works-but-is-buggy with older
+    sidecars, or simply to track the newest sidecar (→ "minor / update
+    **suggested**").
+
+On `register`, the brain compares the reported sidecar version:
+
+| Reported sidecar version | Result |
+|---|---|
+| `>= RECOMMENDED` | OK |
+| `MIN <= v < RECOMMENDED` | accept + **"update suggested"** (dashboard badge + sidecar logs a notice) |
+| `< MIN` | **hard-block** (close connection, "update required") |
+| `"dev"` / unparseable (local dev build) | accept + dev notice, **never block** |
+
+### 7.4 Implementation plan
+
+**A. Sidecar versioning (Go side)**
+- New file `sidecar/VERSION` (plain `X.Y.Z`) — the single source of truth.
+- New `sidecar/version.go`: `var sidecarVersion = "dev"` (overridden at build).
+- Build injects it: `-ldflags "-X main.sidecarVersion=$(cat VERSION)"` in
+  `sidecar/Makefile` (local builds) and in the release workflow's
+  `go build` step (currently `-ldflags "-s -w"` → add `-X`). Unset = `"dev"`.
+- Add `Version string \`json:"version"\`` to `SidecarRegistration`
+  (`sidecar/types.go`) and set it in the register send (`sidecar/client.go`).
+
+**B. Brain compatibility (TS side)**
+- New `src/sidecar/compat.ts`:
+  - `export const SIDECAR_MIN_VERSION = "x.y.z";`
+  - `export const SIDECAR_RECOMMENDED_VERSION = "x.y.z";`
+  - `classifySidecarVersion(v: string): 'ok' | 'suggested' | 'blocked' | 'dev'`
+    using a small semver compare (or the `semver` pkg if already available).
+- Extend the `register` type (`src/sidecar/types.ts`) + `ConnectedSidecar` with
+  `version`. In `manager.ts`'s `register` branch:
+  - read `parsed.version` (default `"dev"`), classify it;
+  - `blocked` → send a `register_rejected` control message
+    `{ type: 'incompatible', reason, min: MIN, your_version }` then close the WS
+    (do **not** `registerConnection`);
+  - `suggested`/`ok`/`dev` → register as today, store `version` +
+    `updateStatus` on the record so the dashboard + API expose it.
+- Sidecar side (`client.go`): handle the `incompatible` close — log a loud
+  "sidecar X is incompatible with this brain (needs >= MIN); update required"
+  and **stop the reconnect loop** (or long-backoff) so it doesn't hammer; surface
+  it to the user (stderr is enough; the user runs the sidecar in a terminal).
+  For `suggested`, the brain can include an `update_suggested` field in the
+  normal register-ack (add one if there isn't a register-ack yet) so the sidecar
+  logs "an update is available (recommended >= RECOMMENDED)".
+- Dashboard: the Settings sidecar list (already shows online/os/platform) gains a
+  **version column + an "update available/required" badge** from the stored
+  status. (`src/daemon/api-routes.ts` sidecar list + the v2 settings room.)
+
+**C. GitHub Actions**
+- **PR gate** — new job (in `test.yml` or a new `sidecar-version-check.yml`) on
+  `pull_request`: `git diff --name-only origin/<base>...HEAD`; if any **shipping**
+  sidecar path changed (`sidecar/**/*.go` excluding `*_test.go`, plus
+  `sidecar/go.mod`, `sidecar/go.sum`, `sidecar/helpers/**`) **and**
+  `sidecar/VERSION` did NOT change → **fail** with "bump sidecar/VERSION". Gray
+  areas to decide when implementing: `sidecar/Makefile`, `sidecar/include/**`
+  (cross-compile shim only — probably exclude), comment-only `.go` edits (the
+  pragmatic rule is "touch shipping `.go` → bump at least patch").
+- **Decouple release** (`release.yml`):
+  - Add trigger `tags: ['sidecar-v*']`. A `sidecar-v*` push runs **only** the
+    `build-sidecar` + `build-ocr-helper` + `publish-sidecar` jobs, versioned from
+    `sidecar/VERSION` (assert `sidecar/VERSION == ${tag#sidecar-v}`), NOT from the
+    brain tag. The `go build` step gains `-X main.sidecarVersion=$(cat VERSION)`.
+  - The brain `v*` release **stops building/publishing the sidecar**: remove
+    `publish-sidecar` (and the sidecar build/ocr jobs) from the brain chain;
+    re-point `publish-docker`/`publish-brain` `needs:` accordingly. (Docker image
+    bundling the sidecar, if any, should pull a pinned published sidecar version
+    rather than building it in the brain release — verify the Dockerfile.)
+  - `publish-sidecar`'s "Extract version from tag" / "Prepare platform packages"
+    use `sidecar/VERSION` instead of `${RELEASE_TAG#v}`; everything else (the
+    per-platform `npm version`, the wrapper `optionalDependencies` `sed`) stays.
+
+**D. The npm wrapper (`@usejarvis/sidecar`) — mechanism unchanged**
+- All five platform packages + the wrapper publish at the single `sidecar/VERSION`;
+  the wrapper's `optionalDependencies` stay exact-pinned to that one version; npm
+  installs only the os/cpu match (as today). No structural change.
+- "How users learn about updates":
+  - **Native-binary users (majority)** and **npm users alike**: the **runtime
+    handshake** (§7.3) is the universal signal — the brain tells them
+    suggested/required on every connect.
+  - **npm users additionally**: normal `npm update -g @usejarvis/sidecar` /
+    reinstall pulls the new wrapper + matching platform package. (Optional
+    nicety, not required: the wrapper's `bin/jarvis-sidecar` launcher could do a
+    cached `npm view @usejarvis/sidecar version` and print a one-line "update
+    available" — best-effort, must not block startup or fail offline.)
+
+### 7.5 Initial values / first cut
+- Seed `sidecar/VERSION` at the current effective sidecar version (e.g. `1.0.0`
+  if cutting fresh, or whatever the last coupled release stamped).
+- Set the brain's `SIDECAR_MIN_VERSION` = that same value (nothing is
+  incompatible yet) and `SIDECAR_RECOMMENDED_VERSION` = the same. They diverge
+  from each other only as real compat events happen.
+- Update README install/versioning notes (the sidecar now versions independently;
+  `bun install -g @usejarvis/sidecar` still works).
+
+### 7.6 Files this will touch (checklist for the implementer)
+- `sidecar/VERSION` (new), `sidecar/version.go` (new), `sidecar/Makefile`
+  (ldflags), `sidecar/types.go` + `sidecar/client.go` (register version).
+- `src/sidecar/compat.ts` (new), `src/sidecar/types.ts`, `src/sidecar/manager.ts`
+  (classify + hard-block + store), `sidecar/client.go` (handle reject/ack),
+  `src/daemon/api-routes.ts` + the v2 settings room (version + badge).
+- `.github/workflows/release.yml` (decouple + `sidecar-v*` + ldflags),
+  a PR-gate workflow, `README.md`.
+- No change needed to `sidecar/npm/*/package.json` structure (versions are
+  generated at publish; wrapper pins stay single-version).
