@@ -15,6 +15,7 @@ import type { PersonalityModel } from '../personality/model.ts';
 
 import { LLMManager } from '../llm/manager.ts';
 import { registerLLMProviders, configureLLMTiers } from '../llm/config-binding.ts';
+import { getDb } from '../vault/schema.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -521,7 +522,12 @@ export class AgentService implements Service, IAgentService {
     // configured llm.tiers.conversation. Otherwise we stay in classic
     // single-orchestrator mode (and handleMessage uses this.orchestrator).
     if (this.llmManager.hasConversationTier()) {
-      this.taskRegistry = new TaskRegistry();
+      // Persist task records so paused (needs_input) tasks survive daemon
+      // restarts. getDb is called lazily (resolver function) so a DB re-open
+      // between hot-reloads stays consistent. hydrate() runs immediately to
+      // reconcile any tasks that were in-flight at shutdown.
+      this.taskRegistry = new TaskRegistry({ db: () => { try { return getDb(); } catch { return null; } } });
+      this.taskRegistry.hydrate();
       // Task runner: route delegations through the primary orchestrator so
       // task tiers run with the full tool registry, role prompt, authority
       // gating, and Jarvis-specific feature knowledge. Uses processTaskCall

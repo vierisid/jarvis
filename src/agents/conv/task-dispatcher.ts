@@ -131,8 +131,8 @@ export class TaskDispatcher {
 
     const history = record.pausedConversation;
     // Clear so a subsequent failed resume doesn't replay stale state.
-    record.pausedConversation = undefined;
-    record.question = undefined;
+    // Uses the registry helper so the DB row drops these fields too.
+    this.registry.clearPauseState(taskId);
 
     return await this.runAndHandle(record, record.request, subsystem, abort, {
       originalMessage: userInput,
@@ -168,8 +168,13 @@ export class TaskDispatcher {
       }
 
       if (result.kind === 'paused') {
-        record.question = result.question;
-        record.pausedConversation = result.conversation;
+        // Record the pause state via the registry so it lands in the DB
+        // (so a daemon restart doesn't drop the question + buffer).
+        this.registry.recordPauseState(
+          record.id,
+          result.question,
+          result.conversation as import('../../llm/provider.ts').LLMMessage[],
+        );
         const envelope: TaskResultEnvelope = {
           task_id: record.id,
           status: 'needs_input',

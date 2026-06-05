@@ -768,4 +768,28 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_subsystem ON llm_usage(subsystem, ts DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_tier ON llm_usage(tier, ts DESC)`);
+
+  // Conv-tier delegated tasks. The TaskRegistry mirrors mutations here so
+  // paused (needs_input) tasks survive daemon restarts: the user's eventual
+  // clarification reply can still resume the saved conversation buffer. Tasks
+  // that were mid-flight (running/queued) at shutdown are reconciled to
+  // failed on boot because the LLM call doesn't survive a process restart.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      template TEXT NOT NULL,
+      intent TEXT NOT NULL,
+      original_message TEXT,
+      subsystem TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      result_json TEXT,
+      question TEXT,
+      paused_conversation TEXT
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status_updated ON tasks(status, updated_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)`);
 }
