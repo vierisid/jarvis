@@ -15,6 +15,11 @@ and begin bringing pebble / sub_pebble / region_select in line with the
 **decoupling sidecar versioning from the brain + a brain↔sidecar compatibility
 contract** — was added later and is designed (not yet built) in **§7**.
 
+> **⛔ RELEASE BLOCKER (see §8):** the ambient pebble feature made the sidecar a
+> cgo program, but CI still builds it with `CGO_ENABLED=0` — so the release
+> `build-sidecar` job currently **fails on every platform**, and no CI job
+> catches it. This branch **cannot be released** until §8 is done.
+
 ---
 
 ## 1. System context (for whoever resumes this)
@@ -622,3 +627,99 @@ On `register`, the brain compares the reported sidecar version:
   a PR-gate workflow, `README.md`.
 - No change needed to `sidecar/npm/*/package.json` structure (versions are
   generated at publish; wrapper pins stay single-version).
+
+---
+
+## 8. ⛔ The CI sidecar build is BROKEN on this branch (cgo) — release blocker
+
+> **This must be fixed before the branch can be merged/released.** It is
+> independent of §7 but lands in the same `build-sidecar` job, so do them
+> together. **Not yet fixed.**
+
+### 8.1 The finding
+
+The ambient pebble feature turned the sidecar into a **cgo** program, but the
+release pipeline still cross-compiles it as if it were pure Go. Concretely:
+
+- `release.yml`'s `build-sidecar` job runs, for all 5 platforms on a **single
+  `ubuntu-latest`** runner:
+  ```
+  CGO_ENABLED: "0"
+  GOOS=… GOARCH=… go build -ldflags "-s -w" -o jarvis-sidecar …
+  ```
+- With `CGO_ENABLED=0`, the **cgo** dependencies are excluded, and the build
+  **fails on every platform**:
+  ```
+  github.com/webview/webview_go: build constraints exclude all Go files
+  ```
+  (Reproduced locally for `linux/amd64`, `windows/amd64`, `darwin/arm64` — all
+  fail identically.)
+- **Nothing in CI catches this.** `test.yml` only builds the Swift `ocr-helper`
+  (on a Mac); the `Dockerfile` does not build the sidecar. So the broken build is
+  invisible until a release tag is pushed, at which point `build-sidecar` fails.
+
+Bottom line: **a release of this branch would fail.** The pebble work introduced
+native UI (panels = webview; pebble/sub_pebble = GTK/Cairo on Linux, Cocoa on
+macOS, WebView2 on Windows) which requires `CGO_ENABLED=1` + per-OS toolchains
+and libraries — none of which the current pipeline provides.
+
+### 8.2 The cgo dependency surface (`sidecar/go.mod`)
+
+- `github.com/webview/webview_go` — **cgo**, panels. Needs the system webview:
+  **WebView2** (Windows), **WebKitGTK 4.1** (Linux), **WKWebView** (macOS).
+- `github.com/gen2brain/malgo` — **cgo** (miniaudio), pebble audio. `dlopen`s the
+  OS audio backend at runtime, so **no audio dev headers are needed at build
+  time** (a plain cgo C compiler suffices — confirmed: the local Linux build
+  worked with only the webkit/gtk deps).
+- `github.com/hajimehoshi/go-mp3`, `golang.org/x/image` — pure Go, no cgo.
+- The pebble overlays themselves add direct cgo: `pebble_overlay_linux.go`
+  (`#cgo pkg-config: gtk+-3.0`), `pebble_overlay_darwin.go`
+  (`#cgo … -framework Cocoa …`). `*_windows.go` overlays use `syscall` (no cgo),
+  but they share the package with webview, so the whole package is cgo on Windows
+  too.
+
+### 8.3 Required build matrix (replace the single CGO=0 cross-compile)
+
+Each platform must build with `CGO_ENABLED=1` on a runner/toolchain that can see
+its native UI SDK. Add the §7 version ldflag everywhere:
+`-ldflags "-s -w -X main.sidecarVersion=$(cat sidecar/VERSION)"`.
+
+| npm pkg | GOOS/GOARCH | Runner | Toolchain + libs | Notes |
+|---|---|---|---|---|
+| `linux-x64` | linux/amd64 | `ubuntu-latest` (native) | `libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential` + symlink `webkit2gtk-4.0.pc`→`-4.1.pc` (and `javascriptcoregtk-4.0.pc`→`-4.1.pc`) | This is exactly what made the local Linux build succeed; sufficient (malgo needs no dev headers). |
+| `linux-arm64` | linux/arm64 | an **arm64 Linux runner** (`ubuntu-…-arm`) native, OR amd64 + aarch64 cross-toolchain + multiarch webkit/gtk libs | same libs (arm64) | Native arm64 runner is far simpler than cross-compiling cgo + multiarch apt. |
+| `win32-x64` | windows/amd64 | `ubuntu-latest` **cross-compile** (preferred) **or** a `windows-latest` runner | mingw-w64: `CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++` + `CGO_CXXFLAGS=-I$PWD/include CGO_CFLAGS=-I$PWD/include` (the `EventToken.h` shim) | This is the proven `verify-windows.sh` recipe; no Windows runner needed. WebView2 headers are bundled in webview_go; the shim covers the one missing SDK header. |
+| `darwin-arm64` | darwin/arm64 | `macos-latest` (native) | Xcode CLT (Cocoa/WKWebView SDK + clang) — already present on the runner | The `ocr-helper` job already runs on `macos-latest`; reuse a Mac runner. |
+| `darwin-x64` | darwin/amd64 | `macos-latest` (cross on the Mac) | `CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -target x86_64-apple-macos11"` (or set `-mmacosx-version-min`) | The ocr-helper job already cross-builds both arches on a Mac via `-target`, so the runner supports it. **Cross-compiling darwin cgo from Linux (osxcross) is painful — use a Mac runner.** |
+
+Practical structuring options:
+- Keep the matrix but split runners per `os` (matrix `include` with a `runner`
+  field + an install step gated on the OS). The two darwin arches can share one
+  `macos-latest` job that builds both via `-target`.
+- Or: a Linux job (builds linux-amd64 native + win32-x64 via mingw + optionally
+  linux-arm64 cross), a separate arm64-linux job, and a macOS job (both darwin
+  arches). Either is fine; the constraint is "right SDK on the right runner".
+
+### 8.4 Add a Go build to PR CI (so this never regresses silently)
+
+`test.yml` should gain a **sidecar compile check** so a cgo/build break is caught
+on PRs, not at release. Minimum: a Linux job that installs the webkit/gtk deps
+and runs `go build ./...` + `go test ./...` in `sidecar/` (native, `CGO_ENABLED=1`).
+Optionally add the Windows mingw cross-build (cheap, same runner) and a macOS
+`go build` job. (Note: the repo's local pre-commit hook does **not** run Go at
+all — see §1 — so CI is the only automated guard.)
+
+### 8.5 How this integrates with §7
+
+§7.4.C already rewrites `build-sidecar` for the decoupled `sidecar-v*` release and
+the version ldflag. Fold §8 into that same rewrite: when you restructure
+`build-sidecar`, do it as the §8.3 per-OS cgo matrix (not a tweak of the existing
+`CGO_ENABLED=0` job). The PR-version-gate (§7.4.C) and the PR-compile-check
+(§8.4) can live in the same workflow.
+
+### 8.6 Verifiable here vs not
+- Linux native build + Windows mingw cross-build: **verifiable in this dev
+  environment** (the toolchains are installed; `verify-windows.sh` proves the
+  Windows path).
+- linux-arm64 and both darwin arches: **not verifiable here** — must be checked on
+  the actual runners (a Mac for darwin; an arm64 runner or QEMU for linux-arm64).
