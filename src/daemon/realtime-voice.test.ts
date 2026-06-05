@@ -1,8 +1,10 @@
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript } from '../comms/realtime.ts';
+import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage } from '../comms/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
+import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
+import { setUsageDatabase } from '../llm/usage.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
   apiKey: 'k', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
@@ -12,6 +14,7 @@ const RESOLVED: ResolvedRealtimeVoice = {
 class FakeRealtimeSession {
   fnCb: ((c: RealtimeFunctionCall) => void) | null = null;
   transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
+  usageCb: ((u: RealtimeUsage) => void) | null = null;
   errorCb: ((e: string) => void) | null = null;
   closeCb: (() => void) | null = null;
   results: Array<{ callId: string; result: unknown }> = [];
@@ -20,6 +23,7 @@ class FakeRealtimeSession {
   onAudio() {}
   onTranscript(cb: (t: RealtimeTranscript) => void) { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void) { this.fnCb = cb; }
+  onUsage(cb: (u: RealtimeUsage) => void) { this.usageCb = cb; }
   onError(cb: (e: string) => void) { this.errorCb = cb; }
   onOpen() {}
   onClose(cb: () => void) { this.closeCb = cb; }
@@ -95,5 +99,36 @@ describe('RealtimeVoiceSession', () => {
     await fake.fnCb!({ callId: 'c3', name: 'read_file', args: {} });
     await Promise.resolve();
     expect(fake.results).toHaveLength(0); // not sent after close
+  });
+});
+
+describe('RealtimeVoiceSession usage tracking', () => {
+  beforeEach(() => {
+    closeDb();
+    initDatabase(':memory:');
+    setUsageDatabase(() => getDb());
+  });
+  afterEach(() => { closeDb(); });
+
+  test('usage events land in llm_usage as conversation/realtime_voice', async () => {
+    const { fake, rv } = setup(async () => 'ok');
+    await rv.connect();
+    fake.usageCb!({ input_tokens: 100, output_tokens: 25, latency_ms: 420 });
+
+    const rows = getDb()!
+      .query<{ tier: string; subsystem: string; provider: string; model: string; input_tokens: number; output_tokens: number; latency_ms: number }, []>(
+        'SELECT tier, subsystem, provider, model, input_tokens, output_tokens, latency_ms FROM llm_usage',
+      )
+      .all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      tier: 'conversation',
+      subsystem: 'realtime_voice',
+      provider: 'openai',
+      model: 'gpt-realtime-2',
+      input_tokens: 100,
+      output_tokens: 25,
+      latency_ms: 420,
+    });
   });
 });

@@ -184,6 +184,34 @@ describe('RealtimeSession lifecycle', () => {
     expect(sentAudio).toHaveLength(2);
   });
 
+  test('response.done emits a usage event with token totals and latency', async () => {
+    const { socket, session } = makeSession();
+    const events: Array<{ input_tokens: number; output_tokens: number; latency_ms: number }> = [];
+    session.onUsage((u) => events.push(u));
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'response.created' });
+    socket.emit({
+      type: 'response.done',
+      response: { usage: { input_tokens: 42, output_tokens: 17 } },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.input_tokens).toBe(42);
+    expect(events[0]!.output_tokens).toBe(17);
+    expect(events[0]!.latency_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  test('response.done with no usage object does NOT fire onUsage', async () => {
+    const { socket, session } = makeSession();
+    const events: unknown[] = [];
+    session.onUsage((u) => events.push(u));
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.done', response: {} });
+    expect(events).toHaveLength(0);
+  });
+
   test('barge-in with no active response does not send response.cancel', async () => {
     const { socket, session } = makeSession();
     await session.connect();

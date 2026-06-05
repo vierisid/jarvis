@@ -15,6 +15,7 @@ import {
 import type { AudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
+import { recordUsage } from '../llm/usage.ts';
 
 export type RealtimeVoiceDeps = {
   /** Shared tool schema (same `LLMTool[]` the text providers use). */
@@ -65,6 +66,24 @@ export class RealtimeVoiceSession {
     this.session.onClose(() => {
       this.closed = true;
       this.deps.onClose?.();
+    });
+
+    // Fold realtime token usage into the shared llm_usage table so the Usage
+    // room reports realtime spend alongside the text tiers. Tier is
+    // 'conversation' (realtime is the conversational brain when active) and
+    // subsystem labels the source. Provider name is hardcoded since realtime
+    // only runs against OpenAI; the model id comes from the resolved session.
+    this.session.onUsage((u) => {
+      recordUsage({
+        tier: 'conversation',
+        resolved_tier: 'conversation',
+        subsystem: 'realtime_voice',
+        provider: 'openai',
+        model: resolved.model,
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        latency_ms: u.latency_ms,
+      });
     });
 
     // The critical path: model requests a tool -> run it through the

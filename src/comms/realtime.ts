@@ -42,6 +42,18 @@ export type RealtimeTranscript = {
   final: boolean;
 };
 
+/**
+ * Per-response usage reported by OpenAI in `response.done`. We feed this into
+ * the shared `llm_usage` table so the Usage room can attribute realtime spend
+ * the same way it accounts for the text tiers.
+ */
+export type RealtimeUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  /** Wall-clock since `response.created` for this response, in ms. */
+  latency_ms: number;
+};
+
 /** Minimal WebSocket surface we depend on — lets tests inject a fake. */
 export interface RealtimeSocket {
   send(data: string): void;
@@ -139,6 +151,7 @@ export class RealtimeSession {
   private audioCb: ((chunk: Buffer) => void) | null = null;
   private transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
   private functionCallCb: ((c: RealtimeFunctionCall) => void) | null = null;
+  private usageCb: ((u: RealtimeUsage) => void) | null = null;
   private errorCb: ((err: string) => void) | null = null;
   private openCb: (() => void) | null = null;
   private closeCb: (() => void) | null = null;
@@ -150,6 +163,9 @@ export class RealtimeSession {
   // Gates barge-in cancel so we don't send response.cancel with nothing active
   // (which OpenAI rejects with an error event).
   private responseActive = false;
+  // Wall-clock the current response started (response.created), used to compute
+  // a per-response latency for the usage record on response.done.
+  private responseStartedAt = 0;
   // Set on barge-in: suppress any output audio deltas still arriving from the
   // response we just cancelled, until the next response begins.
   private suppressOutputAudio = false;
@@ -161,6 +177,8 @@ export class RealtimeSession {
   onAudio(cb: (chunk: Buffer) => void): void { this.audioCb = cb; }
   onTranscript(cb: (t: RealtimeTranscript) => void): void { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void): void { this.functionCallCb = cb; }
+  /** Fires once per `response.done` with the token + latency accounting. */
+  onUsage(cb: (u: RealtimeUsage) => void): void { this.usageCb = cb; }
   onError(cb: (err: string) => void): void { this.errorCb = cb; }
   onOpen(cb: () => void): void { this.openCb = cb; }
   onClose(cb: () => void): void { this.closeCb = cb; }
@@ -260,10 +278,28 @@ export class RealtimeSession {
         // audio plays, and arm the cancel gate.
         this.responseActive = true;
         this.suppressOutputAudio = false;
+        this.responseStartedAt = Date.now();
         break;
       }
       case 'response.done': {
         this.responseActive = false;
+        // Extract per-response usage if present and emit it. OpenAI realtime
+        // reports `response.usage.{input_tokens, output_tokens}` (plus audio /
+        // text breakdowns we don't currently surface). Missing fields default
+        // to 0 so a malformed event doesn't crash the session.
+        const resp = (evt.response as Record<string, unknown> | undefined) ?? {};
+        const usage = resp.usage as Record<string, unknown> | undefined;
+        if (usage && this.usageCb) {
+          const input = Number(usage.input_tokens ?? 0);
+          const output = Number(usage.output_tokens ?? 0);
+          const latency = this.responseStartedAt > 0 ? Date.now() - this.responseStartedAt : 0;
+          this.usageCb({
+            input_tokens: Number.isFinite(input) ? input : 0,
+            output_tokens: Number.isFinite(output) ? output : 0,
+            latency_ms: latency,
+          });
+        }
+        this.responseStartedAt = 0;
         break;
       }
       case 'response.output_audio.delta': {
