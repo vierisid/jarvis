@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import type { RealtimeReasoningEffort, SettingsHook } from "../useSettingsData";
 import { Chip } from "../../../ui";
 
@@ -6,11 +6,11 @@ import { Chip } from "../../../ui";
 const REALTIME_VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "sage", "shimmer", "verse"];
 
 const REASONING_EFFORTS: ReadonlyArray<{ id: RealtimeReasoningEffort; label: string }> = [
-  { id: "minimal", label: "Minimal — fastest, least deliberate" },
-  { id: "low", label: "Low — default, low latency" },
-  { id: "medium", label: "Medium — balanced" },
-  { id: "high", label: "High — more deliberate" },
-  { id: "xhigh", label: "X-High — most deliberate, highest latency/cost" },
+  { id: "minimal", label: "Minimal - fastest, least deliberate" },
+  { id: "low", label: "Low - default, low latency" },
+  { id: "medium", label: "Medium - balanced" },
+  { id: "high", label: "High - more deliberate" },
+  { id: "xhigh", label: "X-High - most deliberate, highest latency/cost" },
 ];
 
 export function VoiceTab({
@@ -22,13 +22,12 @@ export function VoiceTab({
 }) {
   const voice = data.voiceCfg;
   const rt = voice?.realtime;
-  const [apiKey, setApiKey] = useState("");
 
   const statusChip = !rt?.enabled
     ? { label: "Off", tone: undefined }
     : rt.available
       ? { label: "Active", tone: "ok" as const }
-      : { label: "No API key", tone: "warn" as const };
+      : { label: "No OpenAI key", tone: "warn" as const };
 
   return (
     <div className="v2-set__tabpane">
@@ -37,9 +36,10 @@ export function VoiceTab({
           <div>
             <h3 className="v2-set__section-title">Premium Realtime Voice</h3>
             <div className="v2-set__section-sub">
-              Speech-to-speech via OpenAI&apos;s gpt-realtime-2 — lower latency, natural
-              turn-taking, reasons mid-conversation. Bring your own OpenAI key; you are billed
-              by OpenAI (~$0.30/min). Off by default; the standard voice pipeline is unaffected.
+              Speech-to-speech via OpenAI&apos;s gpt-realtime-2 - lower latency, natural
+              turn-taking, reasons mid-conversation. Reuses the OpenAI provider key from
+              Settings &gt; LLM (you are billed by OpenAI, ~$0.30/min). Off by default;
+              the standard voice pipeline is unaffected.
             </div>
           </div>
           <Chip tone={statusChip.tone}>{statusChip.label}</Chip>
@@ -64,41 +64,10 @@ export function VoiceTab({
           <>
             {!rt.available && (
               <p className="v2-set__hint" data-tone="warn">
-                Enabled, but no OpenAI key resolves yet. Add one below (or set the OpenAI provider
-                key under the LLM tab). Until then JARVIS uses the standard voice pipeline.
+                Enabled, but no OpenAI provider is configured. Add one under Settings &gt; LLM.
+                Until then JARVIS uses the standard voice pipeline.
               </p>
             )}
-
-            {/* API key (BYO) */}
-            <div className="v2-set__field">
-              <label className="v2-set__field-label">OpenAI API key</label>
-              <div style={{ display: "flex", gap: "var(--s-2)" }}>
-                <input
-                  className="v2-set__input"
-                  type="password"
-                  placeholder="leave empty to keep existing / reuse LLM key"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="v2-set__btn v2-set__btn--primary"
-                  disabled={!apiKey}
-                  onClick={async () => {
-                    const r = await data.setVoiceConfig({ realtime: { api_key: apiKey } });
-                    if (r.ok) setApiKey("");
-                    onToast(r.message, r.ok ? "ok" : "warn");
-                  }}
-                >
-                  Save key
-                </button>
-              </div>
-              <p className="v2-set__hint">
-                {rt.has_api_key
-                  ? "A realtime-specific key is configured."
-                  : "No realtime-specific key; falls back to the OpenAI LLM key or env."}
-              </p>
-            </div>
 
             {/* Voice */}
             <div className="v2-set__field">

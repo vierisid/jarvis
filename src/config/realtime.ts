@@ -37,15 +37,38 @@ const DEFAULT_MAX_SESSION_MINUTES = 10;
 const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 /**
+ * Find the first OpenAI provider key in `llm.providers`. A provider entry's
+ * effective kind is `entry.kind ?? name` (matches `instantiateProvider`), so a
+ * user-named instance like `"openai-personal"` with `kind: 'openai'` is
+ * accepted - as is the default-named `"openai"` entry without an explicit kind.
+ */
+function findOpenAIProviderKey(config: JarvisConfig): string {
+  const providers = config.llm?.providers;
+  if (!providers) return '';
+  for (const [name, entry] of Object.entries(providers)) {
+    if (!entry) continue;
+    const kind = entry.kind ?? name;
+    if (kind !== 'openai') continue;
+    const key = (entry.api_key ?? '').trim();
+    if (key) return key;
+  }
+  return '';
+}
+
+/**
  * Gate + resolve the premium realtime voice mode.
  *
  * Decision (see docs/GPT_REALTIME_2_INTEGRATION.md): entitlement is simply
- * "user supplies a working OpenAI key". This NEVER throws — when realtime is
- * unavailable it returns `{ ok: false, reason }` so the caller can log a
- * warning and fall back to the standard STT -> LLM -> TTS pipeline.
+ * "user has an OpenAI provider configured under llm.providers". The realtime
+ * session reuses that key - there is no separate realtime credential. This
+ * NEVER throws - when realtime is unavailable it returns `{ ok: false, reason }`
+ * so the caller can log a warning and fall back to the standard STT -> LLM ->
+ * TTS pipeline.
  *
- * Key resolution order: `voice.realtime.api_key` -> `llm.openai.api_key` -> env
- * (JARVIS_OPENAI_KEY / OPENAI_API_KEY).
+ * Key resolution: scan `llm.providers` for a `kind: 'openai'` entry, then
+ * legacy `llm.openai.api_key` (loader migrates this into providers but keeps
+ * the raw block around until YAML write), then env (JARVIS_OPENAI_KEY /
+ * OPENAI_API_KEY).
  */
 export function resolveRealtimeVoice(
   config: JarvisConfig,
@@ -58,7 +81,7 @@ export function resolveRealtimeVoice(
   }
 
   const apiKey = (
-    rt.api_key ||
+    findOpenAIProviderKey(config) ||
     config.llm?.openai?.api_key ||
     env.JARVIS_OPENAI_KEY ||
     env.OPENAI_API_KEY ||
@@ -69,8 +92,8 @@ export function resolveRealtimeVoice(
     return {
       ok: false,
       reason:
-        'Realtime voice enabled but no OpenAI API key resolved ' +
-        '(set voice.realtime.api_key, llm.openai.api_key, or JARVIS_OPENAI_KEY)',
+        'Realtime voice enabled but no OpenAI key resolved ' +
+        '(add an OpenAI provider under Settings > LLM, or set JARVIS_OPENAI_KEY)',
     };
   }
 

@@ -1986,7 +1986,6 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           wake_engine: voice?.wake_engine ?? 'openwakeword',
           realtime: {
             enabled: rt?.enabled ?? false,
-            has_api_key: !!rt?.api_key,
             model: rt?.model ?? 'gpt-realtime-2',
             voice: rt?.voice ?? null,
             reasoning_effort: rt?.reasoning_effort ?? 'low',
@@ -2000,7 +1999,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // it is so a client can tell "using the default" from an explicit set.
             blocked_categories: rt?.blocked_categories ?? DEFAULT_BLOCKED_CATEGORIES,
             blocked_categories_default: rt?.blocked_categories === undefined,
-            // true when enabled AND a key resolves (own key, llm.openai, or env).
+            // true when enabled AND an OpenAI provider key resolves (via
+            // llm.providers or env) - reflects whether realtime would actually
+            // start if voice_start arrived right now.
             available,
           },
         });

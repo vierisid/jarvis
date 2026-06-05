@@ -138,42 +138,26 @@ describe('mergeTTSConfig', () => {
 });
 
 describe('mergeVoiceConfig', () => {
-  test('preserves realtime api_key when patch omits it', () => {
+  test('deep-merges realtime so siblings survive a partial update', () => {
     const existing: VoiceConfig = {
       wake_engine: 'openwakeword',
-      realtime: { enabled: true, api_key: 'sk-secret', model: 'gpt-realtime-2', reasoning_effort: 'low' },
+      realtime: { enabled: true, model: 'gpt-realtime-2', reasoning_effort: 'low' },
     };
     const merged = mergeVoiceConfig(existing, { realtime: { reasoning_effort: 'high' } });
-    expect(merged.realtime?.api_key).toBe('sk-secret');     // preserved
-    expect(merged.realtime?.reasoning_effort).toBe('high');  // updated
-    expect(merged.realtime?.model).toBe('gpt-realtime-2');   // sibling intact
-  });
-
-  test('empty api_key string does not wipe the stored key', () => {
-    const existing: VoiceConfig = {
-      wake_engine: 'openwakeword',
-      realtime: { enabled: true, api_key: 'sk-secret' },
-    };
-    const merged = mergeVoiceConfig(existing, { realtime: { enabled: false, api_key: '' } });
-    expect(merged.realtime?.api_key).toBe('sk-secret');
-    expect(merged.realtime?.enabled).toBe(false);
-  });
-
-  test('accepts a new api_key when provided', () => {
-    const existing: VoiceConfig = { wake_engine: 'openwakeword', realtime: { enabled: false, api_key: 'old' } };
-    const merged = mergeVoiceConfig(existing, { realtime: { enabled: true, api_key: 'new' } });
-    expect(merged.realtime?.api_key).toBe('new');
+    expect(merged.realtime?.reasoning_effort).toBe('high');
+    expect(merged.realtime?.model).toBe('gpt-realtime-2');
+    expect(merged.realtime?.enabled).toBe(true);
   });
 
   test('shallow-merges wake_engine without touching realtime', () => {
-    const existing: VoiceConfig = { wake_engine: 'openwakeword', realtime: { enabled: true, api_key: 'k' } };
+    const existing: VoiceConfig = { wake_engine: 'openwakeword', realtime: { enabled: true } };
     const merged = mergeVoiceConfig(existing, { wake_engine: 'webspeech' });
     expect(merged.wake_engine).toBe('webspeech');
     expect(merged.realtime?.enabled).toBe(true);
   });
 
   test('initializes from undefined', () => {
-    const merged = mergeVoiceConfig(undefined, { realtime: { enabled: true, api_key: 'k', voice: 'marin' } });
+    const merged = mergeVoiceConfig(undefined, { realtime: { enabled: true, voice: 'marin' } });
     expect(merged.wake_engine).toBe('openwakeword');
     expect(merged.realtime?.voice).toBe('marin');
   });

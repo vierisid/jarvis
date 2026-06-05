@@ -163,14 +163,13 @@ export interface VoiceConfig {
   wake_engine: string;
   realtime: {
     enabled: boolean;
-    has_api_key: boolean;
     model: string;
     voice: string | null;
     reasoning_effort: RealtimeReasoningEffort;
     max_session_minutes: number;
     monthly_budget_usd: number | null;
     blocked_categories: string[];
-    /** true when enabled AND a key resolves (own key, llm.openai, or env). */
+    /** true when enabled AND the OpenAI provider key resolves. */
     available: boolean;
   };
 }
@@ -180,7 +179,6 @@ export interface VoiceConfigPatch {
   wake_engine?: string;
   realtime?: Partial<{
     enabled: boolean;
-    api_key: string;
     model: string;
     voice: string;
     reasoning_effort: RealtimeReasoningEffort;

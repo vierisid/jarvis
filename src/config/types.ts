@@ -44,20 +44,16 @@ export type RealtimeReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'x
 
 /**
  * Premium opt-in speech-to-speech voice via OpenAI's Realtime API
- * (`gpt-realtime-2`). BYO OpenAI key — the user pays OpenAI directly. When
- * disabled (default) JARVIS uses the standard STT -> text LLM -> TTS pipeline.
+ * (`gpt-realtime-2`). When enabled, the realtime session reuses the OpenAI
+ * provider configured under `llm.providers` (matched by `kind: 'openai'`) -
+ * there is no separate realtime key. When disabled (default) JARVIS uses the
+ * standard STT -> text LLM -> TTS pipeline.
  *
  * See docs/GPT_REALTIME_2_INTEGRATION.md.
  */
 export type RealtimeVoiceConfig = {
   /** Master opt-in. Default false. Env: JARVIS_REALTIME_VOICE. */
   enabled: boolean;
-  /**
-   * OpenAI API key for the realtime session. If unset, resolution falls back to
-   * the existing `llm.openai.api_key`, then env. Never hard-fails the daemon —
-   * if no key resolves while enabled, JARVIS warns and uses the standard path.
-   */
-  api_key?: string;
   /** Realtime model id. Default 'gpt-realtime-2'. */
   model?: string;
   /** OpenAI realtime voice id (e.g. 'marin', 'cedar'). */

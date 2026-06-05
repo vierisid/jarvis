@@ -65,7 +65,7 @@ export function validateVoicePatch(body: unknown): VoicePatchValidation {
     if ('enabled' in r && typeof r.enabled !== 'boolean') {
       return { ok: false, error: 'realtime.enabled must be a boolean' };
     }
-    for (const strField of ['api_key', 'model', 'voice'] as const) {
+    for (const strField of ['model', 'voice'] as const) {
       if (strField in r && typeof r[strField] !== 'string') {
         return { ok: false, error: `realtime.${strField} must be a string` };
       }
@@ -169,9 +169,9 @@ export function mergeTTSConfig(
 /**
  * Merge a partial voice patch into the existing config. The `realtime`
  * sub-block (premium gpt-realtime-2) is deep-merged so a partial update (e.g.
- * just `reasoning_effort`) doesn't wipe siblings, and its `api_key` is
- * preserved when the patch omits it or sends an empty string — the GET
- * endpoint redacts the key, so a UI round-trip never sees the real value.
+ * just `reasoning_effort`) doesn't wipe siblings. It holds no secret of its
+ * own - the realtime session reuses the OpenAI provider key from llm.providers
+ * (see resolveRealtimeVoice) - so a plain shallow object merge is enough.
  */
 export function mergeVoiceConfig(
   existing: VoiceConfig | undefined,
@@ -183,7 +183,8 @@ export function mergeVoiceConfig(
 
   const incRealtime = patch.realtime as AnyRec | undefined;
   if (incRealtime) {
-    merged.realtime = mergeCloudSubBlock((base as AnyRec).realtime as AnyRec | undefined, incRealtime);
+    const baseRealtime = (base as AnyRec).realtime as AnyRec | undefined;
+    merged.realtime = { ...baseRealtime, ...incRealtime };
     delete patch.realtime;
   }
 
