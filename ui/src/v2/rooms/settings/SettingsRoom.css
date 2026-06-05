@@ -722,3 +722,56 @@
 .v2-set--inline .v2-set__body { padding: var(--s-3) var(--s-4); }
 
 .v2-set--inline .v2-set__banner { margin: 0 var(--s-4) var(--s-3); }
+
+
+/* Mode chooser (LLMTab: single LLM vs multi-tier) */
+
+.v2-set__mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+
+.v2-set__mode-card {
+  text-align: left;
+  background: var(--paper);
+  border: var(--hair);
+  border-radius: var(--r-1);
+  padding: var(--s-3);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.v2-set__mode-card:hover:not(:disabled) {
+  background: var(--paper-2);
+}
+
+.v2-set__mode-card:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.v2-set__mode-card[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--paper-2);
+}
+
+.v2-set__mode-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.v2-set__mode-card[data-active="true"] .v2-set__mode-title {
+  color: var(--accent);
+}
+
+.v2-set__mode-sub {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+

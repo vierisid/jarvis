@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Plus, Trash2, ChevronLeft } from "lucide-react";
+import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { Icon } from "../../../ui";
 import {
   KEY_BASED_KINDS,
@@ -82,7 +82,27 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   litellm: [],
 };
 
-type Mode = "basic" | "advanced";
+/**
+ * Two ways the system can be configured:
+ *  - "single"     : one model handles everything. `llm.default` set, no tier
+ *                   entries. The classic orchestrator runs.
+ *  - "multi-tier" : a thin conv LLM owns dialogue and delegates work to
+ *                   heavier task models (low/medium/high). Router-first
+ *                   architecture; activated by any tier being set.
+ *
+ * The mode is derived from the config shape (presence of any tier) - there's
+ * no separate `mode` field stored, so the UI and backend stay in sync by
+ * construction. Switching from multi -> single deletes all tier entries
+ * atomically; switching the other way just expands the UI to expose tier
+ * slots (the existing `default` becomes the fall-up fallback).
+ */
+type Mode = "single" | "multi-tier";
+
+function deriveMode(llm: { tiers: { conversation: string | null; high: string | null; medium: string | null; low: string | null } } | null): Mode {
+  if (!llm) return "single";
+  const anyTier = llm.tiers.conversation || llm.tiers.high || llm.tiers.medium || llm.tiers.low;
+  return anyTier ? "multi-tier" : "single";
+}
 
 export function LLMTab({
   data,
@@ -92,24 +112,66 @@ export function LLMTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const llm = data.llm;
-  const [mode, setMode] = useState<Mode>("basic");
+  const mode = deriveMode(llm);
+  const [switching, setSwitching] = useState(false);
 
-  // Auto-switch to advanced when ANY tier is configured. Users in classic
-  // single-LLM mode (just `default` set) start in basic.
+  if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
+
+  // Switching multi -> single deletes the tier config. The user explicitly
+  // asked for this (instead of preserving) so the saved YAML stays clean and
+  // there's no hidden tier state that would silently re-activate router mode
+  // if a future bug flipped the derived mode. The `default` model stays put.
+  const switchToSingle = async () => {
+    if (mode === "single") return;
+    setSwitching(true);
+    try {
+      const r = await data.clearAllTiers();
+      onToast(r.ok ? "Switched to single-LLM mode (tier config cleared)." : r.message, r.ok ? "ok" : "warn");
+    } finally {
+      setSwitching(false);
+    }
+  };
+  // Single -> multi-tier is a pure UI transition: no tier values to write
+  // yet, and `default` becomes the fallback. The user picks tier models
+  // below. Toggling here only flips the local view (deriveMode will return
+  // "single" until at least one tier is set).
+  const switchToMulti = () => {
+    if (mode === "multi-tier") return;
+    // Optimistic: the section below renders multi-tier pickers as soon as
+    // the user clicks, even if no tier is set yet. Once they pick a tier
+    // model the config reflects the mode and the derived state matches.
+    setPendingMulti(true);
+  };
+  const [pendingMulti, setPendingMulti] = useState(false);
+  // The view is in multi-tier mode if either the config says so or the user
+  // just clicked the toggle and hasn't picked a model yet.
+  const viewMode: Mode = mode === "multi-tier" || pendingMulti ? "multi-tier" : "single";
+  // Clear the pending flag once a tier actually gets written (so flipping
+  // back to single later starts from a clean view).
   useEffect(() => {
-    if (!llm) return;
-    const anyTier =
-      llm.tiers.conversation ||
-      llm.tiers.high ||
-      llm.tiers.medium ||
-      llm.tiers.low;
-    if (anyTier) setMode("advanced");
-  }, [llm?.tiers.conversation, llm?.tiers.high, llm?.tiers.medium, llm?.tiers.low]);
-
-  if (!llm) return <div className="v2-set__empty">Loading LLM config…</div>;
+    if (mode === "multi-tier") setPendingMulti(false);
+  }, [mode]);
 
   return (
     <div>
+      <section className="v2-set__section">
+        <div className="v2-set__section-head">
+          <div>
+            <h3 className="v2-set__section-title">How should Jarvis think?</h3>
+            <div className="v2-set__section-sub">
+              Pick the architecture that drives chat and background work.
+              You can switch any time.
+            </div>
+          </div>
+        </div>
+        <ModeChooser
+          mode={viewMode}
+          switching={switching}
+          onSingle={switchToSingle}
+          onMulti={switchToMulti}
+        />
+      </section>
+
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
@@ -122,11 +184,59 @@ export function LLMTab({
         <ProvidersList data={data} onToast={onToast} />
       </section>
 
-      {mode === "basic" ? (
-        <BasicModelSection data={data} onToast={onToast} onAdvanced={() => setMode("advanced")} />
+      {viewMode === "single" ? (
+        <SingleModelSection data={data} onToast={onToast} />
       ) : (
-        <AdvancedTiersSection data={data} onToast={onToast} onBack={() => setMode("basic")} />
+        <MultiTierSection data={data} onToast={onToast} />
       )}
+    </div>
+  );
+}
+
+function ModeChooser({
+  mode,
+  switching,
+  onSingle,
+  onMulti,
+}: {
+  mode: Mode;
+  switching: boolean;
+  onSingle: () => void;
+  onMulti: () => void;
+}) {
+  return (
+    <div className="v2-set__mode" role="radiogroup" aria-label="LLM mode">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "single"}
+        className="v2-set__mode-card"
+        data-active={mode === "single"}
+        onClick={onSingle}
+        disabled={switching}
+      >
+        <div className="v2-set__mode-title">Single LLM</div>
+        <div className="v2-set__mode-sub">
+          One model handles user chat AND background work. Simplest, cheapest
+          to wire, fewer moving parts. Recommended default.
+        </div>
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "multi-tier"}
+        className="v2-set__mode-card"
+        data-active={mode === "multi-tier"}
+        onClick={onMulti}
+        disabled={switching}
+      >
+        <div className="v2-set__mode-title">Multi-tier (router-first)</div>
+        <div className="v2-set__mode-sub">
+          A small fast model owns dialogue and delegates work to heavier
+          task models in the background. Better at long-running tasks; needs
+          more setup.
+        </div>
+      </button>
     </div>
   );
 }
@@ -437,16 +547,14 @@ function NewProviderRow({
   );
 }
 
-// ─── Basic mode: single model picker ───────────────────────────────────────
+// Single LLM mode: one model picker
 
-function BasicModelSection({
+function SingleModelSection({
   data,
   onToast,
-  onAdvanced,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
-  onAdvanced: () => void;
 }) {
   const llm = data.llm!;
 
@@ -456,7 +564,7 @@ function BasicModelSection({
         <div>
           <h3 className="v2-set__section-title">Model</h3>
           <div className="v2-set__section-sub">
-            Pick one model. The system uses it for all work (single-LLM mode).
+            Pick one model. The system uses it for everything.
           </div>
         </div>
       </div>
@@ -470,29 +578,18 @@ function BasicModelSection({
           onToast(r.message, r.ok ? "ok" : "warn");
         }}
       />
-
-      <button
-        type="button"
-        className="v2-set__btn"
-        style={{ marginTop: "var(--s-3)" }}
-        onClick={onAdvanced}
-      >
-        <Icon icon={ChevronRight} size={14} /> Advanced settings (per-tier models)
-      </button>
     </section>
   );
 }
 
-// ─── Advanced mode: tier model pickers ─────────────────────────────────────
+// Multi-tier mode: per-tier model pickers + a fallback default.
 
-function AdvancedTiersSection({
+function MultiTierSection({
   data,
   onToast,
-  onBack,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
-  onBack: () => void;
 }) {
   const llm = data.llm!;
 
@@ -500,7 +597,7 @@ function AdvancedTiersSection({
     {
       id: "conversation",
       label: "Conversation",
-      sub: "Thin LLM that owns dialogue and routes work to the task tiers. Setting this activates router-first mode.",
+      sub: "Thin LLM that owns dialogue and routes work to the task tiers.",
     },
     {
       id: "high",
@@ -523,16 +620,13 @@ function AdvancedTiersSection({
     <section className="v2-set__section">
       <div className="v2-set__section-head">
         <div>
-          <h3 className="v2-set__section-title">Advanced — per-tier models</h3>
+          <h3 className="v2-set__section-title">Per-tier models</h3>
           <div className="v2-set__section-sub">
             Different models for different jobs. Tiers without an explicit
-            model fall up: low → medium → high. The basic default below acts
-            as the fallback when no tier is set.
+            model fall up: low -&gt; medium -&gt; high. The default below acts
+            as the fallback when no tier matches.
           </div>
         </div>
-        <button type="button" className="v2-set__btn" onClick={onBack}>
-          <Icon icon={ChevronLeft} size={14} /> Back to basic
-        </button>
       </div>
 
       {TIERS.map((t) => (

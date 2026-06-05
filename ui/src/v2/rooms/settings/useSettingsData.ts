@@ -503,6 +503,24 @@ export function useSettingsData() {
   );
 
   /**
+   * Clear every tier slot in a single request. Used by the LLM mode-switch
+   * (multi-tier -> single LLM) so the transition is atomic from the user's
+   * perspective: one button click, one network round-trip, one refresh.
+   */
+  const clearAllTiers = useCallback(async (): Promise<ActionResult> => {
+    try {
+      const r = await postJson<{ ok: boolean; message: string }>(
+        "/api/config/llm",
+        { tiers: { conversation: null, high: null, medium: null, low: null } },
+      );
+      await refresh();
+      return { ok: true, message: r.message || "All tiers cleared." };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+    }
+  }, [refresh]);
+
+  /**
    * Test a provider's credentials. The `name` is the user's chosen provider
    * key (e.g. "anthropic" or "ollama-remote"). Optional overrides let the UI
    * test what's in a form field before the user clicks Save - without them,
@@ -854,6 +872,7 @@ export function useSettingsData() {
     removeProvider,
     setDefaultModel,
     setTierModel,
+    clearAllTiers,
     testProvider,
     setTelegram,
     setDiscord,

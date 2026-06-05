@@ -295,3 +295,65 @@
 @media (prefers-reduced-motion: reduce) {
   .v2-setup__spin { animation: none; }
 }
+
+
+/* Advanced setup: per-tier model pickers */
+
+.v2-setup__mode-toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.v2-setup__link {
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.v2-setup__link:hover {
+  color: var(--accent);
+}
+
+.v2-setup__tiers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.v2-setup__tier-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+  align-items: start;
+  padding: var(--s-2) var(--s-3);
+  background: var(--paper-2);
+  border: var(--hair);
+  border-radius: var(--r-1);
+}
+
+.v2-setup__tier-label {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.v2-setup__tier-sub {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.v2-setup__tier-input {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
