@@ -23,7 +23,13 @@ var gtkMainOnce sync.Once
 func ensureGTKMain() {
 	gtkMainOnce.Do(func() {
 		go func() {
-			C.gtk_init(nil, nil)
+			// gtk_init_check returns FALSE on a headless box instead of aborting
+			// the whole process the way gtk_init does. With no display (CI, a
+			// headless server, a sidecar built with overlay capabilities but run
+			// without X), skip the loop — the overlays simply won't appear.
+			if C.gtk_init_check(nil, nil) == 0 {
+				return
+			}
 			C.gtk_main()
 		}()
 	})

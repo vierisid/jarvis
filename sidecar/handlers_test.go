@@ -8,6 +8,10 @@ import (
 
 func testConfig() *SidecarConfig {
 	cfg := defaultConfig()
+	// Unit tests must not spin up native overlays (GTK) or launch a real
+	// browser. Restrict to pure-Go capabilities so NewSidecarClient + preflight
+	// don't construct the pebble/panel services or start Chrome.
+	cfg.Capabilities = []SidecarCapability{CapTerminal, CapFilesystem, CapSystemInfo}
 	return &cfg
 }
 
