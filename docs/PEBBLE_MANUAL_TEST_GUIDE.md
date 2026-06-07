@@ -128,6 +128,17 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
       **screenshot**. Save; the sidecar logs `Config reloaded`.
 - [ ] **2.f** The pebble overlay appears near the cursor shortly after the
       `pebble` capability is enabled and the sidecar (re)connects.
+- [ ] **2.g Tray / menu-bar icon [W][M]** (no tray on Linux yet).
+      - **[W]** While running, a JARVIS icon sits in the Windows **system tray**
+        (notification area). **Right-click** it → a menu with **"Close"**.
+        Clicking Close stops the sidecar (process exits, icon disappears).
+      - **[M]** While running, a JARVIS item sits in the macOS **menu bar** (no
+        Dock icon — it's an accessory app). Click it → a menu with **"Close"**
+        that stops the sidecar. (Bonus to verify: with the tray running, the
+        macOS pebble/panels should now actually animate, since the tray
+        establishes the Cocoa main run loop.)
+      - **[W][M]** Ctrl+C in the terminal also still stops it cleanly (icon
+        removed).
 
 ---
 

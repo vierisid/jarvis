@@ -92,5 +92,10 @@ Usage:
 		cancel()
 	}()
 
-	client.Start(ctx)
+	// runWithTray runs the client plus, on Windows/macOS, a system-tray /
+	// menu-bar icon whose "Close" entry stops the sidecar. It owns the per-OS
+	// threading (the macOS menu-bar item needs the main thread + NSApp run loop)
+	// and blocks until the client stops. Linux/other have no tray and just run
+	// the client.
+	runWithTray(ctx, cancel, client)
 }
