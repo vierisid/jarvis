@@ -272,17 +272,24 @@ bun install -g @usejarvis/sidecar
 
 ### 3. Run the sidecar
 
-Paste and run the copied command on the machine where you installed the sidecar:
+Just start it:
+
+```bash
+jarvis-sidecar
+```
+
+The first time it runs unconfigured, a small **setup window** pops up asking for
+the enrollment token — paste the token you copied and click **Connect**. The
+sidecar saves it locally (`~/.jarvis-sidecar/config.yaml`) and connects.
+
+Prefer the terminal / a headless box? Pass the token on the CLI instead (no
+window):
 
 ```bash
 jarvis-sidecar --token <your-token>
 ```
 
-The sidecar saves the token locally, so on subsequent runs you just need:
-
-```bash
-jarvis-sidecar
-```
+Either way, subsequent runs are just `jarvis-sidecar` (the saved token is reused).
 
 Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness).
 

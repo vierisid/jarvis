@@ -52,8 +52,27 @@ Usage:
 	}
 
 	if cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "Error: No token configured. Run with --token <jwt> first.")
-		os.Exit(1)
+		// Unconfigured: pop up the first-run window asking for the enrollment
+		// token instead of erroring out. (--token still works headlessly.)
+		log.Println("[sidecar] No token configured - opening setup window...")
+		tok, err := runSetupWindow()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\nAlternatively, run: jarvis-sidecar --token <jwt>\n", err)
+			os.Exit(1)
+		}
+		if tok == "" {
+			fmt.Fprintln(os.Stderr, "Setup cancelled - no token entered.")
+			os.Exit(1)
+		}
+		cfg.Token = tok
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("[sidecar] Failed to save config: %v", err)
+		}
+		log.Println("[sidecar] Token saved to config")
+		// Re-exec into a clean process so the overlays don't share a process with
+		// the setup window's webview (GTK main-loop conflict on Linux). On Unix
+		// this does not return; on Windows it's a no-op and we continue.
+		restartAfterSetup()
 	}
 
 	client, err := NewSidecarClient(cfg)
