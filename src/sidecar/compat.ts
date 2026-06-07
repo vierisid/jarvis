@@ -24,8 +24,12 @@
  * events happen.
  */
 
-export const SIDECAR_MIN_VERSION = '1.0.0';
-export const SIDECAR_RECOMMENDED_VERSION = '1.0.0';
+// During the current development phase the sidecar is frozen at a single
+// version (sidecar/VERSION = 0.1.0) and ships as one release, so both floors sit
+// at that value — nothing is incompatible yet. They only start to diverge once
+// the sidecar resumes independent, per-change versioning post-development.
+export const SIDECAR_MIN_VERSION = '0.1.0';
+export const SIDECAR_RECOMMENDED_VERSION = '0.1.0';
 
 /**
  * Outcome of classifying a sidecar's reported version against the floors:

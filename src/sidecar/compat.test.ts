@@ -3,7 +3,6 @@ import {
   classifySidecarVersion,
   compareSemver,
   parseSemver,
-  SIDECAR_MIN_VERSION,
   SIDECAR_RECOMMENDED_VERSION,
 } from './compat.ts';
 
@@ -47,9 +46,7 @@ describe('classifySidecarVersion', () => {
     expect(classifySidecarVersion('99.0.0')).toBe('ok');
   });
   test('below MIN is blocked', () => {
-    // Only meaningful once MIN > 0.0.0 — assert relative to a synthetic older build.
-    if (parseSemver(SIDECAR_MIN_VERSION)!.major >= 1) {
-      expect(classifySidecarVersion('0.9.0')).toBe('blocked');
-    }
+    // 0.0.0 is below any floor greater than 0.0.0 (the seeded floor is 0.1.0).
+    expect(classifySidecarVersion('0.0.0')).toBe('blocked');
   });
 });

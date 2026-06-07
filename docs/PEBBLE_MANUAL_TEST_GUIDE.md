@@ -55,10 +55,10 @@ done
 
 cd sidecar
 CGO_ENABLED=1 go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis-sidecar .
-./jarvis-sidecar --version    # must print 1.0.0
+./jarvis-sidecar --version    # must print 0.1.0
 ```
 
-- [ ] **1.1.a [L]** Build succeeds, `--version` prints `1.0.0`.
+- [ ] **1.1.a [L]** Build succeeds, `--version` prints `0.1.0`.
 - [ ] **1.1.b [L]** Run on an **X11** session (or XWayland). On pure Wayland the
       overlays + global hotkeys won't work (documented gap §11). Check your
       session: `echo $XDG_SESSION_TYPE`.
@@ -75,7 +75,7 @@ CGO_ENABLED=1 GOOS=windows CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ 
   go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis-sidecar.exe .
 ```
 
-- [ ] **1.2.a [W]** `jarvis-sidecar.exe --version` prints `1.0.0`.
+- [ ] **1.2.a [W]** `jarvis-sidecar.exe --version` prints `0.1.0`.
 - [ ] **1.2.b [W]** Requires the **WebView2 runtime** installed (panels). If
       panels fail to spawn, install the Evergreen WebView2 runtime.
 
@@ -96,7 +96,7 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
       **System Settings → Privacy & Security →**
       - **Accessibility** (global hotkeys won't fire without it)
       - **Screen Recording** (region capture returns black/empty without it)
-- [ ] **1.3.c [M]** `--version` prints `1.0.0`.
+- [ ] **1.3.c [M]** `--version` prints `0.1.0`.
 
 ---
 
@@ -106,10 +106,23 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
       dashboard (default `http://localhost:3142`).
 - [ ] **2.b** **Settings → Sidecar → Enroll**, name it (e.g. "test-box"), copy
       the `jarvis-sidecar --token <jwt>` command.
-- [ ] **2.c** Run that command on the test machine. The sidecar terminal prints
-      `Identified as <host> (<os>/<arch>) v1.0.0` and `Connected`.
+- [ ] **2.b-i First-run setup window [W][L][M].** On a machine with **no token
+      yet**, run `jarvis-sidecar` with **no flags**. A setup window pops up
+      ("Connect this machine to JARVIS"). Paste the enrollment token, click
+      **Connect** (or Cmd/Ctrl+Enter). Window closes; terminal logs
+      `Token saved to config`; it connects.
+      - Paste garbage → inline error "doesn't look like a valid token", window
+        stays open.
+      - Close the window without entering a token → process exits with
+        "Setup cancelled".
+      - Re-run `jarvis-sidecar` → **no** window (saved token reused).
+      - `jarvis-sidecar --token <jwt>` (headless path) still works with no window.
+      - **[L]** needs an X11/XWayland display + webkit2gtk; **[M]/[W]** use the
+        system webview (WebView2 on Windows).
+- [ ] **2.c** Run that command (or use the window). The sidecar terminal prints
+      `Identified as <host> (<os>/<arch>) v0.1.0` and `Connected`.
 - [ ] **2.d** Back in **Settings → Sidecar**, the sidecar shows **online** with
-      **`v1.0.0`** next to the os/platform (the new version column).
+      **`v0.1.0`** next to the os/platform (the new version column).
 - [ ] **2.e** In Settings, enable the capabilities under test: at least
       **pebble**, **sub_pebble**, **windows** (panels), **awareness**,
       **screenshot**. Save; the sidecar logs `Config reloaded`.
@@ -305,12 +318,12 @@ A drag-select screen-capture overlay. Trigger it via the brain flow that calls
 
 ## 8. Sidecar version decoupling & compatibility (§7)
 
-This is the new versioning workstream. Floors ship at `MIN = RECOMMENDED = 1.0.0`.
+This is the new versioning workstream. Floors ship at `MIN = RECOMMENDED = 0.1.0`.
 
 ### 8.1 Handshake — happy path
 
-- [ ] **8.1.a [W][L][M]** A `1.0.0` sidecar connects normally; dashboard shows
-      `v1.0.0`, no "update" badge.
+- [ ] **8.1.a [W][L][M]** A current (`0.1.0`) sidecar connects normally;
+      dashboard shows `v0.1.0`, no "update" badge (it's ≥ the `0.1.0` floor).
 - [ ] **8.1.b** **Dev build never blocks.** Build **without** the ldflag
       (`go build .`), so `--version` prints `dev`. Connect it. The brain accepts
       it; dashboard shows a **"dev build"** note; it is never blocked.
@@ -321,12 +334,12 @@ To exercise the non-trivial branches, temporarily edit
 `src/sidecar/compat.ts` and restart the brain (revert after).
 
 - [ ] **8.2.a Blocked (update required).** Set `SIDECAR_MIN_VERSION = '2.0.0'`.
-      Restart brain. Connect the `1.0.0` sidecar. **Expected:** brain refuses —
-      logs `Rejecting sidecar … version 1.0.0 < required 2.0.0`; the WS closes
+      Restart brain. Connect the current (`0.1.0`) sidecar. **Expected:** brain refuses —
+      logs `Rejecting sidecar … version 0.1.0 < required 2.0.0`; the WS closes
       (code 4001); the **sidecar** prints the loud `INCOMPATIBLE … update
       required` banner and **stops reconnecting** (no hammering). Revert.
 - [ ] **8.2.b Suggested (update available).** Set `SIDECAR_RECOMMENDED_VERSION =
-      '2.0.0'` (leave MIN at `1.0.0`). Restart brain. Connect the `1.0.0`
+      '2.0.0'` (leave MIN at `0.1.0`). Restart brain. Connect the current (`0.1.0`)
       sidecar. **Expected:** it connects; sidecar logs `An update is available
       (recommends >= 2.0.0…)`; dashboard sidecar row shows **"update available"**
       (warn colour). Revert.
@@ -349,16 +362,15 @@ Run these as a reviewer on the branch / a draft PR.
 - [ ] **9.a Go PR gate.** Open a draft PR. The `Tests` workflow runs a
       **`sidecar-build`** job (Linux native cgo `go vet`/`build`/`test` +
       Windows mingw cross-build). It must pass.
-- [ ] **9.b Version-bump gate.** In a scratch PR, edit a shipping file
-      (`sidecar/client.go`) **without** bumping `sidecar/VERSION` →
-      `sidecar-version-gate` **fails** with "bump sidecar/VERSION". Then bump
-      `sidecar/VERSION` → it **passes**. Editing only `*_test.go` or
-      `sidecar/include/**` does **not** require a bump.
+- [ ] **9.b Version-bump gate is OFF (dev phase).** Confirm there is **no**
+      `sidecar-version-gate` job — the sidecar is frozen at `0.1.0` for now, so
+      shipping changes do **not** require a VERSION bump. (Reinstated later when
+      independent versioning resumes.)
 - [ ] **9.c Sidecar release (dry run).** Actions → **Release** → Run workflow
-      with `dry_run = true`, `tag = sidecar-v1.0.0-test.1`. The `classify` job
-      tags it **sidecar**; only `build-sidecar` (5-arch cgo matrix) +
-      `build-ocr-helper` + `publish-sidecar` (+ sidecar GH release) run; brain
-      jobs are **skipped**. `publish-sidecar` asserts the tag == `sidecar/VERSION`.
+      with `dry_run = true`, `tag = sidecar-v0.1.0` (must match `sidecar/VERSION`).
+      The `classify` job tags it **sidecar**; only `build-sidecar` (5-arch cgo
+      matrix) + `build-ocr-helper` + `publish-sidecar` (+ sidecar GH release) run;
+      brain jobs are **skipped**. `publish-sidecar` asserts tag == `sidecar/VERSION`.
 - [ ] **9.d Brain release (dry run).** Run with `tag = v9.9.9-test.1`. Only
       `build-docker` / `publish-brain` / `publish-docker` / `github-release` /
       `discord-notify` run; **no sidecar jobs**. Docker image does not bundle the

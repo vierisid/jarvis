@@ -70,46 +70,11 @@ jobs:
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           go build -o /tmp/jarvis-sidecar.exe .
 
-  # ─── PR gate: a shipping sidecar change must bump sidecar/VERSION ──
-  # The sidecar versions independently of the brain (docs/PEBBLE_REVIEW... §7).
-  # Any shipping Go/helper/module change without a VERSION bump fails here.
-  sidecar-version-gate:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Require sidecar/VERSION bump on shipping sidecar changes
-        run: |
-          set -euo pipefail
-          BASE_REF="${{ github.base_ref }}"
-          # Full (non-shallow) fetch so the three-dot diff can find the merge base.
-          git fetch --no-tags origin "$BASE_REF"
-          CHANGED="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
-
-          # Shipping = Go (non-test) + go.mod/sum + helpers. Excludes _test.go,
-          # the cross-compile shim (include/**), Makefile, VERSION itself, docs.
-          SHIP="$(printf '%s\n' "$CHANGED" \
-            | grep -E '^sidecar/(.*\.go|go\.mod|go\.sum|helpers/.*)$' \
-            | grep -v '_test\.go$' || true)"
-
-          if [ -z "$SHIP" ]; then
-            echo "No shipping sidecar changes in this PR — version bump not required."
-            exit 0
-          fi
-
-          if printf '%s\n' "$CHANGED" | grep -qx 'sidecar/VERSION'; then
-            echo "Shipping sidecar changes present and sidecar/VERSION was bumped. OK:"
-            printf '%s\n' "$SHIP"
-            exit 0
-          fi
-
-          echo "::error::Shipping sidecar code changed but sidecar/VERSION was NOT bumped."
-          echo "Changed shipping paths:"
-          printf '%s\n' "$SHIP"
-          echo "Bump sidecar/VERSION (patch=bugfix, minor=new capability, major=breaking)."
-          exit 1
+  # NOTE: the sidecar VERSION-bump PR gate is intentionally OFF during the
+  # current development phase — the sidecar is frozen at sidecar/VERSION = 0.1.0
+  # and ships as a single version, so per-change bumps aren't wanted. Reinstate a
+  # "shipping sidecar change must bump sidecar/VERSION" job here when independent
+  # per-change versioning resumes (design in docs/PEBBLE_REVIEW... §7.4.C).
 
   # Validate the macOS Vision OCR helper compiles, and publish the universal
   # Mach-O binary as an artifact so operators can grab it without cutting a

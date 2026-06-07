@@ -506,12 +506,19 @@ runtime verification** of everything (must be checked on a Mac).
 >   branch + `toSidecarInfo`. Dashboard: version + "update available/dev" badge
 >   in the v2 `SidecarTab`.
 > - **CI:** see §8 — `build-sidecar` rewritten as the cgo matrix, the brain/
->   sidecar release flows decoupled (`sidecar-v*` tag + `classify` job), and PR
->   gates (Go compile/test + VERSION-bump) added to `test.yml`.
+>   sidecar release flows decoupled (`sidecar-v*` tag + `classify` job), and a Go
+>   compile/test gate added to `test.yml`.
 > - **README:** "Versioning & updates" subsection under Sidecar Setup.
 >
-> Seed values: `MIN == RECOMMENDED == 1.0.0` (nothing incompatible yet). Below is
-> the original design text.
+> **Dev-phase note (current):** the sidecar is **frozen at `sidecar/VERSION =
+> 0.1.0`** for the whole in-development cycle — everything ships as one version,
+> so the version is NOT bumped per change. Consequently the **VERSION-bump PR
+> gate is OFF** (removed from `test.yml`; reinstate per §7.4.C when independent
+> per-change versioning resumes). The floors are seeded `MIN == RECOMMENDED ==
+> 0.1.0`, so the dev sidecar always classifies as "ok". The decoupling machinery
+> (handshake, hard-block, dashboard badge, decoupled release) is fully in place
+> and simply operates at the single frozen version. Below is the original design
+> text (which describes the eventual per-change versioning discipline).
 
 ### 7.1 The problem
 
@@ -679,11 +686,11 @@ On `register`, the brain compares the reported sidecar version:
     offline.)
 
 ### 7.5 Initial values / first cut
-- Seed `sidecar/VERSION` at the current effective sidecar version (e.g. `1.0.0`
-  if cutting fresh, or whatever the last coupled release stamped).
-- Set the brain's `SIDECAR_MIN_VERSION` = that same value (nothing is
-  incompatible yet) and `SIDECAR_RECOMMENDED_VERSION` = the same. They diverge
-  from each other only as real compat events happen.
+- **As shipped (dev phase):** `sidecar/VERSION = 0.1.0`, frozen for the whole
+  development cycle (one version for everything; not bumped per change).
+- `SIDECAR_MIN_VERSION = SIDECAR_RECOMMENDED_VERSION = 0.1.0` (nothing
+  incompatible; the dev sidecar is always "ok"). They diverge only once
+  independent per-change versioning resumes and a real compat event happens.
 - Update README install/versioning notes (the sidecar now versions independently;
   `bun install -g @usejarvis/sidecar` still works).
 
