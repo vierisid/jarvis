@@ -1,8 +1,8 @@
 # Vendored + patched `webview_go`
 
-This is a local copy of `github.com/webview/webview_go`
-(`v0.0.0-20240831120633-6173450d4dd6`), wired in via a `replace` directive in
-`sidecar/go.mod`, with **one patch**.
+This is a local copy of `github.com/webview/webview_go` (the pinned version is
+in `UPSTREAM_VERSION`), wired in via a `replace` directive in `sidecar/go.mod`,
+with **one patch** (`jarvis.patch`).
 
 ## Why
 
@@ -33,5 +33,21 @@ brief flash there).
 
 ## Upgrading
 
-Re-copy the module from the Go module cache, re-apply the one-line `SW_HIDE`
-patch above (search for `PATCHED (jarvis)`), and re-run `go mod tidy`.
+Upgrades are automated. `.github/workflows/update-webview.yml` runs monthly: it
+checks the Go module proxy for a newer version, re-vendors via
+`scripts/vendor-webview.sh`, re-applies `jarvis.patch`, and -- only if the patch
+still applies and the sidecar still builds (linux-native cgo + windows-cross
+mingw) -- opens a PR. A green run means the bump is safe to merge, but the PR is
+always left for a human to review and merge (no auto-merge).
+
+To bump manually (or pin a specific version):
+
+```sh
+scripts/vendor-webview.sh                # latest from the proxy
+scripts/vendor-webview.sh v0.0.0-2025... # a specific version
+```
+
+If upstream moves the win32 constructor, `patch` (and the workflow) will fail.
+Regenerate `jarvis.patch`: diff a pristine copy of the new
+`libs/webview/include/webview.h` against the `SW_HIDE` edit above (search for
+`PATCHED (jarvis)`), update the hunk, and re-run the script.

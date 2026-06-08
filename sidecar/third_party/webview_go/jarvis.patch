@@ -1,0 +1,17 @@
+diff --git a/libs/webview/include/webview.h b/libs/webview/include/webview.h
+--- a/libs/webview/include/webview.h
++++ b/libs/webview/include/webview.h
+@@ -3179,9 +3179,10 @@ public:
+                     nullptr, hInstance, this);
+
+     if (m_owns_window) {
+-      ShowWindow(m_window, SW_SHOW);
+-      UpdateWindow(m_window);
+-      SetFocus(m_window);
++      // PATCHED (jarvis): create the window HIDDEN so the host can reveal it
++      // once the page has loaded, avoiding the empty-window flash during
++      // WebView2 init. The host calls ShowWindow(SW_SHOW) itself.
++      ShowWindow(m_window, SW_HIDE);
+     }
+
+     auto cb =

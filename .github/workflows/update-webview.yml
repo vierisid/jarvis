@@ -1,0 +1,197 @@
+name: Update webview_go
+
+# Monthly check for a newer github.com/webview/webview_go, re-vendor it into
+# sidecar/third_party/webview_go, re-apply our SW_HIDE patch (jarvis.patch), and
+# -- only if it still builds on every toolchain -- open a PR for review.
+#
+# Why this exists: we vendor + patch webview_go (see the vendor dir's
+# JARVIS_PATCH.md), so Dependabot/Renovate can't bump it. This job is the
+# replacement: a PR is opened ONLY when the patch re-applies cleanly AND the
+# sidecar still compiles (linux-native cgo + windows-cross mingw, the same gate
+# as test.yml's sidecar-build, which specifically exercises the patched win32
+# path). A green run means the bump is safe -- but the PR is always left for a
+# human to review and merge (no auto-merge).
+#
+# Optional: set a PAT in secret WEBVIEW_BOT_TOKEN (repo + workflow scope) so the
+# bot's PR also triggers test.yml as a visible check on the PR. PRs opened with
+# the default GITHUB_TOKEN do not trigger other workflows; the in-workflow compat
+# gate below runs either way.
+
+on:
+  schedule:
+    - cron: "0 6 1 * *" # 06:00 UTC on the 1st of every month
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "webview_go version to pin (default: latest from the proxy)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# Serialize runs (a manual dispatch landing on top of the monthly cron) so two
+# jobs don't race on the bot branch / open competing PRs.
+concurrency:
+  group: update-webview-go
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.25"
+  MODULE: github.com/webview/webview_go
+
+jobs:
+  # ─── Is there a newer version than what we have pinned? ─────────
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+      current: ${{ steps.cmp.outputs.current }}
+      version: ${{ steps.cmp.outputs.version }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - id: cmp
+        # Read the dispatch input through env (never interpolate untrusted
+        # ${{ }} straight into the shell -- it would allow command injection).
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          current="$(cat sidecar/third_party/webview_go/UPSTREAM_VERSION)"
+          if [ -n "$INPUT_VERSION" ]; then
+            latest="$INPUT_VERSION"
+          else
+            latest="$(curl -fsSL "https://proxy.golang.org/${MODULE}/@latest" \
+              | sed -n 's/.*"Version":"\([^"]*\)".*/\1/p')"
+          fi
+          [ -n "$latest" ] || { echo "could not resolve latest version" >&2; exit 1; }
+          # Defence in depth: a Go module version is [A-Za-z0-9.+_-] only. Reject
+          # anything else before it flows into later shell steps.
+          case "$latest" in
+            *[!A-Za-z0-9.+_-]*) echo "refusing suspicious version: $latest" >&2; exit 1 ;;
+          esac
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "version=$latest"  >> "$GITHUB_OUTPUT"
+          if [ "$current" != "$latest" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "current=$current  latest=$latest"
+
+  # ─── Re-vendor, re-patch, prove it still builds, open the PR ────
+  update:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sidecar/go.sum
+
+      # Same toolchain set as test.yml's sidecar-build: GTK/WebKit for the
+      # native cgo build, mingw for the windows cross-build of the patched code.
+      - name: Install Linux UI libraries + mingw
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          for d in /usr/lib/*/pkgconfig; do
+            [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
+            [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
+          done
+
+      - name: Re-vendor + re-apply jarvis.patch
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: scripts/vendor-webview.sh "$VERSION"
+
+      - name: Verify the hidden-window patch landed
+        run: |
+          set -euo pipefail
+          h=sidecar/third_party/webview_go/libs/webview/include/webview.h
+          grep -q "PATCHED (jarvis)" "$h"
+          grep -q "ShowWindow(m_window, SW_HIDE)" "$h"
+
+      # ── Compatibility gate ─────────────────────────────────────
+      - name: Compat - build + vet + test (linux/amd64, cgo)
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go build ./...
+          go test ./...
+
+      - name: Compat - cross-build (windows/amd64, mingw) [patched win32 path]
+        working-directory: sidecar
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          CC: x86_64-w64-mingw32-gcc
+          CXX: x86_64-w64-mingw32-g++
+        run: |
+          set -euo pipefail
+          export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
+          go build -o /tmp/jarvis-sidecar.exe .
+
+      - name: Open / update the bump PR
+        id: pr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: bot/update-webview-go
+          delete-branch: true
+          add-paths: |
+            sidecar/third_party/webview_go/**
+            sidecar/go.mod
+            sidecar/go.sum
+          commit-message: "Bump vendored webview_go to ${{ needs.check.outputs.version }}"
+          title: "Bump vendored webview_go to ${{ needs.check.outputs.version }}"
+          labels: dependencies, automated
+          body: |
+            Automated monthly bump of the vendored `webview_go`.
+
+            - From: `${{ needs.check.outputs.current }}`
+            - To:   `${{ needs.check.outputs.version }}`
+
+            Re-vendored via `scripts/vendor-webview.sh` and re-applied
+            `jarvis.patch` (the SW_HIDE hidden-window patch). The compatibility
+            gate in this run passed:
+
+            - linux/amd64 cgo `go vet` + `go build` + `go test`
+            - windows/amd64 mingw cross-build (compiles the patched win32 engine)
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Note: the gate proves it still **compiles**; it can't exercise the
+            runtime hidden-window behavior. Skim the `jarvis.patch` hunk in the
+            diff to confirm the SW_HIDE edit still sits in the win32 constructor.
+
+      # If anything above failed (patch no longer applies, or upstream broke the
+      # build), surface it instead of failing silently in a scheduled run.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="webview_go ${VERSION} update needs a human"
+          # Don't open a fresh issue every month if the same bump keeps failing.
+          if gh issue list --state open --search "$title in:title" --json title --jq '.[].title' \
+               | grep -qxF "$title"; then
+            echo "An open issue already tracks this; not duplicating."
+            exit 0
+          fi
+          gh issue create --title "$title" --label automated,dependencies \
+            --body "The monthly webview_go update to \`${VERSION}\` failed (patch no longer applies, or the bump broke the build). Re-apply the SW_HIDE patch, regenerate \`sidecar/third_party/webview_go/jarvis.patch\`, then re-run. Run: ${RUN_URL}" \
+            || true

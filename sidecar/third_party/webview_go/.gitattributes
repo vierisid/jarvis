@@ -1,0 +1,5 @@
+# Vendored upstream. Normalize everything to LF so re-vendoring (which copies
+# files straight from the Go module cache, where Microsoft's WebView2.h ships
+# with CRLF) doesn't surface spurious line-ending-only diffs. Line endings are
+# irrelevant to the C/Go compilers here.
+* text=auto eol=lf
