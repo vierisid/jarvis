@@ -27,8 +27,13 @@ extern void goTrayOpenChat(void);
 extern void goTrayOpenSettings(void);
 extern void goTrayOpenLogs(void);
 
-// Menu action target: forwards clicks back into Go.
-@interface JarvisTrayTarget : NSObject
+// Menu action target: forwards clicks back into Go. Also acts as the
+// NSApplication delegate (set in jarvisTraySetup) so that webview_go's panel
+// engine, on first construction, sees a non-nil app delegate and goes straight
+// to creating its window instead of spinning up its own temporary [NSApp run]
+// loop on a background goroutine (which would never receive the already-fired
+// didFinishLaunching and would hang / race the tray's run loop).
+@interface JarvisTrayTarget : NSObject <NSApplicationDelegate>
 - (void)onClose:(id)sender;
 - (void)onChat:(id)sender;
 - (void)onSettings:(id)sender;
@@ -63,6 +68,9 @@ static void jarvisTraySetup(void) {
     btn.toolTip = @"JARVIS Sidecar";
 
     gTrayTarget = [[JarvisTrayTarget alloc] init];
+    // Become the app delegate so panel webviews skip their own bootstrap run
+    // loop (see the JarvisTrayTarget interface comment).
+    [NSApp setDelegate:gTrayTarget];
     NSMenu* menu = [[NSMenu alloc] init];
 
     // Connection status — disabled (unclickable) info line. action:nil keeps it

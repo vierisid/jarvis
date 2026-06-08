@@ -7,9 +7,34 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	webview "github.com/webview/webview_go"
 )
+
+// panelSharedLoop is true on platforms where one process-wide native run loop,
+// owned elsewhere (the macOS tray's [NSApp run]), services every panel window.
+// There, panels must NOT start their own loop and every window/webview mutation
+// must be marshalled onto that loop's thread (the main thread). On Windows/Linux
+// each panel goroutine owns its window and runs its own loop, so this is false.
+const panelSharedLoop = runtime.GOOS == "darwin"
+
+// uiSync runs fn on the thread that owns the panel windows and blocks until it
+// finishes. On shared-loop platforms (macOS) that's the main thread, reached via
+// the webview's main-queue dispatch; elsewhere the caller already owns the
+// window so fn runs inline.
+func uiSync(wv webview.WebView, fn func()) {
+	if !panelSharedLoop || wv == nil {
+		fn()
+		return
+	}
+	done := make(chan struct{})
+	wv.Dispatch(func() {
+		defer close(done)
+		fn()
+	})
+	<-done
+}
 
 // panelImpl wraps a single webview window and the channel used to control it.
 type panelImpl struct {
@@ -20,6 +45,11 @@ type panelImpl struct {
 	following  atomic.Bool     // when true, cursor-tracker actively moves window
 	followStop chan struct{}   // closed by Close()/Stop() to halt the tracker
 	hotkeyStop func()          // unregister + stop the hotkey listener
+	// macOS shared-loop teardown: uiClosed is closed (once) when the window is
+	// gone so the spawn goroutine, which does not run its own loop there, can
+	// return. Unused on Windows/Linux (those block in wv.Run()).
+	uiClosed    chan struct{}
+	uiCloseOnce sync.Once
 }
 
 // panelService is the cross-platform PanelService implementation. The actual
@@ -57,6 +87,7 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		ready:      make(chan struct{}),
 		done:       make(chan struct{}),
 		followStop: make(chan struct{}),
+		uiClosed:   make(chan struct{}),
 	}
 	if spec.FollowCursor {
 		impl.following.Store(true)
@@ -94,7 +125,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			close(impl.ready)
 			return
 		}
-		defer wv.Destroy()
+		// Destroy touches the NSWindow/WKWebView, so on the shared-loop platform
+		// it must run on the main thread.
+		defer func() { uiSync(wv, wv.Destroy) }()
 		impl.wv = wv
 		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 
@@ -103,121 +136,131 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		// so it appears fully-formed instead of showing the empty webview that
 		// fills + resizes as it loads). Fullscreen / cursor-follow panels (the
 		// transparent overlays) must be visible from the start, so they opt out.
-		earlyHandle := wv.Window()
-		delayShow := !spec.Fullscreen && !spec.FollowCursor && earlyHandle != nil
-		if delayShow {
-			_ = platformSetWindowVisible(earlyHandle, false)
-		}
-
-		if spec.Title != "" {
-			wv.SetTitle(spec.Title)
-		}
-		// Fullscreen mode (W2-T7) overrides bounds with the virtual screen
-		// dimensions and positions the window at the virtual screen's origin
-		// — secondary monitors extending left/up of primary have negative
-		// origin coords. Page renders pebble at OS cursor pos via CSS.
-		w, h := spec.Bounds.W, spec.Bounds.H
-		if spec.Fullscreen {
-			w, h = platformGetScreenSize()
-		}
-		if w > 0 || h > 0 {
-			if w <= 0 {
-				w = 200
+		// All window/webview setup below touches AppKit/WebKit objects, which on
+		// the shared-loop platform (macOS) must run on the main thread. uiSync
+		// marshals the whole sequence there and blocks until done; on
+		// Windows/Linux it runs inline on this goroutine. earlyHandle/handle/
+		// delayShow are hoisted because later goroutines (follow, bounds, close
+		// watcher) read them.
+		var earlyHandle, handle unsafe.Pointer
+		var delayShow bool
+		uiSync(wv, func() {
+			earlyHandle = wv.Window()
+			delayShow = !spec.Fullscreen && !spec.FollowCursor && earlyHandle != nil
+			if delayShow {
+				_ = platformSetWindowVisible(earlyHandle, false)
 			}
-			if h <= 0 {
-				h = 60
-			}
-			var hint webview.Hint = webview.HintNone
-			if !spec.Resizable {
-				hint = webview.HintFixed
-			}
-			wv.SetSize(w, h, hint)
-			log.Printf("[panels] spawn(%s): size set to %dx%d (fullscreen=%v)", spec.ID, w, h, spec.Fullscreen)
-		}
 
-		handle := wv.Window()
-		log.Printf("[panels] spawn(%s): native handle=%v", spec.ID, handle)
-		if err := applyPlatformFlags(handle, spec); err != nil {
-			log.Printf("[panels] applyPlatformFlags(%s): %v", spec.ID, err)
-		}
-
-		// Reposition fullscreen window to the virtual-screen origin so it
-		// truly covers every connected monitor (secondaries can extend
-		// left/up of primary, giving negative origin coords).
-		if spec.Fullscreen {
-			origX, origY := platformGetVirtualScreenOrigin()
-			if err := platformMoveWindow(handle, origX, origY); err != nil {
-				log.Printf("[panels] spawn(%s): move to (%d,%d): %v", spec.ID, origX, origY, err)
-			} else {
-				log.Printf("[panels] spawn(%s): positioned at virtual-screen origin (%d,%d)", spec.ID, origX, origY)
+			if spec.Title != "" {
+				wv.SetTitle(spec.Title)
 			}
-		} else if spec.Bounds.X >= 0 && spec.Bounds.Y >= 0 {
-			// W3-T3 — daemon passed an explicit top-left (restored from
-			// ~/.jarvis/window-state.json, or palette positioning). The
-			// sentinel for "let the sidecar pick" is x<0/y<0; treat
-			// 0,0 and positive coords as authoritative and move there.
-			// Use the keep-z-order variant so a non-always-on-top panel
-			// doesn't get promoted to topmost just because we repositioned
-			// it (platformMoveWindow does that for the cursor-follow path).
-			if err := platformMoveWindowKeepZOrder(handle, spec.Bounds.X, spec.Bounds.Y); err != nil {
-				log.Printf("[panels] spawn(%s): move to saved (%d,%d): %v", spec.ID, spec.Bounds.X, spec.Bounds.Y, err)
-			} else {
-				log.Printf("[panels] spawn(%s): positioned at saved (%d,%d)", spec.ID, spec.Bounds.X, spec.Bounds.Y)
+			// Fullscreen mode (W2-T7) overrides bounds with the virtual screen
+			// dimensions and positions the window at the virtual screen's origin
+			// — secondary monitors extending left/up of primary have negative
+			// origin coords. Page renders pebble at OS cursor pos via CSS.
+			w, h := spec.Bounds.W, spec.Bounds.H
+			if spec.Fullscreen {
+				w, h = platformGetScreenSize()
 			}
-		}
+			if w > 0 || h > 0 {
+				if w <= 0 {
+					w = 200
+				}
+				if h <= 0 {
+					h = 60
+				}
+				var hint webview.Hint = webview.HintNone
+				if !spec.Resizable {
+					hint = webview.HintFixed
+				}
+				wv.SetSize(w, h, hint)
+				log.Printf("[panels] spawn(%s): size set to %dx%d (fullscreen=%v)", spec.ID, w, h, spec.Fullscreen)
+			}
 
-		// JS-callable bindings: page calls these directly via webview, no
-		// daemon round-trip. Must be bound before Run.
-		panelID := spec.ID
-		if err := wv.Bind("__sidecar_set_regions", func(rects []PanelRect) error {
-			return s.SetInteractiveRegions(panelID, rects)
-		}); err != nil {
-			log.Printf("[panels] spawn(%s): Bind(__sidecar_set_regions) failed: %v", spec.ID, err)
-		}
-		if err := wv.Bind("__sidecar_set_clickthrough", func(ct bool) error {
-			return s.SetClickThrough(panelID, ct)
-		}); err != nil {
-			log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
-		}
+			handle = wv.Window()
+			log.Printf("[panels] spawn(%s): native handle=%v", spec.ID, handle)
+			if err := applyPlatformFlags(handle, spec); err != nil {
+				log.Printf("[panels] applyPlatformFlags(%s): %v", spec.ID, err)
+			}
 
-		// Reveal the (hidden) panel once its page has loaded, with a timeout
-		// fallback so it never stays stuck hidden. Set up BEFORE Navigate so the
-		// init script + binding apply to the loaded page.
-		if !delayShow {
-			// Overlay panels (fullscreen / cursor-follow) must be visible
-			// immediately. The vendored webview creates the window hidden on
-			// Windows, so show it now.
-			_ = platformSetWindowVisible(earlyHandle, true)
-		}
-		if delayShow {
-			// Re-assert hidden: applyPlatformFlags above may have re-shown the
-			// window (its SetWindowPos uses SWP_SHOWWINDOW for always-on-top).
-			_ = platformSetWindowVisible(earlyHandle, false)
-			var panelShown atomic.Bool
-			showPanel := func() {
-				if panelShown.CompareAndSwap(false, true) {
-					_ = platformSetWindowVisible(earlyHandle, true)
-					_ = platformFocusWindow(earlyHandle)
+			// Reposition fullscreen window to the virtual-screen origin so it
+			// truly covers every connected monitor (secondaries can extend
+			// left/up of primary, giving negative origin coords).
+			if spec.Fullscreen {
+				origX, origY := platformGetVirtualScreenOrigin()
+				if err := platformMoveWindow(handle, origX, origY); err != nil {
+					log.Printf("[panels] spawn(%s): move to (%d,%d): %v", spec.ID, origX, origY, err)
+				} else {
+					log.Printf("[panels] spawn(%s): positioned at virtual-screen origin (%d,%d)", spec.ID, origX, origY)
+				}
+			} else if spec.Bounds.X >= 0 && spec.Bounds.Y >= 0 {
+				// W3-T3 — daemon passed an explicit top-left (restored from
+				// ~/.jarvis/window-state.json, or palette positioning). The
+				// sentinel for "let the sidecar pick" is x<0/y<0; treat
+				// 0,0 and positive coords as authoritative and move there.
+				// Use the keep-z-order variant so a non-always-on-top panel
+				// doesn't get promoted to topmost just because we repositioned
+				// it (platformMoveWindow does that for the cursor-follow path).
+				if err := platformMoveWindowKeepZOrder(handle, spec.Bounds.X, spec.Bounds.Y); err != nil {
+					log.Printf("[panels] spawn(%s): move to saved (%d,%d): %v", spec.ID, spec.Bounds.X, spec.Bounds.Y, err)
+				} else {
+					log.Printf("[panels] spawn(%s): positioned at saved (%d,%d)", spec.ID, spec.Bounds.X, spec.Bounds.Y)
 				}
 			}
-			// Injected at document start on each navigation: call the binding a
-			// beat after `load` so the first paint is done before we reveal.
-			wv.Init(`(function(){try{var r=function(){if(window.__sidecar_panel_ready)window.__sidecar_panel_ready();};` +
-				`if(document.readyState==='complete'){setTimeout(r,120);}` +
-				`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`)
-			_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
-			go func() {
-				time.Sleep(6 * time.Second)
-				if impl.wv != nil {
-					impl.wv.Dispatch(func() { showPanel() })
-				}
-			}()
-		}
 
-		if spec.URL != "" {
-			wv.Navigate(spec.URL)
-			log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
-		}
+			// JS-callable bindings: page calls these directly via webview, no
+			// daemon round-trip. Must be bound before Run.
+			panelID := spec.ID
+			if err := wv.Bind("__sidecar_set_regions", func(rects []PanelRect) error {
+				return s.SetInteractiveRegions(panelID, rects)
+			}); err != nil {
+				log.Printf("[panels] spawn(%s): Bind(__sidecar_set_regions) failed: %v", spec.ID, err)
+			}
+			if err := wv.Bind("__sidecar_set_clickthrough", func(ct bool) error {
+				return s.SetClickThrough(panelID, ct)
+			}); err != nil {
+				log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
+			}
+
+			// Reveal the (hidden) panel once its page has loaded, with a timeout
+			// fallback so it never stays stuck hidden. Set up BEFORE Navigate so the
+			// init script + binding apply to the loaded page.
+			if !delayShow {
+				// Overlay panels (fullscreen / cursor-follow) must be visible
+				// immediately. The vendored webview creates the window hidden on
+				// Windows, so show it now.
+				_ = platformSetWindowVisible(earlyHandle, true)
+			}
+			if delayShow {
+				// Re-assert hidden: applyPlatformFlags above may have re-shown the
+				// window (its SetWindowPos uses SWP_SHOWWINDOW for always-on-top).
+				_ = platformSetWindowVisible(earlyHandle, false)
+				var panelShown atomic.Bool
+				showPanel := func() {
+					if panelShown.CompareAndSwap(false, true) {
+						_ = platformSetWindowVisible(earlyHandle, true)
+						_ = platformFocusWindow(earlyHandle)
+					}
+				}
+				// Injected at document start on each navigation: call the binding a
+				// beat after `load` so the first paint is done before we reveal.
+				wv.Init(`(function(){try{var r=function(){if(window.__sidecar_panel_ready)window.__sidecar_panel_ready();};` +
+					`if(document.readyState==='complete'){setTimeout(r,120);}` +
+					`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`)
+				_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
+				go func() {
+					time.Sleep(6 * time.Second)
+					if impl.wv != nil {
+						impl.wv.Dispatch(func() { showPanel() })
+					}
+				}()
+			}
+
+			if spec.URL != "" {
+				wv.Navigate(spec.URL)
+				log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
+			}
+		})
 
 		// Global summon hotkey: toggles cursor-follow and dispatches a JS
 		// callback in the page so the user can summon/dismiss from any app.
@@ -398,7 +441,12 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					case <-impl.done:
 						return // already tearing down (webview terminated it)
 					default:
-						if impl.wv != nil {
+						if panelSharedLoop {
+							// macOS: the window is gone, but the shared [NSApp run]
+							// loop must keep running for the tray + other panels.
+							// Signal the spawn goroutine instead of terminating.
+							impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
+						} else if impl.wv != nil {
 							impl.wv.Dispatch(func() {
 								if impl.wv != nil {
 									impl.wv.Terminate()
@@ -412,9 +460,19 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		}()
 
 		close(impl.ready)
-		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
-		wv.Run() // blocks until Terminate() or window closed
-		log.Printf("[panels] spawn(%s): event loop exited", spec.ID)
+		if panelSharedLoop {
+			// macOS: the tray owns the single process-wide [NSApp run] loop and
+			// services this window. Starting our own loop here would nest
+			// [NSApp run] on a background goroutine (illegal). Just block until
+			// the window closes — the close watcher / Close() signals uiClosed.
+			log.Printf("[panels] spawn(%s): attached to shared run loop", spec.ID)
+			<-impl.uiClosed
+			log.Printf("[panels] spawn(%s): window closed", spec.ID)
+		} else {
+			log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)
+			wv.Run() // blocks until Terminate() or window closed
+			log.Printf("[panels] spawn(%s): event loop exited", spec.ID)
+		}
 		s.mu.Lock()
 		closedCb := s.closedCb
 		s.mu.Unlock()
@@ -444,6 +502,20 @@ func (s *panelService) Close(id PanelID) error {
 		return formatPanelError("close", id, fmt.Errorf("handle type mismatch"))
 	}
 	if impl.wv != nil {
+		if panelSharedLoop {
+			// macOS: close the window on the main thread (it owns the NSWindow)
+			// and signal the spawn goroutine. Never Terminate() here — that stops
+			// the tray's shared [NSApp run] loop, killing the menu bar + every
+			// other panel. The close watcher's deferred cleanup runs once the
+			// spawn goroutine returns from <-uiClosed.
+			uiSync(impl.wv, func() {
+				if err := platformDestroyWindow(impl.wv.Window()); err != nil {
+					log.Printf("[panels] platformDestroyWindow(%s): %v", id, err)
+				}
+			})
+			impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
+			return nil
+		}
 		// On Windows, wv.Terminate() asks the webview's message loop to
 		// return but doesn't actually destroy the OS HWND, so the user
 		// still sees the window after Close() reports success. Force the

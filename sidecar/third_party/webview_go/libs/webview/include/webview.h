@@ -1895,6 +1895,17 @@ private:
     dispatch([this] { on_window_destroyed(); });
   }
   void set_up_window() {
+    // PATCHED (jarvis): NSWindow / WKWebView must be created on the main thread.
+    // The host spawns panels on background goroutines, so when we're off the
+    // main thread marshal this whole method synchronously onto the main queue
+    // (the host's [NSApp run] loop pumps it). Without this AppKit aborts with
+    // "NSWindow should only be instantiated on the main thread!".
+    if (!objc::msg_send<bool>("NSThread"_cls, "isMainThread"_sel)) {
+      dispatch_sync_f(dispatch_get_main_queue(), this, [](void *ctx) {
+        static_cast<cocoa_wkwebview_engine *>(ctx)->set_up_window();
+      });
+      return;
+    }
     objc::autoreleasepool arp;
 
     // Main window

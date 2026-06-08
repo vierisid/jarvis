@@ -2,7 +2,8 @@
 
 This is a local copy of `github.com/webview/webview_go` (the pinned version is
 in `UPSTREAM_VERSION`), wired in via a `replace` directive in `sidecar/go.mod`,
-with **one patch** (`jarvis.patch`).
+with **two patches** (`jarvis.patch`): a Win32 one (no open flash) and a Cocoa
+one (create the window on the main thread).
 
 ## Why
 
@@ -27,9 +28,34 @@ page has loaded — see `revealWebviewOnLoad` (`webview_reveal.go`) for the setu
 window + log viewer, and the inline reveal in `panels_runtime.go` for panels.
 Non-`delayShow` overlay panels are shown immediately.
 
-Only the **Windows** path is patched; the GTK/Cocoa paths are unchanged (they
-keep showing on create, and the host's reveal/hide logic is a harmless no-op /
-brief flash there).
+## The Cocoa patch (macOS main-thread window creation)
+
+On macOS the sidecar's tray owns the single process-wide `[NSApp run]` loop, and
+panels are spawned on background goroutines. Cocoa requires every `NSWindow` to
+be created on the main thread, so `webview.New()` off the main thread aborts with
+*"NSWindow should only be instantiated on the main thread!"*. We patch
+`cocoa_wkwebview_engine::set_up_window()` to marshal itself synchronously onto the
+main queue when called off-main:
+
+```cpp
+  void set_up_window() {
+    if (!objc::msg_send<bool>("NSThread"_cls, "isMainThread"_sel)) {
+      dispatch_sync_f(dispatch_get_main_queue(), this, [](void *ctx) {
+        static_cast<cocoa_wkwebview_engine *>(ctx)->set_up_window();
+      });
+      return;
+    }
+    ...
+  }
+```
+
+The host side (`panels_runtime.go`) cooperates: it runs all panel setup through
+`uiSync` (the webview's main-queue dispatch), and on macOS it does NOT call
+`wv.Run()`/`Terminate()` (which would nest/stop the tray's shared loop) — it
+attaches to the shared loop and tears down when the window closes. The tray sets
+itself as the `NSApplicationDelegate` so the engine skips its own bootstrap loop.
+
+The GTK path is unchanged.
 
 ## Upgrading
 

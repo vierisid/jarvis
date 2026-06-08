@@ -1,9 +1,27 @@
 diff --git a/libs/webview/include/webview.h b/libs/webview/include/webview.h
 --- a/libs/webview/include/webview.h
 +++ b/libs/webview/include/webview.h
-@@ -3179,9 +3179,10 @@ public:
+@@ -1895,6 +1895,17 @@ private:
+     dispatch([this] { on_window_destroyed(); });
+   }
+   void set_up_window() {
++    // PATCHED (jarvis): NSWindow / WKWebView must be created on the main thread.
++    // The host spawns panels on background goroutines, so when we're off the
++    // main thread marshal this whole method synchronously onto the main queue
++    // (the host's [NSApp run] loop pumps it). Without this AppKit aborts with
++    // "NSWindow should only be instantiated on the main thread!".
++    if (!objc::msg_send<bool>("NSThread"_cls, "isMainThread"_sel)) {
++      dispatch_sync_f(dispatch_get_main_queue(), this, [](void *ctx) {
++        static_cast<cocoa_wkwebview_engine *>(ctx)->set_up_window();
++      });
++      return;
++    }
+     objc::autoreleasepool arp;
+ 
+     // Main window
+@@ -3179,9 +3190,10 @@ public:
                      nullptr, hInstance, this);
-
+ 
      if (m_owns_window) {
 -      ShowWindow(m_window, SW_SHOW);
 -      UpdateWindow(m_window);
@@ -13,5 +31,5 @@ diff --git a/libs/webview/include/webview.h b/libs/webview/include/webview.h
 +      // WebView2 init. The host calls ShowWindow(SW_SHOW) itself.
 +      ShowWindow(m_window, SW_HIDE);
      }
-
+ 
      auto cb =
