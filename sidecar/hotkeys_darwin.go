@@ -16,18 +16,19 @@ package main
 
 #import <Cocoa/Cocoa.h>
 
-extern void goHotkeyFire(unsigned long long id);
+extern void goHotkeyFire(unsigned long long hotkeyID);
 
 // Returns a retained handle (void*) for the installed monitor; remove via
 // jarvisHotkeyRemove. modMask is an NSEventModifierFlags subset; keyCode is the
-// hardware key code.
-static void* jarvisHotkeyAdd(unsigned long modMask, unsigned short keyCode, unsigned long long id) {
+// hardware key code. NOTE: the id param must not be named `id` -- that shadows
+// the Objective-C `id` type used for the monitor handle below.
+static void* jarvisHotkeyAdd(unsigned long modMask, unsigned short keyCode, unsigned long long hotkeyID) {
     NSEventModifierFlags want = (NSEventModifierFlags)modMask;
     id mon = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                     handler:^(NSEvent* e) {
         NSEventModifierFlags got = [e modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
         if ([e keyCode] == keyCode && (got & want) == want) {
-            goHotkeyFire(id);
+            goHotkeyFire(hotkeyID);
         }
     }];
     if (!mon) return NULL;

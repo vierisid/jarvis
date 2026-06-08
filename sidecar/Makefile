@@ -5,6 +5,15 @@ MODULE   := github.com/jarvis/sidecar
 VERSION  := $(shell cat VERSION 2>/dev/null || echo dev)
 BIN_NAME := jarvis
 LDFLAGS  := -s -w -X main.sidecarVersion=$(VERSION)
+
+# macOS: build against the 11.0 deployment target (same as CI's
+# `clang -target <arch>-apple-macos11`) so APIs that newer SDKs mark obsoleted --
+# e.g. CGWindowListCreateImage, made unavailable in the macOS 15 SDK -- stay
+# compilable. Without this, `make build` on a macOS 15+ host fails to build.
+ifeq ($(shell uname),Darwin)
+export MACOSX_DEPLOYMENT_TARGET := 11.0
+endif
+
 # Windows ships as a GUI-subsystem app (no console window): the cross-compile
 # loops below append `-H windowsgui` to LDFLAGS when $$os = windows.
 
