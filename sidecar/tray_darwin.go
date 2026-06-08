@@ -23,13 +23,22 @@ package main
 #import <Cocoa/Cocoa.h>
 
 extern void goTrayClose(void);
+extern void goTrayOpenChat(void);
+extern void goTrayOpenSettings(void);
+extern void goTrayOpenLogs(void);
 
-// Menu action target: forwards the "Close" click back into Go.
+// Menu action target: forwards clicks back into Go.
 @interface JarvisTrayTarget : NSObject
 - (void)onClose:(id)sender;
+- (void)onChat:(id)sender;
+- (void)onSettings:(id)sender;
+- (void)onLogs:(id)sender;
 @end
 @implementation JarvisTrayTarget
-- (void)onClose:(id)sender { (void)sender; goTrayClose(); }
+- (void)onClose:(id)sender    { (void)sender; goTrayClose(); }
+- (void)onChat:(id)sender     { (void)sender; goTrayOpenChat(); }
+- (void)onSettings:(id)sender { (void)sender; goTrayOpenSettings(); }
+- (void)onLogs:(id)sender     { (void)sender; goTrayOpenLogs(); }
 @end
 
 static NSStatusItem*     gStatusItem     = nil;
@@ -61,6 +70,17 @@ static void jarvisTraySetup(void) {
     gStatusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Disconnected" action:nil keyEquivalent:@""];
     [gStatusMenuItem setEnabled:NO];
     [menu addItem:gStatusMenuItem];
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem* chatItem = [[NSMenuItem alloc] initWithTitle:@"Jarvis" action:@selector(onChat:) keyEquivalent:@""];
+    [chatItem setTarget:gTrayTarget];
+    [menu addItem:chatItem];
+    NSMenuItem* settingsItem = [[NSMenuItem alloc] initWithTitle:@"Settings" action:@selector(onSettings:) keyEquivalent:@""];
+    [settingsItem setTarget:gTrayTarget];
+    [menu addItem:settingsItem];
+    NSMenuItem* logsItem = [[NSMenuItem alloc] initWithTitle:@"Logs" action:@selector(onLogs:) keyEquivalent:@""];
+    [logsItem setTarget:gTrayTarget];
+    [menu addItem:logsItem];
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem* closeItem = [[NSMenuItem alloc] initWithTitle:@"Close"
@@ -120,7 +140,12 @@ import (
 // whole program, so [NSApp run] + the status item run where Cocoa requires.
 func init() { runtime.LockOSThread() }
 
-var trayOnCloseDarwin func()
+var (
+	trayOnCloseDarwin      func()
+	trayOpenChatDarwin     func()
+	trayOpenSettingsDarwin func()
+	trayOpenLogsDarwin     func()
+)
 
 // runWithTray (macOS): client on a goroutine, tray + NSApp run loop on the main
 // thread. Blocks until "Close" (or a signal cancels the context).
@@ -129,6 +154,9 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	}
+	trayOpenChatDarwin = client.OpenChat
+	trayOpenSettingsDarwin = client.OpenSettings
+	trayOpenLogsDarwin = client.OpenLogViewer
 
 	go client.Start(ctx)
 

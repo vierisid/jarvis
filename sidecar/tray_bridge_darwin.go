@@ -16,3 +16,24 @@ func goTrayClose() {
 		go trayOnCloseDarwin()
 	}
 }
+
+//export goTrayOpenChat
+func goTrayOpenChat() {
+	if trayOpenChatDarwin != nil {
+		go trayOpenChatDarwin()
+	}
+}
+
+//export goTrayOpenSettings
+func goTrayOpenSettings() {
+	if trayOpenSettingsDarwin != nil {
+		go trayOpenSettingsDarwin()
+	}
+}
+
+//export goTrayOpenLogs
+func goTrayOpenLogs() {
+	if trayOpenLogsDarwin != nil {
+		go trayOpenLogsDarwin()
+	}
+}

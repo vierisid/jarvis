@@ -140,16 +140,25 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
 - [ ] **2.f** The pebble overlay appears near the cursor shortly after the
       `pebble` capability is enabled and the sidecar (re)connects.
 - [ ] **2.g Tray / menu-bar icon [W][M]** (no tray on Linux yet).
-      - **[W]** While running, a JARVIS icon sits in the Windows **system tray**
-        (notification area). **Right-click** it → a menu with **"Close"**.
-        Clicking Close stops the sidecar (process exits, icon disappears).
-      - **[M]** While running, a JARVIS item sits in the macOS **menu bar** (no
-        Dock icon — it's an accessory app). Click it → a menu with **"Close"**
-        that stops the sidecar. (Bonus to verify: with the tray running, the
-        macOS pebble/panels should now actually animate, since the tray
-        establishes the Cocoa main run loop.)
-      - **[W][M]** Ctrl+C in the terminal also still stops it cleanly (icon
-        removed).
+      - **[W]** A JARVIS icon sits in the Windows **system tray**; **right-click**
+        opens the menu. **[M]** A JARVIS item sits in the macOS **menu bar** (no
+        Dock icon — accessory app); click it to open the menu.
+      - Menu contents (top → bottom): **Connected/Disconnected** (grayed,
+        unclickable status), **Jarvis**, **Settings**, **Logs**, **Close**.
+      - **Connected/Disconnected** reflects the live brain connection (flips
+        within ~1s of connect/disconnect).
+      - **Jarvis** → opens the main chat room as a native window (dashboard
+        `#/` home). **Settings** → opens the settings room (`#/_room_settings`).
+        Re-clicking focuses the existing window instead of duplicating.
+      - **Logs** → opens a local **log viewer** window (NOT a dashboard room):
+        scrollable log of `~/.jarvis/sidecar.log`, a **search** box (filters to
+        matching lines + count), **Copy** (to clipboard), **Export** (writes a
+        timestamped `sidecar-log-*.txt` and shows the path), **Refresh**.
+      - **Close** stops the sidecar (process exits, icon disappears); Ctrl+C in a
+        terminal also stops it cleanly.
+      - **[M] caveat:** opening webview windows (Jarvis/Settings/Logs) from the
+        menu bar shares the panels' macOS main-run-loop constraint and is
+        unverified — check on a Mac.
 
 ---
 

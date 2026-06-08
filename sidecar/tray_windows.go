@@ -54,8 +54,11 @@ const (
 	trayTpmRightBtn  = 0x0002
 	trayTpmReturnCmd = 0x0100
 
-	trayMenuCloseID = 1
-	trayIDIApp      = 32512 // IDI_APPLICATION (stock icon placeholder; brand later)
+	trayMenuCloseID    = 1
+	trayMenuChatID     = 2
+	trayMenuSettingsID = 3
+	trayMenuLogsID     = 4
+	trayIDIApp         = 32512 // IDI_APPLICATION (stock icon placeholder; brand later)
 )
 
 // NOTIFYICONDATAW (current/Vista+ layout).
@@ -88,10 +91,13 @@ type trayMsg struct {
 }
 
 var (
-	trayHwnd      atomic.Uintptr
-	trayOnClose   func()
-	trayConnected func() bool // reports brain-connection status for the menu
-	trayNID       trayNotifyIconData
+	trayHwnd         atomic.Uintptr
+	trayOnClose      func()
+	trayConnected    func() bool // reports brain-connection status for the menu
+	trayOpenChat     func()
+	trayOpenSettings func()
+	trayOpenLogs     func()
+	trayNID          trayNotifyIconData
 )
 
 // runWithTray (Windows): tray on its own goroutine, client on the main goroutine.
@@ -101,6 +107,9 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		cancel()
 	}
 	trayConnected = client.Connected
+	trayOpenChat = client.OpenChat
+	trayOpenSettings = client.OpenSettings
+	trayOpenLogs = client.OpenLogViewer
 
 	ready := make(chan struct{})
 	go func() {
@@ -230,8 +239,12 @@ func showTrayMenu(hwnd uintptr) {
 	procAppendMenuW.Call(hMenu, trayMfString|trayMfGrayed|trayMfDisabled, 0, uintptr(unsafe.Pointer(statusLabel)))
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
-	closeLabel, _ := syscall.UTF16PtrFromString("Close")
-	procAppendMenuW.Call(hMenu, trayMfString, trayMenuCloseID, uintptr(unsafe.Pointer(closeLabel)))
+	appendTrayItem(hMenu, "Jarvis", trayMenuChatID)
+	appendTrayItem(hMenu, "Settings", trayMenuSettingsID)
+	appendTrayItem(hMenu, "Logs", trayMenuLogsID)
+	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
+
+	appendTrayItem(hMenu, "Close", trayMenuCloseID)
 
 	var pt pblPoint
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -248,7 +261,28 @@ func showTrayMenu(hwnd uintptr) {
 	)
 	procPostMessageW.Call(hwnd, 0 /* WM_NULL */, 0, 0)
 
-	if cmd == trayMenuCloseID && trayOnClose != nil {
-		go trayOnClose()
+	switch cmd {
+	case trayMenuCloseID:
+		if trayOnClose != nil {
+			go trayOnClose()
+		}
+	case trayMenuChatID:
+		if trayOpenChat != nil {
+			go trayOpenChat()
+		}
+	case trayMenuSettingsID:
+		if trayOpenSettings != nil {
+			go trayOpenSettings()
+		}
+	case trayMenuLogsID:
+		if trayOpenLogs != nil {
+			go trayOpenLogs()
+		}
 	}
+}
+
+// appendTrayItem adds a normal clickable menu item with the given command id.
+func appendTrayItem(hMenu uintptr, label string, id uintptr) {
+	l, _ := syscall.UTF16PtrFromString(label)
+	procAppendMenuW.Call(hMenu, trayMfString, id, uintptr(unsafe.Pointer(l)))
 }
