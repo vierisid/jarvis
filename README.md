@@ -275,27 +275,27 @@ bun install -g @usejarvis/sidecar
 Just start it:
 
 ```bash
-jarvis-sidecar
+jarvis
 ```
 
 The first time it runs unconfigured, a small **setup window** pops up asking for
 the enrollment token — paste the token you copied and click **Connect**. The
-sidecar saves it locally (`~/.jarvis-sidecar/config.yaml`) and connects.
+sidecar saves it locally (`~/.jarvis/sidecar.yaml`) and connects.
 
 Prefer the terminal / a headless box? Pass the token on the CLI instead (no
 window):
 
 ```bash
-jarvis-sidecar --token <your-token>
+jarvis --token <your-token>
 ```
 
-Either way, subsequent runs are just `jarvis-sidecar` (the saved token is reused).
+Either way, subsequent runs are just `jarvis` (the saved token is reused).
 
 Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness).
 
 ### Versioning & updates
 
-The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer binary from [GitHub Releases](https://github.com/vierisid/jarvis/releases) -- the `sidecar-vX.Y.Z` releases). Run `jarvis-sidecar --version` to see what you have.
+The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer binary from [GitHub Releases](https://github.com/vierisid/jarvis/releases) -- the `sidecar-vX.Y.Z` releases). Run `jarvis --version` to see what you have.
 
 On connect, the brain checks the sidecar's version against its compatibility floors and surfaces the result in **Settings -> Sidecar**:
 

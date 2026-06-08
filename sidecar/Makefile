@@ -3,8 +3,10 @@ MODULE   := github.com/jarvis/sidecar
 # VERSION file is read here and injected into the binary via -X; CI asserts the
 # `sidecar-v*` release tag matches it.
 VERSION  := $(shell cat VERSION 2>/dev/null || echo dev)
-BIN_NAME := jarvis-sidecar
+BIN_NAME := jarvis
 LDFLAGS  := -s -w -X main.sidecarVersion=$(VERSION)
+# Windows ships as a GUI-subsystem app (no console window): the cross-compile
+# loops below append `-H windowsgui` to LDFLAGS when $$os = windows.
 
 PLATFORMS := \
 	darwin/arm64 \
@@ -39,7 +41,8 @@ dist-test:
 		ext=""; \
 		[ "$$os" = "windows" ] && ext=".exe"; \
 		echo "Building $$os/$$arch test-enabled..."; \
-		GOOS=$$os GOARCH=$$arch go build -tags sidecartest -ldflags "$(LDFLAGS)" \
+		lf="$(LDFLAGS)"; [ "$$os" = "windows" ] && lf="$$lf -H windowsgui"; \
+		GOOS=$$os GOARCH=$$arch go build -tags sidecartest -ldflags "$$lf" \
 			-o "dist/$${os}-$${arch}/$(BIN_NAME)-test$${ext}" . || exit 1; \
 	done
 
@@ -93,7 +96,8 @@ dist: test vet
 		ext=""; \
 		[ "$$os" = "windows" ] && ext=".exe"; \
 		echo "Building $$os/$$arch..."; \
-		GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" \
+		lf="$(LDFLAGS)"; [ "$$os" = "windows" ] && lf="$$lf -H windowsgui"; \
+		GOOS=$$os GOARCH=$$arch go build -ldflags "$$lf" \
 			-o "dist/$${os}-$${arch}/$(BIN_NAME)$${ext}" . || exit 1; \
 	done
 

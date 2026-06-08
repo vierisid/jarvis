@@ -8,7 +8,7 @@
     "directory": "sidecar/npm/jarvis-sidecar"
   },
   "bin": {
-    "jarvis-sidecar": "bin/jarvis-sidecar"
+    "jarvis": "bin/jarvis"
   },
   "files": ["bin"],
   "optionalDependencies": {

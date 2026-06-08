@@ -23,20 +23,24 @@ func main() {
 	}
 
 	if *help {
-		fmt.Println(`jarvis-sidecar — Jarvis sidecar client (Go)
+		fmt.Println(`jarvis — Jarvis sidecar client (Go)
 
 Usage:
-  jarvis-sidecar --token <jwt>    Enroll and start (saves token to config)
-  jarvis-sidecar                  Start using saved token
-  jarvis-sidecar --test <cmd>     Run a built-in platform test (test build only)
-  jarvis-sidecar --version        Print the sidecar version and exit
-  jarvis-sidecar --help           Show this help`)
+  jarvis --token <jwt>    Enroll and start (saves token to config)
+  jarvis                  Start using saved token
+  jarvis --test <cmd>     Run a built-in platform test (test build only)
+  jarvis --version        Print the sidecar version and exit
+  jarvis --help           Show this help`)
 		os.Exit(0)
 	}
 
 	if *testMode {
 		os.Exit(runTests(flag.Args()))
 	}
+
+	// Route logs to ~/.jarvis/sidecar.log so the GUI-subsystem Windows build runs
+	// without a console window (and so there's a log to inspect anywhere).
+	setupLogging()
 
 	cfg, err := LoadConfig()
 	if err != nil {

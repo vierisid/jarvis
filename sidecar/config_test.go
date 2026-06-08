@@ -54,8 +54,8 @@ func TestSaveConfigRestrictsPermissions(t *testing.T) {
 		configFile = originalConfigFile
 	})
 
-	configDir = filepath.Join(t.TempDir(), ".jarvis-sidecar")
-	configFile = filepath.Join(configDir, "config.yaml")
+	configDir = filepath.Join(t.TempDir(), ".jarvis")
+	configFile = filepath.Join(configDir, "sidecar.yaml")
 
 	cfg := defaultConfig()
 	cfg.Token = "secret-token"
@@ -93,8 +93,8 @@ func TestSaveConfigRefusesSymlink(t *testing.T) {
 	})
 
 	tmp := t.TempDir()
-	configDir = filepath.Join(tmp, ".jarvis-sidecar")
-	configFile = filepath.Join(configDir, "config.yaml")
+	configDir = filepath.Join(tmp, ".jarvis")
+	configFile = filepath.Join(configDir, "sidecar.yaml")
 
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)

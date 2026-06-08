@@ -70,7 +70,7 @@ const setupWindowHTML = `<!doctype html>
     your brain and authenticates it.</p>
   <label for="tok">Enrollment token</label>
   <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false" autofocus></textarea>
-  <p class="hint">The token is stored locally at ~/.jarvis-sidecar/config.yaml. Press Cmd/Ctrl+Enter to connect.</p>
+  <p class="hint">The token is stored locally at ~/.jarvis/sidecar.yaml. Press Cmd/Ctrl+Enter to connect.</p>
   <div class="row">
     <span id="err"></span>
     <button id="go" onclick="submit()">Connect</button>

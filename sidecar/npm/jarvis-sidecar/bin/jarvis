@@ -24,7 +24,7 @@ let binPath;
 try {
   const pkgDir = path.dirname(require.resolve(`${pkg}/package.json`));
   const ext = os.platform() === "win32" ? ".exe" : "";
-  binPath = path.join(pkgDir, "bin", `jarvis-sidecar${ext}`);
+  binPath = path.join(pkgDir, "bin", `jarvis${ext}`);
 } catch {
   console.error(
     `Platform package ${pkg} is not installed. Try reinstalling @usejarvis/sidecar.`

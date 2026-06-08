@@ -87,7 +87,7 @@ export function SidecarTab({
               Token for "{enrollResult.name}" — copy now, this is shown only once
             </div>
             <code className="v2-set__code v2-set__code--block">
-              jarvis-sidecar --token {enrollResult.token}
+              jarvis --token {enrollResult.token}
             </code>
             <div style={{ display: "flex", gap: "var(--s-2)", justifyContent: "flex-end" }}>
               <button type="button" className="v2-set__btn" onClick={copyToken}>

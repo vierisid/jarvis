@@ -38,6 +38,9 @@ func platformOCR(imagePath string) (OCRResult, error) {
 		"-File", scriptFile,
 		"-Path", imagePath,
 	)
+	// Runs on every awareness OCR pass; without this it pops a console window
+	// each time on the GUI-subsystem build.
+	hideSubprocessWindow(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -54,8 +54,8 @@ for d in /usr/lib/*/pkgconfig; do
 done
 
 cd sidecar
-CGO_ENABLED=1 go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis-sidecar .
-./jarvis-sidecar --version    # must print 0.1.0
+CGO_ENABLED=1 go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis .
+./jarvis --version    # must print 0.1.0
 ```
 
 - [ ] **1.1.a [L]** Build succeeds, `--version` prints `0.1.0`.
@@ -72,19 +72,24 @@ Cross-compiled from Linux/WSL with mingw (the proven recipe), or built natively.
 cd sidecar
 CGO_ENABLED=1 GOOS=windows CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
   CGO_CFLAGS=-I$(pwd)/include CGO_CXXFLAGS=-I$(pwd)/include \
-  go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis-sidecar.exe .
+  go build -ldflags "-X main.sidecarVersion=$(cat VERSION) -H windowsgui" -o jarvis.exe .
 ```
 
-- [ ] **1.2.a [W]** `jarvis-sidecar.exe --version` prints `0.1.0`.
+- [ ] **1.2.a [W]** Build succeeds. (`--version` won't print to the terminal —
+      the binary is GUI-subsystem, see 1.2.c.)
 - [ ] **1.2.b [W]** Requires the **WebView2 runtime** installed (panels). If
       panels fail to spawn, install the Evergreen WebView2 runtime.
+- [ ] **1.2.c [W] No console window + file logs.** Double-click `jarvis.exe`
+      (or run it): **no black cmd window** appears. Logs are written to
+      `%USERPROFILE%\.jarvis\sidecar.log` (open it to see the startup/connect
+      lines). The config lives at `%USERPROFILE%\.jarvis\sidecar.yaml`.
 
 ### 1.3 macOS [M] — expect to fix compile errors first
 
 ```bash
 cd sidecar
-CGO_ENABLED=1 go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis-sidecar .
-./jarvis-sidecar --version
+CGO_ENABLED=1 go build -ldflags "-X main.sidecarVersion=$(cat VERSION)" -o jarvis .
+./jarvis --version
 make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
 ```
 
@@ -105,9 +110,9 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
 - [ ] **2.a** Start the brain: `bun run dev` (or your usual run). Open the
       dashboard (default `http://localhost:3142`).
 - [ ] **2.b** **Settings → Sidecar → Enroll**, name it (e.g. "test-box"), copy
-      the `jarvis-sidecar --token <jwt>` command.
+      the `jarvis --token <jwt>` command.
 - [ ] **2.b-i First-run setup window [W][L][M].** On a machine with **no token
-      yet**, run `jarvis-sidecar` with **no flags**. A setup window pops up
+      yet**, run `jarvis` with **no flags**. A setup window pops up
       ("Connect this machine to JARVIS"). Paste the enrollment token, click
       **Connect** (or Cmd/Ctrl+Enter). Window closes; terminal logs
       `Token saved to config`; it connects.
@@ -115,8 +120,8 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
         stays open.
       - Close the window without entering a token → process exits with
         "Setup cancelled".
-      - Re-run `jarvis-sidecar` → **no** window (saved token reused).
-      - `jarvis-sidecar --token <jwt>` (headless path) still works with no window.
+      - Re-run `jarvis` → **no** window (saved token reused).
+      - `jarvis --token <jwt>` (headless path) still works with no window.
       - **[L]** needs an X11/XWayland display + webkit2gtk; **[M]/[W]** use the
         system webview (WebView2 on Windows).
 - [ ] **2.c** Run that command (or use the window). The sidecar terminal prints

@@ -11,8 +11,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var configDir = filepath.Join(homeDir(), ".jarvis-sidecar")
-var configFile = filepath.Join(configDir, "config.yaml")
+// The sidecar shares the ~/.jarvis data folder with the brain (they rarely run
+// on the same host); its files are named distinctly so they can't collide with
+// brain files (jarvis.pid, sidecar-keys/, the db, etc.). captures/ is shared.
+var configDir = filepath.Join(homeDir(), ".jarvis")
+var configFile = filepath.Join(configDir, "sidecar.yaml")
 
 func homeDir() string {
 	h, err := os.UserHomeDir()
