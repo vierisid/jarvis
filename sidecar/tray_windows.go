@@ -48,6 +48,9 @@ const (
 	trayNifTip     = 0x00000004
 
 	trayMfString     = 0x00000000
+	trayMfGrayed     = 0x00000001
+	trayMfDisabled   = 0x00000002
+	trayMfSeparator  = 0x00000800
 	trayTpmRightBtn  = 0x0002
 	trayTpmReturnCmd = 0x0100
 
@@ -85,9 +88,10 @@ type trayMsg struct {
 }
 
 var (
-	trayHwnd    atomic.Uintptr
-	trayOnClose func()
-	trayNID     trayNotifyIconData
+	trayHwnd      atomic.Uintptr
+	trayOnClose   func()
+	trayConnected func() bool // reports brain-connection status for the menu
+	trayNID       trayNotifyIconData
 )
 
 // runWithTray (Windows): tray on its own goroutine, client on the main goroutine.
@@ -96,6 +100,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	}
+	trayConnected = client.Connected
 
 	ready := make(chan struct{})
 	go func() {
@@ -214,6 +219,16 @@ func showTrayMenu(hwnd uintptr) {
 		return
 	}
 	defer procDestroyMenu.Call(hMenu)
+
+	// Connection status — disabled (unclickable) info line, rebuilt each open so
+	// it always reflects the current state.
+	status := "Disconnected"
+	if trayConnected != nil && trayConnected() {
+		status = "Connected"
+	}
+	statusLabel, _ := syscall.UTF16PtrFromString(status)
+	procAppendMenuW.Call(hMenu, trayMfString|trayMfGrayed|trayMfDisabled, 0, uintptr(unsafe.Pointer(statusLabel)))
+	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
 	closeLabel, _ := syscall.UTF16PtrFromString("Close")
 	procAppendMenuW.Call(hMenu, trayMfString, trayMenuCloseID, uintptr(unsafe.Pointer(closeLabel)))

@@ -32,8 +32,9 @@ extern void goTrayClose(void);
 - (void)onClose:(id)sender { (void)sender; goTrayClose(); }
 @end
 
-static NSStatusItem*     gStatusItem  = nil;
-static JarvisTrayTarget* gTrayTarget  = nil;
+static NSStatusItem*     gStatusItem     = nil;
+static JarvisTrayTarget* gTrayTarget     = nil;
+static NSMenuItem*       gStatusMenuItem = nil; // the disabled "Connected"/"Disconnected" line
 
 // jarvisTraySetup creates the status item + menu. Main thread only.
 static void jarvisTraySetup(void) {
@@ -54,12 +55,31 @@ static void jarvisTraySetup(void) {
 
     gTrayTarget = [[JarvisTrayTarget alloc] init];
     NSMenu* menu = [[NSMenu alloc] init];
-    NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:@"Close"
-                                                  action:@selector(onClose:)
-                                           keyEquivalent:@""];
-    [item setTarget:gTrayTarget];
-    [menu addItem:item];
+
+    // Connection status — disabled (unclickable) info line. action:nil keeps it
+    // non-selectable.
+    gStatusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Disconnected" action:nil keyEquivalent:@""];
+    [gStatusMenuItem setEnabled:NO];
+    [menu addItem:gStatusMenuItem];
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem* closeItem = [[NSMenuItem alloc] initWithTitle:@"Close"
+                                                       action:@selector(onClose:)
+                                                keyEquivalent:@""];
+    [closeItem setTarget:gTrayTarget];
+    [menu addItem:closeItem];
+
     gStatusItem.menu = menu;
+}
+
+// jarvisTraySetConnected updates the status line. Safe to call from any
+// goroutine — marshals onto the main queue.
+static void jarvisTraySetConnected(int connected) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gStatusMenuItem) {
+            gStatusMenuItem.title = connected ? @"Connected" : @"Disconnected";
+        }
+    });
 }
 
 // jarvisTrayRun runs the Cocoa main loop (blocks until jarvisTrayQuit).
@@ -93,6 +113,7 @@ import "C"
 import (
 	"context"
 	"runtime"
+	"time"
 )
 
 // Pin the main goroutine to the process's main OS thread (thread 0) for the
@@ -112,6 +133,27 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	go client.Start(ctx)
 
 	C.jarvisTraySetup()
+	// Poll the connection state and push it to the status menu item on change.
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		last := -1
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cur := 0
+				if client.Connected() {
+					cur = 1
+				}
+				if cur != last {
+					last = cur
+					C.jarvisTraySetConnected(C.int(cur))
+				}
+			}
+		}
+	}()
 	// Quit the run loop when the context is cancelled (menu Close OR a signal).
 	go func() {
 		<-ctx.Done()

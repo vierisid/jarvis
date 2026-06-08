@@ -31,7 +31,8 @@ type SidecarClient struct {
 	conn            *websocket.Conn
 	reconnectDelay  time.Duration
 	stopped         bool
-	incompatible    bool // brain hard-blocked us (version < MIN); do not reconnect
+	incompatible    bool        // brain hard-blocked us (version < MIN); do not reconnect
+	connected       atomic.Bool // true while the WS is up + registered (tray status)
 	availableCaps   []SidecarCapability
 	unavailableCaps []UnavailableCapability
 
@@ -182,7 +183,12 @@ func (c *SidecarClient) Stop() {
 		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
 		c.conn = nil
 	}
+	c.connected.Store(false)
 }
+
+// Connected reports whether the sidecar is currently connected + registered to
+// the brain. Used by the tray status entry.
+func (c *SidecarClient) Connected() bool { return c.connected.Load() }
 
 func (c *SidecarClient) reloadConfig() {
 	c.mu.Lock()
@@ -272,6 +278,8 @@ func (c *SidecarClient) runPreflight() {
 }
 
 func (c *SidecarClient) connectAndServe(ctx context.Context) error {
+	// Reflects the live tray status; reset on every return (disconnect / error).
+	defer c.connected.Store(false)
 	log.Printf("[sidecar] Connecting to %s...", c.claims.Brain)
 
 	conn, _, err := websocket.Dial(ctx, c.claims.Brain, &websocket.DialOptions{
@@ -287,6 +295,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	conn.SetReadLimit(10 * 1024 * 1024)
 
 	log.Println("[sidecar] Connected")
+	c.connected.Store(true)
 	c.reconnectDelay = minReconnectDelay
 
 	if err := c.sendRegistration(ctx); err != nil {
