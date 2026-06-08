@@ -102,6 +102,12 @@ make build-ocr-helper     # builds the Vision OCR helper (needs Xcode CLT)
       - **Accessibility** (global hotkeys won't fire without it)
       - **Screen Recording** (region capture returns black/empty without it)
 - [ ] **1.3.c [M]** `--version` prints `0.1.0`.
+- [ ] **1.3.d [M] Run behavior + file logs** (macOS analog of 1.2.c). Run
+      `./jarvis`. It runs as a **menu-bar accessory** — a JARVIS item appears in
+      the menu bar with **no Dock icon** (this is the macOS "no console window").
+      Logs are written to `~/.jarvis/sidecar.log`; config + token live at
+      `~/.jarvis/sidecar.yaml`. **No WebView2-style install** is needed — macOS
+      ships WKWebView, so the setup window / panels / log viewer render natively.
 
 ---
 
@@ -440,14 +446,22 @@ they are not bugs.
 
 ## 12. Sign-off
 
-| Platform | Built | Pebble | Sub-pebble | Region | Panels | Audio | Version (§8) | Tester / date |
-|---|---|---|---|---|---|---|---|---|
-| Windows  | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
-| Linux/X11| ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
-| macOS    | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+Columns: **Built** (§1) · **Setup** (first-run window, §2.b-i) · **Tray**
+(menu-bar/tray + Connected status + Jarvis/Settings/Logs/Close, §2.g) · **Pebble**
+(§3) · **Sub** (sub-pebble, §4) · **Region** (§5) · **Panels** (§6) · **Audio**
+(§7) · **Version** (§8). Tray is Windows/macOS only — "—" = not applicable.
 
-CI gates (§9): ☐ Go build gate · ☐ version-bump gate · ☐ sidecar release dry-run
-· ☐ brain release dry-run.
+| Platform  | Built | Setup | Tray | Pebble | Sub | Region | Panels | Audio | Version | Tester / date |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Windows   | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| Linux/X11 | ☐ | ☐ | — | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| macOS     | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+
+> **macOS first:** §1.3.a (it compiles) gates everything else on the Mac.
+
+CI gates (§9): ☐ Go build/test gate · ☐ sidecar release dry-run · ☐ brain
+release dry-run. (The version-bump PR gate is intentionally OFF this dev cycle —
+§9.b.)
 
 > When all three platforms are signed off and the residuals in §11 are either
 > closed or accepted, delete this file and `PEBBLE_REVIEW_AND_REFACTOR.md` before
