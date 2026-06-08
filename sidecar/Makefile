@@ -18,9 +18,16 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test
+.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test manifest
 
 all: test build
+
+# Regenerate the embedded Windows application manifest resource from
+# jarvis.manifest. Go auto-links rsrc_windows_amd64.syso into windows/amd64
+# builds. The manifest declares OS compatibility so the Program Compatibility
+# Assistant doesn't flag the app as a (failed) installer. Requires mingw windres.
+manifest:
+	x86_64-w64-mingw32-windres --input jarvis.rc --output rsrc_windows_amd64.syso --output-format=coff
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_NAME) .

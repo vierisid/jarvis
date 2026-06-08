@@ -75,11 +75,11 @@ CGO_ENABLED=1 GOOS=windows CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ 
   go build -ldflags "-X main.sidecarVersion=$(cat VERSION) -H windowsgui" -o jarvis.exe .
 ```
 
-- [ ] **1.2.a [W]** Build succeeds. (`--version` won't print to the terminal —
+- [x] **1.2.a [W]** Build succeeds. (`--version` won't print to the terminal —
       the binary is GUI-subsystem, see 1.2.c.)
-- [ ] **1.2.b [W]** Requires the **WebView2 runtime** installed (panels). If
+- [x] **1.2.b [W]** Requires the **WebView2 runtime** installed (panels). If
       panels fail to spawn, install the Evergreen WebView2 runtime.
-- [ ] **1.2.c [W] No console window + file logs.** Double-click `jarvis.exe`
+- [x] **1.2.c [W] No console window + file logs.** Double-click `jarvis.exe`
       (or run it): **no black cmd window** appears. Logs are written to
       `%USERPROFILE%\.jarvis\sidecar.log` (open it to see the startup/connect
       lines). The config lives at `%USERPROFILE%\.jarvis\sidecar.yaml`.

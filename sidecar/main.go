@@ -55,6 +55,16 @@ Usage:
 		log.Println("[sidecar] Token saved to config")
 	}
 
+	// On Windows the dashboard panels AND the first-run setup window are
+	// WebView2-backed (no-op check on Linux/macOS). ensureWebView2Runtime blocks
+	// through any user-triggered install and only returns false if the runtime
+	// is still absent (declined / timed out), in which case we can't render any
+	// window, so exit cleanly.
+	if !ensureWebView2Runtime() {
+		log.Println("[sidecar] WebView2 runtime not installed — JARVIS can't show its windows. Exiting.")
+		os.Exit(0)
+	}
+
 	if cfg.Token == "" {
 		// Unconfigured: pop up the first-run window asking for the enrollment
 		// token instead of erroring out. (--token still works headlessly.)
