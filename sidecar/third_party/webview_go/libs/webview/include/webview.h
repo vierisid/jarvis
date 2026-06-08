@@ -1471,6 +1471,7 @@ using browser_engine = detail::gtk_webkit_engine;
 #include <CoreGraphics/CoreGraphics.h>
 #include <objc/NSObjCRuntime.h>
 #include <objc/objc-runtime.h>
+#include <pthread.h> // PATCHED (jarvis): for pthread_main_np() in set_up_window
 
 namespace webview {
 namespace detail {
@@ -1899,8 +1900,10 @@ private:
     // The host spawns panels on background goroutines, so when we're off the
     // main thread marshal this whole method synchronously onto the main queue
     // (the host's [NSApp run] loop pumps it). Without this AppKit aborts with
-    // "NSWindow should only be instantiated on the main thread!".
-    if (!objc::msg_send<bool>("NSThread"_cls, "isMainThread"_sel)) {
+    // "NSWindow should only be instantiated on the main thread!". We use
+    // pthread_main_np() rather than [NSThread isMainThread] because routing a
+    // bool return through webview's objc_msgSend wrapper mis-reads on arm64.
+    if (pthread_main_np() == 0) {
       dispatch_sync_f(dispatch_get_main_queue(), this, [](void *ctx) {
         static_cast<cocoa_wkwebview_engine *>(ctx)->set_up_window();
       });
