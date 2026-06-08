@@ -98,6 +98,17 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		impl.wv = wv
 		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 
+		// Hide normal panels while the page loads, then reveal them once the
+		// page fires `load` (the page keeps loading + rendering while hidden,
+		// so it appears fully-formed instead of showing the empty webview that
+		// fills + resizes as it loads). Fullscreen / cursor-follow panels (the
+		// transparent overlays) must be visible from the start, so they opt out.
+		earlyHandle := wv.Window()
+		delayShow := !spec.Fullscreen && !spec.FollowCursor && earlyHandle != nil
+		if delayShow {
+			_ = platformSetWindowVisible(earlyHandle, false)
+		}
+
 		if spec.Title != "" {
 			wv.SetTitle(spec.Title)
 		}
@@ -167,6 +178,40 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			return s.SetClickThrough(panelID, ct)
 		}); err != nil {
 			log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
+		}
+
+		// Reveal the (hidden) panel once its page has loaded, with a timeout
+		// fallback so it never stays stuck hidden. Set up BEFORE Navigate so the
+		// init script + binding apply to the loaded page.
+		if !delayShow {
+			// Overlay panels (fullscreen / cursor-follow) must be visible
+			// immediately. The vendored webview creates the window hidden on
+			// Windows, so show it now.
+			_ = platformSetWindowVisible(earlyHandle, true)
+		}
+		if delayShow {
+			// Re-assert hidden: applyPlatformFlags above may have re-shown the
+			// window (its SetWindowPos uses SWP_SHOWWINDOW for always-on-top).
+			_ = platformSetWindowVisible(earlyHandle, false)
+			var panelShown atomic.Bool
+			showPanel := func() {
+				if panelShown.CompareAndSwap(false, true) {
+					_ = platformSetWindowVisible(earlyHandle, true)
+					_ = platformFocusWindow(earlyHandle)
+				}
+			}
+			// Injected at document start on each navigation: call the binding a
+			// beat after `load` so the first paint is done before we reveal.
+			wv.Init(`(function(){try{var r=function(){if(window.__sidecar_panel_ready)window.__sidecar_panel_ready();};` +
+				`if(document.readyState==='complete'){setTimeout(r,120);}` +
+				`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`)
+			_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
+			go func() {
+				time.Sleep(6 * time.Second)
+				if impl.wv != nil {
+					impl.wv.Dispatch(func() { showPanel() })
+				}
+			}()
 		}
 
 		if spec.URL != "" {
@@ -330,6 +375,41 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				}
 			}()
 		}
+
+		// Close watcher (Windows). webview_go only terminates a run loop when the
+		// LAST webview window in the process closes (process-wide window count),
+		// so closing one panel while another webview window is open leaves this
+		// run loop stuck — its deferred reg.delete never fires and the (fixed-id)
+		// panel can't be reopened. Watch the HWND; when it's destroyed, force the
+		// loop to return so cleanup runs. No-op on platforms where
+		// platformWindowAlive can't probe the handle.
+		go func() {
+			t := time.NewTicker(250 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-impl.done:
+					return
+				case <-t.C:
+					if platformWindowAlive(handle) {
+						continue
+					}
+					select {
+					case <-impl.done:
+						return // already tearing down (webview terminated it)
+					default:
+						if impl.wv != nil {
+							impl.wv.Dispatch(func() {
+								if impl.wv != nil {
+									impl.wv.Terminate()
+								}
+							})
+						}
+						return
+					}
+				}
+			}
+		}()
 
 		close(impl.ready)
 		log.Printf("[panels] spawn(%s): entering event loop (Run)", spec.ID)

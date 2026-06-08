@@ -58,6 +58,9 @@ func runLogViewer(logPath string) {
 		return dst
 	})
 
+	// The vendored webview creates the window hidden (no flash); reveal it once
+	// the page has loaded.
+	revealWebviewOnLoad(w)
 	w.SetHtml(logViewerHTML)
 	w.Run()
 }

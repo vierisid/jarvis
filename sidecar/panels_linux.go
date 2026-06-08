@@ -86,6 +86,13 @@ static void jarvis_panel_set_window_state(void* gtkwin_ptr, int state) {
     }
 }
 
+static void jarvis_panel_set_visible(void* gtkwin_ptr, int visible) {
+    if (!gtkwin_ptr) return;
+    GtkWidget* w = GTK_WIDGET(gtkwin_ptr);
+    if (!GTK_IS_WIDGET(w)) return;
+    if (visible) gtk_widget_show(w); else gtk_widget_hide(w);
+}
+
 static void jarvis_panel_set_click_through(void* gtkwin_ptr, int clickThrough) {
     if (!gtkwin_ptr) return;
     GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
@@ -265,6 +272,23 @@ func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error
 		return fmt.Errorf("unknown window state: %q", state)
 	}
 	C.jarvis_panel_set_window_state(handle, s)
+	return nil
+}
+
+// platformWindowAlive — best-effort on Linux (the GTK handle can't be safely
+// probed once freed). Returns true so the Windows-only close watcher is a no-op
+// here; GTK's own destroy → terminate path handles cleanup.
+func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
+
+func platformSetWindowVisible(handle unsafe.Pointer, visible bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil GtkWindow*")
+	}
+	v := C.int(0)
+	if visible {
+		v = 1
+	}
+	C.jarvis_panel_set_visible(handle, v)
 	return nil
 }
 

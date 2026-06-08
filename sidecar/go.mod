@@ -13,3 +13,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	nhooyr.io/websocket v1.8.17
 )
+
+replace github.com/webview/webview_go => ./third_party/webview_go

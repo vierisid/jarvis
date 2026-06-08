@@ -80,6 +80,12 @@ static void jarvis_panel_set_window_state(void* nswindow_ptr, int state) {
     }
 }
 
+static void jarvis_panel_set_visible(void* nswindow_ptr, int visible) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    if (visible) [w makeKeyAndOrderFront:nil]; else [w orderOut:nil];
+}
+
 static void jarvis_panel_set_click_through(void* nswindow_ptr, int clickThrough) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
@@ -233,5 +239,21 @@ func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error
 		return fmt.Errorf("unknown window state: %q", state)
 	}
 	C.jarvis_panel_set_window_state(handle, s)
+	return nil
+}
+
+// platformWindowAlive — best-effort on macOS. Returns true so the Windows-only
+// close watcher is a no-op here.
+func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
+
+func platformSetWindowVisible(handle unsafe.Pointer, visible bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil NSWindow*")
+	}
+	v := C.int(0)
+	if visible {
+		v = 1
+	}
+	C.jarvis_panel_set_visible(handle, v)
 	return nil
 }

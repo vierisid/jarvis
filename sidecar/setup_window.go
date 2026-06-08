@@ -135,6 +135,9 @@ func runSetupWindow() (string, error) {
 		return "", fmt.Errorf("bind setup handler: %w", err)
 	}
 
+	// The vendored webview creates the window hidden (no flash); reveal it once
+	// the form has loaded.
+	revealWebviewOnLoad(w)
 	w.SetHtml(setupWindowHTML)
 	w.Run() // blocks until Terminate() (submit) or the window is closed
 	return token, nil

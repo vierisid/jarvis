@@ -88,15 +88,19 @@ var (
 //
 // DWMWA_USE_IMMERSIVE_DARK_MODE (20) — BOOL: dark title bar.
 // DWMWA_WINDOW_CORNER_PREFERENCE (33) — DWORD: corner radius enum.
-//   0 = default (let DWM decide), 1 = no round, 2 = round (large), 3 = small round.
+//
+//	0 = default (let DWM decide), 1 = no round, 2 = round (large), 3 = small round.
+//
 // DWMWA_SYSTEMBACKDROP_TYPE (38) — DWORD: backdrop material.
-//   1 = none, 2 = Mica, 3 = acrylic, 4 = tabbed Mica.
+//
+//	1 = none, 2 = Mica, 3 = acrylic, 4 = tabbed Mica.
+//
 // All three require Win11 22H2 (build 22621) or newer; older builds
 // return DWMRC_E_INVALID_ARG (0x80070057) which we ignore.
 const (
-	dwmWaUseImmersiveDarkMode  = 20
+	dwmWaUseImmersiveDarkMode   = 20
 	dwmWaWindowCornerPreference = 33
-	dwmWaSystemBackdropType    = 38
+	dwmWaSystemBackdropType     = 38
 
 	dwmwcpRoundLarge = 2
 	dwmsbtMainWindow = 2
@@ -437,6 +441,33 @@ func platformDestroyWindow(handle unsafe.Pointer) error {
 		return fmt.Errorf("nil HWND")
 	}
 	procPostMessageW.Call(uintptr(handle), wmClose, 0, 0)
+	return nil
+}
+
+var procIsWindow = user32.NewProc("IsWindow")
+
+// platformWindowAlive reports whether the HWND still exists (false once the
+// window has been destroyed, e.g. the user clicked the X).
+func platformWindowAlive(handle unsafe.Pointer) bool {
+	if handle == nil {
+		return false
+	}
+	r, _, _ := procIsWindow.Call(uintptr(handle))
+	return r != 0
+}
+
+// platformSetWindowVisible shows/hides a panel HWND. Used to keep a panel
+// hidden while its page loads, then reveal it fully-rendered. SW_HIDE=0,
+// SW_SHOW=5.
+func platformSetWindowVisible(handle unsafe.Pointer, visible bool) error {
+	if handle == nil {
+		return fmt.Errorf("nil HWND")
+	}
+	cmd := uintptr(0) // SW_HIDE
+	if visible {
+		cmd = uintptr(5) // SW_SHOW
+	}
+	procShowWindowPanel.Call(uintptr(handle), cmd)
 	return nil
 }
 

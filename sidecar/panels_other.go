@@ -55,6 +55,12 @@ func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error
 	return fmt.Errorf("set window state not supported on this platform")
 }
 
+func platformSetWindowVisible(handle unsafe.Pointer, _ bool) error {
+	return nil
+}
+
+func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
+
 func platformDestroyWindow(handle unsafe.Pointer) error {
 	return fmt.Errorf("destroy window not supported on this platform")
 }
