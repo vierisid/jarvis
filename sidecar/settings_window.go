@@ -1,0 +1,280 @@
+package main
+
+// Local sidecar settings window — a small webview that shows connection status,
+// lets the user change the enrollment token, and edit sidecar preferences.
+// Entirely local: it is NOT a dashboard room and never talks to the brain
+// (the old "Settings" entry opened the remote settings room). Mirrors the log
+// viewer pattern; UI is plain HTML, to be branded later.
+
+import (
+	"fmt"
+	"log"
+	"runtime"
+
+	webview "github.com/webview/webview_go"
+)
+
+// OpenSettings opens the local sidecar settings window on its own OS-locked
+// goroutine (webview owns its thread, like the log viewer / panels).
+func (c *SidecarClient) OpenSettings() {
+	go c.runSettingsWindow()
+}
+
+// settingsState is the snapshot the page renders. Returned by the getState
+// binding (webview_go marshals it to JSON for the JS side).
+type settingsState struct {
+	Status string `json:"status"` // "connected" | "connecting" | "error"
+	Prefs  struct {
+		StartAtStartup bool `json:"start_at_startup"`
+		EtherealPebble bool `json:"ethereal_pebble"`
+	} `json:"prefs"`
+}
+
+func connStateString(s int32) string {
+	switch s {
+	case connConnected:
+		return "connected"
+	case connError:
+		return "error"
+	default:
+		return "connecting"
+	}
+}
+
+func (c *SidecarClient) runSettingsWindow() {
+	runtime.LockOSThread()
+	w := webview.New(false)
+	if w == nil {
+		log.Printf("[settings] could not open the settings window (webview runtime missing?)")
+		return
+	}
+	defer w.Destroy()
+	w.SetTitle("JARVIS — Sidecar Settings")
+	w.SetSize(520, 560, webview.HintNone)
+
+	// getState returns the live connection status + current preferences.
+	_ = w.Bind("getState", func() settingsState {
+		prefs := c.Preferences()
+		var st settingsState
+		st.Status = connStateString(c.ConnState())
+		st.Prefs.StartAtStartup = prefs.StartAtStartup
+		st.Prefs.EtherealPebble = prefs.EtherealPebble
+		return st
+	})
+
+	// saveToken validates + persists a new enrollment token. It applies on the
+	// next reconnect attempt; a restart guarantees a clean reconnect.
+	_ = w.Bind("saveToken", func(raw string) error {
+		raw = trimToken(raw)
+		if raw == "" {
+			return fmt.Errorf("Paste a token to save.")
+		}
+		if _, err := DecodeJWTPayload(raw); err != nil {
+			return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
+		}
+		if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
+			return fmt.Errorf("Could not save the token: %v", err)
+		}
+		log.Printf("[settings] enrollment token updated")
+		return nil
+	})
+
+	// setPref persists a single preference toggle. For start_at_startup it also
+	// registers/unregisters OS autostart; if that fails we don't save the toggle
+	// so the checkbox reverts to the real state.
+	_ = w.Bind("setPref", func(key string, enabled bool) error {
+		switch key {
+		case "start_at_startup":
+			if err := platformSetAutoStart(enabled); err != nil {
+				verb := "enable"
+				if !enabled {
+					verb = "disable"
+				}
+				return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
+			}
+			return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
+		case "ethereal_pebble":
+			// Selection only — the visual style is not implemented yet.
+			return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled })
+		default:
+			return fmt.Errorf("unknown preference %q", key)
+		}
+	})
+
+	// The vendored webview creates the window hidden (no flash); reveal it once
+	// the page has loaded.
+	revealWebviewOnLoad(w)
+	w.SetHtml(settingsWindowHTML)
+	w.Run()
+}
+
+// trimToken strips surrounding whitespace from a pasted token.
+func trimToken(s string) string {
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\n' || s[start] == '\r' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\n' || s[end-1] == '\r' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
+const settingsWindowHTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    background: #f5f2eb; color: #1a1a1a; padding: 22px; overflow-y: auto;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1a; color: #e8e6e0; }
+    .card { background: #232323; border-color: #3a3a3a; }
+    textarea { background: #2a2a2a; color: #e8e6e0; border-color: #444; }
+    .sub, .hint { color: #9a978f; }
+  }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+    opacity: 0.6; margin: 22px 0 8px;
+  }
+  .card {
+    background: #fff; border: 1px solid #cbc3b2; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 2px;
+  }
+  .status { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #b9b3a6; flex: 0 0 auto; }
+  .dot.connected { background: #2fae57; }
+  .dot.connecting { background: #d2a23a; }
+  .dot.error { background: #c23a2a; }
+  .status-text { font-size: 14px; font-weight: 600; }
+  label.field { font-size: 12px; font-weight: 600; display: block; margin-bottom: 6px; }
+  textarea {
+    width: 100%; height: 84px; resize: none; padding: 9px 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    border: 1px solid #cbc3b2; border-radius: 8px; background: #fbf9f4; color: #1a1a1a; line-height: 1.4;
+  }
+  textarea:focus { outline: 2px solid #c23a2a; outline-offset: 1px; border-color: #c23a2a; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+  .msg { font-size: 12px; min-height: 16px; flex: 1; }
+  .msg.ok { color: #2fae57; }
+  .msg.err { color: #c23a2a; }
+  button {
+    appearance: none; border: 0; border-radius: 8px; padding: 9px 16px;
+    background: #c23a2a; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #a83120; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .pref { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
+  .pref + .pref { border-top: 1px solid rgba(128,128,128,0.18); margin-top: 6px; padding-top: 12px; }
+  .pref input { margin-top: 2px; width: 16px; height: 16px; flex: 0 0 auto; }
+  .pref .label { font-size: 14px; }
+  .pref .hint { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+  #prefMsg { font-size: 12px; min-height: 16px; margin-top: 6px; }
+  #prefMsg.err { color: #c23a2a; }
+</style>
+</head>
+<body>
+  <h1>Sidecar Settings</h1>
+
+  <h2>Connection</h2>
+  <div class="card">
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <span id="statusText" class="status-text">Checking…</span>
+    </div>
+  </div>
+
+  <h2>Enrollment token</h2>
+  <div class="card">
+    <label class="field" for="tok">Paste a new token to re-point this machine</label>
+    <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false"></textarea>
+    <div class="row">
+      <span id="tokMsg" class="msg"></span>
+      <button id="saveTok" onclick="saveToken()">Save token</button>
+    </div>
+  </div>
+
+  <h2>General</h2>
+  <div class="card">
+    <label class="pref">
+      <input type="checkbox" id="start_at_startup" onchange="togglePref(this)">
+      <span><span class="label">Start at system startup</span>
+        <div class="hint">Launch the sidecar automatically when you log in.</div></span>
+    </label>
+  </div>
+
+  <h2>Style</h2>
+  <div class="card">
+    <label class="pref">
+      <input type="checkbox" id="ethereal_pebble" onchange="togglePref(this)">
+      <span><span class="label">Ethereal pebble</span>
+        <div class="hint">A softer, translucent pebble look. (Coming soon — the setting is saved now.)</div></span>
+    </label>
+    <div id="prefMsg"></div>
+  </div>
+
+<script>
+  var dot = document.getElementById('dot');
+  var statusText = document.getElementById('statusText');
+
+  function paintStatus(s) {
+    dot.className = 'dot ' + s;
+    statusText.textContent = s === 'connected' ? 'Connected'
+                           : s === 'error'     ? 'Connection error'
+                                               : 'Connecting…';
+  }
+
+  async function pollStatus() {
+    try { var st = await window.getState(); paintStatus(st.status); } catch (e) {}
+  }
+
+  async function init() {
+    var st = await window.getState();
+    paintStatus(st.status);
+    document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
+    document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
+    setInterval(pollStatus, 2000);
+  }
+
+  async function saveToken() {
+    var btn = document.getElementById('saveTok');
+    var msg = document.getElementById('tokMsg');
+    var tok = document.getElementById('tok');
+    msg.className = 'msg'; msg.textContent = '';
+    btn.disabled = true;
+    try {
+      await window.saveToken(tok.value);
+      msg.className = 'msg ok';
+      msg.textContent = 'Saved. Restart the sidecar to reconnect with the new token.';
+      tok.value = '';
+    } catch (e) {
+      msg.className = 'msg err';
+      msg.textContent = (e && e.message) ? e.message : String(e);
+    }
+    btn.disabled = false;
+  }
+
+  async function togglePref(el) {
+    var msg = document.getElementById('prefMsg');
+    msg.className = ''; msg.textContent = '';
+    var desired = el.checked;
+    try {
+      await window.setPref(el.id, desired);
+    } catch (e) {
+      el.checked = !desired; // revert on failure
+      msg.className = 'err';
+      msg.textContent = (e && e.message) ? e.message : String(e);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>`

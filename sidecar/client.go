@@ -228,6 +228,22 @@ func (c *SidecarClient) Connected() bool { return c.connState.Load() == connConn
 // connError) for the tray icon + status line.
 func (c *SidecarClient) ConnState() int32 { return c.connState.Load() }
 
+// editConfig mutates the live config under the lock and persists it to disk.
+// Used by the local settings window, whose bindings run on the webview thread.
+func (c *SidecarClient) editConfig(fn func(cfg *SidecarConfig)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fn(c.config)
+	return SaveConfig(c.config)
+}
+
+// Preferences returns a copy of the current preferences (lock-protected).
+func (c *SidecarClient) Preferences() PreferencesConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config.Preferences
+}
+
 func (c *SidecarClient) reloadConfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -318,9 +334,15 @@ func (c *SidecarClient) runPreflight() {
 func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	log.Printf("[sidecar] Connecting to %s...", c.claims.Brain)
 
+	// Snapshot the token under the lock — the settings window can change it on
+	// the webview thread. (It applies on the next reconnect / restart.)
+	c.mu.Lock()
+	token := c.config.Token
+	c.mu.Unlock()
+
 	conn, resp, err := websocket.Dial(ctx, c.claims.Brain, &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization": []string{"Bearer " + c.config.Token},
+			"Authorization": []string{"Bearer " + token},
 		},
 	})
 	if err != nil {

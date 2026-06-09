@@ -111,6 +111,16 @@ type SidecarConfig struct {
 	Filesystem   FilesystemConfig    `yaml:"filesystem"`
 	Browser      BrowserConfig       `yaml:"browser"`
 	Awareness    AwarenessConfig     `yaml:"awareness"`
+	Preferences  PreferencesConfig   `yaml:"preferences"`
+}
+
+// PreferencesConfig holds user-facing sidecar preferences edited from the local
+// settings window, grouped by UI category. Add fields over time.
+type PreferencesConfig struct {
+	// General
+	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
+	// Style
+	EtherealPebble bool `yaml:"ethereal_pebble"` // selection only — the visual style is not built yet
 }
 
 type TerminalConfig struct {
