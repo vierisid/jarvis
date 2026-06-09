@@ -85,6 +85,9 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client.pebble = maybeNewPebbleService(client.availableCaps)
 	client.subPebble = maybeNewSubPebbleService(client.availableCaps)
 	if client.pebble != nil {
+		// Apply the ethereal preference up front (stored on the core; takes
+		// effect whenever the brain spawns the pebble).
+		client.pebble.SetEthereal(config.Preferences.EtherealPebble, config.Preferences.EtherealIdleSeconds)
 		// Playback service rides alongside the pebble — same capability gate
 		// (CapPebble) since both are part of the ambient voice loop.
 		client.playback = NewAudioPlaybackService()
@@ -244,6 +247,15 @@ func (c *SidecarClient) Preferences() PreferencesConfig {
 	return c.config.Preferences
 }
 
+// applyPebblePrefs pushes the current pebble-related preferences into the live
+// pebble service. Called after the settings window edits them.
+func (c *SidecarClient) applyPebblePrefs() {
+	if c.pebble != nil {
+		p := c.Preferences()
+		c.pebble.SetEthereal(p.EtherealPebble, p.EtherealIdleSeconds)
+	}
+}
+
 func (c *SidecarClient) reloadConfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -275,6 +287,7 @@ func (c *SidecarClient) reloadConfig() {
 	}
 	if hasPebble && c.pebble == nil {
 		c.pebble = NewPebbleService()
+		c.pebble.SetEthereal(c.config.Preferences.EtherealPebble, c.config.Preferences.EtherealIdleSeconds)
 		c.playback = NewAudioPlaybackService()
 		c.regions = NewRegionSelectionService()
 	} else if !hasPebble && c.pebble != nil {

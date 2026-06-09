@@ -120,7 +120,8 @@ type PreferencesConfig struct {
 	// General
 	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
 	// Style
-	EtherealPebble bool `yaml:"ethereal_pebble"` // selection only — the visual style is not built yet
+	EtherealPebble      bool `yaml:"ethereal_pebble"`       // fade the pebble out while idle, pop it back on activity
+	EtherealIdleSeconds int  `yaml:"ethereal_idle_seconds"` // idle time before the pebble fades out (default 5)
 }
 
 type TerminalConfig struct {

@@ -25,8 +25,9 @@ func (c *SidecarClient) OpenSettings() {
 type settingsState struct {
 	Status string `json:"status"` // "connected" | "connecting" | "error"
 	Prefs  struct {
-		StartAtStartup bool `json:"start_at_startup"`
-		EtherealPebble bool `json:"ethereal_pebble"`
+		StartAtStartup      bool `json:"start_at_startup"`
+		EtherealPebble      bool `json:"ethereal_pebble"`
+		EtherealIdleSeconds int  `json:"ethereal_idle_seconds"`
 	} `json:"prefs"`
 }
 
@@ -59,6 +60,10 @@ func (c *SidecarClient) runSettingsWindow() {
 		st.Status = connStateString(c.ConnState())
 		st.Prefs.StartAtStartup = prefs.StartAtStartup
 		st.Prefs.EtherealPebble = prefs.EtherealPebble
+		st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
+		if st.Prefs.EtherealIdleSeconds <= 0 {
+			st.Prefs.EtherealIdleSeconds = pebbleEtherealDefaultIdleSec
+		}
 		return st
 	})
 
@@ -94,11 +99,29 @@ func (c *SidecarClient) runSettingsWindow() {
 			}
 			return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
 		case "ethereal_pebble":
-			// Selection only — the visual style is not implemented yet.
-			return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled })
+			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled }); err != nil {
+				return err
+			}
+			c.applyPebblePrefs()
+			return nil
 		default:
 			return fmt.Errorf("unknown preference %q", key)
 		}
+	})
+
+	// setEtherealIdle sets the idle timeout (seconds) before the pebble fades out.
+	_ = w.Bind("setEtherealIdle", func(seconds int) error {
+		if seconds < 1 {
+			seconds = 1
+		}
+		if seconds > 3600 {
+			seconds = 3600
+		}
+		if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealIdleSeconds = seconds }); err != nil {
+			return err
+		}
+		c.applyPebblePrefs()
+		return nil
 	})
 
 	// The vendored webview creates the window hidden (no flash); reveal it once
@@ -178,6 +201,10 @@ const settingsWindowHTML = `<!doctype html>
   .pref .hint { font-size: 12px; opacity: 0.7; margin-top: 2px; }
   #prefMsg { font-size: 12px; min-height: 16px; margin-top: 6px; }
   #prefMsg.err { color: #c23a2a; }
+  .idlerow { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; margin-top: 8px; border-top: 1px solid rgba(128,128,128,0.18); font-size: 14px; }
+  .idlerow .label { flex: 1; }
+  .idlerow input { width: 60px; padding: 5px 8px; border: 1px solid #cbc3b2; border-radius: 6px; background: #fff; color: #1a1a1a; font-size: 13px; }
+  @media (prefers-color-scheme: dark) { .idlerow input { background: #2a2a2a; color: #e8e6e0; border-color: #444; } }
 </style>
 </head>
 <body>
@@ -215,8 +242,13 @@ const settingsWindowHTML = `<!doctype html>
     <label class="pref">
       <input type="checkbox" id="ethereal_pebble" onchange="togglePref(this)">
       <span><span class="label">Ethereal pebble</span>
-        <div class="hint">A softer, translucent pebble look. (Coming soon — the setting is saved now.)</div></span>
+        <div class="hint">Fade the pebble out while it sits idle; it pops back in when Jarvis activates.</div></span>
     </label>
+    <div class="idlerow" id="etherealIdleRow">
+      <span class="label">Fade out after</span>
+      <input type="number" id="ethereal_idle_seconds" min="1" max="3600" step="1" onchange="saveIdle(this)">
+      <span>seconds idle</span>
+    </div>
     <div id="prefMsg"></div>
   </div>
 
@@ -235,11 +267,29 @@ const settingsWindowHTML = `<!doctype html>
     try { var st = await window.getState(); paintStatus(st.status); } catch (e) {}
   }
 
+  function updateIdleRow() {
+    var on = document.getElementById('ethereal_pebble').checked;
+    var inp = document.getElementById('ethereal_idle_seconds');
+    inp.disabled = !on;
+    document.getElementById('etherealIdleRow').style.opacity = on ? '1' : '0.45';
+  }
+
+  async function saveIdle(el) {
+    var msg = document.getElementById('prefMsg');
+    msg.className = ''; msg.textContent = '';
+    var v = parseInt(el.value, 10);
+    if (isNaN(v) || v < 1) { v = 1; el.value = 1; }
+    try { await window.setEtherealIdle(v); }
+    catch (e) { msg.className = 'err'; msg.textContent = (e && e.message) ? e.message : String(e); }
+  }
+
   async function init() {
     var st = await window.getState();
     paintStatus(st.status);
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
+    document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
+    updateIdleRow();
     setInterval(pollStatus, 2000);
   }
 
@@ -272,6 +322,7 @@ const settingsWindowHTML = `<!doctype html>
       msg.className = 'err';
       msg.textContent = (e && e.message) ? e.message : String(e);
     }
+    updateIdleRow();
   }
 
   init();

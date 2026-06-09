@@ -75,6 +75,16 @@ type pebbleCore struct {
 	clickDownMs    atomic.Int64
 	cursorOnDisc   atomic.Bool // cursor is over the disc → freeze cursor-follow
 	cursorOnAnswer atomic.Bool // cursor is over the "open full" button
+
+	// Ethereal mode (live-set from settings via SetEthereal): when enabled the
+	// pebble fades out after staying idle past etherealIdleMs and pops back in
+	// when it next leaves idle. etherealAlpha is the animated window opacity
+	// (0..1); it's loop-goroutine local (advanceFrame writes it, present reads
+	// it — same goroutine), so it needs no atomic.
+	etherealEnabled atomic.Bool
+	etherealIdleMs  atomic.Int64 // idle timeout before fade-out
+	idleSinceMs     atomic.Int64 // ms when the pebble last entered idle (0 = active)
+	etherealAlpha   float64
 }
 
 // pebblePlatform is the per-OS adapter contract the shared runtime drives. The
@@ -142,6 +152,66 @@ func (c *pebbleCore) advanceFrame() {
 	// Window top-left so the disc anchor lands at the eased position.
 	c.renderedX.Store(int32(c.curX) - pebbleAnchorX)
 	c.renderedY.Store(int32(c.curY) - pebbleAnchorY)
+
+	c.advanceEthereal()
+}
+
+// Ethereal-mode animation tuning. The fade-out is slow and gentle; the pop-in
+// is much faster so reappearing reads as a deliberate, "stronger" entrance.
+const (
+	pebbleEtherealFadeOut        = 0.06 // per-frame ease toward hidden (~0.7s)
+	pebbleEtherealFadeIn         = 0.40 // per-frame ease toward visible (snappy)
+	pebbleEtherealDefaultIdleSec = 5
+)
+
+// SetEthereal enables/disables ethereal mode and sets the idle timeout before
+// fade-out. Safe before Spawn and from any goroutine (atomic stores).
+func (c *pebbleCore) SetEthereal(enabled bool, idleSeconds int) {
+	if idleSeconds <= 0 {
+		idleSeconds = pebbleEtherealDefaultIdleSec
+	}
+	c.etherealIdleMs.Store(int64(idleSeconds) * 1000)
+	c.etherealEnabled.Store(enabled)
+}
+
+// EtherealAlpha returns the current ethereal window opacity (0..1). Read by the
+// renderers in present(); runs on the same goroutine as advanceFrame.
+func (c *pebbleCore) EtherealAlpha() float64 { return c.etherealAlpha }
+
+// advanceEthereal updates etherealAlpha for the current frame. When ethereal is
+// enabled and the pebble has stayed idle past the configured timeout, it eases
+// the opacity toward 0 (gentle fade-out); the moment it leaves idle it eases
+// back toward 1 with a faster factor (the "stronger" pop-in). When ethereal is
+// off, opacity is held at 1. Runs on the frame-loop goroutine.
+func (c *pebbleCore) advanceEthereal() {
+	st, _ := c.state.Load().(PebbleState)
+	now := time.Now().UnixMilli()
+	if st == PebbleIdle {
+		if c.idleSinceMs.Load() == 0 {
+			c.idleSinceMs.Store(now)
+		}
+	} else {
+		c.idleSinceMs.Store(0)
+	}
+
+	hidden := false
+	if c.etherealEnabled.Load() && st == PebbleIdle {
+		if since := c.idleSinceMs.Load(); since != 0 && now-since >= c.etherealIdleMs.Load() {
+			hidden = true
+		}
+	}
+
+	target, ease := 1.0, pebbleEtherealFadeIn
+	if hidden {
+		target, ease = 0.0, pebbleEtherealFadeOut
+	}
+	c.etherealAlpha += (target - c.etherealAlpha) * ease
+	// Snap the tails so we settle cleanly instead of crawling / ghosting.
+	if c.etherealAlpha < 0.003 {
+		c.etherealAlpha = 0
+	} else if c.etherealAlpha > 0.997 {
+		c.etherealAlpha = 1
+	}
 }
 
 // ─── Shared state mutators ───────────────────────────────────────────────────
@@ -228,6 +298,9 @@ func runPebbleLoop(core *pebbleCore, p pebblePlatform) {
 		return
 	}
 	defer p.destroyWindow()
+
+	// Start fully visible (etherealAlpha's zero value is 0 = invisible).
+	core.etherealAlpha = 1.0
 
 	// Advance one frame before the first present so renderedX/renderedY hold a
 	// real position — otherwise the initial present would place the window at

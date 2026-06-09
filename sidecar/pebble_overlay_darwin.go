@@ -413,8 +413,10 @@ static void jarvisPebbleSpawnImpl(void) {
 // frame tick; we push state/tick/text, convert to the bottom-left window origin
 // (Y-flip), and redraw.
 static void jarvisPebblePresentImpl(int x, int y, int state, unsigned long long tick,
-                                    int eye, int blinded, int answerOverflow, NSString* body) {
+                                    int eye, int blinded, int answerOverflow, int alphaPct, NSString* body) {
     if (!gPebbleWindow || !gPebbleView) return;
+    // Ethereal-mode window opacity (0..100 from the Go runtime).
+    [gPebbleWindow setAlphaValue:(CGFloat)alphaPct / 100.0];
     gPebbleState = state;
     gFrameTick = tick;
     gEye = eye;
@@ -454,12 +456,12 @@ void jarvisPebbleSpawn(void) {
 // jarvisPebblePresent pushes one eased frame from the Go runtime. text may be
 // NULL/empty (drawRect: falls back to the per-state placeholder).
 void jarvisPebblePresent(int x, int y, int state, unsigned long long tick,
-                         int eye, int blinded, int answerOverflow, const char* text) {
+                         int eye, int blinded, int answerOverflow, int alphaPct, const char* text) {
     // Copy onto the heap so the Go-side buffer can be freed immediately.
     char* copy = (text && *text) ? strdup(text) : NULL;
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString* body = copy ? [NSString stringWithUTF8String:copy] : nil;
-        jarvisPebblePresentImpl(x, y, state, tick, eye, blinded, answerOverflow, body);
+        jarvisPebblePresentImpl(x, y, state, tick, eye, blinded, answerOverflow, alphaPct, body);
         if (copy) free(copy);
     });
 }
@@ -560,11 +562,17 @@ func (s *pebbleServiceDarwin) present() error {
 		defer C.free(unsafe.Pointer(cstr))
 	}
 	answerID, _ := s.answerOverflowID.Load().(string)
+	alpha := s.EtherealAlpha()
+	if alpha < 0 {
+		alpha = 0
+	} else if alpha > 1 {
+		alpha = 1
+	}
 	C.jarvisPebblePresent(
 		C.int(s.renderedX.Load()), C.int(s.renderedY.Load()),
 		C.int(pebbleStateToInt(state)), C.ulonglong(s.frameTick),
 		pebbleBoolToCInt(s.eyeActive.Load()), pebbleBoolToCInt(s.blinded.Load()),
-		pebbleBoolToCInt(answerID != ""), cstr,
+		pebbleBoolToCInt(answerID != ""), C.int(alpha*100), cstr,
 	)
 	return nil
 }

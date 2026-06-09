@@ -641,10 +641,17 @@ func (s *pebbleServiceWindows) present() error {
 	// per-pixel alpha in the DIB.
 	const acSrcOver = 0x00
 	const acSrcAlpha = 0x01
+	// Ethereal mode scales the whole-window opacity (on top of per-pixel alpha).
+	ea := s.EtherealAlpha()
+	if ea < 0 {
+		ea = 0
+	} else if ea > 1 {
+		ea = 1
+	}
 	blend := pblBlendFunction{
 		BlendOp:             acSrcOver,
 		BlendFlags:          0,
-		SourceConstantAlpha: 255,
+		SourceConstantAlpha: byte(ea * 255),
 		AlphaFormat:         acSrcAlpha,
 	}
 	winPt := pblPoint{X: winX, Y: winY}

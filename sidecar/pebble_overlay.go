@@ -84,6 +84,12 @@ type PebbleService interface {
 	// Spawn (value just stashed).
 	SetBlinded(blinded bool) error
 
+	// SetEthereal configures ethereal mode: when enabled, the pebble fades out
+	// after staying idle for idleSeconds and pops back in (a faster animation
+	// than the fade-out) the moment it next becomes active. Live-updatable from
+	// settings and safe to call before Spawn (the values are just stored).
+	SetEthereal(enabled bool, idleSeconds int)
+
 	// Close hides + destroys the overlay. Idempotent.
 	Close() error
 
