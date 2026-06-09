@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -36,12 +37,14 @@ var (
 
 const (
 	trayCallbackMsg  = 0x0400 + 1 // WM_APP-ish (WM_USER+1) tray callback
+	trayMsgSetState  = 0x0400 + 2 // WM_APP+2: poll goroutine -> tray thread, swap icon (wParam=state)
 	trayWmRButtonUp  = 0x0205
 	trayWmContextMnu = 0x007B
 	trayWmClose      = 0x0010
 	trayWmDestroy    = 0x0002
 
 	trayNimAdd     = 0x00000000
+	trayNimModify  = 0x00000001
 	trayNimDelete  = 0x00000002
 	trayNifMessage = 0x00000001
 	trayNifIcon    = 0x00000002
@@ -59,6 +62,7 @@ const (
 	trayMenuSettingsID = 3
 	trayMenuLogsID     = 4
 	trayIDIApp         = 32512 // IDI_APPLICATION (stock icon placeholder; brand later)
+	trayIDIError       = 32515 // IDI_WARNING (connection-error placeholder; brand later)
 )
 
 // NOTIFYICONDATAW (current/Vista+ layout).
@@ -93,7 +97,7 @@ type trayMsg struct {
 var (
 	trayHwnd         atomic.Uintptr
 	trayOnClose      func()
-	trayConnected    func() bool // reports brain-connection status for the menu
+	trayConnState    func() int32 // brain-connection state (connConnecting/connConnected/connError)
 	trayOpenChat     func()
 	trayOpenSettings func()
 	trayOpenLogs     func()
@@ -106,10 +110,33 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	}
-	trayConnected = client.Connected
+	trayConnState = client.ConnState
 	trayOpenChat = client.OpenChat
 	trayOpenSettings = client.OpenSettings
 	trayOpenLogs = client.OpenLogViewer
+
+	// Poll the connection state; when it changes, ask the tray thread (which owns
+	// the icon) to swap the notification-area icon to reflect connected / error.
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		last := int32(-1)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cur := client.ConnState()
+				if cur == last {
+					continue
+				}
+				last = cur
+				if h := trayHwnd.Load(); h != 0 {
+					procPostMessageW.Call(h, trayMsgSetState, uintptr(cur), 0)
+				}
+			}
+		}
+	}()
 
 	ready := make(chan struct{})
 	go func() {
@@ -197,6 +224,22 @@ func runTrayMessageLoop() {
 	}
 }
 
+// traySetIconForState swaps the notification-area icon to reflect the current
+// connection state. Must run on the tray thread (it owns trayNID), so it's
+// invoked via the trayMsgSetState window message posted by the poll goroutine.
+func traySetIconForState(state int32) {
+	id := uintptr(trayIDIApp)
+	if state == connError {
+		id = uintptr(trayIDIError) // connection-error placeholder; brand later
+	}
+	hIcon, _, _ := procLoadIconW.Call(0, id)
+	if hIcon == 0 {
+		return
+	}
+	trayNID.HIcon = hIcon
+	procShellNotifyIconW.Call(trayNimModify, uintptr(unsafe.Pointer(&trayNID)))
+}
+
 func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case trayCallbackMsg:
@@ -205,6 +248,10 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if ev == trayWmRButtonUp || ev == trayWmContextMnu {
 			showTrayMenu(hwnd)
 		}
+		return 0
+
+	case trayMsgSetState:
+		traySetIconForState(int32(wParam))
 		return 0
 
 	case trayWmClose:
@@ -232,8 +279,13 @@ func showTrayMenu(hwnd uintptr) {
 	// Connection status — disabled (unclickable) info line, rebuilt each open so
 	// it always reflects the current state.
 	status := "Disconnected"
-	if trayConnected != nil && trayConnected() {
-		status = "Connected"
+	if trayConnState != nil {
+		switch trayConnState() {
+		case connConnected:
+			status = "Connected"
+		case connError:
+			status = "Connection error"
+		}
 	}
 	statusLabel, _ := syscall.UTF16PtrFromString(status)
 	procAppendMenuW.Call(hMenu, trayMfString|trayMfGrayed|trayMfDisabled, 0, uintptr(unsafe.Pointer(statusLabel)))

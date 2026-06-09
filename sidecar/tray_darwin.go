@@ -100,12 +100,25 @@ static void jarvisTraySetup(void) {
     gStatusItem.menu = menu;
 }
 
-// jarvisTraySetConnected updates the status line. Safe to call from any
+// jarvisTraySetConnState updates the status line + menu-bar icon. state:
+// 0 = connecting, 1 = connected, 2 = connection error. Safe to call from any
 // goroutine — marshals onto the main queue.
-static void jarvisTraySetConnected(int connected) {
+static void jarvisTraySetConnState(int state) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gStatusMenuItem) {
-            gStatusMenuItem.title = connected ? @"Connected" : @"Disconnected";
+            gStatusMenuItem.title = (state == 1) ? @"Connected"
+                                  : (state == 2) ? @"Connection error"
+                                                 : @"Disconnected";
+        }
+        if (gStatusItem) {
+            NSStatusBarButton* btn = gStatusItem.button;
+            if (@available(macOS 11.0, *)) {
+                // TODO: brand a dedicated connection-error glyph. For now the
+                // default placeholder: a warning triangle vs the normal disc.
+                NSString* sym = (state == 2) ? @"exclamationmark.triangle.fill" : @"circle.fill";
+                NSImage* img = [NSImage imageWithSystemSymbolName:sym accessibilityDescription:@"JARVIS Sidecar"];
+                if (img) { [img setTemplate:YES]; btn.image = img; }
+            }
         }
     });
 }
@@ -169,23 +182,20 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	go client.Start(ctx)
 
 	C.jarvisTraySetup()
-	// Poll the connection state and push it to the status menu item on change.
+	// Poll the connection state and push it to the status item (text + icon) on change.
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		last := -1
+		last := int32(-1)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cur := 0
-				if client.Connected() {
-					cur = 1
-				}
+				cur := client.ConnState()
 				if cur != last {
 					last = cur
-					C.jarvisTraySetConnected(C.int(cur))
+					C.jarvisTraySetConnState(C.int(cur))
 				}
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,6 +25,22 @@ const (
 	maxReconnectDelay = 60 * time.Second
 )
 
+// Connection state, surfaced to the tray (icon + status line).
+const (
+	connConnecting int32 = iota // not connected yet (initial / retrying)
+	connConnected               // WS up + registered
+	connError                   // last attempt failed (unreachable or token rejected)
+)
+
+// tokenRejectedError means the brain was reachable but refused our token during
+// the WebSocket handshake (HTTP 401 missing / 403 invalid|revoked), as opposed
+// to the brain being unreachable.
+type tokenRejectedError struct{ status int }
+
+func (e *tokenRejectedError) Error() string {
+	return fmt.Sprintf("brain rejected the sidecar token (HTTP %d)", e.status)
+}
+
 type SidecarClient struct {
 	config          *SidecarConfig
 	claims          *SidecarTokenClaims
@@ -31,8 +48,9 @@ type SidecarClient struct {
 	conn            *websocket.Conn
 	reconnectDelay  time.Duration
 	stopped         bool
-	incompatible    bool        // brain hard-blocked us (version < MIN); do not reconnect
-	connected       atomic.Bool // true while the WS is up + registered (tray status)
+	incompatible    bool         // brain hard-blocked us (version < MIN); do not reconnect
+	connState       atomic.Int32 // connConnecting/connConnected/connError (tray icon + status)
+	alertOnce       sync.Once    // show the invalid-token pop-up at most once
 	availableCaps   []SidecarCapability
 	unavailableCaps []UnavailableCapability
 
@@ -155,6 +173,22 @@ func (c *SidecarClient) Start(ctx context.Context) {
 			log.Printf("[sidecar] Not reconnecting — update the sidecar and restart.")
 			return
 		}
+		var tokErr *tokenRejectedError
+		if errors.As(err, &tokErr) {
+			// The brain is reachable but the token is invalid/revoked. Retrying
+			// with the same token is pointless, so alert the user (once) and stop
+			// reconnecting. Stay alive so the tray keeps showing the error state
+			// (connError was set in connectAndServe) until the user quits or
+			// restarts after fixing the config.
+			log.Printf("[sidecar] Token rejected by the brain (HTTP %d). Not reconnecting until reconfigured.", tokErr.status)
+			c.alertOnce.Do(func() {
+				platformShowAlert("JARVIS Sidecar",
+					"This machine's enrollment token is not valid — the brain rejected it.\n\n"+
+						"Re-enroll the sidecar from the dashboard, update the token in the config, then restart.")
+			})
+			<-ctx.Done()
+			return
+		}
 		if err != nil {
 			log.Printf("[sidecar] Disconnected: %v", err)
 		}
@@ -183,12 +217,16 @@ func (c *SidecarClient) Stop() {
 		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
 		c.conn = nil
 	}
-	c.connected.Store(false)
+	c.connState.Store(connConnecting)
 }
 
 // Connected reports whether the sidecar is currently connected + registered to
 // the brain. Used by the tray status entry.
-func (c *SidecarClient) Connected() bool { return c.connected.Load() }
+func (c *SidecarClient) Connected() bool { return c.connState.Load() == connConnected }
+
+// ConnState reports the live connection state (connConnecting/connConnected/
+// connError) for the tray icon + status line.
+func (c *SidecarClient) ConnState() int32 { return c.connState.Load() }
 
 func (c *SidecarClient) reloadConfig() {
 	c.mu.Lock()
@@ -278,24 +316,33 @@ func (c *SidecarClient) runPreflight() {
 }
 
 func (c *SidecarClient) connectAndServe(ctx context.Context) error {
-	// Reflects the live tray status; reset on every return (disconnect / error).
-	defer c.connected.Store(false)
 	log.Printf("[sidecar] Connecting to %s...", c.claims.Brain)
 
-	conn, _, err := websocket.Dial(ctx, c.claims.Brain, &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(ctx, c.claims.Brain, &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Authorization": []string{"Bearer " + c.config.Token},
 		},
 	})
 	if err != nil {
+		// nhooyr returns the HTTP response on a failed handshake. A 401/403 means
+		// the brain was reachable but refused the token; anything else (no
+		// response) means we couldn't reach the brain at all (dead server, or a
+		// token whose brain URL is wrong/unresolvable).
+		c.connState.Store(connError)
+		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			return &tokenRejectedError{status: resp.StatusCode}
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
+	// Past the handshake: on any later return (disconnect) drop back to
+	// "connecting" so the tray clears the error state during reconnect.
+	defer c.connState.Store(connConnecting)
 	c.conn = conn
 	// Allow large messages (10MB)
 	conn.SetReadLimit(10 * 1024 * 1024)
 
 	log.Println("[sidecar] Connected")
-	c.connected.Store(true)
+	c.connState.Store(connConnected)
 	c.reconnectDelay = minReconnectDelay
 
 	if err := c.sendRegistration(ctx); err != nil {
