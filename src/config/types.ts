@@ -202,6 +202,16 @@ export type UserConfig = {
 };
 
 /**
+ * Anonymous usage telemetry. Opt-out model: enabled by default so the
+ * project can measure unique installs and retention. Disable with
+ * `enabled: false`, the `JARVIS_TELEMETRY=0` env var, or the community
+ * standard `DO_NOT_TRACK=1`.
+ */
+export type TelemetryConfig = {
+  enabled: boolean;
+};
+
+/**
  * Onboarding completion state — persists in `~/.jarvis/config.yaml` so
  * the dashboard knows which phase (setup / profile interview / tutorial)
  * to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
@@ -330,6 +340,7 @@ export type LLMConfig = {
 export type JarvisConfig = {
   user?: UserConfig;
   onboarding?: OnboardingConfig;
+  telemetry?: TelemetryConfig;
   daemon: {
     port: number;
     data_dir: string;
@@ -389,6 +400,9 @@ export type JarvisConfig = {
 export const DEFAULT_CONFIG: JarvisConfig = {
   user: {
     name: '',
+  },
+  telemetry: {
+    enabled: true,
   },
   daemon: {
     port: 3142,

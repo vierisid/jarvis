@@ -344,6 +344,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 3. Create service registry
     registry = new ServiceRegistry();
 
+    // 3b. Anonymous usage telemetry (opt-out). Constructed here so it can be
+    //     registered before the LLM-dependent services and counts installs
+    //     even while the daemon is still in onboarding/setup mode.
+    const { TelemetryService } = await import('../telemetry/index.ts');
+    const telemetryService = new TelemetryService({
+      config: jarvisConfig,
+      packageRoot: path.join(import.meta.dir, '..', '..'),
+    });
+
     // 4. Create proactive modules
     const heartbeatConfig = jarvisConfig.heartbeat;
     const reactor = new EventReactor();
@@ -434,6 +443,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 7. Register services in startup order
     //    Agent first (needs DB), Observers second, Channels third, Sidecar, WebSocket last (needs Agent)
+    registry.register(telemetryService);
     registry.register(agentService);
     if (observerService) registry.register(observerService);
     registry.register(channelService);
