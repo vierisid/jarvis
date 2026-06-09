@@ -90,10 +90,17 @@ export interface LLMConfigProviderView {
  *     empty. The classic orchestrator runs.
  *   - Multi-tier: `tiers` has at least one entry. When tiers.conversation is
  *     set, the router-first architecture activates.
+ *
+ * `mode` is the user's persisted choice of architecture. It's stored
+ * explicitly (not inferred from tier presence) so the selection survives a
+ * tab switch / reload even before any tier model is picked, and so the user
+ * can flip back to single at any time. Runtime routing still keys off tier
+ * presence; `mode` only drives which section the UI shows.
  */
 export interface LLMConfig {
   providers: Record<string, LLMConfigProviderView>;
   default: string | null;
+  mode: "single" | "multi-tier";
   tiers: {
     conversation: string | null;
     high: string | null;
@@ -521,6 +528,40 @@ export function useSettingsData() {
   }, [refresh]);
 
   /**
+   * Switch the persisted LLM architecture mode. The choice is stored on the
+   * backend so it survives reloads and the user can flip either direction at
+   * any time. Switching to single also clears every tier in the same request
+   * (atomic from the user's perspective) so router-first stays off and there's
+   * no stale tier config left behind.
+   */
+  const setLLMMode = useCallback(
+    async (mode: "single" | "multi-tier"): Promise<ActionResult> => {
+      try {
+        const body =
+          mode === "single"
+            ? { mode, tiers: { conversation: null, high: null, medium: null, low: null } }
+            : { mode };
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/llm",
+          body,
+        );
+        await refresh();
+        return {
+          ok: true,
+          message:
+            r.message ||
+            (mode === "single"
+              ? "Switched to single-LLM mode (tier config cleared)."
+              : "Switched to multi-tier mode."),
+        };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
+  /**
    * Test a provider's credentials. The `name` is the user's chosen provider
    * key (e.g. "anthropic" or "ollama-remote"). Optional overrides let the UI
    * test what's in a form field before the user clicks Save - without them,
@@ -873,6 +914,7 @@ export function useSettingsData() {
     setDefaultModel,
     setTierModel,
     clearAllTiers,
+    setLLMMode,
     testProvider,
     setTelegram,
     setDiscord,

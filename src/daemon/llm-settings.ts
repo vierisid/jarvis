@@ -29,6 +29,7 @@ import {
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
 const SETTING_DEFAULT = 'llm.default';
+const SETTING_MODE = 'llm.mode';
 const SETTING_TIER_CONVERSATION = 'llm.tiers.conversation';
 const SETTING_TIER_HIGH = 'llm.tiers.high';
 const SETTING_TIER_MEDIUM = 'llm.tiers.medium';
@@ -46,9 +47,19 @@ export type LLMSettingsProviderView = {
   base_url?: string;
 };
 
+export type LLMMode = 'single' | 'multi-tier';
+
 export type LLMSettingsResponse = {
   providers: Record<string, LLMSettingsProviderView>;
   default: string | null;
+  /**
+   * The user's persisted architecture choice. Stored explicitly rather than
+   * inferred from tier presence, so the selection survives reloads even before
+   * a tier model is picked and the user can flip back to single at any time.
+   * Runtime routing still activates router-first only when tiers.conversation
+   * is set (see configureLLMTiers) - this field never drives routing on its own.
+   */
+  mode: LLMMode;
   tiers: {
     conversation: string | null;
     high: string | null;
@@ -67,6 +78,7 @@ export type LLMSettingsRequest = {
     base_url?: string;
   } | null>;            // null deletes the provider
   default?: string | null;     // null clears
+  mode?: LLMMode;              // persisted architecture choice
   tiers?: {
     conversation?: string | null;
     high?: string | null;
@@ -101,15 +113,30 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     };
   }
 
+  const tiers = {
+    conversation: config.llm.tiers?.conversation ?? null,
+    high: config.llm.tiers?.high ?? null,
+    medium: config.llm.tiers?.medium ?? null,
+    low: config.llm.tiers?.low ?? null,
+  };
+
+  // Mode is read from its own setting. For installs that pre-date this field
+  // (no stored value), fall back to inferring it from tier presence so the
+  // upgrade is seamless.
+  const storedMode = getSetting(SETTING_MODE);
+  const anyTier = tiers.conversation || tiers.high || tiers.medium || tiers.low;
+  const mode: LLMMode =
+    storedMode === 'multi-tier' || storedMode === 'single'
+      ? storedMode
+      : anyTier
+        ? 'multi-tier'
+        : 'single';
+
   return {
     providers,
     default: config.llm.default ?? null,
-    tiers: {
-      conversation: config.llm.tiers?.conversation ?? null,
-      high: config.llm.tiers?.high ?? null,
-      medium: config.llm.tiers?.medium ?? null,
-      low: config.llm.tiers?.low ?? null,
-    },
+    mode,
+    tiers,
     available_kinds: AVAILABLE_KINDS,
   };
 }
@@ -154,6 +181,14 @@ export function saveLLMSettings(
       }
       config.llm.providers[name] = merged;
     }
+  }
+
+  // Persist the architecture choice. Kept in its own setting (not derived) so
+  // the selection survives reloads and the user can flip either direction even
+  // before any tier model is picked. Does NOT drive runtime routing - that
+  // still keys off tiers.conversation in configureLLMTiers.
+  if (body.mode === 'single' || body.mode === 'multi-tier') {
+    setSetting(SETTING_MODE, body.mode);
   }
 
   // Apply default + tier model refs.

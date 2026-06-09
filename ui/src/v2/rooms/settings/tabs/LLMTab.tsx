@@ -90,19 +90,16 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
  *                   heavier task models (low/medium/high). Router-first
  *                   architecture; activated by any tier being set.
  *
- * The mode is derived from the config shape (presence of any tier) - there's
- * no separate `mode` field stored, so the UI and backend stay in sync by
- * construction. Switching from multi -> single deletes all tier entries
- * atomically; switching the other way just expands the UI to expose tier
- * slots (the existing `default` becomes the fall-up fallback).
+ * The mode is a persisted choice (`llm.mode`), NOT inferred from tier
+ * presence. Storing it explicitly is what lets the selection survive a tab
+ * switch / reload before any tier model is picked, and lets the user flip
+ * back to single at any time. Switching multi -> single also clears every
+ * tier atomically so router-first stays off and no stale tier config lingers;
+ * the `default` model stays put as the fall-up fallback. Runtime routing
+ * still activates router-first only when tiers.conversation is set, so this
+ * UI choice never silently changes behaviour on its own.
  */
 type Mode = "single" | "multi-tier";
-
-function deriveMode(llm: { tiers: { conversation: string | null; high: string | null; medium: string | null; low: string | null } } | null): Mode {
-  if (!llm) return "single";
-  const anyTier = llm.tiers.conversation || llm.tiers.high || llm.tiers.medium || llm.tiers.low;
-  return anyTier ? "multi-tier" : "single";
-}
 
 export function LLMTab({
   data,
@@ -112,45 +109,26 @@ export function LLMTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const llm = data.llm;
-  const mode = deriveMode(llm);
   const [switching, setSwitching] = useState(false);
 
   if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
 
-  // Switching multi -> single deletes the tier config. The user explicitly
-  // asked for this (instead of preserving) so the saved YAML stays clean and
-  // there's no hidden tier state that would silently re-activate router mode
-  // if a future bug flipped the derived mode. The `default` model stays put.
-  const switchToSingle = async () => {
-    if (mode === "single") return;
+  // The mode comes straight from the backend (persisted), so it's the single
+  // source of truth for which section renders. No local mirror state.
+  const mode: Mode = llm.mode;
+
+  const switchMode = async (next: Mode) => {
+    if (mode === next || switching) return;
     setSwitching(true);
     try {
-      const r = await data.clearAllTiers();
-      onToast(r.ok ? "Switched to single-LLM mode (tier config cleared)." : r.message, r.ok ? "ok" : "warn");
+      const r = await data.setLLMMode(next);
+      onToast(r.message, r.ok ? "ok" : "warn");
     } finally {
       setSwitching(false);
     }
   };
-  // Single -> multi-tier is a pure UI transition: no tier values to write
-  // yet, and `default` becomes the fallback. The user picks tier models
-  // below. Toggling here only flips the local view (deriveMode will return
-  // "single" until at least one tier is set).
-  const switchToMulti = () => {
-    if (mode === "multi-tier") return;
-    // Optimistic: the section below renders multi-tier pickers as soon as
-    // the user clicks, even if no tier is set yet. Once they pick a tier
-    // model the config reflects the mode and the derived state matches.
-    setPendingMulti(true);
-  };
-  const [pendingMulti, setPendingMulti] = useState(false);
-  // The view is in multi-tier mode if either the config says so or the user
-  // just clicked the toggle and hasn't picked a model yet.
-  const viewMode: Mode = mode === "multi-tier" || pendingMulti ? "multi-tier" : "single";
-  // Clear the pending flag once a tier actually gets written (so flipping
-  // back to single later starts from a clean view).
-  useEffect(() => {
-    if (mode === "multi-tier") setPendingMulti(false);
-  }, [mode]);
+  const switchToSingle = () => switchMode("single");
+  const switchToMulti = () => switchMode("multi-tier");
 
   return (
     <div>
@@ -165,7 +143,7 @@ export function LLMTab({
           </div>
         </div>
         <ModeChooser
-          mode={viewMode}
+          mode={mode}
           switching={switching}
           onSingle={switchToSingle}
           onMulti={switchToMulti}
@@ -184,7 +162,7 @@ export function LLMTab({
         <ProvidersList data={data} onToast={onToast} />
       </section>
 
-      {viewMode === "single" ? (
+      {mode === "single" ? (
         <SingleModelSection data={data} onToast={onToast} />
       ) : (
         <MultiTierSection data={data} onToast={onToast} />
