@@ -48,9 +48,9 @@ feature-usage data.
 ## When pings are sent
 
 - Once at daemon startup.
-- Then once every 4 hours while the process runs.
+- Then once every hour while the process runs.
 
-The 4-hour heartbeat exists because JARVIS is a long-running server daemon:
+The hourly heartbeat exists because JARVIS is a long-running server daemon:
 without it, a machine that starts once and stays up for weeks would look like a
 single brief session. Every send is fire-and-forget with a 5-second timeout; a
 failed or blocked request never affects the daemon.

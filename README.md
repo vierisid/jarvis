@@ -417,7 +417,7 @@ JARVIS sends **anonymous** usage metrics so the project can measure its unique
 user base and retention. Each ping contains only a hashed machine id (derived
 from hostname + username, never reversible to either), the app version, the
 install method, and the OS/arch. No personal data, config, content, or feature
-usage is ever sent. Pings go out at startup and every 4 hours.
+usage is ever sent. Pings go out at startup and every hour.
 
 It is on by default (opt-out). Disable it with any of:
 

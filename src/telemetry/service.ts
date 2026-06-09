@@ -62,7 +62,7 @@ export class TelemetryService implements Service {
         console.log(`[Telemetry] debug: payload=${JSON.stringify(this.payload)}`);
       }
 
-      // Startup ping + 4-hourly heartbeat. Fire-and-forget; the .catch is
+      // Startup ping + hourly heartbeat. Fire-and-forget; the .catch is
       // belt-and-suspenders against an unhandled rejection (fire() already
       // swallows its own errors).
       this.fire().catch(() => {});
@@ -135,7 +135,7 @@ export class TelemetryService implements Service {
         [
           '',
           '+--- Anonymous usage metrics --------------------------------------+',
-          '| JARVIS sends a small anonymous ping at startup and every 4 hours  |',
+          '| JARVIS sends a small anonymous ping at startup and every hour     |',
           '| so we can count unique installs and retention. No personal data,  |',
           '| no config, no content - just a hashed machine id, app version,    |',
           '| install method, and OS. Details: docs/TELEMETRY.md                |',

@@ -18,7 +18,7 @@ daemon:
 #   token: "your-secret-token-here"
 
 # Anonymous usage metrics (opt-out, enabled by default).
-# Sends a tiny anonymous ping at startup and every 4 hours so the project can
+# Sends a tiny anonymous ping at startup and every hour so the project can
 # count unique installs and retention. No personal data, config, or content —
 # just a hashed machine id, app version, install method, and OS.
 # See docs/TELEMETRY.md for exactly what is collected.
