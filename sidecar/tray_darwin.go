@@ -123,8 +123,18 @@ static void jarvisTraySetConnState(int state) {
     });
 }
 
+// gTrayShouldQuit is set true only by jarvisTrayQuit. webview_go stops the app
+// run loop when a panel window closes (on_window_destroyed -> terminate ->
+// [NSApp stop]); that must NOT end the sidecar. So jarvisTrayRun re-enters the
+// run loop after any stop and only returns when we actually want to quit.
+static volatile int gTrayShouldQuit = 0;
+
 // jarvisTrayRun runs the Cocoa main loop (blocks until jarvisTrayQuit).
-static void jarvisTrayRun(void) { [NSApp run]; }
+static void jarvisTrayRun(void) {
+    while (!gTrayShouldQuit) {
+        [NSApp run];
+    }
+}
 
 // jarvisTrayQuit removes the status item and stops the run loop. Safe to call
 // from any goroutine — it marshals onto the main queue and posts a dummy event
@@ -135,6 +145,7 @@ static void jarvisTrayQuit(void) {
             [[NSStatusBar systemStatusBar] removeStatusItem:gStatusItem];
             gStatusItem = nil;
         }
+        gTrayShouldQuit = 1;
         [NSApp stop:nil];
         NSEvent* e = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
                                         location:NSMakePoint(0, 0)

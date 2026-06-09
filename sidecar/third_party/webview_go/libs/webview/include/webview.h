@@ -2036,23 +2036,14 @@ private:
 
   // Blocks while depleting the run loop of events.
   void deplete_run_loop_event_queue() {
-    objc::autoreleasepool arp;
-    auto app = get_shared_application();
-    bool done{};
-    dispatch([&] { done = true; });
-    auto mask = NSUIntegerMax; // NSEventMaskAny
-    // NSDefaultRunLoopMode
-    auto mode = objc::msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel,
-                                   "kCFRunLoopDefaultMode");
-    while (!done) {
-      objc::autoreleasepool arp;
-      auto event = objc::msg_send<id>(
-          app, "nextEventMatchingMask:untilDate:inMode:dequeue:"_sel, mask,
-          nullptr, mode, YES);
-      if (event) {
-        objc::msg_send<void>(app, "sendEvent:"_sel, event);
-      }
-    }
+    // PATCHED (jarvis): no-op on Cocoa. The host destroys panels by running
+    // wv.Destroy() on the main queue (panels live under the tray's shared
+    // [NSApp run] loop). The original pump dispatches a `done=true` sentinel
+    // onto the SAME serial main queue and spins until it runs — but it can't
+    // run until wv.Destroy() returns, so the main thread deadlocks: it keeps
+    // pumping events (the tray still responds) while the dispatch queue is
+    // frozen, so reopening a panel, the palette, and pebble cursor-follow all
+    // hang. The window still closes via [m_window close] in the destructor.
   }
 
   bool m_debug{};
