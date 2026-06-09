@@ -61,6 +61,9 @@ func platformSetWindowVisible(handle unsafe.Pointer, _ bool) error {
 
 func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
 
+// registerPanelCloseWatch is macOS-only (NSWindowWillCloseNotification).
+func registerPanelCloseWatch(_ unsafe.Pointer, _ *panelImpl) {}
+
 func platformDestroyWindow(handle unsafe.Pointer) error {
 	return fmt.Errorf("destroy window not supported on this platform")
 }

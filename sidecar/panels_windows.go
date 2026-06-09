@@ -456,6 +456,10 @@ func platformWindowAlive(handle unsafe.Pointer) bool {
 	return r != 0
 }
 
+// registerPanelCloseWatch is macOS-only (NSWindowWillCloseNotification); Windows
+// uses the platformWindowAlive (IsWindow) polling close watcher instead.
+func registerPanelCloseWatch(_ unsafe.Pointer, _ *panelImpl) {}
+
 // platformSetWindowVisible shows/hides a panel HWND. Used to keep a panel
 // hidden while its page loads, then reveal it fully-rendered. SW_HIDE=0,
 // SW_SHOW=5.

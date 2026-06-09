@@ -8,6 +8,8 @@ package main
 
 #import <Cocoa/Cocoa.h>
 
+extern void goPanelClosed(unsigned long long token);
+
 static void jarvis_panel_apply_flags(
     void* nswindow_ptr,
     int alwaysOnTop,
@@ -18,6 +20,10 @@ static void jarvis_panel_apply_flags(
 ) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    // Panels live under the tray's shared run loop; the host tears them down
+    // explicitly. Keep the NSWindow object alive when the user clicks its close
+    // button so teardown (and any in-flight focus) can't touch freed memory.
+    [w setReleasedWhenClosed:NO];
 
     if (alwaysOnTop) {
         [w setLevel:NSFloatingWindowLevel];
@@ -116,13 +122,52 @@ static void jarvis_panel_move_window(void* nswindow_ptr, int x, int y) {
     [w setLevel:NSFloatingWindowLevel];
     [w orderFrontRegardless];
 }
+
+// Fire goPanelClosed(token) when the user closes this window, so the host can
+// tear the panel down (clear its registry entry). The block fires on the main
+// thread (close happens there); we never remove the observer — panels are few
+// and the window outlives it (releasedWhenClosed:NO).
+static void jarvis_panel_watch_close(void* nswindow_ptr, unsigned long long token) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:w
+                     queue:nil
+                usingBlock:^(NSNotification* note) { (void)note; goPanelClosed(token); }];
+}
 */
 import "C"
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
+
+// Panel close-watch registry. macOS panels run under the tray's shared run loop
+// and never run their own webview loop, so we observe each window's
+// NSWindowWillCloseNotification and signal the spawn goroutine when the user
+// closes it. Without this the panel registry keeps a stale entry and a reopen
+// focuses a destroyed window (crash).
+var (
+	panelCloseSeq   atomic.Uint64
+	panelCloseFuncs sync.Map // uint64 token -> func()
+)
+
+// registerPanelCloseWatch wires the window's close notification to impl's
+// teardown signal. Called from the cross-platform spawn path; no-op elsewhere.
+func registerPanelCloseWatch(handle unsafe.Pointer, impl *panelImpl) {
+	if handle == nil || impl == nil {
+		return
+	}
+	token := panelCloseSeq.Add(1)
+	panelCloseFuncs.Store(token, func() {
+		impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
+	})
+	C.jarvis_panel_watch_close(handle, C.ulonglong(token))
+}
 
 func boolToCInt(b bool) C.int {
 	if b {

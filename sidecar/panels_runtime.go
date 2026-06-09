@@ -262,6 +262,12 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 		})
 
+		// macOS: panels don't run their own loop, so we can't rely on wv.Run()
+		// returning when the window closes. Observe the window's close to signal
+		// teardown (clears the registry so a reopen makes a fresh window instead
+		// of focusing the destroyed one). No-op on Windows/Linux.
+		registerPanelCloseWatch(handle, impl)
+
 		// Global summon hotkey: toggles cursor-follow and dispatches a JS
 		// callback in the page so the user can summon/dismiss from any app.
 		if spec.SummonHotkey != "" {

@@ -280,6 +280,10 @@ func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error
 // here; GTK's own destroy → terminate path handles cleanup.
 func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
 
+// registerPanelCloseWatch is macOS-only (NSWindowWillCloseNotification); the
+// Windows/Linux close watcher polls platformWindowAlive instead.
+func registerPanelCloseWatch(_ unsafe.Pointer, _ *panelImpl) {}
+
 func platformSetWindowVisible(handle unsafe.Pointer, visible bool) error {
 	if handle == nil {
 		return fmt.Errorf("nil GtkWindow*")
