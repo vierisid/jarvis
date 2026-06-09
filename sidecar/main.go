@@ -55,6 +55,15 @@ Usage:
 		log.Println("[sidecar] Token saved to config")
 	}
 
+	// Reconcile OS autostart with the saved preference: re-register with the
+	// current executable path so a moved/renamed binary fixes its login entry on
+	// the next launch (idempotent when the path is unchanged).
+	if cfg.Preferences.StartAtStartup {
+		if err := platformSetAutoStart(true); err != nil {
+			log.Printf("[sidecar] could not refresh start-at-startup registration: %v", err)
+		}
+	}
+
 	// On Windows the dashboard panels AND the first-run setup window are
 	// WebView2-backed (no-op check on Linux/macOS). ensureWebView2Runtime blocks
 	// through any user-triggered install and only returns false if the runtime

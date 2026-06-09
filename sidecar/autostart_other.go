@@ -31,10 +31,12 @@ func platformSetAutoStart(enabled bool) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
+	// Quote the Exec path so a binary path containing spaces parses correctly per
+	// the XDG Desktop Entry spec.
 	content := fmt.Sprintf("[Desktop Entry]\n"+
 		"Type=Application\n"+
 		"Name=JARVIS Sidecar\n"+
-		"Exec=%s\n"+
+		"Exec=%q\n"+
 		"X-GNOME-Autostart-enabled=true\n", exe)
 	return os.WriteFile(desktop, []byte(content), 0644)
 }
