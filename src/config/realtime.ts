@@ -65,14 +65,12 @@ function findOpenAIProviderKey(config: JarvisConfig): string {
  * so the caller can log a warning and fall back to the standard STT -> LLM ->
  * TTS pipeline.
  *
- * Key resolution: scan `llm.providers` for a `kind: 'openai'` entry, then
- * legacy `llm.openai.api_key` (loader migrates this into providers but keeps
- * the raw block around until YAML write), then env (JARVIS_OPENAI_KEY /
- * OPENAI_API_KEY).
+ * Key resolution: scan `llm.providers` for a `kind: 'openai'` entry and reuse
+ * its key (injected from the keychain at startup). LLM credentials live only
+ * in the DB + keychain - there is no config.yaml or env fallback.
  */
 export function resolveRealtimeVoice(
   config: JarvisConfig,
-  env: Record<string, string | undefined> = process.env,
 ): RealtimeVoiceResolution {
   const rt = config.voice?.realtime;
 
@@ -80,20 +78,14 @@ export function resolveRealtimeVoice(
     return { ok: false, reason: 'Realtime voice disabled (voice.realtime.enabled is false)' };
   }
 
-  const apiKey = (
-    findOpenAIProviderKey(config) ||
-    config.llm?.openai?.api_key ||
-    env.JARVIS_OPENAI_KEY ||
-    env.OPENAI_API_KEY ||
-    ''
-  ).trim();
+  const apiKey = findOpenAIProviderKey(config).trim();
 
   if (!apiKey) {
     return {
       ok: false,
       reason:
         'Realtime voice enabled but no OpenAI key resolved ' +
-        '(add an OpenAI provider under Settings > LLM, or set JARVIS_OPENAI_KEY)',
+        '(add an OpenAI provider under Settings > LLM)',
     };
   }
 

@@ -207,17 +207,23 @@ export function stripSecretsFromProviders(
 // ── mergeLLMSettingsIntoConfig ───────────────────────────────────────────
 
 /**
- * Merge DB-stored LLM settings (and keychain secrets) into the in-memory
- * config at startup. Env vars (already applied by loadConfig) take priority;
- * DB values fill in anything env didn't set.
+ * Load ALL LLM settings from the DB + encrypted keychain into the in-memory
+ * config at startup. This is the SOLE source of LLM configuration: providers,
+ * credentials, the single-LLM `default`, and the tier map all come from the
+ * database. config.yaml and env vars contribute nothing (loadConfig discards
+ * any `llm` block and the env loader no longer reads LLM vars), so this fully
+ * REPLACES `config.llm` rather than merging into it - a stale value can never
+ * shadow the dashboard.
  *
  * Also reads legacy DB keys (KEY_ANTHROPIC, SETTING_PRIMARY, etc.) from
  * pre-rework installs and migrates them in-memory so users upgrading don't
  * lose their saved credentials.
  */
 export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
-  if (!config.llm.providers) config.llm.providers = {};
-  if (!config.llm.tiers) config.llm.tiers = {};
+  // Replace, don't merge: the DB is authoritative for every LLM setting.
+  config.llm.providers = {};
+  config.llm.tiers = {};
+  config.llm.default = undefined;
 
   // 1. New shape: load providers JSON + default + tier strings.
   const providersJson = getSetting(SETTING_PROVIDERS);
@@ -225,9 +231,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     try {
       const parsed = JSON.parse(providersJson) as Record<string, LLMProviderEntry>;
       for (const [name, entry] of Object.entries(parsed)) {
-        if (!config.llm.providers[name]) {
-          config.llm.providers[name] = entry;
-        }
+        config.llm.providers[name] = entry;
       }
     } catch (err) {
       console.warn('[LLM] Failed to parse stored providers JSON:', err);
@@ -235,7 +239,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
   }
 
   const dbDefault = getSetting(SETTING_DEFAULT);
-  if (dbDefault && !config.llm.default) config.llm.default = dbDefault;
+  if (dbDefault) config.llm.default = dbDefault;
 
   for (const [tier, key] of [
     ['conversation', SETTING_TIER_CONVERSATION],
@@ -244,7 +248,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     ['low', SETTING_TIER_LOW],
   ] as const) {
     const value = getSetting(key);
-    if (value && !config.llm.tiers[tier]) config.llm.tiers[tier] = value;
+    if (value) config.llm.tiers[tier] = value;
   }
 
   // 2. Legacy shape: migrate per-provider DB keys + KEY_* secrets if any
@@ -261,8 +265,9 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     const key = getSecret(keychainKey(name));
     if (key) {
       // Inject into the entry transiently so registerLLMProviders can
-      // instantiate the provider. This will be stripped before save (see
-      // saveConfig stripLegacyLLMFields and saveLLMSettings).
+      // instantiate the provider. The whole llm block is stripped before any
+      // YAML write (see saveConfig / stripLLMConfigForYAML), and saveLLMSettings
+      // persists secrets only to the keychain.
       config.llm.providers[name] = { ...config.llm.providers[name], api_key: key };
     }
   }

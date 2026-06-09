@@ -14,7 +14,7 @@ function withOpenAIProvider(config: JarvisConfig, key: string): JarvisConfig {
 
 describe('resolveRealtimeVoice', () => {
   test('disabled by default', () => {
-    const res = resolveRealtimeVoice(makeConfig(), {});
+    const res = resolveRealtimeVoice(makeConfig());
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain('disabled');
   });
@@ -22,7 +22,7 @@ describe('resolveRealtimeVoice', () => {
   test('enabled but no key resolves -> not ok, never throws', () => {
     const config = makeConfig();
     config.voice!.realtime!.enabled = true;
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain('no OpenAI key');
   });
@@ -31,7 +31,7 @@ describe('resolveRealtimeVoice', () => {
     const config = makeConfig();
     config.voice!.realtime = { enabled: true };
     withOpenAIProvider(config, 'provider-key');
-    const res = resolveRealtimeVoice(config, { JARVIS_OPENAI_KEY: 'env-key' });
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.resolved.apiKey).toBe('provider-key');
   });
@@ -40,7 +40,7 @@ describe('resolveRealtimeVoice', () => {
     const config = makeConfig();
     config.voice!.realtime = { enabled: true };
     config.llm.providers = { 'openai-personal': { kind: 'openai', api_key: 'custom' } };
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.resolved.apiKey).toBe('custom');
   });
@@ -52,28 +52,33 @@ describe('resolveRealtimeVoice', () => {
       anthropic: { api_key: 'sk-ant' },
       groq: { kind: 'groq', api_key: 'gsk' },
     };
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(false);
   });
 
-  test('falls back to legacy llm.openai then env', () => {
-    const c1 = makeConfig();
-    c1.voice!.realtime = { enabled: true };
-    c1.llm.openai = { api_key: 'legacy-key' };
-    const r1 = resolveRealtimeVoice(c1, { JARVIS_OPENAI_KEY: 'env-key' });
-    expect(r1.ok && r1.resolved.apiKey).toBe('legacy-key');
-
-    const c2 = makeConfig();
-    c2.voice!.realtime = { enabled: true };
-    c2.llm.openai = undefined;
-    const r2 = resolveRealtimeVoice(c2, { OPENAI_API_KEY: 'env-key' });
-    expect(r2.ok && r2.resolved.apiKey).toBe('env-key');
+  test('does not fall back to env vars - key must come from a configured provider', () => {
+    // LLM credentials live only in the DB + keychain (surfaced on
+    // config.llm.providers at runtime). There is no config.yaml or env fallback.
+    const config = makeConfig();
+    config.voice!.realtime = { enabled: true };
+    const prevJarvis = process.env.JARVIS_OPENAI_KEY;
+    const prevOpenAI = process.env.OPENAI_API_KEY;
+    process.env.JARVIS_OPENAI_KEY = 'env-key';
+    process.env.OPENAI_API_KEY = 'env-key';
+    try {
+      const res = resolveRealtimeVoice(config);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).toContain('no OpenAI key');
+    } finally {
+      if (prevJarvis === undefined) delete process.env.JARVIS_OPENAI_KEY; else process.env.JARVIS_OPENAI_KEY = prevJarvis;
+      if (prevOpenAI === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = prevOpenAI;
+    }
   });
 
   test('applies defaults for model / effort / session cap', () => {
     const config = withOpenAIProvider(makeConfig(), 'k');
     config.voice!.realtime = { enabled: true };
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.resolved.model).toBe('gpt-realtime-2');
@@ -90,7 +95,7 @@ describe('resolveRealtimeVoice', () => {
   test('an explicit blocked_categories array (even empty) overrides the default', () => {
     const config = withOpenAIProvider(makeConfig(), 'k');
     config.voice!.realtime = { enabled: true, blocked_categories: [] };
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.resolved.blockedCategories).toEqual([]);
   });
@@ -98,13 +103,13 @@ describe('resolveRealtimeVoice', () => {
   test('honors user-selected reasoning effort and rejects invalid', () => {
     const valid = withOpenAIProvider(makeConfig(), 'k');
     valid.voice!.realtime = { enabled: true, reasoning_effort: 'xhigh' };
-    const r1 = resolveRealtimeVoice(valid, {});
+    const r1 = resolveRealtimeVoice(valid);
     expect(r1.ok && r1.resolved.reasoningEffort).toBe('xhigh');
 
     const invalid = withOpenAIProvider(makeConfig(), 'k');
     // @ts-expect-error testing invalid runtime value
     invalid.voice!.realtime = { enabled: true, reasoning_effort: 'bogus' };
-    const r2 = resolveRealtimeVoice(invalid, {});
+    const r2 = resolveRealtimeVoice(invalid);
     expect(r2.ok && r2.resolved.reasoningEffort).toBe('low');
   });
 
@@ -115,7 +120,7 @@ describe('resolveRealtimeVoice', () => {
       blocked_categories: ['file_delete', 'shell'],
       monthly_budget_usd: 25,
     };
-    const res = resolveRealtimeVoice(config, {});
+    const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.resolved.blockedCategories).toEqual(['file_delete', 'shell']);

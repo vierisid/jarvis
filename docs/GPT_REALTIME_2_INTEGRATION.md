@@ -16,11 +16,10 @@ separate licensing. Resolution (`resolveRealtimeVoice`, `src/config/realtime.ts`
 never throws: when realtime is unavailable it returns `{ ok: false, reason }`
 and the caller logs a warning and falls back to the standard pipeline.
 
-Key resolution order:
-
-1. `voice.realtime.api_key`
-2. `llm.openai.api_key`
-3. env `JARVIS_OPENAI_KEY`, then `OPENAI_API_KEY`
+Key resolution: the realtime session reuses the key of the OpenAI provider
+configured under Settings > LLM (stored in the DB + encrypted keychain). There
+is no separate realtime credential and no `config.yaml` or env-var fallback -
+if no OpenAI provider is configured, realtime voice reports unavailable.
 
 The user is billed by OpenAI directly (BYO key). The Settings > Voice GET
 endpoint redacts the key and reports `has_api_key` / `available` only.

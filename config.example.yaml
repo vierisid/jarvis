@@ -26,52 +26,13 @@ daemon:
 telemetry:
   enabled: true
 
-llm:
-  # ── Providers ──
-  # Each key is a NAME you'll reference in model strings ("name:model").
-  # Set `kind` only when the name differs from the provider class (e.g. you
-  # want two ollama instances called "ollama-local" + "ollama-remote").
-  providers:
-    anthropic:
-      api_key: "sk-ant-..."
-    openai:
-      api_key: "sk-..."
-    # groq:
-    #   api_key: "gsk_..."
-    # gemini:
-    #   api_key: "..."
-    # openrouter:
-    #   api_key: "sk-or-..."
-    # nvidia:
-    #   api_key: "nvapi-..."
-    ollama:
-      base_url: "http://localhost:11434"
-    # ollama-remote:
-    #   kind: ollama
-    #   base_url: "http://192.168.1.50:11434"
-    # openai_compatible:
-    #   base_url: "http://localhost:8080/v1"
-    #   api_key: ""
-    # litellm:
-    #   base_url: "http://localhost:4000/v1"
-    #   api_key: ""
-
-  # ── Single-LLM mode ──
-  # One model used for everything. The system runs in classic
-  # single-orchestrator mode. Format: "provider-name:model-id".
-  default: "anthropic:claude-sonnet-4-5-20250929"
-
-  # ── Multi-tier mode (advanced) ──
-  # When `tiers` is set, it OVERRIDES `default` for the listed tiers.
-  # Setting `tiers.conversation` activates the router-first architecture:
-  # a thin conversation LLM delegates work to task tiers (low/medium/high)
-  # and verbalizes the results. Task tiers fall up: low -> medium -> high.
-  #
-  # tiers:
-  #   conversation: "openai:gpt-4o-mini"
-  #   high:         "anthropic:claude-opus-4-7"
-  #   medium:       "anthropic:claude-sonnet-4-6"
-  #   low:          "groq:llama-3.3-70b-versatile"
+# ── LLM configuration ──
+# There is NO LLM config in this file. Providers, credentials, the single-LLM
+# default, and per-tier routing are all configured from the settings dashboard
+# (http://localhost:3142, Settings > LLM) and stored in the database +
+# encrypted keychain. Any `llm:` block added here is ignored on load and
+# stripped on save. Env vars (JARVIS_OPENAI_KEY, etc.) are no longer read for
+# LLM config either.
 
 personality:
   core_traits:

@@ -300,41 +300,15 @@ export type LLMConfig = {
   default?: LLMModelRef;
 
   /**
-   * Per-tier model overrides. Presence of any tier here activates tier-aware
-   * routing. The `conversation` tier specifically switches the system into
+   * Per-tier model map. This is the in-memory runtime representation, sourced
+   * EXCLUSIVELY from the DB (dashboard-managed) - it is NOT read from or
+   * written to config.yaml. Any `llm.tiers` block in config.yaml is discarded
+   * on load and stripped on save; only the single-LLM `default` may be set via
+   * the config file. The `conversation` tier switches the system into
    * router-first mode (conv LLM delegates to task tiers); task tiers
    * (low/medium/high) without an explicit assignment fall up.
    */
   tiers?: LLMTiersConfig;
-
-  /**
-   * Legacy single-block-per-provider shape kept for backward compatibility.
-   * The loader auto-migrates these into `providers` + `default` in-memory.
-   * New configs should use `providers` + `default` / `tiers` instead.
-   *
-   * @deprecated Use `providers` + `default`/`tiers` instead.
-   */
-  primary?: string;
-  /** @deprecated Tier fall-up replaces the fallback chain. */
-  fallback?: string[];
-  /** @deprecated Use `providers.anthropic` + a model reference. */
-  anthropic?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.openai` + a model reference. */
-  openai?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.groq` + a model reference. */
-  groq?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.gemini` + a model reference. */
-  gemini?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.ollama` + a model reference. */
-  ollama?: { base_url?: string; model?: string };
-  /** @deprecated Use `providers.openrouter` + a model reference. */
-  openrouter?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.nvidia` + a model reference. */
-  nvidia?: { api_key: string; model?: string };
-  /** @deprecated Use `providers.openai_compatible` + a model reference. */
-  openai_compatible?: { base_url?: string; api_key?: string; model?: string };
-  /** @deprecated Use `providers.litellm` + a model reference. */
-  litellm?: { base_url?: string; api_key?: string; model?: string };
 };
 
 export type JarvisConfig = {

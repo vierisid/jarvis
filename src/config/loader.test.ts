@@ -35,21 +35,24 @@ describe('Config Loader', () => {
     expect(config.active_role).toBe(DEFAULT_CONFIG.active_role);
   });
 
-  test('can save and load config', async () => {
+  test('can save and load config; LLM config is never persisted to YAML', async () => {
     const testConfig = structuredClone(DEFAULT_CONFIG);
     testConfig.daemon.port = 9999;
+    // LLM config lives only in the DB + keychain (dashboard-managed). Even when
+    // present in the in-memory config, it must never be written to config.yaml.
     testConfig.llm.providers = { openai: { api_key: 'sk-test' } };
     testConfig.llm.default = 'openai:gpt-4o-mini';
 
     await saveConfig(testConfig, TEST_CONFIG_PATH);
     expect(existsSync(TEST_CONFIG_PATH)).toBe(true);
+    const text = await Bun.file(TEST_CONFIG_PATH).text();
+    expect(text).not.toContain('llm:');
+    expect(text).not.toContain('sk-test');
 
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.port).toBe(9999);
-    expect(loaded.llm.providers?.openai).toBeDefined();
-    expect(loaded.llm.default).toBe('openai:gpt-4o-mini');
-    // Legacy fields should have been stripped on save
-    expect(loaded.llm.primary).toBeUndefined();
+    // The llm block was stripped on save and is discarded on load.
+    expect(loaded.llm).toEqual(DEFAULT_CONFIG.llm);
   });
 
   test('saves config with owner-only permissions', async () => {
@@ -76,8 +79,9 @@ describe('Config Loader', () => {
     }
   });
 
-  test('deep merges partial config with defaults', async () => {
-    // Save a partial config (only some fields)
+  test('deep merges partial config with defaults; any llm block is discarded', async () => {
+    // Save a partial config (only some fields). The llm block is legacy and
+    // must be ignored entirely - LLM config comes only from the DB.
     const partialYaml = `
 daemon:
   port: 8888
@@ -92,7 +96,8 @@ llm:
 
     // Should have our custom values
     expect(loaded.daemon.port).toBe(8888);
-    expect(loaded.llm.primary).toBe('openai');
+    // The llm block has no authority and is discarded back to the empty default.
+    expect(loaded.llm).toEqual(DEFAULT_CONFIG.llm);
 
     // Should have defaults for missing values (paths are tilde-expanded)
     expect(loaded.daemon.data_dir).not.toContain('~');
@@ -147,7 +152,7 @@ llm:
     await Bun.write(TEST_CONFIG_PATH, '');
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.port).toBe(DEFAULT_CONFIG.daemon.port);
-    expect(loaded.llm.primary).toBe(DEFAULT_CONFIG.llm.primary);
+    expect(loaded.llm).toEqual(DEFAULT_CONFIG.llm);
     expect(loaded.daemon.data_dir).not.toContain('~');
   });
 
@@ -223,7 +228,7 @@ llm:
     expect(secondText).toBe(firstText);
   });
 
-  test('round-trips channel config and multi-tier LLM setup', async () => {
+  test('round-trips channel config; the entire LLM block is stripped from YAML', async () => {
     const testConfig = structuredClone(DEFAULT_CONFIG);
     testConfig.channels = {
       telegram: {
@@ -238,6 +243,7 @@ llm:
         guild_id: 'guild-123',
       },
     };
+    // All of this is dashboard/DB-managed and must never touch config.yaml.
     testConfig.llm.providers = {
       ollama: { base_url: 'http://localhost:11434' },
       gemini: { api_key: 'gemini-key' },
@@ -248,17 +254,18 @@ llm:
     };
 
     await saveConfig(testConfig, TEST_CONFIG_PATH);
-    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    const text = await Bun.file(TEST_CONFIG_PATH).text();
+    // Non-LLM config persists; the LLM block (and any secret) is gone entirely.
+    expect(text).toContain('channels:');
+    expect(text).not.toContain('llm:');
+    expect(text).not.toContain('gemini-key');
 
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.channels?.discord?.enabled).toBe(true);
     expect(loaded.channels?.discord?.guild_id).toBe('guild-123');
-    expect(loaded.llm.providers?.ollama?.base_url).toBe('http://localhost:11434');
-    // The provider entry round-trips but the api_key MUST NOT - it's a
-    // secret that lives only in the keychain (see stripLegacyLLMFields).
-    expect(loaded.llm.providers?.gemini).toBeDefined();
-    expect(loaded.llm.providers?.gemini?.api_key).toBeUndefined();
-    expect(loaded.llm.tiers?.conversation).toBe('gemini:gemini-3-flash-preview');
-    expect(loaded.llm.tiers?.medium).toBe('ollama:llama3.1');
+    // LLM config has no authority in config.yaml: stripped on save, discarded
+    // on load. It is sourced solely from the DB at runtime.
+    expect(loaded.llm).toEqual(DEFAULT_CONFIG.llm);
   });
 });
 

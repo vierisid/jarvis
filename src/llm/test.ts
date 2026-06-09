@@ -3,17 +3,26 @@
  *
  * Run with: bun run src/llm/test.ts
  *
- * Reads ~/.jarvis/config.yaml, instantiates each configured provider, and
- * exercises both non-streaming and streaming chat via the LLMManager.
+ * Reads ~/.jarvis/config.yaml plus the DB-stored LLM settings (providers +
+ * tiers are dashboard-managed and live in the database), instantiates each
+ * configured provider, and exercises both non-streaming and streaming chat
+ * via the LLMManager.
  */
 
 import { LLMManager } from './index.ts';
 import { loadConfig } from '../config/index.ts';
+import { initDatabase } from '../vault/schema.ts';
+import { mergeLLMSettingsIntoConfig } from '../daemon/llm-settings.ts';
 import { registerLLMProviders, configureLLMTiers } from './config-binding.ts';
 
 async function testProviders() {
   console.log('Loading config...');
   const config = await loadConfig();
+  // Tiers (and dashboard-saved providers) live in the DB, not config.yaml.
+  // Merge them in so this diagnostic exercises the same routing the daemon
+  // uses at runtime.
+  initDatabase(config.daemon.db_path);
+  mergeLLMSettingsIntoConfig(config);
 
   const manager = new LLMManager();
   const hasProvider = registerLLMProviders(manager, config.llm.providers ?? {});

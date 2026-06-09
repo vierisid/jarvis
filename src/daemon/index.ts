@@ -330,16 +330,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
     seedWebappTemplates();
 
-    // 2b. Load LLM settings from DB + encrypted keychain, merge into config
+    // 2b. Load all LLM settings (providers, credentials, single-LLM default,
+    // tiers) from the DB + encrypted keychain. This is the sole source of LLM
+    // config - config.yaml and env vars contribute nothing.
     const { mergeLLMSettingsIntoConfig } = await import('./llm-settings.ts');
     mergeLLMSettingsIntoConfig(jarvisConfig);
     logWithTimestamp('LLM settings loaded from database');
-
-    // 2c. Derive llm.tiers from legacy primary if user hasn't configured tiers.
-    // Run AFTER mergeLLMSettingsIntoConfig so DB-stored primary overrides the
-    // YAML primary before we derive the medium tier.
-    const { migrateLegacyLLMConfig } = await import('../config/loader.ts');
-    migrateLegacyLLMConfig(jarvisConfig);
 
     // 3. Create service registry
     registry = new ServiceRegistry();

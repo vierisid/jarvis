@@ -1243,25 +1243,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const config = ctx.config;
         return json({
           daemon: config.daemon,
+          // LLM config is DB/keychain-managed (dashboard). Report a sanitized
+          // canonical summary - provider names, single-LLM default, and the
+          // tier map. The dedicated dashboard endpoint is /api/config/llm.
           llm: {
-            primary: config.llm.primary,
-            fallback: config.llm.fallback,
-            anthropic: config.llm.anthropic ? { model: config.llm.anthropic.model } : null,
-            openai: config.llm.openai ? { model: config.llm.openai.model } : null,
-            groq: config.llm.groq ? { model: config.llm.groq.model } : null,
-            ollama: config.llm.ollama ?? null,
-            openai_compatible: config.llm.openai_compatible
-              ? {
-                  base_url: config.llm.openai_compatible.base_url,
-                  model: config.llm.openai_compatible.model,
-                }
-              : null,
-            litellm: config.llm.litellm
-              ? {
-                  base_url: config.llm.litellm.base_url,
-                  model: config.llm.litellm.model,
-                }
-              : null,
+            providers: Object.keys(config.llm.providers ?? {}),
+            default: config.llm.default ?? null,
+            tiers: config.llm.tiers ?? {},
           },
           personality: config.personality,
           authority: config.authority,
@@ -1353,7 +1341,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async () => {
         try {
           const { NVIDIAProvider } = await import('../llm/nvidia.ts');
-          const key = ctx.config.llm.nvidia?.api_key ?? '';
+          // Key (if any) lives in the keychain, keyed by provider name. NVIDIA's
+          // /v1/models is publicly readable, so an empty key still works.
+          const { getSecret } = await import('../vault/keychain.ts');
+          const key = getSecret('llm.provider.nvidia.api_key') ?? '';
           const provider = new NVIDIAProvider(key);
           const models = await provider.listModels();
           return json({ ok: true, models });
