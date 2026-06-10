@@ -4,7 +4,7 @@
  * Dispatches based on how JARVIS was installed:
  *   docker      refuse, point user at host-side `docker pull`
  *   bun-global  `bun update -g @usejarvis/brain`
- *   script      git pull --ff-only + bun install
+ *   script      checkout the latest release tag + bun install
  *   dev         refuse, tell user to `git pull` themselves
  *   unknown     refuse with guidance
  *
@@ -183,40 +183,91 @@ function updateBunGlobal(
   };
 }
 
+/**
+ * Compare two `vX.Y.Z` (or `vX.Y.Z.N`) tags numerically, component by
+ * component. Returns >0 if `a` is newer, <0 if older, 0 if equal.
+ */
+function compareVersionTags(a: string, b: string): number {
+  const pa = a.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Pick the highest version tag from `git ls-remote --tags --refs` output.
+ * Mirrors install.sh's `grep -E '^v[0-9]…' | sort -V | tail -n1`. Returns
+ * null when no version-shaped tag is present.
+ */
+export function pickLatestTag(lsRemoteStdout: string): string | null {
+  const tags = lsRemoteStdout
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('refs/tags/');
+      return idx === -1 ? null : line.slice(idx + 'refs/tags/'.length).trim();
+    })
+    .filter((t): t is string => !!t && /^v\d+(\.\d+)*$/.test(t));
+
+  if (tags.length === 0) return null;
+  return tags.reduce((best, cur) => (compareVersionTags(cur, best) > 0 ? cur : best));
+}
+
 function updateScript(
   packageRoot: string,
   currentVersion: string,
   spawn: Spawner,
 ): UpdateResult {
-  // Preflight: fetch remote and check whether we're already up-to-date.
-  // Saves the daemon-restart round-trip when nothing has changed.
-  const fetch = spawn(['git', 'fetch', '--quiet'], { cwd: packageRoot });
-  if (fetch.exitCode === 0) {
-    const head = spawn(['git', 'rev-parse', 'HEAD'], { cwd: packageRoot });
-    const upstream = spawn(['git', 'rev-parse', '@{u}'], { cwd: packageRoot });
-    if (head.exitCode === 0 && upstream.exitCode === 0 && head.stdout.trim() === upstream.stdout.trim()) {
-      console.log(c.green(`✓ Already on the latest version (${currentVersion})`));
-      return {
-        method: 'script',
-        outcome: 'up-to-date',
-        exitCode: 0,
-        message: 'no-op',
-      };
-    }
+  // Script installs are pinned to a release tag (detached HEAD), so there is
+  // no upstream branch to pull. Resolve the latest tag from the remote and
+  // check it out instead. Mirrors install.sh's tag-pinning.
+  const ls = spawn(['git', 'ls-remote', '--tags', '--refs', 'origin'], { cwd: packageRoot });
+  if (ls.exitCode !== 0) {
+    console.log(c.red('✗ Update failed (could not reach remote):'));
+    const err = ls.stderr.trim() || ls.stdout.trim();
+    if (err) console.log(c.dim(`  ${err}`));
+    return { method: 'script', outcome: 'failed', exitCode: 1, message: 'git ls-remote failed' };
   }
 
-  console.log(c.dim('Running `git pull --ff-only`...'));
-  const pull = spawn(['git', 'pull', '--ff-only'], { cwd: packageRoot });
-  if (pull.exitCode !== 0) {
-    console.log(c.red('✗ Update failed (git pull):'));
-    const err = pull.stderr.trim() || pull.stdout.trim();
+  const latestTag = pickLatestTag(ls.stdout);
+  if (!latestTag) {
+    console.log(c.red('✗ Update failed: no release tags found on the remote.'));
+    return { method: 'script', outcome: 'failed', exitCode: 1, message: 'no remote tags' };
+  }
+
+  // Already on the latest tag? `git describe --exact-match` prints the tag at
+  // HEAD (and exits non-zero when HEAD isn't exactly on a tag — then we update).
+  const describe = spawn(['git', 'describe', '--tags', '--exact-match'], { cwd: packageRoot });
+  const currentTag = describe.exitCode === 0 ? describe.stdout.trim() : null;
+  if (currentTag === latestTag) {
+    console.log(c.green(`✓ Already on the latest version (${currentVersion})`));
+    return { method: 'script', outcome: 'up-to-date', exitCode: 0, message: 'no-op' };
+  }
+
+  console.log(c.dim(`Updating to ${latestTag}...`));
+  // Discard any local tracked changes so the checkout can't be blocked.
+  spawn(['git', 'checkout', '--', '.'], { cwd: packageRoot });
+
+  const fetch = spawn(
+    ['git', 'fetch', '--depth', '1', 'origin', `refs/tags/${latestTag}:refs/tags/${latestTag}`],
+    { cwd: packageRoot },
+  );
+  if (fetch.exitCode !== 0) {
+    console.log(c.red('✗ Update failed (git fetch):'));
+    const err = fetch.stderr.trim() || fetch.stdout.trim();
     if (err) console.log(c.dim(`  ${err}`));
-    return {
-      method: 'script',
-      outcome: 'failed',
-      exitCode: 1,
-      message: 'git pull failed',
-    };
+    return { method: 'script', outcome: 'failed', exitCode: 1, message: 'git fetch failed' };
+  }
+
+  const checkout = spawn(['git', 'checkout', '-q', latestTag], { cwd: packageRoot });
+  if (checkout.exitCode !== 0) {
+    console.log(c.red('✗ Update failed (git checkout):'));
+    const err = checkout.stderr.trim() || checkout.stdout.trim();
+    if (err) console.log(c.dim(`  ${err}`));
+    return { method: 'script', outcome: 'failed', exitCode: 1, message: 'git checkout failed' };
   }
 
   console.log(c.dim('Running `bun install`...'));
@@ -224,7 +275,7 @@ function updateScript(
   if (install.exitCode !== 0) {
     console.log(c.yellow('! Dependencies may need manual refresh:'));
     console.log(c.dim(`  cd ${packageRoot} && bun install`));
-    // Don't fail the update — the git pull succeeded, dependencies are a
+    // Don't fail the update — the checkout succeeded, dependencies are a
     // separate concern the user can resolve.
   }
 

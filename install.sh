@@ -286,28 +286,48 @@ main() {
     fi
   fi
 
+  # Resolve the latest release tag from the remote (no full clone needed).
+  # Shallow clones don't fetch tags, so we ask the remote directly and pick
+  # the highest version with a version-aware sort.
+  info "Resolving latest release tag..."
+  LATEST_TAG=$(git ls-remote --tags --refs "$REPO_URL" 2>/dev/null \
+    | awk -F/ '{print $NF}' \
+    | grep -E '^v[0-9]+(\.[0-9]+)*$' \
+    | sort -V \
+    | tail -n1)
+
+  if [ -z "$LATEST_TAG" ]; then
+    err "Could not resolve a release tag from $REPO_URL"
+    err "Check your internet connection and try again."
+    exit 1
+  fi
+  ok "Latest release: ${LATEST_TAG}"
+
   if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Existing installation found. Updating..."
+    info "Existing installation found. Updating to ${LATEST_TAG}..."
     git -C "$INSTALL_DIR" checkout -- . 2>/dev/null || true
-    git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
-      warn "Could not fast-forward. Re-cloning..."
+    if git -C "$INSTALL_DIR" fetch --depth 1 origin "refs/tags/${LATEST_TAG}:refs/tags/${LATEST_TAG}" 2>/dev/null \
+       && git -C "$INSTALL_DIR" checkout -q "$LATEST_TAG" 2>/dev/null; then
+      ok "Updated to ${LATEST_TAG}"
+    else
+      warn "Could not update in place. Re-cloning..."
       rm -rf "$INSTALL_DIR"
-      git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || {
+      git clone --depth 1 --branch "$LATEST_TAG" "$REPO_URL" "$INSTALL_DIR" || {
         err "Failed to clone repository. Check your internet connection."
         exit 1
       }
-    }
-    ok "Updated to latest version"
+      ok "Installed ${LATEST_TAG}"
+    fi
   else
     if [ -d "$INSTALL_DIR" ]; then
       rm -rf "$INSTALL_DIR"
     fi
     mkdir -p "$(dirname "$INSTALL_DIR")"
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || {
+    git clone --depth 1 --branch "$LATEST_TAG" "$REPO_URL" "$INSTALL_DIR" || {
       err "Failed to clone repository. Check your internet connection."
       exit 1
     }
-    ok "Downloaded JARVIS"
+    ok "Downloaded JARVIS ${LATEST_TAG}"
   fi
 
   echo ""

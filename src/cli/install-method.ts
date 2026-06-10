@@ -179,7 +179,7 @@ export function getMethodCommands(method: InstallMethod): MethodCommands {
       };
     case 'script':
       return {
-        update: 'jarvis update   # runs `git pull` + `bun install`',
+        update: 'jarvis update   # checks out the latest release tag + `bun install`',
         uninstall: 'jarvis uninstall   # removes ~/.jarvis and the CLI wrapper',
       };
     case 'dev':

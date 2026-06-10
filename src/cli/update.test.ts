@@ -118,11 +118,14 @@ describe('runUpdate — bun-global', () => {
 });
 
 describe('runUpdate — script install', () => {
-  test('skips when already up-to-date (HEAD == upstream)', async () => {
+  // ls-remote stdout fixtures: one tag ref per line, `<sha>\trefs/tags/<name>`.
+  const lsRemote = (...tags: string[]): string =>
+    tags.map((t, i) => `${'0'.repeat(40 - String(i).length)}${i}\trefs/tags/${t}`).join('\n') + '\n';
+
+  test('skips when already on the latest tag', async () => {
     const { spawn, calls } = recordingSpawner([
-      { exitCode: 0 }, // git fetch
-      { exitCode: 0, stdout: 'abc123\n' }, // git rev-parse HEAD
-      { exitCode: 0, stdout: 'abc123\n' }, // git rev-parse @{u}
+      { exitCode: 0, stdout: lsRemote('v0.9.0', 'v1.0.0') }, // git ls-remote (latest = v1.0.0)
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // git describe --exact-match
     ]);
     const result = await runUpdate({
       packageRoot: workDir,
@@ -133,20 +136,20 @@ describe('runUpdate — script install', () => {
     });
     expect(result.outcome).toBe('up-to-date');
     expect(result.exitCode).toBe(0);
-    // No git pull / bun install should have run.
-    expect(calls.map((c) => c.cmd[0] + ' ' + c.cmd[1])).toEqual([
-      'git fetch',
-      'git rev-parse',
-      'git rev-parse',
+    // No fetch / checkout / bun install should have run.
+    expect(calls.map((c) => c.cmd.slice(0, 2).join(' '))).toEqual([
+      'git ls-remote',
+      'git describe',
     ]);
   });
 
-  test('runs git pull + bun install when upstream has new commits', async () => {
+  test('fetches + checks out the latest tag when a newer one exists', async () => {
     const { spawn, calls } = recordingSpawner([
-      { exitCode: 0 }, // fetch
-      { exitCode: 0, stdout: 'abc\n' }, // HEAD
-      { exitCode: 0, stdout: 'def\n' }, // upstream
-      { exitCode: 0 }, // git pull
+      { exitCode: 0, stdout: lsRemote('v1.0.0', 'v2.0.0') }, // ls-remote (latest = v2.0.0)
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // describe (current = v1.0.0)
+      { exitCode: 0 }, // git checkout -- .
+      { exitCode: 0 }, // git fetch tag
+      { exitCode: 0 }, // git checkout tag
       { exitCode: 0 }, // bun install
     ]);
     const result = await runUpdate({
@@ -157,18 +160,22 @@ describe('runUpdate — script install', () => {
       restartDaemon: false,
     });
     expect(result.outcome).toBe('updated');
-    expect(calls[3]!.cmd).toEqual(['git', 'pull', '--ff-only']);
+    expect(calls[3]!.cmd).toEqual([
+      'git', 'fetch', '--depth', '1', 'origin', 'refs/tags/v2.0.0:refs/tags/v2.0.0',
+    ]);
     expect(calls[3]!.cwd).toBe(workDir);
-    expect(calls[4]!.cmd).toEqual(['bun', 'install']);
-    expect(calls[4]!.cwd).toBe(workDir);
+    expect(calls[4]!.cmd).toEqual(['git', 'checkout', '-q', 'v2.0.0']);
+    expect(calls[5]!.cmd).toEqual(['bun', 'install']);
+    expect(calls[5]!.cwd).toBe(workDir);
   });
 
-  test('proceeds with pull when git fetch fails (skips preflight)', async () => {
-    // If fetch fails (e.g. offline, no upstream), we can't preflight — just
-    // try the pull and let it surface the real error.
+  test('updates when HEAD is not on a tag (describe fails)', async () => {
     const { spawn, calls } = recordingSpawner([
-      { exitCode: 1, stderr: 'no upstream' }, // fetch fails
-      { exitCode: 0 }, // git pull still runs
+      { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote
+      { exitCode: 128, stderr: 'no tag at HEAD' }, // describe fails -> treat as needs update
+      { exitCode: 0 }, // checkout -- .
+      { exitCode: 0 }, // fetch
+      { exitCode: 0 }, // checkout tag
       { exitCode: 0 }, // bun install
     ]);
     const result = await runUpdate({
@@ -180,16 +187,54 @@ describe('runUpdate — script install', () => {
     });
     expect(result.outcome).toBe('updated');
     expect(calls.map((c) => c.cmd.slice(0, 2).join(' '))).toEqual([
+      'git ls-remote',
+      'git describe',
+      'git checkout',
       'git fetch',
-      'git pull',
+      'git checkout',
       'bun install',
     ]);
   });
 
-  test('reports failure when git pull fails', async () => {
+  test('fails when the remote is unreachable (ls-remote fails)', async () => {
+    const { spawn, calls } = recordingSpawner([
+      { exitCode: 1, stderr: 'could not resolve host' }, // ls-remote fails
+    ]);
+    const result = await runUpdate({
+      packageRoot: workDir,
+      spawn,
+      detect: () => fakeInfo('script'),
+      checkRunning: () => null,
+      restartDaemon: false,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.exitCode).toBe(1);
+    // Must not proceed past the remote probe.
+    expect(calls).toHaveLength(1);
+  });
+
+  test('fails when the remote has no version tags', async () => {
     const { spawn } = recordingSpawner([
-      { exitCode: 1 }, // fetch fails (skip preflight)
-      { exitCode: 1, stderr: 'not fast-forward' }, // pull fails
+      { exitCode: 0, stdout: '' }, // ls-remote returns nothing usable
+    ]);
+    const result = await runUpdate({
+      packageRoot: workDir,
+      spawn,
+      detect: () => fakeInfo('script'),
+      checkRunning: () => null,
+      restartDaemon: false,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('reports failure when git checkout fails', async () => {
+    const { spawn } = recordingSpawner([
+      { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // describe
+      { exitCode: 0 }, // checkout -- .
+      { exitCode: 0 }, // fetch
+      { exitCode: 1, stderr: 'checkout conflict' }, // checkout tag fails
     ]);
     const result = await runUpdate({
       packageRoot: workDir,
@@ -205,8 +250,11 @@ describe('runUpdate — script install', () => {
   test('stops running daemon before updating', async () => {
     let stopCalls = 0;
     const { spawn } = recordingSpawner([
-      { exitCode: 1 }, // fetch fails, skip preflight
-      { exitCode: 0 }, // pull
+      { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // describe
+      { exitCode: 0 }, // checkout -- .
+      { exitCode: 0 }, // fetch
+      { exitCode: 0 }, // checkout tag
       { exitCode: 0 }, // bun install
     ]);
     const result = await runUpdate({
@@ -226,8 +274,11 @@ describe('runUpdate — script install', () => {
 
   test('bun install failure is a warning, not a hard failure', async () => {
     const { spawn } = recordingSpawner([
-      { exitCode: 1 }, // fetch fails
-      { exitCode: 0 }, // pull succeeds
+      { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // describe
+      { exitCode: 0 }, // checkout -- .
+      { exitCode: 0 }, // fetch
+      { exitCode: 0 }, // checkout tag
       { exitCode: 2, stderr: 'disk full' }, // bun install fails
     ]);
     const result = await runUpdate({
@@ -237,8 +288,30 @@ describe('runUpdate — script install', () => {
       checkRunning: () => null,
       restartDaemon: false,
     });
-    // git pull was the meaningful operation; bun install is recoverable.
+    // The checkout was the meaningful operation; bun install is recoverable.
     expect(result.outcome).toBe('updated');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('pickLatestTag', () => {
+  const line = (tag: string) => `1111111111111111111111111111111111111111\trefs/tags/${tag}`;
+
+  test('picks the highest version, not lexicographic order', async () => {
+    const { pickLatestTag } = await import('./update.ts');
+    const stdout = [line('v0.6.0'), line('v0.6.1'), line('v0.10.0'), line('v0.9.0')].join('\n');
+    expect(pickLatestTag(stdout)).toBe('v0.10.0');
+  });
+
+  test('handles four-part versions like v0.4.3.1', async () => {
+    const { pickLatestTag } = await import('./update.ts');
+    const stdout = [line('v0.4.3'), line('v0.4.3.1'), line('v0.4.2')].join('\n');
+    expect(pickLatestTag(stdout)).toBe('v0.4.3.1');
+  });
+
+  test('ignores non-version refs and returns null when none match', async () => {
+    const { pickLatestTag } = await import('./update.ts');
+    const stdout = [line('latest'), line('nightly'), line('release-candidate')].join('\n');
+    expect(pickLatestTag(stdout)).toBeNull();
   });
 });
