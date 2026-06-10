@@ -1487,9 +1487,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // "speaking" state machine.
     if (willSpeak && this.ttsProvider) {
       const requestId = `interview-${Date.now()}`;
-      // tts_start is only sent right before the first chunk so a
-      // provider that fails instantly never strands the UI in
-      // "speaking" with no audio and no tts_end.
+      // Tracks whether the tts_start frame went out: the finally block
+      // below closes it with tts_end exactly when it was opened, so a
+      // provider that throws -- even before the first chunk -- never
+      // strands the UI in "speaking" with no audio and no tts_end.
       let ttsStarted = false;
       try {
         this.wsServer.sendToClient(ws, {

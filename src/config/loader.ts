@@ -1,7 +1,7 @@
 import YAML from 'yaml';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { rename, unlink } from 'node:fs/promises';
+import { lstat, rename, unlink } from 'node:fs/promises';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
@@ -164,6 +164,9 @@ function stripLLMConfigForYAML(config: JarvisConfig): JarvisConfig {
   return clone;
 }
 
+/** Monotonic per-process counter for unique save temp-file names. */
+let saveCounter = 0;
+
 export async function saveConfig(
   config: JarvisConfig,
   configPath?: string
@@ -182,10 +185,23 @@ export async function saveConfig(
     await secureParentDirectory(path);
     // Write-then-rename so the config is replaced atomically. A direct
     // O_TRUNC write leaves a truncated/empty config.yaml if the daemon is
-    // killed mid-write — on the next boot that parses as defaults and the
+    // killed mid-write -- on the next boot that parses as defaults and the
     // user loses onboarding state, authority overrides, everything.
-    const tmpPath = `${path}.tmp`;
+    // The tmp name carries pid + a counter so two concurrent saves can
+    // never rename each other's half-written file into place.
+    const tmpPath = `${path}.${process.pid}.${saveCounter++}.tmp`;
     await secureWriteFile(tmpPath, yaml, 0o600, 'Config');
+
+    // rename() would silently replace a symlinked config.yaml with a
+    // regular file (e.g. a link into a dotfiles repo). secureWriteFile
+    // refuses symlinks via O_NOFOLLOW; keep that contract here and fail
+    // loudly instead of clobbering the link.
+    const existing = await lstat(path).catch(() => null);
+    if (existing?.isSymbolicLink()) {
+      await unlink(tmpPath).catch(() => {});
+      throw new Error(`${path} is a symlink; refusing to replace it`);
+    }
+
     try {
       await rename(tmpPath, path);
     } catch {

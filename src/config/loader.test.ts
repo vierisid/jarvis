@@ -1,8 +1,8 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { loadConfig, saveConfig } from './loader.ts';
 import { DEFAULT_CONFIG } from './types.ts';
-import { existsSync, statSync } from 'node:fs';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, lstatSync, statSync } from 'node:fs';
+import { chmod, mkdtemp, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
 
@@ -391,6 +391,56 @@ voice:
     process.env.JARVIS_WAKE_ENGINE = 'siri';
     const config = await loadConfig('/tmp/jarvis-voice-invalid-env.yaml');
     expect(config.voice?.wake_engine).toBe('openwakeword');
+  });
+});
+
+describe('Atomic Save', () => {
+  beforeEach(async () => {
+    await createTestConfigPath();
+  });
+
+  afterEach(async () => {
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+  });
+
+  test('leaves no tmp files behind after repeated saves', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.onboarding = { setup_completed_at: 1, tutorial_completed_at: null };
+    await saveConfig(config, TEST_CONFIG_PATH);
+    config.onboarding = { setup_completed_at: 2, tutorial_completed_at: null };
+    await saveConfig(config, TEST_CONFIG_PATH);
+
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.onboarding?.setup_completed_at).toBe(2);
+    expect(await readdir(TEST_CONFIG_DIR)).toEqual(['config.yaml']);
+  });
+
+  test('concurrent saves never leave a truncated or missing config', async () => {
+    const configs = [1, 2, 3, 4, 5].map((n) => {
+      const c = structuredClone(DEFAULT_CONFIG);
+      c.onboarding = { setup_completed_at: n, tutorial_completed_at: null };
+      return c;
+    });
+    await Promise.all(configs.map((c) => saveConfig(c, TEST_CONFIG_PATH)));
+
+    // Whichever save won, the file must be complete and parseable.
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect([1, 2, 3, 4, 5]).toContain(loaded.onboarding?.setup_completed_at ?? 0);
+    expect(await readdir(TEST_CONFIG_DIR)).toEqual(['config.yaml']);
+  });
+
+  test('refuses to replace a symlinked config and leaves the link intact', async () => {
+    const decoy = join(TEST_CONFIG_DIR, 'decoy.yaml');
+    await Bun.write(decoy, 'daemon:\n  port: 4444\n');
+    await symlink(decoy, TEST_CONFIG_PATH);
+
+    expect(saveConfig(DEFAULT_CONFIG, TEST_CONFIG_PATH)).rejects.toThrow(/symlink/);
+
+    // Neither the link target nor the link itself was touched, and the
+    // rejected tmp file was cleaned up.
+    expect(await Bun.file(decoy).text()).toBe('daemon:\n  port: 4444\n');
+    expect(lstatSync(TEST_CONFIG_PATH).isSymbolicLink()).toBe(true);
+    expect((await readdir(TEST_CONFIG_DIR)).sort()).toEqual(['config.yaml', 'decoy.yaml']);
   });
 });
 
