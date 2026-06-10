@@ -1,607 +1,175 @@
 name: Release
 
+# Cuts a release end-to-end: bumps package.json on a release branch, opens a
+# PR and merges it (main requires PRs), tags the merge commit, then dispatches
+# the Release Executor workflow (release-exec.yml) against that tag. The
+# explicit dispatch is required because tags pushed with GITHUB_TOKEN never
+# trigger tag-push workflows (GitHub's recursion guard) -- workflow_dispatch
+# is exempt from that guard.
+
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "Dry run — build and validate everything without publishing"
-        type: boolean
-        default: true
-      tag:
-        description: "Version tag to simulate (e.g. v0.1.0-test.1)"
+      version:
+        description: "New version: explicit (e.g. 0.7.0) or bump keyword (patch | minor | major)"
         required: true
-        default: "v0.0.0-dry-run"
+        default: "patch"
 
 permissions:
   contents: write
-  packages: write
+  pull-requests: write
+  actions: write
 
-env:
-  GO_VERSION: "1.23"
-  BUN_VERSION: "latest"
-  SIDECAR_BIN: jarvis-sidecar
-  DRY_RUN: ${{ inputs.dry_run || false }}
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  # ─── Gate: run tests before anything else ───────────────────────
-  test:
+  cut:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: main
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - run: bun install
-      - run: bun test
-      - run: bunx tsc --noEmit
+          bun-version: latest
 
-  # ─── Gate: validate Docker build before publishing anything ────
-  # Runs a no-push multi-arch build so a broken Dockerfile fails the entire
-  # release (npm, GitHub Release, Docker push) rather than just one job.
-  build-docker:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Extract version from tag
+      - name: Compute new version
         id: version
-        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (validate, no push)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: false
-          build-args: VERSION=${{ steps.version.outputs.VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ─── Cross-compile Go sidecars ─────────────────────────────────
-  build-sidecar:
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: darwin
-            goarch: arm64
-            npm_pkg: darwin-arm64
-          - goos: darwin
-            goarch: amd64
-            npm_pkg: darwin-x64
-          - goos: linux
-            goarch: amd64
-            npm_pkg: linux-x64
-          - goos: linux
-            goarch: arm64
-            npm_pkg: linux-arm64
-          - goos: windows
-            goarch: amd64
-            npm_pkg: win32-x64
-            ext: .exe
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: sidecar/go.sum
-
-      - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
-        working-directory: sidecar
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          go build -ldflags "-s -w" -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v5
-        with:
-          name: sidecar-${{ matrix.npm_pkg }}
-          path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
-
-  # ─── Build the macOS Vision OCR helper (universal arm64+amd64) ─
-  # Swift + Vision.framework are macOS-only, so this job has to run on a Mac.
-  # We produce one universal Mach-O binary that's bundled into both darwin
-  # npm packages and both darwin release tarballs.
-  build-ocr-helper:
-    needs: test
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build universal ocr-helper
-        working-directory: sidecar
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          swiftc -O -target arm64-apple-macos11  -o /tmp/ocr-helper-arm64 helpers/ocr-helper.swift
-          swiftc -O -target x86_64-apple-macos11 -o /tmp/ocr-helper-amd64 helpers/ocr-helper.swift
-          mkdir -p helpers
-          lipo -create -output helpers/ocr-helper /tmp/ocr-helper-arm64 /tmp/ocr-helper-amd64
-          file helpers/ocr-helper
-          lipo -info helpers/ocr-helper
+          CURRENT=$(jq -r .version package.json)
+          # --allow-same-version so an equal version reaches the guard below
+          # and fails with a clear message instead of npm's "Version not changed".
+          NEW=$(npm version "$VERSION_INPUT" --no-git-tag-version --allow-same-version)
+          NEW="${NEW#v}"
+          echo "CURRENT=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "NEW=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "Version bump: ${CURRENT} -> ${NEW}"
 
-      - name: Upload helper binary
-        uses: actions/upload-artifact@v5
-        with:
-          name: ocr-helper-darwin
-          path: sidecar/helpers/ocr-helper
-
-  # ─── Publish sidecar packages to npm ───────────────────────────
-  publish-sidecar:
-    needs: [build-sidecar, build-docker, build-ocr-helper]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Ensure npm supports Trusted Publishing
-        run: npm install -g npm@latest
-
-      - name: Download all sidecar binaries
-        uses: actions/download-artifact@v5
-        with:
-          path: artifacts
-          pattern: sidecar-*
-
-      - name: Download macOS OCR helper
-        uses: actions/download-artifact@v5
-        with:
-          name: ocr-helper-darwin
-          path: artifacts/ocr-helper-darwin
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare platform packages
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            pkg_dir="sidecar/npm/${platform}"
-            mkdir -p "${pkg_dir}/bin"
-
-            # Copy binary
-            cp "artifacts/sidecar-${platform}/"* "${pkg_dir}/bin/"
-            chmod +x "${pkg_dir}/bin/"*
-
-            # Bundle the macOS Vision OCR helper alongside the darwin sidecar binaries
-            case "${platform}" in
-              darwin-arm64|darwin-x64)
-                cp artifacts/ocr-helper-darwin/ocr-helper "${pkg_dir}/bin/"
-                chmod +x "${pkg_dir}/bin/ocr-helper"
-                ;;
-            esac
-
-            # Update version
-            cd "${pkg_dir}"
-            npm version "${VERSION}" --no-git-tag-version --allow-same-version
-            cd "$GITHUB_WORKSPACE"
-          done
-
-          # Update wrapper package version and dependency versions
-          cd sidecar/npm/jarvis-sidecar
-          npm version "${VERSION}" --no-git-tag-version --allow-same-version
-
-          # Update optionalDependencies versions
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
-          done
-
-      - name: Publish platform packages
-        run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
-
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            pkg="@usejarvis/sidecar-${platform}"
-            echo "Publishing ${pkg}@${VERSION}... ${FLAGS}"
-            cd "sidecar/npm/${platform}"
-            if ! npm publish --access public $FLAGS; then
-              if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-                echo "${pkg}@${VERSION} is already on npm; treating as success."
-              else
-                exit 1
-              fi
-            fi
-            cd "$GITHUB_WORKSPACE"
-          done
-
-      - name: Publish wrapper package
-        run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          pkg="@usejarvis/sidecar"
-
-          cd sidecar/npm/jarvis-sidecar
-          if ! npm publish --access public $FLAGS; then
-            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-              echo "${pkg}@${VERSION} is already on npm; treating as success."
-            else
-              exit 1
-            fi
-          fi
-
-  # ─── Publish main brain package to npm ─────────────────────────
-  publish-brain:
-    needs: [test, build-docker]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Ensure npm supports Trusted Publishing
-        run: npm install -g npm@latest
-
-      - run: bun install
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Set package version
-        run: npm version "${{ steps.version.outputs.VERSION }}" --no-git-tag-version --allow-same-version
-
-      - name: Build UI
-        run: bun run prepublishOnly
-
-      - name: Publish to npm
-        run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          pkg="@usejarvis/brain"
-
-          if ! npm publish --access public $FLAGS; then
-            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-              echo "${pkg}@${VERSION} is already on npm; treating as success."
-            else
-              exit 1
-            fi
-          fi
-
-  # ─── Create GitHub Release with binaries ───────────────────────
-  # Gated by publish-docker, which is itself gated by publish-sidecar and
-  # publish-brain. So if any npm publish or the docker push fails, no GH
-  # release is created and no Discord ping fires.
-  github-release:
-    needs: [publish-docker, build-sidecar, build-ocr-helper]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Download all sidecar binaries
-        uses: actions/download-artifact@v5
-        with:
-          path: artifacts
-          pattern: sidecar-*
-
-      - name: Download macOS OCR helper
-        uses: actions/download-artifact@v5
-        with:
-          name: ocr-helper-darwin
-          path: artifacts/ocr-helper-darwin
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Package release assets
-        run: |
-          mkdir -p release
-
-          # Bundle the helper alongside the darwin sidecar binaries so a single
-          # tarball contains everything a macOS install needs for OCR to work.
-          for platform in darwin-arm64 darwin-x64; do
-            cp artifacts/ocr-helper-darwin/ocr-helper "artifacts/sidecar-${platform}/"
-            chmod +x "artifacts/sidecar-${platform}/ocr-helper"
-          done
-
-          # Create archives for each platform
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            chmod +x "artifacts/sidecar-${platform}/${{ env.SIDECAR_BIN }}"
-            case "${platform}" in
-              darwin-*)
-                tar -czf "release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-${platform}.tar.gz" \
-                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}" "ocr-helper"
-                ;;
-              *)
-                tar -czf "release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-${platform}.tar.gz" \
-                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
-                ;;
-            esac
-          done
-
-          # Windows gets a zip
-          cd "artifacts/sidecar-win32-x64"
-          zip "../../release/${{ env.SIDECAR_BIN }}-v${{ steps.version.outputs.VERSION }}-win32-x64.zip" \
-            "${{ env.SIDECAR_BIN }}.exe"
-          cd "$GITHUB_WORKSPACE"
-
-      - name: Create GitHub Release
-        if: env.DRY_RUN != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: Jarvis v${{ steps.version.outputs.VERSION }}
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
-          files: |
-            release/*.tar.gz
-            release/*.zip
-
-      - name: Dry-run summary
-        if: env.DRY_RUN == 'true'
-        run: |
-          echo "::notice::DRY RUN — skipped GitHub Release creation"
-          echo "Would have created release v${{ steps.version.outputs.VERSION }}"
-          echo "Assets that would be attached:"
-          ls -lh release/
-
-  # ─── Build and push Docker images ──────────────────────────────
-  # Gated by the npm publishes — if any npm publish fails, docker never
-  # pushes. Keeps the release atomic from the user-visible side: a Docker
-  # image tagged vX.Y.Z always has matching @usejarvis/* npm versions.
-  publish-docker:
-    needs: [publish-sidecar, publish-brain]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
-          if echo "$VERSION" | grep -q '-'; then
-            echo "IS_PRERELEASE=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
-            type=raw,value=latest,enable=${{ steps.version.outputs.IS_PRERELEASE == 'false' }}
-          labels: |
-            org.opencontainers.image.title=Jarvis
-            org.opencontainers.image.description=J.A.R.V.I.S. — Always-on autonomous AI daemon
-            org.opencontainers.image.vendor=vierisid
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
-
-      # Layers are already populated in the GHA cache by the build-docker
-      # validation job, so this build is effectively cache-hit + registry push.
-      - name: Build and push Docker image
-        if: env.DRY_RUN != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ steps.version.outputs.VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build Docker image (dry run)
-        if: env.DRY_RUN == 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ steps.version.outputs.VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Dry-run summary
-        if: env.DRY_RUN == 'true'
-        run: |
-          echo "::notice::DRY RUN — Docker image built but not pushed"
-          echo "Tags that would have been pushed:"
-          echo "${{ steps.meta.outputs.tags }}"
-
-  # ─── Notify Discord about the new release ──────────────────────
-  discord-notify:
-    needs: github-release
-    if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get release notes
-        id: release
+      - name: Guard - new version must be greater than current
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.version.outputs.CURRENT }}
+          NEW: ${{ steps.version.outputs.NEW }}
         run: |
-          RELEASE_JSON=$(gh api repos/${{ github.repository }}/releases/tags/${RELEASE_TAG})
-          BODY=$(echo "$RELEASE_JSON" | jq -r '.body')
-          HTML_URL=$(echo "$RELEASE_JSON" | jq -r '.html_url')
-          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+          bun -e '
+            const { CURRENT, NEW } = process.env;
+            if (Bun.semver.order(NEW, CURRENT) !== 1) {
+              console.error(`Refusing to release ${NEW}: not greater than current package.json version ${CURRENT}`);
+              process.exit(1);
+            }
+          '
 
-          # Store in files to avoid delimiter issues
-          echo "$BODY" > /tmp/whats_changed.txt
-          echo "$HTML_URL" > /tmp/html_url.txt
-          echo "$TAG" > /tmp/tag.txt
-
-      - name: Post to Discord
+      - name: Guard - tag must not already exist
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NEW: ${{ steps.version.outputs.NEW }}
+        run: |
+          if gh api "repos/${{ github.repository }}/git/ref/tags/v${NEW}" >/dev/null 2>&1; then
+            echo "Tag v${NEW} already exists"
+            exit 1
+          fi
+
+      - name: Create release PR
+        id: pr
+        env:
+          NEW: ${{ steps.version.outputs.NEW }}
         run: |
           set -euo pipefail
-          export LC_ALL=en_US.UTF-8
+          BRANCH="release/v${NEW}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add package.json
+          git commit -m "release v${NEW}"
+          git push origin "$BRANCH"
+          # skip-changelog keeps the bump PR out of the generated release notes
+          # (and therefore out of the Discord summary, which is derived from
+          # them) -- see the exclude rule in .github/release.yml.
+          PR_URL=$(gh pr create --base main --head "$BRANCH" \
+            --title "release v${NEW}" \
+            --label skip-changelog \
+            --body "Version bump for v${NEW}. Auto-generated by the Release workflow.")
+          echo "PR_URL=${PR_URL}" >> "$GITHUB_OUTPUT"
 
-          TAG=$(cat /tmp/tag.txt)
-          HTML_URL=$(cat /tmp/html_url.txt)
-
-          # Strip GitHub HTML comments and the redundant "## What's Changed" header
-          # (the message prefix already announces the release).
-          CLEAN=$(sed -e '/^<!--/d' -e '/^## What.s Changed$/d' /tmp/whats_changed.txt)
-          CLEAN=$(printf '%s\n' "$CLEAN" | awk 'NF{p=1} p')
-
-          PREFIX=$'@everyone\n\n**Jarvis '"${TAG}"$' has been released!** 🎉\n\n'
-          SUFFIX=$'\n\n🔗 **Full release:** <'"${HTML_URL}"'>'
-
-          TOTAL_PRS=$(printf '%s\n' "$CLEAN" | grep -c '^\* ' || true)
-
-          # Per-section bullet counts in the full changelog (preserves order).
-          SECTIONS_FULL=$(printf '%s\n' "$CLEAN" | awk '
-            /^### / { current=$0; if (!(current in seen)) { order[++n]=current; seen[current]=1 } next }
-            /^\* / && current { count[current]++ }
-            END { for (i=1;i<=n;i++) printf "%d\t%s\n", count[order[i]]+0, order[i] }
-          ')
-
-          # Reserve worst-case marker length (assume every section appears in the dropped list).
-          ALL_HEADERS=$(printf '%s\n' "$SECTIONS_FULL" | cut -f2- | sed 's/^### //' | paste -sd ', ' -)
-          MARKER_WORST=$(printf '\n\n*...and %d more changes across %s.*' "$TOTAL_PRS" "$ALL_HEADERS")
-
-          BUDGET=$(( 2000 - ${#PREFIX} - ${#SUFFIX} - ${#MARKER_WORST} ))
-
-          USED=0
-          KEPT=""
-          TRUNCATED=0
-          while IFS= read -r LINE; do
-            COST=$(( ${#LINE} + 1 ))
-            if (( USED + COST <= BUDGET )); then
-              KEPT+="${LINE}"$'\n'
-              USED=$(( USED + COST ))
-            else
-              TRUNCATED=1
-              break
+      - name: Merge release PR
+        id: merge
+        env:
+          PR_URL: ${{ steps.pr.outputs.PR_URL }}
+        run: |
+          set -euo pipefail
+          # Mergeability is computed async after PR creation; retry while it is
+          # UNKNOWN, but fail fast on a real conflict (e.g. package.json changed
+          # on main between checkout and merge) -- retrying cannot fix that.
+          MERGED=0
+          for i in $(seq 1 10); do
+            STATUS=$(gh pr view "$PR_URL" --json mergeable --jq .mergeable || true)
+            if [ "$STATUS" = "CONFLICTING" ]; then
+              echo "Release PR ${PR_URL} conflicts with main; aborting."
+              exit 1
             fi
-          done < <(printf '%s\n' "$CLEAN")
-
-          if (( TRUNCATED )); then
-            # Drop trailing dangling section headers (no bullets kept under them).
-            KEPT=$(printf '%s' "$KEPT" | awk '
-              { lines[NR]=$0 }
-              END {
-                n=NR
-                while (n>0 && lines[n] ~ /^### /) n--
-                for (i=1;i<=n;i++) print lines[i]
-              }')
-
-            KEPT_PRS=$(printf '%s\n' "$KEPT" | grep -c '^\* ' || true)
-            DROPPED=$(( TOTAL_PRS - KEPT_PRS ))
-
-            SECTIONS_KEPT=$(printf '%s\n' "$KEPT" | awk '
-              /^### / { current=$0; if (!(current in seen)) { order[++n]=current; seen[current]=1 } next }
-              /^\* / && current { count[current]++ }
-              END { for (i=1;i<=n;i++) printf "%d\t%s\n", count[order[i]]+0, order[i] }
-            ')
-
-            DROPPED_SECTIONS=$(awk -F'\t' '
-              NR==FNR { kept[$2]=$1; next }
-              {
-                full=$1; header=$2
-                k = (header in kept) ? kept[header] : 0
-                if (k < full) print header
-              }
-            ' <(printf '%s\n' "$SECTIONS_KEPT") <(printf '%s\n' "$SECTIONS_FULL") | sed 's/^### //')
-
-            N=$(printf '%s\n' "$DROPPED_SECTIONS" | sed '/^$/d' | wc -l)
-            if (( N == 0 )); then
-              LIST=""
-            elif (( N == 1 )); then
-              LIST=$(printf '%s' "$DROPPED_SECTIONS")
-            elif (( N == 2 )); then
-              LIST=$(printf '%s\n' "$DROPPED_SECTIONS" | paste -sd '|' - | sed 's/|/ and /')
-            else
-              LIST=$(printf '%s\n' "$DROPPED_SECTIONS" | awk '
-                { a[NR]=$0 }
-                END {
-                  for (i=1;i<NR;i++) printf "%s, ", a[i]
-                  printf "and %s", a[NR]
-                }
-              ')
+            if [ "$STATUS" = "MERGEABLE" ]; then
+              if gh pr merge "$PR_URL" --squash; then MERGED=1; break; fi
             fi
-
-            if [[ -n "$LIST" ]]; then
-              MARKER=$(printf '\n\n*...and %d more changes across %s.*' "$DROPPED" "$LIST")
-            else
-              MARKER=$(printf '\n\n*...and %d more changes.*' "$DROPPED")
-            fi
-
-            KEPT="${KEPT%$'\n'}"
-            BODY="${KEPT}${MARKER}"
-          else
-            BODY="$CLEAN"
+            sleep 5
+          done
+          if [ "$MERGED" != 1 ]; then
+            echo "Could not merge release PR ${PR_URL}"
+            exit 1
           fi
+          SHA=""
+          for i in $(seq 1 10); do
+            SHA=$(gh pr view "$PR_URL" --json mergeCommit --jq '.mergeCommit.oid // empty' || true)
+            [ -n "$SHA" ] && break
+            sleep 3
+          done
+          if [ -z "$SHA" ]; then
+            echo "Could not resolve merge commit SHA for ${PR_URL}"
+            exit 1
+          fi
+          echo "SHA=${SHA}" >> "$GITHUB_OUTPUT"
 
-          MESSAGE="${PREFIX}${BODY}${SUFFIX}"
+      - name: Tag merge commit
+        env:
+          NEW: ${{ steps.version.outputs.NEW }}
+          SHA: ${{ steps.merge.outputs.SHA }}
+        run: |
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/v${NEW}" \
+            -f sha="${SHA}"
 
-          jq -n --arg content "$MESSAGE" '{"content": $content, "flags": 4}' | \
-            curl -sf -X POST "$DISCORD_WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -d @-
+      - name: Delete release branch
+        env:
+          NEW: ${{ steps.version.outputs.NEW }}
+        run: git push origin --delete "release/v${NEW}" || true
+
+      - name: Start release executor
+        env:
+          NEW: ${{ steps.version.outputs.NEW }}
+        run: |
+          gh workflow run release-exec.yml --ref "v${NEW}" -f tag="v${NEW}" -f dry_run=false
+          echo "Dispatched release-exec.yml for v${NEW}"
+
+      # Don't leave an orphaned release branch / open PR behind: a re-run would
+      # otherwise fail at git push / gh pr create because they already exist.
+      # Merged PRs are left alone (only the branch gets deleted, harmlessly).
+      - name: Clean up on failure
+        if: ${{ failure() }}
+        env:
+          NEW: ${{ steps.version.outputs.NEW }}
+          PR_URL: ${{ steps.pr.outputs.PR_URL }}
+        run: |
+          if [ -n "$PR_URL" ]; then
+            STATE=$(gh pr view "$PR_URL" --json state --jq .state || true)
+            if [ "$STATE" = "OPEN" ]; then
+              gh pr close "$PR_URL" --comment "Release workflow run failed; closing. See the workflow logs." || true
+            fi
+          fi
+          if [ -n "$NEW" ]; then
+            git push origin --delete "release/v${NEW}" || true
+          fi
