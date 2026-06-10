@@ -156,18 +156,15 @@ const settingsWindowHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { color-scheme: light dark; }
+  /* Force the sidecar's own light theme regardless of the OS appearance:
+     color-scheme: light keeps the engine from dark-rendering form controls /
+     scrollbars, and there is no prefers-color-scheme override. */
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
     background: #f5f2eb; color: #1a1a1a; padding: 22px; overflow-y: auto;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1a1a1a; color: #e8e6e0; }
-    .card { background: #232323; border-color: #3a3a3a; }
-    textarea { background: #2a2a2a; color: #e8e6e0; border-color: #444; }
-    .sub, .hint { color: #9a978f; }
   }
   h1 { font-size: 18px; margin: 0 0 16px; }
   h2 {
@@ -211,7 +208,6 @@ const settingsWindowHTML = `<!doctype html>
   .idlerow { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; margin-top: 8px; border-top: 1px solid rgba(128,128,128,0.18); font-size: 14px; }
   .idlerow .label { flex: 1; }
   .idlerow input { width: 60px; padding: 5px 8px; border: 1px solid #cbc3b2; border-radius: 6px; background: #fff; color: #1a1a1a; font-size: 13px; }
-  @media (prefers-color-scheme: dark) { .idlerow input { background: #2a2a2a; color: #e8e6e0; border-color: #444; } }
 </style>
 </head>
 <body>

@@ -30,17 +30,13 @@ const setupWindowHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { color-scheme: light dark; }
+  /* Force the sidecar's own light theme regardless of the OS appearance. */
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 28px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
     background: #f5f2eb; color: #1a1a1a;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1a1a1a; color: #f5f2eb; }
-    textarea { background: #232323; color: #f5f2eb; border-color: #444; }
-    .hint { color: #9a978f; }
   }
   h1 { font-size: 18px; margin: 0 0 6px; }
   .sub { font-size: 13px; margin: 0 0 18px; opacity: 0.8; line-height: 1.45; }

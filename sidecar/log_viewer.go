@@ -71,20 +71,16 @@ const logViewerHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { color-scheme: light dark; }
+  /* Force the sidecar's own light theme regardless of the OS appearance:
+     color-scheme: light keeps the engine from dark-rendering form controls /
+     scrollbars, and there is no prefers-color-scheme override. */
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     display: flex; flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #f5f2eb; color: #1a1a1a;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1a1a1a; color: #e8e6e0; }
-    .bar { background: #232323; border-color: #3a3a3a; }
-    input { background: #2a2a2a; color: #e8e6e0; border-color: #444; }
-    pre { background: #161616; color: #d6d3cc; }
-    button { background: #333; color: #e8e6e0; border-color: #444; }
   }
   .bar {
     display: flex; align-items: center; gap: 8px; padding: 8px 10px;
