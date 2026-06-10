@@ -252,15 +252,27 @@ func (c *SidecarClient) Preferences() PreferencesConfig {
 // context cancel) so in-app actions like the settings restart can exit cleanly.
 func (c *SidecarClient) SetShutdown(fn func()) { c.shutdown = fn }
 
-// Restart launches a fresh sidecar process, then shuts this one down shortly
-// after — used by the settings window after a token change. The brief delay lets
-// the UI show feedback before the window tears down.
+// Restart launches a fresh sidecar process and, once it has proven it started
+// (didn't crash within restartHealthWindow), shuts this one down — used by the
+// settings window after a token change. If the replacement exits immediately
+// (e.g. a broken build), the current process is kept alive and the error is
+// reported instead of leaving the user with no sidecar.
 func (c *SidecarClient) Restart() error {
-	if err := relaunchSidecar(); err != nil {
+	cmd, err := relaunchSidecar()
+	if err != nil {
 		return fmt.Errorf("could not launch a new instance: %v", err)
 	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case werr := <-exited:
+		return fmt.Errorf("the new instance exited immediately: %v", werr)
+	case <-time.After(restartHealthWindow):
+		// Still running — hand this process off after a brief beat so the UI can
+		// render "Restarting…" first.
+	}
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(restartHandoffDelay)
 		if c.shutdown != nil {
 			c.shutdown()
 		} else {

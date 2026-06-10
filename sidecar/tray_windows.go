@@ -140,9 +140,11 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	}()
 
 	ready := make(chan struct{})
+	trayDone := make(chan struct{})
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+		defer close(trayDone)
 		ok := createTrayIcon()
 		close(ready)
 		if !ok {
@@ -154,9 +156,16 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 
 	client.Start(ctx) // blocks until client.Stop() (menu Close or signal)
 
-	// Tear the icon down: ask the tray window to remove the icon + end its loop.
+	// Tear the icon down: ask the tray window to remove the icon + end its loop,
+	// then wait for the tray thread to actually finish so the process doesn't
+	// exit (leaving a stale ghost icon) before Shell_NotifyIcon(NIM_DELETE) runs.
+	// Bounded so a wedged message loop can't hang shutdown.
 	if h := trayHwnd.Load(); h != 0 {
 		procPostMessageW.Call(h, trayWmClose, 0, 0)
+		select {
+		case <-trayDone:
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 

@@ -48,7 +48,7 @@ Usage:
 	// before we grab them.
 	if os.Getenv("JARVIS_RELAUNCH") == "1" {
 		log.Println("[sidecar] relaunched — waiting for the previous instance to exit...")
-		time.Sleep(800 * time.Millisecond)
+		time.Sleep(restartRelaunchWait)
 	}
 
 	cfg, err := LoadConfig()
