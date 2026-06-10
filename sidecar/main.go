@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -41,6 +42,14 @@ Usage:
 	// Route logs to ~/.jarvis/sidecar.log so the GUI-subsystem Windows build runs
 	// without a console window (and so there's a log to inspect anywhere).
 	setupLogging()
+
+	// When relaunched by an in-app restart (settings token change), wait briefly
+	// for the previous instance to exit and release the mic / hotkeys / tray icon
+	// before we grab them.
+	if os.Getenv("JARVIS_RELAUNCH") == "1" {
+		log.Println("[sidecar] relaunched — waiting for the previous instance to exit...")
+		time.Sleep(800 * time.Millisecond)
+	}
 
 	cfg, err := LoadConfig()
 	if err != nil {

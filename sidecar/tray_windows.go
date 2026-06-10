@@ -110,6 +110,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	}
+	client.SetShutdown(trayOnClose)
 	trayConnState = client.ConnState
 	trayOpenChat = client.OpenChat
 	trayOpenSettings = client.OpenSettings

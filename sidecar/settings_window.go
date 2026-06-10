@@ -84,6 +84,13 @@ func (c *SidecarClient) runSettingsWindow() {
 		return nil
 	})
 
+	// restartSidecar launches a fresh process and exits this one (so a new token
+	// takes effect). The settings window offers it right after a token save.
+	_ = w.Bind("restartSidecar", func() error {
+		log.Printf("[settings] restart requested")
+		return c.Restart()
+	})
+
 	// setPref persists a single preference toggle. For start_at_startup it also
 	// registers/unregisters OS autostart; if that fails we don't save the toggle
 	// so the checkbox reverts to the real state.
@@ -290,7 +297,34 @@ const settingsWindowHTML = `<!doctype html>
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
     updateIdleRow();
+    // Typing a new token after a save reverts the button from Restart to Save.
+    document.getElementById('tok').addEventListener('input', resetTokenButton);
     setInterval(pollStatus, 2000);
+  }
+
+  function resetTokenButton() {
+    var btn = document.getElementById('saveTok');
+    if (btn.textContent !== 'Save token') {
+      btn.textContent = 'Save token';
+      btn.onclick = doSaveToken;
+    }
+    btn.disabled = false;
+  }
+
+  async function doRestart() {
+    var btn = document.getElementById('saveTok');
+    var msg = document.getElementById('tokMsg');
+    btn.disabled = true;
+    msg.className = 'msg'; msg.textContent = '';
+    try {
+      await window.restartSidecar();
+      msg.className = 'msg ok';
+      msg.textContent = 'Restarting Jarvis…';
+    } catch (e) {
+      btn.disabled = false;
+      msg.className = 'msg err';
+      msg.textContent = (e && e.message) ? e.message : String(e);
+    }
   }
 
   // Note: the JS handler must NOT be named the same as the Go binding
@@ -304,8 +338,11 @@ const settingsWindowHTML = `<!doctype html>
     try {
       await window.saveToken(tok.value);
       msg.className = 'msg ok';
-      msg.textContent = 'Saved. Restart the sidecar to reconnect with the new token.';
+      msg.textContent = 'Saved — restart to reconnect with the new token.';
       tok.value = '';
+      // Morph Save -> Restart for a one-click apply.
+      btn.textContent = 'Restart Jarvis';
+      btn.onclick = doRestart;
     } catch (e) {
       msg.className = 'msg err';
       msg.textContent = (e && e.message) ? e.message : String(e);

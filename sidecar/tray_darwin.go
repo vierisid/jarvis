@@ -186,6 +186,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	}
+	client.SetShutdown(trayOnCloseDarwin)
 	trayOpenChatDarwin = client.OpenChat
 	trayOpenSettingsDarwin = client.OpenSettings
 	trayOpenLogsDarwin = client.OpenLogViewer

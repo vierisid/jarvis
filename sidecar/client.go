@@ -54,6 +54,7 @@ type SidecarClient struct {
 	availableCaps   []SidecarCapability
 	unavailableCaps []UnavailableCapability
 
+	shutdown  func()             // full process-shutdown (client stop + ctx cancel); set by runWithTray
 	obsCancel context.CancelFunc // cancel function for running observers
 	obsCtx    context.Context    // parent context (from connectAndServe's ctx)
 	sendFn    EventSender        // event sender for observers
@@ -245,6 +246,28 @@ func (c *SidecarClient) Preferences() PreferencesConfig {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.config.Preferences
+}
+
+// SetShutdown registers the full process-shutdown callback (client stop + main
+// context cancel) so in-app actions like the settings restart can exit cleanly.
+func (c *SidecarClient) SetShutdown(fn func()) { c.shutdown = fn }
+
+// Restart launches a fresh sidecar process, then shuts this one down shortly
+// after — used by the settings window after a token change. The brief delay lets
+// the UI show feedback before the window tears down.
+func (c *SidecarClient) Restart() error {
+	if err := relaunchSidecar(); err != nil {
+		return fmt.Errorf("could not launch a new instance: %v", err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if c.shutdown != nil {
+			c.shutdown()
+		} else {
+			os.Exit(0)
+		}
+	}()
+	return nil
 }
 
 // applyPebblePrefs pushes the current pebble-related preferences into the live
