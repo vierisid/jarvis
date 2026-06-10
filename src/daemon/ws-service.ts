@@ -1461,6 +1461,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     const text = result.assistantText.trim();
 
+    // Decide up-front whether audio will follow, and TELL the UI in the
+    // text message. The UI must not guess: when it assumed TTS based on
+    // its own (possibly stale) settings fetch and no `tts_start` ever
+    // arrived — e.g. TTS disabled, or no provider loaded — it sat in
+    // "Jarvis is thinking…" forever with the composer disabled.
+    const willSpeak = Boolean(speakReply && this.ttsProvider && text);
+
     // Send the text reply for the UI to render in the chat-bubble
     // layout (always — the bubble is the visual record even when TTS
     // is on).
@@ -1470,16 +1477,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         text,
         facts_recorded: result.factsRecorded,
         done: result.done,
+        will_speak: willSpeak,
       },
       timestamp: Date.now(),
     });
 
-    // If TTS is on AND the user wants the reply spoken AND we have a
-    // provider loaded, stream the audio. Reuse the existing
-    // `tts_start` + binary chunks pipeline so the UI's MicOrb plays
-    // it through the normal "speaking" state machine.
-    if (speakReply && this.ttsProvider && text) {
+    // Stream the audio via the existing `tts_start` + binary chunks
+    // pipeline so the UI's MicOrb plays it through the normal
+    // "speaking" state machine.
+    if (willSpeak && this.ttsProvider) {
       const requestId = `interview-${Date.now()}`;
+      // tts_start is only sent right before the first chunk so a
+      // provider that fails instantly never strands the UI in
+      // "speaking" with no audio and no tts_end.
+      let ttsStarted = false;
       try {
         this.wsServer.sendToClient(ws, {
           type: 'tts_start',
@@ -1490,17 +1501,23 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           id: requestId,
           timestamp: Date.now(),
         });
+        ttsStarted = true;
         for await (const chunk of this.ttsProvider.synthesizeStream(text)) {
           this.wsServer.sendBinary(ws, chunk);
         }
-        this.wsServer.sendToClient(ws, {
-          type: 'tts_end',
-          payload: { requestId },
-          id: requestId,
-          timestamp: Date.now(),
-        });
       } catch (err) {
         console.warn('[WSService] Interview TTS failed:', err);
+      } finally {
+        // Always close the TTS frame once it was opened — a synthesis
+        // failure mid-stream must not leave the UI waiting forever.
+        if (ttsStarted) {
+          this.wsServer.sendToClient(ws, {
+            type: 'tts_end',
+            payload: { requestId },
+            id: requestId,
+            timestamp: Date.now(),
+          });
+        }
       }
     }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, Check, Loader2, Mic, MicOff, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, Loader2, Mic, MicOff, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
 import { Button, Icon } from "../ui";
 import "./SetupRoom.css";
 
@@ -246,6 +246,34 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
   // ── Submit state ───────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [skipping, setSkipping] = useState(false);
+  const [skipError, setSkipError] = useState<string | null>(null);
+
+  // Escape hatch available from every setup screen. No LLM gets
+  // configured, so Jarvis can't chat until the user wires a provider
+  // up in Settings — but they reach the dashboard immediately.
+  const handleSkipSetup = async () => {
+    if (
+      !confirm(
+        "Skip setup? Jarvis won't be able to respond until you configure an LLM in Settings. You can re-run onboarding any time from Settings.",
+      )
+    ) {
+      return;
+    }
+    setSkipping(true);
+    setSkipError(null);
+    try {
+      const r = await fetch("/api/onboarding/skip", { method: "POST" });
+      if (!r.ok) {
+        const text = await r.text().catch(() => `HTTP ${r.status}`);
+        throw new Error(text || `HTTP ${r.status}`);
+      }
+      onComplete();
+    } catch (err) {
+      setSkipError(err instanceof Error ? err.message : "Skip failed.");
+      setSkipping(false);
+    }
+  };
 
   const handlePickProvider = (id: LLMProviderId) => {
     setProviderId(id);
@@ -444,7 +472,22 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
               3 · Voice Out
             </div>
           </div>
+          <button
+            type="button"
+            className="v2-setup__skip"
+            onClick={handleSkipSetup}
+            disabled={skipping || saving}
+          >
+            <Icon icon={SkipForward} size="sm" />
+            {skipping ? "Skipping…" : "Skip setup"}
+          </button>
         </header>
+
+        {skipError && (
+          <div className="v2-setup__error" role="alert">
+            {skipError}
+          </div>
+        )}
 
         {screen === "llm" ? (
           <section className="v2-setup__screen">

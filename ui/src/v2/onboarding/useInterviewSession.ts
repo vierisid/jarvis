@@ -74,6 +74,7 @@ export function useInterviewSession(opts: {
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
   const audioPlayingRef = useRef(false);
   const ttsPendingRef = useRef(false);
+  const ttsFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [phase, setPhase] = useState<InterviewState["phase"]>("connecting");
   const [orbState, setOrbState] = useState<OrbState>("idle");
@@ -82,7 +83,37 @@ export function useInterviewSession(opts: {
   const [factsRecorded, setFactsRecorded] = useState(0);
   const [farewell, setFarewell] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [textOnly, setTextOnly] = useState(opts.ttsDisabled);
+  const [textOnly, setTextOnlyState] = useState(opts.ttsDisabled);
+  // The WS handlers below live in a mount-once effect, so reading the
+  // `textOnly` state there would see the value frozen at mount. The ref
+  // is the live view — without it, toggling "Continue with text only"
+  // mid-session left the handlers waiting for TTS that was no longer
+  // requested.
+  const textOnlyRef = useRef(textOnly);
+
+  const clearTtsFallbackTimer = useCallback(() => {
+    if (ttsFallbackTimerRef.current !== null) {
+      clearTimeout(ttsFallbackTimerRef.current);
+      ttsFallbackTimerRef.current = null;
+    }
+  }, []);
+
+  /** Toggle text-only mode. Turning it ON also rescues a session stuck
+   *  waiting on TTS audio — flip straight to listening so the composer
+   *  re-enables. */
+  const setTextOnly = useCallback(
+    (next: boolean) => {
+      textOnlyRef.current = next;
+      setTextOnlyState(next);
+      if (next && ttsPendingRef.current) {
+        ttsPendingRef.current = false;
+        clearTtsFallbackTimer();
+        setPhase("listening");
+        setOrbState("listening");
+      }
+    },
+    [clearTtsFallbackTimer],
+  );
 
   // ── WS lifecycle ─────────────────────────────────────────────────
   useEffect(() => {
@@ -97,7 +128,7 @@ export function useInterviewSession(opts: {
       ws.send(
         JSON.stringify({
           type: "interview_start",
-          payload: { speakReply: !textOnly },
+          payload: { speakReply: !textOnlyRef.current },
           timestamp: Date.now(),
         }),
       );
@@ -106,7 +137,7 @@ export function useInterviewSession(opts: {
     ws.onmessage = (event) => {
       // Binary frames are TTS audio chunks.
       if (event.data instanceof ArrayBuffer) {
-        if (textOnly) return; // ignore audio in text-only mode
+        if (textOnlyRef.current) return; // ignore audio in text-only mode
         audioQueueRef.current.push(event.data);
         if (!audioPlayingRef.current) playNextChunk();
         return;
@@ -133,18 +164,37 @@ export function useInterviewSession(opts: {
           }
           // We get the text immediately; if TTS will follow, the
           // orb stays in "thinking" until tts_start fires. If not,
-          // jump straight to listening so the user can reply.
-          if (textOnly || !text) {
+          // jump straight to listening so the user can reply. The
+          // daemon says explicitly whether audio is coming
+          // (`will_speak`) — trust it over our local mode guess, so
+          // a TTS-less daemon never strands us waiting for audio.
+          // (Older daemons omit the field; undefined falls through
+          // to the local guess + timeout fallback below.)
+          const willSpeak = msg.payload?.will_speak;
+          if (textOnlyRef.current || !text || willSpeak === false) {
             setPhase("listening");
             setOrbState("listening");
           } else {
             ttsPendingRef.current = true;
+            // Safety net: if tts_start never arrives (provider died,
+            // pre-will_speak daemon with TTS off), un-stick the
+            // composer rather than waiting forever.
+            clearTtsFallbackTimer();
+            ttsFallbackTimerRef.current = setTimeout(() => {
+              ttsFallbackTimerRef.current = null;
+              if (ttsPendingRef.current) {
+                ttsPendingRef.current = false;
+                setPhase("listening");
+                setOrbState("listening");
+              }
+            }, 10_000);
           }
           break;
         }
         case "tts_start":
-          if (!textOnly) {
+          if (!textOnlyRef.current) {
             ttsPendingRef.current = false;
+            clearTtsFallbackTimer();
             setPhase("speaking");
             setOrbState("speaking");
             // Pre-warm AudioContext so the first chunk plays cleanly.
@@ -213,6 +263,7 @@ export function useInterviewSession(opts: {
       }
       audioCtxRef.current = null;
       audioQueueRef.current = [];
+      clearTtsFallbackTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -271,12 +322,12 @@ export function useInterviewSession(opts: {
       ws.send(
         JSON.stringify({
           type: "interview_user_message",
-          payload: { text: trimmed, speakReply: !textOnly },
+          payload: { text: trimmed, speakReply: !textOnlyRef.current },
           timestamp: Date.now(),
         }),
       );
     },
-    [textOnly],
+    [],
   );
 
   return {

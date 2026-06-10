@@ -69,6 +69,37 @@
 .v2-setup__progress-step[data-done="true"] { color: var(--ok); }
 .v2-setup__progress-sep { opacity: 0.4; }
 
+.v2-setup__skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-pill);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.v2-setup__skip:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+
+.v2-setup__skip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.v2-setup__skip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ── Screen ── */
 
 .v2-setup__screen {

@@ -77,9 +77,7 @@ export function useOnboardingStatus(): HookValue {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/onboarding/status");
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const json = (await r.json()) as OnboardingStatus;
+      const json = await fetchStatusWithRetry();
       setStatus((prev) => {
         // Phase E — when this refresh was triggered locally (not by a
         // peer tab) and any phase flag flipped, broadcast so peers
@@ -100,11 +98,13 @@ export function useOnboardingStatus(): HookValue {
       setError(null);
     } catch (err) {
       // The status endpoint is one of the few routes that should
-      // ALWAYS work — even in setup mode. If it 5xxs we treat it as
-      // "not yet onboarded" rather than blocking the user behind a
-      // permanent error screen. The OnboardingGate's render path
-      // checks `status === null` to mean "still loading"; we set a
-      // sentinel below so the gate falls through to setup screens.
+      // ALWAYS work — even in setup mode. After retries are exhausted
+      // we treat failure as "not yet onboarded" rather than blocking
+      // the user behind a permanent error screen. The OnboardingGate's
+      // render path checks `status === null` to mean "still loading";
+      // we set a sentinel below so the gate falls through to setup
+      // screens. (The retries above keep a daemon that's mid-restart
+      // from flashing the setup flow at an already-onboarded user.)
       setError(err instanceof Error ? err.message : String(err));
       setStatus({
         setup_completed: false,
@@ -150,6 +150,29 @@ export function useOnboardingStatus(): HookValue {
   }, [refresh]);
 
   return { status, loading, error, refresh };
+}
+
+/** Fetch `/api/onboarding/status` with a few short retries. A daemon
+ *  that is mid-restart (or briefly 503ing while services come up) used
+ *  to fail the single fetch, and the error fallback re-showed the full
+ *  setup flow to an already-onboarded user. Three attempts over ~2s
+ *  ride out the transient without meaningfully delaying real new
+ *  installs (where the endpoint answers instantly). */
+async function fetchStatusWithRetry(): Promise<OnboardingStatus> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+    }
+    try {
+      const r = await fetch("/api/onboarding/status");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()) as OnboardingStatus;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /** Compare phase-relevant flags between two snapshots. Returns true if

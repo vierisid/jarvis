@@ -22,7 +22,11 @@ import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequire
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
-  const [ttsDisabled, setTtsDisabled] = useState(false);
+  // null = TTS state unknown (fetch in flight). The interview room must
+  // NOT mount until this resolves: it latches voice-vs-text mode at
+  // mount, so mounting with a guessed value put TTS-off users in voice
+  // mode — they then waited forever for audio that never came.
+  const [ttsDisabled, setTtsDisabled] = useState<boolean | null>(null);
 
   // Look up TTS state once we're past setup so Phase B can decide
   // whether to render in voice or text-only mode. Cheap one-shot
@@ -34,7 +38,7 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     fetch("/api/config/tts")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d && typeof d.enabled === "boolean") setTtsDisabled(!d.enabled);
+        setTtsDisabled(d && typeof d.enabled === "boolean" ? !d.enabled : false);
       })
       .catch(() => setTtsDisabled(false));
   }, [status?.setup_completed, status?.profile_completed, status?.setup_skipped_profile]);
@@ -54,6 +58,11 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   }
 
   if (!status.profile_completed && !status.setup_skipped_profile) {
+    // Hold mount until the TTS check resolves (~50ms on localhost) —
+    // same blank-frame treatment as the status fetch above.
+    if (ttsDisabled === null) {
+      return null;
+    }
     return (
       <ProfileInterviewRoom
         ttsDisabled={ttsDisabled}

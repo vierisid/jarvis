@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { rename, unlink } from 'node:fs/promises';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG } from './types.ts';
 import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
@@ -179,7 +180,21 @@ export async function saveConfig(
     });
 
     await secureParentDirectory(path);
-    await secureWriteFile(path, yaml, 0o600, 'Config');
+    // Write-then-rename so the config is replaced atomically. A direct
+    // O_TRUNC write leaves a truncated/empty config.yaml if the daemon is
+    // killed mid-write — on the next boot that parses as defaults and the
+    // user loses onboarding state, authority overrides, everything.
+    const tmpPath = `${path}.tmp`;
+    await secureWriteFile(tmpPath, yaml, 0o600, 'Config');
+    try {
+      await rename(tmpPath, path);
+    } catch {
+      // Rename across-the-board works on POSIX; on Windows it can fail
+      // transiently (antivirus holding the target). Fall back to the
+      // in-place write rather than losing the save entirely.
+      await unlink(tmpPath).catch(() => {});
+      await secureWriteFile(path, yaml, 0o600, 'Config');
+    }
     console.log(`Config saved to ${path}`);
   } catch (err) {
     throw new Error(`Failed to save config to ${path}: ${err}`);

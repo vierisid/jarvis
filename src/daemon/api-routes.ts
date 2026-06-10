@@ -980,6 +980,59 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     /**
+     * Skip the ENTIRE onboarding flow from the first setup screen. No LLM
+     * is configured, so the daemon stays chat-less until the user wires a
+     * provider up in Settings → LLM — but the dashboard becomes reachable
+     * immediately. Marks setup complete, opts out of the profile
+     * interview, and dismisses the tutorial in one write. Existing
+     * timestamps are preserved so a skip after a partial run never
+     * regresses state.
+     */
+    '/api/onboarding/skip': {
+      POST: async () => {
+        try {
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const fresh = await loadConfig();
+          const now = Date.now();
+          fresh.onboarding = {
+            ...fresh.onboarding,
+            setup_completed_at: fresh.onboarding?.setup_completed_at ?? now,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at ?? now,
+            setup_skipped_profile: true,
+          };
+          await saveConfig(fresh);
+          ctx.config.onboarding = fresh.onboarding;
+
+          // Best-effort service start so the "Restart Jarvis" banner
+          // doesn't nag after a skip. Failure is non-fatal — services
+          // that need an LLM just stay idle until one is configured.
+          let postSetupStarted = false;
+          if (ctx.startPostSetupServices) {
+            try {
+              await ctx.startPostSetupServices();
+              postSetupStarted = true;
+            } catch (err) {
+              console.warn(
+                '[Onboarding] Post-setup services skipped after onboarding skip:',
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+
+          return json({
+            ok: true,
+            setup_completed_at: fresh.onboarding.setup_completed_at,
+            post_setup_services_started: postSetupStarted,
+            message: 'Onboarding skipped. Configure an LLM in Settings to start chatting.',
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
      * Phase B — user skipped the conversational profile interview.
      * Sets `setup_skipped_profile: true` so the gate stops re-rendering
      * Phase B. Profile remains empty; user can fill it later via the
@@ -1156,30 +1209,39 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
           }
 
-          // 2. STT settings — mirrors /api/config/stt POST semantics via
-          //    the shared mergeSTTConfig helper. STT is consumed at the
-          //    next transcription request, so no hot-swap is needed.
+          // 2. STT + TTS + the setup-completed flag in ONE config write.
+          //    These used to be three sequential load→save round-trips; a
+          //    daemon kill (or crash) between them persisted setup HALF-done
+          //    — TTS saved but the completion flag lost — and the user was
+          //    funneled back into onboarding on the next boot.
+          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
+          const fresh = await loadConfig();
           if (body.stt) {
-            const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
-            const { mergeSTTConfig } = await import('./config-merge.ts');
-            const fresh = await lc();
+            // Mirrors /api/config/stt POST semantics. STT is consumed at
+            // the next transcription request, so no hot-swap is needed.
             fresh.stt = mergeSTTConfig(fresh.stt, body.stt);
-            await sc(fresh);
-            ctx.config.stt = fresh.stt;
           }
-
-          // 3. TTS settings — mirrors /api/config/tts POST via the shared
-          //    mergeTTSConfig helper, then hot-reloads the provider so the
-          //    post-setup "Welcome to Jarvis" reply is spoken immediately.
           if (body.tts) {
-            const { loadConfig: lc, saveConfig: sc } = await import('../config/loader.ts');
-            const { mergeTTSConfig } = await import('./config-merge.ts');
-            const fresh = await lc();
             fresh.tts = mergeTTSConfig(fresh.tts, body.tts);
-            await sc(fresh);
-            ctx.config.tts = fresh.tts;
-            // Hot-reload TTS provider when possible so the post-setup
-            // "Welcome to Jarvis" reply is spoken immediately.
+          }
+          const now = Date.now();
+          fresh.onboarding = {
+            setup_completed_at: now,
+            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
+            setup_skipped_profile: fresh.onboarding?.setup_skipped_profile,
+            tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at,
+            tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
+            last_reset_at: fresh.onboarding?.last_reset_at,
+          };
+          await saveConfig(fresh);
+          if (body.stt) ctx.config.stt = fresh.stt;
+          if (body.tts) ctx.config.tts = fresh.tts;
+          ctx.config.onboarding = fresh.onboarding;
+
+          // 3. Hot-reload the TTS provider when possible so the post-setup
+          //    "Welcome to Jarvis" reply is spoken immediately.
+          if (body.tts) {
             try {
               if (ctx.config.tts && ctx.wsService) {
                 const { createTTSProvider } = await import('../comms/voice.ts');
@@ -1191,22 +1253,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             }
           }
 
-          // 4. Flip the setup-completed flag.
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
-          const now = Date.now();
-          fresh.onboarding = {
-            setup_completed_at: now,
-            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
-            setup_skipped_profile: fresh.onboarding?.setup_skipped_profile,
-            tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at,
-            tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
-            last_reset_at: fresh.onboarding?.last_reset_at,
-          };
-          await saveConfig(fresh);
-          ctx.config.onboarding = fresh.onboarding;
-
-          // 5. Bring the LLM-dependent services (bgAgent, commitment
+          // 4. Bring the LLM-dependent services (bgAgent, commitment
           //    executor, awareness) online in-process. Without this the
           //    user would have to restart the daemon — fatal UX on
           //    Docker / VPS. Failure here is non-fatal: chat still works
