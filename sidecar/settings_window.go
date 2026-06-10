@@ -224,7 +224,7 @@ const settingsWindowHTML = `<!doctype html>
     <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false"></textarea>
     <div class="row">
       <span id="tokMsg" class="msg"></span>
-      <button id="saveTok" onclick="saveToken()">Save token</button>
+      <button id="saveTok" onclick="doSaveToken()">Save token</button>
     </div>
   </div>
 
@@ -293,7 +293,9 @@ const settingsWindowHTML = `<!doctype html>
     setInterval(pollStatus, 2000);
   }
 
-  async function saveToken() {
+  // Note: the JS handler must NOT be named the same as the Go binding
+  // (window.saveToken) — a same-named top-level function shadows the binding.
+  async function doSaveToken() {
     var btn = document.getElementById('saveTok');
     var msg = document.getElementById('tokMsg');
     var tok = document.getElementById('tok');
