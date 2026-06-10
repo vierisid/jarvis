@@ -271,6 +271,60 @@
   font-style: italic;
 }
 
+/* ── Card result (finished task's answer) ── */
+
+.v2-agents__card-result {
+  border-top: var(--hair-soft);
+  padding-top: var(--s-2);
+}
+
+.v2-agents__card-result-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.v2-agents__card-result-summary::-webkit-details-marker {
+  display: none;
+}
+
+.v2-agents__card-result-summary::after {
+  content: "▸";
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  margin-left: auto;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.v2-agents__card-result[open] .v2-agents__card-result-summary::after {
+  transform: rotate(90deg);
+}
+
+.v2-agents__card-result-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.v2-agents__card-result-body {
+  margin-top: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+  user-select: text;
+}
+
 .v2-agents__card-foot {
   display: flex;
   align-items: center;
@@ -470,6 +524,31 @@
   font-size: var(--text-xs);
   color: var(--ink-2);
   line-height: var(--lh-body);
+}
+
+.v2-agents__orbital-detail-result {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: var(--s-2) var(--s-3);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  user-select: text;
+}
+
+.v2-agents__orbital-detail-result-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s-1);
 }
 
 .v2-agents__orbital-detail-meta {

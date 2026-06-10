@@ -3,6 +3,13 @@ import { useLiveData } from "../../shell/LiveDataContext";
 
 const POLL_INTERVAL_MS = 5000;
 
+export interface AgentTaskResult {
+  success: boolean;
+  response: string;
+  tools_used: string[];
+  termination_reason: string;
+}
+
 export interface LiveAgentInfo {
   id: string;
   role: { id: string; name: string };
@@ -16,6 +23,8 @@ export interface LiveAgentInfo {
     task: string;
     started_at: number;
     completed_at: number | null;
+    /** The sub-agent's final answer — present once the task finished. */
+    result?: AgentTaskResult | null;
   } | null;
 }
 

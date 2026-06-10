@@ -24,6 +24,22 @@ export type Agent = {
 };
 
 /**
+ * Whether a role is allowed to spawn sub-agents.
+ *
+ * A role can delegate when it declares the `delegation` tool (the
+ * mechanism `delegate_task` / `manage_agents` actually use — specialists
+ * are discovered from roles/specialists/, not from the role file) OR
+ * when it defines legacy `sub_roles` templates. Deriving this from
+ * `sub_roles` alone broke delegation for the default personal-assistant
+ * role: it ships the delegation tool and a prompt that advertises
+ * delegation, but no `sub_roles`, so every spawn was refused regardless
+ * of the configured authority level.
+ */
+export function canSpawnChildren(role: RoleDefinition): boolean {
+  return role.tools.includes('delegation') || (role.sub_roles?.length ?? 0) > 0;
+}
+
+/**
  * Default authority bounds for an agent
  */
 function getDefaultAuthority(role: RoleDefinition): AuthorityBounds {
@@ -32,7 +48,7 @@ function getDefaultAuthority(role: RoleDefinition): AuthorityBounds {
     allowed_tools: role.tools,
     denied_tools: [],
     max_token_budget: 100000,
-    can_spawn_children: (role.sub_roles?.length ?? 0) > 0,
+    can_spawn_children: canSpawnChildren(role),
   };
 }
 

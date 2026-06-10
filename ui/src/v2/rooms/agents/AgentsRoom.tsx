@@ -340,6 +340,11 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
   const currentTask =
     agent.live?.current_task ?? agent.live?.latest_task?.task ?? null;
   const sinceTs = agent.live?.created_at ?? null;
+  const latestTask = agent.live?.latest_task ?? null;
+  // Show the finished task's answer once the agent is no longer busy —
+  // this is where the user actually reads what the sub-agent produced.
+  const finishedResult =
+    !agent.live?.busy && latestTask?.result ? latestTask.result : null;
 
   let statusLabel: string;
   let statusTone: "ok" | "warn" | "neutral" | "accent";
@@ -377,6 +382,23 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
           {statusLabel}
         </Chip>
       </div>
+      {finishedResult && (
+        <details className="v2-agents__card-result">
+          <summary className="v2-agents__card-result-summary">
+            <Chip tone={finishedResult.success ? "ok" : "warn"} dot>
+              {finishedResult.success ? "Result ready" : "Task failed"}
+            </Chip>
+            <span className="v2-agents__card-result-hint">
+              {latestTask?.completed_at
+                ? formatRelative(latestTask.completed_at)
+                : ""}
+            </span>
+          </summary>
+          <div className="v2-agents__card-result-body">
+            {finishedResult.response}
+          </div>
+        </details>
+      )}
       <div className="v2-agents__card-foot">
         <AuthorityBar authority={agent.authority} active={agent.isActive} />
         <div className="v2-agents__card-foot-spacer" />
@@ -492,6 +514,16 @@ function Orbital({
             {selected.live?.current_task && (
               <div className="v2-agents__orbital-detail-task">
                 {selected.live.current_task}
+              </div>
+            )}
+            {!selected.live?.busy && selected.live?.latest_task?.result && (
+              <div className="v2-agents__orbital-detail-result">
+                <div className="v2-agents__orbital-detail-result-label">
+                  {selected.live.latest_task.result.success
+                    ? "Latest result"
+                    : "Latest task failed"}
+                </div>
+                {selected.live.latest_task.result.response}
               </div>
             )}
             <div className="v2-agents__orbital-detail-meta">

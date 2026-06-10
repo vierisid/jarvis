@@ -3,7 +3,7 @@ import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, Con
 import { guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
-import { AgentInstance } from './agent.ts';
+import { AgentInstance, canSpawnChildren } from './agent.ts';
 import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
@@ -172,8 +172,35 @@ export class AgentOrchestrator {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
 
-    if (!parent.agent.authority.can_spawn_children) {
-      throw new Error('Parent agent does not have authority to spawn children');
+    // The authority engine is the PRIME decider for spawning. The user's
+    // explicit configuration (per-action overrides, context rules, the
+    // authority slider) wins over the role-derived capability flag in
+    // BOTH directions: a `spawn_agent` deny blocks a delegation-capable
+    // role, and an allow unblocks a role that never declared delegation.
+    // This also covers spawn paths that bypass the tool-level gate
+    // (dashboard spawn dialog, workflow delegator). The role flag is
+    // only the fallback when no engine is wired (tests, embedded use).
+    if (this.authorityEngine) {
+      const decision = this.authorityEngine.checkAuthority({
+        agentId: parent.id,
+        agentAuthorityLevel: parent.agent.authority.max_authority_level,
+        agentRoleId: parent.agent.role.id,
+        toolName: 'spawn_sub_agent',
+        toolCategory: 'delegation',
+        actionCategory: 'spawn_agent',
+        temporaryGrants: this.temporaryGrants,
+      });
+      if (!decision.allowed) {
+        throw new Error(`Authority denied spawning a sub-agent: ${decision.reason}`);
+      }
+      // `requiresApproval` is intentionally treated as allowed here: the
+      // soft gate runs at the TOOL layer (executeTool intercepts
+      // delegate_task/manage_agents before they execute), so by the time
+      // we get here the approval either wasn't needed or was granted.
+    } else if (!parent.agent.authority.can_spawn_children) {
+      throw new Error(
+        `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
+      );
     }
 
     // Create child agent with reduced authority
@@ -187,7 +214,7 @@ export class AgentOrchestrator {
       ),
       denied_tools: parent.agent.authority.denied_tools,
       max_token_budget: Math.floor(parent.agent.authority.max_token_budget / 2),
-      can_spawn_children: (role.sub_roles?.length ?? 0) > 0,
+      can_spawn_children: canSpawnChildren(role),
     };
 
     const agent = new AgentInstance(role, {

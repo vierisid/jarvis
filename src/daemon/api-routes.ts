@@ -199,7 +199,35 @@ type AgentTaskSnapshot = {
   task: string;
   startedAt: number;
   completedAt?: number | null;
+  result?: {
+    success: boolean;
+    response: string;
+    toolsUsed: string[];
+    terminationReason: string;
+  } | null;
 };
+
+/** Serialize a task (with its result, when finished) for API responses.
+ *  The result is the ONLY place the sub-agent's final answer lives for
+ *  dashboard-spawned tasks — without it the UI could show that a task
+ *  completed but never what it produced. */
+function taskToJSON(task: AgentTaskSnapshot) {
+  return {
+    id: task.id,
+    status: task.status,
+    task: task.task,
+    started_at: task.startedAt,
+    completed_at: task.completedAt ?? null,
+    result: task.result
+      ? {
+          success: task.result.success,
+          response: task.result.response,
+          tools_used: task.result.toolsUsed,
+          termination_reason: task.result.terminationReason,
+        }
+      : null,
+  };
+}
 
 function buildAgentSnapshots(ctx: ApiContext) {
   const orchestrator = ctx.agentService.getOrchestrator();
@@ -227,13 +255,7 @@ function buildAgentSnapshots(ctx: ApiContext) {
     return {
       ...base,
       busy: busyAgents.has(agent.id),
-      latest_task: latestTask ? {
-        id: latestTask.id,
-        status: latestTask.status,
-        task: latestTask.task,
-        started_at: latestTask.startedAt,
-        completed_at: latestTask.completedAt,
-      } : null,
+      latest_task: latestTask ? taskToJSON(latestTask) : null,
     };
   });
 
@@ -706,6 +728,21 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             llmManager: ctx.agentService.getLLMManager(),
             specialists: ctx.agentService.getSpecialists(),
             taskManager,
+            // Dashboard-spawned tasks used to run with NO progress callback:
+            // nothing streamed to the live ticker, nothing persisted to the
+            // activity timeline, and the user never learned the task had
+            // finished (let alone what it produced). Mirror the wiring the
+            // PA's manage_agents tool gets at boot, plus a completion
+            // notification pointing at the Agents room.
+            onProgress: (event: { type: 'text' | 'tool_call' | 'done'; agentName: string; agentId: string; data: unknown }) => {
+              ctx.wsService?.broadcastSubAgentProgress(event);
+              if (event.type === 'done') {
+                ctx.wsService?.broadcastNotification(
+                  `**${event.agentName} finished its task.** Open the Agents room to read the result.`,
+                  'normal',
+                );
+              }
+            },
           };
 
           const spawned = spawnPersistentAgent(deps, body.specialist ?? '');
@@ -723,13 +760,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json({
             ...spawned.agent.toJSON(),
             busy: taskManager.isAgentBusy(spawned.agent.id),
-            latest_task: latestTask ? {
-              id: latestTask.id,
-              status: latestTask.status,
-              task: latestTask.task,
-              started_at: latestTask.startedAt,
-              completed_at: latestTask.completedAt,
-            } : null,
+            latest_task: latestTask ? taskToJSON(latestTask) : null,
             spawned: spawned.summary,
             assignment,
           }, 201);
@@ -823,6 +854,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           specialists: ctx.agentService.getSpecialists(),
           taskManager: tm,
         }));
+      },
+    },
+
+    // Full detail (including the sub-agent's final result) for a single
+    // async task. The list endpoints above intentionally truncate.
+    '/api/agents/tasks/:id': {
+      GET: (req: Request & { params: { id: string } }) => {
+        const tm = ctx.agentService.getTaskManager();
+        if (!tm) return error('Persistent agents are not available.', 503);
+        const task = tm.getTask(req.params.id);
+        if (!task) return error(`Task "${req.params.id}" not found.`, 404);
+        return json({
+          ...taskToJSON(task),
+          agent_id: task.agentId,
+          agent_name: task.agentName,
+          specialist_id: task.specialistId,
+        });
       },
     },
 
