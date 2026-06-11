@@ -362,6 +362,11 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_approval_agent ON approval_requests(agent_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_approval_category ON approval_requests(action_category)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_approval_created ON approval_requests(created_at)`);
+  // Migration: 'inline' requests are executed by the authority gate that is
+  // blocked waiting on them (result flows back to the conversation); the
+  // approve endpoints only flip the status. 'deferred' keeps the legacy
+  // execute-on-approve behavior.
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'deferred'`); } catch {}
 
   // Authority: Audit trail
   db.run(`

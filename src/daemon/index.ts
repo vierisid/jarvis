@@ -489,6 +489,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const approvalDelivery = new ApprovalDelivery();
     const deferredExecutor = new DeferredExecutor(approvalManager, auditTrail);
     deferredExecutor.setLearner(learner);
+    // Approved actions must respect the kill switch too, not just the gate.
+    deferredExecutor.setEmergencyController(emergencyController);
+    // Inline requests are owned by an authority gate blocked in-process;
+    // any that survived a restart have no gate anymore, so hand them to
+    // the deferred path or approving them would execute nothing.
+    const orphanedInline = approvalManager.demoteAllPendingInline();
+    if (orphanedInline > 0) {
+      console.log(`[Daemon] Demoted ${orphanedInline} orphaned inline approval(s) to deferred`);
+    }
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -518,6 +527,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const orchestrator = agentService.getOrchestrator();
     orchestrator.setAuthorityEngine(authorityEngine);
     orchestrator.setApprovalManager(approvalManager);
+    // Inline approval execution: the authority gate blocks on the user's
+    // decision and executes the approved tool itself, so results flow back
+    // through the task envelope to the conversation tier.
+    orchestrator.setDeferredExecutor(deferredExecutor);
     orchestrator.setAuditTrail(auditTrail);
     orchestrator.setEmergencyController(emergencyController);
 
@@ -542,10 +555,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (action === 'approve') {
         const approved = approvalManager.approve(request.id, channel);
         if (!approved) return 'Request already decided';
-        const result = await deferredExecutor.executeApproved(request.id);
+        let reply: string;
+        if (approved.tool_name === 'request_approval' || approved.execution_mode === 'inline') {
+          // Intent-only and inline requests are executed by the blocked
+          // caller (request_approval tool / authority gate) once it sees
+          // the status flip — executing here would run the tool twice.
+          reply = 'Approved. The agent will continue and report back in chat.';
+        } else {
+          const result = await deferredExecutor.executeApproved(request.id);
+          reply = `Approved and executed. Result: ${result.slice(0, 200)}`;
+        }
         const updated = approvalManager.getRequest(request.id);
         if (updated) wsService.broadcastApprovalUpdate(updated);
-        return `Approved and executed. Result: ${result.slice(0, 200)}`;
+        return reply;
       } else {
         const denied = approvalManager.deny(request.id, channel);
         if (!denied) return 'Request already decided';
@@ -909,7 +931,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
       // Skip for intent-only approvals — they have no deferred execution.
+      // Skip for inline approvals too: their result returns through the
+      // task loop and the conversation tier verbalizes it, so a raw
+      // notification would duplicate it in the chat.
       if (request.tool_name === 'request_approval') return;
+      if (request.execution_mode === 'inline') return;
       const text = `[EXECUTED] ${request.tool_name}: ${result.slice(0, 200)}`;
       wsService.broadcastNotification(text, 'normal');
     });

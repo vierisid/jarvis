@@ -11,11 +11,17 @@ import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { AuditTrail } from '../authority/audit.ts';
+import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
+// How long the authority gate blocks waiting for the user to approve a
+// gated tool call before falling back to the deferred (fire-and-forget)
+// path. Long enough to click a permission panel, short enough that an
+// ignored panel doesn't hang the conversation turn indefinitely.
+const APPROVAL_WAIT_TIMEOUT_MS = 2 * 60 * 1000;
 
 /**
  * Special tool exposed only on processTaskCall. The orchestrator intercepts
@@ -58,6 +64,7 @@ export class AgentOrchestrator {
   // Authority engine components
   private authorityEngine: AuthorityEngine | null = null;
   private approvalManager: ApprovalManager | null = null;
+  private deferredExecutor: DeferredExecutor | null = null;
   private auditTrail: AuditTrail | null = null;
   private emergencyController: EmergencyController | null = null;
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
@@ -102,6 +109,15 @@ export class AgentOrchestrator {
 
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
+  }
+
+  /**
+   * Enables inline approval execution: the authority gate blocks on the
+   * user's decision and runs the approved tool itself, so the result flows
+   * back through the task loop instead of a detached notification.
+   */
+  setDeferredExecutor(executor: DeferredExecutor): void {
+    this.deferredExecutor = executor;
   }
 
   setAuditTrail(trail: AuditTrail): void {
@@ -454,7 +470,7 @@ export class AgentOrchestrator {
         });
 
         for (const tc of llmResponse.tool_calls) {
-          const result = await this.executeTool(tc);
+          const result = await this.executeTool(tc, opts.signal);
           messages.push({
             role: 'tool',
             content: result,
@@ -671,8 +687,11 @@ export class AgentOrchestrator {
    * Execute a single tool call via the ToolRegistry.
    * Includes authority gate: checks emergency state, authority level, and governed categories.
    * Returns a string for text-only results, or ContentBlock[] for multi-modal results (images).
+   *
+   * `signal` (task-tier calls) lets a cancelled task break out of the
+   * blocking approval wait instead of holding the dispatch open.
    */
-  private async executeTool(toolCall: LLMToolCall): Promise<string | ContentBlock[]> {
+  private async executeTool(toolCall: LLMToolCall, signal?: AbortSignal): Promise<string | ContentBlock[]> {
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
@@ -740,6 +759,12 @@ export class AgentOrchestrator {
       // 5. Requires approval
       if (decision.requiresApproval && this.approvalManager) {
         const urgency = this.determineUrgency(actionCategory);
+        // Inline mode: block here until the user decides, then execute the
+        // tool ourselves so the result returns through the task loop (and
+        // from there to the conversation tier), instead of being executed
+        // detached on approval and broadcast as a raw notification.
+        // Deferred mode is the fallback when no executor is wired.
+        const inline = this.deferredExecutor !== null;
         const request = this.approvalManager.createRequest({
           agentId: primary.id,
           agentName: primary.agent.role.name,
@@ -749,15 +774,68 @@ export class AgentOrchestrator {
           urgency,
           reason: decision.reason,
           context: `Agent attempted: ${toolCall.name}(${JSON.stringify(toolCall.arguments).slice(0, 200)})`,
+          executionMode: inline ? 'inline' : 'deferred',
         });
 
         // Emit approval request event
         this.onApprovalNeeded?.(request);
 
-        return `[AWAITING_APPROVAL] Request #${request.id.slice(0, 8)} submitted. ` +
-               `Action: ${toolCall.name} (${actionCategory}). ` +
-               `Reason: ${decision.reason}. ` +
-               `The user will be notified and can approve or deny this action.`;
+        if (!inline) {
+          return `[AWAITING_APPROVAL] Request #${request.id.slice(0, 8)} submitted. ` +
+                 `Action: ${toolCall.name} (${actionCategory}). ` +
+                 `Reason: ${decision.reason}. ` +
+                 `The user will be notified and can approve or deny this action.`;
+        }
+
+        const resolved = await this.approvalManager.waitForResolution(request.id, {
+          timeoutMs: APPROVAL_WAIT_TIMEOUT_MS,
+          signal,
+        });
+
+        switch (resolved.status) {
+          case 'approved':
+            // The approve endpoints skip execution for inline requests; we
+            // are the single executor. executeApproved handles markExecuted,
+            // audit, and approval learning.
+            return await this.deferredExecutor!.executeApproved(request.id);
+          case 'executed':
+            // Another path already ran it (shouldn't happen for inline
+            // requests; tolerated for robustness). Surface its result.
+            return resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`;
+          case 'denied':
+            return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
+                   `Do not retry the action. Briefly tell the user it was not performed.`;
+          case 'expired':
+            return `[APPROVAL EXPIRED] The approval request for ${toolCall.name} expired before the user decided. ` +
+                   `Ask the user whether they still want this done.`;
+          case 'pending':
+          default: {
+            // Timed out waiting (or the task was cancelled mid-wait). Hand
+            // the request to the deferred path so a late click still
+            // executes it. demoteToDeferred only succeeds while the request
+            // is still pending, so it cannot race an approve into a double
+            // execution: if the user approved in the meantime, the demotion
+            // fails and we execute inline after all.
+            if (!this.approvalManager.demoteToDeferred(request.id)) {
+              const recheck = this.approvalManager.getRequest(request.id);
+              if (recheck?.status === 'approved') {
+                return await this.deferredExecutor!.executeApproved(request.id);
+              }
+              if (recheck?.status === 'executed') {
+                return recheck.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`;
+              }
+              if (recheck?.status === 'denied') {
+                return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
+                       `Do not retry the action. Briefly tell the user it was not performed.`;
+              }
+            }
+            return `[AWAITING_APPROVAL] Request #${request.id.slice(0, 8)} submitted. ` +
+                   `Action: ${toolCall.name} (${actionCategory}). ` +
+                   `Reason: ${decision.reason}. ` +
+                   `The user has not responded yet. They can still approve or deny it later; ` +
+                   `if approved later, it will be executed and the user will be notified.`;
+          }
+        }
       }
     }
 

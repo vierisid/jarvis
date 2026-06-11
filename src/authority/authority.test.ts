@@ -3,6 +3,8 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { AuthorityEngine, type AuthorityConfig } from './engine.ts';
 import { ApprovalManager } from './approval.ts';
 import { AuditTrail } from './audit.ts';
+import { DeferredExecutor } from './deferred-executor.ts';
+import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityLearner } from './learning.ts';
 import { EmergencyController } from './emergency.ts';
 import { getActionForTool } from './tool-action-map.ts';
@@ -386,6 +388,56 @@ describe('ApprovalManager', () => {
     expect(found!.id).toBe(req.id);
   });
 
+  test('execution_mode defaults to deferred and persists when set inline', () => {
+    const mgr = new ApprovalManager();
+    const deferred = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'send_email',
+      toolArguments: {}, actionCategory: 'send_email',
+      urgency: 'normal', reason: 'test', context: '',
+    });
+    expect(deferred.execution_mode).toBe('deferred');
+    expect(mgr.getRequest(deferred.id)!.execution_mode).toBe('deferred');
+
+    const inline = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_workflow',
+      toolArguments: {}, actionCategory: 'modify_settings',
+      urgency: 'normal', reason: 'test', context: '',
+      executionMode: 'inline',
+    });
+    expect(inline.execution_mode).toBe('inline');
+    expect(mgr.getRequest(inline.id)!.execution_mode).toBe('inline');
+  });
+
+  test('demoteToDeferred succeeds only while pending', () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_workflow',
+      toolArguments: {}, actionCategory: 'modify_settings',
+      urgency: 'normal', reason: 'test', context: '',
+      executionMode: 'inline',
+    });
+
+    expect(mgr.demoteToDeferred(req.id)).toBe(true);
+    expect(mgr.getRequest(req.id)!.execution_mode).toBe('deferred');
+
+    // Already deferred — nothing to demote.
+    expect(mgr.demoteToDeferred(req.id)).toBe(false);
+  });
+
+  test('demoteToDeferred fails after approval (inline gate keeps execution)', () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_workflow',
+      toolArguments: {}, actionCategory: 'modify_settings',
+      urgency: 'normal', reason: 'test', context: '',
+      executionMode: 'inline',
+    });
+
+    mgr.approve(req.id, 'dashboard');
+    expect(mgr.demoteToDeferred(req.id)).toBe(false);
+    expect(mgr.getRequest(req.id)!.execution_mode).toBe('inline');
+  });
+
   test('markExecuted updates fields', () => {
     const mgr = new ApprovalManager();
     const req = mgr.createRequest({
@@ -399,6 +451,87 @@ describe('ApprovalManager', () => {
     const updated = mgr.getRequest(req.id);
     expect(updated!.status).toBe('executed');
     expect(updated!.execution_result).toBe('Email sent successfully');
+  });
+
+  test('inline flow: gate waits, approve flips status, executor runs tool once', async () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_workflow',
+      toolArguments: { action: 'create' }, actionCategory: 'modify_settings',
+      urgency: 'normal', reason: 'test', context: '',
+      executionMode: 'inline',
+    });
+
+    let executions = 0;
+    const registry = {
+      execute: async () => { executions++; return '{"ok":true}'; },
+    } as unknown as ToolRegistry;
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executor.setToolRegistry(registry);
+
+    // Simulate the blocked authority gate: wait, then execute on approval.
+    const gate = (async () => {
+      const resolved = await mgr.waitForResolution(req.id, { timeoutMs: 5000, pollMs: 10 });
+      expect(resolved.status).toBe('approved');
+      return executor.executeApproved(req.id);
+    })();
+
+    // Simulate the approve endpoint: flip status, skip execution (inline).
+    const approved = mgr.approve(req.id, 'dashboard');
+    expect(approved!.execution_mode).toBe('inline');
+
+    const result = await gate;
+    expect(result).toBe('{"ok":true}');
+    expect(executions).toBe(1);
+    expect(mgr.getRequest(req.id)!.status).toBe('executed');
+  });
+
+  test('executeApproved refuses to run while system is paused', async () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'send_email',
+      toolArguments: {}, actionCategory: 'send_email',
+      urgency: 'normal', reason: 'test', context: '',
+    });
+    mgr.approve(req.id, 'dashboard');
+
+    let executions = 0;
+    const registry = {
+      execute: async () => { executions++; return 'sent'; },
+    } as unknown as ToolRegistry;
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executor.setToolRegistry(registry);
+    const emergency = new EmergencyController();
+    executor.setEmergencyController(emergency);
+    emergency.pause();
+
+    const result = await executor.executeApproved(req.id);
+    expect(result).toContain('[SYSTEM PAUSED]');
+    expect(result).toContain('NOT executed');
+    expect(executions).toBe(0);
+    // Request is closed out, not left as an approved zombie.
+    expect(mgr.getRequest(req.id)!.status).toBe('executed');
+  });
+
+  test('waitForResolution returns early when the signal aborts', async () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_workflow',
+      toolArguments: {}, actionCategory: 'modify_settings',
+      urgency: 'normal', reason: 'test', context: '',
+      executionMode: 'inline',
+    });
+
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 30);
+    const start = Date.now();
+    const resolved = await mgr.waitForResolution(req.id, {
+      timeoutMs: 10_000,
+      pollMs: 10,
+      signal: ctrl.signal,
+    });
+    expect(resolved.status).toBe('pending');
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   test('expireOld expires old pending requests', () => {

@@ -2255,8 +2255,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // the originating `request_approval` tool call is blocked waiting for
         // the DB status to flip (via waitForResolution polling). Skipping
         // executeApproved avoids a recursive call into the tool registry.
+        // Inline-mode requests are likewise executed by the authority gate
+        // that is blocked on this status flip, so the result flows back to
+        // the conversation — executing here would run the tool twice.
         let result = '';
-        if (approved.tool_name !== 'request_approval') {
+        if (approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
           result = await ctx.deferredExecutor.executeApproved(requestId);
         }
 

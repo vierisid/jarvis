@@ -6,6 +6,7 @@ import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from './approval.ts';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
+import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
@@ -15,6 +16,7 @@ export class DeferredExecutor {
   private approvalManager: ApprovalManager;
   private auditTrail: AuditTrail;
   private learner: AuthorityLearner | null = null;
+  private emergencyController: EmergencyController | null = null;
   private onResult: ExecutionResultCallback | null = null;
 
   constructor(approvalManager: ApprovalManager, auditTrail: AuditTrail) {
@@ -28,6 +30,10 @@ export class DeferredExecutor {
 
   setLearner(learner: AuthorityLearner): void {
     this.learner = learner;
+  }
+
+  setEmergencyController(controller: EmergencyController): void {
+    this.emergencyController = controller;
   }
 
   setResultCallback(cb: ExecutionResultCallback): void {
@@ -45,6 +51,17 @@ export class DeferredExecutor {
 
     if (!this.toolRegistry) {
       return 'Error: No tool registry configured';
+    }
+
+    // Emergency gate: an approval clicked while the system is paused/killed
+    // must not execute. Close the request out (mirroring the error path)
+    // so it doesn't linger as an approved-but-never-executed zombie.
+    if (this.emergencyController && !this.emergencyController.canExecute()) {
+      const state = this.emergencyController.getState();
+      const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
+      this.approvalManager.markExecuted(requestId, blocked);
+      this.onResult?.(requestId, request, blocked);
+      return blocked;
     }
 
     const startTime = Date.now();

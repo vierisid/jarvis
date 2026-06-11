@@ -1895,8 +1895,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             executed: false,
             channel: 'voice',
           });
-          // Same skip-on-intent-only path as the REST endpoint.
-          if (this.deferredExecutor && approved.tool_name !== 'request_approval') {
+          // Same skip-on-intent-only and skip-on-inline path as the REST
+          // endpoint: inline requests are executed by the blocked gate.
+          if (this.deferredExecutor && approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
             try {
               await this.deferredExecutor.executeApproved(latest.id);
             } catch (err) {

@@ -10,6 +10,17 @@ import type { ActionCategory } from '../roles/authority.ts';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'executed';
 export type ApprovalUrgency = 'urgent' | 'normal';
 
+/**
+ * How an approved request gets executed:
+ *  - 'inline': the authority gate that created it is blocked on
+ *    waitForResolution and executes the tool itself, so the result flows
+ *    back through the task envelope to the conversation tier. Resolution
+ *    endpoints must only flip the status, never execute.
+ *  - 'deferred': nobody is waiting; whichever endpoint approves it runs
+ *    the tool via DeferredExecutor (the legacy fire-and-forget path).
+ */
+export type ApprovalExecutionMode = 'inline' | 'deferred';
+
 export type ApprovalRequest = {
   id: string;
   agent_id: string;
@@ -21,6 +32,7 @@ export type ApprovalRequest = {
   reason: string;
   context: string;
   status: ApprovalStatus;
+  execution_mode: ApprovalExecutionMode;
   decided_at: number | null;
   decided_by: string | null;
   executed_at: number | null;
@@ -41,16 +53,18 @@ export class ApprovalManager {
     urgency: ApprovalUrgency;
     reason: string;
     context: string;
+    executionMode?: ApprovalExecutionMode;
   }): ApprovalRequest {
     const db = getDb();
     const id = generateId();
     const now = Date.now();
     const toolArgs = JSON.stringify(params.toolArguments);
+    const executionMode = params.executionMode ?? 'deferred';
 
     db.run(
-      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, now]
+      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now]
     );
 
     return {
@@ -64,6 +78,7 @@ export class ApprovalManager {
       reason: params.reason,
       context: params.context,
       status: 'pending',
+      execution_mode: executionMode,
       decided_at: null,
       decided_by: null,
       executed_at: null,
@@ -121,6 +136,39 @@ export class ApprovalManager {
 
     if (result.changes === 0) return null;
     return this.getRequest(requestId);
+  }
+
+  /**
+   * Hand an inline request over to the deferred path (used when the
+   * blocked authority gate times out waiting for the user). Conditional
+   * on the request still being pending+inline so it cannot race the
+   * approve endpoints into a double execution: if the user approved
+   * first, this returns false and the (still-blocked) gate executes;
+   * if the demotion lands first, the approve endpoints see 'deferred'
+   * and execute via DeferredExecutor as before.
+   */
+  demoteToDeferred(requestId: string): boolean {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests SET execution_mode = 'deferred' WHERE id = ? AND status = 'pending' AND execution_mode = 'inline'`,
+      [requestId]
+    );
+    return result.changes > 0;
+  }
+
+  /**
+   * Startup sweep: demote ALL pending inline requests to deferred. An
+   * inline request only makes sense while the authority gate that created
+   * it is blocked waiting on it; after a daemon restart no such gate
+   * exists, so approving one would flip the status without anything
+   * executing the tool. Returns the number of demoted requests.
+   */
+  demoteAllPendingInline(): number {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests SET execution_mode = 'deferred' WHERE status = 'pending' AND execution_mode = 'inline'`
+    );
+    return result.changes;
   }
 
   /**
@@ -196,17 +244,19 @@ export class ApprovalManager {
 
   /**
    * Block until a pending request resolves (approved / denied / expired / executed),
-   * or until the timeout fires — whichever comes first. Polling-based so it stays
-   * robust across the approve/deny paths (REST endpoint, channel handler, etc.)
-   * without needing to instrument every resolution site with event emission.
+   * or until the timeout fires or the optional signal aborts — whichever comes
+   * first. Polling-based so it stays robust across the approve/deny paths
+   * (REST endpoint, channel handler, etc.) without needing to instrument every
+   * resolution site with event emission.
    *
    * Returns the latest request state. If the request is missing, throws.
-   * If the timeout fires, returns the still-pending request — callers should
-   * treat `status === 'pending'` as a timeout and respond accordingly.
+   * If the timeout fires or the signal aborts, returns the still-pending
+   * request — callers should treat `status === 'pending'` as a timeout/abort
+   * and respond accordingly.
    */
   async waitForResolution(
     requestId: string,
-    opts: { timeoutMs?: number; pollMs?: number } = {},
+    opts: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {},
   ): Promise<ApprovalRequest> {
     const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min default
     const pollMs = opts.pollMs ?? 250;
@@ -217,6 +267,7 @@ export class ApprovalManager {
       if (!current) throw new Error(`Approval request ${requestId} not found`);
       if (current.status !== 'pending') return current;
 
+      if (opts.signal?.aborted) return current;
       if (Date.now() - start >= timeoutMs) return current;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
