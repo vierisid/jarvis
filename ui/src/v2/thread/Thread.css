@@ -11,6 +11,10 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Keep scroll momentum contained to the thread so reaching the top/bottom
+     (or scrolling a nested scrollable inside a message) doesn't chain out to
+     the page. */
+  overscroll-behavior: contain;
   scroll-behavior: smooth;
 }
 

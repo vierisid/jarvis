@@ -83,6 +83,9 @@
   border: var(--hair);
   border-radius: var(--r-2);
   overflow-x: auto;
+  /* Contain horizontal scroll so dragging a wide code block to its edge
+     doesn't bleed the scroll into the thread/page. */
+  overscroll-behavior: contain;
   font-family: var(--font-mono);
   font-size: 0.88em;
   line-height: 1.5;
