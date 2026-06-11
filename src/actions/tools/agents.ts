@@ -12,7 +12,7 @@ import type { AgentOrchestrator } from '../../agents/orchestrator.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition } from './registry.ts';
-import type { AgentTaskManager } from '../../agents/task-manager.ts';
+import type { AgentTaskManager, AsyncTask } from '../../agents/task-manager.ts';
 import { createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 
 export type AgentToolDeps = {
@@ -21,6 +21,9 @@ export type AgentToolDeps = {
   specialists: Map<string, RoleDefinition>;
   taskManager: AgentTaskManager;
   onProgress?: ProgressCallback;
+  /** Fires when an assigned task settles -- success OR failure (the
+   *  'done' progress event only fires on the success path). */
+  onTaskComplete?: (task: AsyncTask) => void;
 };
 
 export class HttpError extends Error {
@@ -113,6 +116,7 @@ export async function assignPersistentAgentTask(
     llmManager: deps.llmManager,
     toolRegistry: scopedRegistry,
     onProgress: deps.onProgress,
+    onComplete: deps.onTaskComplete,
   });
 
   console.log(`[ManageAgents] Assigned task ${taskId} to ${agent.agent.role.name}`);

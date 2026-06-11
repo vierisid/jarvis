@@ -6,9 +6,22 @@ const POLL_INTERVAL_MS = 5000;
 export interface AgentTaskResult {
   success: boolean;
   response: string;
+  /** True when the list payload capped `response`; the full text is at
+   *  GET /api/agents/tasks/:id (see useFullTaskResponse). */
+  response_truncated?: boolean;
   tools_used: string[];
   termination_reason: string;
 }
+
+export type LiveAgentTask = {
+  id: string;
+  status: string;
+  task: string;
+  started_at: number;
+  completed_at: number | null;
+  /** The sub-agent's final answer — present once the task finished. */
+  result?: AgentTaskResult | null;
+};
 
 export interface LiveAgentInfo {
   id: string;
@@ -17,15 +30,42 @@ export interface LiveAgentInfo {
   current_task: string | null;
   created_at: number;
   busy?: boolean;
-  latest_task?: {
-    id: string;
-    status: string;
-    task: string;
-    started_at: number;
-    completed_at: number | null;
-    /** The sub-agent's final answer — present once the task finished. */
-    result?: AgentTaskResult | null;
-  } | null;
+  latest_task?: LiveAgentTask | null;
+}
+
+/**
+ * Lazily fetch a task's full result text. The roster poll caps long
+ * responses (`response_truncated`); when `active` flips true (the user
+ * expanded the result), this pulls the untruncated text from
+ * /api/agents/tasks/:id. Returns null until then — callers fall back
+ * to the truncated preview.
+ */
+export function useFullTaskResponse(
+  task: LiveAgentTask | null | undefined,
+  active: boolean,
+): string | null {
+  const [full, setFull] = useState<string | null>(null);
+  const taskId = task?.id ?? null;
+  const truncated = task?.result?.response_truncated === true;
+
+  useEffect(() => {
+    setFull(null);
+    if (!taskId || !truncated || !active) return;
+    let cancelled = false;
+    fetch(`/api/agents/tasks/${taskId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && typeof d?.result?.response === "string") {
+          setFull(d.result.response);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, truncated, active]);
+
+  return full;
 }
 
 export interface SpecialistInfo {

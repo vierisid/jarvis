@@ -25,6 +25,7 @@ import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import {
   useAgentsData,
+  useFullTaskResponse,
   type AgentRosterEntry,
   type SpecialistInfo,
 } from "./useAgentsData";
@@ -345,6 +346,10 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
   // this is where the user actually reads what the sub-agent produced.
   const finishedResult =
     !agent.live?.busy && latestTask?.result ? latestTask.result : null;
+  // The roster poll caps long responses; fetch the full text only once
+  // the user actually expands the result.
+  const [resultOpen, setResultOpen] = useState(false);
+  const fullResponse = useFullTaskResponse(latestTask, resultOpen);
 
   let statusLabel: string;
   let statusTone: "ok" | "warn" | "neutral" | "accent";
@@ -383,7 +388,10 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
         </Chip>
       </div>
       {finishedResult && (
-        <details className="v2-agents__card-result">
+        <details
+          className="v2-agents__card-result"
+          onToggle={(e) => setResultOpen((e.target as HTMLDetailsElement).open)}
+        >
           <summary className="v2-agents__card-result-summary">
             <Chip tone={finishedResult.success ? "ok" : "warn"} dot>
               {finishedResult.success ? "Result ready" : "Task failed"}
@@ -395,7 +403,7 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
             </span>
           </summary>
           <div className="v2-agents__card-result-body">
-            {finishedResult.response}
+            {fullResponse ?? finishedResult.response}
           </div>
         </details>
       )}
@@ -441,6 +449,15 @@ function Orbital({
   const selected = selectedRoleId
     ? roster.find((a) => a.roleId === selectedRoleId) ?? null
     : null;
+  // The detail panel shows the result as soon as an agent is selected,
+  // so fetch the full text right away when the poll truncated it.
+  const selectedResultShown = Boolean(
+    selected && !selected.live?.busy && selected.live?.latest_task?.result,
+  );
+  const selectedFullResponse = useFullTaskResponse(
+    selected?.live?.latest_task,
+    selectedResultShown,
+  );
 
   // Ticker: most recent 20 events. Duplicated for seamless loop scroll.
   const tickerEvents = liveActivity.slice(0, 20);
@@ -523,7 +540,7 @@ function Orbital({
                     ? "Latest result"
                     : "Latest task failed"}
                 </div>
-                {selected.live.latest_task.result.response}
+                {selectedFullResponse ?? selected.live.latest_task.result.response}
               </div>
             )}
             <div className="v2-agents__orbital-detail-meta">
