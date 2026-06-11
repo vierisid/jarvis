@@ -3,15 +3,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"time"
 )
 
 func platformClipboardRead() (string, error) {
@@ -32,48 +27,40 @@ func platformDefaultShell() string {
 	return "sh"
 }
 
-func launchChromeIfNeeded(cfg *SidecarConfig) {
-	port := cfg.Browser.CDPPort
-	if port == 0 {
-		port = 9222
+// findChromiumExecutable locates a Chromium-based browser to drive: the
+// configured override, else the first known install under /Applications, else
+// a PATH fallback (e.g. a Homebrew chromium).
+func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
+	if p := cfg.Browser.ExecutablePath; p != "" {
+		if isExecutableFile(p) {
+			return p, nil
+		}
+		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
 
-	// Check if Chrome is already listening
-	url := fmt.Sprintf("http://localhost:%d/json/version", port)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
-		return
-	}
-
-	chromePaths := []string{
+	candidates := []string{
 		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"google-chrome",
-		"chromium",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		"/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
 	}
-
-	profileDir := cfg.Browser.ProfileDir
-	if profileDir == "" {
-		profileDir = filepath.Join(os.TempDir(), "jarvis-chrome-profile")
-	}
-
-	for _, chromePath := range chromePaths {
-		cmd := exec.Command(chromePath,
-			fmt.Sprintf("--remote-debugging-port=%d", port),
-			fmt.Sprintf("--user-data-dir=%s", profileDir),
-			"--no-first-run",
-			"about:blank",
-		)
-		if err := cmd.Start(); err == nil {
-			log.Printf("[browser] Launched Chrome with CDP on port %d", port)
-			time.Sleep(2 * time.Second)
-			return
+	for _, c := range candidates {
+		if isExecutableFile(c) {
+			return c, nil
 		}
 	}
+	for _, c := range []string{"google-chrome", "chromium"} {
+		if path, err := exec.LookPath(c); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge or Brave)")
+}
 
-	log.Printf("[browser] Could not launch Chrome — browser tools may not work")
+func isExecutableFile(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }
 
 func platformGetActiveWindow() (appName string, windowTitle string) {

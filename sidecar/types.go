@@ -136,8 +136,17 @@ type FilesystemConfig struct {
 }
 
 type BrowserConfig struct {
-	CDPPort    int    `yaml:"cdp_port"`
+	// ExecutablePath optionally pins the Chromium-based browser to drive. When
+	// empty the sidecar auto-detects one (the OS default browser if it is
+	// Chromium-based, otherwise a known install: Chrome, Edge, Brave, ...).
+	ExecutablePath string `yaml:"executable_path"`
+	// ProfileDir is the dedicated user-data dir for Jarvis's automation browser
+	// (kept separate from the user's own profile). Defaults to a temp dir.
 	ProfileDir string `yaml:"profile_dir"`
+	// CDPPort is retained for backward-compatible config files but is no longer
+	// used: the sidecar drives the browser over an inherited CDP pipe
+	// (--remote-debugging-pipe), not a TCP port.
+	CDPPort int `yaml:"cdp_port"`
 }
 
 // RPCResult is returned by handlers.

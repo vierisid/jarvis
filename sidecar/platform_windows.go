@@ -5,11 +5,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 func platformClipboardRead() (string, error) {
@@ -41,50 +43,109 @@ func platformDefaultShell() string {
 	return "cmd.exe"
 }
 
-// launchChromeIfNeeded starts Chrome with remote debugging if not already running.
-func launchChromeIfNeeded(cfg *SidecarConfig) {
-	port := cfg.Browser.CDPPort
-	if port == 0 {
-		port = 9222
+// findChromiumExecutable locates a Chromium-based browser to drive: the
+// configured override, else the OS default browser if it is Chromium-based,
+// else the first known install (Chrome, Edge -- always present on Win10/11 --
+// Brave, ...).
+func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
+	if p := cfg.Browser.ExecutablePath; p != "" {
+		if isExecutableFile(p) {
+			return p, nil
+		}
+		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
 
-	// Check if Chrome is already listening
-	url := fmt.Sprintf("http://localhost:%d/json/version", port)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
-		return // Already running
+	var candidates []string
+	if def := windowsDefaultBrowserExe(); def != "" {
+		candidates = append(candidates, def)
 	}
-
-	// Try to launch Chrome with debugging port
-	chromePaths := []string{
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-	}
-
-	profileDir := cfg.Browser.ProfileDir
-	if profileDir == "" {
-		profileDir = fmt.Sprintf(`%%TEMP%%\jarvis-chrome-profile`)
-	}
-
-	for _, chromePath := range chromePaths {
-		cmd := exec.Command(chromePath,
-			fmt.Sprintf("--remote-debugging-port=%d", port),
-			fmt.Sprintf("--user-data-dir=%s", profileDir),
-			"--no-first-run",
-			"about:blank",
-		)
-		hideSubprocessWindow(cmd)
-		if err := cmd.Start(); err == nil {
-			log.Printf("[browser] Launched Chrome with CDP on port %d", port)
-			time.Sleep(2 * time.Second) // Give Chrome time to start
-			return
+	candidates = append(candidates, windowsChromiumCandidates()...)
+	for _, c := range candidates {
+		if isExecutableFile(c) {
+			return c, nil
 		}
 	}
+	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Edge or Brave)")
+}
 
-	log.Printf("[browser] Could not launch Chrome — browser tools may not work")
+func isExecutableFile(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+// windowsChromiumCandidates lists known install locations across the per-machine
+// and per-user program directories.
+func windowsChromiumCandidates() []string {
+	rel := []string{
+		`Google\Chrome\Application\chrome.exe`,
+		`Microsoft\Edge\Application\msedge.exe`,
+		`BraveSoftware\Brave-Browser\Application\brave.exe`,
+		`Vivaldi\Application\vivaldi.exe`,
+		`Chromium\Application\chrome.exe`,
+	}
+	var out []string
+	for _, base := range []string{
+		os.Getenv("ProgramFiles"),
+		os.Getenv("ProgramFiles(x86)"),
+		os.Getenv("LocalAppData"),
+	} {
+		if base == "" {
+			continue
+		}
+		for _, r := range rel {
+			out = append(out, filepath.Join(base, r))
+		}
+	}
+	return out
+}
+
+// windowsDefaultBrowserExe resolves the user's default https handler to an
+// executable path, returning it only if it is a recognised Chromium browser.
+func windowsDefaultBrowserExe() string {
+	k, err := registry.OpenKey(registry.CURRENT_USER,
+		`Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice`,
+		registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	progID, _, err := k.GetStringValue("ProgId")
+	if err != nil || progID == "" {
+		return ""
+	}
+
+	cmdKey, err := registry.OpenKey(registry.CLASSES_ROOT, progID+`\shell\open\command`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer cmdKey.Close()
+	cmd, _, err := cmdKey.GetStringValue("")
+	if err != nil || cmd == "" {
+		return ""
+	}
+
+	exe := exeFromShellCommand(cmd)
+	switch strings.ToLower(filepath.Base(exe)) {
+	case "chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "chromium.exe":
+		return exe
+	}
+	return ""
+}
+
+// exeFromShellCommand pulls the executable path out of a registry shell\open
+// command string such as `"C:\...\chrome.exe" -- "%1"`.
+func exeFromShellCommand(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, `"`) {
+		if end := strings.IndexByte(cmd[1:], '"'); end >= 0 {
+			return cmd[1 : 1+end]
+		}
+		return ""
+	}
+	if sp := strings.IndexByte(cmd, ' '); sp >= 0 {
+		return cmd[:sp]
+	}
+	return cmd
 }
 
 func platformGetActiveWindow() (appName string, windowTitle string) {

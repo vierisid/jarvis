@@ -551,13 +551,18 @@ function formatSnapshot(snap: PageSnapshot): string {
 
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
-  description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser.',
+  description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
   category: 'browser',
   parameters: {
     url: {
       type: 'string',
       description: 'The URL to navigate to',
       required: true,
+    },
+    headless: {
+      type: 'boolean',
+      description: 'Run the browser hidden in the background instead of opening a visible window the user can see and interact with. Default false (visible). The mode is set when the browser launches; switching it while a browser is already open relaunches it.',
+      required: false,
     },
     target: {
       type: 'string',
@@ -568,7 +573,7 @@ export const browserNavigateTool: ToolDefinition = {
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
-      return routeToSidecar(target, 'browser_navigate', { url: params.url }, 'browser');
+      return routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
     }
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {

@@ -1,164 +1,270 @@
 package main
 
 import (
-	"context"
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"nhooyr.io/websocket"
 )
 
-// ── CDP Client ───────────────────────────────────────────────────────
+// ── CDP over an inherited pipe ────────────────────────────────────────
+//
+// Instead of opening a localhost debugging *port* (which any local process /
+// page could connect to), the sidecar launches the browser with
+// `--remote-debugging-pipe` and speaks the Chrome DevTools Protocol over a pair
+// of inherited file descriptors: the browser reads commands on fd 3 and writes
+// responses/events on fd 4. Messages are NUL-delimited JSON. Because the
+// connection is browser-level (not bound to one page), we attach to a page
+// target up front and tag page-scoped commands with its flat-mode sessionId.
+//
+// The OS-specific plumbing that wires fd 3/4 lives in startBrowserPipe
+// (browser_pipe_unix.go / browser_pipe_windows.go); everything below is shared.
 
-// cdpClient manages a Chrome DevTools Protocol connection.
+// browserProc is a launched browser whose CDP pipe we own.
+type browserProc struct {
+	write io.WriteCloser // commands we write  -> browser fd 3
+	read  io.ReadCloser  // responses we read  <- browser fd 4
+	kill  func()         // terminate the browser process
+}
+
+// cdpClient manages a Chrome DevTools Protocol connection over the pipe.
 type cdpClient struct {
-	mu      sync.Mutex
-	conn    *websocket.Conn
-	port    int
+	mu        sync.Mutex // serializes writes to the pipe
+	proc      *browserProc
+	sessionID string // flat-mode session for the attached page target
+	headless  bool   // visibility mode the browser was launched in
+
 	msgID   atomic.Int64
-	pending map[int64]chan json.RawMessage
+	pending map[int64]chan cdpReply
 	pendMu  sync.Mutex
+	closed  atomic.Bool
+}
+
+type cdpReply struct {
+	result json.RawMessage
+	errMsg json.RawMessage
 }
 
 var activeCDP struct {
-	mu     sync.Mutex
-	client *cdpClient
-	port   int
+	mu      sync.Mutex
+	client  *cdpClient
+	healthy bool
 }
 
-func getCDP(cfg *SidecarConfig) (*cdpClient, error) {
+// getCDP returns the live browser CDP client, launching the browser lazily on
+// first use. A running browser is reused; but when the caller *explicitly*
+// requests the other visibility mode (explicit==true and headless differs), the
+// current browser is torn down and relaunched so the option takes effect. When
+// headless is not specified (explicit==false) the running browser is kept as-is
+// to avoid thrashing on every call.
+func getCDP(cfg *SidecarConfig, headless, explicit bool) (*cdpClient, error) {
 	activeCDP.mu.Lock()
 	defer activeCDP.mu.Unlock()
 
-	port := cfg.Browser.CDPPort
-	if port == 0 {
-		port = 9222
+	if c := activeCDP.client; c != nil && !c.closed.Load() {
+		if explicit && c.headless != headless {
+			activeCDP.client = nil
+			c.shutdown()
+		} else {
+			return c, nil
+		}
 	}
 
-	if activeCDP.client != nil && activeCDP.port == port {
-		return activeCDP.client, nil
+	client, err := launchCDP(cfg, headless)
+	if err != nil {
+		return nil, err
 	}
+	activeCDP.client = client
+	return client, nil
+}
 
-	client, err := newCDPClient(port)
+// chromiumLaunchArgs builds the command-line flags for the automation browser.
+func chromiumLaunchArgs(profileDir string, headless bool) []string {
+	args := []string{
+		"--remote-debugging-pipe",
+		"--user-data-dir=" + profileDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-features=Translate",
+	}
+	if headless {
+		args = append(args, "--headless=new", "--hide-scrollbars")
+	}
+	args = append(args, "about:blank")
+	return args
+}
+
+// launchCDP finds a Chromium-based browser, starts it with the CDP pipe, and
+// attaches to a page target.
+func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
+	exe, err := findChromiumExecutable(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	activeCDP.client = client
-	activeCDP.port = port
-	return client, nil
-}
+	profileDir := cfg.Browser.ProfileDir
+	if profileDir == "" {
+		profileDir = filepath.Join(os.TempDir(), "jarvis-chrome-profile")
+	}
 
-func newCDPClient(port int) (*cdpClient, error) {
-	// Get the first page's WebSocket URL from Chrome's /json endpoint
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	url := fmt.Sprintf("http://localhost:%d/json", port)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	resp, err := http.DefaultClient.Do(req)
+	proc, err := startBrowserPipe(exe, chromiumLaunchArgs(profileDir, headless))
 	if err != nil {
-		return nil, fmt.Errorf("Chrome not running on port %d — launch Chrome with --remote-debugging-port=%d: %w", port, port, err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var targets []struct {
-		WebSocketDebuggerUrl string `json:"webSocketDebuggerUrl"`
-		Type                 string `json:"type"`
-	}
-	if err := json.Unmarshal(body, &targets); err != nil {
-		return nil, fmt.Errorf("parse CDP targets: %w", err)
+		return nil, fmt.Errorf("launch browser %q: %w", exe, err)
 	}
 
-	wsURL := ""
-	for _, t := range targets {
-		if t.Type == "page" && t.WebSocketDebuggerUrl != "" {
-			wsURL = t.WebSocketDebuggerUrl
-			break
-		}
+	mode := "headed"
+	if headless {
+		mode = "headless"
 	}
-	if wsURL == "" {
-		return nil, fmt.Errorf("no CDP page target found on port %d", port)
-	}
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("CDP WebSocket dial: %w", err)
-	}
-	conn.SetReadLimit(50 * 1024 * 1024)
+	log.Printf("[browser] launched %s (%s) with CDP pipe", filepath.Base(exe), mode)
 
 	c := &cdpClient{
-		conn:    conn,
-		port:    port,
-		pending: make(map[int64]chan json.RawMessage),
+		proc:     proc,
+		headless: headless,
+		pending:  make(map[int64]chan cdpReply),
 	}
+	go c.readLoop(proc.read)
 
-	// Start read loop
-	go c.readLoop()
-
+	if err := c.attachToPage(); err != nil {
+		c.shutdown()
+		return nil, fmt.Errorf("attach to page: %w", err)
+	}
 	return c, nil
 }
 
-func (c *cdpClient) readLoop() {
+// attachToPage finds (or creates) a page target and stores its flat session id.
+func (c *cdpClient) attachToPage() error {
+	targetID := ""
+	// The about:blank window the browser opens at launch may not register as a
+	// target for a beat; poll briefly before falling back to creating one.
+	deadline := time.Now().Add(3 * time.Second)
 	for {
-		_, data, err := c.conn.Read(context.Background())
+		raw, err := c.sendOn("", "Target.getTargets", nil)
 		if err != nil {
-			c.close()
-			return
+			return err
 		}
-		var msg struct {
-			ID     int64           `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error  json.RawMessage `json:"error"`
+		var res struct {
+			TargetInfos []struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+			} `json:"targetInfos"`
 		}
-		if json.Unmarshal(data, &msg) != nil {
-			continue
-		}
-		if msg.ID == 0 {
-			continue // event, ignore
-		}
-
-		c.pendMu.Lock()
-		ch, ok := c.pending[msg.ID]
-		if ok {
-			delete(c.pending, msg.ID)
-		}
-		c.pendMu.Unlock()
-
-		if ok {
-			if msg.Error != nil {
-				ch <- msg.Error
-			} else {
-				ch <- msg.Result
+		json.Unmarshal(raw, &res)
+		for _, t := range res.TargetInfos {
+			if t.Type == "page" {
+				targetID = t.TargetID
+				break
 			}
+		}
+		if targetID != "" || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if targetID == "" {
+		raw, err := c.sendOn("", "Target.createTarget", map[string]any{"url": "about:blank"})
+		if err != nil {
+			return err
+		}
+		var res struct {
+			TargetID string `json:"targetId"`
+		}
+		json.Unmarshal(raw, &res)
+		targetID = res.TargetID
+	}
+	if targetID == "" {
+		return fmt.Errorf("no page target available")
+	}
+
+	raw, err := c.sendOn("", "Target.attachToTarget", map[string]any{
+		"targetId": targetID,
+		"flatten":  true,
+	})
+	if err != nil {
+		return err
+	}
+	var att struct {
+		SessionID string `json:"sessionId"`
+	}
+	json.Unmarshal(raw, &att)
+	if att.SessionID == "" {
+		return fmt.Errorf("attach returned no sessionId")
+	}
+	c.sessionID = att.SessionID
+	return nil
+}
+
+// readLoop consumes NUL-delimited CDP messages and routes replies by id.
+func (c *cdpClient) readLoop(r io.Reader) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	for {
+		data, err := br.ReadBytes(0)
+		if len(data) > 1 {
+			if n := len(data); data[n-1] == 0 {
+				data = data[:n-1]
+			}
+			var msg struct {
+				ID     int64           `json:"id"`
+				Result json.RawMessage `json:"result"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal(data, &msg) == nil && msg.ID != 0 {
+				c.pendMu.Lock()
+				ch, ok := c.pending[msg.ID]
+				if ok {
+					delete(c.pending, msg.ID)
+				}
+				c.pendMu.Unlock()
+				if ok {
+					ch <- cdpReply{result: msg.Result, errMsg: msg.Error}
+				}
+			}
+			// id == 0 -> protocol event; ignored.
+		}
+		if err != nil {
+			c.fail()
+			return
 		}
 	}
 }
 
+// send issues a page-scoped command (tagged with the attached sessionId).
 func (c *cdpClient) send(method string, params map[string]any) (json.RawMessage, error) {
-	id := c.msgID.Add(1)
-	ch := make(chan json.RawMessage, 1)
+	return c.sendOn(c.sessionID, method, params)
+}
 
+// sendOn issues a command on a specific session ("" = browser-level).
+func (c *cdpClient) sendOn(sessionID, method string, params map[string]any) (json.RawMessage, error) {
+	if c.closed.Load() {
+		return nil, fmt.Errorf("browser connection closed")
+	}
+
+	id := c.msgID.Add(1)
+	ch := make(chan cdpReply, 1)
 	c.pendMu.Lock()
 	c.pending[id] = ch
 	c.pendMu.Unlock()
 
-	msg := map[string]any{
-		"id":     id,
-		"method": method,
-		"params": params,
+	msg := map[string]any{"id": id, "method": method}
+	if params != nil {
+		msg["params"] = params
 	}
-
+	if sessionID != "" {
+		msg["sessionId"] = sessionID
+	}
 	data, _ := json.Marshal(msg)
+	data = append(data, 0) // NUL terminator
+
 	c.mu.Lock()
-	err := c.conn.Write(context.Background(), websocket.MessageText, data)
+	_, err := c.proc.write.Write(data)
 	c.mu.Unlock()
 	if err != nil {
 		c.pendMu.Lock()
@@ -168,8 +274,11 @@ func (c *cdpClient) send(method string, params map[string]any) (json.RawMessage,
 	}
 
 	select {
-	case result := <-ch:
-		return result, nil
+	case reply := <-ch:
+		if reply.errMsg != nil {
+			return nil, fmt.Errorf("CDP %s: %s", method, string(reply.errMsg))
+		}
+		return reply.result, nil
 	case <-time.After(30 * time.Second):
 		c.pendMu.Lock()
 		delete(c.pending, id)
@@ -178,13 +287,60 @@ func (c *cdpClient) send(method string, params map[string]any) (json.RawMessage,
 	}
 }
 
-func (c *cdpClient) close() {
+// shutdown tears down the connection and the browser process. Idempotent. Does
+// NOT touch activeCDP, so it is safe to call while holding activeCDP.mu.
+func (c *cdpClient) shutdown() {
+	if c.closed.Swap(true) {
+		return
+	}
+	if c.proc != nil {
+		c.proc.write.Close()
+		c.proc.read.Close()
+		if c.proc.kill != nil {
+			c.proc.kill()
+		}
+	}
+}
+
+// fail is invoked when the pipe dies: it clears the cached client (so the next
+// browser tool call relaunches) and shuts the connection down.
+func (c *cdpClient) fail() {
 	activeCDP.mu.Lock()
 	if activeCDP.client == c {
 		activeCDP.client = nil
 	}
 	activeCDP.mu.Unlock()
-	c.conn.Close(websocket.StatusNormalClosure, "closing")
+	c.shutdown()
+}
+
+// closeActiveCDP closes the current browser (if any) and clears the cache so the
+// next browser tool call starts fresh — e.g. to switch visibility modes.
+func closeActiveCDP() {
+	activeCDP.mu.Lock()
+	c := activeCDP.client
+	activeCDP.client = nil
+	activeCDP.mu.Unlock()
+	if c != nil {
+		c.shutdown()
+	}
+}
+
+// headlessParam reads the optional headless flag from RPC params. explicit
+// reports whether the caller actually supplied it (vs. defaulting). Default
+// false -> the browser opens headed so the user can see and interact with it.
+func headlessParam(params map[string]any) (value bool, explicit bool) {
+	v, ok := params["headless"]
+	if !ok {
+		return false, false
+	}
+	b, _ := v.(bool)
+	return b, true
+}
+
+// getCDPForParams launches/reuses the browser honoring the call's headless flag.
+func getCDPForParams(cfg *SidecarConfig, params map[string]any) (*cdpClient, error) {
+	headless, explicit := headlessParam(params)
+	return getCDP(cfg, headless, explicit)
 }
 
 // ── Browser Handlers ─────────────────────────────────────────────────
@@ -196,7 +352,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("missing required parameter: url")
 		}
 
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +379,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 
 func makeBrowserSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -244,7 +400,7 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("missing required parameter: element_id")
 		}
 
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +437,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		elemID, hasElem := params["element_id"].(float64)
 		submit, _ := params["submit"].(bool)
 
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +495,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 
 func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +534,7 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 			amount = 3
 		}
 
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -408,7 +564,7 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("missing required parameter: expression")
 		}
 
-		cdp, err := getCDP(cfg)
+		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
@@ -422,6 +578,13 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		return &RPCResult{Result: map[string]any{"result": json.RawMessage(result)}}, nil
+	}
+}
+
+func makeBrowserCloseHandler(cfg *SidecarConfig) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		closeActiveCDP()
+		return &RPCResult{Result: map[string]any{"closed": true}}, nil
 	}
 }
 

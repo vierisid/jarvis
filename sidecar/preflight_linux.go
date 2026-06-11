@@ -54,12 +54,10 @@ func checkAwareness() string {
 }
 
 func checkBrowser(cfg *SidecarConfig) string {
-	for _, bin := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
-		if _, err := exec.LookPath(bin); err == nil {
-			return ""
-		}
+	if _, err := findChromiumExecutable(cfg); err != nil {
+		return err.Error()
 	}
-	return "no Chrome/Chromium browser found"
+	return ""
 }
 
 func checkDesktop() string {

@@ -59,7 +59,8 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["find_element"] = handleFindElement
 	}
 	if caps[CapBrowser] {
-		launchChromeIfNeeded(cfg)
+		// The browser launches lazily on the first browser_* call (headed by
+		// default; pass headless:true to start it hidden) — not at startup.
 		registry["browser_navigate"] = makeBrowserNavigateHandler(cfg)
 		registry["browser_snapshot"] = makeBrowserSnapshotHandler(cfg)
 		registry["browser_click"] = makeBrowserClickHandler(cfg)
@@ -67,6 +68,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 		registry["browser_screenshot"] = makeBrowserScreenshotHandler(cfg)
 		registry["browser_scroll"] = makeBrowserScrollHandler(cfg)
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
+		registry["browser_close"] = makeBrowserCloseHandler(cfg)
 	}
 
 	if caps[CapWindows] && panels != nil {
@@ -753,8 +755,9 @@ func makeGetConfigHandler(cfg *SidecarConfig) RPCHandler {
 				"max_file_size_kb": cfg.Filesystem.MaxFileSizeKB,
 			},
 			"browser": map[string]any{
-				"cdp_port":    cfg.Browser.CDPPort,
-				"profile_dir": cfg.Browser.ProfileDir,
+				"executable_path": cfg.Browser.ExecutablePath,
+				"profile_dir":     cfg.Browser.ProfileDir,
+				"cdp_port":        cfg.Browser.CDPPort, // deprecated; retained for back-compat
 			},
 			"awareness": map[string]any{
 				"screen_interval_ms":   cfg.Awareness.ScreenIntervalMs,
@@ -818,11 +821,14 @@ func makeUpdateConfigHandler(cfg *SidecarConfig, onReloaded func()) RPCHandler {
 
 		// Update browser
 		if browser, ok := params["browser"].(map[string]any); ok {
-			if v, ok := browser["cdp_port"].(float64); ok {
-				cfg.Browser.CDPPort = int(v)
+			if v, ok := browser["executable_path"].(string); ok {
+				cfg.Browser.ExecutablePath = v
 			}
 			if v, ok := browser["profile_dir"].(string); ok {
 				cfg.Browser.ProfileDir = v
+			}
+			if v, ok := browser["cdp_port"].(float64); ok {
+				cfg.Browser.CDPPort = int(v)
 			}
 		}
 
