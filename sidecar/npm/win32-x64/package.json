@@ -9,8 +9,5 @@
   },
   "os": ["win32"],
   "cpu": ["x64"],
-  "bin": {
-    "jarvis-sidecar": "bin/jarvis-sidecar.exe"
-  },
-  "files": ["bin/jarvis-sidecar.exe"]
+  "files": ["bin"]
 }

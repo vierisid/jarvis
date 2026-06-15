@@ -9,8 +9,5 @@
   },
   "os": ["linux"],
   "cpu": ["arm64"],
-  "bin": {
-    "jarvis-sidecar": "bin/jarvis-sidecar"
-  },
-  "files": ["bin/jarvis-sidecar"]
+  "files": ["bin"]
 }
