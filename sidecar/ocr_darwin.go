@@ -42,12 +42,15 @@ func platformOCR(imagePath string) (OCRResult, error) {
 	var result struct {
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+	// Sanitize raw control bytes before decoding, and never log the raw output:
+	// it is the user's screen contents.
+	clean := sanitizeOCRJSON(stdout.Bytes())
+	if err := json.Unmarshal(clean, &result); err != nil {
 		details := strings.TrimSpace(stderr.String())
 		if details != "" {
 			return OCRResult{}, fmt.Errorf("decode ocr-helper output (%s): %w", details, err)
 		}
-		return OCRResult{}, fmt.Errorf("decode ocr-helper output: %w (raw: %q)", err, stdout.String())
+		return OCRResult{}, fmt.Errorf("decode ocr-helper output: %w (%d bytes)", err, len(clean))
 	}
 
 	return OCRResult{
