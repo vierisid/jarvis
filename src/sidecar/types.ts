@@ -61,6 +61,13 @@ export interface SidecarTokenClaims {
   brain: string;
   /** URL to fetch the brain's JWKS public key */
   jwks: string;
+  /**
+   * Brain's anonymous telemetry id (see src/telemetry/anon-id.ts), so the
+   * sidecar can report which brain it belongs to without learning anything
+   * identifying. Absent on tokens issued before sidecar telemetry existed —
+   * those sidecars simply report no brain correlation until re-enrolled.
+   */
+  bid?: string;
   /** Issued-at timestamp */
   iat: number;
 }

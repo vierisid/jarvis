@@ -248,6 +248,49 @@ func (c *SidecarClient) Preferences() PreferencesConfig {
 	return c.config.Preferences
 }
 
+// TelemetryEnabled reports whether anonymous sidecar telemetry is on. A nil
+// config value (key absent) means on — telemetry is opt-out. Read live so the
+// settings-window toggle takes effect without a restart. Env overrides are
+// applied by the telemetry loop, not here.
+func (c *SidecarClient) TelemetryEnabled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.config.Telemetry.Enabled == nil {
+		return true
+	}
+	return *c.config.Telemetry.Enabled
+}
+
+// AvailableCaps returns a copy of the currently-available capabilities. Locked
+// because reloadConfig can re-run preflight and replace the slice.
+func (c *SidecarClient) AvailableCaps() []SidecarCapability {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]SidecarCapability, len(c.availableCaps))
+	copy(out, c.availableCaps)
+	return out
+}
+
+// UnavailableCaps returns a copy of the capabilities that are enabled but can't
+// function on this machine (with reasons). Locked for the same reason.
+func (c *SidecarClient) UnavailableCaps() []UnavailableCapability {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]UnavailableCapability, len(c.unavailableCaps))
+	copy(out, c.unavailableCaps)
+	return out
+}
+
+// BrainAnonID returns the brain's anonymous telemetry id from the enrollment
+// token, or "" if the token predates sidecar telemetry. Claims are set once at
+// construction and never mutated, so no lock is needed.
+func (c *SidecarClient) BrainAnonID() string {
+	if c.claims == nil {
+		return ""
+	}
+	return c.claims.Bid
+}
+
 // SetShutdown registers the full process-shutdown callback (client stop + main
 // context cancel) so in-app actions like the settings restart can exit cleanly.
 func (c *SidecarClient) SetShutdown(fn func()) { c.shutdown = fn }

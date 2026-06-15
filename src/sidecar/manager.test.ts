@@ -3,7 +3,10 @@ import { statSync } from 'node:fs';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { decodeJwt } from 'jose';
 import { buildEnrollmentUrls, isLocalhostBrainUrl, SidecarManager } from './manager.ts';
+import { initDatabase, closeDb } from '../vault/schema.ts';
+import { computeAnonId } from '../telemetry/anon-id.ts';
 
 function keyPaths(dataDir: string): { keyDir: string; privateKeyPath: string; publicKeyPath: string } {
   const keyDir = join(dataDir, 'sidecar-keys');
@@ -142,6 +145,31 @@ describe('SidecarManager key storage', () => {
 
       expectKeyModes(dataDir);
     } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('SidecarManager enrollment', () => {
+  test('stamps the brain anonymous telemetry id (bid) into the enrollment token', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      manager.setBrainUrl('https://brain.example.com');
+
+      const { token } = await manager.enrollSidecar('telemetry-test');
+      const claims = decodeJwt(token);
+
+      // The token carries the brain's anon telemetry id so the sidecar can
+      // report which brain it belongs to — and it must equal exactly what the
+      // brain reports in its own telemetry, or the Grafana join won't line up.
+      expect(claims.bid).toBe(computeAnonId());
+
+      await manager.stop();
+    } finally {
+      closeDb();
       await rm(dataDir, { recursive: true, force: true });
     }
   });

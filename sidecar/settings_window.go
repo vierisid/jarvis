@@ -28,6 +28,7 @@ type settingsState struct {
 		StartAtStartup      bool `json:"start_at_startup"`
 		EtherealPebble      bool `json:"ethereal_pebble"`
 		EtherealIdleSeconds int  `json:"ethereal_idle_seconds"`
+		TelemetryEnabled    bool `json:"telemetry_enabled"`
 	} `json:"prefs"`
 }
 
@@ -64,6 +65,7 @@ func (c *SidecarClient) runSettingsWindow() {
 		if st.Prefs.EtherealIdleSeconds <= 0 {
 			st.Prefs.EtherealIdleSeconds = pebbleEtherealDefaultIdleSec
 		}
+		st.Prefs.TelemetryEnabled = c.TelemetryEnabled()
 		return st
 	})
 
@@ -111,6 +113,12 @@ func (c *SidecarClient) runSettingsWindow() {
 			}
 			c.applyPebblePrefs()
 			return nil
+		case "telemetry_enabled":
+			// Persist an explicit pointer so the choice is durable (and a future
+			// config read can tell "off" from "unset/default-on"). The running
+			// telemetry loop re-reads this each tick, so it takes effect live.
+			b := enabled
+			return c.editConfig(func(cfg *SidecarConfig) { cfg.Telemetry.Enabled = &b })
 		default:
 			return fmt.Errorf("unknown preference %q", key)
 		}
@@ -255,6 +263,15 @@ const settingsWindowHTML = `<!doctype html>
     <div id="prefMsg"></div>
   </div>
 
+  <h2>Privacy</h2>
+  <div class="card">
+    <label class="pref">
+      <input type="checkbox" id="telemetry_enabled" onchange="togglePref(this)">
+      <span><span class="label">Send anonymous usage metrics</span>
+        <div class="hint">A small anonymous ping (hashed machine id, version, OS, capabilities) at startup and hourly, so the project can measure usage. No personal data or screen content. On by default; turn off here anytime.</div></span>
+    </label>
+  </div>
+
 <script>
   var dot = document.getElementById('dot');
   var statusText = document.getElementById('statusText');
@@ -292,6 +309,7 @@ const settingsWindowHTML = `<!doctype html>
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
+    document.getElementById('telemetry_enabled').checked = !!st.prefs.telemetry_enabled;
     updateIdleRow();
     // Typing a new token after a save reverts the button from Restart to Save.
     document.getElementById('tok').addEventListener('input', resetTokenButton);

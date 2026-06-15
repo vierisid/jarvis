@@ -115,6 +115,11 @@ Usage:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Anonymous usage telemetry (opt-out). Runs regardless of brain connection
+	// so we can also see sidecars that start but never connect. Fire-and-forget;
+	// it can never block or crash startup. Stops when ctx is cancelled.
+	StartTelemetry(ctx, client)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

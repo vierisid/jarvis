@@ -26,6 +26,7 @@ import { RPCTracker } from './rpc.ts';
 import { SidecarConnection } from './connection.ts';
 import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
+import { computeAnonId } from '../telemetry/anon-id.ts';
 
 const ALG = 'ES256';
 const KEY_DIR_NAME = 'sidecar-keys';
@@ -333,12 +334,16 @@ export class SidecarManager implements Service {
 
     const { brainWs, jwksUrl } = buildEnrollmentUrls(this.brainUrl);
 
-    // Sign JWT
+    // Sign JWT. `bid` is the brain's anonymous telemetry id so the sidecar can
+    // report which brain it belongs to (for the sidecars-per-brain analytics);
+    // it is the same digest the brain reports in its own telemetry, never the
+    // raw hostname/username.
     const token = await new SignJWT({
       sid: id,
       name: trimmed,
       brain: brainWs,
       jwks: jwksUrl,
+      bid: computeAnonId(),
     } satisfies Omit<SidecarTokenClaims, 'sub' | 'jti' | 'iat'>)
       .setProtectedHeader({ alg: ALG, kid: this.keyId })
       .setSubject(`sidecar:${id}`)

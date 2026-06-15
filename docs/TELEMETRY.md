@@ -97,3 +97,29 @@ Pings are POSTed directly to a Supabase (PostgREST) table using the project's
 policy - clients can write but never read. The endpoint is set in
 `src/telemetry/constants.ts`. If the endpoint is unconfigured, the client
 simply does nothing.
+
+## Sidecar telemetry
+
+The desktop sidecar (the Go agent that gives JARVIS eyes and hands on your
+machines) sends its own anonymous ping to a separate `sidecar_pings` table. It
+is **independent of the brain**: it has its own hashed id
+(`jarvis-sidecar-telemetry-v1` namespace), its own opt-out, and it does **not**
+honor the brain's `JARVIS_TELEMETRY` / `DO_NOT_TRACK` env vars.
+
+What it sends: the sidecar's hashed machine id, its version, platform + arch,
+coarse OS version, UTC offset, whether it is currently connected to a brain,
+which capabilities work on this machine, and `brain_anon_id` - the anonymous id
+of the brain it is enrolled to (stamped into the enrollment token), so we can
+count devices per user. No hostname, username, IP, file paths, or screen
+content.
+
+Cadence is the same: one ping at startup, then hourly.
+
+**Opt out** (any one):
+
+- Untick **Settings -> Privacy -> "Send anonymous usage metrics"** in the
+  sidecar window (on by default).
+- Set `telemetry.enabled: false` in `~/.jarvis/sidecar.yaml`.
+- Run with `JARVIS_SIDECAR_TELEMETRY=0`.
+
+Set `JARVIS_SIDECAR_TELEMETRY_DEBUG=1` to log each ping's outcome.

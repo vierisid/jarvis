@@ -36,7 +36,11 @@ type SidecarTokenClaims struct {
 	Name  string `json:"name"`
 	Brain string `json:"brain"`
 	JWKS  string `json:"jwks"`
-	Iat   int64  `json:"iat"`
+	// Bid is the brain's anonymous telemetry id, stamped by the brain at
+	// enrollment so the sidecar can report which brain it belongs to. Empty on
+	// tokens issued before sidecar telemetry existed (re-enroll to populate).
+	Bid string `json:"bid"`
+	Iat int64  `json:"iat"`
 }
 
 // RPCRequest is a message from brain to sidecar.
@@ -112,6 +116,18 @@ type SidecarConfig struct {
 	Browser      BrowserConfig       `yaml:"browser"`
 	Awareness    AwarenessConfig     `yaml:"awareness"`
 	Preferences  PreferencesConfig   `yaml:"preferences"`
+	Telemetry    TelemetryConfig     `yaml:"telemetry"`
+}
+
+// TelemetryConfig controls anonymous sidecar usage metrics. Independent of the
+// brain's telemetry: it does NOT honor the brain's JARVIS_TELEMETRY/DO_NOT_TRACK
+// env vars. Enabled is a pointer so a config file without the key reads as "on"
+// (the opt-out default) rather than a zero-value false. Toggle it from the
+// settings window's Privacy section or with JARVIS_SIDECAR_TELEMETRY=0.
+type TelemetryConfig struct {
+	// omitempty so an unset (default-on) config doesn't persist `enabled: null`;
+	// an explicit true/false is a non-nil pointer and is still written.
+	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // PreferencesConfig holds user-facing sidecar preferences edited from the local
