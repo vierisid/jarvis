@@ -872,20 +872,29 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
-    // Full detail for a single async task. The list payloads cap the
-    // result response at LIST_RESPONSE_MAX_CHARS; this returns it whole
-    // (the UI fetches it on expand when `response_truncated` is set).
+    // Full detail for a single async task. Returns the response whole (the
+    // agents room fetches it on expand when `response_truncated` is set) and
+    // also flattens the fields the sub-pebble's "open full" panel
+    // (taskResult room) renders directly.
     '/api/agents/tasks/:id': {
       GET: (req: Request & { params: { id: string } }) => {
         const tm = ctx.agentService.getTaskManager();
         if (!tm) return error('Persistent agents are not available.', 503);
         const task = tm.getTask(req.params.id);
         if (!task) return error(`Task "${req.params.id}" not found.`, 404);
+        const elapsedS = Math.round(((task.completedAt ?? Date.now()) - task.startedAt) / 1000);
         return json({
           ...taskToJSON(task, { full: true }),
           agent_id: task.agentId,
           agent_name: task.agentName,
           specialist_id: task.specialistId,
+          // Flat fields consumed by the taskResult room panel.
+          specialist: task.specialistId,
+          elapsed_seconds: elapsedS,
+          response: task.result?.response ?? '',
+          summary: task.summary,
+          tools_used: task.result?.toolsUsed ?? [],
+          tokens_used: task.result?.tokensUsed ?? null,
         });
       },
     },
