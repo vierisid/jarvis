@@ -25,9 +25,9 @@ permissions:
   packages: write
 
 env:
-  GO_VERSION: "1.23"
+  GO_VERSION: "1.25"
   BUN_VERSION: "latest"
-  SIDECAR_BIN: jarvis-sidecar
+  SIDECAR_BIN: jarvis
   DRY_RUN: ${{ inputs.dry_run || false }}
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
@@ -74,29 +74,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ─── Cross-compile Go sidecars ─────────────────────────────────
+  # ─── Cross-compile Go sidecars (cgo) ───────────────────────────
+  # The pebble feature made the sidecar a cgo program (webview_go, GTK/Cocoa
+  # overlays), so it CANNOT be cross-compiled with CGO_ENABLED=0 from a single
+  # runner. Each arch builds with CGO_ENABLED=1 on a runner/toolchain that can
+  # see its native UI SDK.
   build-sidecar:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - goos: darwin
-            goarch: arm64
-            npm_pkg: darwin-arm64
-          - goos: darwin
-            goarch: amd64
-            npm_pkg: darwin-x64
           - goos: linux
             goarch: amd64
             npm_pkg: linux-x64
+            runner: ubuntu-latest
+            setup: linux
           - goos: linux
             goarch: arm64
             npm_pkg: linux-arm64
+            runner: ubuntu-24.04-arm
+            setup: linux
           - goos: windows
             goarch: amd64
             npm_pkg: win32-x64
+            runner: ubuntu-latest
+            setup: windows-cross
             ext: .exe
+          - goos: darwin
+            goarch: arm64
+            npm_pkg: darwin-arm64
+            runner: macos-latest
+            setup: darwin
+          - goos: darwin
+            goarch: amd64
+            npm_pkg: darwin-x64
+            runner: macos-latest
+            setup: darwin
     steps:
       - uses: actions/checkout@v5
 
@@ -105,14 +120,53 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: sidecar/go.sum
 
+      # Linux native (amd64 + arm64): WebKitGTK 4.1 + GTK3. webview_go pins the
+      # pkg-config name `webkit2gtk-4.0`, so alias the 4.1 .pc files. malgo needs
+      # no audio dev headers (it dlopens the backend at runtime).
+      - name: Install Linux UI libraries
+        if: matrix.setup == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential
+          for d in /usr/lib/*/pkgconfig; do
+            [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
+            [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
+          done
+
+      # Windows cross-compile from Linux via mingw-w64 + the bundled EventToken.h
+      # shim (the one WebView2 SDK header mingw lacks). Same recipe as
+      # verify-windows.sh — no Windows runner needed.
+      - name: Install mingw-w64 (Windows cross)
+        if: matrix.setup == 'windows-cross'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
       - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: sidecar
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: "1"
         run: |
-          go build -ldflags "-s -w" -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
+          set -euo pipefail
+          LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
+          case "${{ matrix.setup }}" in
+            windows-cross)
+              export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
+              export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
+              # GUI subsystem: no console window when the .exe is launched.
+              LDFLAGS="$LDFLAGS -H windowsgui"
+              ;;
+            darwin)
+              if [ "${{ matrix.goarch }}" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
+              export CC="clang -target $TARGET" CXX="clang++ -target $TARGET"
+              ;;
+          esac
+          go build -ldflags "$LDFLAGS" \
+            -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
 
       - name: Upload binary
         uses: actions/upload-artifact@v5
