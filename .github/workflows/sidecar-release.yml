@@ -19,6 +19,13 @@ on:
         description: "Build and validate without publishing"
         type: boolean
         default: false
+    outputs:
+      released:
+        description: "true when a new sidecar version was (re)built this run"
+        value: ${{ jobs.resolve.outputs.should_release }}
+      version:
+        description: "the sidecar version (from sidecar/VERSION)"
+        value: ${{ jobs.resolve.outputs.version }}
   workflow_dispatch:
     inputs:
       dry_run:

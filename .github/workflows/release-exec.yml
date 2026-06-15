@@ -138,13 +138,15 @@ jobs:
             fi
           fi
 
-  # ─── Create the brain GitHub Release (notes only) ──────────────
+  # ─── Create the brain GitHub Release ───────────────────────────
   # Gated by publish-docker (itself gated by the npm publishes), so a failed
-  # publish means no release and no Discord ping. The sidecar ships to npm only
-  # (sidecar-release.yml, no git tag); this release carries the brain notes the
-  # Discord step summarizes.
+  # publish means no release and no Discord ping. Carries the brain notes the
+  # Discord step summarizes and, when the sidecar was (re)built this run,
+  # attaches the sidecar binaries — so the downloads live on the brain's v*
+  # release with no separate sidecar tag. The sidecar itself ships via npm
+  # (sidecar-release.yml).
   github-release:
-    needs: [publish-docker]
+    needs: [publish-docker, sidecar]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -155,6 +157,59 @@ jobs:
         id: version
         run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # The sidecar binaries are uploaded as artifacts by the reusable
+      # sidecar-release workflow (same run); pull them in only when it actually
+      # built this run.
+      - name: Download sidecar binaries
+        if: needs.sidecar.outputs.released == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          pattern: sidecar-*
+
+      - name: Download macOS OCR helper
+        if: needs.sidecar.outputs.released == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: ocr-helper-darwin
+          path: artifacts/ocr-helper-darwin
+
+      - name: Package sidecar assets
+        if: needs.sidecar.outputs.released == 'true'
+        env:
+          SIDECAR_VERSION: ${{ needs.sidecar.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          # Bundle the helper alongside the darwin sidecar binaries so a single
+          # tarball contains everything a macOS install needs for OCR to work.
+          for platform in darwin-arm64 darwin-x64; do
+            cp artifacts/ocr-helper-darwin/ocr-helper "artifacts/sidecar-${platform}/"
+            chmod +x "artifacts/sidecar-${platform}/ocr-helper"
+          done
+
+          # Tarballs are named for the sidecar's own version.
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            chmod +x "artifacts/sidecar-${platform}/${{ env.SIDECAR_BIN }}"
+            case "${platform}" in
+              darwin-*)
+                tar -czf "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz" \
+                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}" "ocr-helper"
+                ;;
+              *)
+                tar -czf "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz" \
+                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
+                ;;
+            esac
+          done
+
+          # Windows gets a zip
+          cd "artifacts/sidecar-win32-x64"
+          zip "../../release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-win32-x64.zip" \
+            "${{ env.SIDECAR_BIN }}.exe"
+          cd "$GITHUB_WORKSPACE"
+
       - name: Create GitHub Release
         if: env.DRY_RUN != 'true'
         uses: softprops/action-gh-release@v2
@@ -164,12 +219,18 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          # Empty when the sidecar didn't change this run — attach what's there.
+          fail_on_unmatched_files: false
+          files: |
+            release/*.tar.gz
+            release/*.zip
 
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
         run: |
           echo "::notice::DRY RUN — skipped GitHub Release creation"
           echo "Would have created release v${{ steps.version.outputs.VERSION }}"
+          ls -lh release/ 2>/dev/null || true
 
   # ─── Build and push Docker images ──────────────────────────────
   # Gated by the npm publishes — if any npm publish fails, docker never
