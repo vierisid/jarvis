@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	webview "github.com/webview/webview_go"
@@ -24,45 +23,37 @@ func (c *SidecarClient) OpenLogViewer() {
 }
 
 func runLogViewer(logPath string) {
-	runtime.LockOSThread()
-	w := webview.New(false)
-	if w == nil {
-		log.Printf("[logs] could not open the log viewer (webview runtime missing?)")
-		return
-	}
-	defer w.Destroy()
-	w.SetTitle("JARVIS — Logs")
-	w.SetSize(900, 600, webview.HintNone)
+	runLocalWebview("JARVIS — Logs", 900, 600, webview.HintNone, func(w webview.WebView) {
 
-	// loadLogs returns the current log file contents.
-	_ = w.Bind("loadLogs", func() string {
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			return fmt.Sprintf("(could not read %s: %v)", logPath, err)
-		}
-		return string(data)
+		// loadLogs returns the current log file contents.
+		_ = w.Bind("loadLogs", func() string {
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				return fmt.Sprintf("(could not read %s: %v)", logPath, err)
+			}
+			return string(data)
+		})
+
+		// exportLogs writes a timestamped copy next to the log and returns its path
+		// (shown in the UI). Avoids needing a native save dialog.
+		_ = w.Bind("exportLogs", func() string {
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				return ""
+			}
+			dst := filepath.Join(configDir, fmt.Sprintf("sidecar-log-%d.txt", time.Now().Unix()))
+			if err := os.WriteFile(dst, data, 0600); err != nil {
+				log.Printf("[logs] export failed: %v", err)
+				return ""
+			}
+			return dst
+		})
+
+		// The vendored webview creates the window hidden (no flash); reveal it once
+		// the page has loaded.
+		revealWebviewOnLoad(w)
+		w.SetHtml(logViewerHTML)
 	})
-
-	// exportLogs writes a timestamped copy next to the log and returns its path
-	// (shown in the UI). Avoids needing a native save dialog.
-	_ = w.Bind("exportLogs", func() string {
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			return ""
-		}
-		dst := filepath.Join(configDir, fmt.Sprintf("sidecar-log-%d.txt", time.Now().Unix()))
-		if err := os.WriteFile(dst, data, 0600); err != nil {
-			log.Printf("[logs] export failed: %v", err)
-			return ""
-		}
-		return dst
-	})
-
-	// The vendored webview creates the window hidden (no flash); reveal it once
-	// the page has loaded.
-	revealWebviewOnLoad(w)
-	w.SetHtml(logViewerHTML)
-	w.Run()
 }
 
 const logViewerHTML = `<!doctype html>

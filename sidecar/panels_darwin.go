@@ -169,6 +169,20 @@ func registerPanelCloseWatch(handle unsafe.Pointer, impl *panelImpl) {
 	C.jarvis_panel_watch_close(handle, C.ulonglong(token))
 }
 
+// watchWindowClose fires onClose (once) when the given NSWindow closes. Used by
+// local webview windows (settings, logs) that attach to the tray's shared run
+// loop instead of running their own webview loop. Reuses the panel close-watch
+// C observer + registry; goPanelClosed invokes (and removes) the stored func.
+func watchWindowClose(handle unsafe.Pointer, onClose func()) {
+	if handle == nil {
+		onClose()
+		return
+	}
+	token := panelCloseSeq.Add(1)
+	panelCloseFuncs.Store(token, onClose)
+	C.jarvis_panel_watch_close(handle, C.ulonglong(token))
+}
+
 func boolToCInt(b bool) C.int {
 	if b {
 		return 1

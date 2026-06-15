@@ -125,9 +125,18 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			close(impl.ready)
 			return
 		}
-		// Destroy touches the NSWindow/WKWebView, so on the shared-loop platform
-		// it must run on the main thread.
-		defer func() { uiSync(wv, wv.Destroy) }()
+		// Windows/Linux own the loop and Destroy the webview safely after Run()
+		// returns. On macOS (shared loop) the window closes under the tray's
+		// [NSApp run], but pending webview callbacks still reference the engine
+		// (the delayShow reveal-timeout goroutine, webview's own
+		// on_window_will_close dispatch); destroying it here frees the engine out
+		// from under them -> use-after-free crash. Leak the engine on macOS
+		// instead (panels open rarely). TODO: cancellable teardown to reclaim.
+		defer func() {
+			if !panelSharedLoop {
+				wv.Destroy()
+			}
+		}()
 		impl.wv = wv
 		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 

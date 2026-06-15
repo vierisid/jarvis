@@ -1635,7 +1635,17 @@ public:
   void *window_impl() override { return (void *)m_window; }
   void *widget_impl() override { return (void *)m_webview; }
   void *browser_controller_impl() override { return (void *)m_webview; };
-  void terminate_impl() override { stop_run_loop(); }
+  void terminate_impl() override {
+    // PATCHED (jarvis): no-op on Cocoa. The sidecar runs every webview window
+    // (panels, settings, logs) under the tray's single shared [NSApp run] loop.
+    // on_window_destroyed() calls terminate() when the LAST webview window
+    // closes; the upstream behavior here is stop_run_loop() -> [NSApp stop],
+    // which stops the tray's loop. Re-entering [NSApp run] afterwards leaves the
+    // main dispatch queue unserviced, so the next webview.New()'s dispatch_sync
+    // to the main thread hangs forever (and the pebble's main-queue paint stalls
+    // + tray quit can't post). The app must only ever quit via the tray's own
+    // jarvisTrayQuit ([NSApp stop] + gTrayShouldQuit), never on a window close.
+  }
   void run_impl() override {
     auto app = get_shared_application();
     objc::msg_send<void>(app, "run"_sel);

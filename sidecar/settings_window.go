@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"runtime"
 
 	webview "github.com/webview/webview_go"
 )
@@ -44,106 +43,98 @@ func connStateString(s int32) string {
 }
 
 func (c *SidecarClient) runSettingsWindow() {
-	runtime.LockOSThread()
-	w := webview.New(false)
-	if w == nil {
-		log.Printf("[settings] could not open the settings window (webview runtime missing?)")
-		return
-	}
-	defer w.Destroy()
-	w.SetTitle("JARVIS — Sidecar Settings")
-	w.SetSize(520, 560, webview.HintNone)
+	runLocalWebview("JARVIS — Sidecar Settings", 520, 560, webview.HintNone, func(w webview.WebView) {
 
-	// getState returns the live connection status + current preferences.
-	_ = w.Bind("getState", func() settingsState {
-		prefs := c.Preferences()
-		var st settingsState
-		st.Status = connStateString(c.ConnState())
-		st.Prefs.StartAtStartup = prefs.StartAtStartup
-		st.Prefs.EtherealPebble = prefs.EtherealPebble
-		st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
-		if st.Prefs.EtherealIdleSeconds <= 0 {
-			st.Prefs.EtherealIdleSeconds = pebbleEtherealDefaultIdleSec
-		}
-		st.Prefs.TelemetryEnabled = c.TelemetryEnabled()
-		return st
-	})
-
-	// saveToken validates + persists a new enrollment token. It applies on the
-	// next reconnect attempt; a restart guarantees a clean reconnect.
-	_ = w.Bind("saveToken", func(raw string) error {
-		raw = trimToken(raw)
-		if raw == "" {
-			return fmt.Errorf("Paste a token to save.")
-		}
-		if _, err := DecodeJWTPayload(raw); err != nil {
-			return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
-		}
-		if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
-			return fmt.Errorf("Could not save the token: %v", err)
-		}
-		log.Printf("[settings] enrollment token updated")
-		return nil
-	})
-
-	// restartSidecar launches a fresh process and exits this one (so a new token
-	// takes effect). The settings window offers it right after a token save.
-	_ = w.Bind("restartSidecar", func() error {
-		log.Printf("[settings] restart requested")
-		return c.Restart()
-	})
-
-	// setPref persists a single preference toggle. For start_at_startup it also
-	// registers/unregisters OS autostart; if that fails we don't save the toggle
-	// so the checkbox reverts to the real state.
-	_ = w.Bind("setPref", func(key string, enabled bool) error {
-		switch key {
-		case "start_at_startup":
-			if err := platformSetAutoStart(enabled); err != nil {
-				verb := "enable"
-				if !enabled {
-					verb = "disable"
-				}
-				return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
+		// getState returns the live connection status + current preferences.
+		_ = w.Bind("getState", func() settingsState {
+			prefs := c.Preferences()
+			var st settingsState
+			st.Status = connStateString(c.ConnState())
+			st.Prefs.StartAtStartup = prefs.StartAtStartup
+			st.Prefs.EtherealPebble = prefs.EtherealPebble
+			st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
+			if st.Prefs.EtherealIdleSeconds <= 0 {
+				st.Prefs.EtherealIdleSeconds = pebbleEtherealDefaultIdleSec
 			}
-			return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
-		case "ethereal_pebble":
-			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled }); err != nil {
+			st.Prefs.TelemetryEnabled = c.TelemetryEnabled()
+			return st
+		})
+
+		// saveToken validates + persists a new enrollment token. It applies on the
+		// next reconnect attempt; a restart guarantees a clean reconnect.
+		_ = w.Bind("saveToken", func(raw string) error {
+			raw = trimToken(raw)
+			if raw == "" {
+				return fmt.Errorf("Paste a token to save.")
+			}
+			if _, err := DecodeJWTPayload(raw); err != nil {
+				return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
+			}
+			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
+				return fmt.Errorf("Could not save the token: %v", err)
+			}
+			log.Printf("[settings] enrollment token updated")
+			return nil
+		})
+
+		// restartSidecar launches a fresh process and exits this one (so a new token
+		// takes effect). The settings window offers it right after a token save.
+		_ = w.Bind("restartSidecar", func() error {
+			log.Printf("[settings] restart requested")
+			return c.Restart()
+		})
+
+		// setPref persists a single preference toggle. For start_at_startup it also
+		// registers/unregisters OS autostart; if that fails we don't save the toggle
+		// so the checkbox reverts to the real state.
+		_ = w.Bind("setPref", func(key string, enabled bool) error {
+			switch key {
+			case "start_at_startup":
+				if err := platformSetAutoStart(enabled); err != nil {
+					verb := "enable"
+					if !enabled {
+						verb = "disable"
+					}
+					return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
+				}
+				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
+			case "ethereal_pebble":
+				if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled }); err != nil {
+					return err
+				}
+				c.applyPebblePrefs()
+				return nil
+			case "telemetry_enabled":
+				// Persist an explicit pointer so the choice is durable (and a future
+				// config read can tell "off" from "unset/default-on"). The running
+				// telemetry loop re-reads this each tick, so it takes effect live.
+				b := enabled
+				return c.editConfig(func(cfg *SidecarConfig) { cfg.Telemetry.Enabled = &b })
+			default:
+				return fmt.Errorf("unknown preference %q", key)
+			}
+		})
+
+		// setEtherealIdle sets the idle timeout (seconds) before the pebble fades out.
+		_ = w.Bind("setEtherealIdle", func(seconds int) error {
+			if seconds < 1 {
+				seconds = 1
+			}
+			if seconds > 3600 {
+				seconds = 3600
+			}
+			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealIdleSeconds = seconds }); err != nil {
 				return err
 			}
 			c.applyPebblePrefs()
 			return nil
-		case "telemetry_enabled":
-			// Persist an explicit pointer so the choice is durable (and a future
-			// config read can tell "off" from "unset/default-on"). The running
-			// telemetry loop re-reads this each tick, so it takes effect live.
-			b := enabled
-			return c.editConfig(func(cfg *SidecarConfig) { cfg.Telemetry.Enabled = &b })
-		default:
-			return fmt.Errorf("unknown preference %q", key)
-		}
-	})
+		})
 
-	// setEtherealIdle sets the idle timeout (seconds) before the pebble fades out.
-	_ = w.Bind("setEtherealIdle", func(seconds int) error {
-		if seconds < 1 {
-			seconds = 1
-		}
-		if seconds > 3600 {
-			seconds = 3600
-		}
-		if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealIdleSeconds = seconds }); err != nil {
-			return err
-		}
-		c.applyPebblePrefs()
-		return nil
+		// The vendored webview creates the window hidden (no flash); reveal it once
+		// the page has loaded.
+		revealWebviewOnLoad(w)
+		w.SetHtml(settingsWindowHTML)
 	})
-
-	// The vendored webview creates the window hidden (no flash); reveal it once
-	// the page has loaded.
-	revealWebviewOnLoad(w)
-	w.SetHtml(settingsWindowHTML)
-	w.Run()
 }
 
 // trimToken strips surrounding whitespace from a pasted token.
