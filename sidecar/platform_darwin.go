@@ -35,6 +35,9 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 		if isExecutableFile(p) {
 			return p, nil
 		}
+		if lp, err := exec.LookPath(p); err == nil {
+			return lp, nil
+		}
 		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
 

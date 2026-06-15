@@ -49,8 +49,8 @@ func platformDefaultShell() string {
 // Brave, ...).
 func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 	if p := cfg.Browser.ExecutablePath; p != "" {
-		if isExecutableFile(p) {
-			return p, nil
+		if r := resolveConfiguredBrowser(p); r != "" {
+			return r, nil
 		}
 		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
@@ -71,6 +71,28 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 func isExecutableFile(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir()
+}
+
+// resolveConfiguredBrowser turns a configured executable_path into a usable
+// path. It accepts a full/relative path that exists, or a bare exe name
+// (e.g. "msedge.exe") which it resolves via PATH and then the known install
+// locations. Returns "" if nothing matches.
+func resolveConfiguredBrowser(p string) string {
+	if isExecutableFile(p) {
+		return p
+	}
+	if filepath.Base(p) == p { // bare name
+		if lp, err := exec.LookPath(p); err == nil {
+			return lp
+		}
+		want := strings.ToLower(p)
+		for _, c := range windowsChromiumCandidates() {
+			if strings.ToLower(filepath.Base(c)) == want && isExecutableFile(c) {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 // windowsChromiumCandidates lists known install locations across the per-machine

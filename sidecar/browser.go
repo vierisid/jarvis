@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,6 +86,21 @@ func getCDP(cfg *SidecarConfig, headless, explicit bool) (*cdpClient, error) {
 	return client, nil
 }
 
+// browserProfileName derives a per-browser user-data dir name from the
+// executable, e.g. chrome.exe -> "jarvis-chrome-profile",
+// msedge.exe -> "jarvis-msedge-profile".
+func browserProfileName(exe string) string {
+	base := strings.ToLower(filepath.Base(exe))
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	base = strings.ReplaceAll(base, " ", "-")
+	if base == "" {
+		base = "chromium"
+	}
+	return "jarvis-" + base + "-profile"
+}
+
 // chromiumLaunchArgs builds the command-line flags for the automation browser.
 func chromiumLaunchArgs(profileDir string, headless bool) []string {
 	args := []string{
@@ -111,7 +127,10 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 
 	profileDir := cfg.Browser.ProfileDir
 	if profileDir == "" {
-		profileDir = filepath.Join(os.TempDir(), "jarvis-chrome-profile")
+		// Per-browser profile dir: a profile created by Chrome can't be reused by
+		// Edge/Brave (Chromium refuses a profile from a different brand with a
+		// "can't use this profile" alert), so key it on the executable.
+		profileDir = filepath.Join(os.TempDir(), browserProfileName(exe))
 	}
 
 	proc, err := startBrowserPipe(exe, chromiumLaunchArgs(profileDir, headless))
