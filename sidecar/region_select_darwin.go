@@ -20,8 +20,15 @@ package main
 // by the backing factor.
 
 /*
-#cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Cocoa -framework AppKit -framework CoreGraphics
+// CGWindowListCreateImage is obsoleted in the macOS 15 SDK headers (the symbol
+// is still live at runtime). Pin the deployment target below 15.0 so the
+// availability check treats it as deprecated, not unavailable. As a #cgo
+// directive this applies package-wide on darwin, so every cgo TU shares one
+// min (no linker version mismatch), and it overrides the -mmacos-version-min
+// Go's cgo injects from the SDK -- which is why the Makefile's
+// MACOSX_DEPLOYMENT_TARGET env alone doesn't suppress the error.
+#cgo CFLAGS: -x objective-c -fobjc-arc -mmacosx-version-min=11.0
+#cgo LDFLAGS: -framework Cocoa -framework AppKit -framework CoreGraphics -mmacosx-version-min=11.0
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
