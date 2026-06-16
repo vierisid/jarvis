@@ -33,6 +33,16 @@ const KEY_DIR_NAME = 'sidecar-keys';
 const PRIVATE_KEY_FILE = 'private.pem';
 const PUBLIC_KEY_FILE = 'public.pem';
 
+// Short-lived access tokens. The enrollment JWT is a long-lived REFRESH-style
+// credential that never leaves the sidecar except as an Authorization: Bearer
+// header to /sidecar/connect and the token-mint endpoint. Everything on the
+// data plane (panel /api fetches, the /ws control socket) authenticates with
+// one of these instead: minted on demand from the enrollment JWT, signed with
+// the same ES256 key, scoped by audience, and verified statelessly (signature +
+// exp + aud, no DB hit) so a leak is bounded to the TTL rather than forever.
+const ACCESS_TOKEN_AUDIENCE = 'brain-api';
+const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
+
 // Localhost host check anchored: matches `localhost`, `localhost:PORT`, but
 // not e.g. `notlocalhost.example.com`. Used both for enrollment URL scheme
 // inference and for startup warnings.
@@ -498,12 +508,63 @@ export class SidecarManager implements Service {
 
       const claims = payload as unknown as SidecarTokenClaims;
 
+      // A short-lived access token (aud=brain-api) must never be accepted as an
+      // enrollment credential. validateToken gates /sidecar/connect and the
+      // token-mint endpoint; if an access token passed here it could mint fresh
+      // access tokens indefinitely, defeating its TTL. Enrollment JWTs carry no
+      // audience, so reject anything bearing the access-token audience.
+      if ((payload as Record<string, unknown>).aud === ACCESS_TOKEN_AUDIENCE) {
+        return null;
+      }
+
       // Check sidecar is still enrolled
       if (!claims.sid || !this.isEnrolled(claims.sid)) {
         return null;
       }
 
       return claims;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Mint a short-lived access token for an enrolled sidecar. This is the only
+   * credential that authenticates the data plane (panel /api fetches + /ws); the
+   * enrollment JWT is never accepted there. Enrollment is checked here at mint
+   * time, so a revoked sidecar can't obtain new tokens (and existing ones expire
+   * within the TTL). Returns null if the sidecar isn't enrolled or keys aren't
+   * loaded.
+   */
+  async issueAccessToken(sid: string): Promise<{ token: string; expiresIn: number } | null> {
+    if (!this.privateKey) return null;
+    if (!sid || !this.isEnrolled(sid)) return null;
+    const token = await new SignJWT({ sid })
+      .setProtectedHeader({ alg: ALG, kid: this.keyId })
+      .setSubject(`sidecar:${sid}`)
+      .setAudience(ACCESS_TOKEN_AUDIENCE)
+      .setIssuedAt()
+      .setExpirationTime(`${ACCESS_TOKEN_TTL_SECONDS}s`)
+      .sign(this.privateKey);
+    return { token, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
+  }
+
+  /**
+   * Verify a short-lived access token. Returns { sid } if the signature,
+   * audience, and expiry all check out, else null. Deliberately stateless (no
+   * DB / isEnrolled lookup): the short TTL is the revocation mechanism, which
+   * also keeps this cheap on every authenticated request.
+   */
+  async verifyAccessToken(token: string): Promise<{ sid: string } | null> {
+    if (!this.publicKey) return null;
+    try {
+      const { payload } = await jwtVerify(token, this.publicKey, {
+        algorithms: [ALG],
+        audience: ACCESS_TOKEN_AUDIENCE,
+      });
+      const sid = typeof payload.sid === 'string' ? payload.sid : '';
+      if (!sid) return null;
+      return { sid };
     } catch {
       return null;
     }

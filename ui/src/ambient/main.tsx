@@ -8,8 +8,10 @@ import "./pebble.css";
 // need a backdrop so the pebble is visible against something.
 const params = new URLSearchParams(window.location.search);
 if (params.get("native") === "1") {
-  // Magic magenta body background — Win32 LWA_COLORKEY transparency relies
-  // on this exact colour. Anything painted #FE00FE becomes invisible.
+  // Transparent body so the desktop shows through. Transparency is achieved by
+  // alpha compositing (WebView2 default-background = 0 + DirectComposition on
+  // Windows, layer-backed transparent NSWindow / GTK RGBA visual elsewhere) —
+  // NOT a color key. See pebble.css `.pebble-native-transparent`.
   document.body.classList.add("pebble-native-transparent");
 } else {
   document.body.classList.add("pebble-dev-backdrop");

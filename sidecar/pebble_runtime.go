@@ -118,20 +118,29 @@ func (c *pebbleCore) advanceFrame() {
 
 	// T8 — element-pointing override. Ease to a fixed point (snappier factor)
 	// until the duration expires, then restore the prior state + bubble text.
+	// The transition is serialized with PointAt under c.mu: previously an
+	// expiry-flip here could interleave with an arm there, dropping a point
+	// issued the same frame a prior point expired (or restoring stale state over
+	// the fresh one). Only locks when actually pointing, so the common path is
+	// untouched.
 	if c.pointing.Load() {
-		if time.Now().UnixMilli() >= c.pointUntilMs.Load() {
-			c.pointing.Store(false)
-			if ps, ok := c.prevState.Load().(PebbleState); ok {
-				c.state.Store(ps)
+		c.mu.Lock()
+		if c.pointing.Load() { // re-check under lock
+			if time.Now().UnixMilli() >= c.pointUntilMs.Load() {
+				c.pointing.Store(false)
+				if ps, ok := c.prevState.Load().(PebbleState); ok {
+					c.state.Store(ps)
+				}
+				if pt, ok := c.prevText.Load().(string); ok {
+					c.bubbleText.Store(pt)
+				}
+			} else {
+				tgtX = float64(c.pointX.Load())
+				tgtY = float64(c.pointY.Load())
+				followFactor = pebblePointFollowFactor
 			}
-			if pt, ok := c.prevText.Load().(string); ok {
-				c.bubbleText.Store(pt)
-			}
-		} else {
-			tgtX = float64(c.pointX.Load())
-			tgtY = float64(c.pointY.Load())
-			followFactor = pebblePointFollowFactor
 		}
+		c.mu.Unlock()
 	}
 
 	// Freeze cursor-follow while the cursor sits on the disc so the user can
@@ -254,7 +263,9 @@ func (c *pebbleCore) PointAt(x, y int, label string, durationMs int) error {
 	}
 	// Snapshot the pre-point state ONLY on the first point of a run, so
 	// re-entrant points (multiple LLM tags) restore the original, not an
-	// intermediate "speaking + label" state.
+	// intermediate "speaking + label" state. Held under c.mu so the whole
+	// snapshot+arm is atomic against advanceFrame's expiry-restore.
+	c.mu.Lock()
 	if c.pointing.CompareAndSwap(false, true) {
 		ps, _ := c.state.Load().(PebbleState)
 		pt, _ := c.bubbleText.Load().(string)
@@ -266,6 +277,7 @@ func (c *pebbleCore) PointAt(x, y int, label string, durationMs int) error {
 	c.pointUntilMs.Store(time.Now().Add(time.Duration(durationMs) * time.Millisecond).UnixMilli())
 	c.state.Store(PebbleListening)
 	c.bubbleText.Store(label)
+	c.mu.Unlock()
 	return nil
 }
 

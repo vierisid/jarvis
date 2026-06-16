@@ -475,37 +475,47 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
     return JSON.stringify({success: true, tag: el.tagName});
 })()
 `, int(elemID), jsonString(text))
-			cdp.send("Runtime.evaluate", map[string]any{
+			if _, err := cdp.send("Runtime.evaluate", map[string]any{
 				"expression":    script,
 				"returnByValue": true,
-			})
+			}); err != nil {
+				return nil, fmt.Errorf("type into element failed: %w", err)
+			}
 		} else {
 			// Type into focused element character by character
 			for _, ch := range text {
-				cdp.send("Input.dispatchKeyEvent", map[string]any{
+				if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
 					"type": "keyDown",
 					"text": string(ch),
-				})
-				cdp.send("Input.dispatchKeyEvent", map[string]any{
+				}); err != nil {
+					return nil, fmt.Errorf("type failed mid-string: %w", err)
+				}
+				if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
 					"type": "keyUp",
 					"text": string(ch),
-				})
+				}); err != nil {
+					return nil, fmt.Errorf("type failed mid-string: %w", err)
+				}
 			}
 		}
 
 		if submit {
-			cdp.send("Input.dispatchKeyEvent", map[string]any{
+			if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
 				"type":                  "keyDown",
 				"key":                   "Enter",
 				"code":                  "Enter",
 				"windowsVirtualKeyCode": 13,
-			})
-			cdp.send("Input.dispatchKeyEvent", map[string]any{
+			}); err != nil {
+				return nil, fmt.Errorf("submit (Enter down) failed: %w", err)
+			}
+			if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
 				"type":                  "keyUp",
 				"key":                   "Enter",
 				"code":                  "Enter",
 				"windowsVirtualKeyCode": 13,
-			})
+			}); err != nil {
+				return nil, fmt.Errorf("submit (Enter up) failed: %w", err)
+			}
 		}
 
 		return &RPCResult{Result: map[string]any{"success": true}}, nil
@@ -564,9 +574,11 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		script := fmt.Sprintf("window.scrollBy(0, %d)", pixels)
-		cdp.send("Runtime.evaluate", map[string]any{
+		if _, err := cdp.send("Runtime.evaluate", map[string]any{
 			"expression": script,
-		})
+		}); err != nil {
+			return nil, fmt.Errorf("scroll failed: %w", err)
+		}
 
 		return &RPCResult{Result: map[string]any{
 			"success":   true,

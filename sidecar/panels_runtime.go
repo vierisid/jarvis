@@ -39,7 +39,7 @@ func uiSync(wv webview.WebView, fn func()) {
 // panelImpl wraps a single webview window and the channel used to control it.
 type panelImpl struct {
 	spec       PanelSpec
-	wv         webview.WebView // assigned by the runner goroutine
+	wvVal      atomic.Value    // webview.WebView; set once by the runner goroutine, read by close-watcher / hotkey / service methods
 	ready      chan struct{}   // closed once wv is set + flags applied
 	done       chan struct{}   // closed when Run() returns
 	following  atomic.Bool     // when true, cursor-tracker actively moves window
@@ -50,6 +50,17 @@ type panelImpl struct {
 	// return. Unused on Windows/Linux (those block in wv.Run()).
 	uiClosed    chan struct{}
 	uiCloseOnce sync.Once
+}
+
+// setWV / loadWV guard the webview handle, which is written once by the runner
+// goroutine and read concurrently by the close-watcher, the hotkey listener, and
+// the service methods (Close/Focus/SetInteractiveRegions/...). loadWV returns
+// nil until the runner has assigned it. Callers must snapshot once and reuse the
+// local, not call loadWV twice in a nil-check + use.
+func (p *panelImpl) setWV(wv webview.WebView) { p.wvVal.Store(wv) }
+func (p *panelImpl) loadWV() webview.WebView {
+	wv, _ := p.wvVal.Load().(webview.WebView)
+	return wv
 }
 
 // panelService is the cross-platform PanelService implementation. The actual
@@ -137,7 +148,7 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				wv.Destroy()
 			}
 		}()
-		impl.wv = wv
+		impl.setWV(wv)
 		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 
 		// Hide normal panels while the page loads, then reveal them once the
@@ -259,15 +270,15 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
 				go func() {
 					time.Sleep(6 * time.Second)
-					if impl.wv != nil {
-						impl.wv.Dispatch(func() { showPanel() })
+					if wv := impl.loadWV(); wv != nil {
+						wv.Dispatch(func() { showPanel() })
 					}
 				}()
 			}
 
 			if spec.URL != "" {
 				wv.Navigate(spec.URL)
-				log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, spec.URL)
+				log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, redactPanelURL(spec.URL))
 			}
 		})
 
@@ -287,16 +298,20 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					return
 				}
 				p, ok := e.handle.(*panelImpl)
-				if !ok || p.wv == nil {
+				if !ok {
+					return
+				}
+				wv := p.loadWV()
+				if wv == nil {
 					return
 				}
 				wasFollowing := p.following.Load()
 				p.following.Store(!wasFollowing)
-				p.wv.Dispatch(func() {
+				wv.Dispatch(func() {
 					if wasFollowing {
-						p.wv.Eval("if (window.__pebble_summon) window.__pebble_summon();")
+						wv.Eval("if (window.__pebble_summon) window.__pebble_summon();")
 					} else {
-						p.wv.Eval("if (window.__pebble_dismiss) window.__pebble_dismiss();")
+						wv.Eval("if (window.__pebble_dismiss) window.__pebble_dismiss();")
 					}
 				})
 			}
@@ -461,11 +476,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 							// loop must keep running for the tray + other panels.
 							// Signal the spawn goroutine instead of terminating.
 							impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
-						} else if impl.wv != nil {
-							impl.wv.Dispatch(func() {
-								if impl.wv != nil {
-									impl.wv.Terminate()
-								}
+						} else if wv := impl.loadWV(); wv != nil {
+							wv.Dispatch(func() {
+								wv.Terminate()
 							})
 						}
 						return
@@ -516,15 +529,15 @@ func (s *panelService) Close(id PanelID) error {
 	if !ok {
 		return formatPanelError("close", id, fmt.Errorf("handle type mismatch"))
 	}
-	if impl.wv != nil {
+	if wv := impl.loadWV(); wv != nil {
 		if panelSharedLoop {
 			// macOS: close the window on the main thread (it owns the NSWindow)
 			// and signal the spawn goroutine. Never Terminate() here — that stops
 			// the tray's shared [NSApp run] loop, killing the menu bar + every
 			// other panel. The close watcher's deferred cleanup runs once the
 			// spawn goroutine returns from <-uiClosed.
-			uiSync(impl.wv, func() {
-				if err := platformDestroyWindow(impl.wv.Window()); err != nil {
+			uiSync(wv, func() {
+				if err := platformDestroyWindow(wv.Window()); err != nil {
 					log.Printf("[panels] platformDestroyWindow(%s): %v", id, err)
 				}
 			})
@@ -538,10 +551,10 @@ func (s *panelService) Close(id PanelID) error {
 		// / gtk_widget_destroy (Linux) to the underlying handle, then
 		// fall through to wv.Terminate so the webview's deferred cleanup
 		// (`reg.delete`, `wv.Destroy`) still runs.
-		if err := platformDestroyWindow(impl.wv.Window()); err != nil {
+		if err := platformDestroyWindow(wv.Window()); err != nil {
 			log.Printf("[panels] platformDestroyWindow(%s): %v (falling back to wv.Terminate)", id, err)
 		}
-		impl.wv.Terminate()
+		wv.Terminate()
 	}
 	return nil
 }
@@ -565,10 +578,14 @@ func (s *panelService) SetInteractiveRegions(id PanelID, rects []PanelRect) erro
 		return formatPanelError("set_regions", id, ErrPanelUnknown)
 	}
 	impl, ok := e.handle.(*panelImpl)
-	if !ok || impl.wv == nil {
+	if !ok {
 		return formatPanelError("set_regions", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetInteractiveRegions(impl.wv.Window(), rects); err != nil {
+	wv := impl.loadWV()
+	if wv == nil {
+		return formatPanelError("set_regions", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetInteractiveRegions(wv.Window(), rects); err != nil {
 		return formatPanelError("set_regions", id, err)
 	}
 	return nil
@@ -580,10 +597,14 @@ func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
 		return formatPanelError("set_clickthrough", id, ErrPanelUnknown)
 	}
 	impl, ok := e.handle.(*panelImpl)
-	if !ok || impl.wv == nil {
+	if !ok {
 		return formatPanelError("set_clickthrough", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetClickThrough(impl.wv.Window(), clickThrough); err != nil {
+	wv := impl.loadWV()
+	if wv == nil {
+		return formatPanelError("set_clickthrough", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetClickThrough(wv.Window(), clickThrough); err != nil {
 		return formatPanelError("set_clickthrough", id, err)
 	}
 	return nil
@@ -595,10 +616,14 @@ func (s *panelService) Focus(id PanelID) error {
 		return formatPanelError("focus", id, ErrPanelUnknown)
 	}
 	impl, ok := e.handle.(*panelImpl)
-	if !ok || impl.wv == nil {
+	if !ok {
 		return formatPanelError("focus", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformFocusWindow(impl.wv.Window()); err != nil {
+	wv := impl.loadWV()
+	if wv == nil {
+		return formatPanelError("focus", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformFocusWindow(wv.Window()); err != nil {
 		return formatPanelError("focus", id, err)
 	}
 	return nil
@@ -614,10 +639,14 @@ func (s *panelService) SetWindowState(id PanelID, state PanelWindowState) error 
 		return formatPanelError("set_window_state", id, ErrPanelUnknown)
 	}
 	impl, ok := e.handle.(*panelImpl)
-	if !ok || impl.wv == nil {
+	if !ok {
 		return formatPanelError("set_window_state", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetWindowState(impl.wv.Window(), state); err != nil {
+	wv := impl.loadWV()
+	if wv == nil {
+		return formatPanelError("set_window_state", id, fmt.Errorf("window not ready"))
+	}
+	if err := platformSetWindowState(wv.Window(), state); err != nil {
 		return formatPanelError("set_window_state", id, err)
 	}
 	return nil

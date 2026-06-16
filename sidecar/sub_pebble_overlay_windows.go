@@ -577,8 +577,15 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 	if dib == 0 {
 		return fmt.Errorf("CreateDIBSection failed")
 	}
-	defer procDeleteObjectGdi.Call(dib)
-	procSelectObject.Call(memDC, dib)
+	// Restore the DC's default bitmap before deleting the DIB — DeleteObject
+	// fails on a selected bitmap and DeleteDC won't free it, so otherwise the
+	// DIB + pixel buffer leak every frame. (See present() in
+	// pebble_overlay_windows.go for the full rationale.)
+	oldBmp, _, _ := procSelectObject.Call(memDC, dib)
+	defer func() {
+		procSelectObject.Call(memDC, oldBmp)
+		procDeleteObjectGdi.Call(dib)
+	}()
 
 	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowW*pebbleWindowH)
 	for i := range pixels {

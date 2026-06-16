@@ -458,6 +458,7 @@ import "C"
 
 import (
 	"log"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -467,8 +468,8 @@ import (
 // each frame onto the GTK main loop.
 type pebbleServiceLinux struct {
 	pebbleCore
-	summonCallback    func()
-	paletteCallback   func()
+	summonCallback    atomic.Value // func(); re-assigned per reconnect, read by the hotkey goroutine
+	paletteCallback   atomic.Value // func()
 	hotkeyStop        func() // summon hotkey listener stop
 	paletteHotkeyStop func() // palette hotkey listener stop
 }
@@ -510,8 +511,8 @@ func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
 	// pebble input wiring lands).
 	if s.spec.SummonHotkey != "" {
 		if stop, err := startHotkeyListener(s.spec.SummonHotkey, func() {
-			if s.summonCallback != nil {
-				s.summonCallback()
+			if cb, ok := s.summonCallback.Load().(func()); ok && cb != nil {
+				cb()
 			}
 		}); err != nil {
 			log.Printf("[pebble] summon hotkey %q not registered: %v", s.spec.SummonHotkey, err)
@@ -522,8 +523,8 @@ func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
 	}
 	if s.spec.PaletteHotkey != "" {
 		if stop, err := startHotkeyListener(s.spec.PaletteHotkey, func() {
-			if s.paletteCallback != nil {
-				s.paletteCallback()
+			if cb, ok := s.paletteCallback.Load().(func()); ok && cb != nil {
+				cb()
 			}
 		}); err != nil {
 			log.Printf("[pebble] palette hotkey %q not registered: %v", s.spec.PaletteHotkey, err)
@@ -585,8 +586,8 @@ func (s *pebbleServiceLinux) Close() error {
 // strike / answer-overflow button (§5.3). The pointing label is already handled
 // (PointAt sets state=listening + bubbleText=label).
 
-func (s *pebbleServiceLinux) OnSummon(callback func())  { s.summonCallback = callback }
-func (s *pebbleServiceLinux) OnPalette(callback func()) { s.paletteCallback = callback }
+func (s *pebbleServiceLinux) OnSummon(callback func())  { s.summonCallback.Store(callback) }
+func (s *pebbleServiceLinux) OnPalette(callback func()) { s.paletteCallback.Store(callback) }
 
 // OnBlindToggle / OnAnswerOpen — the callbacks are accepted; the summon/palette
 // hotkeys fire via X11 (§5.4). The disc long-press (blind-toggle) and the

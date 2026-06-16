@@ -148,8 +148,11 @@ type pebbleServiceWindows struct {
 
 	// summonCallback / paletteCallback are invoked when the user fires the
 	// summon / palette hotkeys; the daemon drives state transitions from there.
-	summonCallback  func()
-	paletteCallback func()
+	// atomic.Value because OnSummon/OnPalette are re-assigned on every reconnect
+	// (connectAndServe) while the hotkey-listener goroutine reads them — a plain
+	// field is a data race. Matches the other pebble callbacks.
+	summonCallback  atomic.Value // func()
+	paletteCallback atomic.Value // func()
 }
 
 // NewPebbleService returns the Windows-native pebble service. Stores a
@@ -253,22 +256,21 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 // SetState() so the brain stays the source of truth (wake-word, LLM
 // lifecycle, manual hotkey all funnel through the same path).
 func (s *pebbleServiceWindows) onSummonHotkey() {
-	cb := s.summonCallback
-	if cb != nil {
+	if cb, ok := s.summonCallback.Load().(func()); ok && cb != nil {
 		go cb()
 	}
 }
 
 func (s *pebbleServiceWindows) OnSummon(callback func()) {
-	s.summonCallback = callback
+	s.summonCallback.Store(callback)
 }
 
 // onPaletteHotkey fires the user-supplied palette callback. Like the summon
 // callback, this runs on whatever goroutine the hotkey listener used; the
 // daemon owns the open/close lifecycle of the palette panel itself.
 func (s *pebbleServiceWindows) onPaletteHotkey() {
-	cb := s.paletteCallback
-	if cb == nil {
+	cb, ok := s.paletteCallback.Load().(func())
+	if !ok || cb == nil {
 		log.Printf("[pebble] palette hotkey fired but no callback registered yet — dropping")
 		return
 	}
@@ -277,7 +279,7 @@ func (s *pebbleServiceWindows) onPaletteHotkey() {
 }
 
 func (s *pebbleServiceWindows) OnPalette(callback func()) {
-	s.paletteCallback = callback
+	s.paletteCallback.Store(callback)
 }
 
 // SetState / SetText / SetEye / SetBlinded / SetAnswerOverflow / PointAt are
@@ -598,8 +600,17 @@ func (s *pebbleServiceWindows) present() error {
 	if dib == 0 {
 		return fmt.Errorf("CreateDIBSection failed")
 	}
-	defer procDeleteObjectGdi.Call(dib)
-	procSelectObject.Call(memDC, dib)
+	// Save the DC's default bitmap and restore it before deleting the DIB.
+	// DeleteObject fails on a bitmap still selected into a DC (and DeleteDC does
+	// NOT free a selected bitmap), so without the restore the DIB and its
+	// full-window pixel buffer leak every frame -> GDI handle/memory exhaustion
+	// within minutes at the 60fps frame loop. defer LIFO ordering puts this
+	// before the procDeleteDC(memDC) defer above, which is required.
+	oldBmp, _, _ := procSelectObject.Call(memDC, dib)
+	defer func() {
+		procSelectObject.Call(memDC, oldBmp)
+		procDeleteObjectGdi.Call(dib)
+	}()
 
 	pixels := unsafe.Slice((*uint32)(bits), pebbleWindowW*pebbleWindowH)
 	for i := range pixels {

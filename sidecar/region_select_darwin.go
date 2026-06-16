@@ -110,6 +110,16 @@ static int               gRsx = 0, gRsy = 0, gRcx = 0, gRcy = 0;
 }
 @end
 
+// Borderless NSWindows return NO from canBecomeKeyWindow by default, so a plain
+// NSWindow would never become key under the accessory activation policy and
+// keyDown: (Escape-to-cancel) would never fire. Subclass to opt in.
+@interface JarvisRegionWindow : NSWindow
+@end
+@implementation JarvisRegionWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+@end
+
 static void region_start_impl(void) {
     NSScreen* main = [[NSScreen screens] firstObject];
     NSRect fr = main ? main.frame : NSMakeRect(0, 0, 1920, 1080);
@@ -119,7 +129,7 @@ static void region_start_impl(void) {
     gRegionShot = CGWindowListCreateImage(CGRectInfinite, kCGWindowListOptionOnScreenOnly,
                                           kCGNullWindowID, kCGWindowImageDefault);
 
-    NSWindow* win = [[NSWindow alloc] initWithContentRect:fr
+    NSWindow* win = [[JarvisRegionWindow alloc] initWithContentRect:fr
                                                 styleMask:NSWindowStyleMaskBorderless
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
@@ -133,6 +143,9 @@ static void region_start_impl(void) {
     [win setContentView:view];
     gRegionWin = win;
     gRegionView = view;
+    // Accessory-policy apps aren't frontmost by default; activate so the
+    // overlay can take key focus and receive the Escape keyDown.
+    [NSApp activateIgnoringOtherApps:YES];
     [win makeKeyAndOrderFront:nil];
     [win makeFirstResponder:view];
     [[NSCursor crosshairCursor] set];

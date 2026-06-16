@@ -174,3 +174,102 @@ describe('SidecarManager enrollment', () => {
     }
   });
 });
+
+describe('SidecarManager access tokens', () => {
+  test('mints an access token an enrolled sidecar can use, and round-trips the sid', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      manager.setBrainUrl('https://brain.example.com');
+
+      const { sidecar } = await manager.enrollSidecar('access-test');
+
+      const minted = await manager.issueAccessToken(sidecar.id);
+      expect(minted).not.toBeNull();
+      expect(minted!.expiresIn).toBeGreaterThan(0);
+
+      // The access token authenticates the data plane and decodes back to sid.
+      const verified = await manager.verifyAccessToken(minted!.token);
+      expect(verified).toEqual({ sid: sidecar.id });
+
+      // Carries a real expiry (unlike the long-lived enrollment JWT).
+      const decoded = decodeJwt(minted!.token);
+      expect(decoded.exp).toBeDefined();
+      expect(decoded.aud).toBe('brain-api');
+
+      await manager.stop();
+    } finally {
+      closeDb();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('does not mint for an unenrolled sid', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      expect(await manager.issueAccessToken('does-not-exist')).toBeNull();
+      await manager.stop();
+    } finally {
+      closeDb();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('the enrollment JWT is NOT accepted as an access token (and vice versa)', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      manager.setBrainUrl('https://brain.example.com');
+
+      const { token: enrollmentJwt, sidecar } = await manager.enrollSidecar('cutover-test');
+      const access = await manager.issueAccessToken(sidecar.id);
+
+      // The whole point of the split: the long-lived enrollment JWT must be
+      // rejected on the data plane (it has no brain-api audience).
+      expect(await manager.verifyAccessToken(enrollmentJwt)).toBeNull();
+
+      // And a short-lived access token must NOT work as an enrollment credential
+      // (else it could mint fresh tokens forever via /sidecar/token).
+      expect(await manager.validateToken(access!.token)).toBeNull();
+
+      // Sanity: each is still valid on its own side.
+      expect(await manager.verifyAccessToken(access!.token)).toEqual({ sid: sidecar.id });
+      expect((await manager.validateToken(enrollmentJwt))?.sid).toBe(sidecar.id);
+
+      await manager.stop();
+    } finally {
+      closeDb();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects garbage and tampered access tokens', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      manager.setBrainUrl('https://brain.example.com');
+      const { sidecar } = await manager.enrollSidecar('tamper-test');
+      const access = await manager.issueAccessToken(sidecar.id);
+
+      expect(await manager.verifyAccessToken('not-a-jwt')).toBeNull();
+      expect(await manager.verifyAccessToken('')).toBeNull();
+      // Flip a character in the signature segment -> signature check fails.
+      const tampered = access!.token.slice(0, -3) + (access!.token.endsWith('a') ? 'b' : 'a') + 'xx';
+      expect(await manager.verifyAccessToken(tampered)).toBeNull();
+
+      await manager.stop();
+    } finally {
+      closeDb();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

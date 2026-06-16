@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// stubPanelToken returns a panelToken provider that always yields tok, for
+// driving makePanelSpawnHandler in tests without a live brain mint endpoint.
+func stubPanelToken(tok string) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) { return tok, nil }
+}
 
 // fakePanelService is a stand-in for the real webview-backed service.
 // It records calls, lets tests pre-seed an error, and never opens real
@@ -161,7 +168,7 @@ func itoa(n int) string {
 
 func TestPanelSpawnHandler_HappyPath(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", stubPanelToken("tok-123"))
 
 	res, err := h(map[string]any{
 		"id":            "pebble",
@@ -189,7 +196,7 @@ func TestPanelSpawnHandler_HappyPath(t *testing.T) {
 
 func TestPanelSpawnHandler_MissingURL(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", stubPanelToken("tok-123"))
 
 	_, err := h(map[string]any{"id": "x"})
 	if err == nil {
@@ -199,7 +206,7 @@ func TestPanelSpawnHandler_MissingURL(t *testing.T) {
 
 func TestPanelSpawnHandler_MissingParams(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", stubPanelToken("tok-123"))
 
 	_, err := h(nil)
 	if err == nil {
@@ -210,7 +217,7 @@ func TestPanelSpawnHandler_MissingParams(t *testing.T) {
 func TestPanelSpawnHandler_ServiceError(t *testing.T) {
 	svc := newFakePanelService()
 	svc.spawnErr = errors.New("boom")
-	h := makePanelSpawnHandler(svc, "ws://x/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "ws://x/sidecar/connect", stubPanelToken("tok-123"))
 
 	_, err := h(map[string]any{"url": "http://x"})
 	if err == nil || err.Error() != "boom" {
@@ -220,7 +227,7 @@ func TestPanelSpawnHandler_ServiceError(t *testing.T) {
 
 func TestPanelSpawnHandler_RejectsForeignOrigin(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc, "wss://brain.example.com/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "wss://brain.example.com/sidecar/connect", stubPanelToken("tok-123"))
 
 	_, err := h(map[string]any{"id": "x", "url": "https://evil.com/phish"})
 	if err == nil {
@@ -233,7 +240,7 @@ func TestPanelSpawnHandler_RejectsForeignOrigin(t *testing.T) {
 
 func TestPanelSpawnHandler_InjectsTokenAndKeepsFragment(t *testing.T) {
 	svc := newFakePanelService()
-	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", "tok-123")
+	h := makePanelSpawnHandler(svc, "ws://localhost:3142/sidecar/connect", stubPanelToken("tok-123"))
 
 	if _, err := h(map[string]any{"id": "ans", "url": "http://localhost:3142/#/_answer_42"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)

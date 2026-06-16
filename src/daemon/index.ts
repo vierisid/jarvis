@@ -10,6 +10,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { initDatabase, closeDb } from "../vault/schema.ts";
+import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
@@ -224,6 +225,11 @@ async function handleShutdown(signal: string): Promise<void> {
       }
       workflowEngineShutdown = null;
     }
+
+    // Flush any debounced per-room window bounds before we exit, otherwise a
+    // panel moved within the last 400 ms (the write debounce) is lost on quit.
+    // Safe no-op if window-state was never touched this session.
+    flushWindowState();
 
     // Close the shared DB. `closeWorkflowDb` aliases `closeDb` since the
     // workflow tables live in the same file -- one call is enough.
@@ -469,6 +475,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // a second hotkey press.
       const pendingSummons = new Map<string, { cancelled: boolean }>();
 
+      // Fallback timers for the bare-"Jarvis" listening state. If the sidecar's
+      // session capture never produces an `audio.session_end` (dropped event,
+      // VAD wedged, user walked away), the pebble would stay `listening` forever
+      // with wake-word suppressed. These recover it. Cleared the moment a session
+      // IS consumed in onComplete, so they never interrupt a real response cycle.
+      // Generous: longer than any normal VAD capture (pre-speech + hard-cap), so
+      // it only fires when session_end genuinely never came, not on a slow start.
+      const WAKE_LISTEN_FALLBACK_MS = 30_000;
+      const pendingListenTimers = new Map<string, ReturnType<typeof setTimeout>>();
+      const clearListenTimer = (sidecarId: string) => {
+        const t = pendingListenTimers.get(sidecarId);
+        if (t) {
+          clearTimeout(t);
+          pendingListenTimers.delete(sidecarId);
+        }
+      };
+
       // Per-sidecar guard so the wake-word handler can't race itself: a second
       // wake segment may arrive while the first is still transcribing, before
       // pendingSummons is claimed. Set synchronously on entry, cleared in finally.
@@ -665,6 +688,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const ctrl = pendingSummons.get(sidecarId);
         if (ctrl) ctrl.cancelled = true;
         pendingSummons.delete(sidecarId);
+        clearListenTimer(sidecarId);
       });
 
       // ─────────────────────────── Sub-pebble rail ───────────────────────────
@@ -1195,6 +1219,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // summon slot mid-answer. We instead keep the pendingRegion entry alive
       // for the whole cycle and skip re-entry while this set holds the sidecar.
       const regionCycleActive = new Set<string>();
+
+      // Identity-guarded release of a summon slot. A voice turn can outlive the
+      // controller that started it (the user dismisses and immediately re-summons,
+      // or a wake segment races a manual press), so a stale cycle finishing must
+      // NOT blindly `pendingSummons.delete(sidecarId)` — that would evict a newer
+      // turn's slot and wedge the pebble. Only clear when (a) this exact `ctrl`
+      // still owns the slot, and (b) the region overlay flow hasn't taken the turn
+      // over (it re-uses the same `ctrl` and owns teardown via its own finally, so
+      // clearing here would pull the slot out from under an in-flight capture).
+      const clearSummon = (sidecarId: string, ctrl: { cancelled: boolean }) => {
+        if (pendingSummons.get(sidecarId) !== ctrl) return;
+        if (pendingRegionByPebble.get(sidecarId)?.ctrl === ctrl) return;
+        pendingSummons.delete(sidecarId);
+      };
 
       const tryHandleRegionIntent = async (
         sidecarId: string,
@@ -2573,6 +2611,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         let lastPlaybackEnd = Date.now();
         let totalAudioMs = 0;
         const pendingTTS: Promise<unknown>[] = [];
+        // Serializes clip DISPATCH (not synthesis) so sentences play in order
+        // even when a later, shorter sentence synthesizes faster than an earlier
+        // one. Each job awaits the previous before queueing its clip + bumping
+        // lastPlaybackEnd, keeping playback order and the end estimate correct.
+        let ttsTail: Promise<unknown> = Promise.resolve();
 
         const flipToSpeaking = async () => {
           if (speakingStarted) return;
@@ -2582,10 +2625,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
         const enqueueSentence = (sentence: string): void => {
           if (!pebbleTTS || !sentence.trim()) return;
+          const prev = ttsTail;
           const job = (async () => {
             const ttsStart = Date.now();
             try {
               const audio = await pebbleTTS!.synthesize(sentence);
+              // Synthesis may have finished out of order; wait for the previous
+              // sentence's clip to be queued before queueing ours.
+              await prev;
               if (ctrl.cancelled) return;
               const clipMs = estimateAudioDurationMs(audio) ?? sentence.length * 60;
               totalAudioMs += clipMs;
@@ -2612,6 +2659,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               console.warn('[ambient-ui] sentence TTS failed:', err);
             }
           })();
+          ttsTail = job;
           pendingTTS.push(job);
         };
 
@@ -2873,6 +2921,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       audioSessions.onComplete(async (session) => {
         const ctrl = pendingSummons.get(session.sidecarId);
+        // A session arrived: the listening phase is over, so cancel the bare-wake
+        // fallback timer before it can interrupt the response cycle that follows.
+        clearListenTimer(session.sidecarId);
         if (!ctrl || ctrl.cancelled) return; // user dismissed mid-capture
 
         console.log(
@@ -2901,17 +2952,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (!transcript) {
             console.log('[ambient-ui] empty transcript — returning to idle');
             await setState(session.sidecarId, 'idle', '');
-            pendingSummons.delete(session.sidecarId);
+            clearSummon(session.sidecarId, ctrl);
             return;
           }
           console.log(`[ambient-ui] user said (${transcript.length} chars)`);
 
           await runResponseCycle(session.sidecarId, transcript, ctrl);
-          pendingSummons.delete(session.sidecarId);
+          clearSummon(session.sidecarId, ctrl);
         } catch (err) {
           console.warn('[ambient-ui] voice cycle error:', err);
           await setState(session.sidecarId, 'idle', '');
-          pendingSummons.delete(session.sidecarId);
+          clearSummon(session.sidecarId, ctrl);
         }
       });
 
@@ -2982,6 +3033,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT, ${transcript.length} chars)`);
 
         const command = stripWakePrefix(transcript);
+        // Re-check: a manual summon (Ctrl+Space) may have claimed the slot while
+        // we were transcribing (the entry guard at the top ran before the STT
+        // await). The deliberate press wins, so bail rather than clobber its ctrl
+        // and resolve its session_end against ours.
+        if (pendingSummons.has(sidecarId)) return;
         // Claim the summon slot so the rest of this cycle owns it.
         const ctrl = { cancelled: false };
         pendingSummons.set(sidecarId, ctrl);
@@ -2992,16 +3048,27 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // gets transcribed + run through the LLM. The session_end
           // event will land in `audioSessions.onComplete` above, which
           // sees the pendingSummons we just set and runs the response
-          // cycle. No need for a separate timeout here — the session
-          // capture's own VAD hard-cap bounds the wait.
+          // cycle. The session capture's own VAD hard-cap normally bounds the
+          // wait, but a dropped session_end would otherwise wedge us in
+          // `listening` forever, so arm a fallback (cleared in onComplete the
+          // instant a session is actually consumed, so it never cuts a response).
           await setState(sidecarId, 'listening', '');
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {});
             console.log(`[ambient-ui] wake → listening (capture started)`);
+            clearListenTimer(sidecarId);
+            pendingListenTimers.set(sidecarId, setTimeout(() => {
+              pendingListenTimers.delete(sidecarId);
+              if (pendingSummons.get(sidecarId) !== ctrl) return; // already consumed/replaced
+              console.warn('[ambient-ui] wake → listening: no session_end within fallback window — resetting to idle');
+              ctrl.cancelled = true;
+              clearSummon(sidecarId, ctrl);
+              void setState(sidecarId, 'idle', '');
+            }, WAKE_LISTEN_FALLBACK_MS));
           } catch (err) {
             console.warn('[ambient-ui] wake → start_listening failed:', err);
             ctrl.cancelled = true;
-            pendingSummons.delete(sidecarId);
+            clearSummon(sidecarId, ctrl);
             await setState(sidecarId, 'idle', '');
           }
           return;
@@ -3014,7 +3081,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn('[ambient-ui] wake voice cycle error:', err);
           await setState(sidecarId, 'idle', '');
         } finally {
-          pendingSummons.delete(sidecarId);
+          clearSummon(sidecarId, ctrl);
         }
 
         } finally {
@@ -3033,7 +3100,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (pending) {
             pending.ctrl.cancelled = true;
             await setState(sidecarId, 'idle', '');
-            pendingSummons.delete(sidecarId);
+            clearSummon(sidecarId, pending.ctrl);
           }
           return;
         }
@@ -3056,7 +3123,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const binary = event.binary as { type?: string; data?: string; mime_type?: string } | undefined;
         if (!binary || binary.type !== 'inline' || typeof binary.data !== 'string') {
           pendingRegionByPebble.delete(sidecarId);
-          pendingSummons.delete(sidecarId);
+          clearSummon(sidecarId, pending.ctrl);
           await setState(sidecarId, 'idle', '');
           return;
         }
@@ -3070,7 +3137,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         );
         if (ctrl.cancelled) {
           pendingRegionByPebble.delete(sidecarId);
-          pendingSummons.delete(sidecarId);
+          clearSummon(sidecarId, ctrl);
           return;
         }
 
@@ -3092,7 +3159,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         } finally {
           regionCycleActive.delete(sidecarId);
           pendingRegionByPebble.delete(sidecarId);
-          pendingSummons.delete(sidecarId);
+          clearSummon(sidecarId, ctrl);
         }
       });
 

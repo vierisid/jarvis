@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // panel.spawn — open a new native panel window. Returns the panel id.
@@ -13,16 +15,24 @@ import (
 // Result: { "id": "<panel-id>" }
 //
 // The brain supplies the URL to render. Before navigating, the sidecar pins it
-// to the brain origin from the enrollment JWT (`brainURL`) and appends its own
-// token, so a panel can only ever render the official brain and its content
-// fetches authenticate over the same identity as the sidecar WebSocket.
-func makePanelSpawnHandler(svc PanelService, brainURL, sidecarToken string) RPCHandler {
+// to the brain origin from the enrollment JWT (`brainURL`) and appends a
+// short-lived ACCESS token (minted from the enrollment JWT via panelToken), so
+// a panel can only ever render the official brain and its content fetches
+// authenticate with a bounded-lifetime credential rather than the permanent
+// enrollment JWT.
+func makePanelSpawnHandler(svc PanelService, brainURL string, panelToken func(context.Context) (string, error)) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		spec, err := decodePanelSpec(params)
 		if err != nil {
 			return nil, err
 		}
-		safeURL, err := sanitizePanelURL(spec.URL, brainURL, sidecarToken)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		accessToken, err := panelToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("panel auth token: %w", err)
+		}
+		safeURL, err := sanitizePanelURL(spec.URL, brainURL, accessToken)
 		if err != nil {
 			return nil, err
 		}
@@ -36,14 +46,15 @@ func makePanelSpawnHandler(svc PanelService, brainURL, sidecarToken string) RPCH
 }
 
 // sanitizePanelURL enforces that a panel's target URL points at the brain
-// origin carried in the enrollment JWT, then appends the sidecar token so the
-// brain can authenticate the webview's same-origin content fetches.
+// origin carried in the enrollment JWT, then appends the short-lived access
+// token so the brain can authenticate the webview's same-origin content fetches
+// (and set its session cookie). The enrollment JWT itself is never placed here.
 //
 // The JWT `brain` claim is a WebSocket URL (ws(s)://host/sidecar/connect); only
 // its host is compared, so http(s) panel URLs on the same host are accepted
 // whether the brain is local (localhost) or remote. A mismatch is rejected
 // rather than silently rendered.
-func sanitizePanelURL(rawURL, brainURL, sidecarToken string) (string, error) {
+func sanitizePanelURL(rawURL, brainURL, accessToken string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid panel url: %w", err)
@@ -58,12 +69,28 @@ func sanitizePanelURL(rawURL, brainURL, sidecarToken string) (string, error) {
 	if !strings.EqualFold(u.Host, allowed.Host) {
 		return "", fmt.Errorf("panel url host %q is not the brain origin %q", u.Host, allowed.Host)
 	}
-	if sidecarToken != "" {
+	if accessToken != "" {
 		q := u.Query()
-		q.Set("token", sidecarToken)
+		q.Set("token", accessToken)
 		u.RawQuery = q.Encode()
 	}
 	return u.String(), nil
+}
+
+// redactPanelURL replaces the access-token query value with a placeholder so a
+// panel URL can be logged without leaking the credential into the log file
+// (which the in-app Log Viewer can also export).
+func redactPanelURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[unparseable url]"
+	}
+	if u.Query().Get("token") != "" {
+		q := u.Query()
+		q.Set("token", "REDACTED")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 // panel.close — close a panel window by id.

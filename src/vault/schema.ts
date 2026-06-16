@@ -442,7 +442,7 @@ function createTables(db: Database): void {
   // capture insert fails with "no column named thumbnail_path". ALTER
   // adds it; the try/catch silently swallows the "duplicate column" error
   // on subsequent runs.
-  try { db.run('ALTER TABLE screen_captures ADD COLUMN thumbnail_path TEXT'); } catch {}
+  try { db.run('ALTER TABLE screen_captures ADD COLUMN thumbnail_path TEXT'); } catch { /* already present */ }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS awareness_sessions (

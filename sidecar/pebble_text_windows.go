@@ -263,10 +263,15 @@ func repairBubbleTextAlpha(pixels []uint32, bubbleY1 int32) {
 	// Insets larger than the corner radius (6 px) so we don't accidentally
 	// turn the transparent rounded-corner pixels opaque. Top inset starts
 	// just above the eyebrow row (62) so the JARVIS label is repaired too.
+	// Derive x1 from the bubble width: it used to be hardcoded to 332, which
+	// (after the card grew to pebbleBubbleX1=448) left the right ~100 px of body
+	// text — which lays out to pebbleBubbleBodyX1=434 — with alpha=0, i.e.
+	// invisible. Span the full card interior instead.
 	const (
-		x0 = 20
-		x1 = 332
-		y0 = 56
+		inset = 8                     // > corner radius (6)
+		x0    = pebbleBubbleX0 + inset // 20
+		x1    = pebbleBubbleX1 - inset // 440 — covers body text out to 434
+		y0    = 56
 	)
 	y1 := int(bubbleY1) - 8
 	if y1 <= y0 {

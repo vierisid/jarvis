@@ -148,7 +148,13 @@ func (s *AudioCaptureService) Stop() ([]byte, time.Duration, error) {
 		return nil, 0, nil
 	}
 	dur := time.Since(s.session.startedAt)
-	pcm := s.session.pcm.Bytes()
+	// Snapshot the PCM under the session lock: device.Stop() above is not
+	// guaranteed to have joined an in-flight onRecv callback on every malgo
+	// backend, and bytes.Buffer is not safe for concurrent Write/Bytes. Copy so
+	// the returned slice is independent of the buffer's backing array too.
+	s.session.mu.Lock()
+	pcm := append([]byte(nil), s.session.pcm.Bytes()...)
+	s.session.mu.Unlock()
 	id := s.session.id
 	s.session = nil
 	log.Printf("[audio] capture session %q stopped (%d PCM bytes, %.2fs)", id, len(pcm), dur.Seconds())

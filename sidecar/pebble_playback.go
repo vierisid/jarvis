@@ -215,7 +215,21 @@ func (s *AudioPlaybackService) playOne(audio []byte, mimeHint string) error {
 	if err := device.Start(); err != nil {
 		return fmt.Errorf("device.Start: %w", err)
 	}
-	<-done
+	// `done` is closed only from inside the malgo data callback (clip finished
+	// or stopReq seen). If the device opens but then stalls / errors / stops
+	// driving the callback (device disconnect, sample-rate rejected mid-stream),
+	// the callback never reaches the end condition and a bare `<-done` would
+	// hang the singleton worker forever, wedging all future playback. Bound the
+	// wait by the clip's own duration plus a startup/drain grace.
+	timeout := 3 * time.Second
+	if bps := sampleRate * channels * 2; bps > 0 {
+		timeout += time.Duration(float64(len(pcm)) / float64(bps) * float64(time.Second))
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Printf("[playback] clip wait timed out after %v (device stalled?) — forcing stop", timeout)
+	}
 	device.Stop() //nolint:errcheck
 	return nil
 }
@@ -326,6 +340,12 @@ func decodeWAV(buf []byte) ([]byte, int, int, error) {
 		}
 		body := buf[pos : pos+int(size)]
 		pos += int(size)
+		// RIFF chunks are word-aligned: an odd-sized chunk is followed by a
+		// 1-byte pad NOT counted in `size`. Skip it, or a LIST/INFO/fact chunk
+		// of odd length before `data` desyncs every later chunk header.
+		if size%2 == 1 {
+			pos++
+		}
 		switch id {
 		case "fmt ":
 			if len(body) < 16 {

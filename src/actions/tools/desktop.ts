@@ -13,6 +13,7 @@ import type { AppController, UIElement, WindowInfo } from '../app-control/interf
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
+import type { SidecarCapability } from '../../sidecar/types.ts';
 
 /**
  * Resolve the desktop-tool target. If the LLM passed an explicit
@@ -23,9 +24,16 @@ import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
  * which signals the caller to fall back to the legacy local
  * controller (rarely useful in practice but kept for parity).
  */
-function resolveDesktopTarget(explicit?: unknown): string | null {
+function resolveDesktopTarget(
+  explicit?: unknown,
+  capability: SidecarCapability = 'desktop',
+): string | null {
   if (typeof explicit === 'string' && explicit.trim()) return explicit;
-  return autoTargetForCapability('desktop');
+  // Auto-target by the capability the RPC actually requires. Most desktop_*
+  // RPCs need 'desktop', but capture_screen needs 'screenshot' — resolving
+  // against 'desktop' there could pick a sidecar that lacks 'screenshot' and
+  // then hard-fail in routeToSidecar with a "do NOT retry" error.
+  return autoTargetForCapability(capability);
 }
 import { isNoLocalTools, LOCAL_DISABLED_MSG } from './local-tools-guard.ts';
 
@@ -517,7 +525,7 @@ export const desktopScreenshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = resolveDesktopTarget(params.target);
+    const target = resolveDesktopTarget(params.target, 'screenshot');
     if (target) {
       return routeToSidecar(target, 'capture_screen', params, 'screenshot');
     }

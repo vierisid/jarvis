@@ -377,6 +377,14 @@ export class AgentService implements Service, IAgentService {
    * carries both an inline base64 image (e.g. a region screenshot
    * captured by the pebble) and the user's text. Used by T19's
    * "help with this" flow.
+   *
+   * NOTE: unlike streamMessage, this always uses the base primary agent and
+   * does NOT route through convOrchestrator when conv (router-first) mode is
+   * active — the conv path doesn't carry vision. Consequence: in conv mode,
+   * image turns run through a different agent than text turns, and the conv
+   * text stream's tool_call events (which drive the pebble's action narration)
+   * won't fire for image turns. Intentional for now; revisit if conv gains
+   * vision support.
    */
   streamMessageWithImage(
     text: string,

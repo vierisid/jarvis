@@ -90,7 +90,8 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          # Track sidecar/go.mod as the single source of the Go version.
+          go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
 
       # Same toolchain set as test.yml's sidecar-build: GTK/WebKit for the

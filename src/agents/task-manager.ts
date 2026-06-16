@@ -185,7 +185,10 @@ export class AgentTaskManager {
   }
 
   /**
-   * Remove completed/failed tasks older than maxAge (default 10 min).
+   * Remove completed/failed tasks older than maxAge (default 60 min). The
+   * longer retention lets the ambient sub-pebble surface late task summaries;
+   * the trade-off is more completed records (with result/summary strings) held
+   * in the map at steady state.
    */
   cleanup(maxAgeMs = 60 * 60_000): number {
     let removed = 0;

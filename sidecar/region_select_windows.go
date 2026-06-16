@@ -115,14 +115,13 @@ func (s *regionSelectionWindows) snapshotVirtualScreen() error {
 	yRaw, _, _ := procGetSystemMetrics.Call(uintptr(smYVirtualScreen))
 	wRaw, _, _ := procGetSystemMetrics.Call(uintptr(smCxVirtualScreen))
 	hRaw, _, _ := procGetSystemMetrics.Call(uintptr(smCyVirtualScreen))
-	x := int32(int16(xRaw & 0xFFFF))
-	if xRaw&0x8000 != 0 {
-		x = int32(int16(xRaw))
-	}
-	y := int32(int16(yRaw & 0xFFFF))
-	if yRaw&0x8000 != 0 {
-		y = int32(int16(yRaw))
-	}
+	// GetSystemMetrics returns a 32-bit signed int in the low dword of the
+	// uintptr. Take it directly as int32 (matching w/h below) — the previous
+	// 16-bit truncation produced a wrong origin once the virtual-screen left/top
+	// edge passed +/-32768 px (e.g. several 4K monitors arranged to the left),
+	// which then offset both the snapshot BitBlt and the overlay placement.
+	x := int32(xRaw)
+	y := int32(yRaw)
 	w := int(int32(wRaw))
 	h := int(int32(hRaw))
 	if w <= 0 || h <= 0 {
@@ -155,8 +154,13 @@ func (s *regionSelectionWindows) snapshotVirtualScreen() error {
 	if dib == 0 {
 		return fmt.Errorf("CreateDIBSection failed")
 	}
-	defer procDeleteObjectGdi.Call(dib)
-	procSelectObject.Call(memDC, dib)
+	// Restore the DC's default bitmap before deleting the DIB; DeleteObject
+	// won't free a selected bitmap (see present() in pebble_overlay_windows.go).
+	oldBmp, _, _ := procSelectObject.Call(memDC, dib)
+	defer func() {
+		procSelectObject.Call(memDC, oldBmp)
+		procDeleteObjectGdi.Call(dib)
+	}()
 
 	// BitBlt the screen DC into our memDC.
 	r, _, _ := procRegionBitBlt.Call(
@@ -428,8 +432,13 @@ func (s *regionSelectionWindows) paint() {
 	if dib == 0 {
 		return
 	}
-	defer procDeleteObjectGdi.Call(dib)
-	procSelectObject.Call(memDC, dib)
+	// Restore the DC's default bitmap before deleting the DIB; DeleteObject
+	// won't free a selected bitmap (see present() in pebble_overlay_windows.go).
+	oldBmp, _, _ := procSelectObject.Call(memDC, dib)
+	defer func() {
+		procSelectObject.Call(memDC, oldBmp)
+		procDeleteObjectGdi.Call(dib)
+	}()
 
 	pixels := unsafe.Slice((*uint32)(bits), w*h)
 

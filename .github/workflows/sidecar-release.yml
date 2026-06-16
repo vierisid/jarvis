@@ -115,7 +115,8 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          # Track sidecar/go.mod as the single source of the Go version.
+          go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
 
       # Linux native (amd64 + arm64): WebKitGTK 4.1 + GTK3. webview_go pins the

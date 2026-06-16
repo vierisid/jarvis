@@ -125,16 +125,21 @@ static void jarvis_panel_move_window(void* nswindow_ptr, int x, int y) {
 
 // Fire goPanelClosed(token) when the user closes this window, so the host can
 // tear the panel down (clear its registry entry). The block fires on the main
-// thread (close happens there); we never remove the observer — panels are few
-// and the window outlives it (releasedWhenClosed:NO).
+// thread (close happens there). NSWindowWillClose is one-shot, so the block
+// removes its own observer after firing — otherwise every Settings/Logs/panel
+// open leaks an NSNotificationCenter observer for the life of the process.
 static void jarvis_panel_watch_close(void* nswindow_ptr, unsigned long long token) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    [[NSNotificationCenter defaultCenter]
+    __block id obs = [[NSNotificationCenter defaultCenter]
         addObserverForName:NSWindowWillCloseNotification
                     object:w
                      queue:nil
-                usingBlock:^(NSNotification* note) { (void)note; goPanelClosed(token); }];
+                usingBlock:^(NSNotification* note) {
+                    (void)note;
+                    goPanelClosed(token);
+                    if (obs) { [[NSNotificationCenter defaultCenter] removeObserver:obs]; obs = nil; }
+                }];
 }
 */
 import "C"

@@ -13,12 +13,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	xdraw "golang.org/x/image/draw"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func(), brainURL string, sidecarToken string) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func(), brainURL string, panelToken func(context.Context) (string, error)) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -72,7 +73,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 	}
 
 	if caps[CapWindows] && panels != nil {
-		registry["panel.spawn"] = makePanelSpawnHandler(panels, brainURL, sidecarToken)
+		registry["panel.spawn"] = makePanelSpawnHandler(panels, brainURL, panelToken)
 		registry["panel.close"] = makePanelCloseHandler(panels)
 		registry["panel.focus"] = makePanelFocusHandler(panels)
 		registry["panel.list"] = makePanelListHandler(panels)
@@ -109,7 +110,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, availableCaps []SidecarCapability, p
 
 	// Administrative handlers — not gated by capability
 	registry["get_config"] = makeGetConfigHandler(cfg)
-	registry["update_config"] = makeUpdateConfigHandler(cfg, onReloaded)
+	registry["update_config"] = makeUpdateConfigHandler(cfg, cfgMu, onReloaded)
 
 	return registry
 }
@@ -769,10 +770,15 @@ func makeGetConfigHandler(cfg *SidecarConfig) RPCHandler {
 	}
 }
 
-func makeUpdateConfigHandler(cfg *SidecarConfig, onReloaded func()) RPCHandler {
+func makeUpdateConfigHandler(cfg *SidecarConfig, mu sync.Locker, onReloaded func()) RPCHandler {
 	getConfig := makeGetConfigHandler(cfg)
 
 	return func(params map[string]any) (*RPCResult, error) {
+		// Mutate the shared *SidecarConfig under the same lock that editConfig /
+		// reloadConfig / Preferences use — this handler runs on a per-RPC
+		// goroutine while those run on the settings/reconnect paths, all touching
+		// the same struct. No early returns until the explicit Unlock below.
+		mu.Lock()
 		// Update capabilities
 		if caps, ok := params["capabilities"].([]any); ok {
 			newCaps := make([]SidecarCapability, 0, len(caps))
@@ -848,11 +854,15 @@ func makeUpdateConfigHandler(cfg *SidecarConfig, onReloaded func()) RPCHandler {
 			}
 		}
 
-		// Persist to disk
-		if err := SaveConfig(cfg); err != nil {
+		// Persist to disk while still holding the lock, then release it.
+		err := SaveConfig(cfg)
+		mu.Unlock()
+		if err != nil {
 			return nil, fmt.Errorf("failed to save config: %w", err)
 		}
 
+		// onReloaded (reloadConfig) acquires the same lock, so it must run only
+		// after we've released it — otherwise it self-deadlocks.
 		if onReloaded != nil {
 			onReloaded()
 		}

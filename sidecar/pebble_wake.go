@@ -38,7 +38,7 @@ import (
 type WakeListenerOpts struct {
 	RMSThreshold      float64       // chunk RMS above this counts as speech (default 500)
 	SilenceCutoff     time.Duration // silence after speech that ends a segment (default 900 ms)
-	MinSegmentDur     time.Duration // discard segments shorter than this — likely background noise (default 300 ms)
+	MinSegmentDur     time.Duration // DEPRECATED: superseded by minWakeSpeechChunks; no longer gates emission
 	MaxSegmentDur     time.Duration // hard cap on segment length (default 12 s)
 	PreSpeechIdleScan time.Duration // poll interval while waiting for speech (default 50 ms)
 }
@@ -69,12 +69,15 @@ type WakeListenerService struct {
 
 	// running gates Start/Stop; paused gates the chunk-handling logic so
 	// suppression (during summon) doesn't tear down the device.
-	// suppressed is the lighter-weight gate used during TTS playback —
-	// device stays open but captured chunks are dropped, so JARVIS's own
-	// voice through speakers can't trigger a wake or false segment.
-	running    atomic.Bool
-	paused     atomic.Bool
-	suppressed atomic.Bool
+	// suppressDepth is the lighter-weight gate used while the device stays
+	// open but captured chunks must be dropped (TTS playback, region select)
+	// so JARVIS's own voice / chord-press audio can't trigger a wake. It is a
+	// COUNTER, not a bool, because the sources are independent and can overlap:
+	// a bool let whichever source released first re-enable the mic while the
+	// other still needed it suppressed. Suppressed iff depth > 0.
+	running       atomic.Bool
+	paused        atomic.Bool
+	suppressDepth atomic.Int32
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -84,6 +87,7 @@ type WakeListenerService struct {
 	mu              sync.Mutex
 	segBuf          []byte
 	speechSeen      bool
+	speechChunks    int // count of speech-energy chunks this segment (gap-tolerant)
 	speechStartedAt time.Time
 	lastSpeechAt    time.Time
 	segStartedAt    time.Time
@@ -151,11 +155,29 @@ func (w *WakeListenerService) Resume(ctx context.Context) {
 	}
 	w.resetSegment()
 	w.audioSvc.SetChunkListener(w.onChunk)
-	if err := w.audioSvc.Start(fmt.Sprintf("wake-%d", time.Now().UnixMilli())); err != nil {
-		log.Printf("[wake] resume failed: %v", err)
-		return
+	// The OS may not have released the capture device yet (the session capture
+	// we paused for is still tearing down), so a single Start can fail
+	// transiently. Retry briefly before giving up.
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		if ctx.Err() != nil {
+			w.paused.Store(true)
+			return
+		}
+		if err = w.audioSvc.Start(fmt.Sprintf("wake-%d", time.Now().UnixMilli())); err == nil {
+			log.Printf("[wake] resumed")
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	log.Printf("[wake] resumed")
+	// Give up cleanly. Leaving running=true/paused=false with no device would
+	// strand the listener "running" but deaf forever (the chunk listener is
+	// installed yet never fires). Re-arm paused and drop the listener so the
+	// state is consistent and a later session capture's deferred Resume — or an
+	// explicit Pause/Resume — can recover. Surface loudly.
+	w.audioSvc.SetChunkListener(nil)
+	w.paused.Store(true)
+	log.Printf("[wake] resume failed after retries; listener paused (deaf) until next resume: %v", err)
 }
 
 // Stop fully tears down the wake listener.
@@ -170,19 +192,31 @@ func (w *WakeListenerService) Stop() {
 	log.Printf("[wake] listener stopped")
 }
 
-// Suppress flips the lightweight gate used during TTS playback. true
-// drops every captured chunk on the floor; false resumes normal VAD
-// processing. Resets the in-flight segment so the resume doesn't ship
-// any tail end of speaker echo. Idempotent.
+// Suppress raises (true) or lowers (false) the suppression counter. While the
+// counter is > 0 every captured chunk is dropped; it returns to normal VAD
+// processing only when ALL sources have released. Resets the in-flight segment
+// on the 0->1 and 1->0 edges so neither entering nor leaving suppression ships
+// a tail of speaker echo. Each Suppress(true) must be paired with exactly one
+// Suppress(false); an unbalanced release is clamped at 0 and logged.
 func (w *WakeListenerService) Suppress(yes bool) {
 	if yes {
-		if w.suppressed.CompareAndSwap(false, true) {
-			w.resetSegment()
+		if w.suppressDepth.Add(1) == 1 {
+			w.resetSegment() // 0 -> 1 edge
 		}
 		return
 	}
-	if w.suppressed.CompareAndSwap(true, false) {
-		w.resetSegment()
+	for {
+		cur := w.suppressDepth.Load()
+		if cur == 0 {
+			log.Printf("[wake] Suppress(false) with depth already 0 — ignoring (unbalanced caller)")
+			return
+		}
+		if w.suppressDepth.CompareAndSwap(cur, cur-1) {
+			if cur-1 == 0 {
+				w.resetSegment() // 1 -> 0 edge
+			}
+			return
+		}
 	}
 }
 
@@ -191,7 +225,7 @@ func (w *WakeListenerService) Suppress(yes bool) {
 // 30 ms buffer is ~480 multiplies. Keep work here minimal so we don't
 // stall the audio thread.
 func (w *WakeListenerService) onChunk(buf []byte) {
-	if w.paused.Load() || w.suppressed.Load() {
+	if w.paused.Load() || w.suppressDepth.Load() > 0 {
 		return
 	}
 	rms := pcmRMSint16(buf)
@@ -209,6 +243,7 @@ func (w *WakeListenerService) onChunk(buf []byte) {
 			w.speechStartedAt = now
 			w.segStartedAt = now
 		}
+		w.speechChunks++
 		w.lastSpeechAt = now
 		w.segBuf = append(w.segBuf, buf...)
 		return
@@ -247,6 +282,13 @@ func (w *WakeListenerService) coordinate(ctx context.Context) {
 // maybeEmitSegment checks whether the current segment is ready to emit
 // (silence cutoff reached, or hard cap exceeded). When ready, snapshots
 // the buffer, resets state, and ships the segment to the daemon.
+// minWakeSpeechChunks is the floor on speech-energy chunks for a segment to be
+// shipped for STT. At the ~30 ms capture buffer this is ~90 ms of voiced audio
+// — enough to reject stray clicks/blips while still catching a single short
+// "Jarvis". (Replaces the old first-to-last speech-timestamp span, which
+// under-measured clipped words and silently dropped the core wake utterance.)
+const minWakeSpeechChunks = 3
+
 func (w *WakeListenerService) maybeEmitSegment(ctx context.Context) {
 	now := time.Now()
 	w.mu.Lock()
@@ -262,14 +304,21 @@ func (w *WakeListenerService) maybeEmitSegment(ctx context.Context) {
 	}
 	pcm := w.segBuf
 	speechDur := w.lastSpeechAt.Sub(w.speechStartedAt)
+	speechChunks := w.speechChunks
 	w.segBuf = nil
 	w.speechSeen = false
+	w.speechChunks = 0
 	w.mu.Unlock()
 
-	// Discard tiny blips — most likely background noise, definitely not
-	// a meaningful utterance with "jarvis" in it.
-	if speechDur < w.opts.MinSegmentDur {
-		log.Printf("[wake] discard short segment (%dms speech)", speechDur.Milliseconds())
+	// Discard tiny blips — most likely background noise, not a real utterance.
+	// Gate on the COUNT of speech-energy chunks, not the first-to-last speech
+	// timestamp span: a single clipped/quiet word ("Jarvis") whose energy only
+	// crosses the threshold in a few non-contiguous chunks has a tiny span yet
+	// is exactly what we must catch. The chunk count is gap-tolerant. The
+	// daemon's STT + "jarvis" regex is the real noise filter, so we err toward
+	// keeping borderline segments.
+	if speechChunks < minWakeSpeechChunks {
+		log.Printf("[wake] discard short segment (%d speech chunks, %dms span)", speechChunks, speechDur.Milliseconds())
 		return
 	}
 	if len(pcm) == 0 {
@@ -312,4 +361,5 @@ func (w *WakeListenerService) resetSegment() {
 	defer w.mu.Unlock()
 	w.segBuf = nil
 	w.speechSeen = false
+	w.speechChunks = 0
 }

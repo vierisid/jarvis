@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,8 +45,13 @@ func (e *tokenRejectedError) Error() string {
 type SidecarClient struct {
 	config          *SidecarConfig
 	claims          *SidecarTokenClaims
+	tokenProvider   *accessTokenProvider // mints short-lived panel access tokens
 	handlers        map[string]RPCHandler
-	conn            *websocket.Conn
+	// conn is read by readLoop/sendJSON/sendBinary (per-connection goroutines)
+	// and written by connectAndServe; Stop() clears it from the signal-handler
+	// goroutine. atomic.Pointer makes those cross-goroutine accesses race-free
+	// (c.mu intentionally does not cover conn).
+	conn            atomic.Pointer[websocket.Conn]
 	reconnectDelay  time.Duration
 	stopped         bool
 	incompatible    bool         // brain hard-blocked us (version < MIN); do not reconnect
@@ -79,6 +85,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client := &SidecarClient{
 		config:         config,
 		claims:         claims,
+		tokenProvider:  newAccessTokenProvider(claims.Brain, config.Token),
 		reconnectDelay: minReconnectDelay,
 	}
 	client.runPreflight()
@@ -96,7 +103,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		// makes sense when the ambient UI is active.
 		client.regions = NewRegionSelectionService()
 	}
-	client.handlers = NewHandlerRegistry(config, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig, client.claims.Brain, config.Token)
+	client.handlers = NewHandlerRegistry(config, &client.mu, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig, client.claims.Brain, client.tokenProvider.Token)
 	return client, nil
 }
 
@@ -156,8 +163,19 @@ func normalizeBrainOverride(raw string) string {
 		return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, u.Host)
 	}
 
+	// Default to TLS. Downgrade to plaintext ws only for loopback or private/LAN
+	// addresses (which typically run without a cert); public hosts stay wss so
+	// the bearer token is never sent in the clear over the internet. The old
+	// `strings.Contains(trimmed, ":")` matched ANY host:port — including public
+	// remotes given as bare host:port — and silently downgraded them.
 	wsScheme := "wss"
-	if strings.Contains(trimmed, "localhost") || strings.Contains(trimmed, "127.0.0.1") || strings.Contains(trimmed, ":") {
+	host := trimmed
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		host = h
+	}
+	if host == "localhost" {
+		wsScheme = "ws"
+	} else if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
 		wsScheme = "ws"
 	}
 	return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, trimmed)
@@ -217,9 +235,9 @@ func (c *SidecarClient) Stop() {
 	if c.subPebble != nil {
 		_ = c.subPebble.CloseAll()
 	}
-	if c.conn != nil {
-		c.conn.Close(websocket.StatusNormalClosure, "client shutdown")
-		c.conn = nil
+	if conn := c.conn.Load(); conn != nil {
+		conn.Close(websocket.StatusNormalClosure, "client shutdown")
+		c.conn.Store(nil)
 	}
 	c.connState.Store(connConnecting)
 }
@@ -390,7 +408,7 @@ func (c *SidecarClient) reloadConfig() {
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.config.Token)
+	c.handlers = NewHandlerRegistry(c.config, &c.mu, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.tokenProvider.Token)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
@@ -450,7 +468,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// Past the handshake: on any later return (disconnect) drop back to
 	// "connecting" so the tray clears the error state during reconnect.
 	defer c.connState.Store(connConnecting)
-	c.conn = conn
+	c.conn.Store(conn)
 	// Allow large messages (10MB)
 	conn.SetReadLimit(10 * 1024 * 1024)
 
@@ -496,6 +514,15 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		if err := wakeListener.Start(ctx); err != nil {
 			log.Printf("[wake] failed to start: %v", err)
 			wakeListener = nil
+		} else {
+			// Tear the listener down when this connection ends. audioSvc and
+			// wakeListener are constructed fresh per connectAndServe, so without
+			// this every reconnect leaked a coordinate() goroutine and a held mic
+			// device — after N reconnects, N listeners fight over the microphone.
+			// Stop() works via stopCh (not ctx), so it's safe that Start uses the
+			// parent ctx (reloadConfig cancels obsCtx and must NOT kill the wake
+			// listener). The receiver is bound now, while wakeListener is non-nil.
+			defer wakeListener.Stop()
 		}
 
 		// Suppress wake captures while TTS is playing so JARVIS's own
@@ -747,14 +774,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			c.mu.Lock()
 			c.handlers["region.start_selection"] = func(_ map[string]any) (*RPCResult, error) {
 				selectionID := fmt.Sprintf("region-%d", time.Now().UnixMilli())
+				// Release suppression exactly once for this selection, however it
+				// ends. region.Start calls exactly one of onCapture/onCancel OR
+				// returns an error (and some platform stubs fire onCancel AND
+				// return), so a sync.Once keeps the counter balanced against the
+				// single Suppress(true) below.
+				var releaseOnce sync.Once
+				releaseSuppress := func() {
+					if wakeListener != nil {
+						releaseOnce.Do(func() { wakeListener.Suppress(false) })
+					}
+				}
 				if wakeListener != nil {
 					wakeListener.Suppress(true)
 				}
 				err := c.regions.Start(
 					func(pngBytes []byte, w, h int) {
-						if wakeListener != nil {
-							wakeListener.Suppress(false)
-						}
+						releaseSuppress()
 						evt := SidecarEvent{
 							Type:      "sidecar_event",
 							EventType: "region.captured",
@@ -777,9 +813,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 						}
 					},
 					func() {
-						if wakeListener != nil {
-							wakeListener.Suppress(false)
-						}
+						releaseSuppress()
 						evt := SidecarEvent{
 							Type:      "sidecar_event",
 							EventType: "region.cancelled",
@@ -791,9 +825,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 					},
 				)
 				if err != nil {
-					if wakeListener != nil {
-						wakeListener.Suppress(false)
-					}
+					releaseSuppress()
 					return nil, err
 				}
 				return &RPCResult{Result: map[string]any{"selection_id": selectionID, "started": true}}, nil
@@ -864,8 +896,12 @@ func (c *SidecarClient) sendCapabilitiesUpdate(ctx context.Context) error {
 }
 
 func (c *SidecarClient) readLoop(ctx context.Context) error {
+	conn := c.conn.Load()
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
 	for {
-		_, data, err := c.conn.Read(ctx)
+		_, data, err := conn.Read(ctx)
 		if err != nil {
 			return err
 		}
@@ -986,21 +1022,23 @@ func (c *SidecarClient) sendJSON(ctx context.Context, v any) error {
 	if err != nil {
 		return err
 	}
-	if c.conn == nil {
+	conn := c.conn.Load()
+	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
-	return c.conn.Write(ctx, websocket.MessageText, data)
+	return conn.Write(ctx, websocket.MessageText, data)
 }
 
 // sendBinary writes a binary WS frame: [36-byte refId][raw data].
 func (c *SidecarClient) sendBinary(ctx context.Context, refId string, data []byte) error {
-	if c.conn == nil {
+	conn := c.conn.Load()
+	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
 	frame := make([]byte, 36+len(data))
 	copy(frame[:36], []byte(refId))
 	copy(frame[36:], data)
-	return c.conn.Write(ctx, websocket.MessageBinary, frame)
+	return conn.Write(ctx, websocket.MessageBinary, frame)
 }
 
 // sendEvent sends a sidecar event. Large binary payloads (>= the inline

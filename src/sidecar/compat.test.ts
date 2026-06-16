@@ -34,6 +34,18 @@ describe('compareSemver', () => {
     expect(compareSemver(v('1.0.0-rc.1'), v('1.0.0'))).toBeLessThan(0);
     expect(compareSemver(v('1.0.0'), v('1.0.0-rc.1'))).toBeGreaterThan(0);
   });
+  test('locks the MIN<=v<RECOMMENDED ordering the "suggested" branch relies on', () => {
+    // classifySidecarVersion returns 'suggested' only when min <= v < recommended.
+    // With the seeded floors equal (0.1.0) that branch is unreachable today, so
+    // pin the comparison directly — the first time RECOMMENDED is bumped above
+    // MIN this is the logic that goes live, and it currently has no other cover.
+    const min = v('0.1.0');
+    const recommended = v('0.2.0');
+    const between = v('0.1.5');
+    expect(compareSemver(between, min)).toBeGreaterThanOrEqual(0); // not blocked
+    expect(compareSemver(between, recommended)).toBeLessThan(0);   // would be 'suggested'
+    expect(compareSemver(min, min)).toBe(0);                       // exactly MIN is not blocked
+  });
 });
 
 describe('classifySidecarVersion', () => {

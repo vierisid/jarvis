@@ -38,12 +38,14 @@ export function TaskResultRoom({ taskId }: { taskId: string }) {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = async () => {
+      let status: string | undefined;
       try {
         const res = await fetch(`/api/agents/tasks/${encodeURIComponent(taskId)}`);
         if (!res.ok) {
           if (alive) setError(`HTTP ${res.status}`);
         } else {
           const json = (await res.json()) as TaskRecord;
+          status = json.status;
           if (alive) {
             setTask(json);
             setError(null);
@@ -52,9 +54,14 @@ export function TaskResultRoom({ taskId }: { taskId: string }) {
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : "fetch failed");
       } finally {
-        if (alive) {
-          const interval = task?.status === "running" ? 2000 : 5000;
-          timer = setTimeout(tick, interval);
+        // Re-poll only while running (fast) or after a transient fetch error
+        // (status undefined). A terminal record is immutable, so stop — this is
+        // a long-lived native panel and otherwise it would poll forever. Decide
+        // from the freshly-fetched status, not a stale closure, so the effect
+        // doesn't need task.status in its deps (which tore down the loop on
+        // every transition and fired an extra immediate fetch).
+        if (alive && (status === "running" || status === undefined)) {
+          timer = setTimeout(tick, status === "running" ? 2000 : 5000);
         }
       }
     };
@@ -64,7 +71,7 @@ export function TaskResultRoom({ taskId }: { taskId: string }) {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [taskId, task?.status]);
+  }, [taskId]);
 
   if (error && !task) {
     return (

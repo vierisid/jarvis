@@ -6,8 +6,11 @@
 .agent-strip {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  /* Fill the wrapper, not the viewport: in panel mode the body is rendered
+     inside .jarvis-v2-panel-mode (padding 16px 20px), so 100vw/100vh overflowed
+     the exactly-sized 290x440 native window by the padding on each axis. */
+  height: 100%;
+  width: 100%;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-sans);

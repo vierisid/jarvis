@@ -279,12 +279,15 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Escape backslashes and double-quotes for AppleScript string literal
-	escaped := strings.ReplaceAll(text, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-
-	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
-	if _, err := runOsascript(script, 10*time.Second); err != nil {
+	// Pass the text as an argv item rather than interpolating it into the
+	// script source. osascript args are real arguments (no shell, no string
+	// literal), so newlines/quotes/backslashes in `text` are data and cannot
+	// break out of the keystroke statement -- this is what prevents
+	// AppleScript injection via attacker/LLM-controlled text.
+	script := `on run argv
+	tell application "System Events" to keystroke (item 1 of argv)
+end run`
+	if _, err := runOsascriptArgs(script, 10*time.Second, text); err != nil {
 		return nil, fmt.Errorf("type_text failed: %w", err)
 	}
 
@@ -508,6 +511,22 @@ func runOsascript(script string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// runOsascriptArgs runs an AppleScript that reads its inputs from `argv`, passing
+// caller-supplied values as process arguments (after `--`) rather than interpolating
+// them into the script source. This makes the values data, not code, so they cannot
+// inject AppleScript. The script must be an `on run argv ... end run` handler.
+func runOsascriptArgs(script string, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmdArgs := append([]string{"-e", script, "--"}, args...)
+	cmd := exec.CommandContext(ctx, "osascript", cmdArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
