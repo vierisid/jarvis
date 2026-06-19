@@ -34,6 +34,21 @@ telemetry:
 # stripped on save. Env vars (JARVIS_OPENAI_KEY, etc.) are no longer read for
 # LLM config either.
 
+# ── Conversation context controls ──
+# Bound how much prior dialogue is replayed into the model on each turn. This
+# is the main lever for cost (paid providers re-bill replayed history) and for
+# latency (local models must prefill the whole prompt every turn).
+conversation:
+  # Max prior messages (user + assistant) replayed into context per turn. The
+  # dialogue compactor still summarizes the older part of this window; lowering
+  # it shrinks how much history reaches the model. Default 80.
+  max_messages: 80
+  # A new message arriving more than this many hours after the last one starts
+  # a fresh conversation instead of extending the old one. Default 4. (The
+  # "New chat" button in the dashboard forces a fresh conversation immediately,
+  # regardless of this window.)
+  idle_reset_hours: 4
+
 personality:
   core_traits:
     - "loyal"

@@ -1,5 +1,5 @@
 import React from "react";
-import { Bell, Search } from "lucide-react";
+import { Bell, Search, SquarePen } from "lucide-react";
 import { Button, Icon, KBD } from "../ui";
 import "./Header.css";
 
@@ -25,6 +25,12 @@ export interface HeaderProps {
   onModeChange?: (next: Mode) => void;
   onPalette?: () => void;
   /**
+   * Start a fresh conversation (New Chat soft cutoff). Clears the thread and
+   * tells the daemon to stop replaying prior dialogue. Omitted in the mock
+   * shell, where there's no daemon conversation to reset.
+   */
+  onNewChat?: () => void;
+  /**
    * Count of unread notifications. 0 = no badge. Anything > 9 is rendered
    * as "9+" so a noisy queue doesn't blow the bell's pill width.
    */
@@ -44,6 +50,7 @@ export interface HeaderProps {
 export function Header({
   connection = "live",
   onPalette,
+  onNewChat,
   notificationCount = 0,
   notificationsOpen = false,
   onToggleNotifications,
@@ -64,6 +71,17 @@ export function Header({
       </div>
 
       <div className="v2-header__right">
+        {onNewChat && (
+          <button
+            type="button"
+            className="v2-header__iconbtn"
+            onClick={onNewChat}
+            aria-label="New chat"
+            title="New chat — start a fresh conversation"
+          >
+            <Icon icon={SquarePen} size="md" />
+          </button>
+        )}
         <button
           type="button"
           className="v2-header__palette"

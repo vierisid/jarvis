@@ -1008,7 +1008,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     // Persist user message
     try {
-      const conversation = getOrCreateConversation(channel);
+      const idleHours = this.agentService.getConfig().conversation?.idle_reset_hours;
+      const conversation = getOrCreateConversation(channel, {
+        idleResetMs: typeof idleHours === 'number' ? idleHours * 60 * 60 * 1000 : undefined,
+      });
       recordUserProfileTurn(text);
       addMessage(conversation.id, { role: 'user', content: text });
 

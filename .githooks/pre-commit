@@ -11,8 +11,19 @@ bun run scripts/check-no-ee-imports.ts
 # disk / cold cache but cutting off the indefinite case so the commit
 # fails loudly instead of blocking the terminal.
 echo "[pre-commit] Running tests (240s timeout)..."
+# Pick a portable timeout command. macOS ships no GNU `timeout`; Homebrew
+# coreutils provides it as `gtimeout`. If neither exists, run unbounded
+# rather than failing the commit with "timeout: command not found".
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=(timeout --kill-after=15s 240s)
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=(gtimeout --kill-after=15s 240s)
+else
+  TIMEOUT_CMD=()
+  echo "[pre-commit] note: no timeout/gtimeout found — running tests without a wall-clock bound."
+fi
 set +e
-timeout --kill-after=15s 240s bun test --bail
+"${TIMEOUT_CMD[@]}" bun test --bail
 rc=$?
 set -e
 if [ "$rc" != "0" ]; then
@@ -29,6 +40,6 @@ if [ "$rc" != "0" ]; then
 fi
 
 echo "[pre-commit] Type checking..."
-bunx tsc --noEmit
+bun x tsc --noEmit
 
 echo "[pre-commit] All checks passed."

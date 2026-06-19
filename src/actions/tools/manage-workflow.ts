@@ -93,87 +93,51 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     name: "manage_workflow",
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
-      "",
-      "When the user says things like \"make a workflow that ...\", \"automate X\",",
-      "\"create a flow that does Y every morning\", \"set up an automation for Z\", call",
-      "`compose` with a `name` you propose and the `description` quoting their request.",
-      "When the user says \"run my morning brief\" or \"trigger the daily summary\", call `run`.",
-      "Use the other actions to introspect (`list`, `get`, `list_runs`, `get_run`) or",
-      "lifecycle-manage (`enable`, `disable`, `publish`, `delete`) existing flows.",
-      "",
-      "Most actions accept a `flow` parameter resolving a display name (case-insensitive) or id.",
-      "Runs are referenced by `run_id` (returned by `run` or `list_runs`).",
-      "",
-      "Actions:",
-      "  compose { name, description }       PRIMARY action for \"create a workflow that ...\" requests.",
-      "                                      Builds a draft flow from a plain-English description (LLM-backed).",
-      "                                      On success returns { ok: true, flow, versionId }.",
-      "                                      On failure returns { ok: false, errors, rawResponse }: read the errors,",
-      "                                      refine the description with concrete piece/tool names, and call again.",
-      "                                      Composed flows are DISABLED; follow up with `publish` once the user",
-      "                                      confirms, then optionally `run` to test.",
-      "  create { name, empty: true }        Create an EMPTY workflow with a manual trigger (no steps). The `empty: true`",
-      "                                      flag is REQUIRED -- without it the tool refuses and tells you to use `compose`.",
-      "                                      Only use this when the user explicitly asked for a blank canvas. If they",
-      "                                      described what the workflow should DO, use `compose` with their request as",
-      "                                      the description; never use `create` for that case.",
-      "  list                                Return every workflow's id, name, status, last-updated.",
-      "  get { flow }                        Full detail (latest version, published id, recent metadata).",
-      "  run { flow, payload? }              Queue a run; returns the run_id.",
-      "  enable / disable { flow }           Toggle status.",
-      "  publish { flow }                    Lock the latest draft and set as the published version (also enables it).",
-      "  delete { flow }                     Permanently remove.",
-      "  list_runs { flow?, limit? }         Recent runs (per flow or across all).",
-      "  get_run { run_id }                  Full run detail with step outputs.",
+      "For \"make/automate/set up a workflow that ...\" requests, call `compose` with a proposed `name` and a `description` quoting the request — it builds a draft flow (LLM-backed). On {ok:false,errors}, refine the description with the piece/tool names in the errors and call again. Composed flows start DISABLED; `publish` after the user confirms, then `run` to test.",
+      "`run { flow, payload? }` triggers an existing flow by name/id. Introspect with `list` / `get` / `list_runs` / `get_run`; lifecycle via `enable` / `disable` / `publish` / `delete`.",
+      "`create` makes an EMPTY flow (manual trigger, no steps) and requires `empty: true` — use ONLY for an explicit blank canvas; if the user described behavior, use `compose` instead.",
     ].join("\n"),
     category: "automation",
     parameters: {
       action: {
         type: "string",
-        description:
-          'One of: "compose" | "create" | "list" | "get" | "run" | "enable" | "disable" | "publish" | "delete" | "list_runs" | "get_run". ' +
-          'Use "compose" (not "create") when the user describes what the workflow should do; "create" only makes an empty flow.',
+        description: 'compose | create | list | get | run | enable | disable | publish | delete | list_runs | get_run.',
         required: true,
       },
       flow: {
         type: "string",
-        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional for list_runs.",
+        description: "Workflow name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional for list_runs.",
         required: false,
       },
       name: {
         type: "string",
-        description: 'Display name for the new workflow. Required for "create" and "compose". Pick a short, descriptive title.',
+        description: 'Short display name for the new workflow (compose/create).',
         required: false,
       },
       payload: {
         type: "object",
-        description: 'Optional JSON object passed as the trigger payload of the run (for "run"). Use when the flow expects input data.',
+        description: 'Optional trigger payload object for run.',
         required: false,
       },
       run_id: {
         type: "string",
-        description: 'Run id (for "get_run"). Returned by "run" or "list_runs".',
+        description: 'Run id for get_run (returned by run/list_runs).',
         required: false,
       },
       description: {
         type: "string",
         description:
-          'Plain-English description of what the workflow should do (for "compose"). Quote the user verbatim when possible, ' +
-          'and include trigger details (schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ..."). ' +
-          'On {ok:false,errors} replies, refine this with the names called out in the errors and call compose again.',
+          'What the workflow should do (compose). Quote the user; include the trigger (schedule/webhook/manual) and concrete services/actions (e.g. "send a Gmail to ...").',
         required: false,
       },
       limit: {
         type: "number",
-        description: 'Cap for "list_runs" (default 25).',
+        description: 'Cap for list_runs (default 25).',
         required: false,
       },
       empty: {
         type: "boolean",
-        description:
-          'Required when calling `create` without a `description`. Confirms "yes, the user wants a blank canvas with no steps." ' +
-          'If the user described what the workflow should do, do NOT pass empty -- call `compose` instead with that description. ' +
-          'Defaults to false.',
+        description: 'Set true to create a blank flow with no steps (create only). Defaults to false.',
         required: false,
       },
     },

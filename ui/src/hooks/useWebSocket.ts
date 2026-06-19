@@ -988,8 +988,21 @@ export function useWebSocket() {
     setNotices((prev) => prev.filter((notice) => notice.id !== noticeId));
   }, []);
 
+  // Clear the local conversation view (New Chat soft cutoff). Drops the
+  // rendered messages and any in-flight streaming buffers so the thread
+  // starts empty; the daemon-side cutoff is handled by the caller hitting
+  // /api/vault/conversations/new.
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    streamBufferRef.current = "";
+    streamIdRef.current = null;
+    toolCallsRef.current = [];
+    subAgentEventsRef.current = [];
+    pendingChatIdsRef.current.clear();
+  }, []);
+
   return {
-    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
+    messages, isConnected, sendMessage, clearMessages, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
     approvals,
     clarifiers,
     repeatBacks,

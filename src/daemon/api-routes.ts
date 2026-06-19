@@ -611,6 +611,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // New Chat (soft cutoff): force-create a fresh conversation for the
+    // channel so the next message starts with no replayed dialogue. The old
+    // conversation's messages stay in the DB (browsable via the list/messages
+    // endpoints) — nothing is deleted.
+    '/api/vault/conversations/new': {
+      POST: (req: Request) => {
+        const params = getSearchParams(req);
+        const channel = params.get('channel') ?? 'websocket';
+        const conversation = getOrCreateConversation(channel, { forceNew: true });
+        return json(conversation);
+      },
+    },
+
     '/api/vault/conversations/:id/messages': {
       GET: (req: Request & { params: { id: string } }) => {
         const params = getSearchParams(req);

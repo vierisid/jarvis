@@ -269,6 +269,23 @@ export function useLiveThread() {
     if (!resp.ok) throw new Error(`repeat-back ${decision} failed: ${resp.status}`);
   }, []);
 
+  /**
+   * New Chat — soft cutoff. Tells the daemon to start a fresh conversation
+   * for this channel (old messages stay in the DB), then clears the local
+   * thread so the next turn sends no replayed dialogue. Also drops any
+   * palette-injected cards and open room windows so the thread truly resets.
+   */
+  const newChat = useCallback(async () => {
+    try {
+      await fetch("/api/vault/conversations/new?channel=websocket", { method: "POST" });
+    } catch (err) {
+      console.error("[v2] new chat failed", err);
+    }
+    ws.clearMessages();
+    setInjectedCards([]);
+    setRoomWindows([]);
+  }, [ws]);
+
   return {
     items,
     isConnected: ws.isConnected,
@@ -279,6 +296,8 @@ export function useLiveThread() {
     cancel,
     resolveClarifier,
     resolveRepeatBack,
+    /** New Chat soft cutoff: fresh daemon conversation + cleared local thread. */
+    newChat,
     /** Daemon-emitted thinking flag (between STT-final and stream/tts start). */
     thinking: ws.thinking,
     /** Daemon-driven Room navigation request (voice "open workflows" etc.). */

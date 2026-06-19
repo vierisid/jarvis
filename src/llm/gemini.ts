@@ -9,6 +9,7 @@ import type {
 } from './provider.ts';
 import { classifyErrorString } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { stripCacheBreakpoint } from './prompt-cache.ts';
 
 type GeminiPart =
   | { text: string }
@@ -259,9 +260,9 @@ export class GeminiProvider implements LLMProvider {
     contents: GeminiContent[];
   } {
     const systemMessages = messages.filter(m => m.role === 'system');
-    const systemText = systemMessages
+    const systemText = stripCacheBreakpoint(systemMessages
       .map(m => typeof m.content === 'string' ? m.content : m.content.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n'))
-      .join('\n\n');
+      .join('\n\n'));
 
     const systemInstruction = systemText
       ? { parts: [{ text: systemText }] }

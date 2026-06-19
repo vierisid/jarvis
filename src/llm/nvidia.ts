@@ -9,6 +9,7 @@ import type {
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { stripCacheBreakpoint } from './prompt-cache.ts';
 
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -293,9 +294,9 @@ export class NVIDIAProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
+      const text = stripCacheBreakpoint(typeof m.content === 'string'
         ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n'));
       const msg: OpenAIMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
         content: (m.tool_calls && m.tool_calls.length > 0) ? '' : text,

@@ -35,6 +35,21 @@ export class ProjectManager {
   }
 
   /**
+   * Cheap synchronous existence check: is there at least one project on disk?
+   * Used to gate site_* file-ops tools (which require a project_id) out of the
+   * model's tool list until a project exists. Mirrors listProjects()'s
+   * "directory with a Makefile" definition, but skips all git/meta reads.
+   */
+  hasProjects(): boolean {
+    if (!existsSync(this.projectsDir)) return false;
+    for (const entry of readdirSync(this.projectsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (existsSync(join(this.projectsDir, entry.name, 'Makefile'))) return true;
+    }
+    return false;
+  }
+
+  /**
    * Discover all projects by scanning the projects directory.
    */
   async listProjects(): Promise<Project[]> {

@@ -9,6 +9,7 @@ import type {
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { stripCacheBreakpoint } from './prompt-cache.ts';
 
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -95,6 +96,16 @@ export class OpenAIProvider implements LLMProvider {
     return 'OpenAI';
   }
 
+  /**
+   * Extra fields merged into every request body. Empty for OpenAI proper
+   * (which rejects unknown parameters). Subclasses override to add
+   * server-specific flags — e.g. the openai-compatible provider sets
+   * `cache_prompt` for llama.cpp KV-cache reuse.
+   */
+  protected extraBodyParams(): Record<string, unknown> {
+    return {};
+  }
+
   constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
@@ -111,6 +122,7 @@ export class OpenAIProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(compactedMessages),
+      ...this.extraBodyParams(),
     };
 
     if (temperature !== undefined) body.temperature = temperature;
@@ -151,6 +163,7 @@ export class OpenAIProvider implements LLMProvider {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: true,
+      ...this.extraBodyParams(),
     };
 
     if (temperature !== undefined) body.temperature = temperature;
@@ -315,9 +328,9 @@ export class OpenAIProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
+      const text = stripCacheBreakpoint(typeof m.content === 'string'
         ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n'));
       const msg: OpenAIMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',
         // When assistant made tool calls, content must be null (not empty string)

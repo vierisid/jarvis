@@ -101,6 +101,14 @@ export type LLMOptions = {
   tools?: LLMTool[];
   stream?: boolean;
   tool_choice?: 'auto' | 'none' | 'required';  // 'auto' enables tool calling when available
+  /**
+   * Stable identifier for the conversation this request belongs to (we use the
+   * vault conversation id). Providers that support session-sticky routing —
+   * notably OpenRouter — use it to pin every turn of a conversation to the same
+   * upstream provider, so the prompt cache written on one turn is actually hit
+   * on the next. A new chat → new conversation → new session_id → fresh scope.
+   */
+  session_id?: string;
 };
 
 export interface LLMProvider {

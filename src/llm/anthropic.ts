@@ -10,6 +10,7 @@ import type {
 } from './provider.ts';
 import { classifyErrorString } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { splitCachePrefix } from './prompt-cache.ts';
 
 /** Map Anthropic's SSE-level error.type to our canonical code. */
 function classifyAnthropicErrorType(type: string): LLMErrorCode {
@@ -36,10 +37,13 @@ type AnthropicMessage = {
   content: string | Array<{ type: string; [key: string]: unknown }>;
 };
 
+type CacheControl = { type: 'ephemeral' };
+
 type AnthropicToolDef = {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  cache_control?: CacheControl;
 };
 
 type AnthropicToolUse = {
@@ -155,12 +159,12 @@ export class AnthropicProvider implements LLMProvider {
       max_tokens,
     };
 
-    if (system) body.system = system;
+    if (system) body.system = this.cachedSystem(system);
     if (temperature !== undefined && !modelRejectsTemperature(model)) {
       body.temperature = temperature;
     }
     if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
+      body.tools = this.cachedTools(tools);
       // Anthropic uses budget_tokens for tool use (no explicit tool_choice needed)
     }
 
@@ -184,16 +188,13 @@ export class AnthropicProvider implements LLMProvider {
       stream: true,
     };
 
-    if (system) body.system = system;
+    if (system) body.system = this.cachedSystem(system);
     if (temperature !== undefined && !modelRejectsTemperature(model)) {
       body.temperature = temperature;
     }
     if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
+      body.tools = this.cachedTools(tools);
       // Anthropic automatically uses tools when provided (no explicit tool_choice needed)
-    }
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
     }
 
     let response: Response;
@@ -392,6 +393,38 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     return { system, messages: anthropicMessages };
+  }
+
+  /**
+   * Prompt caching: mark the large, stable prefix of the request — the system
+   * prompt and the tool-definitions block — with cache_control so Anthropic
+   * serves them from cache on repeat turns. Cache reads bill at ~0.1x the
+   * input price (one-time +25% to write), so a fat system prompt that's
+   * re-sent every turn stops being re-billed at full price. This is the single
+   * biggest cost/latency lever for Jarvis.
+   *
+   * The 5-minute ephemeral cache is the API default and needs no beta header.
+   * Below the per-model minimum (~1024 tokens for Sonnet, ~2048 for Haiku) the
+   * marker is a harmless no-op — Anthropic simply doesn't cache.
+   */
+  private cachedSystem(system: string): Array<{ type: 'text'; text: string; cache_control?: CacheControl }> {
+    // Cache only the stable prefix; the volatile tail (time, recent activity)
+    // is sent as a separate, uncached block so it doesn't bust the cache.
+    const { cached, fresh } = splitCachePrefix(system);
+    const blocks: Array<{ type: 'text'; text: string; cache_control?: CacheControl }> = [
+      { type: 'text', text: cached, cache_control: { type: 'ephemeral' } },
+    ];
+    if (fresh) blocks.push({ type: 'text', text: fresh });
+    return blocks;
+  }
+
+  private cachedTools(tools: LLMTool[]): AnthropicToolDef[] {
+    const converted = this.convertTools(tools);
+    if (converted.length > 0) {
+      // One breakpoint at the end of the tools array caches the whole block.
+      converted[converted.length - 1]!.cache_control = { type: 'ephemeral' };
+    }
+    return converted;
   }
 
   private convertTools(tools: LLMTool[]): AnthropicToolDef[] {

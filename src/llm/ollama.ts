@@ -9,6 +9,7 @@ import type {
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { stripCacheBreakpoint } from './prompt-cache.ts';
 
 type OllamaMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -263,7 +264,7 @@ export class OllamaProvider implements LLMProvider {
       if (typeof m.content === 'string') {
         return {
           role: m.role as 'system' | 'user' | 'assistant',
-          content: m.content,
+          content: stripCacheBreakpoint(m.content),
         };
       }
 

@@ -9,10 +9,127 @@ import type {
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+import { splitCachePrefix } from './prompt-cache.ts';
+import { appendFileSync } from 'node:fs';
+
+/** Rough token estimate (~4 chars/token + per-message overhead). */
+function estimateTokens(content: unknown): number {
+  const str = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+  return Math.ceil(str.length / 4);
+}
+
+/**
+ * Debug: when JARVIS_LLM_LOG_FILE is set, append the exact prompt we're about
+ * to send to OpenRouter (after compaction) as one JSON line, with a per-section
+ * token breakdown so you can see what's actually eating the context budget —
+ * stable system prompt vs. volatile ambient blocks vs. dialogue vs. tools.
+ *
+ * Enable:  JARVIS_LLM_LOG_FILE=~/jarvis-prompt.jsonl bun run start
+ * Inspect: tail -1 ~/jarvis-prompt.jsonl | jq .estTokens
+ */
+function logOutgoingRequest(
+  model: string,
+  messages: LLMMessage[],
+  tools?: LLMTool[],
+  streaming = false,
+): void {
+  const path = process.env.JARVIS_LLM_LOG_FILE;
+  if (!path) return;
+  try {
+    const systemTokens = messages
+      .filter((m) => m.role === 'system')
+      .reduce((sum, m) => sum + estimateTokens(m.content) + 4, 0);
+    const dialogueTokens = messages
+      .filter((m) => m.role !== 'system')
+      .reduce((sum, m) => sum + estimateTokens(m.content) + estimateTokens(m.tool_calls) + 4, 0);
+    const toolsTokens = (tools ?? []).reduce(
+      (sum, t) => sum + estimateTokens(t.name) + estimateTokens(t.description) + estimateTokens(t.parameters),
+      0,
+    );
+    const entry = {
+      ts: new Date().toISOString(),
+      provider: 'openrouter',
+      model,
+      streaming,
+      estTokens: {
+        system: systemTokens,
+        dialogue: dialogueTokens,
+        tools: toolsTokens,
+        total: systemTokens + dialogueTokens + toolsTokens,
+      },
+      messageCount: messages.length,
+      toolCount: tools?.length ?? 0,
+      toolNames: (tools ?? []).map((t) => t.name),
+      // Full tool schemas with per-tool token estimate, sorted biggest-first
+      // so you can see which definitions dominate the tools budget.
+      tools: (tools ?? [])
+        .map((t) => ({
+          name: t.name,
+          estTokens: estimateTokens(t.name) + estimateTokens(t.description) + estimateTokens(t.parameters),
+          description: t.description,
+          parameters: t.parameters,
+        }))
+        .sort((a, b) => b.estTokens - a.estTokens),
+      messages: messages.map((m) => ({
+        role: m.role,
+        estTokens: estimateTokens(m.content) + estimateTokens(m.tool_calls),
+        content: m.content,
+        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+      })),
+    };
+    appendFileSync(path.replace(/^~/, process.env.HOME ?? '~'), JSON.stringify(entry) + '\n');
+    console.log(
+      `[OpenRouter] prompt dump → ${path} (system ${systemTokens} + dialogue ${dialogueTokens} + tools ${toolsTokens} ≈ ${systemTokens + dialogueTokens + toolsTokens} tok)`,
+    );
+  } catch (err) {
+    console.warn('[OpenRouter] Failed to write LLM log file:', err);
+  }
+}
+
+type OpenRouterTextPart = {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+};
+
+type OpenRouterUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cost?: number;
+  /** OpenRouter/OpenAI shape: how many prompt tokens were served from cache. */
+  prompt_tokens_details?: { cached_tokens?: number };
+};
+
+/**
+ * Log what the response actually cost — crucially the cached-token count and
+ * the upstream provider OpenRouter routed to. This is the only way to confirm
+ * prompt caching is really happening (the request dump can't show it): if
+ * `cached` stays 0 across turns, the routed provider isn't caching regardless
+ * of how cacheable our prefix is. Always logs to the console; also appends to
+ * JARVIS_LLM_LOG_FILE when set.
+ */
+function logResponseUsage(model: string, usage: OpenRouterUsage | undefined, provider: string | undefined): void {
+  if (!usage) return;
+  const prompt = usage.prompt_tokens ?? 0;
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
+  const pct = prompt > 0 ? Math.round((cached / prompt) * 100) : 0;
+  console.log(
+    `[OpenRouter] response usage: provider=${provider ?? '?'} model=${model} prompt=${prompt} cached=${cached} (${pct}%) completion=${usage.completion_tokens ?? 0} cost=$${(usage.cost ?? 0).toFixed(4)}`,
+  );
+  const path = process.env.JARVIS_LLM_LOG_FILE;
+  if (!path) return;
+  try {
+    const entry = { ts: new Date().toISOString(), kind: 'response_usage', model, provider: provider ?? null, prompt_tokens: prompt, cached_tokens: cached, cached_pct: pct, completion_tokens: usage.completion_tokens ?? 0, cost: usage.cost ?? 0 };
+    appendFileSync(path.replace(/^~/, process.env.HOME ?? '~'), JSON.stringify(entry) + '\n');
+  } catch (err) {
+    console.warn('[OpenRouter] Failed to write response usage:', err);
+  }
+}
 
 type OpenRouterMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenRouterTextPart[] | null;
   tool_call_id?: string;
   tool_calls?: OpenRouterToolCall[];
 };
@@ -49,11 +166,12 @@ type OpenRouterResponse = {
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
-  usage: {
+  usage: OpenRouterUsage & {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
   };
+  provider?: string;
 };
 
 type OpenRouterStreamChunk = {
@@ -78,6 +196,10 @@ type OpenRouterStreamChunk = {
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
+  /** Present on the final chunk when usage accounting is requested. */
+  usage?: OpenRouterUsage;
+  /** Upstream provider OpenRouter routed to (e.g. "DeepSeek", "Alibaba"). */
+  provider?: string;
 };
 
 export class OpenRouterProvider implements LLMProvider {
@@ -92,16 +214,22 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, session_id } = options;
 
     // Compact history for better reliability across routed models
     const budget = calculateHistoryBudget(100000);
     const compactedMessages = compactHistory(messages, budget);
+    logOutgoingRequest(model, compactedMessages, tools, false);
 
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(compactedMessages),
+      usage: { include: true },
     };
+
+    // Session-sticky routing: pin all turns of this conversation to one
+    // provider so the prompt cache is reused across turns.
+    if (session_id) body.session_id = session_id;
 
     if (temperature !== undefined) body.temperature = temperature;
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
@@ -127,21 +255,30 @@ export class OpenRouterProvider implements LLMProvider {
     }
 
     const data = await response.json() as OpenRouterResponse;
+    logResponseUsage(data.model ?? model, data.usage, data.provider);
     return this.convertResponse(data);
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, session_id } = options;
 
     // Compact history for better reliability across routed models
     const budget = calculateHistoryBudget(100000);
     const compactedMessages = compactHistory(messages, budget);
+    logOutgoingRequest(model, compactedMessages, tools, true);
 
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: true,
+      // Ask OpenRouter to include usage (tokens, cost, cached_tokens) in the
+      // final SSE chunk so we can verify caching is actually happening.
+      usage: { include: true },
     };
+
+    // Session-sticky routing: pin all turns of this conversation to one
+    // provider so the prompt cache is reused across turns.
+    if (session_id) body.session_id = session_id;
 
     if (temperature !== undefined) body.temperature = temperature;
     if (max_tokens !== undefined) body.max_tokens = max_tokens;
@@ -181,6 +318,8 @@ export class OpenRouterProvider implements LLMProvider {
     const toolCallBuilders: Map<number, { id: string; name: string; arguments: string }> = new Map();
     let finishReason: string | null = null;
     let responseModel = model;
+    let usage: OpenRouterUsage | undefined;
+    let provider: string | undefined;
 
     try {
       const reader = response.body.getReader();
@@ -203,6 +342,10 @@ export class OpenRouterProvider implements LLMProvider {
 
           try {
             const chunk = JSON.parse(data) as OpenRouterStreamChunk;
+            // Usage + provider arrive on the final chunk (often with no
+            // choices), so capture them outside the choices branch.
+            if (chunk.usage) usage = chunk.usage;
+            if (chunk.provider) provider = chunk.provider;
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];
               responseModel = chunk.model;
@@ -260,6 +403,8 @@ export class OpenRouterProvider implements LLMProvider {
         }
       }
 
+      logResponseUsage(responseModel, usage, provider);
+
       const mappedFinishReason = this.mapFinishReason(finishReason);
       yield {
         type: 'done',
@@ -310,6 +455,22 @@ export class OpenRouterProvider implements LLMProvider {
   private convertMessages(messages: LLMMessage[]): OpenRouterMessage[] {
     return messages.map((m) => {
       const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+
+      // Prompt caching: split the system prompt at the cache breakpoint and
+      // mark only the stable prefix with cache_control, leaving the volatile
+      // tail (time, recent activity, …) uncached. For Anthropic/Gemini-routed
+      // models this caches the prefix (reads bill far below full price); for
+      // OpenAI/Grok/DeepSeek caching is automatic and keyed on the stable-first
+      // ordering (the marker is dropped, the tail stays last). Either way the
+      // system prompt stops being re-billed in full every turn.
+      if (m.role === 'system' && content) {
+        const { cached, fresh } = splitCachePrefix(content);
+        const parts: OpenRouterTextPart[] = [
+          { type: 'text', text: cached, cache_control: { type: 'ephemeral' } },
+        ];
+        if (fresh) parts.push({ type: 'text', text: fresh });
+        return { role: 'system', content: parts };
+      }
 
       const converted: OpenRouterMessage = {
         role: m.role,

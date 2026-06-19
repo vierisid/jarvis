@@ -202,6 +202,27 @@ export type UserConfig = {
 };
 
 /**
+ * Conversation context controls. These bound how much prior dialogue is
+ * replayed into the model on each turn — the lever for cost (paid providers)
+ * and latency (local models that must prefill the whole prompt).
+ */
+export type ConversationConfig = {
+  /**
+   * Max prior messages (user + assistant) pulled from the vault and replayed
+   * into model context per turn. The dialogue compactor still summarizes the
+   * older portion of this window when it's long; lowering this caps the
+   * verbatim tail directly. Default 80.
+   */
+  max_messages: number;
+  /**
+   * Idle window in hours. A new message that arrives more than this long after
+   * the last one starts a fresh conversation instead of appending to the old
+   * one (so context doesn't accumulate indefinitely). Default 4.
+   */
+  idle_reset_hours: number;
+};
+
+/**
  * Anonymous usage telemetry. Opt-out model: enabled by default so the
  * project can measure unique installs and retention. Disable with
  * `enabled: false`, the `JARVIS_TELEMETRY=0` env var, or the community
@@ -313,6 +334,7 @@ export type LLMConfig = {
 
 export type JarvisConfig = {
   user?: UserConfig;
+  conversation?: ConversationConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;
   daemon: {
@@ -374,6 +396,10 @@ export type JarvisConfig = {
 export const DEFAULT_CONFIG: JarvisConfig = {
   user: {
     name: '',
+  },
+  conversation: {
+    max_messages: 80,
+    idle_reset_hours: 4,
   },
   telemetry: {
     enabled: true,

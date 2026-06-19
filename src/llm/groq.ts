@@ -8,6 +8,7 @@ import type {
   LLMToolCall,
 } from './provider.ts';
 import { classifyHttpStatus } from './provider.ts';
+import { stripCacheBreakpoint } from './prompt-cache.ts';
 type GroqMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -372,9 +373,9 @@ export class GroqProvider implements LLMProvider {
 
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
     return messages.map(m => {
-      const text = typeof m.content === 'string'
+      const text = stripCacheBreakpoint(typeof m.content === 'string'
         ? m.content
-        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n');
+        : m.content.map((b) => b.type === 'text' ? b.text : '[image]').join('\n'));
       const hasToolCalls = !!(m.tool_calls && m.tool_calls.length > 0);
       const msg: GroqMessage = {
         role: m.role as 'system' | 'user' | 'assistant' | 'tool',

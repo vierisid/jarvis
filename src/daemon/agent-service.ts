@@ -28,7 +28,8 @@ import { researchQueueTool } from '../actions/tools/research.ts';
 import { documentTool } from '../actions/tools/documents.ts';
 import { AgentTaskManager } from '../agents/task-manager.ts';
 import { discoverSpecialists, formatSpecialistList } from '../agents/role-discovery.ts';
-import { buildSystemPrompt, type PromptContext } from '../roles/prompt-builder.ts';
+import { buildSystemPromptParts, type PromptContext } from '../roles/prompt-builder.ts';
+import { CACHE_BREAKPOINT } from '../llm/prompt-cache.ts';
 import type { ProgressCallback } from '../agents/sub-agent-runner.ts';
 import {
   getPersonality,
@@ -280,7 +281,13 @@ export class AgentService implements Service, IAgentService {
       systemPrompt += '\n\n' + siteContext;
     }
 
-    const stream = this.orchestrator.streamMessage(systemPrompt, text);
+    // Pin this conversation's turns to one upstream provider (OpenRouter
+    // session-sticky routing) so the cached system prefix actually gets reused
+    // across turns. Falls back to the channel when no conversation row exists
+    // yet. A New Chat creates a new conversation id → new session → fresh scope.
+    const sessionId = getRecentConversation(channel)?.conversation.id ?? channel;
+
+    const stream = this.orchestrator.streamMessage(systemPrompt, text, sessionId);
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
@@ -439,11 +446,14 @@ export class AgentService implements Service, IAgentService {
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
-      // Pull a wider window than we'll inject so the compactor has material
-      // to summarize when the conversation is long. The compactor caps the
-      // final list size (last 20 verbatim by default; older bucketed into a
-      // background-built summary when conversation exceeds 40 messages).
-      const messages = getMessages(recent.conversation.id, { limit: 80 });
+      // Pull at most `max_messages` of prior dialogue (configurable — the
+      // lever for cost on paid providers and prefill latency on local models).
+      // The compactor still caps and summarizes within this window (last 20
+      // verbatim by default; older bucketed into a background-built summary
+      // when the conversation exceeds 40 messages), so lowering this directly
+      // shrinks how much history reaches the model.
+      const maxMessages = this.config.conversation?.max_messages ?? 80;
+      const messages = getMessages(recent.conversation.id, { limit: maxMessages });
       const dialogue: LLMMessage[] = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({
@@ -451,7 +461,7 @@ export class AgentService implements Service, IAgentService {
           content: m.content,
         }));
 
-      if (!this.dialogueCompactor) return dialogue.slice(-10);
+      if (!this.dialogueCompactor) return dialogue.slice(-Math.min(10, maxMessages));
       return await this.dialogueCompactor.compact(recent.conversation.id, dialogue);
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
@@ -668,15 +678,28 @@ export class AgentService implements Service, IAgentService {
     // Build prompt context with live data + vault knowledge
     const context = this.buildPromptContext(userMessage);
 
-    // Build base system prompt from role + context
-    const rolePrompt = buildSystemPrompt(this.role, context);
+    // Split into the stable prefix (role, tool guide, profile, specialists) and
+    // the volatile tail (time, recent activity, knowledge, commitments). See
+    // buildSystemPromptParts.
+    const { stable, volatile } = buildSystemPromptParts(this.role, context);
 
-    // Build personality prompt for this channel
+    // Build personality prompt for this channel. NOTE: personality embeds a
+    // live relationship/interaction counter ("N interactions over D days, trust
+    // level …") that ticks every turn, so it is NOT stable — it goes in the
+    // volatile tail. Keeping it in the cached prefix would change the prefix by
+    // a digit each turn and defeat prompt caching entirely.
     const personality = this.personality ?? getPersonality();
     const channelPersonality = getChannelPersonality(personality, channel);
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
-    return `${rolePrompt}\n\n${personalityPrompt}`;
+    // Cache breakpoint: everything before is the byte-identical stable prefix
+    // (role, tool guide, profile, specialists); everything after is re-billed
+    // each turn (personality counter, time, recent activity, knowledge).
+    // Providers without cache_control strip the marker and send the plain
+    // stable-first concatenation (still cache-friendly for automatic prefix
+    // cachers like DeepSeek/OpenAI). See [[../llm/prompt-cache.ts]].
+    const volatileTail = [personalityPrompt, volatile].filter(Boolean).join('\n\n');
+    return volatileTail ? `${stable}${CACHE_BREAKPOINT}${volatileTail}` : stable;
   }
 
   private buildPromptContext(userMessage?: string): PromptContext {

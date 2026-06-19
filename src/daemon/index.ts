@@ -1348,6 +1348,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
 
     // 10a-2. Site Builder Service
+    // Captured for the tool-visibility filter below so it can gate site_*
+    // file-ops on whether any project exists. Stays null when site builder
+    // is disabled (in which case the site_* tools aren't registered anyway).
+    let siteProjectManager: { hasProjects(): boolean } | null = null;
     if (jarvisConfig.sites?.enabled !== false) {
       try {
         const { SiteBuilderService } = await import('../sites/service.ts');
@@ -1362,6 +1366,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const siteBuilderService = new SiteBuilderService(sitesConfig);
         await siteBuilderService.start();
         apiContext.siteBuilderService = siteBuilderService;
+        siteProjectManager = siteBuilderService.projectManager;
         registry.register(siteBuilderService);
 
         // Wire proxy into WebSocket server for dev server HTTP/WS forwarding
@@ -1383,6 +1388,34 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       } catch (err) {
         console.error('[Daemon] Site builder failed to start:', err instanceof Error ? err.message : err);
       }
+    }
+
+    // 10a-3. Capability-gated tool visibility. Don't ship tool schemas the
+    // model can't use in the current context — this is re-evaluated per turn,
+    // so a tool reappears the instant its prerequisite is met (sidecar
+    // enrolled, project created). Cuts input tokens without ever hiding a tool
+    // the user could actually invoke. See JARVIS_LLM_LOG_FILE for measurement.
+    {
+      const { isNoLocalTools } = await import('../actions/tools/local-tools-guard.ts');
+      // site_* file-ops require an existing project_id. Keep site_create_project
+      // always available so a build can be kicked off from a cold thread.
+      const SITE_FILE_OPS = new Set([
+        'site_read_file', 'site_write_file', 'site_delete_file',
+        'site_list_files', 'site_run_command', 'site_git_commit', 'site_github_push',
+      ]);
+      orchestrator.setToolVisibilityFilter((name) => {
+        // Desktop/browser run on a sidecar OR locally on the brain host. Only
+        // hide them when neither path exists: no sidecar AND local tools off.
+        if (name.startsWith('desktop_') || name.startsWith('browser_')) {
+          const hasSidecar = sidecarManager.listSidecars().length > 0;
+          return hasSidecar || !isNoLocalTools();
+        }
+        if (SITE_FILE_OPS.has(name)) {
+          return siteProjectManager?.hasProjects() ?? false;
+        }
+        return true;
+      });
+      console.log('[Daemon] Tool-visibility gating enabled (desktop/browser + site file-ops)');
     }
 
     // 10b. (legacy workflow engine deleted; the new runtime initialized above

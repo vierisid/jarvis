@@ -70,6 +70,13 @@ export class AgentOrchestrator {
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
   private onApprovalNeeded: ((request: ApprovalRequest) => void) | null = null;
 
+  // Optional per-turn filter deciding which registered tools are *offered* to
+  // the model. Returns true to include a tool by name. Used to avoid shipping
+  // (and paying tokens for) tool schemas that can't do anything in the current
+  // context — e.g. desktop/browser tools with no sidecar and local tools
+  // disabled, or site file-ops when no project exists. null = offer all.
+  private toolVisibilityFilter: ((toolName: string) => boolean) | null = null;
+
   constructor() {
     this.hierarchy = new AgentHierarchy();
     this.llmManager = null;
@@ -90,6 +97,14 @@ export class AgentOrchestrator {
 
   getToolRegistry(): ToolRegistry | null {
     return this.toolRegistry;
+  }
+
+  /**
+   * Set the per-turn tool-visibility filter (see field doc). Pass null to
+   * clear it and offer every registered tool.
+   */
+  setToolVisibilityFilter(filter: ((toolName: string) => boolean) | null): void {
+    this.toolVisibilityFilter = filter;
   }
 
   /**
@@ -496,7 +511,7 @@ export class AgentOrchestrator {
    * Yields text/tool_call events through all iterations.
    * Only emits 'done' when the final response is complete.
    */
-  async *streamMessage(systemPrompt: string, message: string): AsyncIterable<LLMStreamEvent> {
+  async *streamMessage(systemPrompt: string, message: string, sessionId?: string): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
@@ -541,7 +556,7 @@ export class AgentOrchestrator {
       let doneResponse: LLMResponse | null = null;
 
       // Stream from LLM
-      for await (const event of this.llmManager.streamTier('medium', 'chat_orchestrator_stream', messages, { tools })) {
+      for await (const event of this.llmManager.streamTier('medium', 'chat_orchestrator_stream', messages, { tools, session_id: sessionId })) {
         if (event.type === 'text') {
           accumulatedText += event.text;
           yield event; // Forward text chunks to client
@@ -680,7 +695,13 @@ export class AgentOrchestrator {
       return undefined;
     }
 
-    return this.toolRegistry.list().map(toolDefToLLMTool);
+    let defs = this.toolRegistry.list();
+    if (this.toolVisibilityFilter) {
+      const include = this.toolVisibilityFilter;
+      defs = defs.filter((d) => include(d.name));
+    }
+    if (defs.length === 0) return undefined;
+    return defs.map(toolDefToLLMTool);
   }
 
   /**

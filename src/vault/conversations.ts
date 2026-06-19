@@ -54,22 +54,44 @@ function parseMessage(row: MessageRow): ConversationMessage {
   };
 }
 
+/** Default idle window: a new message this long after the last starts fresh. */
+const DEFAULT_IDLE_RESET_MS = 4 * 60 * 60 * 1000;
+
 /**
  * Get or create the active conversation for a channel.
- * Returns the most recent conversation for the channel, or creates a new one.
+ *
+ * Returns the most recent conversation for the channel (within the idle
+ * window), or creates a new one.
+ *
+ * @param opts.forceNew     Always create a fresh conversation row, ignoring any
+ *                          recent one. This is the "New Chat" soft cutoff: the
+ *                          old conversation stays in the DB (browsable), but the
+ *                          next message starts with no replayed dialogue.
+ * @param opts.idleResetMs  How long after the last message a new one still
+ *                          appends to the same conversation. Older than this and
+ *                          a fresh conversation is created. Defaults to 4 hours.
  */
-export function getOrCreateConversation(channel: string): Conversation {
+export function getOrCreateConversation(
+  channel: string,
+  opts?: { forceNew?: boolean; idleResetMs?: number }
+): Conversation {
   const db = getDb();
   const now = Date.now();
 
-  // Look for a recent conversation on this channel (within last 4 hours)
-  const cutoff = now - 4 * 60 * 60 * 1000;
-  const existing = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
-  ).get(channel, cutoff) as ConversationRow | null;
+  if (!opts?.forceNew) {
+    // Look for a recent conversation on this channel (within the idle window)
+    const cutoff = now - (opts?.idleResetMs ?? DEFAULT_IDLE_RESET_MS);
+    // Tie-break on rowid (monotonic insert order) so a just-created (e.g. New
+    // Chat) conversation always wins over an older one stamped in the same
+    // millisecond — otherwise the soft cutoff could silently fall back to the
+    // old conversation.
+    const existing = db.prepare(
+      'SELECT * FROM conversations WHERE channel = ? AND last_message_at > ? ORDER BY last_message_at DESC, rowid DESC LIMIT 1'
+    ).get(channel, cutoff) as ConversationRow | null;
 
-  if (existing) {
-    return parseConversation(existing);
+    if (existing) {
+      return parseConversation(existing);
+    }
   }
 
   // Create new conversation
@@ -161,7 +183,7 @@ export function getRecentConversation(channel: string): {
 } | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? ORDER BY last_message_at DESC LIMIT 1'
+    'SELECT * FROM conversations WHERE channel = ? ORDER BY last_message_at DESC, rowid DESC LIMIT 1'
   ).get(channel) as ConversationRow | null;
 
   if (!row) return null;

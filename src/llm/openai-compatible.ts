@@ -20,4 +20,16 @@ export class OpenAICompatibleProvider extends OpenAIProvider {
   protected override get errorLabel(): string {
     return 'OpenAI-compatible';
   }
+
+  /**
+   * llama.cpp's server reuses the KV cache for a matching prompt prefix when
+   * `cache_prompt` is set, so a stable system prompt is prefilled once instead
+   * of re-evaluated every turn — the fix for the multi-second prompt-eval the
+   * user saw on local models. Unknown to most other OpenAI-compatible servers,
+   * which ignore unrecognized body fields, so it's safe to always send here
+   * (and is NOT sent by the OpenAI provider proper, which rejects unknowns).
+   */
+  protected override extraBodyParams(): Record<string, unknown> {
+    return { cache_prompt: true };
+  }
 }

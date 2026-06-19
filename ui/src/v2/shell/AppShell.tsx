@@ -356,6 +356,10 @@ function AppShellLive() {
     [live],
   );
 
+  const handleNewChat = useCallback(() => {
+    live.newChat().catch((err) => console.error("[v2] new chat failed", err));
+  }, [live]);
+
   // ── Palette wiring (Phase 5A) ──
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Phase C — tutorial auto-advance event bus. No-op when the
@@ -649,6 +653,7 @@ function AppShellLive() {
         onSuggestion={handleSuggestion}
         onToggleMute={handleToggleMute}
         onOpenPalette={openPalette}
+        onNewChat={handleNewChat}
         notificationCount={notif.unreadCount}
         notificationsOpen={notifOpen}
         onToggleNotifications={toggleNotif}
@@ -884,6 +889,8 @@ interface ShellLayoutProps {
   onToggleMute: () => void;
   // Palette (Phase 5A)
   onOpenPalette: () => void;
+  // New Chat soft cutoff (live shell only; mock omits)
+  onNewChat?: () => void;
   // Phase 6.2-A — Notification center (live shell only; mock omits)
   notificationCount?: number;
   notificationsOpen?: boolean;
@@ -917,6 +924,7 @@ function ShellLayout({
   onSuggestion,
   onToggleMute,
   onOpenPalette,
+  onNewChat,
   notificationCount,
   notificationsOpen,
   onToggleNotifications,
@@ -928,6 +936,7 @@ function ShellLayout({
         <Header
           connection={connection}
           onPalette={onOpenPalette}
+          onNewChat={onNewChat}
           notificationCount={notificationCount}
           notificationsOpen={notificationsOpen}
           onToggleNotifications={onToggleNotifications}
