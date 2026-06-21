@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-06-14";
+export const GENERATED_AT = "2026-06-21";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -252,8 +252,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-s3",
     npmPackage: "@activepieces/piece-amazon-s3",
-    versionRange: "^0.5.10",
-    latestVersion: "0.5.10",
+    versionRange: "^0.6.0",
+    latestVersion: "0.6.0",
     displayName: "Amazon S3",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-s3",
@@ -1532,8 +1532,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "deepgram",
     npmPackage: "@activepieces/piece-deepgram",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.1.7",
+    latestVersion: "0.1.7",
     displayName: "Deepgram",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/deepgram",
@@ -2462,8 +2462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-gemini",
     npmPackage: "@activepieces/piece-google-gemini",
-    versionRange: "^0.1.10",
-    latestVersion: "0.1.10",
+    versionRange: "^0.1.11",
+    latestVersion: "0.1.11",
     displayName: "Google Gemini",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-gemini",
@@ -2502,8 +2502,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-sheets",
     npmPackage: "@activepieces/piece-google-sheets",
-    versionRange: "^0.16.0",
-    latestVersion: "0.16.0",
+    versionRange: "^0.16.1",
+    latestVersion: "0.16.1",
     displayName: "Google Sheets",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-sheets",
@@ -3732,8 +3732,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-excel-365",
     npmPackage: "@activepieces/piece-microsoft-excel-365",
-    versionRange: "^0.7.0",
-    latestVersion: "0.7.0",
+    versionRange: "^0.7.1",
+    latestVersion: "0.7.1",
     displayName: "Microsoft Excel 365",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-excel-365",
@@ -3742,8 +3742,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-onedrive",
     npmPackage: "@activepieces/piece-microsoft-onedrive",
-    versionRange: "^0.4.0",
-    latestVersion: "0.4.0",
+    versionRange: "^0.4.1",
+    latestVersion: "0.4.1",
     displayName: "Microsoft Onedrive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-onedrive",
@@ -4212,8 +4212,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "openai",
     npmPackage: "@activepieces/piece-openai",
-    versionRange: "^0.9.1",
-    latestVersion: "0.9.1",
+    versionRange: "^0.9.2",
+    latestVersion: "0.9.2",
     displayName: "Openai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/openai",
@@ -4282,8 +4282,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "outseta",
     npmPackage: "@activepieces/piece-outseta",
-    versionRange: "^0.1.2",
-    latestVersion: "0.1.2",
+    versionRange: "^0.2.1",
+    latestVersion: "0.2.1",
     displayName: "Outseta",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/outseta",
@@ -4622,8 +4622,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "presentation",
     npmPackage: "@activepieces/piece-presentation",
-    versionRange: "^0.1.5",
-    latestVersion: "0.1.5",
+    versionRange: "^0.1.6",
+    latestVersion: "0.1.6",
     displayName: "Presentation",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/presentation",
@@ -6372,8 +6372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "workday",
     npmPackage: "@activepieces/piece-workday",
-    versionRange: "^0.0.6",
-    latestVersion: "0.0.6",
+    versionRange: "^0.0.7",
+    latestVersion: "0.0.7",
     displayName: "Workday",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/workday",
@@ -6442,8 +6442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "youtube",
     npmPackage: "@activepieces/piece-youtube",
-    versionRange: "^0.4.8",
-    latestVersion: "0.4.8",
+    versionRange: "^0.4.9",
+    latestVersion: "0.4.9",
     displayName: "Youtube",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/youtube",
