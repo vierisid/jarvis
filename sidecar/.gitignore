@@ -1,9 +1,9 @@
 # Build output
 dist/
-/jarvis-sidecar
-/jarvis-sidecar.exe
-/jarvis-sidecar-test
-/jarvis-sidecar-test.exe
+/jarvis
+/jarvis.exe
+/jarvis-test
+/jarvis-test.exe
 /sidecar
 
 # npm platform package binaries (built by make npm-pack)
