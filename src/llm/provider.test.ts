@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
-import { OpenAIProvider } from './openai.ts';
+import { OpenAIProvider, modelRejectsCustomTemperature } from './openai.ts';
 import { GroqProvider, relaxOptionalFieldsToNullable } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
@@ -843,6 +843,40 @@ describe('OpenAI request shaping', () => {
 
     expect(body.max_completion_tokens).toBe(321);
     expect(body.max_tokens).toBeUndefined();
+  });
+
+  test('OpenAIProvider keeps temperature for chat models that support it', async () => {
+    const provider = new OpenAIProvider('test-key', 'gpt-4o') as any;
+    await provider.chat([{ role: 'user', content: 'hi' }], { temperature: 0.6 });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.temperature).toBe(0.6);
+  });
+
+  test('OpenAIProvider omits temperature for reasoning models that only accept the default', async () => {
+    const provider = new OpenAIProvider('test-key', 'o3-mini') as any;
+    await provider.chat([{ role: 'user', content: 'hi' }], { temperature: 0.6 });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.temperature).toBeUndefined();
+  });
+});
+
+describe('modelRejectsCustomTemperature', () => {
+  test('rejects o-series and gpt-5 reasoning models', () => {
+    for (const m of ['o1', 'o1-mini', 'o3', 'o3-mini', 'o4-mini', 'o3-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano']) {
+      expect(modelRejectsCustomTemperature(m)).toBe(true);
+    }
+  });
+
+  test('allows chat models including gpt-5-chat', () => {
+    for (const m of ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-5-chat-latest']) {
+      expect(modelRejectsCustomTemperature(m)).toBe(false);
+    }
   });
 });
 

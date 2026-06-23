@@ -27,11 +27,15 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
     "claude-haiku-4-5-20251001",
   ],
   openai: [
+    // API model ids ONLY — not ChatGPT product labels. Reasoning ("thinking")
+    // is a request param (reasoning.effort), not a separate "-thinking" model,
+    // so ids like "gpt-5.4-thinking"/"gpt-5.3-instant" 404 as model_not_found.
+    "gpt-5.5",
+    "gpt-5.5-pro",
     "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.4-thinking",
     "gpt-5.4-pro",
-    "gpt-5.3-instant",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
     "gpt-5-mini",
     "gpt-5-nano",
     "gpt-4.1",

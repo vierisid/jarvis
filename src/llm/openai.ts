@@ -10,6 +10,25 @@ import type {
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
+/**
+ * OpenAI reasoning models reject any `temperature` other than the default (1):
+ *   400 invalid_request_error "Unsupported value: 'temperature' does not
+ *   support 0.6 with this model. Only the default (1) value is supported."
+ * Unlike Anthropic's check (presence of the field), this one is on the VALUE —
+ * but the only accepted value is the default, so the fix is the same: omit the
+ * field and let the API apply its default.
+ *
+ * Covers the o-series (o1/o3/o4-mini/o3-pro…) and the GPT-5 reasoning family.
+ * `gpt-5-chat*` is the non-reasoning variant and DOES accept a custom
+ * temperature, so it's excluded. Add new families here if you see that 400.
+ */
+export function modelRejectsCustomTemperature(model: string): boolean {
+  const id = model.toLowerCase();
+  if (/^o\d/.test(id)) return true;
+  if (id.startsWith('gpt-5') && !id.startsWith('gpt-5-chat')) return true;
+  return false;
+}
+
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
@@ -113,7 +132,9 @@ export class OpenAIProvider implements LLMProvider {
       messages: this.convertMessages(compactedMessages),
     };
 
-    if (temperature !== undefined) body.temperature = temperature;
+    if (temperature !== undefined && !modelRejectsCustomTemperature(model)) {
+      body.temperature = temperature;
+    }
     if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
@@ -153,7 +174,9 @@ export class OpenAIProvider implements LLMProvider {
       stream: true,
     };
 
-    if (temperature !== undefined) body.temperature = temperature;
+    if (temperature !== undefined && !modelRejectsCustomTemperature(model)) {
+      body.temperature = temperature;
+    }
     if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);

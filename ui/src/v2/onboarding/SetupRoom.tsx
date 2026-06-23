@@ -55,7 +55,7 @@ const PROVIDERS: ReadonlyArray<{
     id: "openai",
     label: "OpenAI",
     needsKey: true,
-    models: ["gpt-5.4", "gpt-5.4-thinking", "gpt-5-mini", "o4-mini"],
+    models: ["gpt-5.5", "gpt-5.4", "gpt-5.4-pro", "gpt-5-mini"],
     defaultModel: "gpt-5.4",
   },
   {
