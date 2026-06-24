@@ -27,9 +27,9 @@
 }
 
 body {
-  background: var(--j-bg);
-  color: var(--j-text);
-  font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
   min-height: 100vh;
   overflow: hidden;
 }
@@ -50,12 +50,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--j-border-bright);
-  border-radius: 3px;
+  background: var(--rule);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--j-text-muted);
+  background: var(--faint);
 }
 
 /* Selection */
