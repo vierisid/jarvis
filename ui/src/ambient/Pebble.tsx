@@ -5,7 +5,10 @@ export type PebbleState =
   | "listening"
   | "thinking"
   | "speaking"
-  | "working";
+  | "working"
+  | "asking"   // amber — waiting on your approval/authority
+  | "done"     // green flash — job landed
+  | "muted";   // mic muted — quiet, no chroma
 
 // "thinking" is intentionally NOT locked — it should follow the cursor like
 // idle, since thinking is a transient state where the user has no input
@@ -26,9 +29,6 @@ const CURSOR_OFFSET_Y = 22;
 // (which lives just outside the window's TL corner).
 const NATIVE_PEBBLE_X = 4;
 const NATIVE_PEBBLE_Y = 4;
-
-const WAVE_BARS = 4;
-const THINK_DOTS = 3;
 
 // True when the daemon spawned this page with ?native=1, meaning the
 // sidecar is doing native cursor-follow at the window level. The page
@@ -174,37 +174,10 @@ export function Pebble() {
   return (
     <>
       <div ref={pebbleRef} className={cls} aria-hidden>
-        <span className="pebble-glyph">
-          {state === "idle" && <span className="idle-dot" />}
-
-          {(state === "listening" || state === "speaking") && (
-            <span className="wave">
-              {Array.from({ length: WAVE_BARS }).map((_, i) => (
-                <span key={i} className="wave-bar" style={{ animationDelay: `${i * 0.09}s` }} />
-              ))}
-            </span>
-          )}
-
-          {state === "thinking" && (
-            <span className="think">
-              {Array.from({ length: THINK_DOTS }).map((_, i) => (
-                <span key={i} className="think-dot" style={{ animationDelay: `${i * 0.15}s` }} />
-              ))}
-            </span>
-          )}
-
-          {state === "working" && (
-            <span className="working-dot" />
-          )}
+        <span className="gd">
+          <span className="in" />
+          <span className="ring" />
         </span>
-
-        {state !== "idle" && state !== "thinking" && (
-          <span className="pebble-label">
-            {state === "listening" && "listening"}
-            {state === "speaking" && "speaking"}
-            {state === "working" && "working"}
-          </span>
-        )}
       </div>
 
       {showBubble && (

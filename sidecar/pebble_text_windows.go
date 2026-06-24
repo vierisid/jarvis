@@ -90,7 +90,7 @@ func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
 func makeBodyFont() uintptr {
 	bodyHeight := int32(-13)
 	weightNormal := int32(fwNormal)
-	bodyFace, _ := syscall.UTF16PtrFromString("Inter Tight")
+	bodyFace, _ := syscall.UTF16PtrFromString("Familjen Grotesk")
 	font, _, _ := procCreateFontW.Call(
 		uintptr(bodyHeight),
 		0, 0, 0,
@@ -177,7 +177,7 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 	weightMedium := int32(fwMedium)
 
 	// Eyebrow font — uppercase mono, medium weight.
-	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
+	eyebrowFace, _ := syscall.UTF16PtrFromString("Spline Sans Mono")
 	eyebrowFont, _, _ := procCreateFontW.Call(
 		uintptr(eyebrowHeight),
 		0, 0, 0,
@@ -198,18 +198,11 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 	// Transparent text background — preserves the bubble fill underneath.
 	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
 
-	// Per-state colours. Speaking has dark bg → light text; listening has
-	// paper bg → ink text + vermilion eyebrow.
-	var bodyCol, eyebrowCol uint32
-	if state == PebbleSpeaking {
-		// Dark card: paper-tone text + paper eyebrow (so the JARVIS label
-		// reads clearly against the ink background).
-		bodyCol = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-		eyebrowCol = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-	} else {
-		bodyCol = colorRef(pebbleInkR, pebbleInkG, pebbleInkB)
-		eyebrowCol = colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
-	}
+	// Monochrome Lab: the bubble is now a light glass card for both states,
+	// so text is always ink with the red eyebrow.
+	bodyCol := colorRef(pebbleInkR, pebbleInkG, pebbleInkB)
+	eyebrowCol := colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
+	_ = state
 
 	// Eyebrow row.
 	procSelectObject.Call(memDC, eyebrowFont)
@@ -268,7 +261,7 @@ func repairBubbleTextAlpha(pixels []uint32, bubbleY1 int32) {
 	// text — which lays out to pebbleBubbleBodyX1=434 — with alpha=0, i.e.
 	// invisible. Span the full card interior instead.
 	const (
-		inset = 8                     // > corner radius (6)
+		inset = 8                      // > corner radius (6)
 		x0    = pebbleBubbleX0 + inset // 20
 		x1    = pebbleBubbleX1 - inset // 440 — covers body text out to 434
 		y0    = 56
@@ -316,12 +309,9 @@ func (s *pebbleServiceWindows) drawAnswerOverflowButtonText(memDC uintptr, dark 
 	defer procDeleteObjectGdi.Call(font)
 	procSelectObject.Call(memDC, font)
 
-	var col uint32
-	if dark {
-		col = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-	} else {
-		col = colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
-	}
+	// The overflow button is now an ink-filled pill in both states → white text.
+	_ = dark
+	col := colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
 	procSetTextColor.Call(memDC, uintptr(col))
 
 	str, _ := syscall.UTF16PtrFromString("open full ↗")
