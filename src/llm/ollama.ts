@@ -93,6 +93,10 @@ export class OllamaProvider implements LLMProvider {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: false,
+      // Disable reasoning models' (e.g. qwen3) <think> blocks: they pollute
+      // agent output and tool-call parsing. Harmless no-op for non-thinking
+      // models, which Ollama simply ignores.
+      think: false,
     };
 
     // Map our cross-provider options to Ollama's `body.options` bag.
@@ -137,6 +141,8 @@ export class OllamaProvider implements LLMProvider {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: true,
+      // See chat(): disable qwen3-style reasoning blocks; no-op otherwise.
+      think: false,
     };
 
     // See chat(): map our cross-provider options to Ollama's bag.
