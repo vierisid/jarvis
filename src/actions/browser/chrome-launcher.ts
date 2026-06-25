@@ -187,6 +187,14 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
     if (isWSL) {
       args.push('--ozone-platform=x11');
     }
+
+    // Headless servers/containers have no X server. Without a display a
+    // windowed launch dies with "Missing X server or $DISPLAY", so fall back
+    // to headless when no DISPLAY is present (CDP works identically). Machines
+    // with a real display — desktops and WSLg — keep the visible window.
+    if (!isWSL && !process.env.DISPLAY) {
+      args.push('--headless=new');
+    }
   }
 
   // Open a blank tab so a target exists
