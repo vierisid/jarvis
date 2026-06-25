@@ -14,14 +14,17 @@ export type PebbleState =
 // idle, since thinking is a transient state where the user has no input
 // affordance to interact with. Listening + speaking lock so bubble buttons
 // stay clickable.
-const LOCKED: ReadonlySet<PebbleState> = new Set(["listening", "speaking"]);
+// Only speaking summons a bubble + grabs clicks. Listening is just the red
+// drop following the cursor — no window, clicks pass through so you can keep
+// working while you talk.
+const LOCKED: ReadonlySet<PebbleState> = new Set(["speaking"]);
 
 const FOLLOW_FACTOR = 0.10;
 const SETTLE_FACTOR = 0.18;
 
 // Cursor never sits on the pebble. Small offset down-right of the pointer.
-const CURSOR_OFFSET_X = 18;
-const CURSOR_OFFSET_Y = 22;
+const CURSOR_OFFSET_X = 30;
+const CURSOR_OFFSET_Y = 36;
 
 // In native mode the sidecar moves the entire window to follow the cursor,
 // so the pebble div itself stays put. Pinned a few px from the window's
@@ -167,7 +170,7 @@ export function Pebble() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const showBubble = state === "listening" || state === "speaking";
+  const showBubble = state === "speaking";
   const cls =
     "pebble pebble--" + state + (LOCKED.has(state) ? " pebble--locked" : "");
 
@@ -194,7 +197,7 @@ export function Pebble() {
           </div>
           <div className="thread-body">
             <span className="thread-from">jarvis</span>
-            {state === "listening" ? "listening — go ahead." : "ready when you are."}
+            speaking…
           </div>
           <div className="thread-actions">
             <button

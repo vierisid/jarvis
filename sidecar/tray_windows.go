@@ -61,8 +61,11 @@ const (
 	trayMenuChatID     = 2
 	trayMenuSettingsID = 3
 	trayMenuLogsID     = 4
-	trayIDIApp         = 32512 // IDI_APPLICATION (stock icon placeholder; brand later)
-	trayIDIError       = 32515 // IDI_WARNING (connection-error placeholder; brand later)
+	// Brand icon resources compiled into rsrc_windows_amd64.syso from jarvis.rc.
+	// ID 2 is also the .exe / taskbar application icon (lowest-numbered group
+	// icon). ID 3 is the vermilion drop shown when the connection drops.
+	trayIconBrandID = 2 // light drop on dark tile — normal state + app icon
+	trayIconErrorID = 3 // vermilion drop on dark tile — connection-error state
 )
 
 // NOTIFYICONDATAW (current/Vista+ layout).
@@ -199,7 +202,7 @@ func createTrayIcon() bool {
 	}
 	trayHwnd.Store(hwnd)
 
-	hIcon, _, _ := procLoadIconW.Call(0, uintptr(trayIDIApp))
+	hIcon, _, _ := procLoadIconW.Call(hInstance, uintptr(trayIconBrandID))
 
 	trayNID = trayNotifyIconData{}
 	trayNID.CbSize = uint32(unsafe.Sizeof(trayNID))
@@ -238,11 +241,12 @@ func runTrayMessageLoop() {
 // connection state. Must run on the tray thread (it owns trayNID), so it's
 // invoked via the trayMsgSetState window message posted by the poll goroutine.
 func traySetIconForState(state int32) {
-	id := uintptr(trayIDIApp)
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	id := uintptr(trayIconBrandID)
 	if state == connError {
-		id = uintptr(trayIDIError) // connection-error placeholder; brand later
+		id = uintptr(trayIconErrorID)
 	}
-	hIcon, _, _ := procLoadIconW.Call(0, id)
+	hIcon, _, _ := procLoadIconW.Call(hInstance, id)
 	if hIcon == 0 {
 		return
 	}

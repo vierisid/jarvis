@@ -16,10 +16,11 @@ const (
 	pebbleFaintR, pebbleFaintG, pebbleFaintB uint8 = 0x9A, 0xA2, 0xAB // --faint
 
 	// state hues — the only chroma in the system
-	pebbleListenR, pebbleListenG, pebbleListenB uint8 = 0xE6, 0x3B, 0x2E // --listen
-	pebbleSpeakR, pebbleSpeakG, pebbleSpeakB    uint8 = 0x2D, 0x78, 0xFF // --speak
-	pebbleHoldR, pebbleHoldG, pebbleHoldB       uint8 = 0xEA, 0xA4, 0x0E // --hold
-	pebbleOkR, pebbleOkG, pebbleOkB             uint8 = 0x2F, 0xA4, 0x5E // --ok
+	pebbleListenR, pebbleListenG, pebbleListenB    uint8 = 0xE6, 0x3B, 0x2E // --listen
+	pebbleSpeakR, pebbleSpeakG, pebbleSpeakB       uint8 = 0x2D, 0x78, 0xFF // --speak
+	pebbleSpeakTxR, pebbleSpeakTxG, pebbleSpeakTxB uint8 = 0x1E, 0x5F, 0xD8 // --speak-tx (AA blue text)
+	pebbleHoldR, pebbleHoldG, pebbleHoldB          uint8 = 0xEA, 0xA4, 0x0E // --hold
+	pebbleOkR, pebbleOkG, pebbleOkB                uint8 = 0x2F, 0xA4, 0x5E // --ok
 
 	// legacy aliases consumed by the halo / eye glyph — now the brand red.
 	pebbleAccentR, pebbleAccentG, pebbleAccentB uint8 = pebbleListenR, pebbleListenG, pebbleListenB
@@ -390,8 +391,8 @@ func (s *pebbleServiceWindows) drawDrop(pixels []uint32, cr, cg, cb uint8, coreA
 func (s *pebbleServiceWindows) drawState(pixels []uint32, state PebbleState, bubbleY1 int32) {
 	switch state {
 	case PebbleListening:
+		// Just the red drop — no bubble; the user is talking, not reading.
 		s.drawDrop(pixels, pebbleListenR, pebbleListenG, pebbleListenB, 0.55+0.45*s.breathe(84), 0.5)
-		s.drawBubble(pixels, false, float64(bubbleY1))
 	case PebbleSpeaking:
 		s.drawDrop(pixels, pebbleSpeakR, pebbleSpeakG, pebbleSpeakB, 0.6+0.4*s.breathe(96), 0.5)
 		s.drawBubble(pixels, false, float64(bubbleY1))

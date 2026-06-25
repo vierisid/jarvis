@@ -723,8 +723,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         spawnedOn.add(sidecar.id);
         try {
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
-            cursor_offset_x: 22,
-            cursor_offset_y: 26,
+            cursor_offset_x: 34,
+            cursor_offset_y: 40,
             summon_hotkey: 'ctrl+space',
             palette_hotkey: 'ctrl+k',
           });

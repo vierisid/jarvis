@@ -51,7 +51,7 @@ func subPebbleRGB(c SubPebbleColor) (r, g, b uint8) {
 	case SubPebbleViolet:
 		return 0x6E, 0x53, 0x9C
 	case SubPebbleVermilion:
-		return 0xC2, 0x3A, 0x2A
+		return 0xE6, 0x3B, 0x2E
 	case SubPebbleMustard:
 		return 0xB7, 0x8A, 0x1E
 	case SubPebbleTeal:

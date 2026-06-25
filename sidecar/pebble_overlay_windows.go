@@ -628,7 +628,7 @@ func (s *pebbleServiceWindows) present() error {
 	// pixels — repairBubbleTextAlpha clamps alpha back to 255 across the
 	// text region so the bubble doesn't end up "see-through" wherever
 	// glyphs were drawn.
-	if state == PebbleListening || state == PebbleSpeaking {
+	if state == PebbleSpeaking {
 		s.drawBubbleText(memDC, state, bubbleY1)
 		repairBubbleTextAlpha(pixels, bubbleY1)
 		// Long-answer overflow button — only meaningful while bubble shows.

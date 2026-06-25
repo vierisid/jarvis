@@ -14,7 +14,7 @@
   /* neutrals for the summoned Talk panel (light glass) */
   --bg: #FAFBFC; --raise: #FFFFFF; --panel: #EFF2F5; --rule: #E2E7EC; --rule2: #EDF0F3;
   --ink: #13161A; --ink2: #535B63; --ink3: #677077;
-  --listen-tx: #C2301F;
+  --listen-tx: #C2301F; --speak-tx: #1E5FD8;
 
   --corner: 14px 3px 14px 14px; --corner-sm: 9px 2px 9px 9px;
   --ease: cubic-bezier(.2, .7, .2, 1);
@@ -217,7 +217,7 @@ body.pebble-dev-backdrop::before {
 }
 .thread-from {
   font-family: var(--mono); font-size: 9.5px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.16em; color: var(--listen-tx);
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--speak-tx);
   margin-right: 8px;
 }
 

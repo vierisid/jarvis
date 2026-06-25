@@ -110,7 +110,7 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 
 	nullTerm := int32(-1)
 	// Eyebrow — mono uppercase, tinted to the sub-pebble's color.
-	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
+	eyebrowFace, _ := syscall.UTF16PtrFromString("Spline Sans Mono")
 	eyebrowHeight := int32(-10)
 	weightMedium := int32(fwMedium)
 	eyebrowFont, _, _ := procCreateFontW.Call(

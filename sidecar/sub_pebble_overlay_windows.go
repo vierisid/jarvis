@@ -651,41 +651,39 @@ func (s *subPebbleServiceWindows) drawSubPebble(pixels []uint32, color SubPebble
 	r, g, b := subPebbleRGB(color)
 	cx := float64(subPebbleAnchorX)
 	cy := float64(subPebbleAnchorY)
-	const discR = 9.0
-	const dotR = 3.0
-	const shadowOffset = 2.0
+	const dR = 9.0 // mini drop radius
+	const sR = 3.5 // its sharp corner
 
-	// 1) Hard offset shadow — disc shape, ink at 10% alpha.
-	fillCircle(pixels, cx+shadowOffset, cy+shadowOffset, discR,
-		premultiply(28, pebbleInkR, pebbleInkG, pebbleInkB))
-
-	// 2) Paper disc fill.
-	fillCircle(pixels, cx, cy, discR,
-		premultiply(255, pebblePaperR, pebblePaperG, pebblePaperB))
-
-	// 3) Tinted hairline border — the color's saturated tone at 70% alpha
-	//    so the ring reads as "this is the X agent" without competing
-	//    with the centre dot.
-	strokeCircle(pixels, cx, cy, discR, 1.0,
-		premultiply(178, r, g, b))
-
-	// 4) Centre dot — saturated color. Pulsing breath while active; flat
-	//    50% alpha when idle.
-	var alpha uint8 = 255
+	// Core intensity + glow: dim when idle, pulse while active. The agent's
+	// colour reads through the glass so each sub-pebble stays distinct.
+	core := 0.42
+	glow := 0.0
 	switch state {
 	case PebbleIdle:
-		alpha = 110
-	case PebbleWorking, PebbleListening, PebbleThinking, PebbleSpeaking:
-		// 1.2s cycle, 60%–100% — faster than the main pebble's idle
-		// breath so "actively working" reads at a glance.
+		core = 0.42
+	default:
 		const cycleFrames = 75
 		phase := float64(tick%cycleFrames) / float64(cycleFrames)
-		// triangle wave from 0..1..0
 		v := phase * 2
 		if v > 1 {
 			v = 2 - v
 		}
-		alpha = uint8(153 + 102*v)
+		core = 0.6 + 0.4*v
+		glow = 0.4
 	}
-	fillCircle(pixels, cx, cy, dotR, premultiply(alpha, r, g, b))
+
+	// 1) glow
+	if glow > 0 {
+		fillRadial(pixels, cx, cy+1, dR*2.0, uint8(glow*140), r, g, b)
+	}
+	// 2) drop shadow
+	fillDrop(pixels, cx, cy+2, dR, sR, premultiply(34, pebbleInkR, pebbleInkG, pebbleInkB))
+	// 3) glass body
+	fillDrop(pixels, cx, cy, dR, sR, premultiply(120, 255, 255, 255))
+	// 4) colored core (clipped to the drop, tip included)
+	fillDropRadial(pixels, cx, cy, dR, sR, dR, uint8(core*255), r, g, b)
+	// 5) inner shine
+	fillRadial(pixels, cx-dR*0.32, cy-dR*0.34, dR*0.7, 140, 255, 255, 255)
+	// 6) hairline border
+	strokeDrop(pixels, cx, cy, dR, sR, 1.0, premultiply(85, pebbleInkR, pebbleInkG, pebbleInkB))
 }

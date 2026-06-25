@@ -77,7 +77,7 @@ func colorRef(r, g, b uint8) uint32 {
 // dynamic text from SetText winning over the per-state placeholder.
 func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
 	dyn, _ := s.bubbleText.Load().(string)
-	if dyn != "" && (state == PebbleListening || state == PebbleSpeaking) {
+	if dyn != "" && state == PebbleSpeaking {
 		return dyn
 	}
 	// Canonical placeholder copy lives in pebble_core.go.
@@ -112,7 +112,7 @@ func makeBodyFont() uintptr {
 //
 // Returns 0 when the bubble shouldn't be drawn at all (idle/thinking/working).
 func (s *pebbleServiceWindows) computeBubbleBottom(memDC uintptr, state PebbleState) int32 {
-	if state != PebbleListening && state != PebbleSpeaking {
+	if state != PebbleSpeaking {
 		return 0
 	}
 	body := s.resolveBodyText(state)
@@ -198,10 +198,10 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 	// Transparent text background — preserves the bubble fill underneath.
 	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
 
-	// Monochrome Lab: the bubble is now a light glass card for both states,
-	// so text is always ink with the red eyebrow.
+	// Monochrome Lab: the bubble only shows while speaking — a light glass
+	// card with ink body text and a blue (speak) "JARVIS" eyebrow.
 	bodyCol := colorRef(pebbleInkR, pebbleInkG, pebbleInkB)
-	eyebrowCol := colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
+	eyebrowCol := colorRef(pebbleSpeakTxR, pebbleSpeakTxG, pebbleSpeakTxB)
 	_ = state
 
 	// Eyebrow row.
