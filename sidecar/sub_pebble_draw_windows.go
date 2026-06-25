@@ -147,7 +147,11 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 	defer procDeleteObjectGdi.Call(footerFont)
 
 	// ── Eyebrow ──────────────────────────────────────────────
-	procSelectObject.Call(memDC, eyebrowFont)
+	// Capture the DC's original font and restore it before the deferred
+	// DeleteObject calls run — a font still selected into the DC can't be
+	// deleted, which leaked one HFONT per frame and crashed the overlay.
+	prevObj, _, _ := procSelectObject.Call(memDC, eyebrowFont)
+	defer procSelectObject.Call(memDC, prevObj)
 	procSetTextColor.Call(memDC, uintptr(colorRef(tr, tg, tb)))
 	eyebrowText := fmt.Sprintf("%s · %s", agent, formatSubPebbleElapsed(elapsed))
 	eyebrowStr, _ := syscall.UTF16PtrFromString(eyebrowText)

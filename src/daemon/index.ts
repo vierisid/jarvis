@@ -1059,10 +1059,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 });
                 console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
               } else if (event === 'complete' || event === 'fail') {
-                // Flip to idle so the pulse stops; failures additionally
-                // recolor to vermilion so the user sees red on the rail.
+                // Success turns the drop green (the brand "done" state) so the
+                // rail shows finished work at a glance; failures stop the pulse
+                // (idle) and recolor to vermilion so the user sees red.
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
-                  id: task.id, state: 'idle',
+                  id: task.id, state: event === 'complete' ? 'done' : 'idle',
                 });
                 if (event === 'fail') {
                   await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_color', {
@@ -2599,6 +2600,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return { sentences, remainder: buffer.slice(lastEnd) };
       };
 
+      // stripMarkdownForSpeech flattens markdown to plain prose so TTS doesn't
+      // read syntax aloud ("asterisk asterisk", "hash hash"). The bubble still
+      // receives the raw markdown (the sidecar renders it styled); only the
+      // synthesized audio gets the cleaned text.
+      const stripMarkdownForSpeech = (s: string): string =>
+        s
+          .replace(/```[\s\S]*?```/g, ' ')          // fenced code blocks
+          .replace(/`([^`]*)`/g, '$1')              // inline code
+          .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')    // images
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')  // links -> text
+          .replace(/^\s{0,3}#{1,6}\s+/gm, '')       // ATX headings
+          .replace(/^\s{0,3}>\s?/gm, '')            // blockquote markers
+          .replace(/^\s*[-*+]\s+/gm, '')            // bullet markers
+          .replace(/^\s*\d+[.)]\s+/gm, '')          // numbered markers
+          .replace(/(\*\*|__)(.*?)\1/g, '$2')       // bold
+          .replace(/(\*|_)(.*?)\1/g, '$2')          // italic
+          .replace(/~~(.*?)~~/g, '$2')              // strikethrough
+          .replace(/^\s*([-*_]\s*){3,}$/gm, ' ')    // horizontal rules
+          .replace(/\|/g, ' ')                      // table pipes
+          .replace(/\s+/g, ' ')
+          .trim();
+
       // runResponseCycle — streams the LLM response token-by-token.
       // Each completed sentence is synthesized and queued on the sidecar
       // immediately so playback starts within ~1 s of the LLM's first
@@ -2677,12 +2700,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         };
 
         const enqueueSentence = (sentence: string): void => {
-          if (!pebbleTTS || !sentence.trim()) return;
+          if (!pebbleTTS) return;
+          const speakText = stripMarkdownForSpeech(sentence);
+          if (!speakText) return; // sentence was pure markdown (e.g. a code fence)
           const prev = ttsTail;
           const job = (async () => {
             const ttsStart = Date.now();
             try {
-              const audio = await pebbleTTS!.synthesize(sentence);
+              const audio = await pebbleTTS!.synthesize(speakText);
               // Synthesis may have finished out of order; wait for the previous
               // sentence's clip to be queued before queueing ours.
               await prev;

@@ -22,6 +22,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -649,18 +650,29 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 //     against any desktop.
 func (s *subPebbleServiceWindows) drawSubPebble(pixels []uint32, color SubPebbleColor, state PebbleState, tick uint64) {
 	r, g, b := subPebbleRGB(color)
+	// Finished tasks turn green (the brand "ok" hue), mirroring the main
+	// pebble's done state. Failures are recolored vermilion by the daemon.
+	if state == PebbleDone {
+		r, g, b = pebbleOkR, pebbleOkG, pebbleOkB
+	}
 	cx := float64(subPebbleAnchorX)
 	cy := float64(subPebbleAnchorY)
-	const dR = 9.0 // mini drop radius
-	const sR = 3.5 // its sharp corner
+	const dR = 11.5 // mini drop radius (grew from 9 — too small flying out)
+	const sR = 4.5  // its sharp corner
 
-	// Core intensity + glow: dim when idle, pulse while active. The agent's
-	// colour reads through the glass so each sub-pebble stays distinct.
+	// Core intensity + glow per state, mirroring the main pebble:
+	//   active (working/thinking/speaking/…) — pulse + an orbiting spinner dot
+	//   done                                  — steady bright green, no motion
+	//   idle                                  — dim glass
 	core := 0.42
 	glow := 0.0
+	spinning := false
 	switch state {
 	case PebbleIdle:
-		core = 0.42
+		core = 0.40
+	case PebbleDone:
+		core = 0.92
+		glow = 0.55
 	default:
 		const cycleFrames = 75
 		phase := float64(tick%cycleFrames) / float64(cycleFrames)
@@ -669,12 +681,13 @@ func (s *subPebbleServiceWindows) drawSubPebble(pixels []uint32, color SubPebble
 			v = 2 - v
 		}
 		core = 0.6 + 0.4*v
-		glow = 0.4
+		glow = 0.45
+		spinning = true
 	}
 
 	// 1) glow
 	if glow > 0 {
-		fillRadial(pixels, cx, cy+1, dR*2.0, uint8(glow*140), r, g, b)
+		fillRadial(pixels, cx, cy+1, dR*2.0, uint8(glow*150), r, g, b)
 	}
 	// 2) drop shadow
 	fillDrop(pixels, cx, cy+2, dR, sR, premultiply(34, pebbleInkR, pebbleInkG, pebbleInkB))
@@ -686,4 +699,13 @@ func (s *subPebbleServiceWindows) drawSubPebble(pixels []uint32, color SubPebble
 	fillRadial(pixels, cx-dR*0.32, cy-dR*0.34, dR*0.7, 140, 255, 255, 255)
 	// 6) hairline border
 	strokeDrop(pixels, cx, cy, dR, sR, 1.0, premultiply(85, pebbleInkR, pebbleInkG, pebbleInkB))
+	// 7) working spinner — a white dot orbiting the rim (same cue as the main
+	//    pebble's thinking ring) so "still working" reads at a glance.
+	if spinning {
+		const spinFrames = 66
+		ang := float64(tick%spinFrames) / float64(spinFrames) * 2 * math.Pi
+		ox := cx + math.Cos(ang)*dR*0.66
+		oy := cy + math.Sin(ang)*dR*0.66
+		fillCircle(pixels, ox, oy, 1.9, premultiply(235, 255, 255, 255))
+	}
 }
