@@ -102,8 +102,20 @@ export class ObserverService implements Service {
     this._status = 'starting';
 
     try {
-      // Register core observers
-      this.manager.register(new FileWatcher([homedir()], [this.dataDir]));
+      // Register core observers.
+      //
+      // The file watcher recurses over its roots. Defaulting to the entire
+      // home directory hangs the daemon's boot on hosts whose $HOME holds
+      // large trees (multiple repos, node_modules, caches): Bun's recursive
+      // fs.watch blocks while registering watches, and because observers are
+      // awaited before the HTTP/WS service starts, the dashboard never binds.
+      // Allow scoping the watched roots via JARVIS_FILE_WATCH_PATHS (a
+      // colon-separated list); default stays [homedir()] so behavior is
+      // unchanged for everyone else.
+      const watchPaths = process.env.JARVIS_FILE_WATCH_PATHS
+        ? process.env.JARVIS_FILE_WATCH_PATHS.split(':').filter(Boolean)
+        : [homedir()];
+      this.manager.register(new FileWatcher(watchPaths, [this.dataDir]));
       this.manager.register(new ClipboardMonitor());
       this.manager.register(new ProcessMonitor());
 
