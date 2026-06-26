@@ -21,6 +21,7 @@ import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager } from "./pebble-realtime.ts";
 import { resolveRealtimeVoice } from "../config/realtime.ts";
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -570,6 +571,81 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       };
 
+      // Realtime nav-tool execution for the pebble: open a native room panel (or
+      // window-manage it) on the pebble's machine, mirroring the one-shot intent
+      // path. (ROOMS/dashboardURL/boundsForRoom/trackPanel/findPanel are defined
+      // further down in this same scope; this closure runs at tool-call time, by
+      // when they're initialised.) Returns a confirmation, or null if `name`
+      // isn't a nav tool so the caller falls through to the agent tool bridge.
+      const executePebbleNavTool = async (
+        sidecarId: string,
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<string | null> => {
+        if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
+        const openRoom = async (key: string): Promise<string> => {
+          const meta = ROOMS[key];
+          if (!meta) return `I don't have a "${key}" screen.`;
+          try {
+            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+              url: dashboardURL(key),
+              title: meta.title,
+              bounds: boundsForRoom(key, meta.w, meta.h),
+              resizable: true,
+              always_on_top: meta.alwaysOnTop ?? false,
+              multi_instance: false,
+            });
+            const id = (result && typeof result === 'object' && 'id' in (result as object))
+              ? String((result as { id?: unknown }).id ?? '') : '';
+            if (id) trackPanel(sidecarId, { id, key, title: meta.title });
+            return `Opened ${meta.title}.`;
+          } catch (err) {
+            console.warn(`[pebble-realtime] open room "${key}" failed:`, err);
+            return `I couldn't open ${meta.title}.`;
+          }
+        };
+        switch (name) {
+          case 'open_dashboard_room':
+            return openRoom(String(args.room ?? ''));
+          case 'dashboard_room_action':
+            // In-room actions target the dashboard SPA, which a native panel
+            // doesn't receive — opening the room is the useful part here.
+            return openRoom(String(args.room ?? ''));
+          case 'control_dashboard_window': {
+            const action = String(args.action ?? '');
+            const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);
+            if (!target) return "There's no window open to do that with.";
+            const stateMap: Record<string, string> = {
+              maximize: 'maximized', maximized: 'maximized',
+              minimize: 'minimized', minimized: 'minimized',
+              restore: 'normal', normal: 'normal',
+            };
+            try {
+              if (action === 'close') {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
+                untrackPanel(sidecarId, target.id);
+                return `Closed ${target.title}.`;
+              }
+              if (action === 'focus') {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.focus', { id: target.id });
+                return 'Here it is.';
+              }
+              if (stateMap[action]) {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.set_window_state', { id: target.id, state: stateMap[action] });
+                return `Done.`;
+              }
+              return "I'm not sure how to do that with the window.";
+            } catch {
+              return "I couldn't do that with the window.";
+            }
+          }
+          case 'go_back_to_thread':
+            return 'Okay.'; // the pebble has no dashboard thread to return to
+          default:
+            return null;
+        }
+      };
+
       // ─────────────────── Native pebble realtime voice ───────────────────
       // The summon hotkey toggles a perpetual realtime (gpt-realtime) session
       // when realtime is enabled. The sidecar is the audio device: it streams
@@ -581,10 +657,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
         getAudioChannel: (sidecarId) => sidecarManager.getAudioChannel(sidecarId),
         resolve: () => resolveRealtimeVoice(agentService.getConfig()),
-        tools: () => agentService.getOrchestrator().getRealtimeTools(),
+        // Agent tools + the nav tools (open_dashboard_room, …) so realtime voice
+        // can drive the desktop UI just like the one-shot path ("open settings").
+        tools: () => [...agentService.getOrchestrator().getRealtimeTools(), ...REALTIME_NAV_TOOLS],
         instructions: () => agentService.buildRealtimeVoiceInstructions(),
-        executeToolCall: (name, args, blockedCategories) =>
-          agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories }),
+        executeToolCall: async (sidecarId, name, args, blockedCategories) => {
+          // Nav tools open a native panel on the pebble's machine (the realtime
+          // model otherwise had no way to honor "open workflows / settings").
+          const nav = await executePebbleNavTool(sidecarId, name, args);
+          if (nav !== null) return nav;
+          return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories });
+        },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
           console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);

@@ -36,8 +36,10 @@ export type PebbleRealtimeDeps = {
   tools: () => LLMTool[];
   /** Lean voice persona prompt. */
   instructions: () => string;
-  /** Auto-approving tool bridge (emergency-stop + authority gate enforced). */
-  executeToolCall: (name: string, args: Record<string, unknown>, blockedCategories: string[]) => Promise<string>;
+  /** Auto-approving tool bridge (emergency-stop + authority gate enforced).
+   *  sidecarId is passed so nav tools (open_dashboard_room, …) can spawn a
+   *  panel on the right machine. */
+  executeToolCall: (sidecarId: string, name: string, args: Record<string, unknown>, blockedCategories: string[]) => Promise<string>;
   /** Drive the pebble's visual state + bubble text. */
   onState?: (sidecarId: string, state: PebbleRealtimeState, text?: string) => void;
   /** Surface session lifecycle to logs / the sidecar. */
@@ -103,7 +105,7 @@ export class PebbleRealtimeManager {
     const session = new RealtimeVoiceSession(resolved, transport, {
       tools: this.deps.tools(),
       instructions: this.deps.instructions(),
-      executeToolCall: (name, args) => this.deps.executeToolCall(name, args, resolved.blockedCategories),
+      executeToolCall: (name, args) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories),
       onTranscript: (t) => {
         // Drive the pebble: assistant turn → speaking, user turn → listening.
         // Dedupe by state so a long response's many transcript deltas don't

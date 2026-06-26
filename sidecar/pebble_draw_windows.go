@@ -394,8 +394,10 @@ func (s *pebbleServiceWindows) drawState(pixels []uint32, state PebbleState, bub
 		// Just the red drop — no bubble; the user is talking, not reading.
 		s.drawDrop(pixels, pebbleListenR, pebbleListenG, pebbleListenB, 0.55+0.45*s.breathe(84), 0.5)
 	case PebbleSpeaking:
+		// Just the blue drop — no transcript bubble. Voice-first: while JARVIS
+		// talks you listen, you don't read a caption at the cursor. (Long
+		// answers are still readable via the dashboard / "open full" panel.)
 		s.drawDrop(pixels, pebbleSpeakR, pebbleSpeakG, pebbleSpeakB, 0.6+0.4*s.breathe(96), 0.5)
-		s.drawBubble(pixels, false, float64(bubbleY1))
 	case PebbleThinking:
 		s.drawThinking(pixels)
 	case PebbleWorking:
