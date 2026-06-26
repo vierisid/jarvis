@@ -579,6 +579,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // logic is reused from the dashboard realtime path.
       const pebbleRealtime = new PebbleRealtimeManager({
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
+        getAudioChannel: (sidecarId) => sidecarManager.getAudioChannel(sidecarId),
         resolve: () => resolveRealtimeVoice(agentService.getConfig()),
         tools: () => agentService.getOrchestrator().getRealtimeTools(),
         instructions: () => agentService.buildRealtimeVoiceInstructions(),
@@ -625,6 +626,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             pebbleRealtime.pushMicChunk(sidecarId, Buffer.from(data, 'base64'));
           }
         }
+      });
+      // Mic PCM arriving on the dedicated audio channel (binary, isolated from
+      // the bulk control connection) — the preferred path; the pebble.audio_frame
+      // event above is the fallback when no audio channel is connected.
+      sidecarManager.onAudioFrame((sidecarId, frame) => {
+        const n = (pebbleMicFrames.get(sidecarId) ?? 0) + 1;
+        pebbleMicFrames.set(sidecarId, n);
+        if (n === 1 || n % 125 === 0) console.log(`[pebble-realtime] mic frames (audio channel) from ${sidecarId}: ${n}`);
+        pebbleRealtime.pushMicChunk(sidecarId, frame);
       });
       sidecarManager.onSidecarDisconnected((sidecarId) => pebbleRealtime.stop(sidecarId));
 

@@ -59,6 +59,14 @@ export function sanitizeIanaTimezone(value: unknown): string | undefined {
   return IANA_TZ_RE.test(trimmed) ? trimmed : undefined;
 }
 
+/** Send handle for a sidecar's dedicated realtime-audio pipe. */
+export interface SidecarAudioChannel {
+  /** Send a raw PCM playback frame (s16/mono/24 kHz) to the sidecar. */
+  sendPCM(buf: Buffer): void;
+  /** Tell the sidecar to flush playback immediately (barge-in). */
+  sendFlush(): void;
+}
+
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
 
@@ -89,6 +97,15 @@ export class SidecarManager implements Service {
   private connectListeners = new Set<(sidecarId: string) => void>();
   private connectedListeners = new Set<(sidecar: ConnectedSidecar) => void>();
   private disconnectedListeners = new Set<(sidecarId: string) => void>();
+
+  /**
+   * Dedicated realtime-audio pipes, one per sidecar (the pebble's `?channel=audio`
+   * connection). Kept separate from `sidecarConnections` so a 2.4 MB screenshot on
+   * the control connection can't queue in front of audio frames. Binary frames on
+   * this socket are raw PCM (mic in / playback out).
+   */
+  private audioChannels = new Map<string, ServerWebSocket<unknown>>();
+  private audioFrameListeners = new Set<(sidecarId: string, frame: Buffer) => void>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -674,6 +691,46 @@ export class SidecarManager implements Service {
   /** Register a listener for sidecar events */
   onEvent(listener: (sidecarId: string, event: SidecarEvent) => void): void {
     this.eventListeners.add(listener);
+  }
+
+  // ───────────────────────── Realtime audio channel ─────────────────────────
+
+  /** Register the pebble's dedicated audio pipe (replaces any stale one). */
+  registerAudioChannel(sidecarId: string, ws: ServerWebSocket<unknown>): void {
+    const prev = this.audioChannels.get(sidecarId);
+    if (prev && prev !== ws) {
+      try { prev.close(); } catch { /* already gone */ }
+    }
+    this.audioChannels.set(sidecarId, ws);
+    console.log(`[SidecarManager] realtime audio channel open for ${sidecarId}`);
+  }
+
+  /** Deregister the audio pipe on close (only if it's still the current one). */
+  unregisterAudioChannel(sidecarId: string, ws: ServerWebSocket<unknown>): void {
+    if (this.audioChannels.get(sidecarId) === ws) {
+      this.audioChannels.delete(sidecarId);
+      console.log(`[SidecarManager] realtime audio channel closed for ${sidecarId}`);
+    }
+  }
+
+  /** Route an inbound mic PCM frame from the audio channel to listeners. */
+  handleAudioFrame(sidecarId: string, frame: Buffer): void {
+    for (const listener of this.audioFrameListeners) listener(sidecarId, frame);
+  }
+
+  /** Listen for inbound mic PCM frames (wired to the realtime session). */
+  onAudioFrame(listener: (sidecarId: string, frame: Buffer) => void): void {
+    this.audioFrameListeners.add(listener);
+  }
+
+  /** A send handle for the audio pipe, or null when no channel is connected. */
+  getAudioChannel(sidecarId: string): SidecarAudioChannel | null {
+    const ws = this.audioChannels.get(sidecarId);
+    if (!ws) return null;
+    return {
+      sendPCM: (buf: Buffer) => { try { ws.send(buf); } catch { /* gone */ } },
+      sendFlush: () => { try { ws.send(JSON.stringify({ t: 'flush' })); } catch { /* gone */ } },
+    };
   }
 
   /** Register a listener for sidecar connect events */

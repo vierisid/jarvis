@@ -43,9 +43,13 @@ type realtimeVoice struct {
 	setStream  func(*AudioStreamPlayer)                       // install/clear the readLoop's playback target
 	setState   func(PebbleState)                              // drive the pebble visual
 	resumeWake func()                                         // re-arm the wake listener (ctx-bound, self-guarded)
+	// openAudio dials the dedicated audio WebSocket; onBinary plays inbound PCM,
+	// onFlush is barge-in. Returns (writePCM, close, ok=false on dial failure).
+	openAudio func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool)
 
-	frameCh  chan []byte
-	stopSend chan struct{}
+	frameCh    chan []byte
+	stopSend   chan struct{}
+	audioClose func() // closes the dedicated audio channel (nil when not used)
 }
 
 func newRealtimeVoice(
@@ -55,6 +59,7 @@ func newRealtimeVoice(
 	setStream func(*AudioStreamPlayer),
 	setState func(PebbleState),
 	resumeWake func(),
+	openAudio func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool),
 ) *realtimeVoice {
 	return &realtimeVoice{
 		capture:    capture,
@@ -63,6 +68,7 @@ func newRealtimeVoice(
 		setStream:  setStream,
 		setState:   setState,
 		resumeWake: resumeWake,
+		openAudio:  openAudio,
 	}
 }
 
@@ -104,9 +110,27 @@ func (r *realtimeVoice) Start() {
 	// actions) stays quiet during the conversation.
 	ambientSuppressed.Store(true)
 
+	// Open the dedicated audio channel (isolated from the bulk control
+	// connection). Inbound binary plays through this session's stream player;
+	// a text {flush} is barge-in. If the dial fails, audioWrite stays nil and
+	// the sender below falls back to streaming over the main connection.
+	pl := player
+	var audioWrite func([]byte) error
+	if r.openAudio != nil {
+		if w, closeFn, ok := r.openAudio(
+			func(b []byte) { pl.Write(b) },
+			func() { pl.Flush() },
+		); ok {
+			audioWrite = w
+			r.audioClose = closeFn
+		}
+	}
+
 	// Decouple the audio capture thread from the network: the malgo callback
-	// batches ~40 ms frames onto frameCh; a sender goroutine emits them. A
-	// backed-up network drops frames rather than stalling capture.
+	// batches ~40 ms frames onto frameCh; a sender goroutine ships them — over
+	// the dedicated audio channel when available (raw binary, isolated), else
+	// over the main connection as a base64 event. A backed-up network drops
+	// frames rather than stalling capture.
 	r.frameCh = make(chan []byte, 64)
 	r.stopSend = make(chan struct{})
 	frameCh, stopSend := r.frameCh, r.stopSend
@@ -117,11 +141,16 @@ func (r *realtimeVoice) Start() {
 			case out := <-frameCh:
 				sent++
 				if sent == 1 || sent%125 == 0 { // first frame, then every ~5 s
-					log.Printf("[realtime] mic frames streamed up: %d", sent)
+					log.Printf("[realtime] mic frames streamed up: %d (channel=%v)", sent, audioWrite != nil)
 				}
-				r.emit("pebble.audio_frame", map[string]any{
-					"data": base64.StdEncoding.EncodeToString(out),
-				})
+				if audioWrite != nil {
+					if err := audioWrite(out); err != nil {
+						// Channel died mid-session — fall back for this frame.
+						r.emit("pebble.audio_frame", map[string]any{"data": base64.StdEncoding.EncodeToString(out)})
+					}
+				} else {
+					r.emit("pebble.audio_frame", map[string]any{"data": base64.StdEncoding.EncodeToString(out)})
+				}
 			case <-stopSend:
 				return
 			}
@@ -178,6 +207,10 @@ func (r *realtimeVoice) Start() {
 		close(stopSend)
 		r.stopSend = nil
 		r.frameCh = nil
+		if r.audioClose != nil {
+			r.audioClose()
+			r.audioClose = nil
+		}
 		r.setStream(nil)
 		player.Stop()
 		r.player = nil
@@ -211,6 +244,12 @@ func (r *realtimeVoice) Stop(emit bool) {
 		r.stopSend = nil
 	}
 	r.frameCh = nil
+
+	// Close the dedicated audio channel (its read loop exits when the conn closes).
+	if r.audioClose != nil {
+		r.audioClose()
+		r.audioClose = nil
+	}
 
 	r.setStream(nil)
 	if r.player != nil {

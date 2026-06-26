@@ -20,6 +20,7 @@ import { PebbleAudioTransport } from '../comms/pebble-audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
+import type { SidecarAudioChannel } from '../sidecar/manager.ts';
 
 export type PebbleRealtimeState = 'listening' | 'speaking' | 'thinking' | 'idle';
 export type PebbleRealtimeStatus = 'live' | 'closed' | 'error';
@@ -27,6 +28,8 @@ export type PebbleRealtimeStatus = 'live' | 'closed' | 'error';
 export type PebbleRealtimeDeps = {
   /** Dispatch an RPC to a specific sidecar (fire-and-forget for audio frames). */
   dispatchRPC: (sidecarId: string, method: string, params?: Record<string, unknown>) => Promise<unknown>;
+  /** The sidecar's dedicated audio pipe, if connected (preferred over RPC for PCM). */
+  getAudioChannel: (sidecarId: string) => SidecarAudioChannel | null;
   /** Resolve realtime config (key cascade, model, budget, session cap). */
   resolve: () => { ok: true; resolved: ResolvedRealtimeVoice } | { ok: false; reason?: string };
   /** Realtime tool set (agent tools converted for the realtime API). */
@@ -76,16 +79,21 @@ export class PebbleRealtimeManager {
     }
 
     const transport = new PebbleAudioTransport({
-      // Output audio → the sidecar's streaming PCM player. Fire-and-forget:
-      // dispatchRPC sends synchronously (frames stay in order); we don't await
-      // each frame's ack so playback isn't gated on the round-trip.
+      // Output audio → the sidecar's streaming PCM player. Prefer the dedicated
+      // audio channel (raw binary, isolated from the bulk control connection so
+      // screenshots can't stutter it); fall back to the RPC path (base64 over
+      // the control connection) when no audio channel is connected.
       sendAudio: (chunk) => {
+        const ch = this.deps.getAudioChannel(sidecarId);
+        if (ch) { ch.sendPCM(chunk); return; }
         void this.deps
           .dispatchRPC(sidecarId, 'pebble.play_pcm', { data: chunk.toString('base64') })
           .catch(() => {/* sidecar gone / mid-teardown */});
       },
       // Barge-in → flush the sidecar's playback immediately.
       signalStopPlayback: () => {
+        const ch = this.deps.getAudioChannel(sidecarId);
+        if (ch) { ch.sendFlush(); return; }
         void this.deps.dispatchRPC(sidecarId, 'pebble.stop_audio', {}).catch(() => {});
       },
       inputSampleRate: 24000,

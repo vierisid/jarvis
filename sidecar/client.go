@@ -628,7 +628,45 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				wakeListener.Resume(ctx)
 			}
 		}
-		c.realtime = newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake)
+		// openAudio dials a SECOND, dedicated WebSocket (`?channel=audio`) used
+		// only for realtime PCM — isolated from this control connection so a
+		// 2.4 MB screenshot can't queue in front of audio frames. Returns false
+		// (graceful) if the dial fails, in which case the controller falls back
+		// to streaming mic over the main connection as `pebble.audio_frame`.
+		openAudio := func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool) {
+			audioURL := c.claims.Brain + "?channel=audio"
+			aconn, _, derr := websocket.Dial(ctx, audioURL, &websocket.DialOptions{
+				HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}},
+			})
+			if derr != nil {
+				log.Printf("[realtime] audio channel dial failed (using main connection): %v", derr)
+				return nil, nil, false
+			}
+			aconn.SetReadLimit(4 << 20) // playback deltas can be tens of KB
+			go func() {
+				for {
+					typ, data, rerr := aconn.Read(context.Background())
+					if rerr != nil {
+						return // conn closed on Stop → read loop exits
+					}
+					switch typ {
+					case websocket.MessageBinary:
+						onBinary(data) // playback PCM
+					case websocket.MessageText:
+						if strings.Contains(string(data), "flush") {
+							onFlush() // barge-in
+						}
+					}
+				}
+			}()
+			writePCM := func(frame []byte) error {
+				return aconn.Write(context.Background(), websocket.MessageBinary, frame)
+			}
+			closeFn := func() { _ = aconn.Close(websocket.StatusNormalClosure, "") }
+			log.Printf("[realtime] dedicated audio channel open")
+			return writePCM, closeFn, true
+		}
+		c.realtime = newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio)
 		// Tear the session down when this connection ends.
 		defer c.realtime.Stop(false)
 
