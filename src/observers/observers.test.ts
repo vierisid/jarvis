@@ -1,185 +1,95 @@
 /**
- * Tests for Observer Layer
+ * Tests for the Observer Layer.
+ *
+ * Host-sensing observers (file watcher, clipboard, process monitor, desktop
+ * notifications) moved to the sidecar (sidecar/observers.go) in the ambient
+ * model, so this only covers the coordinator (ObserverManager) and the
+ * remaining account-level integrations (Calendar, Email).
  */
 
-import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { test, expect, describe } from 'bun:test';
 import {
   ObserverManager,
-  FileWatcher,
-  ClipboardMonitor,
-  ProcessMonitor,
-  NotificationListener,
   CalendarSync,
   EmailSync,
+  type Observer,
   type ObserverEvent,
+  type ObserverEventHandler,
 } from './index';
 
-// Use an isolated temp dir instead of /tmp to avoid slow recursive watches on CI
-let testDir: string;
-beforeAll(() => {
-  testDir = mkdtempSync(join(tmpdir(), 'jarvis-test-'));
-});
-afterAll(() => {
-  try { rmSync(testDir, { recursive: true }); } catch {}
-});
+/** Minimal in-memory observer used to exercise ObserverManager. */
+class FakeObserver implements Observer {
+  name: string;
+  private running = false;
+  private handler: ObserverEventHandler | null = null;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+  async start(): Promise<void> {
+    this.running = true;
+  }
+  async stop(): Promise<void> {
+    this.running = false;
+  }
+  isRunning(): boolean {
+    return this.running;
+  }
+  onEvent(handler: ObserverEventHandler): void {
+    this.handler = handler;
+  }
+  emit(event: ObserverEvent): void {
+    this.handler?.(event);
+  }
+}
 
 describe('ObserverManager', () => {
   test('registers observers', () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher([testDir]);
-
-    manager.register(watcher);
-
-    expect(manager.listObservers()).toEqual(['file-watcher']);
+    manager.register(new FakeObserver('fake'));
+    expect(manager.listObservers()).toEqual(['fake']);
   });
 
-  test('propagates event handler to observers', () => {
+  test('propagates event handler to registered observers', () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher([testDir]);
+    const fake = new FakeObserver('fake');
+    manager.register(fake);
 
-    manager.register(watcher);
+    const received: ObserverEvent[] = [];
+    manager.setEventHandler((e) => received.push(e));
 
-    let handlerCalled = false;
-    manager.setEventHandler(() => {
-      handlerCalled = true;
-    });
-
-    // Handler should be set on the observer
-    expect(handlerCalled).toBe(false); // Not called yet, just registered
+    fake.emit({ type: 'fake', data: { ok: true }, timestamp: 1 });
+    expect(received).toHaveLength(1);
+    expect(received[0]!.data.ok).toBe(true);
   });
 
   test('starts and stops all observers', async () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher([testDir]);
-    const clipboard = new ClipboardMonitor(5000);
-
-    manager.register(watcher);
-    manager.register(clipboard);
+    manager.register(new FakeObserver('a'));
+    manager.register(new FakeObserver('b'));
 
     await manager.startAll();
-
-    const status = manager.getStatus();
-    expect(status['file-watcher']).toBe(true);
-    expect(status['clipboard']).toBe(true);
+    expect(manager.getStatus()).toEqual({ a: true, b: true });
 
     await manager.stopAll();
-
-    const statusAfter = manager.getStatus();
-    expect(statusAfter['file-watcher']).toBe(false);
-    expect(statusAfter['clipboard']).toBe(false);
+    expect(manager.getStatus()).toEqual({ a: false, b: false });
   });
 
   test('starts and stops individual observers', async () => {
     const manager = new ObserverManager();
-    const watcher = new FileWatcher([testDir]);
+    manager.register(new FakeObserver('a'));
 
-    manager.register(watcher);
+    await manager.startObserver('a');
+    expect(manager.getStatus()['a']).toBe(true);
 
-    await manager.startObserver('file-watcher');
-    expect(manager.getStatus()['file-watcher']).toBe(true);
-
-    await manager.stopObserver('file-watcher');
-    expect(manager.getStatus()['file-watcher']).toBe(false);
+    await manager.stopObserver('a');
+    expect(manager.getStatus()['a']).toBe(false);
   });
 });
 
-describe('FileWatcher', () => {
-  test('starts and stops', async () => {
-    const watcher = new FileWatcher([testDir]);
-
-    expect(watcher.isRunning()).toBe(false);
-
-    await watcher.start();
-    expect(watcher.isRunning()).toBe(true);
-
-    await watcher.stop();
-    expect(watcher.isRunning()).toBe(false);
-  });
-
-  test('prevents double start', async () => {
-    const watcher = new FileWatcher([testDir]);
-
-    await watcher.start();
-    await watcher.start(); // Should not throw
-
-    expect(watcher.isRunning()).toBe(true);
-
-    await watcher.stop();
-  });
-});
-
-describe('ClipboardMonitor', () => {
-  test('starts and stops', async () => {
-    const clipboard = new ClipboardMonitor(5000);
-
-    expect(clipboard.isRunning()).toBe(false);
-
-    await clipboard.start();
-    expect(clipboard.isRunning()).toBe(true);
-
-    await clipboard.stop();
-    expect(clipboard.isRunning()).toBe(false);
-  });
-
-  test('uses custom poll interval', async () => {
-    const clipboard = new ClipboardMonitor(10000);
-
-    await clipboard.start();
-    expect(clipboard.isRunning()).toBe(true);
-
-    await clipboard.stop();
-  });
-});
-
-describe('ProcessMonitor', () => {
-  test('starts and stops', async () => {
-    const monitor = new ProcessMonitor(10000);
-
-    expect(monitor.isRunning()).toBe(false);
-
-    await monitor.start();
-    expect(monitor.isRunning()).toBe(true);
-
-    await monitor.stop();
-    expect(monitor.isRunning()).toBe(false);
-  });
-
-  test('gets process list', async () => {
-    const monitor = new ProcessMonitor(10000);
-
-    const processes = await monitor.getProcessList();
-
-    expect(Array.isArray(processes)).toBe(true);
-    expect(processes.length).toBeGreaterThan(0);
-
-    // Check structure of first process
-    const proc = processes[0];
-    expect(proc).toHaveProperty('pid');
-    expect(proc).toHaveProperty('name');
-    expect(proc).toHaveProperty('cpu');
-    expect(proc).toHaveProperty('memory');
-  });
-});
-
-describe('Stub Observers', () => {
-  test('NotificationListener starts and stops', async () => {
-    const listener = new NotificationListener();
-
-    expect(listener.isRunning()).toBe(false);
-
-    await listener.start();
-    expect(listener.isRunning()).toBe(true);
-
-    await listener.stop();
-    expect(listener.isRunning()).toBe(false);
-  });
-
+describe('Integration observers', () => {
   test('CalendarSync starts and stops', async () => {
     const sync = new CalendarSync();
-
     expect(sync.isRunning()).toBe(false);
 
     await sync.start();
@@ -191,7 +101,6 @@ describe('Stub Observers', () => {
 
   test('EmailSync starts and stops', async () => {
     const sync = new EmailSync();
-
     expect(sync.isRunning()).toBe(false);
 
     await sync.start();

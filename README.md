@@ -289,7 +289,7 @@ jarvis --token <your-token>
 
 Either way, subsequent runs are just `jarvis` (the saved token is reused).
 
-Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness).
+Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness, file watch, processes, notifications). The host-sensing observers (clipboard, file watch, process monitor, desktop notifications) run inside the sidecar on your machine and stream to the brain - the brain no longer observes its own host.
 
 ### Versioning & updates
 

@@ -16,6 +16,12 @@ const (
 	CapWindows    SidecarCapability = "windows"
 	CapPebble     SidecarCapability = "pebble"
 	CapSubPebble  SidecarCapability = "sub_pebble"
+	// Host-sensing observers (moved out of the brain in the ambient/pebble
+	// model — the sidecar is the agent that runs on the user's machine, so all
+	// machine-level observation lives here and streams to the brain).
+	CapFileWatch     SidecarCapability = "file_watch"
+	CapProcesses     SidecarCapability = "processes"
+	CapNotifications SidecarCapability = "notifications"
 )
 
 // AwarenessConfig controls screen and window observer behavior.

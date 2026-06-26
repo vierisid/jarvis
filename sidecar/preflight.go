@@ -20,6 +20,12 @@ func CheckCapabilities(cfg *SidecarConfig) (available []SidecarCapability, unava
 			// Pure Go — always available
 		case CapClipboard:
 			reason = checkClipboard()
+		case CapFileWatch:
+			// Pure-Go polling watcher — always available.
+		case CapProcesses:
+			reason = checkProcesses()
+		case CapNotifications:
+			reason = checkNotifications()
 		case CapScreenshot:
 			reason = checkScreenshot()
 		case CapAwareness:

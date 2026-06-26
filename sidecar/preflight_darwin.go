@@ -42,6 +42,21 @@ func checkAwareness() string {
 	return ""
 }
 
+func checkProcesses() string {
+	// ps is built-in on macOS
+	if _, err := exec.LookPath("ps"); err != nil {
+		return "ps not found"
+	}
+	return ""
+}
+
+func checkNotifications() string {
+	// macOS notifications live in a sandboxed NotificationCenter store with no
+	// stable, unprivileged read path. Not supported until a native listener
+	// lands; the observer no-ops here.
+	return "notification monitoring is not supported on macOS"
+}
+
 func checkBrowser(cfg *SidecarConfig) string {
 	if _, err := findChromiumExecutable(cfg); err != nil {
 		return err.Error()

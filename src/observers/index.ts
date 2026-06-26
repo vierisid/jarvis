@@ -21,11 +21,9 @@ export interface Observer {
   onEvent(handler: ObserverEventHandler): void;
 }
 
-// Export all observers
-export { FileWatcher } from './file-watcher';
-export { ClipboardMonitor } from './clipboard';
-export { NotificationListener } from './notifications';
-export { ProcessMonitor } from './processes';
+// Account-level integration observers. Host-sensing observers (file watcher,
+// clipboard, process monitor, desktop notifications) moved to the sidecar in
+// the ambient/pebble model — see StartObservers in sidecar/observers.go.
 export { CalendarSync } from './calendar';
 export { EmailSync } from './email';
 

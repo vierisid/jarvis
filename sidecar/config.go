@@ -29,6 +29,7 @@ func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
 			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR, CapWindows, CapPebble, CapSubPebble,
+			CapFileWatch, CapProcesses, CapNotifications,
 		},
 		Terminal: TerminalConfig{
 			BlockedCommands: []string{},

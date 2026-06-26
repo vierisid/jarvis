@@ -16,7 +16,8 @@ import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
-import { ObserverService } from "./observer-service.ts";
+import { createObservation } from "../vault/observations.ts";
+import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -4191,24 +4192,90 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.log('[Daemon] Sidecar routing enabled for run_command, read_file, write_file, list_directory');
     }
 
-    // 10h. Wire sidecar events into event pipeline (skip awareness events — already handled by awareness service)
+    // 10h. Wire sidecar events into the event pipeline (skip awareness events —
+    // already handled by the awareness service).
     const awarenessEventTypes = ['screen_capture', 'context_changed', 'idle_detected'];
+
+    // Host-sensing observers (clipboard, file watch, process monitor,
+    // notifications) now run in the SIDECAR — the agent that actually lives on
+    // the user's machine — instead of the brain. Map each sidecar event_type
+    // back to the brain's raw observer type so the classifier rules, vault
+    // observation types, and the `observer.*` workflow bus all keep working
+    // exactly as they did when these observers ran in-process in the brain.
+    const sidecarObserverTypeMap: Record<string, string> = {
+      clipboard_change: 'clipboard',
+      file_change: 'file_change',
+      process_started: 'process_started',
+      process_stopped: 'process_stopped',
+      notification: 'notification',
+    };
+    const observerWarnedTypes = new Set<string>();
+
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double processing
       if (awarenessService && awarenessEventTypes.includes(event.event_type)) return;
 
-      const eventType = `sidecar_${event.event_type}`;
-      const eventData = {
-        sidecar_id: sidecarId,
-        ...(typeof event.payload === 'object' && event.payload !== null ? event.payload as Record<string, unknown> : { payload: event.payload }),
-      };
-      const observerEvent = {
-        type: eventType,
-        data: eventData,
-        timestamp: event.timestamp ?? Date.now(),
-      };
+      const payloadObj: Record<string, unknown> =
+        typeof event.payload === 'object' && event.payload !== null
+          ? (event.payload as Record<string, unknown>)
+          : { payload: event.payload };
+      const ts = event.timestamp ?? Date.now();
 
-      // Classify and route
+      // Host-sensing observer event: full parity with the removed brain-local
+      // ObserverService — vault observation + classify (under the real observer
+      // type so the rules fire) → reactor/coalescer + republish onto the
+      // `observer.*` workflow bus.
+      const observerType = sidecarObserverTypeMap[event.event_type];
+      if (observerType) {
+        const observerEvt = { type: observerType, data: payloadObj, timestamp: ts };
+
+        try {
+          createObservation(mapEventType(observerType), payloadObj);
+        } catch (err) {
+          console.error('[Daemon] Observer vault write failed:', err instanceof Error ? err.message : err);
+        }
+
+        try {
+          const classified = classifyEvent(observerEvt);
+          if (classified.priority === 'critical' || classified.priority === 'high') {
+            reactor.react(classified).catch(err =>
+              console.error('[Daemon] Observer reactor error:', err)
+            );
+          } else {
+            coalescer.addEvent(classified);
+          }
+        } catch (err) {
+          console.error('[Daemon] Observer classify failed:', err instanceof Error ? err.message : err);
+        }
+
+        const mapped = OBSERVER_EVENT_TYPE_MAP[observerType];
+        const canonical = mapped ?? `observer.${observerType}`;
+        if (!mapped && !observerWarnedTypes.has(observerType)) {
+          observerWarnedTypes.add(observerType);
+          console.warn(
+            `[Daemon] Sidecar observer "${observerType}" not in OBSERVER_EVENT_TYPE_MAP; publishing as "${canonical}". Add a mapping in src/workflows/runtime/event-types.ts.`,
+          );
+        }
+        try {
+          sharedEventBus.publish(canonical, { ...payloadObj, _timestamp: ts });
+        } catch (err) {
+          console.error('[Daemon] Observer bus publish failed:', err instanceof Error ? err.message : err);
+        }
+
+        // Keep the dashboard broadcast (parity with prior sidecar event handling).
+        wsService.broadcastSidecarEvent(sidecarId, {
+          type: `sidecar_${event.event_type}`,
+          data: { sidecar_id: sidecarId, ...payloadObj },
+          timestamp: ts,
+        });
+        return;
+      }
+
+      // Any other sidecar event: generic classify + dashboard broadcast.
+      const eventType = `sidecar_${event.event_type}`;
+      const eventData = { sidecar_id: sidecarId, ...payloadObj };
+      const observerEvent = { type: eventType, data: eventData, timestamp: ts };
+
       const classified = classifyEvent(observerEvent);
       if (classified.priority === 'critical' || classified.priority === 'high') {
         reactor.react(classified).catch(err =>
@@ -4218,7 +4285,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         coalescer.addEvent(classified);
       }
 
-      // Broadcast to dashboard
       wsService.broadcastSidecarEvent(sidecarId, observerEvent);
     });
 

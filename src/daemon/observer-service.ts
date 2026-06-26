@@ -1,11 +1,16 @@
 /**
- * Observer Service — The Eyes
+ * Observer Service — account-level integrations (Gmail, Calendar).
  *
- * Wraps ObserverManager. Registers system observers (file watcher,
- * clipboard monitor, process monitor, email, calendar, notifications)
- * and routes events to the vault.
- * Also classifies events and routes them to the EventReactor (immediate)
- * or EventCoalescer (batched for heartbeat).
+ * Wraps ObserverManager and routes its events to the vault + classifier
+ * (EventReactor immediate / EventCoalescer batched) and, via the daemon's
+ * forward callback, the workflow event bus.
+ *
+ * Host-sensing observers (file watcher, clipboard, process monitor, desktop
+ * notifications) used to live here too. In the ambient/pebble model the SIDECAR
+ * is the agent that runs on the user's machine, so all machine-level
+ * observation now runs there (see StartObservers in sidecar/observers.go) and
+ * streams to the brain, which ingests it in src/daemon/index.ts. This service
+ * keeps only the account-level integrations, which are not tied to one machine.
  */
 
 import type { Service, ServiceStatus } from './services.ts';
@@ -16,22 +21,16 @@ import type { EventCoalescer } from './event-coalescer.ts';
 import type { GoogleAuth } from '../integrations/google-auth.ts';
 
 import { homedir } from 'node:os';
-import {
-  ObserverManager,
-  FileWatcher,
-  ClipboardMonitor,
-  ProcessMonitor,
-} from '../observers/index.ts';
+import { ObserverManager } from '../observers/index.ts';
 import { EmailSync } from '../observers/email.ts';
 import { CalendarSync } from '../observers/calendar.ts';
-import { NotificationListener } from '../observers/notifications.ts';
 import { createObservation } from '../vault/observations.ts';
 import { classifyEvent } from './event-classifier.ts';
 
 /**
  * Map observer event types to vault observation types.
  */
-function mapEventType(eventType: string): ObservationType {
+export function mapEventType(eventType: string): ObservationType {
   switch (eventType) {
     case 'file_change':
       return 'file_change';
@@ -102,25 +101,13 @@ export class ObserverService implements Service {
     this._status = 'starting';
 
     try {
-      // Register core observers.
+      // Host-sensing observers (file watcher, clipboard, process monitor,
+      // desktop notifications) now run in the sidecar (sidecar/observers.go)
+      // and stream to the brain, which ingests them in src/daemon/index.ts.
+      // This service registers only the account-level integrations below.
       //
-      // The file watcher recurses over its roots. Defaulting to the entire
-      // home directory hangs the daemon's boot on hosts whose $HOME holds
-      // large trees (multiple repos, node_modules, caches): Bun's recursive
-      // fs.watch blocks while registering watches, and because observers are
-      // awaited before the HTTP/WS service starts, the dashboard never binds.
-      // Allow scoping the watched roots via JARVIS_FILE_WATCH_PATHS (a
-      // colon-separated list); default stays [homedir()] so behavior is
-      // unchanged for everyone else.
-      const watchPaths = process.env.JARVIS_FILE_WATCH_PATHS
-        ? process.env.JARVIS_FILE_WATCH_PATHS.split(':').filter(Boolean)
-        : [homedir()];
-      this.manager.register(new FileWatcher(watchPaths, [this.dataDir]));
-      this.manager.register(new ClipboardMonitor());
-      this.manager.register(new ProcessMonitor());
-
-      // Register D-Bus notification observer (Linux/WSL2)
-      this.manager.register(new NotificationListener());
+      // NB: this supersedes the JARVIS_FILE_WATCH_PATHS boot-hang workaround
+      // (#246) — there is no brain-side file watcher to hang boot anymore.
 
       // Register Gmail observer (if Google auth available)
       this.manager.register(new EmailSync(this.googleAuth ?? undefined));

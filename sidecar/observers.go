@@ -348,6 +348,20 @@ func StartObservers(ctx context.Context, cfg *SidecarConfig, availableCaps []Sid
 		go observer.Run(ctx, send)
 	}
 
+	if caps[CapFileWatch] {
+		// Watch the user's home, excluding the shared ~/.jarvis data dir so the
+		// sidecar's own captures/logs don't generate awareness noise.
+		go NewFileObserver([]string{homeDir()}, []string{configDir}, 5000).Run(ctx, send)
+	}
+
+	if caps[CapProcesses] {
+		go NewProcessObserver(5000).Run(ctx, send)
+	}
+
+	if caps[CapNotifications] {
+		go NewNotificationObserver().Run(ctx, send)
+	}
+
 	if caps[CapAwareness] {
 		go NewScreenObserver(cfg, caps[CapOCR]).Run(ctx, send)
 		go NewWindowObserver(cfg).Run(ctx, send)
