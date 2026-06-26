@@ -18,7 +18,7 @@ package main
 // The click-to-inspect bubble + "open full" button (Windows Phase B) are NOT
 // drawn here yet — SetExpanded still records state so the API is unchanged, but
 // the card + OnOpenFull wiring is a documented follow-up (mirror the bubble math
-// in sub_pebble_draw_windows.go). See docs/PEBBLE_REVIEW_AND_REFACTOR.md §5.2.
+// in sub_pebble_draw_windows.go).
 
 /*
 #cgo pkg-config: gtk+-3.0

@@ -103,8 +103,6 @@ Currently **Windows-only** (cross-platform ports planned). The `localhost:3142` 
 
 > **Opt out:** set `JARVIS_AMBIENT_UI=0` to disable the pebble + sidecar voice loop (useful for headless servers, CI, or users who only want the web dashboard).
 
-For the full architecture story, see [`docs/AMBIENT_UX_PLAN.md`](docs/AMBIENT_UX_PLAN.md).
-
 ---
 
 ## ☁️ Managed Hosting

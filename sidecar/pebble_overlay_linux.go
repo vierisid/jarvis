@@ -590,9 +590,9 @@ func (s *pebbleServiceLinux) OnSummon(callback func())  { s.summonCallback.Store
 func (s *pebbleServiceLinux) OnPalette(callback func()) { s.paletteCallback.Store(callback) }
 
 // OnBlindToggle / OnAnswerOpen — the callbacks are accepted; the summon/palette
-// hotkeys fire via X11 (§5.4). The disc long-press (blind-toggle) and the
+// hotkeys fire via X11. The disc long-press (blind-toggle) and the
 // answer-button click still need the pebble window to catch input (it is
-// currently fully click-through); that input wiring is the documented residual
-// in docs/PEBBLE_REVIEW_AND_REFACTOR.md §5.4.
+// currently fully click-through); that input wiring is a documented residual
+// follow-up.
 func (s *pebbleServiceLinux) OnBlindToggle(callback func())      { _ = callback }
 func (s *pebbleServiceLinux) OnAnswerOpen(callback func(string)) { _ = callback }
