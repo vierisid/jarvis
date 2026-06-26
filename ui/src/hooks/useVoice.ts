@@ -483,6 +483,14 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
 
   // --- Check mic availability on mount ---
   useEffect(() => {
+    // `navigator.mediaDevices` is undefined in a non-secure context (plain
+    // HTTP to a non-localhost origin). Without this guard the call throws a
+    // synchronous TypeError that escapes the effect and aborts the entire app
+    // render — a blank dashboard. Degrade to "mic unavailable" instead.
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setIsMicAvailable(false);
+      return;
+    }
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(stream => {
         stream.getTracks().forEach(t => t.stop());
