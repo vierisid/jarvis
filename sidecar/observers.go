@@ -3,9 +3,25 @@ package main
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 )
+
+// goSafeObserver runs an observer in a goroutine guarded by recover(), so a
+// panic in one observer (e.g. unexpected subprocess output on some host) is
+// logged with its stack and contained — it can no longer take the whole sidecar
+// process down. The panic line names the observer so we can see the culprit.
+func goSafeObserver(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[observer panic] %s: %v\n%s", name, r, debug.Stack())
+			}
+		}()
+		fn()
+	}()
+}
 
 // EventSender sends sidecar events to the brain.
 // If binaryData is provided and exceeds the ref threshold, the transport
@@ -345,25 +361,30 @@ func StartObservers(ctx context.Context, cfg *SidecarConfig, availableCaps []Sid
 
 	if caps[CapClipboard] {
 		observer := NewClipboardObserver(2000)
-		go observer.Run(ctx, send)
+		goSafeObserver("clipboard", func() { observer.Run(ctx, send) })
 	}
 
 	if caps[CapFileWatch] {
 		// Watch the user's home, excluding the shared ~/.jarvis data dir so the
 		// sidecar's own captures/logs don't generate awareness noise.
-		go NewFileObserver([]string{homeDir()}, []string{configDir}, 5000).Run(ctx, send)
+		fo := NewFileObserver([]string{homeDir()}, []string{configDir}, 5000)
+		goSafeObserver("file-watcher", func() { fo.Run(ctx, send) })
 	}
 
 	if caps[CapProcesses] {
-		go NewProcessObserver(5000).Run(ctx, send)
+		po := NewProcessObserver(5000)
+		goSafeObserver("processes", func() { po.Run(ctx, send) })
 	}
 
 	if caps[CapNotifications] {
-		go NewNotificationObserver().Run(ctx, send)
+		no := NewNotificationObserver()
+		goSafeObserver("notifications", func() { no.Run(ctx, send) })
 	}
 
 	if caps[CapAwareness] {
-		go NewScreenObserver(cfg, caps[CapOCR]).Run(ctx, send)
-		go NewWindowObserver(cfg).Run(ctx, send)
+		so := NewScreenObserver(cfg, caps[CapOCR])
+		goSafeObserver("screen", func() { so.Run(ctx, send) })
+		wo := NewWindowObserver(cfg)
+		goSafeObserver("window", func() { wo.Run(ctx, send) })
 	}
 }

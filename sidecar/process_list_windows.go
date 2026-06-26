@@ -13,10 +13,12 @@ import (
 // platformListProcesses lists running processes via PowerShell Get-Process,
 // matching the brain's old ProcessMonitor (Id, Name, CPU, WorkingSet as CSV).
 func platformListProcesses() ([]processInfo, error) {
-	out, err := exec.Command(
+	cmd := exec.Command(
 		"powershell", "-NoProfile", "-Command",
 		"Get-Process | Select-Object Id,Name,CPU,WorkingSet | ConvertTo-Csv -NoTypeInformation",
-	).Output()
+	)
+	hideSubprocessWindow(cmd) // GUI build: don't flash a console window every poll
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
