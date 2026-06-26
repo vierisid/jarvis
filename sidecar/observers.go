@@ -5,6 +5,7 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,14 @@ func goSafeObserver(name string, fn func()) {
 		fn()
 	}()
 }
+
+// ambientSuppressed pauses the heavy ambient screen observer (2.4 MB capture +
+// OCR every tick) while the native pebble holds a realtime voice session. During
+// a focused conversation we don't want screen monitoring competing with the
+// audio stream on the sidecar's single WebSocket, nor the reactor it triggers
+// (set_eye flood, proactive narration, autonomous agent actions). The realtime
+// controller toggles this in Start/Stop.
+var ambientSuppressed atomic.Bool
 
 // EventSender sends sidecar events to the brain.
 // If binaryData is provided and exceeds the ref threshold, the transport
@@ -151,6 +160,11 @@ func (o *ScreenObserver) Run(ctx context.Context, send EventSender) {
 }
 
 func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
+	// Paused during a realtime voice session (focus mode) — skip the heavy
+	// capture+OCR+send so it doesn't stutter the audio stream.
+	if ambientSuppressed.Load() {
+		return
+	}
 	imageData, err := captureScreenBytes()
 	if err != nil {
 		log.Printf("[screen] Capture failed: %v", err)

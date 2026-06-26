@@ -161,7 +161,7 @@ export class SidecarManager implements Service {
       });
 
       // Register handlers for each sidecar observer event type
-      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'file_change', 'process_started', 'process_stopped', 'notification', 'pebble.summon', 'pebble.palette', 'pebble.blind_toggle', 'pebble.open_answer', 'panel.bounds_changed', 'panel.closed', 'audio.session_start', 'audio.session_end', 'audio.wake_segment', 'region.captured', 'region.cancelled', 'sub_pebble.clicked', 'sub_pebble.open_full'];
+      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'file_change', 'process_started', 'process_stopped', 'notification', 'pebble.summon', 'pebble.palette', 'pebble.blind_toggle', 'pebble.open_answer', 'panel.bounds_changed', 'panel.closed', 'audio.session_start', 'audio.session_end', 'audio.wake_segment', 'region.captured', 'region.cancelled', 'sub_pebble.clicked', 'sub_pebble.open_full', 'pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame'];
       const sidecarEventHandler = async (sidecarId: string, event: SidecarEvent) => {
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);
@@ -170,6 +170,11 @@ export class SidecarManager implements Service {
       for (const type of sidecarEventTypes) {
         this.scheduler.on(type, sidecarEventHandler);
       }
+      // Realtime voice events bypass the 1-per-tick queue: realtime_start must
+      // open the session before mic frames arrive, and audio_frame streams at
+      // ~25/s (faster than the queue drains). Direct dispatch keeps them
+      // real-time and in receive order.
+      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame']);
 
       this.rpcTracker.onDetachedComplete((rpcId, result, error) => {
         if (error) {

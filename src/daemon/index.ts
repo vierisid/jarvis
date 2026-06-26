@@ -19,6 +19,8 @@ import { AgentService } from "./agent-service.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
+import { PebbleRealtimeManager } from "./pebble-realtime.ts";
+import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -567,6 +569,64 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn(`[ambient-ui] pebble.set_state(${state}) on ${sidecarId} failed:`, err);
         }
       };
+
+      // ─────────────────── Native pebble realtime voice ───────────────────
+      // The summon hotkey toggles a perpetual realtime (gpt-realtime) session
+      // when realtime is enabled. The sidecar is the audio device: it streams
+      // mic PCM up (`pebble.audio_frame`) and plays streamed PCM down
+      // (`pebble.play_pcm`); the daemon runs the realtime session itself. See
+      // PebbleRealtimeManager + PebbleAudioTransport — all the OpenAI protocol
+      // logic is reused from the dashboard realtime path.
+      const pebbleRealtime = new PebbleRealtimeManager({
+        dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
+        resolve: () => resolveRealtimeVoice(agentService.getConfig()),
+        tools: () => agentService.getOrchestrator().getRealtimeTools(),
+        instructions: () => agentService.buildRealtimeVoiceInstructions(),
+        executeToolCall: (name, args, blockedCategories) =>
+          agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories }),
+        onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
+        onStatus: (sidecarId, status, detail) => {
+          console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);
+          // Echo lifecycle to the sidecar so it can stop capture / show the
+          // reason when the daemon closes or errors the session.
+          void sidecarManager.dispatchRPC(sidecarId, 'pebble.realtime_status', { state: status, detail: detail ?? '' })
+            .catch(() => {/* sidecar may lack the handler / be gone */});
+        },
+      });
+
+      // Tell each pebble-capable sidecar whether realtime is available so its
+      // summon hotkey knows to toggle a live session vs. the one-shot capture.
+      sidecarManager.onSidecarConnected((sidecar) => {
+        if (!sidecar.capabilities.includes('pebble')) return;
+        const res = resolveRealtimeVoice(agentService.getConfig());
+        const enabled = res.ok;
+        console.log(`[pebble-realtime] configure_realtime → ${sidecar.id} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
+        void sidecarManager.dispatchRPC(sidecar.id, 'pebble.configure_realtime', { enabled })
+          .catch((err) => console.warn(`[pebble-realtime] configure_realtime dispatch failed (older sidecar?):`, err));
+      });
+
+      // Sidecar → daemon realtime control + mic stream.
+      const pebbleMicFrames = new Map<string, number>(); // sidecarId -> frame count (diagnostic)
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type === 'pebble.realtime_start') {
+          console.log(`[pebble-realtime] realtime_start from ${sidecarId} — opening session`);
+          pebbleMicFrames.set(sidecarId, 0);
+          void pebbleRealtime.start(sidecarId);
+        } else if (event.event_type === 'pebble.realtime_stop') {
+          console.log(`[pebble-realtime] realtime_stop from ${sidecarId}`);
+          pebbleRealtime.stop(sidecarId);
+        } else if (event.event_type === 'pebble.audio_frame') {
+          const data = (event.payload as { data?: unknown })?.data;
+          if (typeof data === 'string') {
+            const n = (pebbleMicFrames.get(sidecarId) ?? 0) + 1;
+            pebbleMicFrames.set(sidecarId, n);
+            // Confirm the mic stream is flowing without spamming: first frame, then every ~5s.
+            if (n === 1 || n % 125 === 0) console.log(`[pebble-realtime] mic frames from ${sidecarId}: ${n}`);
+            pebbleRealtime.pushMicChunk(sidecarId, Buffer.from(data, 'base64'));
+          }
+        }
+      });
+      sidecarManager.onSidecarDisconnected((sidecarId) => pebbleRealtime.stop(sidecarId));
 
       // STT + TTS providers for the pebble's voice loop. Both built from
       // the same jarvisConfig.* the dashboard uses so API keys / provider
@@ -4171,30 +4231,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             });
         });
 
-        // Auto-launch overlay widget (non-blocking, best-effort)
-        if (jarvisConfig.awareness?.overlay_autolaunch !== false && jarvisConfig.browser?.local !== false) {
-          try {
-            const overlayUrl = `http://localhost:${config.port}/overlay`;
-            const browsers = ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
-            for (const browser of browsers) {
-              const which = Bun.spawnSync(['which', browser]);
-              if (which.exitCode === 0) {
-                Bun.spawn([
-                  browser,
-                  `--app=${overlayUrl}`,
-                  '--window-size=300,320',
-                  '--window-position=20,20',
-                  '--no-sandbox',
-                  '--disable-extensions',
-                  '--disable-gpu',
-                  `--user-data-dir=${path.join(config.dataDir, 'browser', 'overlay-profile')}`,
-                ], { stdout: 'ignore', stderr: 'ignore' });
-                console.log(`[Daemon] Awareness overlay launched (${browser})`);
-                break;
-              }
-            }
-          } catch (err) { console.warn('[Daemon] Awareness overlay failed (non-fatal):', err instanceof Error ? err.message : err); }
-        }
+        // (Removed) The old-dashboard awareness overlay widget used to
+        // auto-launch a Chromium window pointed at /overlay. It connected as a
+        // WebSocket client, which made the daemon's proactive TTS play THROUGH
+        // it — talking over the native pebble's realtime voice. The native
+        // pebble is the awareness surface now, so the overlay is gone.
       } catch (err) {
         console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without awareness
