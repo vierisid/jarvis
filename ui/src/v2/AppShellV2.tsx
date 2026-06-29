@@ -101,8 +101,10 @@ export function AppShellV2() {
       ) : (
         <OnboardingGate>
           <RoomActionBusProvider>
+            {/* Phase 2 — room-centric shell. The AppShell renders the active
+                room inside its surface (persistent Index + top bar around it),
+                so rooms no longer overlay the home as a separate layer. */}
             <AppShell />
-            {route.kind === "room" && <RoomDispatcher roomKey={route.key} />}
           </RoomActionBusProvider>
         </OnboardingGate>
       )}

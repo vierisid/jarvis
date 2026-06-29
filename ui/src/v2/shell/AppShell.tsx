@@ -13,7 +13,8 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
-import { closeRoom, openRoom, type RoomKey } from "../router";
+import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
+import { RoomDispatcher } from "../rooms/RoomDispatcher";
 import { setRoomEntry } from "../rooms/roomEntryStore";
 import { useTutorialEventDispatcher } from "../onboarding/TutorialEventContext";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
@@ -24,7 +25,11 @@ import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
+import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
+import { TopBar } from "./TopBar";
+import { NowRoom } from "./NowRoom";
 import "./AppShell.css";
+import "./roomShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
   workflow: "workflow",
@@ -891,6 +896,16 @@ interface ShellLayoutProps {
   notificationsSlot?: React.ReactNode;
 }
 
+/** Live-state microcopy on the Talk hint line — the old rail's lines, verbatim. */
+const TALK_HINT: Record<VoiceState, string> = {
+  idle: "Tap the pebble, or say “Hey Jarvis.”",
+  listening: "Listening. Pause to send.",
+  thinking: "Thinking through that…",
+  speaking: "Speaking — the reply is in the thread.",
+  "awaiting-approval": "Answer here, or say “yes.”",
+  muted: "Mic is muted. Tap mute to resume.",
+};
+
 function ShellLayout({
   connection,
   items,
@@ -922,60 +937,168 @@ function ShellLayout({
   onToggleNotifications,
   notificationsSlot,
 }: ShellLayoutProps) {
+  const route = useV2Route();
+  const [collapsed, toggleCollapse] = useIndexCollapsed();
+  const [arranging, setArranging] = useState(false);
+  const [talkOpen, setTalkOpen] = useState(false);
+  const [talkIn, setTalkIn] = useState(false);
+
+  // awaiting-approval renders as the "asking" (amber) pebble state.
+  const dataState = voiceState === "awaiting-approval" ? "asking" : voiceState;
+
+  // ⌘J summons/dismisses Talk; Esc dismisses it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J")) {
+        e.preventDefault();
+        setTalkOpen((o) => !o);
+      } else if (e.key === "Escape" && talkOpen) {
+        setTalkOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [talkOpen]);
+
+  // Drop-to-glass enter animation (two RAFs so the transition catches).
+  useEffect(() => {
+    if (!talkOpen) { setTalkIn(false); return; }
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => { raf2 = requestAnimationFrame(() => setTalkIn(true)); });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [talkOpen]);
+
+  // VU bars driven by the live mic level (fixed multipliers, no per-frame RNG).
+  const vuBars = [0.45, 0.95, 0.6, 1, 0.5, 0.8].map((m) => Math.max(2, Math.round(2 + vu * 12 * m)));
+
   return (
-    <div className="v2-shell">
-      <div className="v2-shell__header">
-        <Header
-          connection={connection}
-          onPalette={onOpenPalette}
-          notificationCount={notificationCount}
-          notificationsOpen={notificationsOpen}
-          onToggleNotifications={onToggleNotifications}
-          notificationsSlot={notificationsSlot}
-        />
-      </div>
+    <div className={`rshell${collapsed ? " slim" : ""}`} data-state={dataState}>
+      <IndexSidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
 
-      <PausedTasksBanner />
+      <TopBar
+        connection={connection}
+        voiceState={voiceState}
+        arranging={arranging}
+        onArrange={() => setArranging((a) => !a)}
+        onOpenPalette={onOpenPalette}
+        notificationCount={notificationCount}
+        notificationsOpen={notificationsOpen}
+        onToggleNotifications={onToggleNotifications}
+      />
 
-      <div className="v2-shell__thread">
-        <Thread
-          ref={threadRef}
-          items={items}
-          onApprove={onApprove}
-          onCancel={onCancel}
-          onFocusCard={onFocusCard}
-          onClarifier={onClarifier}
-          onRepeatBack={onRepeatBack}
-          onRoomClose={onRoomClose}
-          onRoomMinimize={onRoomMinimize}
-          onRoomRestore={onRoomRestore}
-          onRoomExpand={onRoomExpand}
-          onRoomLayoutChange={onRoomLayoutChange}
-          dev={devAppend ? { onAppend: devAppend } : undefined}
-        />
-      </div>
+      {/* Surface — the active room owns it; the conversation is summoned. */}
+      {route.kind === "room" ? (
+        <div className="rs-surface rs-room">
+          <RoomDispatcher roomKey={route.key} />
+        </div>
+      ) : (
+        <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
+      )}
 
-      <div className="v2-shell__composer">
-        <Composer
-          onSubmit={onSubmit}
-          onSlash={onOpenPalette}
-          disabled={composerDisabled}
-          placeholder={composerPlaceholder}
-        />
-      </div>
+      {/* Docked pebble — opens/closes Talk. It does NOT start voice; the
+          mic only engages from the pebble inside the Talk panel (or PTT). */}
+      <button
+        className="rs-peb"
+        aria-label={talkOpen ? "Close Talk" : "Open Talk"}
+        aria-expanded={talkOpen}
+        onClick={() => setTalkOpen((o) => !o)}
+      >
+        <span className="gdrop live"><span className="in" /><span className="ring" /></span>
+        <span className="rs-stl">{dataState}</span>
+      </button>
 
-      <div className="v2-shell__rail">
-        <VoiceRail
-          state={voiceState}
-          suggestions={suggestions}
-          vu={vu}
-          device="Default microphone"
-          partialTranscript={partialTranscript}
-          onTapOrb={onTapOrb}
-          onSuggestion={onSuggestion}
-          onToggleMute={onToggleMute}
-        />
-      </div>
+      {/* Talk — everything the VoiceRail + thread + composer did, summoned. */}
+      {talkOpen && (
+        <div className={`rs-talk${talkIn ? " in" : ""}`} role="dialog" aria-label="Talk to Jarvis">
+          <div className="th">
+            <button
+              className="rs-talk-mic"
+              onClick={onTapOrb}
+              aria-label={voiceState === "idle" || voiceState === "muted" ? "Start talking" : "Stop"}
+              aria-pressed={voiceState !== "idle" && voiceState !== "muted"}
+              title="Tap to talk"
+            >
+              <span className="gdrop live"><span className="in" /><span className="ring" /></span>
+            </button>
+            <div className="rs-talk-title">
+              <span className="tt">Talk</span>
+              <span className="rs-talk-sub">
+                {voiceState === "idle" ? "tap the pebble to talk" : TALK_HINT[voiceState]}
+              </span>
+            </div>
+            <button className="esc" onClick={() => setTalkOpen(false)} aria-label="Close Talk">⌘J · esc</button>
+          </div>
+
+          <div className="rs-talk-thread">
+            <PausedTasksBanner />
+            <Thread
+              ref={threadRef}
+              items={items}
+              onApprove={onApprove}
+              onCancel={onCancel}
+              onFocusCard={onFocusCard}
+              onClarifier={onClarifier}
+              onRepeatBack={onRepeatBack}
+              onRoomClose={onRoomClose}
+              onRoomMinimize={onRoomMinimize}
+              onRoomRestore={onRoomRestore}
+              onRoomExpand={onRoomExpand}
+              onRoomLayoutChange={onRoomLayoutChange}
+              dev={devAppend ? { onAppend: devAppend } : undefined}
+            />
+          </div>
+
+          {partialTranscript && (
+            <div style={{ padding: "0 14px 8px", fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink3)" }}>
+              {partialTranscript}…
+            </div>
+          )}
+
+          {suggestions.length > 0 && (
+            <div style={{ padding: "0 14px 10px", display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {suggestions.slice(0, 3).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => onSuggestion(s)}
+                  style={{ fontSize: 11, color: "var(--ink2)", border: "1px solid var(--rule)", borderRadius: 999, padding: "5px 11px", background: "var(--raise)", cursor: "pointer", fontFamily: "var(--sans)" }}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="rs-talk-foot">
+            <div style={{ padding: "11px 13px" }}>
+              <Composer
+                onSubmit={onSubmit}
+                onSlash={onOpenPalette}
+                disabled={composerDisabled}
+                placeholder={composerPlaceholder}
+              />
+            </div>
+            <div className="hint">
+              <span className="rs-stl">{dataState}</span>
+              <span style={{ color: "var(--ink3)" }}>·</span>
+              <span>{TALK_HINT[voiceState]}</span>
+              {voiceState === "listening" && (
+                <span className="vu">{vuBars.map((h, i) => <i key={i} style={{ height: h }} />)}</span>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 15px 11px", fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink3)" }}>
+              <button
+                onClick={onToggleMute}
+                style={{ border: "1px solid var(--rule)", borderRadius: "6px 1px 6px 6px", padding: "4px 10px", color: "var(--ink2)", background: "var(--raise)", cursor: "pointer", fontFamily: "var(--mono)", fontSize: 9 }}
+              >
+                {voiceState === "muted" ? "Unmute" : "Mute"}
+              </button>
+              <span>⌴ hold to talk</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notificationsSlot}
     </div>
   );
 }
