@@ -8,6 +8,7 @@ import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
+import { KitShowcase } from "./pages/KitShowcase";
 import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
 import { AnswerRoom } from "./rooms/answer/AnswerRoom";
 import "./v2.css";
@@ -89,6 +90,16 @@ export function AppShellV2() {
     return (
       <div className="jarvis-v2-root jarvis-v2-palette-mode">
         <PalettePage />
+      </div>
+    );
+  }
+
+  // Kit showcase — the Phase 3 room-kit gallery (#/_kit). Standalone, no
+  // shell chrome, so the primitives can be QA'd in isolation in both themes.
+  if (route.kind === "kit") {
+    return (
+      <div className="jarvis-v2-root">
+        <KitShowcase />
       </div>
     );
   }

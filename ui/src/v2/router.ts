@@ -36,6 +36,7 @@ export type RoomKey =
 export type V2Route =
   | { kind: "home" }
   | { kind: "primitives" }
+  | { kind: "kit" }
   | { kind: "room"; key: RoomKey }
   | { kind: "panel"; key: RoomKey }
   | { kind: "palette" }
@@ -63,6 +64,7 @@ export function getV2Route(): V2Route {
   if (typeof window === "undefined") return { kind: "home" };
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash === "_primitives") return { kind: "primitives" };
+  if (hash === "_kit") return { kind: "kit" };
   if (hash === "_palette") return { kind: "palette" };
   if (hash.startsWith("_room_")) {
     const key = hash.slice("_room_".length);
@@ -102,6 +104,7 @@ export function useV2Route(): V2Route {
 export function navigateV2(route: V2Route): void {
   let hash = "#/";
   if (route.kind === "primitives") hash = "#/_primitives";
+  else if (route.kind === "kit") hash = "#/_kit";
   else if (route.kind === "palette") hash = "#/_palette";
   else if (route.kind === "room") hash = `#/_room_${route.key}`;
   else if (route.kind === "panel") hash = `#/_panel_${route.key}`;
