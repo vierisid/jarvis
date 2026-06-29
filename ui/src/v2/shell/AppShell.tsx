@@ -14,7 +14,7 @@ import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palet
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
-import { RoomDispatcher } from "../rooms/RoomDispatcher";
+import { getRoomBody } from "../rooms/RoomBodyRegistry";
 import { setRoomEntry } from "../rooms/roomEntryStore";
 import { useTutorialEventDispatcher } from "../onboarding/TutorialEventContext";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
@@ -896,6 +896,12 @@ interface ShellLayoutProps {
   notificationsSlot?: React.ReactNode;
 }
 
+/** Render the active room's body (expanded) inside the shell surface. */
+function RoomSurface({ roomKey }: { roomKey: RoomKey }) {
+  const Body = getRoomBody(roomKey);
+  return <Body mode="expanded" />;
+}
+
 /** Live-state microcopy on the Talk hint line — the old rail's lines, verbatim. */
 const TALK_HINT: Record<VoiceState, string> = {
   idle: "Tap the pebble, or say “Hey Jarvis.”",
@@ -986,10 +992,13 @@ function ShellLayout({
         onToggleNotifications={onToggleNotifications}
       />
 
-      {/* Surface — the active room owns it; the conversation is summoned. */}
+      {/* Surface — the active room owns it; the conversation is summoned.
+          Render the room BODY (mode="expanded") directly, not the RoomShell-
+          wrapped overlay, so the room sheds its own header/back chrome and
+          inherits the Index + top bar around it. */}
       {route.kind === "room" ? (
         <div className="rs-surface rs-room">
-          <RoomDispatcher roomKey={route.key} />
+          <RoomSurface roomKey={route.key} />
         </div>
       ) : (
         <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
