@@ -321,6 +321,29 @@ async function postJson<T>(
 }
 
 /**
+ * Apply a freshly-fetched value to state only when it actually differs from
+ * the current one. Every poll's `fetch` produces a brand-new object even when
+ * the data is byte-for-byte identical; setting state with that new reference
+ * churns `===` identity and needlessly re-fires every downstream
+ * `useEffect([obj])` across the settings tabs. That churn is what let the 10s
+ * poll clobber in-progress form edits (issue #238). Comparing by JSON keeps
+ * the previous reference stable when nothing changed, so dependent effects
+ * only run on a real data change.
+ *
+ * Use it as the functional state updater: `setX((prev) => preserveRef(prev, next))`.
+ *
+ * Safe here because every payload is plain JSON straight from `fetch`, and
+ * `prev` came from the same server serializer, so key ordering is stable.
+ */
+function preserveRef<T>(prev: T, next: T): T {
+  try {
+    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+  } catch {
+    return next;
+  }
+}
+
+/**
  * Settings Room data hook.
  *
  * Polls the 8 read endpoints in parallel every 10s (paused while tab
@@ -382,19 +405,22 @@ export function useSettingsData() {
         getJson<SidecarInfo[]>("/api/sidecars"),
         getJson<UserProfileResponse>("/api/user-profile"),
       ]);
-      if (llmR) setLLM(llmR);
-      if (chanStatusR) setChannelStatus(chanStatusR);
-      if (chanCfgR) setChannelCfg(chanCfgR);
-      if (sttR) setSTTCfg(sttR);
-      if (ttsR) setTTSCfg(ttsR);
-      if (voiceR) setVoiceCfg(voiceR);
-      if (autoR) setAutostart(autoR);
-      if (rootR) setRootCfg(rootR);
-      if (persR) setPersonality(persR);
-      if (roleR) setRole(roleR);
-      if (gR) setGoogle(gR);
-      if (scR) setSidecars(scR);
-      if (profR) setProfile(profR);
+      // Functional updaters + preserveRef: keep the previous object reference
+      // when the re-fetched payload is unchanged, so dependent effects in the
+      // tabs don't re-fire on every poll (see preserveRef / issue #238).
+      if (llmR) setLLM((p) => preserveRef(p, llmR));
+      if (chanStatusR) setChannelStatus((p) => preserveRef(p, chanStatusR));
+      if (chanCfgR) setChannelCfg((p) => preserveRef(p, chanCfgR));
+      if (sttR) setSTTCfg((p) => preserveRef(p, sttR));
+      if (ttsR) setTTSCfg((p) => preserveRef(p, ttsR));
+      if (voiceR) setVoiceCfg((p) => preserveRef(p, voiceR));
+      if (autoR) setAutostart((p) => preserveRef(p, autoR));
+      if (rootR) setRootCfg((p) => preserveRef(p, rootR));
+      if (persR) setPersonality((p) => preserveRef(p, persR));
+      if (roleR) setRole((p) => preserveRef(p, roleR));
+      if (gR) setGoogle((p) => preserveRef(p, gR));
+      if (scR) setSidecars((p) => preserveRef(p, scR));
+      if (profR) setProfile((p) => preserveRef(p, profR));
     } finally {
       inFlightRef.current = false;
       setLoading(false);

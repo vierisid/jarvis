@@ -76,18 +76,27 @@ export function ChannelsTab({
   const [elVoicesLoading, setElVoicesLoading] = useState(false);
   const [sarvKey, setSarvKey] = useState("");
 
+  // Seed editable fields from the server config. Depend on the primitive
+  // *values*, not the `channelCfg`/`sttCfg` objects: those get a fresh
+  // reference on every 10s settings poll, so depending on the object would
+  // re-seed (and clobber in-progress typing) on each poll. Value deps only
+  // re-fire when the server value actually changes (e.g. after a save).
+  const tgAllowedServer = channelCfg?.telegram.allowed_users.join(", ") ?? "";
+  const dcAllowedServer = channelCfg?.discord.allowed_users.join(", ") ?? "";
+  const dcGuildServer = channelCfg?.discord.guild_id ?? "";
+
   useEffect(() => {
-    if (channelCfg) {
-      setTgAllowed(channelCfg.telegram.allowed_users.join(", "));
-      setDcAllowed(channelCfg.discord.allowed_users.join(", "));
-      setDcGuild(channelCfg.discord.guild_id ?? "");
-    }
-  }, [channelCfg]);
+    if (!channelCfg) return;
+    setTgAllowed(tgAllowedServer);
+    setDcAllowed(dcAllowedServer);
+    setDcGuild(dcGuildServer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tgAllowedServer, dcAllowedServer, dcGuildServer]);
 
   useEffect(() => {
     if (sttCfg?.local_endpoint) setSttEndpoint(sttCfg.local_endpoint);
     if (sttCfg?.local_server_type) setSttServerType(sttCfg.local_server_type);
-  }, [sttCfg]);
+  }, [sttCfg?.local_endpoint, sttCfg?.local_server_type]);
 
   useEffect(() => {
     if (ttsCfg?.provider !== "elevenlabs") return;
