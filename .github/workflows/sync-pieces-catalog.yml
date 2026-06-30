@@ -80,7 +80,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "chore: refresh pieces catalog"
-          title: ${{ steps.sync.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}
+          title: "${{ steps.sync.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
           body-path: ${{ runner.temp }}/catalog-pr-body.md
           branch: chore/sync-pieces-catalog
           labels: |
