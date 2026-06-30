@@ -76,7 +76,7 @@ describe("job-queue repo", () => {
 
   test("failJob retries with exponential backoff while attempts remain", () => {
     const now = Date.now();
-    const j = enqueue({ jobType: "T", payload: {}, maxAttempts: 3 });
+    const j = enqueue({ jobType: "T", payload: {}, maxAttempts: 3, scheduledAt: now });
     const c1 = claimNextJob({ now });
     expect(c1?.attempt).toBe(1);
 
@@ -94,7 +94,7 @@ describe("job-queue repo", () => {
 
   test("failJob terminates as FAILED after maxAttempts", () => {
     const now = Date.now();
-    const j = enqueue({ jobType: "T", payload: {}, maxAttempts: 2 });
+    const j = enqueue({ jobType: "T", payload: {}, maxAttempts: 2, scheduledAt: now });
     claimNextJob({ now });
     failJob(j.id, "first", { backoffMs: 1, now });
     claimNextJob({ now: now + 1 });
