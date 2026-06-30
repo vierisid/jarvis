@@ -4,11 +4,14 @@
 #   1. `bun run scripts/sync-pieces-catalog.ts` -- walks the activepieces
 #      monorepo at the pinned SHA, queries npm for the latest version of
 #      every piece, and writes `src/workflows/pieces-library/catalog-generated.ts`.
+#      It also diffs against the committed catalog and emits two step outputs:
+#      `verdict` (safe | review) and `has_changes` (whether any entry moved).
 #   2. `bun test` and `tsc --noEmit` -- the catalog tests in
 #      `pieces-library/catalog.test.ts` guard against malformed entries
 #      (bad semver, missing displayName, ids that collide, etc.).
-#   3. If anything changed, open a PR with the diff. If nothing changed,
-#      exit silently.
+#   3. Open a PR ONLY when an entry actually changed (`has_changes == true`).
+#      A run that bumped nothing but the generation timestamp opens no PR. The
+#      PR title reflects the verdict and the body is the script's diff analysis.
 #
 # Why a PR (not a direct commit):
 #   - Every catalog change is reviewable. Pieces can be renamed or removed
@@ -44,9 +47,13 @@ jobs:
 
       - run: bun install
 
-      # Run the generator. Writes catalog-generated.ts in place.
+      # Run the generator. Writes catalog-generated.ts in place and, via
+      # --report, an analysed PR body to the runner temp dir (outside the repo,
+      # so create-pull-request never commits it). The step also emits a
+      # `verdict` output (safe | review) used to title the PR below.
       - name: Regenerate pieces catalog
-        run: bun run scripts/sync-pieces-catalog.ts
+        id: sync
+        run: bun run scripts/sync-pieces-catalog.ts --report "${{ runner.temp }}/catalog-pr-body.md"
         env:
           # Lift the GitHub API rate limit when the script needs it
           # (mostly for the sparse clone, which is unauthenticated by
@@ -65,28 +72,16 @@ jobs:
       # Open (or update) a PR with the catalog diff. peter-evans's
       # create-pull-request handles the branch creation, push, and PR
       # creation idempotently -- a second run on an already-open PR just
-      # updates the branch.
+      # updates the branch. The title reflects the analysed verdict and the
+      # body is the markdown the sync script wrote (body-path), so reviewers
+      # see "safe to merge" vs "manual review required" at a glance.
       - name: Open PR with catalog changes
+        if: steps.sync.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "chore: refresh pieces catalog"
-          title: "chore: refresh pieces catalog"
-          body: |
-            Automated refresh of `src/workflows/pieces-library/catalog-generated.ts`.
-
-            The sync script walked the activepieces monorepo at the pinned SHA
-            (see `scripts/sync-pieces-catalog.ts`) and queried npm for the
-            latest published version of each piece.
-
-            Review checklist:
-            - [ ] Diff looks reasonable (no unexpected wholesale removal)
-            - [ ] No new pieces with suspicious names / licenses
-            - [ ] CI passed (catalog invariants + typecheck)
-
-            Hand-tuning lives in `catalog-overrides.ts` -- this PR doesn't
-            touch that file. If a newly-added piece needs a description
-            override, version pin, or exclusion, follow up with a separate
-            commit on the merged branch.
+          title: ${{ steps.sync.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}
+          body-path: ${{ runner.temp }}/catalog-pr-body.md
           branch: chore/sync-pieces-catalog
           labels: |
             pieces-catalog

@@ -6,6 +6,7 @@
  *
  * Run locally:
  *   bun run scripts/sync-pieces-catalog.ts
+ *   bun run scripts/sync-pieces-catalog.ts --report /tmp/pr-body.md  # preview the PR analysis
  *
  * Run in CI (weekly):
  *   .github/workflows/sync-pieces-catalog.yml
@@ -18,6 +19,10 @@
  *   4. Query the npm registry for the latest published version.
  *      Pieces with no npm release are skipped (still in development).
  *   5. Build a sorted entry list and write catalog-generated.ts.
+ *   6. With --report <path> (or env CATALOG_REPORT_PATH): diff against the
+ *      previously-committed catalog and write a markdown PR body that calls out
+ *      "safe to merge" (version bumps only) vs "manual review required" (pieces
+ *      added/removed, license or SHA changes). See scripts/lib/catalog-diff.ts.
  *
  * What the script does NOT do:
  *   - Probe install size (slow, flaky in CI). Sizes come from the
@@ -31,10 +36,26 @@
  * if running in CI alongside other GH actions.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  mkdirSync,
+  rmSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import {
+  diffCatalogs,
+  renderReport,
+  hasChanges,
+  type GeneratedEntryLike,
+} from "./lib/catalog-diff";
 
 /**
  * Activepieces commit walked when generating the list. Keep this in sync
@@ -66,10 +87,12 @@ interface PieceMetadata {
 async function main(): Promise<void> {
   const checkOnly = process.argv.includes("--check");
   const verbose = process.argv.includes("--verbose") || process.argv.includes("-v");
+  const reportPath = resolveReportPath();
 
   info(`Pinned SHA: ${PINNED_SHA}`);
   info(`Output:     ${OUT_FILE}`);
   info(`Mode:       ${checkOnly ? "check-only (no write)" : "write"}`);
+  if (reportPath) info(`PR report:  ${reportPath}`);
 
   // 1. Sparse-clone packages/pieces/community.
   ensureWorkdir();
@@ -109,8 +132,14 @@ async function main(): Promise<void> {
     for (const s of skipped) console.log(`  - ${s.id}: ${s.reason}`);
   }
 
-  // 5. Write the file.
+  // 5. Render + (optionally) analyse the diff for the auto-PR body. Read the
+  // previous generation BEFORE the file is overwritten below.
   const rendered = renderCatalogFile(found);
+  if (reportPath) {
+    const previous = await readPreviousGeneration();
+    await writePrReport(reportPath, previous, found, rendered);
+  }
+
   if (checkOnly) {
     const current = existsSync(OUT_FILE) ? readFileSync(OUT_FILE, "utf8") : "";
     if (current === rendered) {
@@ -206,20 +235,66 @@ async function extractPiece(dir: string, verbose: boolean): Promise<ExtractResul
   };
 }
 
+/**
+ * How many times to attempt an npm registry GET before giving up. The sync
+ * fires ~300 unauthenticated GETs from a shared CI IP, so transient 429s /
+ * 5xx / connection resets are expected -- retrying absorbs them instead of
+ * silently dropping a piece (which trips the "every VERIFIED id materializes"
+ * catalog invariant when the dropped piece happens to be verified).
+ */
+const NPM_MAX_ATTEMPTS = 4;
+/** Base backoff in ms. Grows exponentially per attempt (500, 1000, 2000...). */
+const NPM_BACKOFF_BASE_MS = 500;
+/** Cap on a single backoff wait so a large Retry-After can't stall the run. */
+const NPM_BACKOFF_MAX_MS = 10_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Parse a `Retry-After` header (RFC 7231: delay-seconds form only -- npm
+ * sends integer seconds). Returns ms, or null when absent/unparseable.
+ */
+function retryAfterMs(res: Response): number | null {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return null;
+  const secs = Number(raw.trim());
+  return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : null;
+}
+
 async function fetchNpmLatest(pkg: string): Promise<NpmInfo | null> {
-  try {
-    const url = `https://registry.npmjs.org/${pkg}/latest`;
-    const res = await fetch(url);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as NpmInfo;
-    return body;
-  } catch (e) {
-    // Soft-fail: if the network is flaky on one package, skip it rather
-    // than aborting the whole sync. The next run will pick it up.
-    console.warn(`[warn] npm fetch failed for ${pkg}: ${(e as Error).message}`);
-    return null;
+  const url = `https://registry.npmjs.org/${pkg}/latest`;
+  let lastError = "";
+  for (let attempt = 1; attempt <= NPM_MAX_ATTEMPTS; attempt++) {
+    let serverDelayMs: number | null = null;
+    try {
+      const res = await fetch(url);
+      // A genuine 404 means the piece has no npm release -- deterministic,
+      // not worth retrying. Skip it.
+      if (res.status === 404) return null;
+      if (res.ok) return (await res.json()) as NpmInfo;
+      // 429 (rate limit) / 5xx / anything else non-OK -- transient. Honour
+      // Retry-After when the server sends it, otherwise back off.
+      lastError = `HTTP ${res.status}`;
+      serverDelayMs = retryAfterMs(res);
+    } catch (e) {
+      // Network-level failure (DNS, reset, timeout) -- transient.
+      lastError = (e as Error).message;
+    }
+    if (attempt < NPM_MAX_ATTEMPTS) {
+      const backoff = NPM_BACKOFF_BASE_MS * 2 ** (attempt - 1);
+      const jitter = Math.floor(Math.random() * NPM_BACKOFF_BASE_MS);
+      const waitMs = Math.min(serverDelayMs ?? backoff + jitter, NPM_BACKOFF_MAX_MS);
+      await sleep(waitMs);
+    }
   }
+  // Exhausted retries. Soft-fail so one persistently broken package doesn't
+  // abort the whole sync; the piece is skipped this run and picked up next.
+  console.warn(
+    `[warn] npm fetch failed for ${pkg} after ${NPM_MAX_ATTEMPTS} attempts: ${lastError}`,
+  );
+  return null;
 }
 
 function humanise(id: string): string {
@@ -275,7 +350,7 @@ function renderCatalogFile(entries: PieceMetadata[]): string {
   lines.push("export const GENERATED: GeneratedCatalogEntry[] = [");
   for (const e of entries) {
     const versionRange = `^${e.latestVersion}`;
-    const sourceUrl = `https://github.com/activepieces/activepieces/tree/${PINNED_SHA}/packages/pieces/community/${e.id}`;
+    const sourceUrl = sourceUrlFor(e.id);
     lines.push("  {");
     lines.push(`    id: ${JSON.stringify(e.id)},`);
     lines.push(`    npmPackage: ${JSON.stringify(e.npmPackage)},`);
@@ -290,6 +365,120 @@ function renderCatalogFile(entries: PieceMetadata[]): string {
   lines.push("];");
   lines.push("");
   return lines.join("\n");
+}
+
+/** GitHub source URL for a piece folder at the pinned SHA. */
+function sourceUrlFor(id: string): string {
+  return `https://github.com/activepieces/activepieces/tree/${PINNED_SHA}/packages/pieces/community/${id}`;
+}
+
+// ─── PR diff report ────────────────────────────────────────────────────────
+//
+// When `--report <path>` (or env CATALOG_REPORT_PATH) is set, the script diffs
+// the freshly generated catalog against the previously-committed one and writes
+// a markdown PR body to that path. The sync workflow feeds it to
+// peter-evans/create-pull-request via `body-path`, so reviewers get an
+// up-front "safe to merge" vs "manual review required" verdict instead of a
+// raw diff. See scripts/lib/catalog-diff.ts for the analysis itself.
+
+/** Where to write the PR-body markdown, or null when reporting is off. */
+function resolveReportPath(): string | null {
+  const idx = process.argv.indexOf("--report");
+  const next = idx !== -1 ? process.argv[idx + 1] : undefined;
+  // Ignore a missing value or an accidental following flag (`--report --verbose`).
+  const fromFlag = next && !next.startsWith("--") ? next : undefined;
+  const raw = fromFlag ?? process.env.CATALOG_REPORT_PATH;
+  return raw ? resolve(raw) : null;
+}
+
+interface PreviousGeneration {
+  entries: GeneratedEntryLike[];
+  sha: string;
+}
+
+/**
+ * Load the previously-committed catalog for diffing. Imports the on-disk
+ * generated module (so we get the structured entries, not a regex parse).
+ * MUST be called before the file is overwritten. Returns null on first run or
+ * if the old file can't be read -- the diff then treats everything as added.
+ */
+async function readPreviousGeneration(): Promise<PreviousGeneration | null> {
+  if (!existsSync(OUT_FILE)) return null;
+  try {
+    const mod = (await import(pathToFileURL(OUT_FILE).href)) as {
+      GENERATED?: GeneratedEntryLike[];
+      GENERATED_FROM_SHA?: string;
+    };
+    return { entries: mod.GENERATED ?? [], sha: mod.GENERATED_FROM_SHA ?? "" };
+  } catch (e) {
+    console.warn(`[warn] could not read previous catalog for diff: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/** Map each id to its 1-based line in the rendered file (for `path:Lnn` refs). */
+function buildLineIndex(rendered: string): Map<string, number> {
+  const index = new Map<string, number>();
+  const lines = rendered.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^    id: "(.+)",$/.exec(lines[i]!);
+    if (m) index.set(m[1]!, i + 1);
+  }
+  return index;
+}
+
+/** Build the new catalog in the diff's shape (versionRange + sourceUrl derived). */
+function toGeneratedEntries(found: PieceMetadata[]): GeneratedEntryLike[] {
+  return found.map((e) => ({
+    id: e.id,
+    npmPackage: e.npmPackage,
+    versionRange: `^${e.latestVersion}`,
+    latestVersion: e.latestVersion,
+    displayName: e.displayName,
+    description: e.description,
+    sourceUrl: sourceUrlFor(e.id),
+    licenseSpdx: e.licenseSpdx,
+  }));
+}
+
+/** Render the PR body, write it to `reportPath`, and surface the verdict. */
+async function writePrReport(
+  reportPath: string,
+  previous: PreviousGeneration | null,
+  found: PieceMetadata[],
+  rendered: string,
+): Promise<void> {
+  const diff = diffCatalogs(previous?.entries ?? [], toGeneratedEntries(found), {
+    oldSha: previous?.sha ?? "",
+    newSha: PINNED_SHA,
+  });
+  const lineIndex = buildLineIndex(rendered);
+  const { verdict, markdown } = renderReport(diff, {
+    shortSha: PINNED_SHA.slice(0, 7),
+    generatedAt: new Date().toISOString().slice(0, 10),
+    fileLabel: "src/workflows/pieces-library/catalog-generated.ts",
+    lineOf: (id) => lineIndex.get(id) ?? null,
+  });
+
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, markdown);
+  const changed = hasChanges(diff);
+  info(`Wrote PR report to ${reportPath} (verdict: ${verdict}, changes: ${changed})`);
+  if (!changed) {
+    info("No catalog updates beyond the timestamp -- the workflow will skip the PR.");
+  }
+
+  // When running under GitHub Actions, expose the verdict + whether anything
+  // material changed as step outputs. The workflow titles the PR from `verdict`
+  // and gates PR creation on `has_changes`. Harmless no-op locally.
+  const githubOutput = process.env.GITHUB_OUTPUT;
+  if (githubOutput) {
+    try {
+      appendFileSync(githubOutput, `verdict=${verdict}\nhas_changes=${changed}\n`);
+    } catch (e) {
+      console.warn(`[warn] could not write GITHUB_OUTPUT: ${(e as Error).message}`);
+    }
+  }
 }
 
 function run(cmd: string, args: string[], verbose: boolean, cwd?: string): void {
