@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
 import {
   acquireLock,
   isLocked,
@@ -351,6 +351,72 @@ describe('Process Lock Manager', () => {
       // Lock freed after process exits
       expect(isLocked()).toBeNull();
       expect(acquireLock(process.pid)).toBe(true);
+    }, { timeout: 15000 });
+  });
+
+  // ── native Windows guard (#252) ──────────────────────────────────
+  //
+  // On native Windows the daemon is unsupported and `flock.c` (POSIX-only)
+  // cannot be compiled. The cc() compile must be deferred so importing the
+  // module never crashes before the CLI's platform guard fires, and any
+  // flock path that *is* reached must surface a clear message rather than a
+  // low-level TinyCC `sys/file.h not found` error.
+
+  describe('native Windows guard', () => {
+    const PROBE_SCRIPT = join(tmpdir(), 'jarvis-test-win32-probe.ts');
+    const PROBE_HOME = join(tmpdir(), 'jarvis-test-win32-home');
+
+    afterEach(() => {
+      try { unlinkSync(PROBE_SCRIPT); } catch {}
+      try { rmSync(PROBE_HOME, { recursive: true, force: true }); } catch {}
+    });
+
+    /** Run a snippet in a child process with `process.platform` faked to win32. */
+    async function runOnFakeWin32(body: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+      writeFileSync(PROBE_SCRIPT, `
+Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+${body}
+`);
+      const proc = Bun.spawn(['bun', PROBE_SCRIPT], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Isolate from the real ~/.jarvis so the probe can't touch a live lock.
+        env: { ...process.env, HOME: PROBE_HOME, USERPROFILE: PROBE_HOME },
+      });
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      const exitCode = await proc.exited;
+      return { stdout, stderr, exitCode };
+    }
+
+    // Smoke test only: on a POSIX CI host `<sys/file.h>` exists, so even the
+    // pre-fix eager compile would succeed here — this can only truly fail on
+    // real Windows. The genuine regression guard is the next test.
+    test('importing the module is side-effect-free (smoke)', async () => {
+      const { stdout, stderr, exitCode } = await runOnFakeWin32(`
+await import(${JSON.stringify(PID_MODULE)});
+console.log('IMPORT_OK');
+`);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('IMPORT_OK');
+      expect(stderr).not.toContain('sys/file.h');
+    }, { timeout: 15000 });
+
+    // Real regression guard: pre-fix, `acquireLock` ran the eager-compiled
+    // flock against the real POSIX libc (no win32 guard existed), so stderr
+    // would NOT contain the support message — this test fails on the old code.
+    test('acquireLock surfaces a clear unsupported message, not a TinyCC error', async () => {
+      const { stderr, exitCode } = await runOnFakeWin32(`
+const { acquireLock } = await import(${JSON.stringify(PID_MODULE)});
+const ok = acquireLock(process.pid);
+console.log('ACQUIRE=' + ok);
+`);
+      expect(exitCode).toBe(0);
+      // The clear, immediate daemon-support message — not a TinyCC header error.
+      expect(stderr).toContain('not compatible with native Windows');
+      expect(stderr).toContain('WSL2 or Docker');
+      expect(stderr).not.toContain('sys/file.h');
     }, { timeout: 15000 });
   });
 });

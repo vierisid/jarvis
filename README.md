@@ -137,7 +137,7 @@ Visit [opencove.host](https://opencove.host) to get started.
 
 - **Bun** >= 1.0 (installed automatically if missing)
 - **OS (native daemon install)**: macOS, Linux, or WSL
-- **Windows**: use WSL2 for the Bun install, or Docker for the daemon
+- **Windows**: native Windows is not supported for the daemon - use WSL2 for the Bun install, or Docker for the daemon
 - **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance
 
 ---
@@ -155,7 +155,7 @@ The first time you run `jarvis start`, the daemon boots in setup mode and the da
 
 > **Restart after first-time setup:** The daemon constructs background services (heartbeat, commitments, awareness) at boot, gated on setup having already been completed. Once you finish setup in the dashboard, those services don't activate until the next start — the dashboard shows a banner reminding you. Run `jarvis restart` (or stop/start) to bring them online. This will go away in a follow-up that constructs the services in-process at setup completion.
 
-> **Note:** Native Windows installs are blocked for the JARVIS daemon. On Windows, use WSL2 for the Bun install above, or use the Docker install instead.
+> **Note:** Native Windows is not a supported platform for the JARVIS daemon. JARVIS is built for Unix-like systems (macOS, Linux, and WSL); supporting native Windows would mean porting to a fundamentally different OS, which is out of scope. On Windows, use WSL2 for the Bun install above, or use the Docker install instead.
 
 ### Docker
 

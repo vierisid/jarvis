@@ -41,16 +41,39 @@ export function lockPathFor(dataDir?: string): string {
 }
 
 // ── flock() via Bun cc() ────────────────────────────────────────────
-// Compiled at startup by Bun's embedded TinyCC. Resolves libc via
-// system headers — works on Linux, macOS, and any POSIX platform
+// Compiled lazily on first use by Bun's embedded TinyCC. Resolves libc
+// via system headers — works on Linux, macOS, and any POSIX platform
 // without hardcoding a shared library path.
+//
+// Compilation is deferred (not run at module load) so that importing
+// this module's pure-fs helpers stays safe on platforms where the helper
+// can't be built. On native Windows the daemon is unsupported, and the C
+// source depends on POSIX headers that don't exist there — guarding here
+// surfaces a clear message instead of a low-level TinyCC header error.
 
-const { symbols: flock } = cc({
-  source: flockSource,
-  symbols: {
-    do_flock: { args: ['i32', 'i32'], returns: 'i32' },
-  },
-});
+type FlockSymbols = {
+  do_flock: (fd: number, operation: number) => number;
+};
+
+let flockSymbols: FlockSymbols | null = null;
+
+function getFlock(): FlockSymbols {
+  if (process.platform === 'win32') {
+    throw new Error(
+      'The JARVIS daemon is not compatible with native Windows. Use WSL2 or Docker.',
+    );
+  }
+  if (flockSymbols === null) {
+    const { symbols } = cc({
+      source: flockSource,
+      symbols: {
+        do_flock: { args: ['i32', 'i32'], returns: 'i32' },
+      },
+    });
+    flockSymbols = symbols as FlockSymbols;
+  }
+  return flockSymbols;
+}
 
 const LOCK_EX = 2;  // Exclusive lock
 const LOCK_NB = 4;  // Non-blocking
@@ -71,6 +94,10 @@ let lockFd: number | null = null;
  */
 export function acquireLock(pid: number): boolean {
   try {
+    // Resolve the flock helper first so an unsupported platform fails before
+    // we create the data dir or open an fd (nothing to leak / clean up).
+    const flock = getFlock();
+
     mkdirSync(JARVIS_DIR, { recursive: true });
 
     // Open (or create) the lock file — don't truncate before locking
@@ -116,10 +143,10 @@ export function isLocked(lockPath: string = LOCK_PATH): number | null {
 
   try {
     // Try non-blocking exclusive lock to probe
-    const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
+    const result = getFlock().do_flock(fd, LOCK_EX | LOCK_NB);
     if (result === 0) {
       // Lock acquired — no daemon running. Release immediately.
-      flock.do_flock(fd, LOCK_UN);
+      getFlock().do_flock(fd, LOCK_UN);
       closeSync(fd);
       return null;
     }
@@ -155,6 +182,7 @@ export function isLocked(lockPath: string = LOCK_PATH): number | null {
  */
 export function acquireLockAt(lockPath: string, pid: number): { release: () => void } | null {
   try {
+    const flock = getFlock();
     mkdirSync(join(lockPath, '..'), { recursive: true });
     const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT, 0o644);
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
