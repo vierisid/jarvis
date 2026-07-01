@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Chip, Icon } from "../../ui";
+import { StatusChip, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
@@ -46,6 +47,13 @@ const ROLE_ICON: Record<string, LucideIcon> = {
   "marketing-strategist": Megaphone,
   "customer-support": Headphones,
 };
+
+/** 2-letter avatar from an agent name (agents §01 — "PA", "RA", "SE"). */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+  return (name.trim().slice(0, 2) || "··").toUpperCase();
+}
 
 type TabId = "command" | "orbital" | "builder";
 const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ["command", "orbital", "builder"];
@@ -351,17 +359,19 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
   const [resultOpen, setResultOpen] = useState(false);
   const fullResponse = useFullTaskResponse(latestTask, resultOpen);
 
+  // Status remap (agents §01): primary is the one red accent in the room,
+  // active is BLUE (in-motion, not green), idle is neutral.
   let statusLabel: string;
-  let statusTone: "ok" | "warn" | "neutral" | "accent";
+  let statusTone: Tone;
   if (agent.isPrimary) {
     statusLabel = "Primary";
-    statusTone = "accent";
+    statusTone = "fail";
   } else if (agent.live?.busy) {
     statusLabel = "Active";
-    statusTone = "ok";
+    statusTone = "run";
   } else {
     statusLabel = "Idle";
-    statusTone = "neutral";
+    statusTone = "mut";
   }
 
   let timeLabel = "";
@@ -375,7 +385,7 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
     <article className="v2-agents__card" data-active={agent.isActive}>
       <div className="v2-agents__card-head">
         <div className="v2-agents__card-icon">
-          <Icon icon={IconComp} size="md" />
+          <span className="v2-agents__avatar-txt">{initials(agent.name)}</span>
         </div>
         <div className="v2-agents__card-id">
           <div className="v2-agents__card-name">{agent.name}</div>
@@ -383,9 +393,9 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
             {currentTask ?? "Waiting for tasks…"}
           </div>
         </div>
-        <Chip tone={statusTone} dot>
+        <StatusChip tone={statusTone} dot>
           {statusLabel}
-        </Chip>
+        </StatusChip>
       </div>
       {finishedResult && (
         <details
@@ -393,9 +403,9 @@ function AgentCard({ agent }: { agent: AgentRosterEntry }) {
           onToggle={(e) => setResultOpen((e.target as HTMLDetailsElement).open)}
         >
           <summary className="v2-agents__card-result-summary">
-            <Chip tone={finishedResult.success ? "ok" : "warn"} dot>
+            <StatusChip tone={finishedResult.success ? "ok" : "hold"} dot>
               {finishedResult.success ? "Result ready" : "Task failed"}
-            </Chip>
+            </StatusChip>
             <span className="v2-agents__card-result-hint">
               {latestTask?.completed_at
                 ? formatRelative(latestTask.completed_at)
@@ -512,7 +522,7 @@ function Orbital({
                   }
                   title={a.name}
                 >
-                  <Icon icon={IconComp} size="sm" />
+                  <span className="v2-agents__avatar-txt">{initials(a.name)}</span>
                   <span className="v2-agents__orb-name">{a.name}</span>
                 </button>
               );
@@ -524,9 +534,9 @@ function Orbital({
           <div className="v2-agents__orbital-detail">
             <div className="v2-agents__orbital-detail-head">
               <span className="v2-agents__orbital-detail-name">{selected.name}</span>
-              <Chip tone={selected.isActive ? "ok" : "neutral"} dot>
+              <StatusChip tone={selected.isActive ? "run" : "mut"} dot>
                 {selected.isPrimary ? "Primary" : selected.isActive ? "Active" : "Idle"}
-              </Chip>
+              </StatusChip>
             </div>
             {selected.live?.current_task && (
               <div className="v2-agents__orbital-detail-task">

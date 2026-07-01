@@ -949,3 +949,17 @@
 .v2-agents--inline .v2-agents__grid {
   grid-template-columns: 1fr;
 }
+
+/* ════════════ Brand Book III / FABLE5 ════════════
+   Palette already rides Phase 0 aliases; fix the asymmetric drop corner +
+   Familjen, and honour the §01/§02 rule: activity is the only colour, and
+   it is BLUE (in-motion), never red. */
+.v2-agents__card, .v2-agents__stat, .v2-agents__orbital-stage { border-radius: var(--corner); }
+.v2-agents__card-icon { border-radius: var(--corner-sm); }
+.v2-agents__stat-value, .v2-agents__card-name { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
+/* authority pips + working orb → blue, not the accent red */
+.v2-agents__pip[data-filled="true"][data-active="true"] { background: var(--speak); }
+.v2-agents__orb[data-active="true"] { border-color: color-mix(in srgb, var(--speak) 55%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--speak) 20%, transparent); }
+/* 2-letter avatars (agents §01) */
+.v2-agents__avatar-txt { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink2); }
+.v2-agents__orb .v2-agents__avatar-txt { font-size: 10px; }
