@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Chip, Icon } from "../../ui";
+import { Shape, type ShapeKind } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
@@ -50,6 +51,26 @@ const TYPE_ICON: Record<EntityType, LucideIcon> = {
   concept: Lightbulb,
   event: Calendar,
 };
+
+// Shape grammar (memory §02) — shape carries type, not colour ("retiring
+// the rainbow"): person=circle · project=drop · tool=square · place=peak ·
+// concept=ring · event=diamond. Colourblind-safe and brand-true.
+const TYPE_SHAPE: Record<EntityType, ShapeKind> = {
+  person: "circle", project: "drop", tool: "square", place: "peak", concept: "ring", event: "diamond",
+};
+
+// SVG node shape for the constellation (fill is ink, set in CSS; the shape
+// distinguishes type). Ring is fill:none+stroke via CSS.
+function NodeShape({ type, r }: { type: EntityType; r: number }) {
+  const c = "v2-mem__node-disc";
+  switch (type) {
+    case "tool": return <rect x={-r} y={-r} width={2 * r} height={2 * r} rx={r * 0.32} className={c} />;
+    case "event": return <rect x={-r} y={-r} width={2 * r} height={2 * r} rx={r * 0.22} transform="rotate(45)" className={c} />;
+    case "place": return <polygon points={`0,${-r} ${r * 0.92},${r * 0.72} ${-r * 0.92},${r * 0.72}`} className={c} />;
+    case "project": return <path d={`M0 ${-r} C ${r * 1.08} ${-r * 0.25}, ${r * 0.72} ${r}, 0 ${r} C ${-r * 0.72} ${r}, ${-r * 1.08} ${-r * 0.25}, 0 ${-r} Z`} className={c} />;
+    default: return <circle r={r} className={c} />; // person, concept (ring via CSS)
+  }
+}
 
 // Hand-positioned cluster centers — preserved from legacy MemoryPage.
 const CLUSTER_CENTERS: Record<EntityType, { x: number; y: number }> = {
@@ -231,7 +252,7 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
               data-active={typeFilter === t}
               onClick={() => setTypeFilter(t)}
             >
-              <Icon icon={TYPE_ICON[t]} size="sm" />
+              <Shape kind={TYPE_SHAPE[t]} />
               <span>{TYPE_LABEL[t]}</span>
               <span className="v2-mem__filter-count">{typeCounts[t]}</span>
             </button>
@@ -564,7 +585,7 @@ function Constellation({
                 onClick={() => onSelect(isSelected ? null : e.id)}
               >
                 {isSelected && <circle r={p.size + 6} className="v2-mem__node-glow" />}
-                <circle r={p.size} className="v2-mem__node-disc" />
+                <NodeShape type={e.type} r={p.size} />
                 <text y={p.size + 12} textAnchor="middle" className="v2-mem__node-label">
                   {e.name}
                 </text>
@@ -671,7 +692,7 @@ function EntityCard({
     <article className="v2-mem__card" data-active={active} onClick={onClick}>
       <div className="v2-mem__card-head">
         <div className="v2-mem__card-icon">
-          <Icon icon={IconComp} size="sm" />
+          <Shape kind={TYPE_SHAPE[entity.type]} />
         </div>
         <div className="v2-mem__card-id">
           <div className="v2-mem__card-name">{entity.name}</div>
@@ -744,7 +765,7 @@ function Browser({
                 data-active={selectedId === e.id}
                 onClick={() => onSelect(e.id)}
               >
-                <Icon icon={TYPE_ICON[e.type]} size="sm" />
+                <Shape kind={TYPE_SHAPE[e.type]} />
                 <span className="v2-mem__col-row-name">{e.name}</span>
                 <span className="v2-mem__col-row-meta">{e.type}</span>
               </button>
@@ -844,7 +865,7 @@ function DetailPanel({
     <aside className="v2-mem__detail">
       <header className="v2-mem__detail-head">
         <div className="v2-mem__detail-icon">
-          <Icon icon={IconComp} size="md" />
+          <Shape kind={TYPE_SHAPE[entity.type]} />
         </div>
         <div>
           <div className="v2-mem__detail-name">{entity.name}</div>
