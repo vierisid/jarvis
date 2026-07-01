@@ -2,22 +2,26 @@
 @import "./tokens.css";
 
 :root {
-  --j-bg: #07070A;
-  --j-surface: #0C0C12;
-  --j-surface-hover: #1A1A22;
-  --j-border: rgba(255,255,255,0.04);
-  --j-border-bright: rgba(255,255,255,0.07);
-  --j-accent: #8B5CF6;
-  --j-accent-dim: #6D28D9;
-  --j-accent2: #A78BFA;
-  --j-success: #34D399;
-  --j-warning: #FBBF24;
-  --j-error: #FB7185;
-  --j-text: rgba(255,255,255,0.88);
-  --j-text-dim: rgba(255,255,255,0.48);
-  --j-text-muted: rgba(255,255,255,0.25);
-  --j-glow: 0 0 20px rgba(139,92,246,0.15);
-  --j-glow-strong: 0 0 30px rgba(139,92,246,0.3);
+  /* The honest graft (Workspaces §02): the legacy IDE's --j-* tokens are
+     remapped onto Monochrome Lab so the editor suite re-themes without a
+     rewrite. Theme-aware — they follow --bg/--ink/etc. per data-theme.
+     (Slated for removal in Phase 6 once the IDE is rebuilt native.) */
+  --j-bg: var(--bg);
+  --j-surface: var(--panel);
+  --j-surface-hover: var(--panel2);
+  --j-border: var(--rule);
+  --j-border-bright: var(--rule2);
+  --j-accent: var(--ink);
+  --j-accent-dim: var(--ink2);
+  --j-accent2: var(--ink3);
+  --j-success: var(--ok);
+  --j-warning: var(--hold);
+  --j-error: var(--listen);
+  --j-text: var(--ink);
+  --j-text-dim: var(--ink2);
+  --j-text-muted: var(--ink3);
+  --j-glow: none;
+  --j-glow-strong: none;
 }
 
 * {
