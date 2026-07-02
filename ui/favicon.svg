@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- usejarvis brand mark: the "drop" — a disc with a squared top-right
+       corner. Ink on light, paper on dark (follows the OS colour scheme,
+       since a favicon can't read the app's data-theme). Brand Book III. -->
+  <style>
+    path { fill: #13161A; }
+    @media (prefers-color-scheme: dark) { path { fill: #EEF1F4; } }
+  </style>
+  <path d="M29 3 L29 16 A13 13 0 1 1 16 3 Z" />
+</svg>
