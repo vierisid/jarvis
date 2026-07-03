@@ -192,3 +192,29 @@ export async function readRawConfigFile(
 // config.yaml as READ-ONLY system configuration (network/hosting keys,
 // root-owned in hosted mode). All user-chosen settings persist to the vault
 // DB settings store instead; see daemon/user-settings.ts.
+
+// ── Listen address ──────────────────────────────────────────────────────────
+
+export type ListenSpec =
+  | { kind: 'tcp'; port: number }
+  | { kind: 'unix'; path: string };
+
+/**
+ * Resolve where the daemon should listen. `daemon.listen: unix:/abs/path.sock`
+ * selects a unix-domain socket (no TCP port is bound at all - hosted mode,
+ * where Caddy fronts the socket); anything else falls back to TCP on
+ * `daemon.port`. Malformed unix specs are fatal: silently falling back to a
+ * TCP port on a shared host would expose the brain to other tenants.
+ */
+export function resolveListen(daemon: { port: number; listen?: string }): ListenSpec {
+  const listen = daemon.listen?.trim();
+  if (!listen) return { kind: 'tcp', port: daemon.port };
+  if (listen.startsWith('unix:')) {
+    const path = listen.slice('unix:'.length);
+    if (!path.startsWith('/')) {
+      throw new Error(`daemon.listen unix socket path must be absolute, got: ${listen}`);
+    }
+    return { kind: 'unix', path };
+  }
+  throw new Error(`Unsupported daemon.listen value: ${listen} (expected "unix:/abs/path.sock")`);
+}

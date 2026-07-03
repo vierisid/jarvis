@@ -300,7 +300,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   // Record the actual bound port in the lockfile so `jarvis stop` knows which
   // port to verify even when the daemon was started with --port, JARVIS_PORT,
   // or a mid-run config change. No-op if we don't hold the lock (e.g. tests).
-  writeLockedPort(port);
+  // In unix-socket mode (daemon.listen) no TCP port exists to verify, so
+  // nothing is recorded and `jarvis stop` falls back to pid-only handling.
+  if (!jarvisConfig.daemon.listen?.startsWith('unix:')) {
+    writeLockedPort(port);
+  }
 
   // If dbPath is relative, make it absolute within dataDir
   if (!path.isAbsolute(config.dbPath)) {
@@ -400,7 +404,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const observerService = config.noLocalTools
       ? null
       : new ObserverService(reactor, coalescer, googleAuth ?? undefined, config.dataDir);
-    const wsService = new WebSocketService(config.port, agentService);
+    // Hosted mode: daemon.listen = unix:/run/jarvis/u_<id>.sock binds a unix
+    // socket and no TCP port at all (Caddy is the only way in).
+    const { resolveListen } = await import('../config/loader.ts');
+    const listen = resolveListen({ port: config.port, listen: jarvisConfig.daemon.listen });
+    const wsService = new WebSocketService(
+      config.port,
+      agentService,
+      listen.kind === 'unix' ? listen.path : undefined,
+    );
 
     // 5b. Create channel service for external comms (Telegram, Discord)
     const channelService = new ChannelService(jarvisConfig, agentService);

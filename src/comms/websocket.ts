@@ -129,6 +129,8 @@ export class WebSocketServer {
   private clients: Set<ServerWebSocket<unknown>> = new Set();
   private handler: WSClientHandler | null = null;
   private port: number;
+  /** When set, bind a unix-domain socket instead of the TCP port (hosted mode). */
+  private unixPath: string | null = null;
   private startTime: number = 0;
   private apiRoutes: Map<string, MethodRoutes> = new Map();
   private staticDir: string | null = null;
@@ -138,8 +140,9 @@ export class WebSocketServer {
   private corsOrigin: string | null = null;
   private proxyLimiter = new ProxyRateLimiter();
 
-  constructor(port: number = 3142) {
+  constructor(port: number = 3142, unixPath?: string) {
     this.port = port;
+    this.unixPath = unixPath ?? null;
     this.corsOrigin = `http://localhost:${port}`;
   }
 
@@ -195,8 +198,19 @@ export class WebSocketServer {
     this.startTime = Date.now();
     const self = this;
 
+    // Unix mode: remove a stale socket file from a previous run first, or
+    // bind fails with EADDRINUSE even though nothing is listening.
+    if (this.unixPath) {
+      try { require('node:fs').unlinkSync(this.unixPath); } catch { /* absent */ }
+    }
+
+    // Bun accepts either { port } or { unix } (mutually exclusive variants of
+    // a discriminated union). TypeScript can't narrow a conditional spread to
+    // one variant, so the pair is cast to the port variant; at runtime Bun
+    // receives exactly one of the two keys.
+    const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port }) as { port: number };
     this.server = Bun.serve<{ sidecar_id?: string; proxy_target?: string; _proxyUpstream?: WebSocket }>({
-      port: this.port,
+      ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
       async fetch(req, server) {
@@ -585,8 +599,17 @@ export class WebSocketServer {
       },
     });
 
-    console.log(`[WebSocketServer] Started on ws://localhost:${this.port}/ws`);
-    console.log(`[WebSocketServer] Health endpoint: http://localhost:${this.port}/health`);
+    if (this.unixPath) {
+      // Caddy (same group) must be able to connect; the socket dir itself is
+      // the per-tenant boundary. 0660 = owner + group only.
+      try { require('node:fs').chmodSync(this.unixPath, 0o660); } catch (err) {
+        console.warn(`[WebSocketServer] Could not chmod socket ${this.unixPath}:`, err);
+      }
+      console.log(`[WebSocketServer] Started on unix:${this.unixPath} (no TCP port bound)`);
+    } else {
+      console.log(`[WebSocketServer] Started on ws://localhost:${this.port}/ws`);
+      console.log(`[WebSocketServer] Health endpoint: http://localhost:${this.port}/health`);
+    }
     if (this.staticDir) {
       console.log(`[WebSocketServer] Dashboard: http://localhost:${this.port}/`);
     }

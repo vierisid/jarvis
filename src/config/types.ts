@@ -317,6 +317,14 @@ export type JarvisConfig = {
   telemetry?: TelemetryConfig;
   daemon: {
     port: number;
+    /**
+     * SYSTEM-owned listen address. When set to `unix:/absolute/path.sock`
+     * the daemon binds a unix-domain socket INSTEAD of the TCP port (no
+     * port is opened at all). Hosted instances use this so Caddy is the
+     * only way in: `listen: unix:/run/jarvis/u_<id>.sock`. Omit for the
+     * self-host default (TCP on `port`).
+     */
+    listen?: string;
     data_dir: string;
     db_path: string;
     /**
