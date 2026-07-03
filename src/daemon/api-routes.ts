@@ -2218,6 +2218,41 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Synthesize a short sample with the given voice params and return the
+     * raw MP3 bytes, so the UI (onboarding + settings) can PLAY a preview
+     * directly instead of relying on the WS/Pebble broadcast path. The config
+     * passed here is EPHEMERAL — nothing is saved, so it never disturbs the
+     * live TTS. For ElevenLabs this doubles as a real key test: a synthesis
+     * call exercises the same TTS path (and scope) the app actually uses, so
+     * a key that lacks `voices_read` but can synthesize still passes.
+     */
+    '/api/tts/preview': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as {
+            provider?: string; voice?: string; api_key?: string; voice_id?: string; model?: string; text?: string;
+          };
+          const text = (typeof body.text === 'string' && body.text.trim() ? body.text.trim() : "Hi, I'm Jarvis. This is how I'll sound.").slice(0, 280);
+          const cfg: Record<string, unknown> = { enabled: true, provider: body.provider === 'elevenlabs' ? 'elevenlabs' : 'edge' };
+          if (body.provider === 'elevenlabs') {
+            if (!body.api_key) return error('ElevenLabs API key required.', 400);
+            cfg.elevenlabs = { api_key: body.api_key, voice_id: body.voice_id, model: body.model };
+          } else {
+            cfg.voice = body.voice || 'en-US-AriaNeural';
+          }
+          const { createTTSProvider } = await import('../comms/voice.ts');
+          const provider = createTTSProvider(cfg as never);
+          if (!provider) return error('Could not build a TTS provider from those settings.', 400);
+          const audio = await provider.synthesize(text);
+          return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error(msg, 502);
+        }
+      },
+    },
+
     // --- Authority & Autonomy ---
     '/api/authority/status': {
       GET: () => {

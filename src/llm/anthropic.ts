@@ -89,9 +89,13 @@ const RETRY_BASE_DELAY_MS = 5000; // 5s, 10s, 20s
  * If you see that 400 again for a NEW model id, add its pattern to the regex
  * below. Do NOT try to pick a "safe" temperature value: the check is on
  * presence, not value. The only fix is to omit the field entirely.
+ *
+ * The adaptive-thinking family (Opus 4.7/4.8, Sonnet 5, Fable 5) all enforce
+ * this — omitting temperature is always safe (the model uses its default),
+ * so we match them pre-emptively rather than wait for a 400 in production.
  */
 function modelRejectsTemperature(model: string): boolean {
-  return /claude-opus-4-7/i.test(model);
+  return /claude-(opus-4-[78]|sonnet-5|fable-5)/i.test(model);
 }
 
 /**
@@ -345,13 +349,15 @@ export class AnthropicProvider implements LLMProvider {
 
   async listModels(): Promise<string[]> {
     // Anthropic doesn't have a models endpoint, so return known models
+    // (current family first). Keep in sync with the UI model pickers in
+    // ui/src/v2/rooms/settings/tabs/LLMTab.tsx + the onboarding wizard.
     return [
-      'claude-opus-4-6',
-      'claude-sonnet-4-5-20250929',
-      'claude-3-5-sonnet-20241022',
-      'claude-3-opus-20240229',
-      'claude-3-sonnet-20240229',
-      'claude-3-haiku-20240307',
+      'claude-fable-5',
+      'claude-opus-4-8',
+      'claude-sonnet-5',
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5-20251001',
     ];
   }
 

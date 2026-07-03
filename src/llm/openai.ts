@@ -333,13 +333,13 @@ export class OpenAIProvider implements LLMProvider {
         .filter(id => id.startsWith('gpt-'))
         .sort();
     } catch (err) {
-      // Fallback to known models if API call fails
+      // Fallback to known models if the live /models call fails.
       return [
-        'gpt-4o',
-        'gpt-4o-mini',
-        'gpt-4-turbo',
-        'gpt-4',
-        'gpt-3.5-turbo',
+        'gpt-5.5',
+        'gpt-5.5-pro',
+        'gpt-5.4',
+        'gpt-5-mini',
+        'o4-mini',
       ];
     }
   }
