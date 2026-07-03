@@ -29,3 +29,25 @@ export function setDefaultCwd(cwd: string | null): void {
 export function getDefaultCwd(): string | null {
   return _defaultCwd;
 }
+
+// ── Local browser guard (browser.local: false) ──────────────────────────────
+//
+// Separate from --no-local-tools: hosted instances disable ONLY the local
+// Chrome (no CDP ports may open on a shared VPS) while other local tools
+// follow their own policy. Set once at daemon boot from the system config.
+
+let _localBrowserDisabled = false;
+
+export function setLocalBrowserDisabled(disabled: boolean): void {
+  _localBrowserDisabled = disabled;
+  if (disabled) {
+    console.log('[Tools] Local browser disabled (browser.local: false). Browser actions route to a sidecar browser.');
+  }
+}
+
+export function isLocalBrowserDisabled(): boolean {
+  return _localBrowserDisabled;
+}
+
+export const LOCAL_BROWSER_DISABLED_MSG =
+  'Error: The local browser is disabled on this machine (browser.local: false). Browser actions run on a connected sidecar with the "browser" capability - none is currently available. Ask the user to open their Jarvis desktop app, then retry. Do NOT retry without a sidecar.';

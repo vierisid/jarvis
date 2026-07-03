@@ -343,6 +343,16 @@ export type JarvisConfig = {
     brain_domain?: string;
   };
   auth?: AuthConfig;
+  /**
+   * SYSTEM-owned (config.yaml, not the DB): whether a LOCAL Chrome may be
+   * launched on this machine. Hosted instances set `local: false` so no CDP
+   * ports ever open on the VPS; browser actions route to a connected
+   * sidecar's browser instead (the tools already prefer a `browser`-capable
+   * sidecar and only fall back to local).
+   */
+  browser?: {
+    local?: boolean;
+  };
   google?: GoogleConfig;
   channels?: ChannelConfig;
   stt?: STTConfig;
@@ -382,6 +392,9 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     port: 3142,
     data_dir: '~/.jarvis',
     db_path: '~/.jarvis/jarvis.db',
+  },
+  browser: {
+    local: true,
   },
   channels: {
     telegram: { enabled: false, bot_token: '', allowed_users: [] },

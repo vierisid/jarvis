@@ -24,7 +24,7 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 // Shared browser controller (lazy-connected on first browser tool use)
 export const browser = new BrowserController();
 
-import { isNoLocalTools, LOCAL_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
+import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -575,6 +575,7 @@ export const browserNavigateTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.navigate(params.url as string);
@@ -601,6 +602,7 @@ export const browserSnapshotTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_snapshot', {}, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.snapshot();
@@ -632,6 +634,7 @@ export const browserClickTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_click', { element_id: params.element_id }, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       return await browser.click(params.element_id as number);
@@ -676,6 +679,7 @@ export const browserTypeTool: ToolDefinition = {
         submit: params.submit,
       }, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       return await browser.type(
@@ -705,6 +709,7 @@ export const browserScreenshotTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const { base64, mimeType } = await browser.screenshotBuffer();
@@ -737,6 +742,7 @@ export const browserUploadFileTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       return await browser.uploadFile(
@@ -778,6 +784,7 @@ export const browserScrollTool: ToolDefinition = {
         amount: params.amount,
       }, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const direction = (params.direction as string) === 'up' ? 'up' : 'down';
@@ -810,6 +817,7 @@ export const browserEvaluateTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const result = await browser.evaluate(params.expression as string);

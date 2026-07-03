@@ -3564,6 +3564,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
+    // 9b'. browser.local: false (system config) - never launch a local
+    // Chrome on this machine. Hosted instances set this so no CDP port can
+    // open on a shared VPS; browser actions route to a sidecar browser
+    // (launchChrome is the enforcement choke point).
+    if (jarvisConfig.browser?.local === false) {
+      const { setLocalBrowserDisabled } = await import('../actions/tools/local-tools-guard.ts');
+      setLocalBrowserDisabled(true);
+    }
+
     // 10. Start all services
     await registry.startAll();
 
@@ -4047,7 +4056,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         });
 
         // Auto-launch overlay widget (non-blocking, best-effort)
-        if (jarvisConfig.awareness?.overlay_autolaunch !== false) {
+        if (jarvisConfig.awareness?.overlay_autolaunch !== false && jarvisConfig.browser?.local !== false) {
           try {
             const overlayUrl = `http://localhost:${config.port}/overlay`;
             const browsers = ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
