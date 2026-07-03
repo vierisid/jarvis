@@ -365,6 +365,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     applyEnvOverrides(jarvisConfig);
     logWithTimestamp('User settings loaded from database');
 
+    // 2d. Cron timezone: hosted brains run on UTC VPSs, so every cron in the
+    // process evaluates in the user's IANA timezone from the system config.
+    if (jarvisConfig.timezone) {
+      try {
+        const { setCronTimezone } = await import('../lib/cron-scheduler.ts');
+        setCronTimezone(jarvisConfig.timezone);
+        logWithTimestamp(`Cron timezone: ${jarvisConfig.timezone}`);
+      } catch {
+        console.warn(`[Daemon] Invalid timezone "${jarvisConfig.timezone}" in config - using machine local time`);
+      }
+    }
+
     // 3. Create service registry
     registry = new ServiceRegistry();
 

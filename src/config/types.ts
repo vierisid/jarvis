@@ -394,6 +394,14 @@ export type JarvisConfig = {
   heartbeat: HeartbeatConfig;
   cron?: SystemCronConfig;
   active_role: string;  // role file name
+  /**
+   * SYSTEM-owned: the user's IANA timezone (e.g. "America/New_York").
+   * Hosted brains run on UTC VPSs; the hosting server writes this (from the
+   * sidecar-reported value) so morning/evening crons, workflow triggers and
+   * goal windows fire at the user's wall-clock times. Self-host: omit to use
+   * the machine's local time.
+   */
+  timezone?: string;
 };
 
 export const DEFAULT_CONFIG: JarvisConfig = {
