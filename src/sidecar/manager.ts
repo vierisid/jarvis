@@ -27,6 +27,9 @@ import { SidecarConnection } from './connection.ts';
 import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 import { computeAnonId } from '../telemetry/anon-id.ts';
+import { loadOrGenerateSidecarKeys, enrollDevice, buildEnrollmentUrls, isLocalhostBrainUrl } from './enrollment.ts';
+
+export { buildEnrollmentUrls, isLocalhostBrainUrl } from './enrollment.ts';
 
 const ALG = 'ES256';
 const KEY_DIR_NAME = 'sidecar-keys';
@@ -42,51 +45,6 @@ const PUBLIC_KEY_FILE = 'public.pem';
 // exp + aud, no DB hit) so a leak is bounded to the TTL rather than forever.
 const ACCESS_TOKEN_AUDIENCE = 'brain-api';
 const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
-
-// Localhost host check anchored: matches `localhost`, `localhost:PORT`, but
-// not e.g. `notlocalhost.example.com`. Used both for enrollment URL scheme
-// inference and for startup warnings.
-const LOCALHOST_HOST_RE = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/;
-
-export function isLocalhostBrainUrl(brainBase: string): boolean {
-  const normalized = brainBase.trim();
-  if (/^(https?|wss?):\/\//.test(normalized)) {
-    try {
-      return LOCALHOST_HOST_RE.test(new URL(normalized).host);
-    } catch {
-      return false;
-    }
-  }
-  return LOCALHOST_HOST_RE.test(normalized);
-}
-
-// Build the JWT-bound enrollment URLs from a single canonical brain base —
-// either a full URL (`https://brain.example.com`, `wss://...`) or a bare
-// host[:port] (`brain.example.com`, `10.0.0.5:3142`). Pure function: no
-// request input, no env, no class state. The single source of truth is
-// whatever the brain operator configured at startup.
-export function buildEnrollmentUrls(brainBase: string): { brainWs: string; jwksUrl: string } {
-  const normalized = brainBase.trim();
-
-  if (/^(https?|wss?):\/\//.test(normalized)) {
-    const parsed = new URL(normalized);
-    const isSecure = parsed.protocol === 'https:' || parsed.protocol === 'wss:';
-    return {
-      brainWs: `${isSecure ? 'wss' : 'ws'}://${parsed.host}/sidecar/connect`,
-      jwksUrl: `${isSecure ? 'https' : 'http'}://${parsed.host}/api/sidecars/.well-known/jwks.json`,
-    };
-  }
-
-  // Bare host: assume insecure only for explicit local hosts. A remote
-  // host with an explicit port (`brain.example.com:443`) used to be
-  // misclassified as insecure by a `:\d+$` heuristic; require a known
-  // local host instead so production deployments default to wss/https.
-  const isSecure = !LOCALHOST_HOST_RE.test(normalized);
-  return {
-    brainWs: `${isSecure ? 'wss' : 'ws'}://${normalized}/sidecar/connect`,
-    jwksUrl: `${isSecure ? 'https' : 'http'}://${normalized}/api/sidecars/.well-known/jwks.json`,
-  };
-}
 
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
@@ -247,49 +205,13 @@ export class SidecarManager implements Service {
   }
 
   private async loadOrGenerateKeys(): Promise<void> {
-    if (existsSync(this.privateKeyPath) && existsSync(this.publicKeyPath)) {
-      await this.loadKeys();
-      await this.secureKeyFilePermissions();
-      console.log('[SidecarManager] Loaded existing ES256 key pair');
-    } else {
-      await this.generateKeys();
-      console.log('[SidecarManager] Generated new ES256 key pair');
-    }
-
-    // Export public key as JWK for the JWKS endpoint
-    this.publicJwk = await exportJWK(this.publicKey!);
-    this.keyId = this.publicJwk.x ?? 'default'; // use x-coordinate as kid (stable, unique)
-  }
-
-  private async generateKeys(): Promise<void> {
-    await secureDirectory(this.keysDir, 0o700);
-
-    const { privateKey, publicKey } = await generateKeyPair(ALG, { extractable: true });
-    this.privateKey = privateKey;
-    this.publicKey = publicKey;
-
-    // Export to PEM and write to disk
-    const pkcs8 = await exportPKCS8(privateKey);
-    const spki = await exportSPKI(publicKey);
-
-    await secureWriteFile(this.privateKeyPath, pkcs8, 0o600, 'SidecarManager');
-    // public.pem contains the SPKI public key, so world-readable 0644 is intentional.
-    await secureWriteFile(this.publicKeyPath, spki, 0o644, 'SidecarManager');
-    await this.secureKeyFilePermissions();
-  }
-
-  private async loadKeys(): Promise<void> {
-    const privatePem = await Bun.file(this.privateKeyPath).text();
-    const publicPem = await Bun.file(this.publicKeyPath).text();
-
-    this.privateKey = await importPKCS8(privatePem, ALG, { extractable: true });
-    this.publicKey = await importSPKI(publicPem, ALG, { extractable: true });
-  }
-
-  private async secureKeyFilePermissions(): Promise<void> {
-    await chmodWithWarning(this.keysDir, 0o700, 'SidecarManager');
-    await chmodWithWarning(this.privateKeyPath, 0o600, 'SidecarManager');
-    await chmodWithWarning(this.publicKeyPath, 0o644, 'SidecarManager');
+    const keys = await loadOrGenerateSidecarKeys(this.dataDir, (msg) =>
+      console.log(`[SidecarManager] ${msg}`),
+    );
+    this.privateKey = keys.privateKey;
+    this.publicKey = keys.publicKey;
+    this.publicJwk = keys.publicJwk;
+    this.keyId = keys.keyId;
   }
 
   // --------------- JWKS ---------------
@@ -318,58 +240,23 @@ export class SidecarManager implements Service {
 
   /**
    * Enroll a new sidecar. Returns the signed JWT enrollment token.
+   * Delegates to the standalone enrollment module (shared with the
+   * `jarvis enroll` CLI); the dashboard API keeps reject-on-duplicate.
    */
   async enrollSidecar(name: string): Promise<{ token: string; sidecar: SidecarRecord }> {
-    if (!this.privateKey) throw new Error('SidecarManager not started');
+    if (!this.privateKey || !this.publicJwk) throw new Error('SidecarManager not started');
     if (!this.brainUrl) throw new Error('Brain URL not configured — call setBrainUrl() first');
 
-    // Validate name
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.length > 64) {
-      throw new Error('Sidecar name must be 1-64 characters');
-    }
-    if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-      throw new Error('Sidecar name may only contain letters, numbers, hyphens, and underscores');
-    }
-
-    // Check uniqueness
-    const db = getDb();
-    const existing = db.query('SELECT id FROM sidecars WHERE name = ? AND status = ?').get(trimmed, 'enrolled') as { id: string } | null;
-    if (existing) {
-      throw new Error(`Sidecar "${trimmed}" is already enrolled`);
-    }
-
-    const id = generateId();
-    const tokenId = generateId();
-
-    const { brainWs, jwksUrl } = buildEnrollmentUrls(this.brainUrl);
-
-    // Sign JWT. `bid` is the brain's anonymous telemetry id so the sidecar can
-    // report which brain it belongs to (for the sidecars-per-brain analytics);
-    // it is the same digest the brain reports in its own telemetry, never the
-    // raw hostname/username.
-    const token = await new SignJWT({
-      sid: id,
-      name: trimmed,
-      brain: brainWs,
-      jwks: jwksUrl,
-      bid: computeAnonId(),
-    } satisfies Omit<SidecarTokenClaims, 'sub' | 'jti' | 'iat'>)
-      .setProtectedHeader({ alg: ALG, kid: this.keyId })
-      .setSubject(`sidecar:${id}`)
-      .setJti(tokenId)
-      .setIssuedAt()
-      .sign(this.privateKey);
-
-    // Store in database
-    db.run(
-      'INSERT INTO sidecars (id, name, token_id) VALUES (?, ?, ?)',
-      [id, trimmed, tokenId],
-    );
-
-    const sidecar = db.query('SELECT * FROM sidecars WHERE id = ?').get(id) as SidecarRecord;
-    console.log(`[SidecarManager] Enrolled sidecar "${trimmed}" (${id})`);
-
+    const { token, sidecar } = await enrollDevice(this.dataDir, this.brainUrl, name, {
+      onExisting: 'reject',
+      keys: {
+        privateKey: this.privateKey,
+        publicKey: this.publicKey!,
+        publicJwk: this.publicJwk,
+        keyId: this.keyId,
+      },
+    });
+    console.log(`[SidecarManager] Enrolled sidecar "${sidecar.name}" (${sidecar.id})`);
     return { token, sidecar };
   }
 

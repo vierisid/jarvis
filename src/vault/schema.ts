@@ -35,9 +35,12 @@ export function closeDb(): void {
 /**
  * Initialize the SQLite database with all required tables
  * @param dbPath - Path to the database file. Defaults to :memory: for testing
+ * @param opts.quiet - Suppress the stdout init log. CLIs whose stdout is
+ *   machine-readable (jarvis enroll/sidecars/revoke) set this so the token
+ *   or JSON is the ONLY thing on stdout.
  * @returns Database instance
  */
-export function initDatabase(dbPath: string = ":memory:"): Database {
+export function initDatabase(dbPath: string = ":memory:", opts?: { quiet?: boolean }): Database {
   try {
     // Close existing connection if any
     closeDb();
@@ -54,7 +57,7 @@ export function initDatabase(dbPath: string = ":memory:"): Database {
     // Create all tables
     createTables(dbInstance);
 
-    console.log(`Database initialized at: ${dbPath}`);
+    if (!opts?.quiet) console.log(`Database initialized at: ${dbPath}`);
     return dbInstance;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

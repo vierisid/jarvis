@@ -46,6 +46,9 @@ ${c.bold('Commands:')}
   ${c.cyan('update')}    Update JARVIS (dispatches based on install method)
   ${c.cyan('uninstall')} Remove JARVIS (dispatches based on install method)
   ${c.cyan('doctor')}    Check environment and connectivity
+  ${c.cyan('enroll')}    Enroll a sidecar device: mint + store its JWT (no daemon needed)
+  ${c.cyan('sidecars')}  List enrolled devices (sidecars list [--json])
+  ${c.cyan('revoke')}    Revoke an enrolled device by sid
   ${c.cyan('version')}   Print version number
   ${c.cyan('help')}      Show this help message
 
@@ -68,6 +71,9 @@ ${c.bold('Examples:')}
   jarvis logs -f                Follow live log output
   jarvis update                 Update to latest version
   jarvis uninstall              Remove JARVIS from this machine
+  jarvis enroll "desktop-NA23"  Mint an enrollment token for a device
+  jarvis sidecars list --json   List devices (machine-readable)
+  jarvis revoke <sid>           Revoke a device's access
   jarvis doctor                 Check if everything is working
 `);
 }
@@ -402,6 +408,18 @@ switch (command) {
   case 'doctor':
     await cmdDoctor();
     break;
+  case 'enroll': {
+    const { cmdEnroll } = await import('../src/cli/devices.ts');
+    process.exit(await cmdEnroll(commandArgs));
+  }
+  case 'sidecars': {
+    const { cmdSidecars } = await import('../src/cli/devices.ts');
+    process.exit(await cmdSidecars(commandArgs));
+  }
+  case 'revoke': {
+    const { cmdRevoke } = await import('../src/cli/devices.ts');
+    process.exit(await cmdRevoke(commandArgs));
+  }
   case 'uninstall':
     await cmdUninstall();
     break;
