@@ -45,15 +45,16 @@ async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string
 
 export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<number> {
   const json = args.includes('--json');
+  const rotate = args.includes('--rotate');
   const name = args.filter((a) => !a.startsWith('--'))[0];
   if (!name) {
-    io.err('usage: jarvis enroll <device-name> [--json]');
+    io.err('usage: jarvis enroll <device-name> [--json] [--rotate]');
     return 2;
   }
 
   try {
     const { dataDir, brainUrl } = await openVault(io);
-    const result = await enrollDevice(dataDir, brainUrl, name, { onExisting: 'upsert' });
+    const result = await enrollDevice(dataDir, brainUrl, name, { onExisting: 'upsert', rotate });
     if (json) {
       io.out(
         JSON.stringify({
@@ -67,7 +68,7 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
       io.err(
         result.created
           ? `enrolled "${result.sidecar.name}" (${result.sidecar.id})`
-          : `re-minted token for existing device "${result.sidecar.name}" (${result.sidecar.id})`,
+          : `re-minted token for existing device "${result.sidecar.name}" (${result.sidecar.id}); previous tokens REMAIN VALID (use --rotate to invalidate them)`,
       );
       io.out(result.token);
     }
@@ -124,8 +125,10 @@ export async function cmdRevoke(args: string[], io: CliIo = defaultIo): Promise<
 
   try {
     await openVault(io);
-    // Same semantics as SidecarManager.revokeSidecar: the row is deleted and
-    // any live daemon rejects the token on its next DB check. Idempotent:
+    // Deletes the enrollment row: new connections are rejected immediately,
+    // and a running daemon severs any LIVE session for this sid within ~30s
+    // (its revocation sweep re-checks enrollment; this CLI is a separate
+    // process and cannot close the daemon's sockets itself). Idempotent:
     // revoking an unknown/already-revoked sid reports revoked=false, exit 0.
     const result = getDb().run('DELETE FROM sidecars WHERE id = ? AND status = ?', [sid, 'enrolled']);
     const revoked = result.changes > 0;

@@ -166,6 +166,13 @@ export interface EnrollOptions {
    * - 'reject' (dashboard API): error, preserving the historical behavior.
    */
   onExisting: 'upsert' | 'reject';
+  /**
+   * With 'upsert': give the device a NEW sid instead of keeping the old one,
+   * which invalidates every previously minted JWT for it (validation is by
+   * sid; the old row is deleted). Use after a suspected token leak. A live
+   * session on the old sid is severed by the daemon's revocation sweep.
+   */
+  rotate?: boolean;
   keys?: SidecarKeys;
 }
 
@@ -186,12 +193,17 @@ export async function enrollDevice(
   const keys = options.keys ?? (await loadOrGenerateSidecarKeys(dataDir));
 
   const db = getDb();
-  const existing = db
+  let existing = db
     .query('SELECT id FROM sidecars WHERE name = ? AND status = ?')
     .get(trimmed, 'enrolled') as { id: string } | null;
 
   if (existing && options.onExisting === 'reject') {
     throw new Error(`Sidecar "${trimmed}" is already enrolled`);
+  }
+
+  if (existing && options.rotate) {
+    db.run('DELETE FROM sidecars WHERE id = ?', [existing.id]);
+    existing = null; // fall through to a brand-new sid
   }
 
   const id = existing?.id ?? generateId();

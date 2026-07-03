@@ -64,7 +64,7 @@ describe('user-settings', () => {
     expect(loadUserSection('tts')).toBeUndefined();
   });
 
-  test('legacy import seeds the DB once and never clobbers newer edits', () => {
+  test('import: UNCHANGED file never clobbers dashboard edits', () => {
     const legacyYaml = {
       daemon: { port: 7777 }, // system key: not imported
       stt: { provider: 'groq' },
@@ -78,7 +78,7 @@ describe('user-settings', () => {
     // The dashboard later edits stt...
     saveUserSection('stt', { provider: 'openai' });
 
-    // ...and a re-import from the same stale file must NOT clobber it.
+    // ...and a re-import from the SAME file must NOT clobber it.
     const reimported = importLegacyUserSettings(legacyYaml);
     expect(reimported).toEqual([]);
 
@@ -86,6 +86,43 @@ describe('user-settings', () => {
     mergeUserSettingsIntoConfig(config);
     expect(config.stt?.provider).toBe('openai');
     expect(config.active_role).toBe('villain');
+  });
+
+  test('import: an EDITED file value applies over the DB (editor-less sections stay tunable)', () => {
+    // Review finding: heartbeat/cron/goals/... have no dashboard editor, so
+    // write-once import made the file a lie. A changed file value is intent.
+    importLegacyUserSettings({ heartbeat: { interval_minutes: 15 } });
+    let config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+    expect(config.heartbeat.interval_minutes).toBe(15);
+
+    // Same file on the next boots: nothing happens.
+    expect(importLegacyUserSettings({ heartbeat: { interval_minutes: 15 } })).toEqual([]);
+
+    // The self-hoster edits the file: the new value must apply.
+    const imported = importLegacyUserSettings({ heartbeat: { interval_minutes: 5 } });
+    expect(imported).toEqual(['heartbeat']);
+    config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+    expect(config.heartbeat.interval_minutes).toBe(5);
+  });
+
+  test('import: pre-tracking DB values are baselined, not clobbered, then file edits apply', () => {
+    // Simulates an instance that imported under the old write-once behavior
+    // (DB row exists, no import record) and got a dashboard edit.
+    setSetting('cfg.stt', JSON.stringify({ provider: 'openai' }));
+
+    // First boot with tracking: file present but only baselined.
+    expect(importLegacyUserSettings({ stt: { provider: 'groq' } })).toEqual([]);
+    let config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+    expect(config.stt?.provider).toBe('openai');
+
+    // A LATER file edit applies.
+    expect(importLegacyUserSettings({ stt: { provider: 'sarvam' } })).toEqual(['stt']);
+    config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+    expect(config.stt?.provider).toBe('sarvam');
   });
 
   test('null rawYaml (no config file) imports nothing', () => {

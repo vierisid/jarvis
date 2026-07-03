@@ -158,10 +158,35 @@ function validPort(value: unknown): number | null {
 
 export type StopPortSource = 'lockfile' | 'env' | 'cli' | 'config' | 'default';
 
-export type StopPortResolution = {
-  port: number;
-  source: StopPortSource;
-};
+export type StopPortResolution =
+  | { port: number; source: StopPortSource }
+  /**
+   * The config binds a unix socket (`daemon.listen: unix:...`) and no TCP
+   * port was recorded in the lockfile: there is NO port to verify or clear.
+   * `jarvis stop` must be pid-only - SIGTERM/SIGKILLing whatever same-user
+   * process happens to listen on daemon.port/3142 would murder an unrelated
+   * service on a hosted box.
+   */
+  | { port: null; source: 'unix-socket' };
+
+/**
+ * Read `daemon.listen` from the YAML config; returns the unix socket path
+ * when one is configured, else null.
+ */
+export function readConfiguredUnixListen(configPath = join(homedir(), '.jarvis', 'config.yaml')): string | null {
+  try {
+    if (!existsSync(configPath)) return null;
+    const text = readFileSync(configPath, 'utf-8');
+    const doc = YAML.parseDocument(text, { merge: true });
+    if (doc.errors.length > 0) return null;
+    const parsed = doc.toJS() as { daemon?: { listen?: unknown } } | null;
+    const listen = parsed?.daemon?.listen;
+    if (typeof listen === 'string' && listen.trim().startsWith('unix:')) return listen.trim().slice('unix:'.length);
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve which port `jarvis stop` should verify.
@@ -187,6 +212,13 @@ export function resolveStopPort(options?: {
 
   const locked = validPort(readLockedPort());
   if (locked !== null) return { port: locked, source: 'lockfile' };
+
+  // Unix-socket mode records no port (there is none). Every other source
+  // (env/cli/config/default) describes a TCP port the daemon never bound,
+  // so port cleanup must be skipped entirely.
+  if (readConfiguredUnixListen(options?.configPath) !== null) {
+    return { port: null, source: 'unix-socket' };
+  }
 
   const fromEnv = validPort(env.JARVIS_PORT);
   if (fromEnv !== null) return { port: fromEnv, source: 'env' };

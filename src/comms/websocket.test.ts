@@ -357,3 +357,72 @@ test('WebSocketServer - auth.insecure_open_access opens the dashboard (setup esc
     authServer.stop();
   }
 });
+
+test('WebSocketServer - WebSocket upgrade allowed with a valid access-token cookie', async () => {
+  const authServer = new WebSocketServer(3155);
+  authServer.setSidecarManager(fakeSidecarManager('valid-access-token'));
+  authServer.start();
+
+  try {
+    const ws = new WebSocket('ws://localhost:3155/ws', {
+      headers: { Cookie: 'token=valid-access-token' },
+    } as any);
+
+    const connected = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+      setTimeout(() => resolve(false), 2000);
+    });
+
+    expect(connected).toBe(true);
+    ws.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - sendToClient unicasts JSON', async () => {
+  let serverWsRef: any = null;
+
+  server.setHandler({
+    async onMessage(msg, ws) {
+      serverWsRef = ws;
+      return undefined;  // No auto-response
+    },
+    onConnect(_ws) {},
+    onDisconnect(_ws) {},
+  });
+
+  server.start();
+
+  const ws = new WebSocket('ws://localhost:3143/ws');
+  const received: WSMessage[] = [];
+
+  await new Promise<void>((resolve) => { ws.onopen = () => resolve(); });
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      received.push(JSON.parse(e.data));
+    }
+  };
+
+  // Trigger to get ws ref
+  ws.send(JSON.stringify({ type: 'command', payload: {}, timestamp: Date.now() }));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  // Unicast a tts_start message
+  server.sendToClient(serverWsRef, {
+    type: 'tts_start',
+    payload: { requestId: 'test-123' },
+    timestamp: Date.now(),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  expect(received.length).toBe(1);
+  expect(received[0]!.type).toBe('tts_start');
+  expect((received[0]!.payload as any).requestId).toBe('test-123');
+
+  ws.close();
+  server.stop();
+});

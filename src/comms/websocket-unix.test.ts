@@ -59,3 +59,13 @@ describe('unix-domain socket listener', () => {
     expect(tcpRefused).toBe(true);
   });
 });
+
+test('stop() removes the socket file (no dead-but-present socket)', async () => {
+  const { existsSync } = await import('node:fs');
+  const sockPath = join(tmpdir(), `jarvis-test-stop-${process.pid}-${Date.now()}.sock`);
+  const s = new WebSocketServer(39995, sockPath);
+  s.start();
+  expect(existsSync(sockPath)).toBe(true);
+  s.stop();
+  expect(existsSync(sockPath)).toBe(false);
+});

@@ -76,7 +76,7 @@ describe('standalone enrollment', () => {
 
   test('reject mode preserves the dashboard duplicate error', async () => {
     await enrollDevice(dataDir, 'u1.vps1.usejarvis.host', 'desktop-NA23', { onExisting: 'upsert' });
-    expect(
+    await expect(
       enrollDevice(dataDir, 'u1.vps1.usejarvis.host', 'desktop-NA23', { onExisting: 'reject' }),
     ).rejects.toThrow(/already enrolled/);
   });
@@ -101,8 +101,32 @@ describe('standalone enrollment', () => {
   });
 
   test('missing brain URL is a hard error, not a localhost token', async () => {
-    expect(enrollDevice(dataDir, '', 'desktop-NA23', { onExisting: 'upsert' })).rejects.toThrow(
+    await expect(enrollDevice(dataDir, '', 'desktop-NA23', { onExisting: 'upsert' })).rejects.toThrow(
       /brain_domain/i,
     );
   });
+});
+
+test('rotate: fresh sid, old tokens die with the old row', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'jarvis-rotate-'));
+  initDatabase(':memory:');
+  try {
+    const first = await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', { onExisting: 'upsert' });
+    const rotated = await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', {
+      onExisting: 'upsert',
+      rotate: true,
+    });
+
+    expect(rotated.created).toBe(true);
+    expect(rotated.sidecar.id).not.toBe(first.sidecar.id);
+    // Old sid is gone -> every JWT carrying it fails enrollment checks.
+    const old = getDb().query('SELECT id FROM sidecars WHERE id = ?').get(first.sidecar.id);
+    expect(old).toBeNull();
+    // Exactly one row for the device name.
+    const count = getDb().query('SELECT COUNT(*) as n FROM sidecars').get() as { n: number };
+    expect(count.n).toBe(1);
+  } finally {
+    closeDb();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

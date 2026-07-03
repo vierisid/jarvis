@@ -6,7 +6,9 @@
  * This generalizes the pattern llm-settings.ts established for the `llm`
  * block: the vault DB settings store is the sole authority, config.yaml
  * contributes nothing (loadConfig discards user sections), and the daemon
- * merges the stored values into the in-memory config at boot. config.yaml is
+ * merges the stored values into the in-memory config at boot. File-provided
+ * sections import on first boot and re-import whenever the FILE value changes
+ * (change-tracked; see importLegacyUserSettings). config.yaml is
  * thereby reduced to a read-only SYSTEM config (daemon.*, auth, google) that
  * the brain never writes — in hosted mode it is root-owned and the server
  * manages it.
@@ -57,22 +59,62 @@ export function loadUserSection(section: UserOwnedSection): unknown {
   }
 }
 
+/** Meta row remembering the file value each section was last imported from. */
+const IMPORT_STATE_KEY = 'cfg.__import_state';
+
+function loadImportState(): Record<string, string> {
+  const raw = getSetting(IMPORT_STATE_KEY);
+  if (raw === null) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
- * One-time import of user sections that a legacy config.yaml still carries.
- * A section is imported only when the DB has no value for it yet, so a
- * dashboard edit is never clobbered by a stale file on later boots. Returns
- * the imported section names (for boot logging).
+ * Import user sections that a config.yaml still carries. Change-tracked, not
+ * write-once (review finding: 10 of 17 sections have no dashboard editor, so
+ * a pure first-boot import silently ignored every later file edit):
+ *
+ * - DB has no value        -> import, remember the file value.
+ * - file EDITED since the last import -> import (the edit is intent: for
+ *   editor-less sections the file is the user's only knob), remember it.
+ * - file unchanged          -> keep the DB value (dashboard edits persist).
+ * - DB value exists but no import record (pre-tracking upgrade) -> baseline
+ *   the current file value WITHOUT importing, so a dashboard edit made under
+ *   the old behavior is never clobbered; subsequent file edits then apply.
+ *
+ * Returns the imported section names (for boot logging).
  */
 export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null): string[] {
   if (!rawYaml) return [];
   const imported: string[] = [];
+  const state = loadImportState();
+  let stateChanged = false;
+
   for (const section of USER_OWNED_SECTIONS) {
     const fileValue = rawYaml[section];
     if (fileValue === undefined || fileValue === null) continue;
-    if (getSetting(settingKey(section)) !== null) continue;
-    setSetting(settingKey(section), JSON.stringify(fileValue));
+    const fileJson = JSON.stringify(fileValue);
+    const hasDbValue = getSetting(settingKey(section)) !== null;
+    const lastImported = state[section];
+
+    if (hasDbValue && lastImported === undefined) {
+      state[section] = fileJson; // baseline only
+      stateChanged = true;
+      continue;
+    }
+    if (hasDbValue && fileJson === lastImported) continue;
+
+    setSetting(settingKey(section), fileJson);
+    state[section] = fileJson;
+    stateChanged = true;
     imported.push(section);
   }
+
+  if (stateChanged) setSetting(IMPORT_STATE_KEY, JSON.stringify(state));
   return imported;
 }
 

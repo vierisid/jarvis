@@ -198,7 +198,7 @@ describe('readRawConfigFile', () => {
   test('returns null for a missing file and throws on bad YAML', async () => {
     expect(await readRawConfigFile('/tmp/jarvis-definitely-not-here.yaml')).toBeNull();
     await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 3142\n    bad: true\n');
-    expect(readRawConfigFile(TEST_CONFIG_PATH)).rejects.toThrow();
+    await expect(readRawConfigFile(TEST_CONFIG_PATH)).rejects.toThrow();
   });
 });
 
@@ -270,7 +270,7 @@ daemon:
 `;
     await Bun.write(TEST_CONFIG_PATH, badYaml);
 
-    expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow();
+    await expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow();
   });
 
   test('uses defaults when file does not exist (no throw)', async () => {

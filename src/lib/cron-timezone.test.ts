@@ -68,3 +68,47 @@ describe('cron timezone', () => {
     expect(CronScheduler.matches(expr, now)).toBe(true);
   });
 });
+
+describe('cron timezone: DST day-boundary regressions (review findings)', () => {
+  afterEach(() => {
+    setCronTimezone(null);
+  });
+
+  test('weekly cron lands ON the US spring-forward Monday, not a week later', () => {
+    setCronTimezone('America/New_York');
+    // From Saturday 2026-03-07 12:00 UTC, next "0 9 * * 1" must be Monday
+    // March 9 09:00 EDT (13:00 UTC) - the original startOfNextLocalDay
+    // skipped the whole transition day and returned March 16.
+    const next = CronScheduler.nextRun('0 9 * * 1', new Date('2026-03-07T12:00:00Z'));
+    expect(next?.toISOString()).toBe('2026-03-09T13:00:00.000Z');
+  });
+
+  test('date-specific cron on/after a transition is found (schedule() must not throw)', () => {
+    setCronTimezone('America/New_York');
+    // "0 9 9 3 *" = March 9, 09:00. The old day-skip jumped over March 9
+    // entirely and nextRun returned null, which made schedule() throw and
+    // the job silently never register.
+    const next = CronScheduler.nextRun('0 9 9 3 *', new Date('2026-03-01T00:00:00Z'));
+    expect(next?.toISOString()).toBe('2026-03-09T13:00:00.000Z');
+  });
+
+  test('zones where DST starts AT midnight (America/Santiago): the day has no 00:xx', () => {
+    setCronTimezone('America/Santiago');
+    // Chile DST 2026 begins the night of Sep 5 -> 6: 00:00 jumps to 01:00,
+    // so Sep 6 has no midnight. A cron for 01:30 must fire Sep 6 01:30 -03
+    // (04:30 UTC), and a date-specific cron for Sep 6 must not be skipped.
+    const next = CronScheduler.nextRun('30 1 * * *', new Date('2026-09-05T23:30:00-04:00'));
+    expect(next?.toISOString()).toBe('2026-09-06T04:30:00.000Z');
+
+    const dateCron = CronScheduler.nextRun('0 9 6 9 *', new Date('2026-09-01T00:00:00Z'));
+    expect(dateCron?.toISOString()).toBe('2026-09-06T12:00:00.000Z');
+  });
+
+  test('fall-back 25h day: next-day search does not stall on the repeated hour', () => {
+    setCronTimezone('America/New_York');
+    // US DST ends 2026-11-01 (25h day). A date cron for Nov 2 searched from
+    // Oct 31 must cross the long day cleanly.
+    const next = CronScheduler.nextRun('0 8 2 11 *', new Date('2026-10-31T00:00:00Z'));
+    expect(next?.toISOString()).toBe('2026-11-02T13:00:00.000Z'); // 8am EST
+  });
+});

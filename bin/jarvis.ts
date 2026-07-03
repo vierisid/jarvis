@@ -72,6 +72,7 @@ ${c.bold('Examples:')}
   jarvis update                 Update to latest version
   jarvis uninstall              Remove JARVIS from this machine
   jarvis enroll "desktop-NA23"  Mint an enrollment token for a device
+  jarvis enroll <name> --rotate Re-enroll invalidating all previous tokens
   jarvis sidecars list --json   List devices (machine-readable)
   jarvis revoke <sid>           Revoke a device's access
   jarvis doctor                 Check if everything is working
@@ -212,11 +213,18 @@ async function cmdStop(args: string[] = []): Promise<void> {
 
   const resolution = resolveStopPort({ cliPort });
   const port = resolution.port;
-  if (resolution.source !== 'lockfile' && resolution.source !== 'default') {
+  if (port !== null && resolution.source !== 'lockfile' && resolution.source !== 'default') {
     console.log(c.dim(`  Using port ${port} (from ${resolution.source})`));
+  }
+  if (port === null) {
+    console.log(c.dim('  Unix-socket mode (daemon.listen) — pid-only stop, no port cleanup'));
   }
 
   if (!pid) {
+    if (port === null) {
+      console.log(c.yellow('JARVIS is not running.'));
+      return;
+    }
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
       const details = cleanup.forced.length > 0
@@ -245,6 +253,11 @@ async function cmdStop(args: string[] = []): Promise<void> {
       try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
     }
 
+    if (port === null) {
+      releaseLock();
+      console.log(c.green('✓ JARVIS daemon stopped.'));
+      return;
+    }
     const cleanup = await ensurePortReleased(port);
     releaseLock();
     if (!cleanup.released) {

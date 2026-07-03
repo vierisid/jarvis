@@ -122,6 +122,16 @@ export class BrowserController {
   async connect(): Promise<void> {
     if (this._connected) return;
 
+    // browser.local: false is enforced HERE, not only in launchChrome:
+    // connect() first probes the CDP port and attaches to whatever is
+    // already listening, so on a shared host a guard on launch alone would
+    // let the agent adopt ANY process bound to 127.0.0.1:<port> - including
+    // another tenant's. No local CDP connection at all when disabled.
+    const { isLocalBrowserDisabled } = await import('../tools/local-tools-guard.ts');
+    if (isLocalBrowserDisabled()) {
+      throw new Error('The local browser is disabled on this machine (browser.local: false). Use a sidecar browser instead.');
+    }
+
     // If Chrome isn't running, launch it automatically
     if (!(await this.isAvailable())) {
       console.log('[BrowserController] Chrome not detected, launching automatically...');

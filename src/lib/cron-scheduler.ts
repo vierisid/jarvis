@@ -183,6 +183,7 @@ interface WallClock {
   dom: number;
   month: number;
   dow: number;
+  year: number;
 }
 
 /** Wall-clock components of a timestamp in the configured cron timezone. */
@@ -194,6 +195,7 @@ function wallClock(date: Date): WallClock {
       dom: date.getDate(),
       month: date.getMonth() + 1,
       dow: date.getDay(),
+      year: date.getFullYear(),
     };
   }
   wallClockFormatter ??= new Intl.DateTimeFormat('en-US', {
@@ -204,6 +206,7 @@ function wallClock(date: Date): WallClock {
     day: 'numeric',
     month: 'numeric',
     weekday: 'short',
+    year: 'numeric',
   });
   const parts: Record<string, string> = {};
   for (const part of wallClockFormatter.formatToParts(date)) {
@@ -215,20 +218,54 @@ function wallClock(date: Date): WallClock {
     dom: Number(parts.day),
     month: Number(parts.month),
     dow: DOW_INDEX[parts.weekday!] ?? 0,
+    year: Number(parts.year),
   };
 }
 
+/** Local calendar date as a single comparable number (yyyymmdd). */
+function localDateKey(wc: WallClock): number {
+  return wc.year * 10_000 + wc.month * 100 + wc.dom;
+}
+
 /**
- * Timestamp of the next local midnight in the cron timezone. DST-safe: lands
- * by wall-clock arithmetic, then snaps until the wall clock reads 00:xx.
+ * First timestamp of the NEXT local calendar date in the cron timezone.
+ * Anchored on the calendar date, not on "wall clock reads 00:00", because
+ * both can lie under DST:
+ *  - spring-forward days are 23h, so a fixed +24h jump overshoots and a
+ *    forward-only "snap to hour 0" then skips an entire day (the original
+ *    bug: nextRun for a Monday cron landing on the transition returned the
+ *    Monday AFTER);
+ *  - in zones where DST starts AT midnight (America/Santiago) the next day
+ *    has no 00:xx at all - its first instant reads 01:00.
+ * Strategy: jump to the vicinity of the next midnight by wall-clock
+ * arithmetic (bounded, over/undershoot at most an hour), then walk by
+ * minutes until the local date is exactly `current date + 1 day-key`,
+ * i.e. the first minute of the next date whatever its wall time is.
  */
 function startOfNextLocalDay(ts: number): number {
-  let candidate = ts;
-  for (let i = 0; i < 4; i++) {
-    const wc = wallClock(new Date(candidate));
-    const minutesIntoDay = wc.hour * 60 + wc.minute;
-    if (candidate !== ts && wc.hour === 0) return candidate;
-    candidate += (24 * 60 - minutesIntoDay) * 60_000;
+  const startKey = localDateKey(wallClock(new Date(ts)));
+
+  // Coarse jump: minutes remaining to nominal midnight. Lands within an hour
+  // of the real boundary regardless of a 23/24/25-hour day.
+  const wc = wallClock(new Date(ts));
+  let candidate = ts + (24 * 60 - (wc.hour * 60 + wc.minute)) * 60_000;
+
+  // A 25-hour day can leave us still on the starting date: take another
+  // bounded hop until the date changes.
+  for (let i = 0; i < 3 && localDateKey(wallClock(new Date(candidate))) <= startKey; i++) {
+    const w = wallClock(new Date(candidate));
+    candidate += (24 * 60 - (w.hour * 60 + w.minute)) * 60_000;
+  }
+
+  // Walk BACK by minutes while the previous minute is still past the start
+  // date - this finds the exact first minute of the next date, and never
+  // crosses back onto the start date (so a skipped-midnight day converges on
+  // its true first instant, e.g. 01:00 in Santiago).
+  let guard = 0;
+  while (guard++ < 180) {
+    const prev = candidate - 60_000;
+    if (localDateKey(wallClock(new Date(prev))) <= startKey) break;
+    candidate = prev;
   }
   return candidate;
 }

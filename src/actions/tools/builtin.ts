@@ -742,7 +742,11 @@ export const browserUploadFileTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
+    // No sidecar route exists for uploads, so the generic "use a sidecar"
+    // guidance would send the agent in circles - say so explicitly.
+    if (isLocalBrowserDisabled()) {
+      return 'Error: browser_upload_file requires the LOCAL browser, which is disabled on this machine (browser.local: false), and file upload has no sidecar route yet. This action is unavailable - do NOT retry.';
+    }
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       return await browser.uploadFile(

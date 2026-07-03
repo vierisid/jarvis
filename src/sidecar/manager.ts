@@ -64,6 +64,7 @@ export class SidecarManager implements Service {
   private scheduler: EventScheduler;
   private rpcTracker: RPCTracker;
   private sidecarConnections = new Map<string, SidecarConnection>();
+  private revocationSweepTimer: ReturnType<typeof setInterval> | null = null;
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
   // Two parallel notify APIs:
@@ -113,6 +114,16 @@ export class SidecarManager implements Service {
     this._status = 'starting';
     try {
       await this.loadOrGenerateKeys();
+
+      // CLI revocations happen in another process; sweep so they take
+      // effect on live sessions within ~30s, not only at the next connect.
+      this.revocationSweepTimer = setInterval(() => {
+        try {
+          this.sweepRevokedConnections();
+        } catch (err) {
+          console.error('[SidecarManager] Revocation sweep failed:', err);
+        }
+      }, 30_000);
 
       // Wire scheduler handlers
       this.scheduler.on('rpc_result', async (sidecarId, event) => {
@@ -167,6 +178,11 @@ export class SidecarManager implements Service {
 
   async stop(): Promise<void> {
     this._status = 'stopping';
+
+    if (this.revocationSweepTimer) {
+      clearInterval(this.revocationSweepTimer);
+      this.revocationSweepTimer = null;
+    }
 
     // Stop scheduler
     this.scheduler.stop();
@@ -281,11 +297,35 @@ export class SidecarManager implements Service {
     const db = getDb();
     const result = db.run('DELETE FROM sidecars WHERE id = ? AND status = ?', [id, 'enrolled']);
     if (result.changes > 0) {
+      // Sever any LIVE session too - deleting the row alone only blocks the
+      // next connect, and a revoked-but-connected sidecar would keep routing
+      // RPCs indefinitely (stolen-device scenario).
+      this.handleSidecarDisconnect(id);
       this.connected.delete(id);
       console.log(`[SidecarManager] Revoked and removed sidecar ${id}`);
       return true;
     }
     return false;
+  }
+
+  /**
+   * Disconnect any live session whose enrollment row is gone. Covers
+   * revocations the daemon cannot observe directly: `jarvis revoke` runs in
+   * a SEPARATE process and deletes the row in the shared (WAL) DB, so the
+   * daemon re-checks periodically. Runs every 30s from start(); public so
+   * tests (and ops surfaces) can force a sweep.
+   */
+  sweepRevokedConnections(): number {
+    let severed = 0;
+    for (const id of [...this.sidecarConnections.keys()]) {
+      if (!this.isEnrolled(id)) {
+        console.log(`[SidecarManager] Severing revoked sidecar session: ${id}`);
+        this.handleSidecarDisconnect(id);
+        this.connected.delete(id);
+        severed++;
+      }
+    }
+    return severed;
   }
 
   /** Check if a sidecar ID is enrolled (not revoked) */

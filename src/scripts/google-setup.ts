@@ -21,8 +21,18 @@ async function main() {
   console.log('=== Google OAuth2 Setup for JARVIS ===');
   console.log('');
 
-  // Load config to get client_id / client_secret
+  // Load config to get client_id / client_secret. Dashboard-entered creds
+  // live in the vault DB (user-settings google fallback), so open it and
+  // merge before concluding nothing is configured.
   const config = await loadConfig();
+  try {
+    const { initDatabase } = await import('../vault/schema.ts');
+    const { mergeUserSettingsIntoConfig } = await import('../daemon/user-settings.ts');
+    initDatabase(config.daemon.db_path, { quiet: true });
+    mergeUserSettingsIntoConfig(config);
+  } catch {
+    // No DB yet (fresh install) - the interactive prompt below handles it.
+  }
 
   let clientId = config.google?.client_id ?? '';
   let clientSecret = config.google?.client_secret ?? '';

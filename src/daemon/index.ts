@@ -297,12 +297,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     noLocalTools: userConfig?.noLocalTools ?? false,
   };
 
+  // Resolve the listen spec ONCE, before anything is persisted: a malformed
+  // `daemon.listen` must fail fast here, not after the lockfile write (a
+  // stale TCP lockfile from a mid-boot crash would mislead `jarvis stop`).
+  const { resolveListen } = await import('../config/loader.ts');
+  let listen: import('../config/loader.ts').ListenSpec;
+  try {
+    listen = resolveListen({ port, listen: jarvisConfig.daemon.listen });
+  } catch (err) {
+    console.error(`\n[Daemon] ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
   // Record the actual bound port in the lockfile so `jarvis stop` knows which
   // port to verify even when the daemon was started with --port, JARVIS_PORT,
   // or a mid-run config change. No-op if we don't hold the lock (e.g. tests).
-  // In unix-socket mode (daemon.listen) no TCP port exists to verify, so
-  // nothing is recorded and `jarvis stop` falls back to pid-only handling.
-  if (!jarvisConfig.daemon.listen?.startsWith('unix:')) {
+  // In unix-socket mode no TCP port exists to verify, so nothing is recorded
+  // and `jarvis stop` is pid-only (resolveStopPort returns port null).
+  if (listen.kind === 'tcp') {
     writeLockedPort(port);
   }
 
@@ -417,9 +429,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ? null
       : new ObserverService(reactor, coalescer, googleAuth ?? undefined, config.dataDir);
     // Hosted mode: daemon.listen = unix:/run/jarvis/u_<id>.sock binds a unix
-    // socket and no TCP port at all (Caddy is the only way in).
-    const { resolveListen } = await import('../config/loader.ts');
-    const listen = resolveListen({ port: config.port, listen: jarvisConfig.daemon.listen });
+    // socket and no TCP port at all (Caddy is the only way in). `listen` was
+    // resolved (and validated) once, before the lockfile write above.
     const wsService = new WebSocketService(
       config.port,
       agentService,
@@ -3589,6 +3600,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.warn('[Daemon] ============================================================');
     } else {
       console.log('[Daemon] JWT-only access: routes require an enrolled device token (default)');
+    }
+    // Upgrade UX: the shared dashboard token was removed (JWT-only). A config
+    // still carrying auth.token would otherwise be silently ignored while the
+    // operator's bookmarked ?token= URL just 401s.
+    if ((jarvisConfig.auth as Record<string, unknown> | undefined)?.token !== undefined) {
+      console.warn('[Daemon] auth.token is no longer supported and was ignored. Access is JWT-only:');
+      console.warn('[Daemon] enroll a device (`jarvis enroll`) or, for setup only, set auth.insecure_open_access.');
     }
 
     // 9b. Apply --no-local-tools flag if set

@@ -333,7 +333,7 @@ Local development builds report `dev` and are never blocked.
 
 ## ⚙️ Configuration
 
-JARVIS stores its configuration at `~/.jarvis/config.yaml`. Open the dashboard at `http://localhost:3142` after `jarvis start` for guided setup — it walks through LLM provider, voice, and a profile interview the first time. The Settings room lets you tweak channels, personality, and authority later.
+JARVIS stores its system configuration at `~/.jarvis/config.yaml`; user-level settings live in its database and are managed from the dashboard. Access is **JWT-only by default**: run `jarvis enroll "<device-name>"` and paste the printed token into the sidecar (desktop app), which connects and gives you the dashboard. Setting up without a sidecar? Temporarily add `auth:\n  insecure_open_access: true` to config.yaml, open `http://localhost:3142` after `jarvis start` for the guided setup, then **remove the flag** once your device is enrolled. The Settings room lets you tweak channels, personality, and authority later.
 
 ```yaml
 daemon:

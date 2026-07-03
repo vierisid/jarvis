@@ -200,9 +200,14 @@ export class WebSocketServer {
     const self = this;
 
     // Unix mode: remove a stale socket file from a previous run first, or
-    // bind fails with EADDRINUSE even though nothing is listening.
+    // bind fails with EADDRINUSE even though nothing is listening. The socket
+    // must also be BORN 0660 (umask), not chmod'd after the fact - between
+    // bind and a post-hoc chmod the file briefly carries the process umask,
+    // and on a shared host that window is the tenant boundary.
+    let restoreUmask: number | null = null;
     if (this.unixPath) {
       try { require('node:fs').unlinkSync(this.unixPath); } catch { /* absent */ }
+      restoreUmask = process.umask(0o117); // 0666 & ~0117 = 0660
     }
 
     // Bun accepts either { port } or { unix } (mutually exclusive variants of
@@ -599,11 +604,19 @@ export class WebSocketServer {
       },
     });
 
+    if (restoreUmask !== null) process.umask(restoreUmask);
     if (this.unixPath) {
       // Caddy (same group) must be able to connect; the socket dir itself is
-      // the per-tenant boundary. 0660 = owner + group only.
-      try { require('node:fs').chmodSync(this.unixPath, 0o660); } catch (err) {
-        console.warn(`[WebSocketServer] Could not chmod socket ${this.unixPath}:`, err);
+      // the per-tenant boundary. The umask above made the socket 0660 at
+      // birth; verify rather than trust, and fail CLOSED if it is wrong.
+      const fs = require('node:fs');
+      const mode = fs.statSync(this.unixPath).mode & 0o777;
+      if (mode !== 0o660) {
+        try { fs.chmodSync(this.unixPath, 0o660); } catch { /* verified below */ }
+        if ((fs.statSync(this.unixPath).mode & 0o777) !== 0o660) {
+          this.stop();
+          throw new Error(`[WebSocketServer] Socket ${this.unixPath} has mode ${mode.toString(8)}, expected 660 - refusing to serve`);
+        }
       }
       console.log(`[WebSocketServer] Started on unix:${this.unixPath} (no TCP port bound)`);
     } else {
@@ -620,6 +633,11 @@ export class WebSocketServer {
       this.server.stop();
       this.server = null;
       this.clients.clear();
+      // Remove the socket file so ops probes don't see a dead-but-present
+      // socket (the pre-bind unlink only covers the NEXT start).
+      if (this.unixPath) {
+        try { require('node:fs').unlinkSync(this.unixPath); } catch { /* absent */ }
+      }
       console.log('[WebSocketServer] Stopped');
     }
   }
