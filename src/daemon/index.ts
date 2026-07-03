@@ -345,6 +345,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     mergeLLMSettingsIntoConfig(jarvisConfig);
     logWithTimestamp('LLM settings loaded from database');
 
+    // 2c. User-owned settings (personality, voice, authority, channels,
+    // onboarding, ...) follow the same rule: the DB is the sole authority,
+    // config.yaml is read-only system config the brain never writes. A
+    // legacy file that still carries user sections seeds the DB exactly
+    // once, then env overrides are re-applied so JARVIS_* still wins.
+    const { importLegacyUserSettings, mergeUserSettingsIntoConfig } = await import('./user-settings.ts');
+    const { readRawConfigFile, applyEnvOverrides } = await import('../config/loader.ts');
+    const rawConfigFile = await readRawConfigFile().catch(() => null);
+    const importedSections = importLegacyUserSettings(rawConfigFile);
+    if (importedSections.length > 0) {
+      logWithTimestamp(`Imported legacy config.yaml sections into the DB: ${importedSections.join(', ')}`);
+    }
+    mergeUserSettingsIntoConfig(jarvisConfig);
+    applyEnvOverrides(jarvisConfig);
+    logWithTimestamp('User settings loaded from database');
+
     // 3. Create service registry
     registry = new ServiceRegistry();
 
@@ -1072,13 +1088,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
-          const wasEnabled = fresh.awareness?.enabled ?? true;
+          const { saveUserSection } = await import('./user-settings.ts');
+          const wasEnabled = jarvisConfig.awareness?.enabled ?? true;
           const nextEnabled = !wasEnabled;
-          if (fresh.awareness) fresh.awareness.enabled = nextEnabled;
-          await saveConfig(fresh);
           (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
+          saveUserSection('awareness', jarvisConfig.awareness);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
           // Push visual: blinded = !enabled.
@@ -1144,7 +1158,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
       // T20 — voice-driven settings mutation. Patches `jarvisConfig`,
-      // persists via `saveConfig`, and rebuilds the live providers so
+      // persists via the DB settings store, and rebuilds the live providers so
       // the next response uses the new setting without a daemon
       // restart. The user explicitly hit this with "turn off TTS in
       // the settings" — the panel opened but the toggle didn't flip
@@ -1152,12 +1166,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // gap. New providers added to `jarvisConfig` (e.g. Groq STT)
       // become voice-switchable too.
       const applyTTSEnabled = async (enabled: boolean): Promise<void> => {
-        const { loadConfig, saveConfig } = await import('../config/loader.ts');
-        const fresh = await loadConfig();
-        if (!fresh.tts) fresh.tts = { enabled, provider: 'edge' };
-        else fresh.tts.enabled = enabled;
-        await saveConfig(fresh);
-        jarvisConfig.tts = fresh.tts;
+        const { saveUserSection } = await import('./user-settings.ts');
+        if (!jarvisConfig.tts) jarvisConfig.tts = { enabled, provider: 'edge' };
+        else jarvisConfig.tts.enabled = enabled;
+        saveUserSection('tts', jarvisConfig.tts);
+        const fresh = { tts: jarvisConfig.tts };
         // Rebuild the pebble's TTS provider so the next response cycle
         // either uses the new provider or skips TTS entirely.
         if (enabled) {
@@ -1184,20 +1197,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       };
 
       const applySTTProvider = async (provider: 'openai' | 'groq' | 'sarvam' | 'local'): Promise<boolean> => {
-        const { loadConfig, saveConfig } = await import('../config/loader.ts');
-        const fresh = await loadConfig();
-        if (!fresh.stt) fresh.stt = { provider };
+        const { saveUserSection } = await import('./user-settings.ts');
+        if (!jarvisConfig.stt) jarvisConfig.stt = { provider };
         // Refuse the switch if the target provider has no API key
         // configured — we don't want to silently break STT.
         const hasKey = (() => {
-          if (provider === 'local') return !!fresh.stt.local?.endpoint;
-          const sub = (fresh.stt as unknown as Record<string, { api_key?: string } | undefined>)[provider];
+          if (provider === 'local') return !!jarvisConfig.stt!.local?.endpoint;
+          const sub = (jarvisConfig.stt as unknown as Record<string, { api_key?: string } | undefined>)[provider];
           return !!sub?.api_key;
         })();
         if (!hasKey) return false;
-        fresh.stt.provider = provider;
-        await saveConfig(fresh);
-        jarvisConfig.stt = fresh.stt;
+        jarvisConfig.stt.provider = provider;
+        saveUserSection('stt', jarvisConfig.stt);
+        const fresh = { stt: jarvisConfig.stt };
         try {
           const { createSTTProvider } = await import('../comms/voice.ts');
           pebbleSTT = createSTTProvider(fresh.stt);
@@ -3239,15 +3251,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (savedEmergencyState === 'paused') emergencyController.pause();
     else if (savedEmergencyState === 'killed') emergencyController.kill();
 
-    // Persist emergency state changes to config.yaml
+    // Persist emergency state changes to the DB settings store
     emergencyController.setStateChangeCallback(async (state) => {
       wsService.broadcastEmergencyState(state);
       try {
-        const { loadConfig: reloadConfig, saveConfig: resaveConfig } = await import('../config/loader.ts');
-        const fresh = await reloadConfig();
-        if (!fresh.authority) fresh.authority = { default_level: 3 } as any;
-        fresh.authority.emergency_state = state;
-        await resaveConfig(fresh);
+        const { saveUserSection } = await import('./user-settings.ts');
+        if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
+        jarvisConfig.authority.emergency_state = state;
+        saveUserSection('authority', jarvisConfig.authority);
       } catch (err) {
         console.error('[Daemon] Failed to persist emergency state:', err);
       }

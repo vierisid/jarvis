@@ -38,19 +38,24 @@ console.log(config.personality.core_traits);  // string[]
 
 ### Saving Configuration
 
+There is intentionally **no `saveConfig`**. `config.yaml` is a read-only
+SYSTEM config (daemon.*, auth, google) that the brain never writes; in hosted
+mode it is root-owned and managed by the hosting server.
+
+All user-owned sections (personality, voice, stt/tts, authority, channels,
+onboarding, ... — see `USER_OWNED_SECTIONS` in `types.ts`) persist to the
+vault DB settings store instead:
+
 ```typescript
-import { saveConfig } from './config/index.ts';
+import { saveUserSection } from '../daemon/user-settings.ts';
 
-// Modify config
-config.daemon.port = 8888;
-config.llm.primary = 'openai';
-
-// Save to default location
-await saveConfig(config);
-
-// Save to custom path
-await saveConfig(config, '/path/to/config.yaml');
+config.tts = { ...config.tts, enabled: true };
+saveUserSection('tts', config.tts);
 ```
+
+A legacy `config.yaml` that still carries user sections seeds the DB once at
+daemon boot (`importLegacyUserSettings`), after which the file's copies are
+ignored (`loadConfig` discards them, exactly like the `llm` block).
 
 ### Using Default Config
 
@@ -243,22 +248,18 @@ console.log(`Database path: ${config.daemon.db_path}`);
 
 ### Dynamic Configuration Updates
 
+Inside the daemon, mutate the live in-memory config (it is the DB-merged,
+authoritative view) and persist the touched section:
+
 ```typescript
-import { loadConfig, saveConfig } from './config/index.ts';
+import { saveUserSection } from '../daemon/user-settings.ts';
 
-// Load current config
-const config = await loadConfig();
-
-// Update settings
-config.daemon.port = 8888;
-config.llm.primary = 'openai';
-config.personality.core_traits.push('humorous');
-
-// Save changes
-await saveConfig(config);
-
-console.log('Configuration updated!');
+ctx.config.personality.core_traits.push('humorous');
+saveUserSection('personality', ctx.config.personality);
 ```
+
+System keys (`daemon.*`) cannot be changed at runtime — edit `config.yaml`
+and restart (self-host), or let the hosting server rewrite it (hosted).
 
 ## Setup Instructions
 

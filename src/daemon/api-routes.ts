@@ -966,9 +966,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/status': {
       GET: async () => {
         try {
-          const { loadConfig } = await import('../config/loader.ts');
-          const cfg = await loadConfig();
-          const o = cfg.onboarding;
+          // ctx.config is the live, DB-merged config; loadConfig() would
+          // return defaults here since onboarding is a user-owned section
+          // that the file no longer carries.
+          const o = ctx.config.onboarding;
           // `getUserProfile` and `hasUserProfile` are already imported
           // at the top of the file. Use `hasUserProfile()` so the
           // check counts wizard answers AND Phase B interview facts —
@@ -1015,8 +1016,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             return error(`Invalid scope "${scope}".`, 400);
           }
 
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           const o = fresh.onboarding ?? {
             setup_completed_at: null,
             tutorial_completed_at: null,
@@ -1040,7 +1041,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           o.last_reset_at = Date.now();
           fresh.onboarding = o;
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
 
           // Mirror to in-memory config so the next /status read is
           // immediately consistent (don't wait for daemon restart).
@@ -1080,8 +1081,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/skip': {
       POST: async () => {
         try {
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           const now = Date.now();
           fresh.onboarding = {
             ...fresh.onboarding,
@@ -1090,7 +1091,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at ?? now,
             setup_skipped_profile: true,
           };
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
           ctx.config.onboarding = fresh.onboarding;
 
           // Best-effort service start so the "Restart Jarvis" banner
@@ -1130,15 +1131,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/profile/skip': {
       POST: async () => {
         try {
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           fresh.onboarding = {
             setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
             tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
             ...fresh.onboarding,
             setup_skipped_profile: true,
           };
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
           ctx.config.onboarding = fresh.onboarding;
           return json({ ok: true, setup_skipped_profile: true });
         } catch (err) {
@@ -1151,15 +1152,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // Three small endpoints powering the spotlight walkthrough's
     // persistence: complete (user finished), dismiss (user skipped),
     // progress (resume-from-step support). All three write through
-    // the same loadConfig → mutate → saveConfig pattern as the rest
+    // the same mutate-then-saveUserSection pattern as the rest
     // of the onboarding routes; the existing reset endpoint with
     // `scope: "tutorial"` already clears all three fields.
 
     '/api/onboarding/tutorial/complete': {
       POST: async () => {
         try {
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           const now = Date.now();
           fresh.onboarding = {
             setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
@@ -1167,7 +1168,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_completed_at: now,
             tutorial_progress_step: undefined,
           };
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
           ctx.config.onboarding = fresh.onboarding;
           return json({ ok: true, tutorial_completed_at: now });
         } catch (err) {
@@ -1179,8 +1180,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/tutorial/dismiss': {
       POST: async () => {
         try {
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           const now = Date.now();
           fresh.onboarding = {
             setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
@@ -1188,7 +1189,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             ...fresh.onboarding,
             tutorial_dismissed_at: now,
           };
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
           ctx.config.onboarding = fresh.onboarding;
           return json({ ok: true, tutorial_dismissed_at: now });
         } catch (err) {
@@ -1203,15 +1204,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = (await req.json().catch(() => ({}))) as { stepId?: string };
           const stepId = typeof body.stepId === 'string' ? body.stepId.trim() : '';
           if (!stepId) return error('Missing stepId.', 400);
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const fresh = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const fresh = ctx.config;
           fresh.onboarding = {
             setup_completed_at: fresh.onboarding?.setup_completed_at ?? null,
             tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
             ...fresh.onboarding,
             tutorial_progress_step: stepId,
           };
-          await saveConfig(fresh);
+          saveUserSection('onboarding', fresh.onboarding);
           ctx.config.onboarding = fresh.onboarding;
           return json({ ok: true, tutorial_progress_step: stepId });
         } catch (err) {
@@ -1303,9 +1304,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           //    daemon kill (or crash) between them persisted setup HALF-done
           //    — TTS saved but the completion flag lost — and the user was
           //    funneled back into onboarding on the next boot.
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
-          const fresh = await loadConfig();
+          const fresh = ctx.config;
           if (body.stt) {
             // Mirrors /api/config/stt POST semantics. STT is consumed at
             // the next transcription request, so no hot-swap is needed.
@@ -1323,7 +1324,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
             last_reset_at: fresh.onboarding?.last_reset_at,
           };
-          await saveConfig(fresh);
+          if (body.stt) saveUserSection('stt', fresh.stt);
+          if (body.tts) saveUserSection('tts', fresh.tts);
+          saveUserSection('onboarding', fresh.onboarding);
           if (body.stt) ctx.config.stt = fresh.stt;
           if (body.tts) ctx.config.tts = fresh.tts;
           ctx.config.onboarding = fresh.onboarding;
@@ -1924,10 +1927,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             return error('Missing client_id or client_secret');
           }
 
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const freshConfig = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const freshConfig = ctx.config;
           freshConfig.google = { client_id: body.client_id, client_secret: body.client_secret };
-          await saveConfig(freshConfig);
+          const { saveGoogleSettings } = await import('./user-settings.ts');
+          saveGoogleSettings(freshConfig.google);
 
           // Update in-memory config so callback route sees credentials immediately
           ctx.config.google = freshConfig.google;
@@ -2010,8 +2014,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const freshConfig = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const freshConfig = ctx.config;
 
           if (!freshConfig.channels) freshConfig.channels = {};
 
@@ -2028,7 +2032,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             } as any;
           }
 
-          await saveConfig(freshConfig);
+          saveUserSection('channels', freshConfig.channels);
           ctx.config.channels = freshConfig.channels;
 
           return json({ ok: true, message: 'Channel config saved. Restart JARVIS to apply changes.' });
@@ -2055,12 +2059,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig } = await import('./config-merge.ts');
-          const freshConfig = await loadConfig();
+          const freshConfig = ctx.config;
 
           freshConfig.stt = mergeSTTConfig(freshConfig.stt, body);
-          await saveConfig(freshConfig);
+          saveUserSection('stt', freshConfig.stt);
           ctx.config.stt = freshConfig.stt;
           return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
         } catch (err) {
@@ -2098,12 +2102,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { saveUserSection } = await import('./user-settings.ts');
           const { mergeTTSConfig } = await import('./config-merge.ts');
-          const freshConfig = await loadConfig();
+          const freshConfig = ctx.config;
 
           freshConfig.tts = mergeTTSConfig(freshConfig.tts, body);
-          await saveConfig(freshConfig);
+          saveUserSection('tts', freshConfig.tts);
           ctx.config.tts = freshConfig.tts;
 
           // Hot-reload TTS provider if wsService available
@@ -2161,15 +2165,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
+          const { saveUserSection } = await import('./user-settings.ts');
           const { mergeVoiceConfig, validateVoicePatch } = await import('./config-merge.ts');
 
           const validation = validateVoicePatch(body);
           if (!validation.ok) return error(validation.error, 400);
 
-          const freshConfig = await loadConfig();
+          const freshConfig = ctx.config;
           freshConfig.voice = mergeVoiceConfig(freshConfig.voice, validation.patch);
-          await saveConfig(freshConfig);
+          saveUserSection('voice', freshConfig.voice);
           // Update in-memory config so the next voice_start resolves with the
           // new settings — resolveRealtimeVoice reads ctx.config live, so no
           // provider hot-reload is needed (unlike TTS/LLM).
@@ -2792,8 +2796,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           ctx.authorityEngine.updateConfig(currentConfig);
 
           // Persist to config.yaml
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const freshConfig = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const freshConfig = ctx.config;
           freshConfig.authority = {
             ...freshConfig.authority,
             default_level: currentConfig.default_level,
@@ -2802,7 +2806,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             context_rules: currentConfig.context_rules,
             learning: currentConfig.learning,
           };
-          await saveConfig(freshConfig);
+          saveUserSection('authority', freshConfig.authority);
 
           return json({ ok: true, config: currentConfig });
         } catch (err) {
@@ -2856,13 +2860,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           ctx.authorityEngine.updateConfig(currentConfig);
 
           // Persist to config.yaml — same path as the full POST.
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const freshConfig = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const freshConfig = ctx.config;
           freshConfig.authority = {
             ...freshConfig.authority,
             overrides: currentConfig.overrides,
           };
-          await saveConfig(freshConfig);
+          saveUserSection('authority', freshConfig.authority);
 
           return json({ ok: true, config: currentConfig });
         } catch (err) {
@@ -2898,13 +2902,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           ctx.learner.markSuggestionSent(body.action, body.tool_name ?? '');
 
           // Persist
-          const { loadConfig, saveConfig } = await import('../config/loader.ts');
-          const freshConfig = await loadConfig();
+          const { saveUserSection } = await import('./user-settings.ts');
+          const freshConfig = ctx.config;
           freshConfig.authority = {
             ...freshConfig.authority,
             ...ctx.authorityEngine.getConfig(),
           };
-          await saveConfig(freshConfig);
+          saveUserSection('authority', freshConfig.authority);
 
           return json({ ok: true });
         } catch (err) {

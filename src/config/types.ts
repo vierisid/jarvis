@@ -212,9 +212,9 @@ export type TelemetryConfig = {
 };
 
 /**
- * Onboarding completion state — persists in `~/.jarvis/config.yaml` so
- * the dashboard knows which phase (setup / profile interview / tutorial)
- * to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
+ * Onboarding completion state — persists in the vault DB settings store
+ * (user-owned section) so the dashboard knows which phase (setup / profile
+ * interview / tutorial) to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
  * `null` means not yet done. Reset endpoint clears subsets per scope.
  *
  * See `docs/ONBOARDING_PLAN.md` for the gate logic and reset semantics.
@@ -469,3 +469,33 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   active_role: 'personal-assistant',
 };
+
+/**
+ * Config sections that are USER-OWNED: they live in the vault DB settings
+ * store (managed from the dashboard), never in config.yaml. loadConfig
+ * discards any such section found in the file (after a one-time legacy
+ * import at daemon boot; see daemon/user-settings.ts), exactly like the
+ * `llm` block. config.yaml keeps only network/system/hosting keys:
+ * daemon.*, auth, google (system-owned when present in the file).
+ */
+export const USER_OWNED_SECTIONS = [
+  'user',
+  'onboarding',
+  'telemetry',
+  'personality',
+  'active_role',
+  'authority',
+  'heartbeat',
+  'cron',
+  'stt',
+  'tts',
+  'voice',
+  'channels',
+  'desktop',
+  'awareness',
+  'sites',
+  'goals',
+  'workflows',
+] as const satisfies readonly (keyof JarvisConfig)[];
+
+export type UserOwnedSection = (typeof USER_OWNED_SECTIONS)[number];

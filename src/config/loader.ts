@@ -1,10 +1,8 @@
 import YAML from 'yaml';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { lstat, rename, unlink } from 'node:fs/promises';
 import type { JarvisConfig } from './types.ts';
-import { DEFAULT_CONFIG } from './types.ts';
-import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
+import { DEFAULT_CONFIG, USER_OWNED_SECTIONS } from './types.ts';
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith('~/')) {
@@ -13,7 +11,7 @@ function expandTilde(filepath: string): string {
   return filepath;
 }
 
-function deepMerge(target: any, source: any): any {
+export function deepMerge(target: any, source: any): any {
   if (!source || typeof source !== 'object') {
     // If source is absent, return a clone of target so callers (or subsequent
     // mutation of the returned value) can never alias shared defaults.
@@ -48,9 +46,11 @@ function deepMerge(target: any, source: any): any {
 
 /**
  * Apply environment variable overrides to config.
- * Env vars take highest precedence (over YAML and defaults).
+ * Env vars take highest precedence (over YAML, defaults, and DB-owned
+ * sections; the daemon re-applies this after merging user settings from
+ * the DB, so JARVIS_* stays a working self-host/dev convenience).
  */
-function applyEnvOverrides(config: JarvisConfig): void {
+export function applyEnvOverrides(config: JarvisConfig): void {
   const env = process.env;
 
   if (env.JARVIS_PORT) {
@@ -146,73 +146,49 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   // at daemon startup.
   config.llm = structuredClone(DEFAULT_CONFIG.llm);
 
+  // The same rule now covers every USER-OWNED section (personality, voice,
+  // authority, ...): they live in the vault DB settings store and the file
+  // has no authority over them. config.yaml is a SYSTEM config: daemon.*,
+  // auth, google. Legacy files that still carry user sections get a one-time
+  // import into the DB at daemon boot (daemon/user-settings.ts) before this
+  // discard makes them invisible; env overrides are re-applied on top by the
+  // daemon after the DB merge.
+  for (const section of USER_OWNED_SECTIONS) {
+    const def = (DEFAULT_CONFIG as Record<string, unknown>)[section];
+    if (def === undefined) {
+      delete (config as Record<string, unknown>)[section];
+    } else {
+      (config as Record<string, unknown>)[section] = structuredClone(def);
+    }
+  }
+  applyEnvOverrides(config); // env wins over the discard (e.g. JARVIS_WAKE_ENGINE)
+
   return config;
 }
 
 /**
- * Strip the ENTIRE `llm` block before writing config.yaml.
- *
- * LLM configuration (providers, credentials, single-LLM default, tiers) lives
- * exclusively in the database + encrypted keychain and is managed from the
- * settings dashboard. config.yaml has no authority over any LLM setting, so it
- * must never carry one - dropping the block here also self-heals any stale
- * `llm:` section left over from older installs on the next save.
+ * Read and parse the raw config.yaml WITHOUT defaults, env overrides, or the
+ * user-section discard. Used exactly once per boot by the legacy-settings
+ * import (daemon/user-settings.ts) to see what an old file still carries.
+ * Returns null when the file doesn't exist; throws on YAML parse errors
+ * (same as loadConfig).
  */
-function stripLLMConfigForYAML(config: JarvisConfig): JarvisConfig {
-  const clone = structuredClone(config);
-  delete (clone as { llm?: unknown }).llm;
-  return clone;
-}
-
-/** Monotonic per-process counter for unique save temp-file names. */
-let saveCounter = 0;
-
-export async function saveConfig(
-  config: JarvisConfig,
-  configPath?: string
-): Promise<void> {
+export async function readRawConfigFile(
+  configPath?: string,
+): Promise<Record<string, unknown> | null> {
   const path = configPath || expandTilde('~/.jarvis/config.yaml');
-
-  try {
-    const canonical = stripLLMConfigForYAML(config);
-    const yaml = YAML.stringify(canonical, {
-      indent: 2,
-      lineWidth: 100,
-      defaultStringType: 'PLAIN',
-      defaultKeyType: 'PLAIN',
-    });
-
-    await secureParentDirectory(path);
-    // Write-then-rename so the config is replaced atomically. A direct
-    // O_TRUNC write leaves a truncated/empty config.yaml if the daemon is
-    // killed mid-write -- on the next boot that parses as defaults and the
-    // user loses onboarding state, authority overrides, everything.
-    // The tmp name carries pid + a counter so two concurrent saves can
-    // never rename each other's half-written file into place.
-    const tmpPath = `${path}.${process.pid}.${saveCounter++}.tmp`;
-    await secureWriteFile(tmpPath, yaml, 0o600, 'Config');
-
-    // rename() would silently replace a symlinked config.yaml with a
-    // regular file (e.g. a link into a dotfiles repo). secureWriteFile
-    // refuses symlinks via O_NOFOLLOW; keep that contract here and fail
-    // loudly instead of clobbering the link.
-    const existing = await lstat(path).catch(() => null);
-    if (existing?.isSymbolicLink()) {
-      await unlink(tmpPath).catch(() => {});
-      throw new Error(`${path} is a symlink; refusing to replace it`);
-    }
-
-    try {
-      await rename(tmpPath, path);
-    } catch {
-      // Rename across-the-board works on POSIX; on Windows it can fail
-      // transiently (antivirus holding the target). Fall back to the
-      // in-place write rather than losing the save entirely.
-      await unlink(tmpPath).catch(() => {});
-      await secureWriteFile(path, yaml, 0o600, 'Config');
-    }
-    console.log(`Config saved to ${path}`);
-  } catch (err) {
-    throw new Error(`Failed to save config to ${path}: ${err}`);
+  const file = Bun.file(path);
+  if (!(await file.exists())) return null;
+  const doc = YAML.parseDocument(await file.text(), { merge: true });
+  if (doc.errors.length > 0) {
+    const formatted = doc.errors.map((entry) => entry.message);
+    throw new Error(`Failed to parse YAML config at ${path}:\n  ${formatted.join('\n  ')}`);
   }
+  return (doc.toJS() ?? {}) as Record<string, unknown>;
 }
+
+
+// NOTE: there is intentionally no saveConfig here. The brain treats
+// config.yaml as READ-ONLY system configuration (network/hosting keys,
+// root-owned in hosted mode). All user-chosen settings persist to the vault
+// DB settings store instead; see daemon/user-settings.ts.
