@@ -73,11 +73,6 @@ export function applyEnvOverrides(config: JarvisConfig): void {
     config.daemon.brain_domain = env.JARVIS_BRAIN_DOMAIN;
   }
 
-  if (env.JARVIS_AUTH_TOKEN) {
-    if (!config.auth) config.auth = {};
-    config.auth.token = env.JARVIS_AUTH_TOKEN;
-  }
-
   if (env.JARVIS_WAKE_ENGINE) {
     const engine = env.JARVIS_WAKE_ENGINE;
     if (engine === 'openwakeword' || engine === 'webspeech' || engine === 'auto') {

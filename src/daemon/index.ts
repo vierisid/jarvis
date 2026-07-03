@@ -3561,13 +3561,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const uiPublicDir = path.join(import.meta.dir, '../../ui/public');
     wsService.setPublicDir(uiPublicDir);
 
-    // 9c. Configure auth token if set
-    const authToken = jarvisConfig.auth?.token;
-    if (authToken) {
-      wsService.setAuthToken(authToken);
-      console.log('[Daemon] Auth token configured — dashboard routes require ?token= or cookie');
+    // 9c. Access model. JWT-only by default: the dashboard and every API
+    // route require a valid enrolled-device token. The one escape hatch is
+    // auth.insecure_open_access (system config), meant ONLY for first-time
+    // self-host setup before a device is enrolled.
+    if (jarvisConfig.auth?.insecure_open_access === true) {
+      wsService.setInsecureOpenAccess(true);
+      console.warn('[Daemon] ============================================================');
+      console.warn('[Daemon] WARNING: auth.insecure_open_access is enabled.');
+      console.warn('[Daemon] The dashboard and API accept requests WITHOUT authentication');
+      console.warn('[Daemon] from anyone who can reach this machine. Enroll your device');
+      console.warn('[Daemon] (`jarvis enroll "<device-name>"`, paste the token into the');
+      console.warn('[Daemon] sidecar) and remove this flag from config.yaml as soon as');
+      console.warn('[Daemon] enrollment is done.');
+      console.warn('[Daemon] ============================================================');
     } else {
-      console.warn('[Daemon] No auth token configured — dashboard is open to anyone on the network');
+      console.log('[Daemon] JWT-only access: routes require an enrolled device token (default)');
     }
 
     // 9b. Apply --no-local-tools flag if set

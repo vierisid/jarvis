@@ -304,8 +304,8 @@ export class WebSocketService implements Service {
     this.wsServer.setPublicDir(dir);
   }
 
-  setAuthToken(token: string): void {
-    this.wsServer.setAuthToken(token);
+  setInsecureOpenAccess(enabled: boolean): void {
+    this.wsServer.setInsecureOpenAccess(enabled);
   }
 
   async start(): Promise<void> {

@@ -117,8 +117,12 @@ async function cmdStart(args: string[]): Promise<void> {
   const { homedir } = await import('node:os');
   const cfgPath = join(homedir(), '.jarvis', 'config.yaml');
   if (!_exists(cfgPath)) {
-    console.log(c.cyan('First-run detected — finish setup in your browser:'));
-    console.log(c.dim(`  → http://localhost:${port ?? 3142}`));
+    console.log(c.cyan('First-run detected. Jarvis is JWT-only by default:'));
+    console.log(c.dim('  1. jarvis enroll "<device-name>"   mint your device token'));
+    console.log(c.dim('  2. paste the token into the sidecar (desktop app) to connect'));
+    console.log(c.dim('  Setting up without a sidecar? Put "auth:\n  insecure_open_access: true"'));
+    console.log(c.dim(`  in ~/.jarvis/config.yaml, open http://localhost:${port ?? 3142}, and`));
+    console.log(c.dim('  REMOVE the flag once your device is enrolled.'));
     console.log('');
   }
 

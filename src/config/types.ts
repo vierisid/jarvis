@@ -193,8 +193,15 @@ export type GoalConfig = {
 };
 
 export type AuthConfig = {
-  /** Shared secret token. If unset, auth is disabled (open access). Env: JARVIS_AUTH_TOKEN */
-  token?: string;
+  /**
+   * DANGEROUS - allow dashboard/API access WITHOUT an enrolled-device token.
+   * The brain is JWT-only by default: enroll a device (`jarvis enroll`) and
+   * connect through the sidecar. Set this ONLY for first-time self-host
+   * setup before any device is enrolled, and remove it as soon as
+   * enrollment is done. The daemon logs a loud warning while it is on.
+   * SYSTEM-owned (config.yaml); there is no shared auth token anymore.
+   */
+  insecure_open_access?: boolean;
 };
 
 export type UserConfig = {

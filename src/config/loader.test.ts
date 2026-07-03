@@ -100,7 +100,7 @@ daemon:
   port: 9090
   brain_domain: "u1.vps1.usejarvis.host"
 auth:
-  token: "legacy-shared-token"
+  insecure_open_access: true
 google:
   client_id: "company-client.apps.googleusercontent.com"
   client_secret: "company-secret"
@@ -108,7 +108,7 @@ google:
     await Bun.write(TEST_CONFIG_PATH, systemYaml);
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.brain_domain).toBe('u1.vps1.usejarvis.host');
-    expect(loaded.auth?.token).toBe('legacy-shared-token');
+    expect(loaded.auth?.insecure_open_access).toBe(true);
     // google is system-owned when the file provides it (hosted: the shared
     // company OAuth client). The DB fallback only applies when absent here.
     expect(loaded.google?.client_id).toBe('company-client.apps.googleusercontent.com');

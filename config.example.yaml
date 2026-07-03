@@ -11,11 +11,18 @@ daemon:
   # Env override: JARVIS_BRAIN_DOMAIN="https://brain.example.com"
   # brain_domain: "https://brain.example.com"
 
-# Authentication — protects dashboard, API, and WebSocket.
-# If unset, the application is open (no auth).
-# Can also be set via JARVIS_AUTH_TOKEN env var.
+# Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
+# require a token from an enrolled device. Correct setup order:
+#   1. jarvis enroll "my-desktop"     (prints the device's enrollment token)
+#   2. paste the token into the sidecar (desktop app) — it connects and the
+#      dashboard is reached through it.
+#
+# ESCAPE HATCH (first-time setup only): open the dashboard WITHOUT auth.
+# Anyone who can reach this machine can then use your Jarvis. The daemon
+# logs a loud warning while this is on — remove it as soon as enrollment
+# is done.
 # auth:
-#   token: "your-secret-token-here"
+#   insecure_open_access: true
 
 # Anonymous usage metrics (opt-out, enabled by default).
 # Sends a tiny anonymous ping at startup and every hour so the project can

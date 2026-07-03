@@ -5,11 +5,6 @@ import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
 export type WSMessage = {
   type: 'chat' | 'command' | 'status' | 'stream' | 'error' | 'notification'
       | 'tts_start' | 'tts_text' | 'tts_end' | 'voice_start' | 'voice_end' | 'voice_text'
@@ -136,7 +131,13 @@ export class WebSocketServer {
   private staticDir: string | null = null;
   private publicDir: string | null = null;
   private sidecarManager: SidecarManager | null = null;
-  private authToken: string | null = null;
+  /**
+   * JWT-only by default: every non-public route requires a valid short-lived
+   * sidecar access token (minted from an enrollment JWT). The ONLY way to
+   * open the dashboard without one is the explicit config escape hatch
+   * `auth.insecure_open_access: true` (pre-enrollment setup; see docs).
+   */
+  private insecureOpenAccess = false;
   private corsOrigin: string | null = null;
   private proxyLimiter = new ProxyRateLimiter();
 
@@ -146,8 +147,8 @@ export class WebSocketServer {
     this.corsOrigin = `http://localhost:${port}`;
   }
 
-  setAuthToken(token: string): void {
-    this.authToken = token;
+  setInsecureOpenAccess(enabled: boolean): void {
+    this.insecureOpenAccess = enabled;
   }
 
   setHandler(handler: WSClientHandler): void {
@@ -257,18 +258,17 @@ export class WebSocketServer {
           return Response.json({ access_token: minted.token, expires_in: minted.expiresIn });
         }
 
-        // 1. Auth check (if configured)
-        if (self.authToken && !isPublicRoute(pathname, req.method)) {
-          // A request is authorized by EITHER the dashboard token OR a valid
-          // short-lived sidecar ACCESS token. The sidecar's panel webviews carry
-          // an access token (minted from the enrollment JWT via /sidecar/token)
-          // so their content fetches authenticate without the dashboard token.
-          // The long-lived enrollment JWT is deliberately NOT accepted here —
-          // only on /sidecar/connect and the mint endpoint — so a leaked panel
-          // credential is bounded to the access-token TTL instead of forever.
+        // 1. Auth check. JWT-only by default: a request is authorized by a
+        // valid short-lived sidecar ACCESS token (minted from the enrollment
+        // JWT via /sidecar/token) - the sidecar's panel webviews carry one.
+        // The long-lived enrollment JWT is deliberately NOT accepted here —
+        // only on /sidecar/connect and the mint endpoint — so a leaked panel
+        // credential is bounded to the access-token TTL instead of forever.
+        // There is NO shared dashboard token: enroll a device or (setup only)
+        // set auth.insecure_open_access.
+        if (!self.insecureOpenAccess && !isPublicRoute(pathname, req.method)) {
           const accepts = async (tok: string | null): Promise<boolean> => {
             if (!tok) return false;
-            if (safeCompare(tok, self.authToken!)) return true;
             if (self.sidecarManager && (await self.sidecarManager.verifyAccessToken(tok))) return true;
             return false;
           };
@@ -416,7 +416,7 @@ export class WebSocketServer {
           const overlayPath = path.join(self.staticDir, '..', 'overlay.html');
           const overlayFile = Bun.file(overlayPath);
           if (await overlayFile.exists()) {
-            if (self.authToken) {
+            if (!self.insecureOpenAccess) {
               const html = await overlayFile.text();
               return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
             }
@@ -442,7 +442,7 @@ export class WebSocketServer {
 
           const file = Bun.file(filePath);
           if (await file.exists()) {
-            if (self.authToken && filePath.endsWith('.html')) {
+            if (!self.insecureOpenAccess && filePath.endsWith('.html')) {
               const html = await file.text();
               return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
             }
