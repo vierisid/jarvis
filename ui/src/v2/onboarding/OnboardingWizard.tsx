@@ -623,26 +623,28 @@ export function OnboardingWizard({
     const pos = T.pos as React.CSSProperties;
     return (
       <div className="obw-tourstage">
-        <div className="obw-miniapp">
-          <div className="mrail">
-            <div className="mh">Run</div><div className="mr">Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
-            <div className="mh">Know</div><div className="mr">Memory</div><div className="mr">Goals</div>
-            <div className="mh">Guard</div><div className="mr">Authority <span className="bd">2</span></div><div className="mr on">Now</div>
+        <div className="obw-tourframe">
+          <div className="obw-miniapp">
+            <div className="mrail">
+              <div className="mh">Run</div><div className="mr">Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
+              <div className="mh">Know</div><div className="mr">Memory</div><div className="mr">Goals</div>
+              <div className="mh">Guard</div><div className="mr">Authority <span className="bd">2</span></div><div className="mr on">Now</div>
+            </div>
+            <div className="mmain">
+              <div className="mtop">Now · good morning</div>
+              <div className="mgrid"><div className="mcard" /><div className="mcard" /><div className="mcard" /><div className="mcard" /></div>
+              <span className="mpeb obw-drop" style={{ width: 26, height: 26 }}><span className="in" /></span>
+            </div>
           </div>
-          <div className="mmain">
-            <div className="mtop">Now · good morning</div>
-            <div className="mgrid"><div className="mcard" /><div className="mcard" /><div className="mcard" /><div className="mcard" /></div>
-            <span className="mpeb obw-drop" style={{ width: 26, height: 26 }}><span className="in" /></span>
-          </div>
-        </div>
-        <div className="obw-tourdim" />
-        <div className="obw-spot" style={pos}>
-          <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of 5</span></div>
-          <div className="sm">{T.sm}</div>
-          {T.t && <div className="stry">{T.t}</div>}
-          <div className="sb">
-            <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
-            <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === TOUR.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
+          <div className="obw-tourdim" />
+          <div className="obw-spot" style={pos}>
+            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of 5</span></div>
+            <div className="sm">{T.sm}</div>
+            {T.t && <div className="stry">{T.t}</div>}
+            <div className="sb">
+              <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
+              <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === TOUR.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
+            </div>
           </div>
         </div>
       </div>

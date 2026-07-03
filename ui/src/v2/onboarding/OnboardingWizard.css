@@ -178,7 +178,32 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-voicepill .ld { width: 9px; height: 9px; border-radius: 50% 50% 50% 1px; transform: rotate(45deg); background: var(--listen); animation: obw-br 1.6s var(--ease-out, ease) infinite; }
 
 /* spotlight tour */
-.obw-tourstage { flex: 1; position: relative; overflow: hidden; background: var(--panel2); }
+.obw-tourstage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background:
+    radial-gradient(65% 60% at 50% 42%, color-mix(in srgb, var(--ink) 5%, transparent), transparent),
+    var(--panel2);
+}
+/* The mini-app is a contained *preview*, not the whole window — a fixed
+   frame centred in the stage so the spotlights land on their targets and
+   it never balloons into a broken-looking empty dashboard. */
+.obw-tourframe {
+  position: relative;
+  width: min(880px, 100%);
+  height: min(520px, 100%);
+  border: 1px solid var(--rule);
+  border-radius: 14px 3px 14px 14px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 30px 70px -34px rgba(0, 0, 0, 0.65);
+}
 .obw-miniapp { position: absolute; inset: 0; display: grid; grid-template-columns: 118px 1fr; }
 .obw-miniapp .mrail { border-right: 1px solid var(--rule); background: var(--bg); padding: 12px 10px; display: flex; flex-direction: column; gap: 5px; }
 .obw-miniapp .mrail .mh { font-family: var(--mono); font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 7px 0 2px; }
@@ -198,7 +223,9 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-spot .sh .sd .in { position: absolute; inset: 0; border-radius: inherit; background: var(--listen); animation: obw-brS 2s var(--ease-out, ease) infinite; }
 .obw-spot .sh .sl { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); }
 .obw-spot .sh .sc { margin-left: auto; font-family: var(--mono); font-size: 8.5px; color: var(--faint); }
-.obw-spot .sm { font-size: 13px; line-height: 1.45; color: var(--ink); letter-spacing: -0.005em; }
+/* direct child only — `.sm` also collides with the small-button modifier
+   (`.obw-btn.sm`), which would force the button text to --ink (invisible). */
+.obw-spot > .sm { font-size: 13px; line-height: 1.45; color: var(--ink); letter-spacing: -0.005em; }
 .obw-spot .stry { font-family: var(--mono); font-size: 9.5px; color: var(--speak); margin-top: 8px; }
 .obw-spot .sb { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
 .obw-spot .sb .grow { flex: 1; }
