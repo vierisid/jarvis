@@ -847,8 +847,9 @@ func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 		Version:                 sidecarVersion,
 		Capabilities:            c.availableCaps,
 		UnavailableCapabilities: c.unavailableCaps,
+		Timezone:                DetectIANATimezone(),
 	}
-	log.Printf("[sidecar] Identified as %s (%s/%s) v%s", msg.Hostname, msg.OS, msg.Platform, msg.Version)
+	log.Printf("[sidecar] Identified as %s (%s/%s) v%s tz=%s", msg.Hostname, msg.OS, msg.Platform, msg.Version, msg.Timezone)
 	return c.sendJSON(ctx, msg)
 }
 

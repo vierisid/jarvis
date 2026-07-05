@@ -349,8 +349,8 @@ export class SidecarManager implements Service {
     // Persist connection details to DB so they're available even when offline
     const db = getDb();
     db.run(
-      `UPDATE sidecars SET last_seen_at = datetime('now'), hostname = ?, os = ?, platform = ?, capabilities = ?, version = ? WHERE id = ?`,
-      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.version, sidecar.id],
+      `UPDATE sidecars SET last_seen_at = datetime('now'), hostname = ?, os = ?, platform = ?, capabilities = ?, version = ?, timezone = COALESCE(?, timezone) WHERE id = ?`,
+      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.version, sidecar.timezone || null, sidecar.id],
     );
     console.log(`[SidecarManager] Sidecar connected: ${sidecar.name} (${sidecar.id})`);
     // Fire both listener flavours — main uses onConnect(id) for routing,
@@ -567,6 +567,7 @@ export class SidecarManager implements Service {
             updateStatus: verdict,
             capabilities: parsed.capabilities ?? [],
             unavailableCapabilities: parsed.unavailable_capabilities ?? [],
+            timezone: typeof parsed.timezone === 'string' ? parsed.timezone : undefined,
             connectedAt: new Date(),
           });
           return;

@@ -103,6 +103,11 @@ type SidecarRegistration struct {
 	Version                 string                  `json:"version"`
 	Capabilities            []SidecarCapability     `json:"capabilities"`
 	UnavailableCapabilities []UnavailableCapability `json:"unavailable_capabilities,omitempty"`
+	// Timezone is the machine's IANA zone (e.g. "Europe/Rome"), best-effort
+	// ("" = unknown). Hosted brains run on UTC VPSs and use this for the
+	// user's local-time crons; the hosting server schedules follow-the-night
+	// maintenance with it.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // SidecarCapabilitiesUpdate is sent when config changes to sync capabilities with the brain.
@@ -114,15 +119,19 @@ type SidecarCapabilitiesUpdate struct {
 
 // SidecarConfig is the YAML config file structure.
 type SidecarConfig struct {
-	Token        string              `yaml:"token"`
-	Brain        string              `yaml:"brain"`
-	Capabilities []SidecarCapability `yaml:"capabilities"`
-	Terminal     TerminalConfig      `yaml:"terminal"`
-	Filesystem   FilesystemConfig    `yaml:"filesystem"`
-	Browser      BrowserConfig       `yaml:"browser"`
-	Awareness    AwarenessConfig     `yaml:"awareness"`
-	Preferences  PreferencesConfig   `yaml:"preferences"`
-	Telemetry    TelemetryConfig     `yaml:"telemetry"`
+	Token string `yaml:"token"`
+	Brain string `yaml:"brain"`
+	// HostedBaseURL overrides the usejarvis connect origin for the first-run
+	// handshake. Honored ONLY in `-tags jarvisdebug` builds (see hosted.go);
+	// release binaries always use the production origin.
+	HostedBaseURL string              `yaml:"hosted_base_url,omitempty"`
+	Capabilities  []SidecarCapability `yaml:"capabilities"`
+	Terminal      TerminalConfig      `yaml:"terminal"`
+	Filesystem    FilesystemConfig    `yaml:"filesystem"`
+	Browser       BrowserConfig       `yaml:"browser"`
+	Awareness     AwarenessConfig     `yaml:"awareness"`
+	Preferences   PreferencesConfig   `yaml:"preferences"`
+	Telemetry     TelemetryConfig     `yaml:"telemetry"`
 }
 
 // TelemetryConfig controls anonymous sidecar usage metrics. Independent of the

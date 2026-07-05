@@ -98,6 +98,9 @@ export async function cmdSidecars(args: string[], io: CliIo = defaultIo): Promis
       status: r.status,
       enrolled_at: r.enrolled_at,
       last_seen_at: r.last_seen_at,
+      // The hosting server reads this (follow-the-night scheduling); null
+      // until the device's sidecar first registers.
+      timezone: r.timezone ?? null,
     }));
     if (json) {
       io.out(JSON.stringify({ devices }));

@@ -674,6 +674,9 @@ function createTables(db: Database): void {
   // Sidecar's own (brain-decoupled) version, reported on register. Added later;
   // ALTER in try/catch is the migration pattern used throughout this file.
   try { db.run('ALTER TABLE sidecars ADD COLUMN version TEXT'); } catch { /* already present */ }
+  // IANA timezone reported by the sidecar on register (hosted brains run on
+  // UTC VPSs; the hosting server reads this for follow-the-night scheduling).
+  try { db.run('ALTER TABLE sidecars ADD COLUMN timezone TEXT'); } catch { /* already present */ }
 
   // Settings table: key-value store for dashboard-managed configuration
   db.run(`

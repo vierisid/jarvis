@@ -86,8 +86,8 @@ Usage:
 	if cfg.Token == "" {
 		// Unconfigured: pop up the first-run window asking for the enrollment
 		// token instead of erroring out. (--token still works headlessly.)
-		log.Println("[sidecar] No token configured - opening setup window...")
-		tok, err := runSetupWindow()
+		log.Println("[sidecar] No token configured - opening connect window...")
+		tok, err := runFirstRunWindow(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\nAlternatively, run: jarvis-sidecar --token <jwt>\n", err)
 			os.Exit(1)
