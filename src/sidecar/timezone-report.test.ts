@@ -64,3 +64,45 @@ describe('sidecar timezone reporting', () => {
     expect(row.timezone).toBe('Europe/Rome');
   });
 });
+
+describe('timezone validation (review finding: untrusted sidecar input)', () => {
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'jarvis-tzval-'));
+    initDatabase(':memory:');
+    manager = new SidecarManager(dataDir);
+  });
+
+  afterEach(async () => {
+    closeDb();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  test('a hostile timezone string is never persisted (YAML-injection path)', async () => {
+    const { sidecar } = await enrollDevice(dataDir, 'u1.vps1.usejarvis.host', 'desktop-A', {
+      onExisting: 'upsert',
+    });
+    manager.registerConnection(connected(sidecar.id, 'Etc/UTC"\ninjected_key: true\n#'));
+
+    const row = getDb().query('SELECT timezone FROM sidecars WHERE id = ?').get(sidecar.id) as {
+      timezone: string | null;
+    };
+    expect(row.timezone).toBeNull();
+  });
+
+  test('sanitizeIanaTimezone accepts real zones, rejects shapes that are not zones', async () => {
+    const { sanitizeIanaTimezone } = await import('./manager.ts');
+    expect(sanitizeIanaTimezone('Europe/Rome')).toBe('Europe/Rome');
+    expect(sanitizeIanaTimezone('America/Argentina/Buenos_Aires')).toBe('America/Argentina/Buenos_Aires');
+    expect(sanitizeIanaTimezone('Etc/GMT+12')).toBe('Etc/GMT+12');
+    expect(sanitizeIanaTimezone('UTC')).toBe('UTC');
+    expect(sanitizeIanaTimezone(' Europe/Rome ')).toBe('Europe/Rome');
+
+    expect(sanitizeIanaTimezone(undefined)).toBeUndefined();
+    expect(sanitizeIanaTimezone('')).toBeUndefined();
+    expect(sanitizeIanaTimezone('not a zone')).toBeUndefined();
+    expect(sanitizeIanaTimezone('/etc/passwd')).toBeUndefined();
+    expect(sanitizeIanaTimezone('a/b/c/d')).toBeUndefined();
+    expect(sanitizeIanaTimezone('A'.repeat(65))).toBeUndefined();
+    expect(sanitizeIanaTimezone('Europe/Rome\nevil: true')).toBeUndefined();
+  });
+});

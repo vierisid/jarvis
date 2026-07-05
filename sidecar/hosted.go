@@ -49,6 +49,31 @@ func resolveHostedBaseURLWith(overrideAllowed bool, cfgValue, envValue string) s
 	return hostedDefaultBaseURL
 }
 
+// submitTokenHandler builds the `window.submitToken` binding. isActive gates
+// it to the LOCAL token form: bindings are callable by whatever page the
+// webview shows, and the hosted flow navigates to remote content - without
+// the gate, any page in the Clerk/Stripe redirect chain could silently
+// enroll this sidecar to an attacker-controlled brain (enrollment JWTs are
+// self-describing via their brain/jwks claims). accept receives a
+// structurally valid JWT and closes the window.
+func submitTokenHandler(isActive func() bool, accept func(token string)) func(string) error {
+	return func(raw string) error {
+		if !isActive() {
+			log.Printf("[hosted] submitToken called while the token form is not active - ignored")
+			return fmt.Errorf("Token entry is not active.")
+		}
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return fmt.Errorf("Paste your enrollment token to continue.")
+		}
+		if _, err := DecodeJWTPayload(raw); err != nil {
+			return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
+		}
+		accept(raw)
+		return nil
+	}
+}
+
 // generateHandshakeNonce returns a 256-bit unguessable correlation id.
 func generateHandshakeNonce() (string, error) {
 	buf := make([]byte, 32)
@@ -65,6 +90,12 @@ func connectPageURL(base, nonce string) string {
 // The long-poll request is held open server-side; keep the client timeout
 // comfortably above the server's hold (~55s).
 var hostedHTTPClient = &http.Client{Timeout: 75 * time.Second}
+
+// A well-behaved server holds the poll, so consecutive requests are ~55s
+// apart. If a poll returns "pending" faster than this (an intermediary that
+// buffers instead of holding, or a simple server), wait out the remainder -
+// verified without the floor: ~2900 requests/second.
+const minPendingPollInterval = 2 * time.Second
 
 // registerHandshake announces the nonce (+ this machine's hostname) so the
 // connect page can claim it after Clerk login.
@@ -140,6 +171,7 @@ func awaitHandshakeToken(ctx context.Context, base, nonce string, onProgress fun
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
+		pollStart := time.Now()
 		res, err := pollHandshakeOnce(ctx, base, nonce)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -151,9 +183,7 @@ func awaitHandshakeToken(ctx context.Context, base, nonce string, onProgress fun
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
-			if backoff < 15*time.Second {
-				backoff *= 2
-			}
+			backoff = min(backoff*2, 15*time.Second)
 			continue
 		}
 		backoff = 2 * time.Second
@@ -170,9 +200,16 @@ func awaitHandshakeToken(ctx context.Context, base, nonce string, onProgress fun
 				reason = "setup failed on the server"
 			}
 			return "", &errHandshakeFailed{reason: reason}
-		default: // "pending" (or unknown) -> immediately re-issue the long-poll
+		default: // "pending" (or unknown) -> re-issue the long-poll
 			if onProgress != nil && res.Step != "" {
 				onProgress(res.Step)
+			}
+			if wait := minPendingPollInterval - time.Since(pollStart); wait > 0 {
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
 			}
 		}
 	}

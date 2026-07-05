@@ -46,6 +46,19 @@ const PUBLIC_KEY_FILE = 'public.pem';
 const ACCESS_TOKEN_AUDIENCE = 'brain-api';
 const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
 
+/**
+ * Accept only strings shaped like IANA zone names ("Area/City", up to three
+ * segments, "UTC"), max 64 chars. Mirrors the Go sidecar's ianaNameRe.
+ */
+const IANA_TZ_RE = /^[A-Za-z_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/;
+
+export function sanitizeIanaTimezone(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return undefined;
+  return IANA_TZ_RE.test(trimmed) ? trimmed : undefined;
+}
+
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
 
@@ -345,12 +358,17 @@ export class SidecarManager implements Service {
 
   /** Register a connected sidecar (called after WS handshake + registration message) */
   registerConnection(sidecar: ConnectedSidecar): void {
-    this.connected.set(sidecar.id, sidecar);
+    // The reported timezone is untrusted sidecar input headed for sensitive
+    // sinks: `jarvis sidecars list --json` (read by the hosting server) and,
+    // downstream, the root-owned system config the server writes. Persist it
+    // only when it LOOKS like an IANA zone name; anything else becomes null.
+    const timezone = sanitizeIanaTimezone(sidecar.timezone);
+    this.connected.set(sidecar.id, { ...sidecar, timezone });
     // Persist connection details to DB so they're available even when offline
     const db = getDb();
     db.run(
       `UPDATE sidecars SET last_seen_at = datetime('now'), hostname = ?, os = ?, platform = ?, capabilities = ?, version = ?, timezone = COALESCE(?, timezone) WHERE id = ?`,
-      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.version, sidecar.timezone || null, sidecar.id],
+      [sidecar.hostname, sidecar.os, sidecar.platform, JSON.stringify(sidecar.capabilities), sidecar.version, timezone ?? null, sidecar.id],
     );
     console.log(`[SidecarManager] Sidecar connected: ${sidecar.name} (${sidecar.id})`);
     // Fire both listener flavours — main uses onConnect(id) for routing,

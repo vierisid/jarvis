@@ -196,3 +196,65 @@ func TestHandshakeCancelledByContext(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+func TestSubmitTokenHandlerGate(t *testing.T) {
+	jwt := testJWT(t)
+	active := false
+	var accepted string
+	handler := submitTokenHandler(func() bool { return active }, func(tok string) { accepted = tok })
+
+	// Regression (review major 1): with the hosted flow showing remote
+	// content (Clerk/Stripe redirects), any page can call the binding. While
+	// the local form is NOT active it must refuse even a valid JWT.
+	if err := handler(jwt); err == nil {
+		t.Fatal("submitToken must be refused while the token form is inactive")
+	}
+	if accepted != "" {
+		t.Fatalf("token must not be accepted while inactive, got %q", accepted)
+	}
+
+	// Active form: garbage rejected, valid JWT accepted.
+	active = true
+	if err := handler("not-a-jwt"); err == nil {
+		t.Fatal("garbage token must be rejected")
+	}
+	if err := handler("  " + jwt + "  "); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+	if accepted != jwt {
+		t.Fatalf("accepted token mismatch: %q", accepted)
+	}
+}
+
+func TestPendingRepollIsRateLimited(t *testing.T) {
+	// Regression (review major 2): a server/proxy answering "pending"
+	// instantly must not be hammered. Unfixed this measured ~2900 polls/s.
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		polls.Add(1)
+		_ = json.NewEncoder(w).Encode(handshakePollResponse{Status: "pending"})
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	defer cancel()
+	_, _ = awaitHandshakeToken(ctx, srv.URL, "nonce", nil)
+
+	// With the 2s floor: one immediate poll, the second lands at ~2s (after
+	// the window). Allow slack for scheduling but nothing like a hot loop.
+	if n := polls.Load(); n > 2 {
+		t.Fatalf("pending re-poll not rate-limited: %d polls in 1.1s", n)
+	}
+}
+
+func TestHostedShellWithErrorBakesTheMessageIn(t *testing.T) {
+	// Regression (review medium 4): the error must be part of the document
+	// (boot script), not an Eval racing the fresh SetHtml.
+	html := hostedShellWithError("Setup did not complete: it's broken <script>")
+	if !strings.Contains(html, `window.__setError('Setup did not complete: it\'s broken \x3cscript>')`) {
+		t.Fatalf("boot script missing or badly escaped:\n%s", html)
+	}
+	if strings.Contains(html, "/*__BOOT__*/") {
+		t.Fatal("placeholder was not replaced")
+	}
+}
