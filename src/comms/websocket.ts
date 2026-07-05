@@ -126,6 +126,16 @@ export class WebSocketServer {
   private port: number;
   /** When set, bind a unix-domain socket instead of the TCP port (hosted mode). */
   private unixPath: string | null = null;
+  /**
+   * Synchronous `process.on('exit')` cleanup for the unix socket, registered
+   * at bind. Guarantees the socket file is removed on ANY graceful process
+   * exit regardless of shutdown-ordering (the daemon stops several slow
+   * services before it reaches this one, and `jarvis stop`'s grace window can
+   * SIGKILL mid-shutdown before an ordered stop() runs). Removed by stop() to
+   * avoid stale handlers across restart-in-place. (SIGKILL is uncatchable; the
+   * next start's pre-bind unlink covers that abnormal case.)
+   */
+  private exitCleanup: (() => void) | null = null;
   private startTime: number = 0;
   private apiRoutes: Map<string, MethodRoutes> = new Map();
   private staticDir: string | null = null;
@@ -618,6 +628,14 @@ export class WebSocketServer {
           throw new Error(`[WebSocketServer] Socket ${this.unixPath} has mode ${mode.toString(8)}, expected 660 - refusing to serve`);
         }
       }
+      // Guarantee the socket is gone on any graceful process exit, whatever
+      // the shutdown ordering. Capture the path so the handler can't race a
+      // later reassignment of this.unixPath.
+      const socketPath = this.unixPath;
+      this.exitCleanup = () => {
+        try { require('node:fs').unlinkSync(socketPath); } catch { /* already gone */ }
+      };
+      process.once('exit', this.exitCleanup);
       console.log(`[WebSocketServer] Started on unix:${this.unixPath} (no TCP port bound)`);
     } else {
       console.log(`[WebSocketServer] Started on ws://localhost:${this.port}/ws`);
@@ -637,6 +655,13 @@ export class WebSocketServer {
       // socket (the pre-bind unlink only covers the NEXT start).
       if (this.unixPath) {
         try { require('node:fs').unlinkSync(this.unixPath); } catch { /* absent */ }
+      }
+      // Drop the exit-time cleanup: an explicit stop already removed the
+      // socket, and leaving it registered would let a restart-in-place on a
+      // new path be unlinked by this old instance's handler at process exit.
+      if (this.exitCleanup) {
+        process.removeListener('exit', this.exitCleanup);
+        this.exitCleanup = null;
       }
       console.log('[WebSocketServer] Stopped');
     }

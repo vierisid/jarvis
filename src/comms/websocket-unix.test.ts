@@ -69,3 +69,49 @@ test('stop() removes the socket file (no dead-but-present socket)', async () => 
   s.stop();
   expect(existsSync(sockPath)).toBe(false);
 });
+
+test('the socket is removed on graceful process exit even when stop() is never called', async () => {
+  // Regression: the daemon stops several slow services (goal, awareness, the
+  // bg-agent browser) BEFORE it reaches the WS service, so an ordered stop()
+  // can run late or be cut off by jarvis stop's SIGKILL. A process.on('exit')
+  // handler must clean the socket regardless of shutdown ordering. A child
+  // process binds the socket and process.exit(0)s WITHOUT calling stop().
+  const { existsSync } = await import('node:fs');
+  const sockPath = join(tmpdir(), `jarvis-test-exit-${process.pid}-${Date.now()}.sock`);
+  const child = `
+    import { WebSocketServer } from ${JSON.stringify(join(import.meta.dir, 'websocket.ts'))};
+    const s = new WebSocketServer(39994, ${JSON.stringify(sockPath)});
+    s.start();
+    if (!require('node:fs').existsSync(${JSON.stringify(sockPath)})) process.exit(2);
+    // Exit WITHOUT s.stop() — the exit handler is the only cleanup path.
+    process.exit(0);
+  `;
+  const proc = Bun.spawn(['bun', '-e', child], { stdout: 'ignore', stderr: 'ignore' });
+  const code = await proc.exited;
+  expect(code).toBe(0);                 // child bound the socket
+  expect(existsSync(sockPath)).toBe(false); // ...and the exit handler removed it
+});
+
+test('stop() deregisters the exit handler (restart-in-place on a new path is untouched)', async () => {
+  const { existsSync, writeFileSync, unlinkSync } = await import('node:fs');
+  const pathA = join(tmpdir(), `jarvis-test-a-${process.pid}-${Date.now()}.sock`);
+  const pathB = join(tmpdir(), `jarvis-test-b-${process.pid}-${Date.now()}.sock`);
+  // A child binds A, stops it, binds B, then exits without stopping B. If A's
+  // handler leaked, it could unlink whatever now sits at A. Prove B is cleaned
+  // and a decoy file left at A survives (A's handler was deregistered by stop).
+  const child = `
+    import { WebSocketServer } from ${JSON.stringify(join(import.meta.dir, 'websocket.ts'))};
+    const fs = require('node:fs');
+    const a = new WebSocketServer(39993, ${JSON.stringify(pathA)});
+    a.start(); a.stop();
+    fs.writeFileSync(${JSON.stringify(pathA)}, 'decoy'); // reclaim path A
+    const b = new WebSocketServer(39992, ${JSON.stringify(pathB)});
+    b.start();
+    process.exit(0);
+  `;
+  const proc = Bun.spawn(['bun', '-e', child], { stdout: 'ignore', stderr: 'ignore' });
+  expect(await proc.exited).toBe(0);
+  expect(existsSync(pathB)).toBe(false); // B's handler cleaned it
+  expect(existsSync(pathA)).toBe(true);  // A's decoy survived (handler deregistered)
+  try { unlinkSync(pathA); } catch { /* cleanup */ }
+});
