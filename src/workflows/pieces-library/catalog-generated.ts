@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-06-21";
+export const GENERATED_AT = "2026-07-05";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -242,8 +242,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-bedrock",
     npmPackage: "@activepieces/piece-amazon-bedrock",
-    versionRange: "^0.1.2",
-    latestVersion: "0.1.2",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Amazon Bedrock",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-bedrock",
@@ -262,8 +262,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-secrets-manager",
     npmPackage: "@activepieces/piece-amazon-secrets-manager",
-    versionRange: "^0.0.4",
-    latestVersion: "0.0.4",
+    versionRange: "^0.1.0",
+    latestVersion: "0.1.0",
     displayName: "Amazon Secrets Manager",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-secrets-manager",
@@ -852,8 +852,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "cal-com",
     npmPackage: "@activepieces/piece-cal-com",
-    versionRange: "^0.4.4",
-    latestVersion: "0.4.4",
+    versionRange: "^0.4.5",
+    latestVersion: "0.4.5",
     displayName: "Cal Com",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/cal-com",
@@ -1132,8 +1132,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "claude",
     npmPackage: "@activepieces/piece-claude",
-    versionRange: "^0.4.8",
-    latestVersion: "0.4.8",
+    versionRange: "^0.4.9",
+    latestVersion: "0.4.9",
     displayName: "Claude",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/claude",
@@ -1192,8 +1192,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "clickup",
     npmPackage: "@activepieces/piece-clickup",
-    versionRange: "^0.7.5",
-    latestVersion: "0.7.5",
+    versionRange: "^0.7.6",
+    latestVersion: "0.7.6",
     displayName: "Clickup",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/clickup",
@@ -1622,8 +1622,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "discord",
     npmPackage: "@activepieces/piece-discord",
-    versionRange: "^0.5.3",
-    latestVersion: "0.5.3",
+    versionRange: "^0.5.4",
+    latestVersion: "0.5.4",
     displayName: "Discord",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/discord",
@@ -2372,8 +2372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "gmail",
     npmPackage: "@activepieces/piece-gmail",
-    versionRange: "^0.12.5",
-    latestVersion: "0.12.5",
+    versionRange: "^0.12.8",
+    latestVersion: "0.12.8",
     displayName: "Gmail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/gmail",
@@ -2402,8 +2402,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-calendar",
     npmPackage: "@activepieces/piece-google-calendar",
-    versionRange: "^0.9.3",
-    latestVersion: "0.9.3",
+    versionRange: "^0.9.4",
+    latestVersion: "0.9.4",
     displayName: "Google Calendar",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-calendar",
@@ -2432,8 +2432,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-docs",
     npmPackage: "@activepieces/piece-google-docs",
-    versionRange: "^0.4.3",
-    latestVersion: "0.4.3",
+    versionRange: "^0.4.4",
+    latestVersion: "0.4.4",
     displayName: "Google Docs",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-docs",
@@ -2442,8 +2442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-drive",
     npmPackage: "@activepieces/piece-google-drive",
-    versionRange: "^0.7.8",
-    latestVersion: "0.7.8",
+    versionRange: "^0.7.10",
+    latestVersion: "0.7.10",
     displayName: "Google Drive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-drive",
@@ -2462,8 +2462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-gemini",
     npmPackage: "@activepieces/piece-google-gemini",
-    versionRange: "^0.1.11",
-    latestVersion: "0.1.11",
+    versionRange: "^0.1.12",
+    latestVersion: "0.1.12",
     displayName: "Google Gemini",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-gemini",
@@ -2502,8 +2502,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-sheets",
     npmPackage: "@activepieces/piece-google-sheets",
-    versionRange: "^0.16.1",
-    latestVersion: "0.16.1",
+    versionRange: "^0.16.2",
+    latestVersion: "0.16.2",
     displayName: "Google Sheets",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-sheets",
@@ -2642,8 +2642,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "groq",
     npmPackage: "@activepieces/piece-groq",
-    versionRange: "^0.2.5",
-    latestVersion: "0.2.5",
+    versionRange: "^0.2.6",
+    latestVersion: "0.2.6",
     displayName: "Groq",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/groq",
@@ -2772,8 +2772,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "hubspot",
     npmPackage: "@activepieces/piece-hubspot",
-    versionRange: "^0.8.5",
-    latestVersion: "0.8.5",
+    versionRange: "^0.8.6",
+    latestVersion: "0.8.6",
     displayName: "Hubspot",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/hubspot",
@@ -3012,8 +3012,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "json",
     npmPackage: "@activepieces/piece-json",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Json",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/json",
@@ -3202,8 +3202,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "lemlist",
     npmPackage: "@activepieces/piece-lemlist",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.1.7",
+    latestVersion: "0.1.7",
     displayName: "Lemlist",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/lemlist",
@@ -3292,8 +3292,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "linkedin",
     npmPackage: "@activepieces/piece-linkedin",
-    versionRange: "^0.2.5",
-    latestVersion: "0.2.5",
+    versionRange: "^0.2.6",
+    latestVersion: "0.2.6",
     displayName: "Linkedin",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/linkedin",
@@ -3752,8 +3752,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-onenote",
     npmPackage: "@activepieces/piece-microsoft-onenote",
-    versionRange: "^0.2.4",
-    latestVersion: "0.2.4",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Microsoft Onenote",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-onenote",
@@ -3762,8 +3762,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-outlook",
     npmPackage: "@activepieces/piece-microsoft-outlook",
-    versionRange: "^0.3.6",
-    latestVersion: "0.3.6",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Microsoft Outlook",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-outlook",
@@ -3802,8 +3802,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-teams",
     npmPackage: "@activepieces/piece-microsoft-teams",
-    versionRange: "^0.5.4",
-    latestVersion: "0.5.4",
+    versionRange: "^0.5.5",
+    latestVersion: "0.5.5",
     displayName: "Microsoft Teams",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-teams",
@@ -4082,8 +4082,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "notion",
     npmPackage: "@activepieces/piece-notion",
-    versionRange: "^0.6.2",
-    latestVersion: "0.6.2",
+    versionRange: "^0.6.5",
+    latestVersion: "0.6.5",
     displayName: "Notion",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/notion",
@@ -4202,8 +4202,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "open-router",
     npmPackage: "@activepieces/piece-open-router",
-    versionRange: "^0.1.5",
-    latestVersion: "0.1.5",
+    versionRange: "^0.1.6",
+    latestVersion: "0.1.6",
     displayName: "Open Router",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/open-router",
@@ -4972,8 +4972,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "rss",
     npmPackage: "@activepieces/piece-rss",
-    versionRange: "^0.5.5",
-    latestVersion: "0.5.5",
+    versionRange: "^0.5.6",
+    latestVersion: "0.5.6",
     displayName: "Rss",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/rss",
@@ -5562,8 +5562,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "supabase",
     npmPackage: "@activepieces/piece-supabase",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Supabase",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/supabase",
@@ -5742,8 +5742,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "telegram-bot",
     npmPackage: "@activepieces/piece-telegram-bot",
-    versionRange: "^0.6.2",
-    latestVersion: "0.6.2",
+    versionRange: "^0.6.5",
+    latestVersion: "0.6.5",
     displayName: "Telegram Bot",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/telegram-bot",
@@ -5892,8 +5892,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "trello",
     npmPackage: "@activepieces/piece-trello",
-    versionRange: "^0.4.7",
-    latestVersion: "0.4.7",
+    versionRange: "^0.4.9",
+    latestVersion: "0.4.9",
     displayName: "Trello",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/trello",
@@ -5982,8 +5982,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "umami",
     npmPackage: "@activepieces/piece-umami",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Umami",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/umami",
