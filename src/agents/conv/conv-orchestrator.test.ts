@@ -163,4 +163,67 @@ describe('ConvOrchestrator', () => {
     const result = await conv.processTurn('stuck', {});
     expect(result.text).toContain('stuck routing');
   });
+
+  it('splits the system prompt into a cache-marked static prefix and a dynamic suffix', async () => {
+    // Capture the messages the conv tier actually sends to the LLM.
+    const captured: LLMMessage[][] = [];
+    class CapturingProvider extends MockProvider {
+      override async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
+        captured.push(messages);
+        return super.chat(messages, opts);
+      }
+    }
+    const provider = new CapturingProvider([textResponse('Hi!'), textResponse('Hello again!')]);
+    const llm = makeManager(provider);
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: sunny' });
+    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: rainy' });
+
+    expect(captured).toHaveLength(2);
+    for (const messages of captured) {
+      // message[0]: static system prompt, marked as cache boundary
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[0]!.cache).toBe(true);
+      const staticText = String(messages[0]!.content);
+      expect(staticText).toContain('TestBot persona.');
+      expect(staticText).not.toContain('Alice');
+      expect(staticText).not.toContain('Weather');
+      // message[1]: dynamic system prompt, NOT cache-marked
+      expect(messages[1]!.role).toBe('system');
+      expect(messages[1]!.cache).toBeUndefined();
+      const dynamicText = String(messages[1]!.content);
+      expect(dynamicText).toContain('Alice');
+      expect(dynamicText).toContain('Weather');
+    }
+    // The static prefix must be byte-identical across turns even though the
+    // dynamic context changed - that's what makes it cacheable.
+    expect(captured[0]![0]!.content).toBe(captured[1]![0]!.content);
+    expect(captured[0]![1]!.content).not.toBe(captured[1]![1]!.content);
+  });
+
+  it('omits the dynamic system message entirely when there is no dynamic context', async () => {
+    const captured: LLMMessage[][] = [];
+    class CapturingProvider extends MockProvider {
+      override async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
+        captured.push(messages);
+        return super.chat(messages, opts);
+      }
+    }
+    const provider = new CapturingProvider([textResponse('Hi!')]);
+    const llm = makeManager(provider);
+    const runner = async () => ({ kind: 'completed' as const, text: '', conversation: [] });
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
+
+    await conv.processTurn('Hi', {});
+    const messages = captured[0]!;
+    expect(messages[0]!.role).toBe('system');
+    expect(messages[1]!.role).toBe('user'); // no empty dynamic system message
+  });
 });

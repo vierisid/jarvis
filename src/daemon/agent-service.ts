@@ -28,7 +28,7 @@ import { researchQueueTool } from '../actions/tools/research.ts';
 import { documentTool } from '../actions/tools/documents.ts';
 import { AgentTaskManager } from '../agents/task-manager.ts';
 import { discoverSpecialists, formatSpecialistList } from '../agents/role-discovery.ts';
-import { buildSystemPrompt, type PromptContext } from '../roles/prompt-builder.ts';
+import { buildSystemPromptParts, type PromptContext, type SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { ProgressCallback } from '../agents/sub-agent-runner.ts';
 import {
   getPersonality,
@@ -275,9 +275,9 @@ export class AgentService implements Service, IAgentService {
       return this.streamMessageConv(text, channel);
     }
 
-    let systemPrompt = this.buildFullSystemPrompt(channel, text);
+    const systemPrompt = this.buildFullSystemPromptParts(channel, text);
     if (siteContext) {
-      systemPrompt += '\n\n' + siteContext;
+      systemPrompt.dynamic += '\n\n' + siteContext;
     }
 
     const stream = this.orchestrator.streamMessage(systemPrompt, text);
@@ -396,8 +396,8 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    let systemPrompt = this.buildFullSystemPrompt(channel, text);
-    if (siteContext) systemPrompt += '\n\n' + siteContext;
+    const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+    if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
 
     const content: import('../llm/provider.ts').ContentBlock[] = [
       { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
@@ -435,7 +435,7 @@ export class AgentService implements Service, IAgentService {
     if (this.convOrchestrator) {
       response = await this.handleMessageConv(text, channel);
     } else {
-      const systemPrompt = this.buildFullSystemPrompt(channel, text);
+      const systemPrompt = this.buildFullSystemPromptParts(channel, text);
       response = await this.orchestrator.processMessage(systemPrompt, text);
     }
 
@@ -593,12 +593,16 @@ export class AgentService implements Service, IAgentService {
         signal,
         history,
       }) => {
-        const baseSystem = this.buildFullSystemPrompt('conv', originalMessage);
+        const baseSystem = this.buildFullSystemPromptParts('conv', originalMessage);
         const templateNote = TaskDispatcher.templatePromptFor(template);
         // Attach the conv LLM's routing intent as system context so the task
         // tier sees both the user's verbatim ask AND the conv's framing -
-        // but the user's words are the primary signal.
-        const systemPrompt = `${baseSystem}\n\n${templateNote}\n\nConversation routing note: ${intent}`;
+        // but the user's words are the primary signal. Both are per-task
+        // volatile, so they ride on the dynamic half of the prompt.
+        const systemPrompt: SystemPromptParts = {
+          static: baseSystem.static,
+          dynamic: `${baseSystem.dynamic}\n\n${templateNote}\n\nConversation routing note: ${intent}`,
+        };
         const result = await this.orchestrator.processTaskCall({
           systemPrompt,
           userMessage: originalMessage,
@@ -712,7 +716,20 @@ export class AgentService implements Service, IAgentService {
   }
 
   buildFullSystemPrompt(channel: string, userMessage?: string): string {
-    if (!this.role) return '';
+    const parts = this.buildFullSystemPromptParts(channel, userMessage);
+    if (!parts.static && !parts.dynamic) return '';
+    return parts.dynamic ? `${parts.static}\n\n${parts.dynamic}` : parts.static;
+  }
+
+  /**
+   * System prompt split at the prompt-cache boundary: `static` is byte-stable
+   * turn-over-turn for a given channel (role prompt + channel personality),
+   * `dynamic` carries the per-turn context (time, observations, goals, ...).
+   * Callers hand the parts to the orchestrator, which marks the static half
+   * as a provider cache boundary.
+   */
+  buildFullSystemPromptParts(channel: string, userMessage?: string): SystemPromptParts {
+    if (!this.role) return { static: '', dynamic: '' };
 
     // Build prompt context with live data + vault knowledge.
     // For latency-sensitive voice channels (pebble), build a slimmer
@@ -723,15 +740,19 @@ export class AgentService implements Service, IAgentService {
       ? this.buildPromptContext(userMessage, { slim: true })
       : this.buildPromptContext(userMessage);
 
-    // Build base system prompt from role + context
-    const rolePrompt = buildSystemPrompt(this.role, context);
+    // Build base system prompt from role + context, split at the boundary
+    const roleParts = buildSystemPromptParts(this.role, context);
 
-    // Build personality prompt for this channel
+    // Build personality prompt for this channel. Config-derived and
+    // time-invariant, so it belongs to the static (cacheable) half.
     const personality = this.personality ?? getPersonality();
     const channelPersonality = getChannelPersonality(personality, channel);
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
-    return `${rolePrompt}\n\n${personalityPrompt}`;
+    return {
+      static: `${roleParts.static}\n\n${personalityPrompt}`,
+      dynamic: roleParts.dynamic,
+    };
   }
 
   private buildPromptContext(userMessage?: string, opts?: { slim?: boolean }): PromptContext {

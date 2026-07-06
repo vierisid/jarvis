@@ -19,9 +19,31 @@ export type PromptContext = {
 };
 
 /**
- * Build a full system prompt from a role definition and context
+ * A system prompt split at the cache boundary.
+ *
+ * `static` depends only on the role definition (plus process-stable context
+ * like authority rules) and is byte-identical turn-over-turn, so callers can
+ * mark it as a provider prompt-cache boundary. `dynamic` carries the per-turn
+ * volatile content (current time, observations, goals, ...) and must always
+ * be rendered AFTER the static part.
+ */
+export type SystemPromptParts = { static: string; dynamic: string };
+
+/**
+ * Build a full system prompt from a role definition and context.
+ * Legacy string form - equivalent to joining the parts from
+ * buildSystemPromptParts.
  */
 export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext): string {
+  const parts = buildSystemPromptParts(role, context);
+  return parts.dynamic ? `${parts.static}\n${parts.dynamic}` : parts.static;
+}
+
+/**
+ * Build the system prompt split into a stable (cacheable) prefix and a
+ * per-turn dynamic suffix.
+ */
+export function buildSystemPromptParts(role: RoleDefinition, context?: PromptContext): SystemPromptParts {
   const sections: string[] = [];
 
   // Identity
@@ -160,17 +182,25 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
   sections.push(buildToolGuide(context?.hasSidecars ?? false));
   sections.push('');
 
+  // ── Static/dynamic boundary ─────────────────────────────────────────────
+  // Everything above depends only on the role (+ process-stable context like
+  // authorityRules / effectiveAuthorityLevel / hasSidecars). Everything below
+  // changes per turn and must not sit inside the cacheable prefix.
+  const staticPrompt = sections.join('\n');
+  const dynamicSections: string[] = [];
+
   // Webapp-specific browser instructions (loaded from DB on demand)
   if (context?.webappInstructions) {
-    sections.push('# Webapp Navigation Instructions');
-    sections.push('The following instructions are specific to the web app the user is asking about. Follow these closely when interacting with this app via browser tools:');
-    sections.push('');
-    sections.push(context.webappInstructions);
-    sections.push('');
+    dynamicSections.push('# Webapp Navigation Instructions');
+    dynamicSections.push('The following instructions are specific to the web app the user is asking about. Follow these closely when interacting with this app via browser tools:');
+    dynamicSections.push('');
+    dynamicSections.push(context.webappInstructions);
+    dynamicSections.push('');
   }
 
   // Current Context
   if (context) {
+    const sections = dynamicSections; // reuse push-style below
     sections.push('# Current Context');
 
     if (context.userName) {
@@ -245,5 +275,5 @@ export function buildSystemPrompt(role: RoleDefinition, context?: PromptContext)
     sections.push('');
   }
 
-  return sections.join('\n');
+  return { static: staticPrompt, dynamic: dynamicSections.join('\n') };
 }
