@@ -37,13 +37,25 @@ import { LiteLLMProvider } from './litellm.ts';
  * "ollama-local" + "ollama-remote") and model refs unambiguously route to
  * one specific instance.
  */
-export function instantiateProvider(name: string, entry: LLMProviderEntry): LLMProvider | null {
+/** Cross-provider settings that aren't part of a single provider entry. */
+export type ProviderGlobals = {
+  /** Provider-side prompt caching (Anthropic cache_control). Default true. */
+  promptCache?: boolean;
+};
+
+export function instantiateProvider(
+  name: string,
+  entry: LLMProviderEntry,
+  globals?: ProviderGlobals,
+): LLMProvider | null {
   const kind: LLMProviderKind = (entry.kind ?? name) as LLMProviderKind;
   let provider: LLMProvider | null = null;
   switch (kind) {
     case 'anthropic':
       if (!entry.api_key) return null;
-      provider = new AnthropicProvider(entry.api_key);
+      provider = new AnthropicProvider(entry.api_key, undefined, {
+        promptCache: globals?.promptCache !== false,
+      });
       break;
     case 'openai':
       if (!entry.api_key) return null;
@@ -96,11 +108,12 @@ export function instantiateProvider(name: string, entry: LLMProviderEntry): LLMP
  */
 export function buildProviders(
   providers: Record<string, LLMProviderEntry>,
+  globals?: ProviderGlobals,
 ): LLMProvider[] {
   const out: LLMProvider[] = [];
   for (const [name, entry] of Object.entries(providers)) {
     if (!entry) continue;
-    const provider = instantiateProvider(name, entry);
+    const provider = instantiateProvider(name, entry, globals);
     if (!provider) continue;
     out.push(provider);
     console.log(`[LLM] Built provider '${name}' (kind=${entry.kind ?? name})`);
@@ -116,8 +129,9 @@ export function buildProviders(
 export function registerLLMProviders(
   manager: LLMManager,
   providers: Record<string, LLMProviderEntry>,
+  globals?: ProviderGlobals,
 ): boolean {
-  const built = buildProviders(providers);
+  const built = buildProviders(providers, globals);
   for (const p of built) manager.registerProvider(p);
   return built.length > 0;
 }
@@ -130,8 +144,9 @@ export function registerLLMProviders(
 export function atomicReloadProviders(
   manager: LLMManager,
   providers: Record<string, LLMProviderEntry>,
+  globals?: ProviderGlobals,
 ): LLMProvider[] {
-  const built = buildProviders(providers);
+  const built = buildProviders(providers, globals);
   manager.replaceProviders(built, '', []);
   return built;
 }

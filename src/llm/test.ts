@@ -25,7 +25,9 @@ async function testProviders() {
   mergeLLMSettingsIntoConfig(config);
 
   const manager = new LLMManager();
-  const hasProvider = registerLLMProviders(manager, config.llm.providers ?? {});
+  const hasProvider = registerLLMProviders(manager, config.llm.providers ?? {}, {
+    promptCache: config.llm.prompt_cache !== false,
+  });
   if (!hasProvider) {
     console.error('No providers configured.');
     return;

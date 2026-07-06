@@ -94,15 +94,32 @@ function modelRejectsTemperature(model: string): boolean {
   return /claude-opus-4-7/i.test(model);
 }
 
+/**
+ * A system prompt block. Anthropic renders tools -> system -> messages, so a
+ * cache_control marker on a system block caches the tools and everything in
+ * the system prompt up to (and including) that block.
+ */
+type AnthropicSystemBlock = {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+};
+
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic';
   private apiKey: string;
   private defaultModel: string;
+  private promptCache: boolean;
   private apiUrl = 'https://api.anthropic.com/v1/messages';
 
-  constructor(apiKey: string, defaultModel = 'claude-sonnet-4-5-20250929') {
+  constructor(
+    apiKey: string,
+    defaultModel = 'claude-sonnet-4-5-20250929',
+    opts?: { promptCache?: boolean },
+  ) {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
+    this.promptCache = opts?.promptCache !== false;
   }
 
   /**
@@ -151,13 +168,14 @@ export class AnthropicProvider implements LLMProvider {
     const compactedMessages = compactHistory(messages, budget);
 
     const { system, messages: anthropicMessages } = this.convertMessages(compactedMessages);
+    this.applyLastMessageBreakpoint(anthropicMessages);
     const body: Record<string, unknown> = {
       model,
       messages: anthropicMessages,
       max_tokens,
     };
 
-    if (system) body.system = system;
+    if (system && system.length > 0) body.system = system;
     if (temperature !== undefined && !modelRejectsTemperature(model)) {
       body.temperature = temperature;
     }
@@ -179,6 +197,7 @@ export class AnthropicProvider implements LLMProvider {
     const compactedMessages = compactHistory(messages, budget);
 
     const { system, messages: anthropicMessages } = this.convertMessages(compactedMessages);
+    this.applyLastMessageBreakpoint(anthropicMessages);
     const body: Record<string, unknown> = {
       model,
       messages: anthropicMessages,
@@ -186,16 +205,13 @@ export class AnthropicProvider implements LLMProvider {
       stream: true,
     };
 
-    if (system) body.system = system;
+    if (system && system.length > 0) body.system = system;
     if (temperature !== undefined && !modelRejectsTemperature(model)) {
       body.temperature = temperature;
     }
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       // Anthropic automatically uses tools when provided (no explicit tool_choice needed)
-    }
-    if (tools && tools.length > 0) {
-      body.tools = this.convertTools(tools);
     }
 
     let response: Response;
@@ -340,11 +356,32 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): {
-    system?: string;
+    system?: AnthropicSystemBlock[];
     messages: AnthropicMessage[];
   } {
-    const systemMessages = messages.filter(m => m.role === 'system');
-    const system = systemMessages.map(m => typeof m.content === 'string' ? m.content : m.content.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n')).join('\n\n') || undefined;
+    // One block per system message, boundaries preserved so a cache_control
+    // marker can sit exactly at the static/dynamic split. The '\n\n' joiner
+    // is appended to every block except the last, keeping the rendered
+    // prompt text byte-identical to the previous string-join behavior.
+    const systemTexts = messages
+      .filter(m => m.role === 'system')
+      .map(m => ({
+        text: typeof m.content === 'string' ? m.content : m.content.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n'),
+        cache: m.cache === true,
+      }))
+      .filter(m => m.text.length > 0); // Anthropic rejects empty text blocks
+
+    const lastMarked = this.promptCache
+      ? systemTexts.reduce((acc, m, idx) => (m.cache ? idx : acc), -1)
+      : -1;
+
+    const system: AnthropicSystemBlock[] | undefined = systemTexts.length > 0
+      ? systemTexts.map((m, idx) => ({
+          type: 'text' as const,
+          text: idx < systemTexts.length - 1 ? `${m.text}\n\n` : m.text,
+          ...(idx === lastMarked ? { cache_control: { type: 'ephemeral' as const } } : {}),
+        }))
+      : undefined;
 
     const anthropicMessages: AnthropicMessage[] = [];
     const nonSystem = messages.filter(m => m.role !== 'system');
@@ -406,6 +443,37 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     return { system, messages: anthropicMessages };
+  }
+
+  /**
+   * Incremental conversation caching: mark the final content block of the
+   * last message so each request caches the entire rendered prefix
+   * (tools + system + all messages). Within a ReAct loop the prefix grows
+   * monotonically, so iteration N reads what iteration N-1 wrote.
+   *
+   * Mutates the converted messages in place. Together with the (single)
+   * system-block marker this emits at most 2 of the 4 allowed breakpoints.
+   */
+  private applyLastMessageBreakpoint(anthropicMessages: AnthropicMessage[]): void {
+    if (!this.promptCache) return;
+    const last = anthropicMessages[anthropicMessages.length - 1];
+    if (!last) return;
+
+    if (typeof last.content === 'string') {
+      if (last.content.length === 0) return; // never emit empty text blocks
+      last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+      return;
+    }
+    const lastBlock = last.content[last.content.length - 1];
+    if (!lastBlock) return;
+    // Copy-on-write: content arrays can be shared with the caller's message
+    // history (convertMessages passes them through by reference). Mutating in
+    // place would leak cache_control into the history and accumulate extra
+    // breakpoints on subsequent requests.
+    last.content = [
+      ...last.content.slice(0, -1),
+      { ...lastBlock, cache_control: { type: 'ephemeral' } },
+    ];
   }
 
   private convertTools(tools: LLMTool[]): AnthropicToolDef[] {

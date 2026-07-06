@@ -555,7 +555,9 @@ export class AgentService implements Service, IAgentService {
 
   private registerProviders(): void {
     const { llm } = this.config;
-    const hasProvider = registerLLMProviders(this.llmManager, llm.providers ?? {});
+    const hasProvider = registerLLMProviders(this.llmManager, llm.providers ?? {}, {
+      promptCache: llm.prompt_cache !== false,
+    });
 
     if (!hasProvider) {
       console.warn('[AgentService] No LLM providers configured. Responses will be placeholders.');

@@ -316,6 +316,13 @@ export type LLMConfig = {
    * (low/medium/high) without an explicit assignment fall up.
    */
   tiers?: LLMTiersConfig;
+
+  /**
+   * Provider-side prompt caching (Anthropic cache_control; OpenAI caching is
+   * automatic). DB/dashboard-sourced like `tiers` - never read from
+   * config.yaml. Absent means enabled; only an explicit false disables it.
+   */
+  prompt_cache?: boolean;
 };
 
 export type JarvisConfig = {

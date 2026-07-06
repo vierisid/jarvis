@@ -34,6 +34,7 @@ const SETTING_TIER_CONVERSATION = 'llm.tiers.conversation';
 const SETTING_TIER_HIGH = 'llm.tiers.high';
 const SETTING_TIER_MEDIUM = 'llm.tiers.medium';
 const SETTING_TIER_LOW = 'llm.tiers.low';
+const SETTING_PROMPT_CACHE = 'llm.prompt_cache';
 
 /** Keychain key for a provider's API key, by provider NAME (not kind). */
 function keychainKey(providerName: string): string {
@@ -68,6 +69,8 @@ export type LLMSettingsResponse = {
   };
   /** Provider classes the system can instantiate. UI dropdowns use this. */
   available_kinds: LLMProviderKind[];
+  /** Provider-side prompt caching. Defaults to true; only explicit false disables. */
+  prompt_cache: boolean;
 };
 
 /** Body shape accepted by saveLLMSettings - all fields optional/partial. */
@@ -85,6 +88,7 @@ export type LLMSettingsRequest = {
     medium?: string | null;
     low?: string | null;
   };
+  prompt_cache?: boolean;
 };
 
 export const AVAILABLE_KINDS: LLMProviderKind[] = [
@@ -138,6 +142,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     mode,
     tiers,
     available_kinds: AVAILABLE_KINDS,
+    prompt_cache: config.llm.prompt_cache !== false,
   };
 }
 
@@ -218,6 +223,11 @@ export function saveLLMSettings(
   setSetting(SETTING_TIER_HIGH, config.llm.tiers.high ?? '');
   setSetting(SETTING_TIER_MEDIUM, config.llm.tiers.medium ?? '');
   setSetting(SETTING_TIER_LOW, config.llm.tiers.low ?? '');
+
+  if (body.prompt_cache !== undefined) {
+    config.llm.prompt_cache = body.prompt_cache;
+    setSetting(SETTING_PROMPT_CACHE, body.prompt_cache ? 'true' : 'false');
+  }
 }
 
 /**
@@ -285,6 +295,9 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     const value = getSetting(key);
     if (value) config.llm.tiers[tier] = value;
   }
+
+  // Prompt caching: absent = enabled; only a stored 'false' disables it.
+  config.llm.prompt_cache = getSetting(SETTING_PROMPT_CACHE) !== 'false';
 
   // 2. Legacy shape: migrate per-provider DB keys + KEY_* secrets if any
   // are present and no new-shape providers exist for them. This is the
@@ -395,7 +408,9 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
   // Atomic single-step swap: build the new provider list, then replaceProviders
   // does the map swap in one assignment. In-flight requests see EITHER the
   // old map or the new one, never an empty/partial map.
-  const built = atomicReloadProviders(llmManager, enrichedProviders);
+  const built = atomicReloadProviders(llmManager, enrichedProviders, {
+    promptCache: config.llm.prompt_cache !== false,
+  });
   if (built.length === 0) {
     console.warn('[LLM] Hot-reload: no providers registered (all entries missing credentials).');
   }
