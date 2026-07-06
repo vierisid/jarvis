@@ -17,11 +17,13 @@ function seed() {
     provider: string;
     in: number;
     out: number;
+    cacheRead?: number;
+    cacheWrite?: number;
     latency: number;
     err?: string;
   }> = [
-    { msAgo: 0,           tier: 'conversation', model: 'gpt-4o-mini',  subsystem: 'conv_orchestrator',   provider: 'openai',    in: 100, out: 50,  latency: 800 },
-    { msAgo: 60_000,      tier: 'medium',       model: 'claude-sonnet',subsystem: 'chat_orchestrator',   provider: 'anthropic', in: 500, out: 200, latency: 2400 },
+    { msAgo: 0,           tier: 'conversation', model: 'gpt-4o-mini',  subsystem: 'conv_orchestrator',   provider: 'openai',    in: 100, out: 50,  cacheRead: 60, latency: 800 },
+    { msAgo: 60_000,      tier: 'medium',       model: 'claude-sonnet',subsystem: 'chat_orchestrator',   provider: 'anthropic', in: 500, out: 200, cacheRead: 300, cacheWrite: 150, latency: 2400 },
     { msAgo: 120_000,     tier: 'low',          model: 'llama3',       subsystem: 'voice_intent',        provider: 'ollama',    in: 200, out: 80,  latency: 5000 },
     { msAgo: 180_000,     tier: 'low',          model: 'llama3',       subsystem: 'vault_extractor',     provider: 'ollama',    in: 250, out: 100, latency: 4800 },
     { msAgo: 240_000,     tier: 'conversation', model: 'gpt-4o-mini',  subsystem: 'conv_orchestrator',   provider: 'openai',    in: 110, out: 55,  latency: 700, err: 'auth' },
@@ -36,6 +38,8 @@ function seed() {
       model: s.model,
       input_tokens: s.in,
       output_tokens: s.out,
+      cache_read_input_tokens: s.cacheRead,
+      cache_creation_input_tokens: s.cacheWrite,
       latency_ms: s.latency,
       error_code: s.err,
     });
@@ -62,6 +66,26 @@ describe('queryUsage', () => {
     expect(r.total.calls).toBe(6);
     expect(r.total.input_tokens).toBe(100 + 500 + 200 + 250 + 110 + 800);
     expect(r.total.errors).toBe(1);
+  });
+
+  it('totals and grouped rows include cache token sums', () => {
+    const r = queryUsage({}, 'model');
+    expect(r.total.cache_read_input_tokens).toBe(60 + 300);
+    expect(r.total.cache_creation_input_tokens).toBe(150);
+
+    const grouped = queryUsage({ providers: ['anthropic'] }, 'subsystem');
+    const chatRow = grouped.rows.find((x) => x.key === 'chat_orchestrator');
+    expect(chatRow?.cache_read_input_tokens).toBe(300);
+    expect(chatRow?.cache_creation_input_tokens).toBe(150);
+  });
+
+  it('raw rows expose cache token columns (defaulting to 0)', () => {
+    const r = queryUsage({ tiers: ['low'] }, 'none');
+    expect(r.raw).toBeDefined();
+    for (const row of r.raw!) {
+      expect(row.cache_read_input_tokens).toBe(0);
+      expect(row.cache_creation_input_tokens).toBe(0);
+    }
   });
 
   it('filters by tier', () => {
@@ -124,6 +148,67 @@ describe('queryUsage', () => {
     const r = queryUsage({}, 'model');
     expect(r.total.calls).toBe(0);
     expect(r.rows).toEqual([]);
+  });
+});
+
+describe('llm_usage cache column migration', () => {
+  it('ALTER path adds cache columns to a legacy-shaped table and inserts succeed', async () => {
+    const { Database } = await import('bun:sqlite');
+    const path = `${process.env.TMPDIR ?? '/tmp'}/jarvis-usage-migration-${Date.now()}.db`;
+
+    // Simulate a DB created before prompt caching landed: legacy llm_usage
+    // without the cache columns.
+    const legacy = new Database(path);
+    legacy.run(`
+      CREATE TABLE llm_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        tier TEXT NOT NULL,
+        resolved_tier TEXT NOT NULL,
+        subsystem TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        latency_ms INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT
+      )
+    `);
+    legacy.run(
+      `INSERT INTO llm_usage (ts, tier, resolved_tier, subsystem, provider, model, input_tokens, output_tokens, latency_ms)
+       VALUES (?, 'low', 'low', 'legacy', 'stub', 'stub', 10, 5, 100)`,
+      [Date.now()],
+    );
+    legacy.close();
+
+    closeDb();
+    const db = initDatabase(path);
+    setUsageDatabase(() => db);
+    try {
+      recordUsage({
+        tier: 'low',
+        resolved_tier: 'low',
+        subsystem: 'post_migration',
+        provider: 'stub',
+        model: 'stub',
+        input_tokens: 20,
+        output_tokens: 10,
+        cache_read_input_tokens: 15,
+        cache_creation_input_tokens: 5,
+        latency_ms: 50,
+      });
+      const r = queryUsage({}, 'subsystem');
+      expect(r.total.calls).toBe(2);
+      expect(r.total.cache_read_input_tokens).toBe(15);
+      expect(r.total.cache_creation_input_tokens).toBe(5);
+      // Legacy row reads back with defaulted cache columns.
+      const legacyRow = r.rows.find((x) => x.key === 'legacy');
+      expect(legacyRow?.cache_read_input_tokens).toBe(0);
+    } finally {
+      closeDb();
+      setUsageDatabase(() => null);
+      await import('node:fs/promises').then((fs) => fs.rm(path, { force: true }));
+    }
   });
 });
 

@@ -229,6 +229,8 @@ export class LLMManager {
         model: response.model || model || '',
         input_tokens: response.usage?.input_tokens ?? 0,
         output_tokens: response.usage?.output_tokens ?? 0,
+        cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? 0,
         latency_ms: Date.now() - started,
       });
       return response;
@@ -285,6 +287,8 @@ export class LLMManager {
         model: finalResponse?.model || model || '',
         input_tokens: finalResponse?.usage?.input_tokens ?? 0,
         output_tokens: finalResponse?.usage?.output_tokens ?? 0,
+        cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
         latency_ms: Date.now() - started,
         error_code: errored ? classifyErrorString(errored) : undefined,
       });

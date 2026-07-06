@@ -783,10 +783,15 @@ function createTables(db: Database): void {
       model TEXT NOT NULL,
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
       latency_ms INTEGER NOT NULL DEFAULT 0,
       error_code TEXT
     )
   `);
+  // Migration: cache token columns for DBs created before prompt caching landed.
+  try { db.run(`ALTER TABLE llm_usage ADD COLUMN cache_read_input_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.run(`ALTER TABLE llm_usage ADD COLUMN cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_subsystem ON llm_usage(subsystem, ts DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_llm_usage_tier ON llm_usage(tier, ts DESC)`);

@@ -63,6 +63,8 @@ type AnthropicResponse = {
   usage: {
     input_tokens: number;
     output_tokens: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
   };
 };
 
@@ -71,7 +73,7 @@ type AnthropicStreamEvent =
   | { type: 'content_block_start'; index: number; content_block: AnthropicContentBlock }
   | { type: 'content_block_delta'; index: number; delta: { type: 'text_delta'; text: string } | { type: 'input_json_delta'; partial_json: string } }
   | { type: 'content_block_stop'; index: number }
-  | { type: 'message_delta'; delta: { stop_reason: string; usage?: { output_tokens: number } } }
+  | { type: 'message_delta'; delta: { stop_reason: string; usage?: { output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }
   | { type: 'message_stop' }
   | { type: 'error'; error: { type: string; message: string } };
 
@@ -214,7 +216,7 @@ export class AnthropicProvider implements LLMProvider {
     const toolCalls: LLMToolCall[] = [];
     let currentToolCall: { id: string; name: string; input_json: string } | null = null;
     let stopReason: string | null = null;
-    let usage = { input_tokens: 0, output_tokens: 0 };
+    const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
     let responseModel = model;
 
     try {
@@ -241,6 +243,12 @@ export class AnthropicProvider implements LLMProvider {
 
             if (event.type === 'message_start' && event.message.usage) {
               usage.input_tokens = event.message.usage.input_tokens;
+              if (event.message.usage.cache_read_input_tokens !== undefined) {
+                usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens;
+              }
+              if (event.message.usage.cache_creation_input_tokens !== undefined) {
+                usage.cache_creation_input_tokens = event.message.usage.cache_creation_input_tokens;
+              }
               if (event.message.model) responseModel = event.message.model;
             } else if (event.type === 'content_block_start') {
               if (event.content_block.type === 'tool_use') {
@@ -281,6 +289,12 @@ export class AnthropicProvider implements LLMProvider {
               stopReason = event.delta.stop_reason;
               if (event.delta.usage) {
                 usage.output_tokens = event.delta.usage.output_tokens;
+                if (event.delta.usage.cache_read_input_tokens !== undefined) {
+                  usage.cache_read_input_tokens = event.delta.usage.cache_read_input_tokens;
+                }
+                if (event.delta.usage.cache_creation_input_tokens !== undefined) {
+                  usage.cache_creation_input_tokens = event.delta.usage.cache_creation_input_tokens;
+                }
               }
             } else if (event.type === 'error') {
               yield {
@@ -424,6 +438,10 @@ export class AnthropicProvider implements LLMProvider {
       usage: {
         input_tokens: response.usage.input_tokens,
         output_tokens: response.usage.output_tokens,
+        ...(response.usage.cache_read_input_tokens !== undefined
+          ? { cache_read_input_tokens: response.usage.cache_read_input_tokens } : {}),
+        ...(response.usage.cache_creation_input_tokens !== undefined
+          ? { cache_creation_input_tokens: response.usage.cache_creation_input_tokens } : {}),
       },
       model: response.model,
       finish_reason: this.mapStopReason(response.stop_reason),

@@ -24,6 +24,8 @@ export type UsageRecord = {
   model: string;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens?: number;      // tokens served from provider prompt cache
+  cache_creation_input_tokens?: number;  // tokens written to provider prompt cache
   latency_ms: number;
   error_code?: string;        // only populated on failure
 };
@@ -37,6 +39,8 @@ export type DailyUsageRow = {
   calls: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   total_latency_ms: number;
   errors: number;
 };
@@ -65,8 +69,9 @@ export function recordUsage(rec: UsageRecord): void {
     db.run(
       `INSERT INTO llm_usage (
         ts, tier, resolved_tier, subsystem, provider, model,
-        input_tokens, output_tokens, latency_ms, error_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+        latency_ms, error_code
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ts,
         rec.tier,
@@ -76,6 +81,8 @@ export function recordUsage(rec: UsageRecord): void {
         rec.model,
         rec.input_tokens,
         rec.output_tokens,
+        rec.cache_read_input_tokens ?? 0,
+        rec.cache_creation_input_tokens ?? 0,
         rec.latency_ms,
         rec.error_code ?? null,
       ],
@@ -105,6 +112,8 @@ export function getDailyRollup(daysBack: number = 7): DailyUsageRow[] {
           COUNT(*) as calls,
           SUM(input_tokens) as input_tokens,
           SUM(output_tokens) as output_tokens,
+          COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
+          COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
           SUM(latency_ms) as total_latency_ms,
           SUM(CASE WHEN error_code IS NOT NULL THEN 1 ELSE 0 END) as errors
         FROM llm_usage
@@ -146,6 +155,8 @@ export type UsageQueryRow = {
   calls: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   total_latency_ms: number;
   errors: number;
 };
@@ -154,6 +165,8 @@ export type UsageQueryTotals = {
   calls: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   total_latency_ms: number;
   errors: number;
 };
@@ -167,6 +180,8 @@ export type UsageRawRow = {
   model: string;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   latency_ms: number;
   error_code: string | null;
 };
@@ -196,7 +211,11 @@ export function queryUsage(
   const db = resolveDb();
   const empty: UsageQueryResult = {
     rows: [],
-    total: { calls: 0, input_tokens: 0, output_tokens: 0, total_latency_ms: 0, errors: 0 },
+    total: {
+      calls: 0, input_tokens: 0, output_tokens: 0,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      total_latency_ms: 0, errors: 0,
+    },
   };
   if (!db) return empty;
 
@@ -231,6 +250,8 @@ export function queryUsage(
           COUNT(*) as calls,
           COALESCE(SUM(input_tokens), 0) as input_tokens,
           COALESCE(SUM(output_tokens), 0) as output_tokens,
+          COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
+          COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
           COALESCE(SUM(latency_ms), 0) as total_latency_ms,
           SUM(CASE WHEN error_code IS NOT NULL THEN 1 ELSE 0 END) as errors
         FROM llm_usage
@@ -242,7 +263,9 @@ export function queryUsage(
       const rawRows = db
         .query<UsageRawRow, (string | number)[]>(
           `SELECT ts, tier, resolved_tier, subsystem, provider, model,
-                  input_tokens, output_tokens, latency_ms, error_code
+                  input_tokens, output_tokens,
+                  cache_read_input_tokens, cache_creation_input_tokens,
+                  latency_ms, error_code
            FROM llm_usage
            ${whereSql}
            ORDER BY ts DESC
@@ -285,6 +308,8 @@ export function queryUsage(
           COUNT(*) as calls,
           COALESCE(SUM(input_tokens), 0) as input_tokens,
           COALESCE(SUM(output_tokens), 0) as output_tokens,
+          COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens,
+          COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
           COALESCE(SUM(latency_ms), 0) as total_latency_ms,
           SUM(CASE WHEN error_code IS NOT NULL THEN 1 ELSE 0 END) as errors
         FROM llm_usage

@@ -79,6 +79,7 @@ type OpenAIResponse = {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 };
 
@@ -421,6 +422,8 @@ export class OpenAIProvider implements LLMProvider {
       usage: {
         input_tokens: response.usage.prompt_tokens,
         output_tokens: response.usage.completion_tokens,
+        ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
+          ? { cache_read_input_tokens: response.usage.prompt_tokens_details.cached_tokens } : {}),
       },
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),

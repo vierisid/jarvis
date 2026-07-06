@@ -7,6 +7,7 @@ export type LLMMessage = {
   content: string | ContentBlock[];
   tool_calls?: LLMToolCall[];   // present on assistant messages with tool use
   tool_call_id?: string;        // present on tool result messages
+  cache?: boolean;              // stable cache boundary at end of this message; providers without explicit prompt caching ignore it
 };
 
 export type LLMTool = {
@@ -24,7 +25,12 @@ export type LLMToolCall = {
 export type LLMResponse = {
   content: string;
   tool_calls: LLMToolCall[];
-  usage: { input_tokens: number; output_tokens: number };
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number;      // tokens served from provider prompt cache
+    cache_creation_input_tokens?: number;  // tokens written to provider prompt cache
+  };
   model: string;
   finish_reason: 'stop' | 'tool_use' | 'length' | 'error';
 };
