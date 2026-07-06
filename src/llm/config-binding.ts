@@ -71,7 +71,9 @@ export function instantiateProvider(
       break;
     case 'openrouter':
       if (!entry.api_key) return null;
-      provider = new OpenRouterProvider(entry.api_key);
+      provider = new OpenRouterProvider(entry.api_key, undefined, {
+        promptCache: globals?.promptCache !== false,
+      });
       break;
     case 'nvidia':
       if (!entry.api_key) return null;

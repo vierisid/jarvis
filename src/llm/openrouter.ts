@@ -53,6 +53,10 @@ type OpenRouterResponse = {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_write_tokens?: number;
+    };
   };
 };
 
@@ -61,6 +65,8 @@ type OpenRouterStreamChunk = {
   object: 'chat.completion.chunk';
   created: number;
   model: string;
+  /** OpenRouter sends usage on the final stream chunk. */
+  usage?: OpenRouterResponse['usage'];
   choices: Array<{
     index: number;
     delta: {
@@ -80,15 +86,32 @@ type OpenRouterStreamChunk = {
   }>;
 };
 
+/**
+ * Upstreams that require explicit cache_control breakpoints through
+ * OpenRouter (everything else - OpenAI, Gemini 2.5, DeepSeek, Groq, Grok,
+ * Moonshot - caches automatically with no request changes). OpenRouter
+ * supports a top-level `cache_control` field for these and places the
+ * breakpoints itself for multi-turn conversations.
+ */
+function modelUsesExplicitCaching(model: string): boolean {
+  return /^(anthropic|qwen)\//i.test(model);
+}
+
 export class OpenRouterProvider implements LLMProvider {
   name = 'openrouter';
   private apiKey: string;
   private defaultModel: string;
+  private promptCache: boolean;
   private apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
 
-  constructor(apiKey: string, defaultModel = 'anthropic/claude-sonnet-4') {
+  constructor(
+    apiKey: string,
+    defaultModel = 'anthropic/claude-sonnet-4',
+    opts?: { promptCache?: boolean },
+  ) {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
+    this.promptCache = opts?.promptCache !== false;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -108,6 +131,12 @@ export class OpenRouterProvider implements LLMProvider {
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';
+    }
+    // Top-level cache_control: OpenRouter places the Anthropic/Qwen
+    // breakpoints automatically for multi-turn conversations. Auto-caching
+    // upstreams need nothing. Sub-minimum prefixes silently don't cache.
+    if (this.promptCache && modelUsesExplicitCaching(model)) {
+      body.cache_control = { type: 'ephemeral' };
     }
 
     const response = await fetch(this.apiUrl, {
@@ -149,6 +178,10 @@ export class OpenRouterProvider implements LLMProvider {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';
     }
+    // Same top-level cache_control as chat() - see comment there.
+    if (this.promptCache && modelUsesExplicitCaching(model)) {
+      body.cache_control = { type: 'ephemeral' };
+    }
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -181,6 +214,7 @@ export class OpenRouterProvider implements LLMProvider {
     const toolCallBuilders: Map<number, { id: string; name: string; arguments: string }> = new Map();
     let finishReason: string | null = null;
     let responseModel = model;
+    let streamUsage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
 
     try {
       const reader = response.body.getReader();
@@ -203,6 +237,11 @@ export class OpenRouterProvider implements LLMProvider {
 
           try {
             const chunk = JSON.parse(data) as OpenRouterStreamChunk;
+            // OpenRouter sends usage on the final chunk (guarded: aggregator
+            // behavior can vary by routed upstream).
+            if (chunk.usage && typeof chunk.usage.prompt_tokens === 'number') {
+              streamUsage = this.convertUsage(chunk.usage);
+            }
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];
               responseModel = chunk.model;
@@ -266,7 +305,7 @@ export class OpenRouterProvider implements LLMProvider {
         response: {
           content: accumulatedText,
           tool_calls: toolCalls,
-          usage: { input_tokens: 0, output_tokens: 0 }, // OpenRouter doesn't provide usage in stream
+          usage: streamUsage, // populated from the final stream chunk when present
           model: responseModel,
           finish_reason: mappedFinishReason,
         },
@@ -369,12 +408,27 @@ export class OpenRouterProvider implements LLMProvider {
     return {
       content,
       tool_calls,
-      usage: {
-        input_tokens: response.usage.prompt_tokens,
-        output_tokens: response.usage.completion_tokens,
-      },
+      usage: this.convertUsage(response.usage),
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),
+    };
+  }
+
+  /**
+   * Normalized semantics (see LLMResponse.usage): input_tokens counts only
+   * UNCACHED prompt tokens. OpenRouter reports OpenAI-shaped usage where
+   * prompt_tokens includes cached tokens, so subtract them out. Guarded with
+   * max(0, ...) because OpenRouter aggregates many upstreams and a routed
+   * backend could report cached_tokens with different inclusion semantics.
+   */
+  private convertUsage(usage: OpenRouterResponse['usage']): LLMResponse['usage'] {
+    const cached = usage.prompt_tokens_details?.cached_tokens;
+    const cacheWrite = usage.prompt_tokens_details?.cache_write_tokens;
+    return {
+      input_tokens: Math.max(0, usage.prompt_tokens - (cached ?? 0)),
+      output_tokens: usage.completion_tokens,
+      ...(cached !== undefined ? { cache_read_input_tokens: cached } : {}),
+      ...(cacheWrite !== undefined ? { cache_creation_input_tokens: cacheWrite } : {}),
     };
   }
 
