@@ -13,6 +13,8 @@ import type {
   PieceInputSchema,
 } from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
+import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
+import { classifyErrorString } from "../../llm/provider.ts";
 
 /**
  * LLM-client shape the composer needs. `chat` is the mandatory single-shot
@@ -33,36 +35,35 @@ export interface ComposerLlmClient {
   ): Promise<ComposerChatReply>;
 }
 
-/** One tool invocation requested by the model (mirrors `LLMToolCall`). */
-export interface ComposerToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
+/**
+ * The composer's tool-loop types are aliases over the provider shapes in
+ * `src/llm/provider.ts` (imported with `import type`, so no runtime/compile
+ * dependency and no import cycle -- sibling tools do the same). Keeping them
+ * as aliases means any drift in the provider shapes surfaces here as a compile
+ * error instead of a silent structural mismatch.
+ */
 
-/** Chat message for the tool loop (mirrors `LLMMessage`, text-only content). */
-export interface ComposerChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  /** Present on assistant messages that requested tool calls. */
-  tool_calls?: ComposerToolCall[];
-  /** Present on tool-result messages; echoes the call's id. */
-  tool_call_id?: string;
-}
+/** One tool invocation requested by the model. */
+export type ComposerToolCall = LLMToolCall;
 
-/** Tool definition surfaced to the model (mirrors `LLMTool`). */
-export interface ComposerToolDef {
-  name: string;
-  description: string;
-  /** JSON Schema for the arguments object. */
-  parameters: Record<string, unknown>;
-}
+/**
+ * Chat message for the tool loop. Narrows `LLMMessage.content` to a plain
+ * string: the composer never sends image blocks, and the rest of the code
+ * treats `content` as a string throughout.
+ */
+export type ComposerChatMessage = Omit<LLMMessage, "content"> & { content: string };
 
-/** Reply from a tool-capable chat call (subset of `LLMResponse`). */
-export interface ComposerChatReply {
-  content: string;
-  tool_calls?: ComposerToolCall[];
-}
+/** Tool definition surfaced to the model. */
+export type ComposerToolDef = LLMTool;
+
+/**
+ * Reply from a tool-capable chat call (subset of `LLMResponse`). `finish_reason`
+ * is surfaced so the loop can distinguish a truncated reply (`'length'`) from a
+ * genuine prose answer and fail with a clear error instead of burning nudges.
+ */
+export type ComposerChatReply = Pick<LLMResponse, "content" | "tool_calls"> & {
+  finish_reason?: LLMResponse["finish_reason"];
+};
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 
@@ -302,7 +303,11 @@ export async function composeFlow(
   if (deps.llm.chatTools) {
     const viaTools = await composeWithTools(deps, req);
     if (viaTools) return viaTools;
-    logAttempt(1, "tool-loop-fallback", "model did not engage with tools; using one-shot prompt");
+    // composeWithTools returned null: either the turn-1 tool call errored in a
+    // way that warrants a retry without tools, or the model answered without
+    // engaging the tools. Both already logged a specific line inside the loop;
+    // this is just the fallback marker.
+    logAttempt(1, "tool-loop-fallback", "tool loop produced no flow on turn 1; using one-shot prompt");
   }
   return composeOneShot(deps, req);
 }
@@ -491,17 +496,32 @@ async function composeWithTools(
     try {
       reply = await deps.llm.chatTools!(messages, toolDefs);
     } catch (e) {
-      // First call failing usually means the provider rejected the tools
-      // parameter -- the one-shot path still has a chance. A mid-loop
-      // failure is a transient/provider error; retrying from scratch
+      const message = (e as Error).message;
+      // A mid-loop failure is a transient/provider error; retrying from scratch
       // without tools would discard progress for no better odds, so bail.
       if (turn === 1) {
-        logAttempt(turn, "tool-loop-error", (e as Error).message);
+        // On turn 1 a failure *might* mean the provider rejected the tools
+        // parameter, in which case the one-shot path still has a chance. But
+        // don't misdiagnose transient/auth failures as "no tool support":
+        // classify the error and only fall back for bad-request / unknown
+        // codes (the shapes a rejected-tools-param error takes). Clearly
+        // transient (rate_limit, network, server) or auth failures are surfaced
+        // as-is -- dropping tools won't fix them and hides the real cause.
+        const code = classifyErrorString(message);
+        if (code === "rate_limit" || code === "network" || code === "server" || code === "auth") {
+          logAttempt(turn, "tool-loop-error", `tool call failed (${code}); not falling back: ${message}`);
+          return {
+            ok: false,
+            errors: [`LLM call failed: ${message}`],
+            rawResponse: lastRaw,
+          };
+        }
+        logAttempt(turn, "tool-loop-error", `tool call errored (${code}); falling back to one-shot: ${message}`);
         return null;
       }
       return {
         ok: false,
-        errors: [`LLM call failed: ${(e as Error).message}`],
+        errors: [`LLM call failed: ${message}`],
         rawResponse: lastRaw,
       };
     }
@@ -512,7 +532,10 @@ async function composeWithTools(
       if (text) lastRaw = text;
       // Some models answer with the flow JSON directly instead of calling
       // submit_flow. Accept it when it validates -- rejecting a correct
-      // flow over protocol pedantry helps nobody.
+      // flow over protocol pedantry helps nobody. When it parses but fails
+      // validation, feed the concrete errors back (like submit_flow does)
+      // rather than a generic nudge, so the model can target them.
+      let inlineErrors: string[] | null = null;
       if (text) {
         try {
           const parsed = JSON.parse(stripJsonFence(text));
@@ -521,22 +544,46 @@ async function composeWithTools(
             logAttempt(turn, "tool-loop-inline-json", null);
             return { ok: true, flow: validation.flow, rawResponse: text };
           }
+          inlineErrors = validation.errors;
+          lastErrors = validation.errors;
+          logAttempt(turn, "tool-loop-inline-validation-error", validation.errors.join("; "));
         } catch {
           // not JSON -- handled below
         }
       }
+      // Truncation: the provider stopped at the token cap mid-reply (often a
+      // submit_flow whose JSON arguments got cut, which convertResponse then
+      // drops to no tool call). Nudging or falling back won't help -- fail with
+      // an accurate message instead of misdiagnosing it as prose.
+      if (reply.finish_reason === "length") {
+        const msg =
+          "the composer's reply was truncated at the model's output token limit before it could finish; " +
+          "the flow may be too large to emit in a single response";
+        logAttempt(turn, "tool-loop-truncated", msg);
+        return { ok: false, errors: [msg], rawResponse: lastRaw };
+      }
       if (turn === 1) return null; // model ignored the tools entirely; one-shot handles this better
       if (++nudges > TOOL_LOOP_MAX_NUDGES) break;
-      messages.push({ role: "assistant", content: text });
+      // Assistant content must be non-empty for providers that forbid empty
+      // non-final assistant turns (Anthropic 400s on it); use a placeholder
+      // when the model returned nothing.
+      messages.push({ role: "assistant", content: text || "(no reply)" });
       messages.push({
         role: "user",
-        content:
-          "Do not answer in prose. Call the submit_flow tool with the complete flow " +
-          "(arguments: { displayName, trigger }), or report_blocked if the request cannot be built.",
+        content: inlineErrors
+          ? "Your inline JSON failed validation:\n" +
+            inlineErrors.map((e) => `  - ${e}`).join("\n") +
+            "\n\nDo not answer in prose. Fix ALL of these issues and call the submit_flow tool with the " +
+            "complete flow (arguments: { displayName, trigger }). Keep the parts that were correct."
+          : "Do not answer in prose. Call the submit_flow tool with the complete flow " +
+            "(arguments: { displayName, trigger }), or report_blocked if the request cannot be built.",
       });
       continue;
     }
 
+    // A reply that engaged the tools resets the consecutive-prose counter:
+    // TOOL_LOOP_MAX_NUDGES is documented as consecutive prose-only replies.
+    nudges = 0;
     messages.push({ role: "assistant", content: reply.content ?? "", tool_calls: calls });
     for (const call of calls) {
       if (call.name === "submit_flow") {
@@ -618,8 +665,12 @@ function blockedResult(
     const id = typeof (s as { id?: unknown }).id === "string" ? (s as { id: string }).id.trim() : "";
     if (!id) continue;
     const entry = byId.get(id);
+    // Skip ids not in the library catalog: a model can hallucinate a slug, and
+    // the primary agent relays suggestedInstalls to the user as installable, so
+    // an unresolvable id would surface a bogus "install X" suggestion.
+    if (!entry) continue;
     const sug: SuggestedInstall = { id };
-    if (entry) sug.displayName = entry.displayName;
+    sug.displayName = entry.displayName;
     const why = (s as { reason?: unknown }).reason;
     if (typeof why === "string" && why.trim()) sug.reason = why.trim();
     suggestedInstalls.push(sug);
@@ -817,9 +868,7 @@ function renderPieceIndex(deps: ComposeDeps): string {
     lines.push(line);
   }
   lines.push("");
-  lines.push("Built-in trigger primitives (no piece registration needed):");
-  lines.push("- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.");
-  lines.push("- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.");
+  lines.push(...BUILTIN_PRIMITIVE_LINES);
   lines.push("");
   lines.push("Event types for jarvis-trigger:on_event (payload fields via get_piece_details('jarvis-trigger')):");
   for (const meta of WORKFLOW_EVENT_TYPES) {
@@ -987,6 +1036,17 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     ...EXAMPLE_SECTION_LINES,
   ];
 }
+
+/**
+ * The built-in trigger primitive lines shared verbatim by the list_pieces
+ * index (renderPieceIndex) and the one-shot catalog (renderCatalog). Kept as a
+ * single const so the two renderings can't drift out of sync.
+ */
+const BUILTIN_PRIMITIVE_LINES = [
+  "Built-in trigger primitives (no piece registration needed):",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.",
+  "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
+];
 
 /**
  * Two complete worked examples: a linear scheduled flow and an event-driven
@@ -1191,9 +1251,7 @@ function renderCatalog(registry: PieceLookup): string {
   // Surface the schedule and webhook primitives the trigger manager understands
   // even though they aren't in the piece catalog today.
   lines.push("");
-  lines.push("Built-in trigger primitives (no piece registration needed):");
-  lines.push("- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.");
-  lines.push("- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.");
+  lines.push(...BUILTIN_PRIMITIVE_LINES);
 
   // Workflow event-type catalog (used by jarvis-trigger:on_event flows).
   lines.push("");

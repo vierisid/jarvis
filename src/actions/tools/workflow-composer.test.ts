@@ -1148,7 +1148,11 @@ describe("composeFlow", () => {
 });
 
 describe("tool-loop composer", () => {
-  type ToolReply = { content?: string; tool_calls?: ComposerToolCall[] };
+  type ToolReply = {
+    content?: string;
+    tool_calls?: ComposerToolCall[];
+    finish_reason?: ComposerChatReply["finish_reason"];
+  };
 
   /**
    * Stub with a tool-capable entrypoint. `replies` are consumed per turn
@@ -1175,7 +1179,7 @@ describe("tool-loop composer", () => {
       if (this.replies === "throw") throw new Error("tools not supported");
       const idx = Math.min(this.toolTurns.length - 1, this.replies.length - 1);
       const r = this.replies[idx]!;
-      return { content: r.content ?? "", tool_calls: r.tool_calls ?? [] };
+      return { content: r.content ?? "", tool_calls: r.tool_calls ?? [], finish_reason: r.finish_reason };
     }
   }
 
@@ -1317,6 +1321,57 @@ describe("tool-loop composer", () => {
     expect(searchResult.content.includes("google-sheets")).toBe(false);
   });
 
+  test("report_blocked drops suggestedPieces ids that aren't in the library catalog", async () => {
+    // A model can hallucinate a slug; since the primary agent relays
+    // suggestedInstalls to the user as installable, an id with no catalog
+    // entry must be filtered out. Here a real id (discord) is kept and a
+    // made-up one is dropped.
+    const llm = new StubToolLlm([
+      {
+        tool_calls: [
+          tc("1", "report_blocked", {
+            reason: "No installed piece can post to Discord or Notion.",
+            suggestedPieces: [
+              { id: "discord", reason: "Posts messages to Discord channels." },
+              { id: "not-a-real-piece", reason: "Hallucinated slug." },
+            ],
+          }),
+        ],
+      },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), library },
+      { name: "Blocked", description: "post to discord and notion" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.suggestedInstalls).toEqual([
+        { id: "discord", displayName: "Discord", reason: "Posts messages to Discord channels." },
+      ]);
+    }
+  });
+
+  test("report_blocked with only hallucinated ids yields no suggestedInstalls", async () => {
+    const llm = new StubToolLlm([
+      {
+        tool_calls: [
+          tc("1", "report_blocked", {
+            reason: "Nothing installed fits.",
+            suggestedPieces: [{ id: "totally-made-up", reason: "not in the catalog" }],
+          }),
+        ],
+      },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), library },
+      { name: "Blocked", description: "do the impossible" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.suggestedInstalls).toBeUndefined();
+    }
+  });
+
   test("search_library is only offered when a library is wired", async () => {
     const llm = new StubToolLlm([{ tool_calls: [tc("1", "submit_flow", validFlowArgs())] }]);
     await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
@@ -1413,6 +1468,93 @@ describe("tool-loop composer", () => {
     }
     expect(llm.toolTurns).toHaveLength(12);
     expect(llm.chatCalls).toHaveLength(0);
+  });
+
+  test("feeds concrete validation errors back when an inline JSON flow fails (turn >= 2)", async () => {
+    // Past turn 1 the model can't fall back to one-shot, so an inline JSON
+    // flow that fails validation must feed the specific errors back (like
+    // submit_flow does) instead of a generic prose nudge.
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "list_pieces")] },
+      { content: JSON.stringify(ghostFlowArgs()) },
+      { tool_calls: [tc("3", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    // The feedback pushed after the bad inline JSON (seen on the next turn)
+    // names the concrete error and steers back to submit_flow.
+    const feedback = llm.toolTurns[2]!.messages.at(-1)!;
+    expect(feedback.role).toBe("user");
+    expect(feedback.content).toMatch(/inline JSON failed validation/);
+    expect(feedback.content).toMatch(/unknown piece "ghost"/);
+    expect(feedback.content).toMatch(/submit_flow/);
+  });
+
+  test("resets the consecutive-prose nudge counter when a reply calls a tool", async () => {
+    // TOOL_LOOP_MAX_NUDGES counts CONSECUTIVE prose replies. Interleaving a
+    // tool call resets the count, so a total of 3 prose replies split by a
+    // tool call must NOT trip the (cumulative) budget before submit_flow.
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "list_pieces")] },
+      { content: "thinking out loud 1" },
+      { tool_calls: [tc("3", "list_pieces")] }, // resets the nudge counter
+      { content: "thinking out loud 2" },
+      { content: "thinking out loud 3" },
+      { tool_calls: [tc("6", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    expect(llm.toolTurns).toHaveLength(6);
+  });
+
+  test("fails with a truncation error when a reply is cut at the token cap", async () => {
+    // finish_reason 'length' means the provider stopped mid-reply (often a
+    // submit_flow whose JSON got dropped to no tool call). Fail with a clear
+    // message rather than misreading it as prose or falling back.
+    const llm = new StubToolLlm([
+      { content: '{"displayName":"X","trigger":{"name":"trigger","type', finish_reason: "length" },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]).toMatch(/truncated/);
+    }
+    // No fallback to one-shot -- truncation isn't a "no tool support" signal.
+    expect(llm.chatCalls).toHaveLength(0);
+  });
+
+  test("turn-1 transient/auth errors fail fast instead of falling back to one-shot", async () => {
+    // A 429 on the first tool call isn't a rejected-tools-param signal;
+    // dropping tools won't help and would hide the real cause. Surface it.
+    let oneShotCalls = 0;
+    const llm: ComposerLlmClient = {
+      async chat() {
+        oneShotCalls++;
+        return { text: "{}" };
+      },
+      async chatTools() {
+        throw new Error("429 Too Many Requests: rate limit exceeded");
+      },
+    };
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]).toMatch(/LLM call failed/);
+    }
+    // Did NOT silently fall back to the one-shot path.
+    expect(oneShotCalls).toBe(0);
   });
 
   test("tool-loop system prompt teaches the process and lists roles inline", async () => {
