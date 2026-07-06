@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { uuid } from "../lib/uuid";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -179,7 +180,7 @@ type SidecarEventPayload = {
 function createSidecarNotice(payload: SidecarEventPayload, timestamp?: number): ChatMessage & { notice?: SystemNotice } {
   const reason = payload.event?.reason?.trim();
   const notice: SystemNotice = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     title: "Sidecar offline",
     text: reason
       ? `Jarvis sidecar disconnected: ${reason}. Dashboard features may be delayed until it reconnects.`
@@ -188,7 +189,7 @@ function createSidecarNotice(payload: SidecarEventPayload, timestamp?: number): 
   };
 
   return {
-    id: crypto.randomUUID(),
+    id: uuid(),
     role: "system",
     content: notice.text,
     timestamp: timestamp ?? Date.now(),
@@ -505,7 +506,7 @@ export function useWebSocket() {
             setMessages((prev) => [
               ...prev,
               {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 role: "system" as MessageRole,
                 content: msg.payload.message,
                 timestamp: msg.timestamp,
@@ -523,7 +524,7 @@ export function useWebSocket() {
             setMessages((prev) => [
               ...prev,
               {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 role: (msg.payload.role === "assistant" ? "assistant" : "user") as MessageRole,
                 content: msg.payload.text,
                 timestamp: msg.timestamp,
@@ -546,7 +547,7 @@ export function useWebSocket() {
           setMessages((prev) => [
             ...prev,
             {
-              id: msg.id ?? crypto.randomUUID(),
+              id: msg.id ?? uuid(),
               role: "user" as MessageRole,
               content: msg.payload.text,
               timestamp: msg.timestamp,
@@ -571,7 +572,7 @@ export function useWebSocket() {
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: uuid(),
           role: "system" as MessageRole,
           content: msg.payload.text,
           timestamp: msg.timestamp,
@@ -592,7 +593,7 @@ export function useWebSocket() {
 
         // Add to agent activity feed
         const activityEvent: AgentActivityEvent = {
-          id: crypto.randomUUID(),
+          id: uuid(),
           agentName: msg.payload.agentName,
           agentId: msg.payload.agentId,
           eventType: msg.payload.type,
@@ -635,7 +636,7 @@ export function useWebSocket() {
 
         if (!streamIdRef.current) {
           // Start a new assistant message
-          const id = crypto.randomUUID();
+          const id = uuid();
           streamIdRef.current = id;
           setMessages((prev) => [
             ...prev,
@@ -700,7 +701,7 @@ export function useWebSocket() {
         setMessages((prev) => [
           ...prev,
           {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: "system" as MessageRole,
             content: String(wfEvent.data.message),
             timestamp: wfEvent.timestamp,
@@ -752,7 +753,7 @@ export function useWebSocket() {
         setMessages((prev) => [
           ...prev,
           {
-            id: msg.id ?? crypto.randomUUID(),
+            id: msg.id ?? uuid(),
             role: "assistant",
             content: String(payload.text),
             timestamp: msg.timestamp,
@@ -921,7 +922,7 @@ export function useWebSocket() {
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: uuid(),
           role: "system",
           content,
           detail,
@@ -948,7 +949,7 @@ export function useWebSocket() {
     (text: string, options?: { projectId?: string; currentRoom?: string }) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-      const id = crypto.randomUUID();
+      const id = uuid();
 
       // Add user message to local state
       setMessages((prev) => [
@@ -979,7 +980,21 @@ export function useWebSocket() {
         id,
         timestamp: Date.now(),
       };
-      wsRef.current.send(JSON.stringify(msg));
+      try {
+        wsRef.current.send(JSON.stringify(msg));
+      } catch (err) {
+        // Never fail a submit silently (issue #260): surface a notice so the
+        // composer doesn't look alive while nothing reaches the daemon.
+        console.error("Failed to send chat message:", err);
+        pendingChatIdsRef.current.delete(id);
+        const notice: SystemNotice = {
+          id: uuid(),
+          title: "Message not sent",
+          text: `Could not send your message: ${err instanceof Error ? err.message : String(err)}`,
+          level: "warning",
+        };
+        setNotices((prev) => [notice, ...prev.filter((item) => item.text !== notice.text)].slice(0, 3));
+      }
     },
     []
   );

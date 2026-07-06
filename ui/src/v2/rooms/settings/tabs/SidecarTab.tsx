@@ -42,6 +42,12 @@ export function SidecarTab({
 
   const copyToken = () => {
     if (!enrollResult) return;
+    // navigator.clipboard is undefined outside secure contexts (plain-HTTP
+    // LAN dashboards), which would throw synchronously and skip the toast.
+    if (!navigator.clipboard) {
+      onToast("Clipboard unavailable over HTTP — select the token manually.", "warn");
+      return;
+    }
     navigator.clipboard.writeText(enrollResult.token).then(
       () => onToast("Token copied to clipboard.", "ok"),
       () => onToast("Copy failed — select manually.", "warn"),

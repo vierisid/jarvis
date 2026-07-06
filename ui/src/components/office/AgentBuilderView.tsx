@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { uuid } from "../../lib/uuid";
 
 type SpecialistInfo = {
   id: string;
@@ -219,7 +220,7 @@ export default function AgentBuilderView({ specialists }: { specialists?: Specia
 
   const addNode = (type: BuilderNodeType) => {
     const preset = NODE_PRESETS[type];
-    const id = `node-${crypto.randomUUID()}`;
+    const id = `node-${uuid()}`;
     const idx = nodes.length;
     const specialistId = type === "specialist" ? specialistOptions[0]!.id : preset.config.connector;
     const specialistName = type === "specialist" ? specialistOptions[0]!.name : preset.title;
@@ -274,7 +275,7 @@ export default function AgentBuilderView({ specialists }: { specialists?: Specia
     if (!selectedNode) return;
     const duplicate: BuilderNode = {
       ...selectedNode,
-      id: `node-${crypto.randomUUID()}`,
+      id: `node-${uuid()}`,
       x: Math.min(selectedNode.x + 40, CANVAS_WIDTH - NODE_WIDTH - 24),
       y: Math.min(selectedNode.y + 40, CANVAS_HEIGHT - NODE_HEIGHT - 24),
       title: `${selectedNode.title} Copy`,
@@ -295,7 +296,7 @@ export default function AgentBuilderView({ specialists }: { specialists?: Specia
     if (from === to) return;
     const exists = edges.some((edge) => edge.from === from && edge.to === to);
     if (exists) return;
-    const id = `edge-${crypto.randomUUID()}`;
+    const id = `edge-${uuid()}`;
     setEdges((prev) => [...prev, { id, from, to, label: "flow" }]);
     setSelectedNodeId(null);
     setSelectedEdgeId(id);

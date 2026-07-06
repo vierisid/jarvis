@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { RealtimeVoiceController } from "../lib/RealtimeVoiceController";
+import { uuid } from "../lib/uuid";
 
 const SPEECH_WAKE_INTERRUPT_COMMANDS = new Set([
   "stop",
@@ -1059,7 +1060,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     const currentRoom = getCurrentRoom?.() ?? "home";
 
     if (browserText) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuid();
       ws.send(JSON.stringify({
         type: "voice_text",
         payload: { requestId, text: browserText, currentRoom },
@@ -1076,7 +1077,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
       return;
     }
 
-    const requestId = crypto.randomUUID();
+    const requestId = uuid();
     const wavBuffer = encodeWav(pcmChunksRef.current, sampleRateRef.current);
 
     // Signal start
