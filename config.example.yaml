@@ -10,6 +10,18 @@ daemon:
   # can actually reach, not localhost or a private/container-only hostname.
   # Env override: JARVIS_BRAIN_DOMAIN="https://brain.example.com"
   # brain_domain: "https://brain.example.com"
+  # Bind a unix domain socket INSTEAD of a TCP port (for a reverse proxy on
+  # the same host). When set, nothing listens on TCP. See docs/SELF_HOSTING.md.
+  # listen: "unix:/run/jarvis/jarvis.sock"
+
+# IANA timezone for cron triggers and morning/evening routines. Set this when
+# the server clock is not your local time (e.g. a UTC-hosted VPS).
+# timezone: "Europe/Rome"
+
+# Set local: false on headless servers (no display): the brain never launches
+# a local Chromium; browser actions route to a connected sidecar's browser.
+# browser:
+#   local: false
 
 # Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
 # require a token from an enrolled device. Correct setup order:

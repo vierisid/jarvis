@@ -335,6 +335,8 @@ Local development builds report `dev` and are never blocked.
 
 JARVIS stores its system configuration at `~/.jarvis/config.yaml`; user-level settings live in its database and are managed from the dashboard. Access is **JWT-only by default**: run `jarvis enroll "<device-name>"` and paste the printed token into the sidecar (desktop app), which connects and gives you the dashboard. Setting up without a sidecar? Temporarily add `auth:\n  insecure_open_access: true` to config.yaml, open `http://localhost:3142` after `jarvis start` for the guided setup, then **remove the flag** once your device is enrolled. The Settings room lets you tweak channels, personality, and authority later.
 
+Running the brain on another machine — a home server, a LAN box, or a VPS with a domain? Read [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for the reverse-proxy setup, `brain_domain`, device enrollment across machines, and what plain-HTTP access does and doesn't support.
+
 ```yaml
 daemon:
   port: 3142
@@ -429,6 +431,7 @@ bun run db:init         # Initialize or reset the database
 General:
 
 - [config.example.yaml](config.example.yaml) — Full configuration reference
+- [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) — Deploying the brain: single machine, LAN, or VPS behind a reverse proxy
 - [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) — LLM provider configuration and routing
 - [docs/VAULT_EXTRACTOR.md](docs/VAULT_EXTRACTOR.md) — Memory and knowledge vault
 - [docs/PERSONALITY_ENGINE.md](docs/PERSONALITY_ENGINE.md) — Personality and role system
