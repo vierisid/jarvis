@@ -27,6 +27,7 @@ import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { M7AgentDelegator } from "../adapters/m7-agent-delegator";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn } from "../sandbox-api/routes/jarvis-llm";
+import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
 import type { NotifyFn } from "../sandbox-api/routes/jarvis-notify";
 import type { JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
@@ -81,9 +82,13 @@ export interface BuildServiceBackendsOptions {
    * vault context). Skipped when the piece's `system` field is set --
    * that's the user's explicit override.
    *
-   * Production wiring passes `AgentService.buildFullSystemPrompt`.
+   * Returned split at the prompt-cache boundary (static role prompt vs
+   * per-call context) so the provider can cache the static prefix across
+   * workflow LLM calls.
+   *
+   * Production wiring passes `AgentService.buildFullSystemPromptParts`.
    */
-  buildJarvisSystemPrompt?: (userMessage: string) => string;
+  buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
 
 export function buildSandboxServiceBackends(
@@ -108,20 +113,26 @@ export function buildSandboxServiceBackends(
     //   - no prompt builder wired   : whatever the piece sent (or nothing).
     //                                 Defensive fallback for tests / pre-
     //                                 agent-service bootstrap windows.
-    const jarvisSystem = opts.buildJarvisSystemPrompt
+    const jarvisParts = opts.buildJarvisSystemPrompt
       ? opts.buildJarvisSystemPrompt(req.prompt)
       : undefined;
     let system: string | undefined;
+    let systemParts: { static: string; dynamic?: string } | undefined;
     if (req.overrideSystem) {
       system = req.system;
-    } else if (req.system && jarvisSystem) {
-      system = `${jarvisSystem}\n\n${req.system}`;
+    } else if (jarvisParts) {
+      // Static Jarvis prefix stays cacheable; per-call context and the
+      // piece's steering prompt ride on the dynamic half. Rendered text is
+      // identical to the old `jarvis + '\n\n' + req.system` join.
+      const dynamic = [jarvisParts.dynamic, req.system].filter(Boolean).join('\n\n');
+      systemParts = { static: jarvisParts.static, ...(dynamic ? { dynamic } : {}) };
     } else {
-      system = req.system ?? jarvisSystem;
+      system = req.system;
     }
     const reply = await llmClient.chat({
       prompt: req.prompt,
       ...(system !== undefined ? { system } : {}),
+      ...(systemParts !== undefined ? { systemParts } : {}),
     });
     if (req.parseJson) {
       try {

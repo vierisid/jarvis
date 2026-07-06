@@ -3772,7 +3772,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // channel slug -- not a real channel, just a key for personality
         // overrides if any are configured.
         buildJarvisSystemPrompt: (userMessage) =>
-          agentService.buildFullSystemPrompt("workflow", userMessage),
+          agentService.buildFullSystemPromptParts("workflow", userMessage),
       });
       workflowSandboxApi.setServices(backends);
       logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");

@@ -508,6 +508,22 @@ console.log('Response:', response);
 
 ## Advanced Topics
 
+### Prompt Caching
+
+Provider-side prompt caching is enabled by default and controlled by the `llm.prompt_cache` setting (DB/dashboard-managed like the tier map; set `prompt_cache: false` via the LLM settings API to disable). Only an explicit `false` disables it.
+
+How it works per provider:
+
+- **Anthropic**: system prompts are sent as a block array with `cache_control` breakpoints. One breakpoint sits on the cache-marked static system block (caching tools + static prompt), a second on the last message of conversational requests (incremental caching across ReAct loop iterations and chat turns). Cache reads bill at ~0.1x input price, writes at 1.25x, with a 5-minute TTL. One-shot requests (no assistant turn) get no message breakpoint, so they never pay the write premium. Prefixes below the model's minimum cacheable size (1024-4096 tokens) silently don't cache and cost nothing extra.
+- **OpenAI**: caching is automatic server-side (~50% discount on cached prefixes over 1024 tokens); Jarvis just keeps stable content first in the prompt. Reported `cached_tokens` are surfaced in telemetry.
+- **Other providers**: the cache markers are ignored; no behavior change.
+
+Internals for callers: `LLMMessage.cache: true` marks a system message as a stable cache boundary. System prompts are built split into a static (byte-stable per role/channel) prefix and a dynamic per-turn suffix (`buildSystemPromptParts` in `src/roles/prompt-builder.ts`); volatile content (current time, observations, goals) must stay in the dynamic half or it invalidates the cache every turn. History trimming (`compactHistory`) uses page-aligned eviction so the retained prefix stays byte-stable between eviction events.
+
+Note: as part of this work, the rendered system prompt's section order changed slightly - the channel personality block now renders before `# Current Context` (previously after), and the conversation tier's task-state sections moved after its static instructions. Content is unchanged.
+
+Telemetry: `usage` on every response (and the `llm_usage` table / `/api/usage` route / Usage room) reports `cache_read_input_tokens` and `cache_creation_input_tokens`. `input_tokens` is normalized across providers to count only uncached, full-price tokens - the full prompt size is `input + cache_read + cache_creation`.
+
 ### Custom Provider Implementation
 
 Create your own provider:

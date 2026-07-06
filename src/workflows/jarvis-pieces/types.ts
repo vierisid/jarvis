@@ -273,6 +273,13 @@ export interface PieceLlmClient {
 export interface PieceLlmInput {
   /** System prompt; placed before the user prompt in the message list. */
   system?: string;
+  /**
+   * System prompt split at the prompt-cache boundary: `static` is byte-stable
+   * across calls (marked as a provider cache boundary), `dynamic` carries
+   * per-call context. Set by the runtime's server-side composition, not by
+   * pieces. Takes precedence over `system` when present.
+   */
+  systemParts?: { static: string; dynamic?: string };
   /** User prompt. Required. */
   prompt: string;
   /** Override the configured model. Format is provider-specific. */

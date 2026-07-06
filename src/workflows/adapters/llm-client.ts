@@ -20,7 +20,14 @@ export class JarvisLlmClient implements PieceLlmClient {
 
   async chat(input: PieceLlmInput): Promise<PieceLlmResponse> {
     const messages: LLMMessage[] = [];
-    if (input.system !== undefined) {
+    if (input.systemParts !== undefined) {
+      // Cache-aware form: static prefix marked as a provider cache boundary
+      // so repeated workflow LLM calls reuse the (large) Jarvis role prompt.
+      messages.push({ role: "system", content: input.systemParts.static, cache: true });
+      if (input.systemParts.dynamic) {
+        messages.push({ role: "system", content: input.systemParts.dynamic });
+      }
+    } else if (input.system !== undefined) {
       messages.push({ role: "system", content: input.system });
     }
     messages.push({ role: "user", content: input.prompt });

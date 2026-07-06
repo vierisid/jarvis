@@ -74,10 +74,17 @@ export type RunSubAgentOptions = {
 /**
  * Build a system prompt for a sub-agent from its role definition.
  */
-function buildSubAgentPrompt(agent: AgentInstance, context: string): string {
+/**
+ * Sub-agent system prompt, split at the prompt-cache boundary. The static
+ * half depends only on the role, so across a sub-agent's loop iterations
+ * (and across runs of the same role within the cache TTL) the provider can
+ * serve tools + static prompt from cache. The per-task `context` rides on
+ * the dynamic half.
+ */
+function buildSubAgentPromptParts(agent: AgentInstance, context: string): { static: string; dynamic: string } {
   const role = agent.agent.role;
 
-  const parts = [
+  const staticParts = [
     `You are ${role.name}.`,
     '',
     role.description,
@@ -92,11 +99,10 @@ function buildSubAgentPrompt(agent: AgentInstance, context: string): string {
     '- Return a clear, structured result when done.',
   ];
 
-  if (context) {
-    parts.push('', '## Context', context);
-  }
-
-  return parts.join('\n');
+  return {
+    static: staticParts.join('\n'),
+    dynamic: context ? ['## Context', context].join('\n') : '',
+  };
 }
 
 /**
@@ -217,15 +223,16 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   agent.setTask(task);
   agent.activate();
 
-  // Build system prompt
-  const systemPrompt = buildSubAgentPrompt(agent, context);
+  // Build system prompt (static half cache-marked, per-task context dynamic)
+  const systemPrompt = buildSubAgentPromptParts(agent, context);
 
   // Add the task as a user message
   agent.addMessage('user', task);
 
   // Build messages array
   const messages: LLMMessage[] = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: systemPrompt.static, cache: true },
+    ...(systemPrompt.dynamic ? [{ role: 'system', content: systemPrompt.dynamic } satisfies LLMMessage] : []),
     ...agent.getMessages(),
   ];
 

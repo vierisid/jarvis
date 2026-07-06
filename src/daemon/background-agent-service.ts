@@ -26,7 +26,7 @@ import { BrowserController } from '../actions/browser/session.ts';
 import { DESKTOP_TOOLS } from '../actions/tools/desktop.ts';
 import { commitmentsTool } from '../actions/tools/commitments.ts';
 import { researchQueueTool } from '../actions/tools/research.ts';
-import { buildSystemPrompt, type PromptContext } from '../roles/prompt-builder.ts';
+import { buildSystemPromptParts, type PromptContext, type SystemPromptParts } from '../roles/prompt-builder.ts';
 import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { getRecentObservations } from '../vault/observations.ts';
 import { findContent } from '../vault/content-pipeline.ts';
@@ -134,7 +134,7 @@ export class BackgroundAgentService implements Service, IAgentService {
 
     this.busy = true;
     try {
-      const systemPrompt = this.buildSystemPrompt(channel);
+      const systemPrompt = this.buildSystemPromptParts(channel);
       return await this.orchestrator.processMessage(systemPrompt, text);
     } catch (err) {
       console.error('[BackgroundAgent] Message error:', err);
@@ -146,10 +146,12 @@ export class BackgroundAgentService implements Service, IAgentService {
 
   // --- Private methods ---
 
-  private buildSystemPrompt(channel: string): string {
-    if (!this.role) return '';
+  private buildSystemPromptParts(_channel: string): SystemPromptParts {
+    if (!this.role) return { static: '', dynamic: '' };
     const context = this.buildPromptContext();
-    return buildSystemPrompt(this.role, context);
+    // Static role prefix is cache-marked downstream; the per-event context
+    // (current time, due commitments) rides on the dynamic half.
+    return buildSystemPromptParts(this.role, context);
   }
 
   private buildPromptContext(): PromptContext {
