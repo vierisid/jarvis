@@ -296,8 +296,14 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
     if (value) config.llm.tiers[tier] = value;
   }
 
-  // Prompt caching: absent = enabled; only a stored 'false' disables it.
-  config.llm.prompt_cache = getSetting(SETTING_PROMPT_CACHE) !== 'false';
+  // Prompt caching: only override when a DB setting exists, so a value
+  // already present on the config object (e.g. from config.yaml) survives
+  // until the user touches the dashboard setting. Absent everywhere =
+  // enabled (every consumer checks `prompt_cache !== false`).
+  const storedPromptCache = getSetting(SETTING_PROMPT_CACHE);
+  if (storedPromptCache !== null) {
+    config.llm.prompt_cache = storedPromptCache !== 'false';
+  }
 
   // 2. Legacy shape: migrate per-provider DB keys + KEY_* secrets if any
   // are present and no new-shape providers exist for them. This is the

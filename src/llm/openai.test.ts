@@ -44,7 +44,9 @@ describe('OpenAIProvider usage parsing', () => {
     const provider = new OpenAIProvider('test-key');
     const response = await provider.chat([{ role: 'user', content: 'hi' }]);
 
-    expect(response.usage.input_tokens).toBe(1200);
+    // Normalized: input_tokens excludes cached tokens (OpenAI's prompt_tokens
+    // includes them), so input + cache_read = the full 1200-token prompt.
+    expect(response.usage.input_tokens).toBe(1200 - 1024);
     expect(response.usage.output_tokens).toBe(40);
     expect(response.usage.cache_read_input_tokens).toBe(1024);
     expect(response.usage.cache_creation_input_tokens).toBeUndefined();

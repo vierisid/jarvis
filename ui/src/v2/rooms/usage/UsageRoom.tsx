@@ -259,13 +259,28 @@ function TotalsStrip({
   totals,
   loading,
 }: {
-  totals: { calls: number; input_tokens: number; output_tokens: number; total_latency_ms: number; errors: number } | undefined;
+  totals: {
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    total_latency_ms: number;
+    errors: number;
+  } | undefined;
   loading: boolean;
 }) {
   const calls = totals?.calls ?? 0;
   const input = totals?.input_tokens ?? 0;
   const output = totals?.output_tokens ?? 0;
-  const total = input + output;
+  const cacheRead = totals?.cache_read_input_tokens ?? 0;
+  const cacheWrite = totals?.cache_creation_input_tokens ?? 0;
+  // input_tokens counts only uncached prompt tokens; the full prompt volume
+  // is input + cache reads + cache writes.
+  const total = input + cacheRead + cacheWrite + output;
+  const cacheHitPct = input + cacheRead + cacheWrite > 0
+    ? Math.round((cacheRead / (input + cacheRead + cacheWrite)) * 100)
+    : 0;
   const errors = totals?.errors ?? 0;
   const avgLatency = calls > 0 ? Math.round((totals?.total_latency_ms ?? 0) / calls) : 0;
 
@@ -273,6 +288,7 @@ function TotalsStrip({
     <div className="v2-usage__totals" aria-busy={loading}>
       <Stat icon={Activity} label="Calls" value={formatNumber(calls)} />
       <Stat label="Input tokens" value={formatNumber(input)} />
+      <Stat label="Cached input" value={cacheRead > 0 ? `${formatNumber(cacheRead)} (${cacheHitPct}%)` : "—"} />
       <Stat label="Output tokens" value={formatNumber(output)} />
       <Stat label="Total tokens" value={formatNumber(total)} highlight />
       <Stat label="Avg latency" value={avgLatency > 0 ? `${avgLatency} ms` : "—"} />
@@ -311,7 +327,16 @@ function GroupedTable({
   groupBy,
   loading,
 }: {
-  rows: { key: string; calls: number; input_tokens: number; output_tokens: number; total_latency_ms: number; errors: number }[];
+  rows: {
+    key: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    total_latency_ms: number;
+    errors: number;
+  }[];
   groupBy: UsageGroupBy;
   loading: boolean;
 }) {
@@ -335,6 +360,7 @@ function GroupedTable({
           <th>{keyHeader}</th>
           <th>Calls</th>
           <th>Input</th>
+          <th>Cached</th>
           <th>Output</th>
           <th>Total</th>
           <th>Avg latency</th>
@@ -347,9 +373,12 @@ function GroupedTable({
             <td>{groupBy === "tier" ? (TIER_LABELS[r.key] ?? r.key) : r.key}</td>
             <td className="v2-usage__num">{formatNumber(r.calls)}</td>
             <td className="v2-usage__num">{formatNumber(r.input_tokens)}</td>
+            <td className="v2-usage__num">
+              {r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}
+            </td>
             <td className="v2-usage__num">{formatNumber(r.output_tokens)}</td>
             <td className="v2-usage__num v2-usage__num--strong">
-              {formatNumber(r.input_tokens + r.output_tokens)}
+              {formatNumber(r.input_tokens + r.cache_read_input_tokens + r.cache_creation_input_tokens + r.output_tokens)}
             </td>
             <td className="v2-usage__num">
               {r.calls > 0 ? `${Math.round(r.total_latency_ms / r.calls)} ms` : "—"}
@@ -390,6 +419,7 @@ function RawRowsTable({
             <th>Model</th>
             <th>Provider</th>
             <th>Input</th>
+            <th>Cached</th>
             <th>Output</th>
             <th>Latency</th>
             <th>Error</th>
@@ -404,6 +434,9 @@ function RawRowsTable({
               <td>{r.model}</td>
               <td>{r.provider}</td>
               <td className="v2-usage__num">{formatNumber(r.input_tokens)}</td>
+              <td className="v2-usage__num">
+                {r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}
+              </td>
               <td className="v2-usage__num">{formatNumber(r.output_tokens)}</td>
               <td className="v2-usage__num">{r.latency_ms} ms</td>
               <td data-warn={!!r.error_code}>{r.error_code ?? ""}</td>

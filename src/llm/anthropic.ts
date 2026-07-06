@@ -361,8 +361,12 @@ export class AnthropicProvider implements LLMProvider {
   } {
     // One block per system message, boundaries preserved so a cache_control
     // marker can sit exactly at the static/dynamic split. The '\n\n' joiner
-    // is appended to every block except the last, keeping the rendered
-    // prompt text byte-identical to the previous string-join behavior.
+    // is PREPENDED to every block except the first, keeping the rendered
+    // prompt text byte-identical to the previous string-join behavior while
+    // keeping the first (cache-marked, static) block's bytes independent of
+    // whether a dynamic block follows - appending the separator instead
+    // would rewrite the cache entry whenever the dynamic message flips
+    // between empty and non-empty.
     const systemTexts = messages
       .filter(m => m.role === 'system')
       .map(m => ({
@@ -378,7 +382,7 @@ export class AnthropicProvider implements LLMProvider {
     const system: AnthropicSystemBlock[] | undefined = systemTexts.length > 0
       ? systemTexts.map((m, idx) => ({
           type: 'text' as const,
-          text: idx < systemTexts.length - 1 ? `${m.text}\n\n` : m.text,
+          text: idx > 0 ? `\n\n${m.text}` : m.text,
           ...(idx === lastMarked ? { cache_control: { type: 'ephemeral' as const } } : {}),
         }))
       : undefined;
@@ -451,11 +455,17 @@ export class AnthropicProvider implements LLMProvider {
    * (tools + system + all messages). Within a ReAct loop the prefix grows
    * monotonically, so iteration N reads what iteration N-1 wrote.
    *
+   * Only applied to conversational requests (at least one assistant turn
+   * present). One-shot calls (classification, extraction, summarization)
+   * never resend their prefix, so a breakpoint there would pay the 1.25x
+   * cache-write premium with zero reads.
+   *
    * Mutates the converted messages in place. Together with the (single)
    * system-block marker this emits at most 2 of the 4 allowed breakpoints.
    */
   private applyLastMessageBreakpoint(anthropicMessages: AnthropicMessage[]): void {
     if (!this.promptCache) return;
+    if (!anthropicMessages.some(m => m.role === 'assistant')) return;
     const last = anthropicMessages[anthropicMessages.length - 1];
     if (!last) return;
 

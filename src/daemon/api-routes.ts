@@ -1546,7 +1546,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json(result);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          return json({ error: msg, rows: [], total: { calls: 0, input_tokens: 0, output_tokens: 0, total_latency_ms: 0, errors: 0 } });
+          return json({ error: msg, rows: [], total: { calls: 0, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_latency_ms: 0, errors: 0 } });
         }
       },
     },

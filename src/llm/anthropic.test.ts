@@ -73,18 +73,45 @@ describe('AnthropicProvider cache_control placement', () => {
     expect(body.system).toHaveLength(2);
     expect(body.system![0]!.cache_control).toEqual({ type: 'ephemeral' });
     expect(body.system![1]!.cache_control).toBeUndefined();
-    // '\n\n' separator preserved so rendered text matches the old string join.
-    expect(body.system![0]!.text).toBe('STATIC PART\n\n');
-    expect(body.system![1]!.text).toBe('DYNAMIC PART');
+    // '\n\n' separator prepended to FOLLOWING blocks so the rendered text
+    // matches the old string join while the marked static block's bytes
+    // stay independent of whether a dynamic block follows.
+    expect(body.system![0]!.text).toBe('STATIC PART');
+    expect(body.system![1]!.text).toBe('\n\nDYNAMIC PART');
   });
 
-  it('marks the last message content block for incremental conversation caching', async () => {
+  it('static system block bytes are identical with and without a dynamic block', async () => {
+    const provider = new AnthropicProvider('key');
+
+    const captureWith = captureChat();
+    await provider.chat([
+      { role: 'system', content: 'STATIC PART', cache: true },
+      { role: 'system', content: 'DYNAMIC PART' },
+      { role: 'user', content: 'hi' },
+    ]);
+    const withDynamic = captureWith.body().system![0]!.text;
+
+    const captureWithout = captureChat();
+    await provider.chat([
+      { role: 'system', content: 'STATIC PART', cache: true },
+      { role: 'user', content: 'hi' },
+    ]);
+    const withoutDynamic = captureWithout.body().system![0]!.text;
+
+    // A byte difference here would rewrite the cache entry whenever the
+    // dynamic system message flips between empty and non-empty.
+    expect(withDynamic).toBe(withoutDynamic);
+  });
+
+  it('marks the last message content block on conversational requests', async () => {
     const capture = captureChat();
     const provider = new AnthropicProvider('key');
 
     await provider.chat([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'question' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'follow-up' },
     ]);
 
     const body = capture.body();
@@ -93,11 +120,27 @@ describe('AnthropicProvider cache_control placement', () => {
     const blocks = last.content as Array<Record<string, unknown>>;
     expect(blocks[blocks.length - 1]).toEqual({
       type: 'text',
-      text: 'question',
+      text: 'follow-up',
       cache_control: { type: 'ephemeral' },
     });
     // Unmarked system prompt -> no system breakpoint; only the message one.
     expect(countCacheControls(body)).toBe(1);
+  });
+
+  it('skips the last-message breakpoint on one-shot requests (no assistant turn)', async () => {
+    const capture = captureChat();
+    const provider = new AnthropicProvider('key');
+
+    await provider.chat([
+      { role: 'system', content: 'classify this' },
+      { role: 'user', content: 'some input' },
+    ]);
+
+    const body = capture.body();
+    // One-shot prompts are never resent: a breakpoint would pay the 1.25x
+    // write premium with zero reads.
+    expect(countCacheControls(body)).toBe(0);
+    expect(body.messages[body.messages.length - 1]!.content).toBe('some input');
   });
 
   it('marks the last tool_result block without mutating the caller history', async () => {
