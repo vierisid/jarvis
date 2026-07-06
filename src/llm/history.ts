@@ -16,53 +16,73 @@ const SYSTEM_RESERVE = 500;          // Tokens reserved for system prompt
 const MINIMUM_BUDGET_PER_TURN = 100;  // Minimum tokens per turn
 
 /**
+ * Eviction page size as a fraction of the budget. When trimming becomes
+ * necessary, the front cut is extended to the next multiple of
+ * `budget * HYSTERESIS_FRACTION` (measured in cumulative chunk size from the
+ * start of history) instead of trimming to fit exactly. Cut candidates depend
+ * only on the immutable prefix of an append-only history, so consecutive
+ * calls pick the identical cut until growth crosses the next page - keeping
+ * the retained prefix byte-stable between eviction events, which is what
+ * provider prompt caches need to score hits.
+ */
+const HYSTERESIS_FRACTION = 0.35;
+
+/**
  * Compact message history for LLM API requests.
  *
- * @param messages - Full message history starting with system prompt
+ * @param messages - Full message history starting with system prompt(s)
  * @param budgetTokens - Token budget (typically max_tokens * 3 to leave room for output)
- * @returns Compacted message list: system prompt + latest turns that fit budget
+ * @returns Compacted message list: leading system prompts + latest turns that fit budget
  */
 export function compactHistory(messages: LLMMessage[], budgetTokens: number): LLMMessage[] {
   if (messages.length === 0) return [];
   if (messages.length === 1) return messages; // Only system prompt
 
-  const compacted: LLMMessage[] = [];
-  
-  // Always keep system prompt
-  if (messages[0]?.role === 'system') {
-    compacted.push(messages[0]);
+  // Always keep the LEADING RUN of system messages (there may be more than
+  // one: e.g. a cacheable static prompt followed by a dynamic-context one).
+  let systemEnd = 0;
+  while (systemEnd < messages.length && messages[systemEnd]!.role === 'system') {
+    systemEnd++;
   }
+  const systemMessages = messages.slice(0, systemEnd);
+  const rest = messages.slice(systemEnd);
 
   const budget = budgetTokens - SYSTEM_RESERVE;
-  let used = compacted[0] ? measureMessage(compacted[0]) : 0;
+  const systemSize = systemMessages.reduce((total, m) => total + measureMessage(m), 0);
 
   // Group remaining messages into atomic chunks
   // Each chunk = assistant with tool_calls + all subsequent tool results
   // Or just individual regular messages
-  const chunks = chunkMessages(messages.slice(1));
-  const keptChunks: LLMMessage[][] = [];
+  const chunks = chunkMessages(rest);
+  const chunkSizes = chunks.map(measureChunk);
+  const chunkTotal = chunkSizes.reduce((a, b) => a + b, 0);
 
-  // Work backwards from latest messages
-  for (let i = chunks.length - 1; i >= 0; i--) {
-    const chunk = chunks[i]!;
-    const size = measureChunk(chunk);
-
-    // Stop if adding this chunk exceeds budget (with previous chunks kept)
-    if (keptChunks.length > 0 && used + size > budget) {
-      break;
-    }
-
-    keptChunks.push(chunk);
-    used += size;
+  // Under budget: return everything untouched (the common case, and the one
+  // that must stay byte-stable for prompt caching).
+  if (systemSize + chunkTotal <= budget) {
+    return [...systemMessages, ...rest];
   }
 
-  // Reverse back to chronological order and add to compacted
-  keptChunks.reverse();
-  for (const chunk of keptChunks) {
-    compacted.push(...chunk);
+  const page = Math.max(1, Math.floor(budget * HYSTERESIS_FRACTION));
+
+  // Step 1 - minimal cut: drop oldest chunks until the remainder fits.
+  // Always keep the newest chunk, even if oversized on its own.
+  let dropped = 0;
+  let cut = 0;
+  while (cut < chunks.length - 1 && systemSize + (chunkTotal - dropped) > budget) {
+    dropped += chunkSizes[cut]!;
+    cut++;
   }
 
-  return compacted;
+  // Step 2 - extend the cut forward to the next page-aligned cumulative
+  // boundary so the boundary stays put until ~one page of new growth.
+  const target = Math.ceil(dropped / page) * page;
+  while (cut < chunks.length - 1 && dropped < target) {
+    dropped += chunkSizes[cut]!;
+    cut++;
+  }
+
+  return [...systemMessages, ...chunks.slice(cut).flat()];
 }
 
 /**
