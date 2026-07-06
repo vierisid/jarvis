@@ -35,6 +35,8 @@ type GeminiResponse = {
     promptTokenCount: number;
     candidatesTokenCount: number;
     totalTokenCount: number;
+    /** Tokens served from Gemini's implicit cache; subset of promptTokenCount. */
+    cachedContentTokenCount?: number;
   };
   modelVersion?: string;
 };
@@ -48,6 +50,7 @@ type GeminiStreamChunk = {
     promptTokenCount: number;
     candidatesTokenCount: number;
     totalTokenCount: number;
+    cachedContentTokenCount?: number;
   };
 };
 
@@ -155,7 +158,7 @@ export class GeminiProvider implements LLMProvider {
     let accumulatedText = '';
     const toolCalls: LLMToolCall[] = [];
     let finishReason: string | null = null;
-    let usage = { input_tokens: 0, output_tokens: 0 };
+    const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
 
     try {
       const reader = response.body.getReader();
@@ -180,8 +183,12 @@ export class GeminiProvider implements LLMProvider {
             const chunk = JSON.parse(data) as GeminiStreamChunk;
 
             if (chunk.usageMetadata) {
-              usage.input_tokens = chunk.usageMetadata.promptTokenCount ?? 0;
+              const cached = chunk.usageMetadata.cachedContentTokenCount;
+              // Normalized: input_tokens counts only uncached prompt tokens
+              // (Gemini's promptTokenCount includes cached content).
+              usage.input_tokens = Math.max(0, (chunk.usageMetadata.promptTokenCount ?? 0) - (cached ?? 0));
               usage.output_tokens = chunk.usageMetadata.candidatesTokenCount ?? 0;
+              if (cached !== undefined) usage.cache_read_input_tokens = cached;
             }
 
             if (chunk.candidates && chunk.candidates.length > 0) {
@@ -347,12 +354,17 @@ export class GeminiProvider implements LLMProvider {
       }
     }
 
+    const cached = response.usageMetadata?.cachedContentTokenCount;
     return {
       content,
       tool_calls,
       usage: {
-        input_tokens: response.usageMetadata?.promptTokenCount ?? 0,
+        // Normalized semantics (see LLMResponse.usage): input_tokens counts
+        // only UNCACHED prompt tokens. Gemini's promptTokenCount includes
+        // cached content (cachedContentTokenCount is a subset of it).
+        input_tokens: Math.max(0, (response.usageMetadata?.promptTokenCount ?? 0) - (cached ?? 0)),
         output_tokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+        ...(cached !== undefined ? { cache_read_input_tokens: cached } : {}),
       },
       model: response.modelVersion ?? model,
       finish_reason: this.mapFinishReason(candidate?.finishReason ?? null),

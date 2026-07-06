@@ -59,6 +59,7 @@ type GroqResponse = {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 };
 
@@ -592,8 +593,16 @@ export class GroqProvider implements LLMProvider {
       content,
       tool_calls,
       usage: {
-        input_tokens: response.usage.prompt_tokens,
+        // Normalized semantics (see LLMResponse.usage): input_tokens counts
+        // only UNCACHED prompt tokens. Groq's automatic prefix caching
+        // reports cached tokens OpenAI-style as a subset of prompt_tokens.
+        input_tokens: Math.max(
+          0,
+          response.usage.prompt_tokens - (response.usage.prompt_tokens_details?.cached_tokens ?? 0),
+        ),
         output_tokens: response.usage.completion_tokens,
+        ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
+          ? { cache_read_input_tokens: response.usage.prompt_tokens_details.cached_tokens } : {}),
       },
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),
