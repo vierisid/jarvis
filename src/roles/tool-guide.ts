@@ -177,6 +177,9 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('The action calls the LLM under the hood, validates against the piece catalog, and either persists a');
   lines.push('DISABLED draft or returns `{ ok: false, errors, rawResponse }`. Treat failures as iterative: read the errors,');
   lines.push('refine the description with concrete piece/tool names from the messages, and call `compose` again.');
+  lines.push('A failure can also carry `suggestedInstalls: [{ id, displayName, reason }]` -- community-library pieces that');
+  lines.push('would make the request possible. Relay those to the user (installs happen from the dashboard\'s Library page)');
+  lines.push('and offer to compose again after installing; do not retry compose unchanged.');
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');
   lines.push('');

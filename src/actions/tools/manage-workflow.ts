@@ -64,7 +64,13 @@ import {
 } from "../../workflows/db/repos/flow-run.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
-import { composeFlow, type ComposedFlow, type ComposerSpecialistRole, type ComposerToolSpec } from "./workflow-composer.ts";
+import {
+  composeFlow,
+  type ComposedFlow,
+  type ComposerLibraryEntry,
+  type ComposerSpecialistRole,
+  type ComposerToolSpec,
+} from "./workflow-composer.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -86,6 +92,13 @@ export interface ManageWorkflowDeps {
    * discovered after this tool is constructed. See ComposeDeps.specialistRoles.
    */
   specialistRoles?: () => ComposerSpecialistRole[];
+  /**
+   * Optional. Compact index of the community piece library. When provided,
+   * the composer's tool loop can search it and suggest installs (surfaced as
+   * `suggestedInstalls` on a failed compose) instead of forcing a request
+   * through the wrong piece when the right one just isn't installed yet.
+   */
+  library?: ComposerLibraryEntry[];
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -110,6 +123,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "                                      On success returns { ok: true, flow, versionId }.",
       "                                      On failure returns { ok: false, errors, rawResponse }: read the errors,",
       "                                      refine the description with concrete piece/tool names, and call again.",
+      "                                      A failure may also carry suggestedInstalls: [{ id, displayName, reason }] --",
+      "                                      community-library pieces that would make the request possible. Relay them",
+      "                                      to the user (pieces are installed from the dashboard's Library page) and",
+      "                                      offer to compose again after installing; do NOT retry compose unchanged.",
       "                                      Composed flows are DISABLED; follow up with `publish` once the user",
       "                                      confirms, then optionally `run` to test.",
       "  create { name, empty: true }        Create an EMPTY workflow with a manual trigger (no steps). The `empty: true`",
@@ -421,6 +438,7 @@ async function actCompose(
     const roles = deps.specialistRoles();
     if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
+  if (deps.library && deps.library.length > 0) composeDeps.library = deps.library;
   const result = await composeFlow(composeDeps, { name, description });
 
   if (!result.ok) {
@@ -428,6 +446,9 @@ async function actCompose(
       ok: false,
       errors: result.errors,
       rawResponse: capRawResponse(result.rawResponse),
+      ...(result.suggestedInstalls && result.suggestedInstalls.length > 0
+        ? { suggestedInstalls: result.suggestedInstalls }
+        : {}),
     };
   }
 

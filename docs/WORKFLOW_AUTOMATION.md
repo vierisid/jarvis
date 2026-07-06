@@ -329,7 +329,9 @@ The primary agent has a `manage_workflow` tool registered (`src/actions/tools/ma
 - `list`, `get`, `delete`, `enable`, `disable`, `publish` -- straight CRUD over flows.
 - `run` -- resolve a flow by name or id and enqueue a `RUN_FLOW`.
 - `create` -- create an empty draft (requires `empty: true` or reroutes to compose if `description` is set).
-- `compose` -- iterative sub-agent loop. Drives a planner LLM to produce a `FlowVersion` body, validates it against the engine-extracted piece schemas, retries up to 4 times with feedback prompts if validation fails. Reads each action's `outputSample` so the LLM can wire concrete field names.
+- `compose` -- sub-agent that builds a `FlowVersion` body from a plain-English description. Two modes:
+  - **Tool loop (preferred)**: the planner LLM discovers the platform through tools -- `list_pieces` (compact index), `get_piece_details` / `get_tool_details` (input schemas + `outputSample`s on demand), `search_library` (installable community pieces) -- and finishes via `submit_flow` (validated against the engine-extracted piece schemas; errors fed back as the tool result, up to 4 submits) or `report_blocked` (structured failure carrying `suggestedInstalls` when a library piece would cover the request).
+  - **One-shot fallback**: for text-only clients or models that don't call tools, the full piece catalog is inlined into one system prompt and parse/validation errors feed a retry loop (up to 4 attempts). Both modes share the same rule sections and worked examples in the system prompt.
 
 Source: `src/actions/tools/manage-workflow.ts` and `src/actions/tools/workflow-composer.ts`. The composer's role profile lives in `roles/specialists/workflow-default.yaml`.
 

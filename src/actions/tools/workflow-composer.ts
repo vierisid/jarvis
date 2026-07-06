@@ -15,14 +15,53 @@ import type {
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 
 /**
- * Minimal LLM-client shape the composer needs. Single-shot
- * prompt -> `{ text }`. The daemon supplies an instance backed by
- * `LLMManager`; tests inject a stub. Kept inline (instead of importing the
- * legacy `PieceLlmClient` type) so the composer doesn't depend on the
- * deleted jarvis-pieces tree.
+ * LLM-client shape the composer needs. `chat` is the mandatory single-shot
+ * path (prompt -> `{ text }`); `chatTools` is the optional tool-calling path.
+ * When `chatTools` is present the composer runs a tool loop (list pieces ->
+ * fetch details -> submit flow) instead of dumping the whole catalog into one
+ * prompt; when absent (or when the model won't call tools) it falls back to
+ * the one-shot path. The daemon supplies an instance backed by `LLMManager`;
+ * tests inject a stub. Shapes are kept inline (structurally compatible with
+ * `src/llm/provider.ts`) so the composer doesn't hard-depend on the provider
+ * module.
  */
 export interface ComposerLlmClient {
   chat(input: { prompt: string; system?: string }): Promise<{ text: string }>;
+  chatTools?(
+    messages: ComposerChatMessage[],
+    tools: ComposerToolDef[],
+  ): Promise<ComposerChatReply>;
+}
+
+/** One tool invocation requested by the model (mirrors `LLMToolCall`). */
+export interface ComposerToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** Chat message for the tool loop (mirrors `LLMMessage`, text-only content). */
+export interface ComposerChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  /** Present on assistant messages that requested tool calls. */
+  tool_calls?: ComposerToolCall[];
+  /** Present on tool-result messages; echoes the call's id. */
+  tool_call_id?: string;
+}
+
+/** Tool definition surfaced to the model (mirrors `LLMTool`). */
+export interface ComposerToolDef {
+  name: string;
+  description: string;
+  /** JSON Schema for the arguments object. */
+  parameters: Record<string, unknown>;
+}
+
+/** Reply from a tool-capable chat call (subset of `LLMResponse`). */
+export interface ComposerChatReply {
+  content: string;
+  tool_calls?: ComposerToolCall[];
 }
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
@@ -62,12 +101,46 @@ export interface ComposeOk {
   rawResponse: string;
 }
 
+/**
+ * A community-library piece the composer thinks would satisfy the request if
+ * it were installed. Surfaced on `ComposeFail` so the calling agent can offer
+ * the install to the user; the composer itself never installs anything.
+ */
+export interface SuggestedInstall {
+  /** Library catalog id (e.g. "discord"). */
+  id: string;
+  /** Human label from the library catalog, when resolvable. */
+  displayName?: string;
+  /** Why the composer thinks this piece fits the request. */
+  reason?: string;
+}
+
+/**
+ * One installable piece from the community library, as surfaced to the
+ * composer's `search_library` tool. The daemon maps the pieces-library
+ * `CatalogEntry` down to this.
+ */
+export interface ComposerLibraryEntry {
+  /** Library catalog id (URL slug, e.g. "discord"). */
+  id: string;
+  /** npm package installed under this id -- matched against the piece registry to flag installed entries. */
+  npmPackage: string;
+  displayName: string;
+  description: string;
+}
+
 export interface ComposeFail {
   ok: false;
   /** One or more reasons the compose attempt failed. */
   errors: string[];
   /** The raw LLM reply (if any) so the assistant can iterate. */
   rawResponse: string | null;
+  /**
+   * Library pieces the composer suggests installing to make the request
+   * possible. Only set when the tool loop determined the request cannot be
+   * built from what is installed (via its `report_blocked` tool).
+   */
+  suggestedInstalls?: SuggestedInstall[];
 }
 
 export type ComposeResult = ComposeOk | ComposeFail;
@@ -170,11 +243,19 @@ export interface ComposeDeps {
    */
   specialistRoles?: ComposerSpecialistRole[];
   /**
+   * Optional community-library index. When present (and the tool loop is
+   * active), the composer exposes a `search_library` tool so the model can
+   * find an installable piece when nothing installed fits, and suggest it via
+   * `report_blocked` instead of shoehorning the request through a wrong piece.
+   */
+  library?: ComposerLibraryEntry[];
+  /**
    * Cap on the LLM attempts inside one compose call. Each failed parse or
    * validation feeds back into the next attempt so the model can self-correct
    * without round-tripping through the calling agent. Default 4. Tests can
    * lower this to 1 to assert single-shot behavior; production should leave
-   * it at the default to absorb weak-model noise.
+   * it at the default to absorb weak-model noise. In the tool loop this caps
+   * `submit_flow` attempts (each failed validation feeds back the same way).
    */
   maxAttempts?: number;
 }
@@ -213,24 +294,57 @@ export async function composeFlow(
   if (!req.name.trim()) return { ok: false, errors: ["name is required"], rawResponse: null };
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
 
+  // Preferred path: a tool loop where the model discovers pieces on demand
+  // (list_pieces / get_piece_details) instead of reading a full catalog dump.
+  // Scales to large installs and keeps the rules from drowning in schemas.
+  // Falls back to the one-shot path when the client has no tool support or
+  // the model doesn't engage with the tools (composeWithTools returns null).
+  if (deps.llm.chatTools) {
+    const viaTools = await composeWithTools(deps, req);
+    if (viaTools) return viaTools;
+    logAttempt(1, "tool-loop-fallback", "model did not engage with tools; using one-shot prompt");
+  }
+  return composeOneShot(deps, req);
+}
+
+/**
+ * Lookup of tool name -> spec for delegate/invoke param validation. Null when
+ * the caller only gave names (or nothing) -- without schemas we can't tell a
+ * missing-required-param from an intentionally-empty one, so we skip the check.
+ */
+function toolSpecMap(deps: ComposeDeps): Map<string, ComposerToolSpec> | null {
+  return deps.tools && deps.tools.length > 0
+    ? new Map(deps.tools.map((t) => [t.name, t] as const))
+    : null;
+}
+
+/**
+ * Set of valid role ids for delegate-step validation. Null when the caller
+ * didn't supply roles -- in that case we can't tell a typo from a real id,
+ * so we skip the check rather than reject everything.
+ */
+function validRoleIdSet(deps: ComposeDeps): Set<string> | null {
+  return deps.specialistRoles && deps.specialistRoles.length > 0
+    ? new Set(deps.specialistRoles.map((r) => r.id))
+    : null;
+}
+
+/**
+ * The original single-shot composer: one big system prompt carrying the whole
+ * piece catalog + rules, and a retry loop feeding parse/validation errors
+ * back. Kept as the fallback for text-only clients and models that don't
+ * call tools (small local models are the usual case).
+ */
+async function composeOneShot(
+  deps: ComposeDeps,
+  req: ComposeRequest,
+): Promise<ComposeResult> {
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderTools(deps.tools, deps.toolNames);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const system = buildSystemPrompt(catalogText, toolsText, rolesText);
-  // Lookup of tool name -> spec for delegate/invoke param validation. Null when
-  // the caller only gave names (or nothing) -- without schemas we can't tell a
-  // missing-required-param from an intentionally-empty one, so we skip the check.
-  const toolSpecs =
-    deps.tools && deps.tools.length > 0
-      ? new Map(deps.tools.map((t) => [t.name, t] as const))
-      : null;
-  // Set of valid role ids for delegate-step validation. Null when the caller
-  // didn't supply roles -- in that case we can't tell a typo from a real id,
-  // so we skip the check rather than reject everything.
-  const validRoleIds =
-    deps.specialistRoles && deps.specialistRoles.length > 0
-      ? new Set(deps.specialistRoles.map((r) => r.id))
-      : null;
+  const toolSpecs = toolSpecMap(deps);
+  const validRoleIds = validRoleIdSet(deps);
 
   // Initial prompt: the user's description verbatim. Retry prompts
   // replace this with a feedback patch derived from the previous
@@ -316,13 +430,497 @@ function logAttempt(attempt: number, status: string, detail: string | null): voi
   console.log(`[compose] attempt ${attempt} ${status}${tail}`);
 }
 
+/* -------------------------------------------------------------- tool loop */
+
+/**
+ * Hard cap on LLM round-trips inside one tool-loop compose. Generous relative
+ * to the expected shape (list -> 2-4 detail lookups -> submit ~= 5 turns) so
+ * legitimate exploration never hits it, but bounded so a model stuck calling
+ * list_pieces forever doesn't burn tokens indefinitely.
+ */
+const TOOL_LOOP_MAX_TURNS = 12;
+/**
+ * How many consecutive prose-only (no tool call) replies we nudge back toward
+ * submit_flow before giving up. Past turn 1 we can't fall back to one-shot
+ * (the conversation already carries tool results), so we nudge instead.
+ */
+const TOOL_LOOP_MAX_NUDGES = 2;
+
+/**
+ * Tool-loop composer. The model discovers the platform through tools --
+ * list_pieces (compact index), get_piece_details / get_tool_details (schemas
+ * + output samples on demand), search_library (installable pieces) -- and
+ * finishes by calling submit_flow (validated; errors fed back as the tool
+ * result) or report_blocked (structured "install X first" failure).
+ *
+ * Returns null when the FIRST turn shows the client/model won't do tools
+ * (provider error, or a reply with neither tool calls nor a parseable flow):
+ * the caller then falls back to the one-shot path, which is designed for
+ * exactly those models. After turn 1 there is no fallback -- failures are
+ * returned as ComposeFail like the one-shot path would.
+ */
+async function composeWithTools(
+  deps: ComposeDeps,
+  req: ComposeRequest,
+): Promise<ComposeResult | null> {
+  const toolSpecs = toolSpecMap(deps);
+  const validRoleIds = validRoleIdSet(deps);
+  const rolesText = renderSpecialistRoles(deps.specialistRoles);
+  const hasLibrary = (deps.library?.length ?? 0) > 0;
+  const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
+  const system = buildToolLoopSystemPrompt(rolesText, hasLibrary);
+
+  const messages: ComposerChatMessage[] = [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content:
+        `Build a workflow named "${req.name.trim()}".\n` +
+        `User description: ${req.description.trim()}`,
+    },
+  ];
+
+  const maxSubmits = deps.maxAttempts ?? 4;
+  let submits = 0;
+  let nudges = 0;
+  let lastErrors: string[] = [];
+  let lastRaw: string | null = null;
+
+  for (let turn = 1; turn <= TOOL_LOOP_MAX_TURNS; turn++) {
+    let reply: ComposerChatReply;
+    try {
+      reply = await deps.llm.chatTools!(messages, toolDefs);
+    } catch (e) {
+      // First call failing usually means the provider rejected the tools
+      // parameter -- the one-shot path still has a chance. A mid-loop
+      // failure is a transient/provider error; retrying from scratch
+      // without tools would discard progress for no better odds, so bail.
+      if (turn === 1) {
+        logAttempt(turn, "tool-loop-error", (e as Error).message);
+        return null;
+      }
+      return {
+        ok: false,
+        errors: [`LLM call failed: ${(e as Error).message}`],
+        rawResponse: lastRaw,
+      };
+    }
+
+    const calls = reply.tool_calls ?? [];
+    if (calls.length === 0) {
+      const text = (reply.content ?? "").trim();
+      if (text) lastRaw = text;
+      // Some models answer with the flow JSON directly instead of calling
+      // submit_flow. Accept it when it validates -- rejecting a correct
+      // flow over protocol pedantry helps nobody.
+      if (text) {
+        try {
+          const parsed = JSON.parse(stripJsonFence(text));
+          const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
+          if (validation.ok) {
+            logAttempt(turn, "tool-loop-inline-json", null);
+            return { ok: true, flow: validation.flow, rawResponse: text };
+          }
+        } catch {
+          // not JSON -- handled below
+        }
+      }
+      if (turn === 1) return null; // model ignored the tools entirely; one-shot handles this better
+      if (++nudges > TOOL_LOOP_MAX_NUDGES) break;
+      messages.push({ role: "assistant", content: text });
+      messages.push({
+        role: "user",
+        content:
+          "Do not answer in prose. Call the submit_flow tool with the complete flow " +
+          "(arguments: { displayName, trigger }), or report_blocked if the request cannot be built.",
+      });
+      continue;
+    }
+
+    messages.push({ role: "assistant", content: reply.content ?? "", tool_calls: calls });
+    for (const call of calls) {
+      if (call.name === "submit_flow") {
+        submits++;
+        const flowArg = unwrapSubmittedFlow(call.arguments);
+        lastRaw = safeStringify(flowArg);
+        const validation = validateComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
+        if (validation.ok) {
+          if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
+          return { ok: true, flow: validation.flow, rawResponse: lastRaw };
+        }
+        lastErrors = validation.errors;
+        logAttempt(submits, "tool-loop-validation-error", validation.errors.join("; "));
+        if (submits >= maxSubmits) {
+          logAttempt(maxSubmits, "tool-loop-exhausted", lastErrors.join("; "));
+          return { ok: false, errors: lastErrors, rawResponse: lastRaw };
+        }
+        messages.push(toolResult(call,
+          "Validation failed:\n" +
+            validation.errors.map((e) => `  - ${e}`).join("\n") +
+            "\n\nFix ALL of these issues and call submit_flow again. Keep the parts that were correct.",
+        ));
+        continue;
+      }
+      if (call.name === "report_blocked") {
+        return blockedResult(call.arguments, deps.library, lastRaw);
+      }
+      messages.push(toolResult(call, runComposerInfoTool(call, deps, toolSpecs)));
+    }
+  }
+
+  logAttempt(TOOL_LOOP_MAX_TURNS, "tool-loop-exhausted", lastErrors.join("; ") || "no submit_flow call");
+  return {
+    ok: false,
+    errors: lastErrors.length > 0
+      ? lastErrors
+      : ["the composer did not produce a valid flow within its tool-call budget"],
+    rawResponse: lastRaw,
+  };
+}
+
+/** Wrap a tool's textual output as the tool-result message for `call`. */
+function toolResult(call: ComposerToolCall, content: string): ComposerChatMessage {
+  return { role: "tool", content, tool_call_id: call.id };
+}
+
+/**
+ * submit_flow arguments should be `{ displayName, trigger }` directly, but
+ * models occasionally nest the object under a `flow` key. Unwrap that one
+ * common miss instead of failing validation on shape pedantry.
+ */
+function unwrapSubmittedFlow(args: Record<string, unknown>): unknown {
+  if (args.trigger === undefined && args.flow && typeof args.flow === "object") return args.flow;
+  return args;
+}
+
+function safeStringify(v: unknown): string {
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/** Build the ComposeFail for a report_blocked call, resolving library labels. */
+function blockedResult(
+  args: Record<string, unknown>,
+  library: ComposerLibraryEntry[] | undefined,
+  lastRaw: string | null,
+): ComposeFail {
+  const reason = typeof args.reason === "string" && args.reason.trim()
+    ? args.reason.trim()
+    : "the request cannot be built from the installed pieces and tools";
+  const byId = new Map((library ?? []).map((e) => [e.id, e] as const));
+  const rawSuggestions = Array.isArray(args.suggestedPieces) ? args.suggestedPieces : [];
+  const suggestedInstalls: SuggestedInstall[] = [];
+  for (const s of rawSuggestions) {
+    if (!s || typeof s !== "object") continue;
+    const id = typeof (s as { id?: unknown }).id === "string" ? (s as { id: string }).id.trim() : "";
+    if (!id) continue;
+    const entry = byId.get(id);
+    const sug: SuggestedInstall = { id };
+    if (entry) sug.displayName = entry.displayName;
+    const why = (s as { reason?: unknown }).reason;
+    if (typeof why === "string" && why.trim()) sug.reason = why.trim();
+    suggestedInstalls.push(sug);
+  }
+  logAttempt(1, "tool-loop-blocked", reason);
+  const fail: ComposeFail = { ok: false, errors: [reason], rawResponse: lastRaw };
+  if (suggestedInstalls.length > 0) fail.suggestedInstalls = suggestedInstalls;
+  return fail;
+}
+
+/** Tool definitions surfaced to the tool-loop model. */
+function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean): ComposerToolDef[] {
+  const defs: ComposerToolDef[] = [
+    {
+      name: "list_pieces",
+      description:
+        "List everything available for workflow steps: installed pieces (with their trigger/action names), " +
+        "built-in trigger primitives (schedule, webhook), event types for jarvis-trigger:on_event, and registered Jarvis tools. " +
+        "Names only -- call get_piece_details before using a piece.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+    {
+      name: "get_piece_details",
+      description:
+        "Full contract of one installed piece: every trigger/action with its input fields (types, REQUIRED flags) " +
+        "and output samples (the field names you may reference in {{step.field}} templates). " +
+        "Call this for EVERY piece you plan to use. Also accepts 'schedule' and 'webhook'.",
+      parameters: {
+        type: "object",
+        properties: {
+          pieceName: {
+            type: "string",
+            description: "Piece name exactly as shown by list_pieces (e.g. 'jarvis-notify').",
+          },
+        },
+        required: ["pieceName"],
+      },
+    },
+    {
+      name: "submit_flow",
+      description:
+        "Submit the finished workflow for validation. Arguments are the flow object itself: " +
+        '{ "displayName": "...", "trigger": { ... } } in the exact shape from the system prompt. ' +
+        "If validation fails you get the error list back -- fix every error and submit again.",
+      parameters: {
+        type: "object",
+        properties: {
+          displayName: { type: "string", description: "Short human title for the workflow." },
+          trigger: {
+            type: "object",
+            description: "The trigger node with the full nextAction chain, per the flow JSON shape.",
+          },
+        },
+        required: ["displayName", "trigger"],
+      },
+    },
+    {
+      name: "report_blocked",
+      description:
+        "Give up because the request cannot be built from the installed pieces and Jarvis tools. " +
+        (hasLibrary
+          ? "If search_library found a piece that would cover the request, suggest it in suggestedPieces. "
+          : "") +
+        "Use this instead of forcing a wrong piece to fit. Only call it after checking list_pieces" +
+        (hasLibrary ? " and search_library." : "."),
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            description: "One or two sentences: what the request needs and why it isn't available.",
+          },
+          ...(hasLibrary
+            ? {
+                suggestedPieces: {
+                  type: "array",
+                  description: "Installable library pieces that would cover the request.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", description: "Library id exactly as returned by search_library." },
+                      reason: { type: "string", description: "Why this piece fits the request." },
+                    },
+                    required: ["id"],
+                  },
+                },
+              }
+            : {}),
+        },
+        required: ["reason"],
+      },
+    },
+  ];
+  if (hasToolSpecs) {
+    defs.push({
+      name: "get_tool_details",
+      description:
+        "Parameter contract of one registered Jarvis tool (for wiring a jarvis-tool:invoke step): " +
+        "each param's name, type, and whether it is REQUIRED. Call this for every Jarvis tool you plan to invoke.",
+      parameters: {
+        type: "object",
+        properties: {
+          toolName: { type: "string", description: "Tool name exactly as shown by list_pieces." },
+        },
+        required: ["toolName"],
+      },
+    });
+  }
+  if (hasLibrary) {
+    defs.push({
+      name: "search_library",
+      description:
+        "Search the community piece library (installable, NOT yet usable) by keyword. " +
+        "Use when no installed piece or Jarvis tool covers a service the user asked for, " +
+        "then suggest the best match via report_blocked. Never put a library-only piece in a flow.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Service or capability keywords, e.g. 'discord' or 'google sheets'." },
+        },
+        required: ["query"],
+      },
+    });
+  }
+  return defs;
+}
+
+/**
+ * Execute one read-only info tool (list/details/search) and return its text.
+ * Unknown tools and bad arguments return an "Error: ..." string rather than
+ * throwing -- the model reads the message and corrects itself, same contract
+ * as the submit_flow validation feedback.
+ */
+function runComposerInfoTool(
+  call: ComposerToolCall,
+  deps: ComposeDeps,
+  toolSpecs: Map<string, ComposerToolSpec> | null,
+): string {
+  switch (call.name) {
+    case "list_pieces":
+      return renderPieceIndex(deps);
+    case "get_piece_details": {
+      const nameArg = typeof call.arguments.pieceName === "string" ? call.arguments.pieceName.trim() : "";
+      if (!nameArg) return "Error: pieceName is required.";
+      if (nameArg === "schedule" || nameArg === "webhook") return renderPrimitiveDetails(nameArg);
+      const piece = resolvePieceByName(deps.pieceRegistry, nameArg);
+      if (!piece || isComposerExcludedPiece(piece.name)) {
+        return `Error: unknown piece "${nameArg}". Call list_pieces to see valid names.`;
+      }
+      return renderPieceDetails(piece);
+    }
+    case "get_tool_details": {
+      const toolName = typeof call.arguments.toolName === "string" ? call.arguments.toolName.trim() : "";
+      if (!toolName) return "Error: toolName is required.";
+      const spec = toolSpecs?.get(toolName);
+      if (!spec) {
+        const known = toolSpecs ? Array.from(toolSpecs.keys()).sort().join(", ") : "(none)";
+        return `Error: unknown tool "${toolName}". Registered tools: ${known}`;
+      }
+      return renderToolSpecLines(spec).join("\n");
+    }
+    case "search_library": {
+      const query = typeof call.arguments.query === "string" ? call.arguments.query.trim() : "";
+      if (!query) return "Error: query is required.";
+      return renderLibrarySearch(deps, query);
+    }
+    default:
+      return `Error: unknown tool "${call.name}".`;
+  }
+}
+
+/** Short piece name shown to the model ('@jarvispieces/piece-jarvis-tool' -> 'jarvis-tool'). */
+function shortPieceName(name: string): string {
+  const marker = "/piece-";
+  const idx = name.lastIndexOf(marker);
+  return idx >= 0 ? name.slice(idx + marker.length) : name;
+}
+
+/**
+ * Compact index for the list_pieces tool: one line per piece (short name,
+ * one-line description, trigger/action names), then the built-in primitives,
+ * the event-type index, and the Jarvis tool names. Schemas deliberately
+ * excluded -- the model fetches those per piece via get_piece_details, which
+ * is the whole point of the tool loop.
+ */
+function renderPieceIndex(deps: ComposeDeps): string {
+  const lines: string[] = ["Installed pieces (get_piece_details for input/output contracts):"];
+  for (const piece of deps.pieceRegistry.list()) {
+    if (isComposerExcludedPiece(piece.name)) continue;
+    const triggers = Object.values(piece.triggers ?? {}).map((t) => t.name);
+    const actions = Object.values(piece.actions).map((a) => a.name);
+    let line = `- ${shortPieceName(piece.name)}: ${firstLine(piece.description)}`;
+    if (triggers.length > 0) line += ` | triggers: ${triggers.join(", ")}`;
+    if (actions.length > 0) line += ` | actions: ${actions.join(", ")}`;
+    lines.push(line);
+  }
+  lines.push("");
+  lines.push("Built-in trigger primitives (no piece registration needed):");
+  lines.push("- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.");
+  lines.push("- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.");
+  lines.push("");
+  lines.push("Event types for jarvis-trigger:on_event (payload fields via get_piece_details('jarvis-trigger')):");
+  for (const meta of WORKFLOW_EVENT_TYPES) {
+    lines.push(`- ${meta.type}: ${firstLine(meta.description)}`);
+  }
+  const toolNames = deps.tools?.map((t) => ({ name: t.name, description: t.description }))
+    ?? deps.toolNames?.map((n) => ({ name: n, description: undefined as string | undefined }));
+  if (toolNames && toolNames.length > 0) {
+    lines.push("");
+    lines.push("Available Jarvis tools (wire via the jarvis-tool piece's invoke action; params via get_tool_details):");
+    for (const t of toolNames) {
+      lines.push(`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** get_piece_details output for the schedule / webhook primitives. */
+function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
+  if (name === "schedule") {
+    return [
+      "schedule (built-in trigger primitive): fires the flow on a cron schedule.",
+      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>' } }.",
+      "  - input.cron_expression: string, REQUIRED; 5-field cron, e.g. '0 8 * * *' for 8am daily, '*/15 * * * *' for every 15 minutes.",
+      "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
+    ].join("\n");
+  }
+  return [
+    "webhook (built-in trigger primitive): fires the flow on an HTTP POST to /api/webhooks/<flow_id>.",
+    "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'webhook', input: { secret: '<optional HMAC secret>' } }.",
+    "  - input.secret: string, optional; when set, requests must carry a valid HMAC signature.",
+    "  The POSTed JSON body becomes the trigger output: reference its fields as {{trigger.<field>}}.",
+  ].join("\n");
+}
+
+/**
+ * Full contract of one piece for the get_piece_details tool: the same
+ * per-piece rendering the one-shot catalog uses, plus -- for the piece that
+ * carries on_event -- the full event-type catalog with payload examples,
+ * since picking an eventType is part of configuring that trigger.
+ */
+function renderPieceDetails(piece: ReturnType<PieceLookup["list"]>[number]): string {
+  const lines = renderPieceBlockLines(piece, shortPieceName(piece.name));
+  if (piece.triggers && Object.keys(piece.triggers).includes("on_event")) {
+    lines.push("");
+    lines.push(...renderEventTypeDetailLines());
+  }
+  return lines.join("\n");
+}
+
+/** search_library output: scored keyword match over the community catalog. */
+function renderLibrarySearch(deps: ComposeDeps, query: string): string {
+  const entries = deps.library ?? [];
+  if (entries.length === 0) return "The community library is not available in this build.";
+  const installed = new Set(deps.pieceRegistry.list().map((p) => p.name));
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const scored = entries
+    .map((e) => {
+      const id = e.id.toLowerCase();
+      const display = e.displayName.toLowerCase();
+      const hay = `${id} ${display} ${e.description.toLowerCase()}`;
+      let score = 0;
+      for (const t of tokens) {
+        if (id === t || display === t) score += 5;
+        else if (id.includes(t) || display.includes(t)) score += 3;
+        else if (hay.includes(t)) score += 1;
+      }
+      return { e, score };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+  if (scored.length === 0) {
+    return `No library pieces match "${query}". Try a different keyword, or report_blocked without a suggestion.`;
+  }
+  const lines = [
+    "Community library matches. These are NOT installed (unless flagged) and CANNOT be used in the flow --",
+    "suggest the best fit via report_blocked so the user can install it first.",
+  ];
+  for (const { e } of scored) {
+    const flag = installed.has(e.npmPackage) ? " [already installed -- see list_pieces]" : " [not installed]";
+    lines.push(`- ${e.id} (${e.displayName})${flag}: ${firstLine(e.description)}`);
+  }
+  return lines.join("\n");
+}
+
 /* ---------------------------------------------------------- system prompt */
 
-function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string): string {
+/**
+ * The rule sections shared by the one-shot and tool-loop prompts. Almost
+ * every line here encodes a real production failure (see git blame before
+ * trimming): inline regex flags hanging runs, payload-envelope misses,
+ * guessed output fields, invented specialist roles. `mode` only varies the
+ * phrasing that says where the piece contracts live (inline catalog vs the
+ * get_piece_details tool).
+ */
+function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): string[] {
+  const contractsRef = mode === "tools" ? "the get_piece_details output" : "the catalog";
   return [
-    "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
-    "",
-    "Output a single JSON object with this exact shape:",
+    "## Flow JSON shape",
+    "A workflow is a single JSON object:",
     '{ "displayName": "<short title>",',
     '  "trigger": { ',
     '    "name": "trigger",',
@@ -332,7 +930,7 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
     '    "nextAction": { "name": "step_1", "type": "PIECE", "settings": { "pieceName": "...", "actionName": "...", "input": { ... } }, "nextAction": { ... } }',
     "  } }",
     "",
-    "Rules:",
+    "## Steps and control flow",
     "  - The first node is named 'trigger'. Action steps are named 'step_1', 'step_2', etc.",
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
@@ -351,11 +949,12 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
     '            { "branchName": "fallback", "branchType": "FALLBACK" }',
     '          ] },',
     '        "children": [ { ...subgraph for high... }, { ...subgraph for fallback... } ] }',
+    "    children[i] pairs with branches[i]; use null for a branch that should do nothing.",
     "    Conditions are 2D: outer array = OR, inner = AND. Operators include TEXT_CONTAINS, TEXT_EXACTLY_MATCHES, TEXT_MATCHES_REGEX, TEXT_DOES_NOT_MATCH_REGEX, NUMBER_IS_GREATER_THAN, NUMBER_IS_LESS_THAN, NUMBER_IS_EQUAL_TO, BOOLEAN_IS_TRUE, BOOLEAN_IS_FALSE, EXISTS, DOES_NOT_EXIST, LIST_IS_EMPTY, LIST_IS_NOT_EMPTY, LIST_CONTAINS.",
     "    For regex operators: secondValue is a JavaScript RegExp pattern (no slashes, no flags suffix). JS RegExp does NOT support inline",
     "    flags -- '(?i)', '(?m)', '(?s)' are INVALID and throw at runtime. For case-insensitivity use character classes instead, e.g.",
     "    '[Nn]o documents found' rather than '(?i)no documents found'. Prefer TEXT_CONTAINS over regex when a plain substring will do.",
-    "    Match the operator to the UPSTREAM STEP'S ACTUAL OUTPUT SHAPE (from its `output` sample in the catalog):",
+    `    Match the operator to the UPSTREAM STEP'S ACTUAL OUTPUT SHAPE (from its \`output\` sample in ${contractsRef}):`,
     "      * If the value is a LIST/array, use LIST_IS_EMPTY / LIST_IS_NOT_EMPTY to test 'did it return anything' -- never a regex.",
     "      * If the value is a STRING, use TEXT_CONTAINS / TEXT_EXACTLY_MATCHES against the actual wording.",
     "      * If the value is a NUMBER, use the NUMBER_* operators; for presence use EXISTS / DOES_NOT_EXIST.",
@@ -363,28 +962,151 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
     "    empty-array pattern like '^\\s*\\[\\s*\\]\\s*$' -- a human-readable string (e.g. 'No documents found.') will never match it, so",
     "    the branch evaluates backwards. To check whether a search/list returned results, prefer a step whose output is a real list and",
     "    use LIST_IS_NOT_EMPTY; if you only have a string, test its actual empty-wording with TEXT_CONTAINS.",
+    "",
+    "## Wiring data between steps",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
     "  - For jarvis-trigger:on_event, the trigger output is an event envelope shaped",
     "    { id, eventType, payload, timestamp } -- the actual event data lives under `payload`.",
     "    Reference payload fields as {{trigger.payload.<field>}}, NOT {{trigger.<field>}}.",
     "    Example: clipboard text is {{trigger.payload.content}}; an email's subject is {{trigger.payload.subject}}.",
-    "  - Field names in `{{step.field}}` MUST exist on that step's declared `output` (see each action / trigger in the catalog).",
+    `  - Field names in \`{{step.field}}\` MUST exist on that step's declared \`output\` (see each action / trigger in ${contractsRef}).`,
     "    Do not guess fields from the user's wording -- for example, a piece whose output is `{ result: ... }` is referenced as",
     "    `{{step.result}}`, NOT `{{step.content}}` just because the user said 'content'. If a piece has no declared output, the",
     "    safe choice is `{{step}}` (the whole output) and let downstream steps drill in.",
+    "",
+    "## Hard rules",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
-    "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
-    rolesText
+    mode === "tools"
+      ? "  - When the user asks for an integration that isn't an installed piece (Gmail, Slack, ...), check the Jarvis tools in list_pieces and use the `jarvis-tool` piece with `toolName` set to one of them."
+      : "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
+    hasRoles
       ? "  - To hand a goal to a sub-agent, use the `jarvis-agent` piece's `delegate` action. Its optional `input.role` MUST be one of the specialist role ids listed below VERBATIM (e.g. `research-analyst`, not `researcher`). If none fits, OMIT `role` and the default agent handles it."
       : "  - To hand a goal to a sub-agent, use the `jarvis-agent` piece's `delegate` action with `input.goal`. Omit `input.role` to use the default agent.",
+    "",
+    ...EXAMPLE_SECTION_LINES,
+  ];
+}
+
+/**
+ * Two complete worked examples: a linear scheduled flow and an event-driven
+ * router. Few-shot beats rules for JSON-shape fidelity -- before these were
+ * added, models regularly nested settings wrong or forgot the children/
+ * branches pairing even with the rules spelled out.
+ */
+const EXAMPLE_SECTION_LINES = [
+  "## Examples",
+  "The pieces used below are illustrative -- always confirm a piece and its real input/output fields before using it.",
+  "",
+  'Example 1 -- "every morning at 8, summarize my day and notify me":',
+  "{",
+  '  "displayName": "Morning brief",',
+  '  "trigger": {',
+  '    "name": "trigger",',
+  '    "type": "PIECE_TRIGGER",',
+  '    "settings": { "pieceName": "schedule", "input": { "cron_expression": "0 8 * * *" } },',
+  '    "nextAction": {',
+  '      "name": "step_1",',
+  '      "type": "PIECE",',
+  '      "settings": {',
+  '        "pieceName": "jarvis-agent",',
+  '        "actionName": "delegate",',
+  '        "input": { "goal": "Summarize today\'s calendar and unread email into a short morning brief." }',
+  "      },",
+  '      "nextAction": {',
+  '        "name": "step_2",',
+  '        "type": "PIECE",',
+  '        "settings": {',
+  '          "pieceName": "jarvis-notify",',
+  '          "actionName": "notify",',
+  '          "input": { "message": "{{step_1.finalMessage}}" }',
+  "        }",
+  "      }",
+  "    }",
+  "  }",
+  "}",
+  "step_2 reads {{step_1.finalMessage}} because `finalMessage` is a field of the delegate action's declared output -- not because the user said 'message'.",
+  "",
+  'Example 2 -- "when an email arrives, notify me if the subject mentions an invoice; otherwise do nothing":',
+  "{",
+  '  "displayName": "Invoice email alert",',
+  '  "trigger": {',
+  '    "name": "trigger",',
+  '    "type": "PIECE_TRIGGER",',
+  '    "settings": {',
+  '      "pieceName": "jarvis-trigger",',
+  '      "triggerName": "on_event",',
+  '      "input": { "eventType": "observer.email_received" }',
+  "    },",
+  '    "nextAction": {',
+  '      "name": "router_1",',
+  '      "type": "ROUTER",',
+  '      "settings": {',
+  '        "executionType": "EXECUTE_FIRST_MATCH",',
+  '        "branches": [',
+  '          { "branchName": "invoice", "branchType": "CONDITION",',
+  '            "conditions": [[{ "firstValue": "{{trigger.payload.subject}}", "operator": "TEXT_CONTAINS", "secondValue": "invoice" }]] },',
+  '          { "branchName": "other", "branchType": "FALLBACK" }',
+  "        ]",
+  "      },",
+  '      "children": [',
+  "        {",
+  '          "name": "step_1",',
+  '          "type": "PIECE",',
+  '          "settings": {',
+  '            "pieceName": "jarvis-notify",',
+  '            "actionName": "notify",',
+  '            "input": { "message": "Invoice email from {{trigger.payload.from}}: {{trigger.payload.subject}}" }',
+  "          }",
+  "        },",
+  "        null",
+  "      ]",
+  "    }",
+  "  }",
+  "}",
+  "The event payload is read via {{trigger.payload.*}} (envelope rule); children[0] pairs with the 'invoice' branch; the null child makes the fallback branch do nothing.",
+];
+
+function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string): string {
+  return [
+    "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
+    "",
+    ...sharedRuleSections("one-shot", rolesText.length > 0),
+    "",
+    "## Output contract",
     "  - Output ONLY the JSON. No markdown. No explanation.",
     "",
     "Available pieces:",
     catalog,
-    toolsText ? "" : "",
     toolsText,
-    rolesText ? "" : "",
+    rolesText,
+  ].filter((s) => s !== "").join("\n");
+}
+
+/**
+ * System prompt for the tool-loop composer. Same rule sections as the
+ * one-shot prompt, but instead of an inline catalog it teaches the model to
+ * discover the platform through the tools and to finish via submit_flow /
+ * report_blocked. Specialist roles stay inline -- the listing is small and
+ * the verbatim-id rule needs the ids next to it.
+ */
+function buildToolLoopSystemPrompt(rolesText: string, hasLibrary: boolean): string {
+  return [
+    "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
+    "You interact ONLY through tools; the ONLY ways to finish are the submit_flow and report_blocked tools.",
+    "",
+    "## Process",
+    "  1. Call list_pieces to see what is installed: pieces, built-in trigger primitives, event types, and Jarvis tools.",
+    "  2. Call get_piece_details for EVERY piece you plan to use (and get_tool_details for every Jarvis tool).",
+    "     Never guess an action's input fields or output shape -- wire only fields you have seen in the details.",
+    "  3. Build the flow and call submit_flow with { displayName, trigger }. If validation errors come back,",
+    "     fix ALL of them and call submit_flow again, keeping the parts that were correct.",
+    hasLibrary
+      ? "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then call report_blocked suggesting the best match. Never force a wrong piece to fit."
+      : "  4. If no installed piece or Jarvis tool covers the request, call report_blocked explaining what is missing.\n     Never force a wrong piece to fit.",
+    "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
+    "",
+    ...sharedRuleSections("tools", rolesText.length > 0),
     rolesText,
   ].filter((s) => s !== "").join("\n");
 }
@@ -403,12 +1125,7 @@ function renderTools(
       "Available Jarvis tools (call via `jarvis-tool { toolName, params: { ... } }`; include EVERY param marked REQUIRED):";
     const lines = [header];
     for (const t of tools) {
-      lines.push(`  - ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`);
-      for (const p of t.params) {
-        const req = p.required ? ", REQUIRED" : "";
-        const desc = p.description ? ` -- ${firstLine(p.description)}` : "";
-        lines.push(`      param ${p.name} (${p.type}${req})${desc}`);
-      }
+      lines.push(...renderToolSpecLines(t).map((l) => `  ${l}`));
     }
     return lines.join("\n");
   }
@@ -439,6 +1156,21 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
   ].join("\n");
 }
 
+/**
+ * One Jarvis tool's contract as prompt/tool-result lines: name + description,
+ * then each param with type and REQUIRED flag. Shared by the one-shot prompt
+ * listing and the get_tool_details tool.
+ */
+function renderToolSpecLines(t: ComposerToolSpec): string[] {
+  const lines = [`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`];
+  for (const p of t.params) {
+    const req = p.required ? ", REQUIRED" : "";
+    const desc = p.description ? ` -- ${firstLine(p.description)}` : "";
+    lines.push(`    param ${p.name} (${p.type}${req})${desc}`);
+  }
+  return lines;
+}
+
 /** First non-empty trimmed line of a (possibly multi-line) string. */
 function firstLine(s: string): string {
   for (const line of s.split("\n")) {
@@ -454,35 +1186,7 @@ function renderCatalog(registry: PieceLookup): string {
     // Internal test/plumbing pieces are never valid in a real flow -- don't
     // even show them to the model.
     if (isComposerExcludedPiece(piece.name)) continue;
-    lines.push(`- ${piece.name} (${piece.displayName}): ${piece.description}`);
-    for (const trigger of Object.values(piece.triggers ?? {})) {
-      lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
-      lines.push(...renderSchemaLines(trigger.inputSchema, 6));
-      // Triggers carry the upstream-native `sampleData`; some pieces
-      // also set `outputSample` (Jarvis extension). Either is a valid
-      // hint -- prefer sampleData when present.
-      lines.push(...renderOutputLines((trigger as { sampleData?: unknown; outputSample?: unknown }).sampleData ?? (trigger as { outputSample?: unknown }).outputSample, 6));
-      // Dynamic-output triggers: emit a per-value sample block so the
-      // model sees the EXACT envelope it should wire from for each
-      // configured input value (rather than mentally splicing the
-      // generic `sampleData` envelope with a separate payload-example
-      // catalog). This is the future-proof channel -- adding a new
-      // event type to `WORKFLOW_EVENT_TYPES` lights up here too.
-      const dyn = (trigger as {
-        dynamicSampleData?: { propName: string; samples: Record<string, unknown> };
-      }).dynamicSampleData;
-      if (dyn && Object.keys(dyn.samples).length > 0) {
-        lines.push(`      output samples by ${dyn.propName} (the trigger's actual output for each value):`);
-        for (const [value, sample] of Object.entries(dyn.samples)) {
-          lines.push(`        ${value}: ${JSON.stringify(sample)}`);
-        }
-      }
-    }
-    for (const action of Object.values(piece.actions)) {
-      lines.push(`    action  ${action.name}: ${action.description}`);
-      lines.push(...renderSchemaLines(action.inputSchema, 6));
-      lines.push(...renderOutputLines((action as { outputSample?: unknown }).outputSample, 6));
-    }
+    lines.push(...renderPieceBlockLines(piece, piece.name));
   }
   // Surface the schedule and webhook primitives the trigger manager understands
   // even though they aren't in the piece catalog today.
@@ -493,15 +1197,69 @@ function renderCatalog(registry: PieceLookup): string {
 
   // Workflow event-type catalog (used by jarvis-trigger:on_event flows).
   lines.push("");
-  lines.push("Available event types for jarvis-trigger:on_event (settings.input.eventType):");
-  lines.push("  Each event's payload fields below are accessed from downstream steps via {{trigger.payload.<field>}} (the trigger wraps the payload in an envelope -- see the wiring rules above).");
+  lines.push(...renderEventTypeDetailLines());
+  return lines.join("\n");
+}
+
+/**
+ * One piece's full contract as prompt lines: header, then every trigger and
+ * action with input schema + output sample. Shared by the one-shot catalog
+ * (label = canonical name) and the get_piece_details tool (label = short
+ * name). `label` only affects the header line.
+ */
+function renderPieceBlockLines(
+  piece: ReturnType<PieceLookup["list"]>[number],
+  label: string,
+): string[] {
+  const lines: string[] = [`- ${label} (${piece.displayName}): ${piece.description}`];
+  for (const trigger of Object.values(piece.triggers ?? {})) {
+    lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
+    lines.push(...renderSchemaLines(trigger.inputSchema, 6));
+    // Triggers carry the upstream-native `sampleData`; some pieces
+    // also set `outputSample` (Jarvis extension). Either is a valid
+    // hint -- prefer sampleData when present.
+    lines.push(...renderOutputLines((trigger as { sampleData?: unknown; outputSample?: unknown }).sampleData ?? (trigger as { outputSample?: unknown }).outputSample, 6));
+    // Dynamic-output triggers: emit a per-value sample block so the
+    // model sees the EXACT envelope it should wire from for each
+    // configured input value (rather than mentally splicing the
+    // generic `sampleData` envelope with a separate payload-example
+    // catalog). This is the future-proof channel -- adding a new
+    // event type to `WORKFLOW_EVENT_TYPES` lights up here too.
+    const dyn = (trigger as {
+      dynamicSampleData?: { propName: string; samples: Record<string, unknown> };
+    }).dynamicSampleData;
+    if (dyn && Object.keys(dyn.samples).length > 0) {
+      lines.push(`      output samples by ${dyn.propName} (the trigger's actual output for each value):`);
+      for (const [value, sample] of Object.entries(dyn.samples)) {
+        lines.push(`        ${value}: ${JSON.stringify(sample)}`);
+      }
+    }
+  }
+  for (const action of Object.values(piece.actions)) {
+    lines.push(`    action  ${action.name}: ${action.description}`);
+    lines.push(...renderSchemaLines(action.inputSchema, 6));
+    lines.push(...renderOutputLines((action as { outputSample?: unknown }).outputSample, 6));
+  }
+  return lines;
+}
+
+/**
+ * The event-type catalog for jarvis-trigger:on_event, with payload examples.
+ * Shared by the one-shot catalog tail and the get_piece_details rendering of
+ * the piece that carries on_event.
+ */
+function renderEventTypeDetailLines(): string[] {
+  const lines = [
+    "Available event types for jarvis-trigger:on_event (settings.input.eventType):",
+    "  Each event's payload fields below are accessed from downstream steps via {{trigger.payload.<field>}} (the trigger wraps the payload in an envelope -- see the wiring rules above).",
+  ];
   for (const meta of WORKFLOW_EVENT_TYPES) {
     lines.push(`- ${meta.type}: ${meta.description}`);
     if (meta.payloadExample) {
       lines.push(`    payload example: ${JSON.stringify(meta.payloadExample)}`);
     }
   }
-  return lines.join("\n");
+  return lines;
 }
 
 function renderSchemaLines(schema: PieceInputSchema | undefined, indent: number): string[] {
@@ -578,6 +1336,26 @@ function formatField(f: PieceInputField): string {
   }
   if (f.description) parts.push(f.description);
   return `${parts.join("; ")}`;
+}
+
+/**
+ * Resolve a piece by canonical or short name. The prompts and tools use the
+ * short human identity (`jarvis-trigger`, `jarvis-tool`), but the catalog is
+ * keyed by the full npm package name (`@jarvispieces/piece-jarvis-trigger`).
+ * Tries the exact name first; on miss walks the catalog for a piece whose
+ * name ends with `/piece-<short>`. Ambiguity (multiple matches) returns null
+ * -- safer than silently picking one.
+ */
+function resolvePieceByName(
+  registry: PieceLookup,
+  pieceName: string,
+): ReturnType<PieceLookup["list"]>[number] | null {
+  const direct = registry.get(pieceName);
+  if (direct) return direct;
+  const matches = registry
+    .list()
+    .filter((p) => p.name === pieceName || p.name.endsWith(`/piece-${pieceName}`));
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /* ------------------------------------------------------------- validation */
@@ -743,28 +1521,14 @@ function validateStep(
     return step;
   }
 
-  // Resolve short names to canonical npm names. The system prompt
-  // tells the LLM to use forms like `jarvis-trigger` and `jarvis-tool`
-  // (because that's the short identity humans use), but the catalog
-  // is keyed by the full npm package name like
-  // `@jarvispieces/piece-jarvis-trigger`. Without this resolution the
-  // composer would lose every Jarvis-piece flow on a validation error
-  // even though the LLM picked the right piece.
-  //
-  // Resolution: try the exact name first; on miss walk the catalog
-  // for any piece whose name ends with `/piece-<short>` or is exactly
-  // `<short>`. Ambiguity (multiple matches) keeps the original miss
-  // semantic -- safer than silently picking one.
-  let piece = registry.get(pieceName);
-  if (!piece) {
-    const matches = registry
-      .list()
-      .filter((p) => p.name === pieceName || p.name.endsWith(`/piece-${pieceName}`));
-    if (matches.length === 1) {
-      piece = matches[0]!;
-      // Persist the canonical name so the engine sees it at runtime.
-      if (step.settings) step.settings = { ...step.settings, pieceName: piece.name };
-    }
+  // Resolve short names to canonical npm names (see resolvePieceByName).
+  // Without this resolution the composer would lose every Jarvis-piece flow
+  // on a validation error even though the LLM picked the right piece.
+  const exact = registry.get(pieceName);
+  const piece = exact ?? resolvePieceByName(registry, pieceName);
+  if (!exact && piece && step.settings) {
+    // Persist the canonical name so the engine sees it at runtime.
+    step.settings = { ...step.settings, pieceName: piece.name };
   }
   if (!piece) {
     errors.push(`step "${name}" references unknown piece "${pieceName}"`);

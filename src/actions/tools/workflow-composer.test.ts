@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
 import { PieceCatalog, type PieceCatalogEntry, type PieceLookup } from "../../workflows/runtime/piece-catalog";
-import type { ComposerLlmClient, ComposerToolSpec } from "./workflow-composer";
+import type {
+  ComposerChatMessage,
+  ComposerChatReply,
+  ComposerLibraryEntry,
+  ComposerLlmClient,
+  ComposerToolCall,
+  ComposerToolDef,
+  ComposerToolSpec,
+} from "./workflow-composer";
 
 class StubLlm implements ComposerLlmClient {
   public calls: Array<{ prompt: string; system?: string }> = [];
@@ -1136,5 +1144,299 @@ describe("composeFlow", () => {
       const sys = llm.calls[0]?.system ?? "";
       expect(sys.includes("- output:")).toBe(false);
     });
+  });
+});
+
+describe("tool-loop composer", () => {
+  type ToolReply = { content?: string; tool_calls?: ComposerToolCall[] };
+
+  /**
+   * Stub with a tool-capable entrypoint. `replies` are consumed per turn
+   * (extra turns reuse the last entry); "throw" makes every chatTools call
+   * fail, modeling a provider that rejects the tools parameter. The plain
+   * `chat` path returns `oneShotReply` so tests can assert fallback.
+   */
+  class StubToolLlm implements ComposerLlmClient {
+    public toolTurns: Array<{ messages: ComposerChatMessage[]; tools: ComposerToolDef[] }> = [];
+    public chatCalls: Array<{ prompt: string; system?: string }> = [];
+    constructor(
+      private readonly replies: ToolReply[] | "throw",
+      private readonly oneShotReply = "",
+    ) {}
+    async chat(input: { prompt: string; system?: string }): Promise<{ text: string }> {
+      this.chatCalls.push(input);
+      return { text: this.oneShotReply };
+    }
+    async chatTools(
+      messages: ComposerChatMessage[],
+      tools: ComposerToolDef[],
+    ): Promise<ComposerChatReply> {
+      this.toolTurns.push({ messages: [...messages], tools });
+      if (this.replies === "throw") throw new Error("tools not supported");
+      const idx = Math.min(this.toolTurns.length - 1, this.replies.length - 1);
+      const r = this.replies[idx]!;
+      return { content: r.content ?? "", tool_calls: r.tool_calls ?? [] };
+    }
+  }
+
+  const tc = (id: string, name: string, args: Record<string, unknown> = {}): ComposerToolCall => ({
+    id,
+    name,
+    arguments: args,
+  });
+
+  const validFlowArgs = () => ({
+    displayName: "Notify me",
+    trigger: {
+      name: "trigger",
+      type: "EMPTY",
+      nextAction: {
+        name: "step_1",
+        type: "PIECE",
+        settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "hi" } },
+      },
+    },
+  });
+
+  const ghostFlowArgs = () => ({
+    displayName: "Ghost",
+    trigger: {
+      name: "trigger",
+      type: "EMPTY",
+      nextAction: {
+        name: "step_1",
+        type: "PIECE",
+        settings: { pieceName: "ghost", actionName: "doit" },
+      },
+    },
+  });
+
+  const library: ComposerLibraryEntry[] = [
+    {
+      id: "discord",
+      npmPackage: "@activepieces/piece-discord",
+      displayName: "Discord",
+      description: "Send messages and manage channels on Discord.",
+    },
+    {
+      id: "google-sheets",
+      npmPackage: "@activepieces/piece-google-sheets",
+      displayName: "Google Sheets",
+      description: "Read and write spreadsheet rows.",
+    },
+  ];
+
+  test("explores with tools then submits a valid flow", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "list_pieces")] },
+      { tool_calls: [tc("2", "get_piece_details", { pieceName: "jarvis-notify" })] },
+      { tool_calls: [tc("3", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "Notify me", description: "notify me with hi" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.flow.displayName).toBe("Notify me");
+      expect(result.flow.trigger.nextAction?.name).toBe("step_1");
+    }
+    // No fallback to the one-shot path.
+    expect(llm.chatCalls).toHaveLength(0);
+    // Turn 2 saw the list_pieces result: a compact index, not full schemas.
+    const listResult = llm.toolTurns[1]!.messages.at(-1)!;
+    expect(listResult.role).toBe("tool");
+    expect(listResult.tool_call_id).toBe("1");
+    expect(listResult.content).toContain("Installed pieces");
+    expect(listResult.content).toContain("jarvis-notify");
+    expect(listResult.content).toContain("schedule");
+    expect(listResult.content.includes("input.message")).toBe(false);
+    // Turn 3 saw the piece details, including the input schema.
+    const detailsResult = llm.toolTurns[2]!.messages.at(-1)!;
+    expect(detailsResult.content).toContain("input.message");
+  });
+
+  test("feeds validation errors back as the submit_flow tool result", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "submit_flow", ghostFlowArgs())] },
+      { tool_calls: [tc("2", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    const feedback = llm.toolTurns[1]!.messages.at(-1)!;
+    expect(feedback.role).toBe("tool");
+    expect(feedback.content).toMatch(/unknown piece "ghost"/);
+    expect(feedback.content).toMatch(/call submit_flow again/);
+  });
+
+  test("maxAttempts caps submit_flow attempts", async () => {
+    const llm = new StubToolLlm([{ tool_calls: [tc("1", "submit_flow", ghostFlowArgs())] }]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), maxAttempts: 2 },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => /unknown piece "ghost"/.test(e))).toBe(true);
+    }
+    expect(llm.toolTurns).toHaveLength(2);
+    // The exhausted loop must NOT fall back to one-shot (the model engaged
+    // with tools; the flow itself is what's wrong).
+    expect(llm.chatCalls).toHaveLength(0);
+  });
+
+  test("search_library + report_blocked yield suggestedInstalls", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "search_library", { query: "discord" })] },
+      {
+        tool_calls: [
+          tc("2", "report_blocked", {
+            reason: "No installed piece can post to Discord.",
+            suggestedPieces: [{ id: "discord", reason: "Posts messages to Discord channels." }],
+          }),
+        ],
+      },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), library },
+      { name: "Discord post", description: "post to my discord channel" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]).toMatch(/Discord/);
+      expect(result.suggestedInstalls).toEqual([
+        { id: "discord", displayName: "Discord", reason: "Posts messages to Discord channels." },
+      ]);
+    }
+    const searchResult = llm.toolTurns[1]!.messages.at(-1)!;
+    expect(searchResult.content).toContain("discord (Discord)");
+    expect(searchResult.content).toContain("[not installed]");
+    expect(searchResult.content.includes("google-sheets")).toBe(false);
+  });
+
+  test("search_library is only offered when a library is wired", async () => {
+    const llm = new StubToolLlm([{ tool_calls: [tc("1", "submit_flow", validFlowArgs())] }]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
+    const toolNames = llm.toolTurns[0]!.tools.map((t) => t.name);
+    expect(toolNames).toContain("list_pieces");
+    expect(toolNames).toContain("submit_flow");
+    expect(toolNames).toContain("report_blocked");
+    expect(toolNames.includes("search_library")).toBe(false);
+    expect(toolNames.includes("get_tool_details")).toBe(false);
+  });
+
+  test("get_tool_details returns the tool's param contract", async () => {
+    const tools: ComposerToolSpec[] = [
+      {
+        name: "gmail_send",
+        description: "Send an email via Gmail.",
+        params: [
+          { name: "to", type: "string", required: true },
+          { name: "subject", type: "string", required: false },
+        ],
+      },
+    ];
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "get_tool_details", { toolName: "gmail_send" })] },
+      { tool_calls: [tc("2", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry(), tools },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    const details = llm.toolTurns[1]!.messages.at(-1)!;
+    expect(details.content).toContain("gmail_send");
+    expect(details.content).toContain("param to (string, REQUIRED)");
+  });
+
+  test("unknown get_piece_details name returns a corrective error result", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("1", "get_piece_details", { pieceName: "ghost" })] },
+      { tool_calls: [tc("2", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    const errResult = llm.toolTurns[1]!.messages.at(-1)!;
+    expect(errResult.content).toMatch(/unknown piece "ghost"/);
+    expect(errResult.content).toMatch(/list_pieces/);
+  });
+
+  test("accepts an inline JSON flow answered without a tool call", async () => {
+    const llm = new StubToolLlm([{ content: JSON.stringify(validFlowArgs()) }]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    expect(llm.chatCalls).toHaveLength(0);
+  });
+
+  test("falls back to one-shot when the model answers prose on turn 1", async () => {
+    const oneShot = JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } });
+    const llm = new StubToolLlm([{ content: "Sure! I'd build a flow like this: ..." }], oneShot);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    expect(llm.toolTurns).toHaveLength(1);
+    expect(llm.chatCalls).toHaveLength(1);
+  });
+
+  test("falls back to one-shot when chatTools throws on the first call", async () => {
+    const oneShot = JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } });
+    const llm = new StubToolLlm("throw", oneShot);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(true);
+    expect(llm.chatCalls).toHaveLength(1);
+  });
+
+  test("gives up after the turn budget when the model never submits", async () => {
+    const llm = new StubToolLlm([{ tool_calls: [tc("1", "list_pieces")] }]);
+    const result = await composeFlow(
+      { llm, pieceRegistry: makeRegistry() },
+      { name: "X", description: "x" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]).toMatch(/tool-call budget/);
+    }
+    expect(llm.toolTurns).toHaveLength(12);
+    expect(llm.chatCalls).toHaveLength(0);
+  });
+
+  test("tool-loop system prompt teaches the process and lists roles inline", async () => {
+    const llm = new StubToolLlm([{ tool_calls: [tc("1", "submit_flow", validFlowArgs())] }]);
+    await composeFlow(
+      {
+        llm,
+        pieceRegistry: makeRegistry(),
+        library,
+        specialistRoles: [{ id: "research-analyst", name: "Research Analyst" }],
+      },
+      { name: "X", description: "x" },
+    );
+    const sys = llm.toolTurns[0]!.messages[0]!;
+    expect(sys.role).toBe("system");
+    expect(sys.content).toContain("## Process");
+    expect(sys.content).toContain("list_pieces");
+    expect(sys.content).toContain("submit_flow");
+    expect(sys.content).toContain("search_library");
+    expect(sys.content).toContain("## Examples");
+    expect(sys.content).toContain("{{trigger.payload.<field>}}");
+    expect(sys.content).toContain("research-analyst");
+    expect(sys.content).toMatch(/MUST be one of the specialist role ids/);
+    // The catalog is NOT dumped inline -- that's what the tools are for.
+    expect(sys.content.includes("input.message")).toBe(false);
   });
 });

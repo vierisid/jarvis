@@ -3612,7 +3612,37 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const content = typeof reply.content === "string" ? reply.content : "";
           return { text: content };
         },
+        // Tool-loop entrypoint: the composer discovers pieces via tools
+        // (list_pieces / get_piece_details / ...) instead of a full catalog
+        // dump. ComposerChatMessage / ComposerToolDef are structurally
+        // compatible with LLMMessage / LLMTool, so this is a passthrough.
+        // If the provider rejects the tools parameter, the composer catches
+        // the error and falls back to the one-shot `chat` path above.
+        async chatTools(
+          messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_calls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; tool_call_id?: string }>,
+          tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>,
+        ): Promise<{ content: string; tool_calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> }> {
+          const reply = await llmManager.chat(messages, {
+            max_tokens: 4096,
+            tools,
+            tool_choice: 'auto',
+          });
+          return {
+            content: typeof reply.content === 'string' ? reply.content : '',
+            tool_calls: reply.tool_calls ?? [],
+          };
+        },
       };
+      // Compact community-library index for the composer's search_library
+      // tool: lets it suggest "install piece X first" when the user asks for
+      // a service that isn't installed, instead of forcing a wrong fit.
+      const { CATALOG: piecesLibraryCatalog } = await import('../workflows/pieces-library/catalog.ts');
+      const composerLibrary = piecesLibraryCatalog.map((e) => ({
+        id: e.id,
+        npmPackage: e.npmPackage,
+        displayName: e.displayName,
+        description: e.description,
+      }));
       const composerToolRegistry = toolRegistry
         ? {
             listNames: (cat?: string) => toolRegistry.list(cat).map((t) => t.name),
@@ -3650,6 +3680,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             name: r.name,
             description: r.description,
           })),
+        library: composerLibrary,
       });
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);
