@@ -87,14 +87,15 @@ type OpenRouterStreamChunk = {
 };
 
 /**
- * Upstreams that require explicit cache_control breakpoints through
- * OpenRouter (everything else - OpenAI, Gemini 2.5, DeepSeek, Groq, Grok,
- * Moonshot - caches automatically with no request changes). OpenRouter
- * supports a top-level `cache_control` field for these and places the
- * breakpoints itself for multi-turn conversations.
+ * Upstreams where OpenRouter's TOP-LEVEL `cache_control` field is documented
+ * to work: OpenRouter places the breakpoints itself for multi-turn
+ * conversations. Documented for Anthropic only. Qwen also needs explicit
+ * caching but only supports per-content-block cache_control (a possible
+ * follow-up); everything else (OpenAI, Gemini 2.5, DeepSeek, Groq, Grok,
+ * Moonshot) caches automatically with no request changes.
  */
-function modelUsesExplicitCaching(model: string): boolean {
-  return /^(anthropic|qwen)\//i.test(model);
+function modelSupportsTopLevelCacheControl(model: string): boolean {
+  return /^anthropic\//i.test(model);
 }
 
 export class OpenRouterProvider implements LLMProvider {
@@ -132,10 +133,10 @@ export class OpenRouterProvider implements LLMProvider {
       body.tools = this.convertTools(tools);
       body.tool_choice = tool_choice || 'auto';
     }
-    // Top-level cache_control: OpenRouter places the Anthropic/Qwen
-    // breakpoints automatically for multi-turn conversations. Auto-caching
-    // upstreams need nothing. Sub-minimum prefixes silently don't cache.
-    if (this.promptCache && modelUsesExplicitCaching(model)) {
+    // Top-level cache_control: OpenRouter places the Anthropic breakpoints
+    // automatically for multi-turn conversations. Auto-caching upstreams
+    // need nothing. Sub-minimum prefixes silently don't cache.
+    if (this.promptCache && modelSupportsTopLevelCacheControl(model)) {
       body.cache_control = { type: 'ephemeral' };
     }
 
@@ -179,7 +180,7 @@ export class OpenRouterProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';
     }
     // Same top-level cache_control as chat() - see comment there.
-    if (this.promptCache && modelUsesExplicitCaching(model)) {
+    if (this.promptCache && modelSupportsTopLevelCacheControl(model)) {
       body.cache_control = { type: 'ephemeral' };
     }
 

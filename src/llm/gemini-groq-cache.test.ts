@@ -49,6 +49,60 @@ describe('GeminiProvider implicit-cache usage parsing', () => {
   });
 });
 
+describe('GeminiProvider stream usage parsing', () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function sseResponse(chunks: unknown[]): void {
+    const body = chunks.map((c) => `data: ${JSON.stringify(c)}`).join('\n') + '\n';
+    globalThis.fetch = (async () =>
+      new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    ) as unknown as typeof fetch;
+  }
+
+  async function collectDoneUsage(provider: GeminiProvider) {
+    for await (const event of provider.stream([{ role: 'user', content: 'hi' }])) {
+      if (event.type === 'done') return event.response.usage;
+    }
+    throw new Error('no done event');
+  }
+
+  it('maps cachedContentTokenCount from stream usageMetadata', async () => {
+    sseResponse([
+      { candidates: [{ content: { parts: [{ text: 'hel' }], role: 'model' } }] },
+      {
+        candidates: [{ content: { parts: [{ text: 'lo' }], role: 'model' }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 2500, candidatesTokenCount: 12, totalTokenCount: 2512, cachedContentTokenCount: 2048 },
+      },
+    ]);
+    const usage = await collectDoneUsage(new GeminiProvider('key'));
+
+    expect(usage.input_tokens).toBe(2500 - 2048);
+    expect(usage.output_tokens).toBe(12);
+    expect(usage.cache_read_input_tokens).toBe(2048);
+  });
+
+  it('clears a stale cached count when a later snapshot omits it', async () => {
+    sseResponse([
+      {
+        candidates: [{ content: { parts: [{ text: 'hel' }], role: 'model' } }],
+        usageMetadata: { promptTokenCount: 2500, candidatesTokenCount: 3, totalTokenCount: 2503, cachedContentTokenCount: 2048 },
+      },
+      {
+        candidates: [{ content: { parts: [{ text: 'lo' }], role: 'model' }, finishReason: 'STOP' }],
+        // Final cumulative snapshot without the cached field: input must be
+        // computed without subtraction and no stale cache_read may survive.
+        usageMetadata: { promptTokenCount: 2500, candidatesTokenCount: 12, totalTokenCount: 2512 },
+      },
+    ]);
+    const usage = await collectDoneUsage(new GeminiProvider('key'));
+
+    expect(usage.input_tokens).toBe(2500);
+    expect(usage.cache_read_input_tokens).toBeUndefined();
+  });
+});
+
 describe('GroqProvider automatic-cache usage parsing', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;

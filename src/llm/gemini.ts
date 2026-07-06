@@ -188,7 +188,14 @@ export class GeminiProvider implements LLMProvider {
               // (Gemini's promptTokenCount includes cached content).
               usage.input_tokens = Math.max(0, (chunk.usageMetadata.promptTokenCount ?? 0) - (cached ?? 0));
               usage.output_tokens = chunk.usageMetadata.candidatesTokenCount ?? 0;
-              if (cached !== undefined) usage.cache_read_input_tokens = cached;
+              if (cached !== undefined) {
+                usage.cache_read_input_tokens = cached;
+              } else {
+                // Each usageMetadata chunk is a full snapshot: a chunk
+                // without the field must clear any earlier value, or the
+                // final totals would double-count the cached span.
+                delete usage.cache_read_input_tokens;
+              }
             }
 
             if (chunk.candidates && chunk.candidates.length > 0) {

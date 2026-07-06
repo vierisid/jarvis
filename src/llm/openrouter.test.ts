@@ -57,12 +57,15 @@ describe('OpenRouterProvider cache_control', () => {
     expect(capture.body().cache_control).toEqual({ type: 'ephemeral' });
   });
 
-  it('sends top-level cache_control for qwen/* models', async () => {
+  it('omits cache_control for qwen/* models (top-level form is Anthropic-only)', async () => {
+    // Qwen needs explicit caching but only supports per-content-block
+    // cache_control, which we don't emit yet. Sending the top-level field
+    // would be undocumented behavior for this upstream.
     const capture = captureChat(completionPayload(basicUsage, 'qwen/qwen-2.5-72b'));
     const provider = new OpenRouterProvider('key');
 
     await provider.chat([{ role: 'user', content: 'hi' }], { model: 'qwen/qwen-2.5-72b' });
-    expect(capture.body().cache_control).toEqual({ type: 'ephemeral' });
+    expect(capture.body().cache_control).toBeUndefined();
   });
 
   it('omits cache_control for auto-caching upstreams', async () => {
