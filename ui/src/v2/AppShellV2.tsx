@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { useV2Route } from "./router";
 import { AppShell } from "./shell/AppShell";
+import { BootSplash } from "./shell/BootSplash";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomActionBus";
@@ -110,14 +111,19 @@ export function AppShellV2() {
       {route.kind === "primitives" ? (
         <PrimitivesPage />
       ) : (
-        <OnboardingGate>
-          <RoomActionBusProvider>
-            {/* Phase 2 — room-centric shell. The AppShell renders the active
-                room inside its surface (persistent Index + top bar around it),
-                so rooms no longer overlay the home as a separate layer. */}
-            <AppShell />
-          </RoomActionBusProvider>
-        </OnboardingGate>
+        <>
+          {/* Cold-start splash — overlays the booting app until the gate
+              resolves (dispatches jarvis:boot-ready), then cross-fades away. */}
+          <BootSplash />
+          <OnboardingGate>
+            <RoomActionBusProvider>
+              {/* Phase 2 — room-centric shell. The AppShell renders the active
+                  room inside its surface (persistent Index + top bar around it),
+                  so rooms no longer overlay the home as a separate layer. */}
+              <AppShell />
+            </RoomActionBusProvider>
+          </OnboardingGate>
+        </>
       )}
     </div>
   );

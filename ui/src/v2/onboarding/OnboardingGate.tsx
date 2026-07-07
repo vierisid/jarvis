@@ -20,6 +20,12 @@ import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequire
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
 
+  // Tell the cold-start splash the app has booted, the first time the status
+  // resolves (to the wizard or the shell — either way boot is done).
+  React.useEffect(() => {
+    if (!loading && status) window.dispatchEvent(new Event("jarvis:boot-ready"));
+  }, [loading, status]);
+
   if (loading || !status) {
     return null;
   }
