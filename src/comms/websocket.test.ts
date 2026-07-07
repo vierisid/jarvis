@@ -50,8 +50,8 @@ test('WebSocketServer - health endpoint', async () => {
 test('WebSocketServer - health reports the JARVIS_VERSION pin', async () => {
   const prev = process.env.JARVIS_VERSION;
   process.env.JARVIS_VERSION = '2026.07.01';
-  server.start();
   try {
+    server.start(); // inside try so a start() throw still restores the env
     const data = (await (await fetch('http://localhost:3143/health')).json()) as any;
     expect(data.version).toBe('2026.07.01');
   } finally {

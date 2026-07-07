@@ -39,13 +39,22 @@ interface Violation {
   text: string;
 }
 
+/** Strip line/block comments so a comment word (e.g. "default", or a `// drop
+ *  column later` note) can't waive OR falsely trip the DDL detection. */
+function stripComments(line: string): string {
+  return line.replace(/\/\*.*?\*\//g, "").replace(/\/\/.*$/, "");
+}
+
 /** Classify a DDL line's rollback hazard, or null if additive/safe. */
 export function contractKind(line: string): string | null {
-  const l = line.toLowerCase();
+  const l = stripComments(line).toLowerCase();
   if (/\bdrop\s+column\b/.test(l)) return "DROP COLUMN";
   if (/\bdrop\s+table\b/.test(l)) return "DROP TABLE";
   if (/\brename\s+column\b/.test(l)) return "RENAME COLUMN";
   if (/\brename\s+to\b/.test(l)) return "RENAME TABLE";
+  // A unique index on an existing table rejects the duplicate rows an older
+  // version legally wrote -> contracting (a plain index is additive/fine).
+  if (/\bcreate\s+unique\s+index\b/.test(l)) return "CREATE UNIQUE INDEX";
   // ADD COLUMN ... NOT NULL with no DEFAULT on the same statement.
   if (/\badd\s+column\b/.test(l) && /\bnot\s+null\b/.test(l) && !/\bdefault\b/.test(l)) {
     return "ADD COLUMN NOT NULL without DEFAULT";
@@ -72,7 +81,11 @@ function main(): void {
     try {
       content = readFileSync(join(REPO_ROOT, rel), "utf-8");
     } catch {
-      continue; // file may not exist in every checkout
+      // A listed DDL file that's gone (moved/renamed/typo) must FAIL loudly --
+      // a silent skip is indistinguishable from "scanned + clean" and would
+      // disable the guard. Update DDL_FILES if the schema genuinely moved.
+      console.error(`[check-migrations] DDL file not found: ${rel} (update DDL_FILES if it moved)`);
+      process.exit(1);
     }
     violations.push(...scanContent(rel, content));
   }

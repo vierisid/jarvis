@@ -40,7 +40,7 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_flow_project ON flow(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_flow_status ON flow(status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_external ON flow(project_id, external_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_external ON flow(project_id, external_id)`, // expand-contract-ok: base-schema index (created with the table)
 
   // Engine-managed trigger state lives in `engine_listeners` (JSON array of
   // AppEventListener `{ events, identifierValue }`, returned by upstream's
@@ -123,7 +123,7 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_app_connection_project ON app_connection(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_app_connection_piece ON app_connection(piece_name)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_app_connection_external ON app_connection(project_id, piece_name, external_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_app_connection_external ON app_connection(project_id, piece_name, external_id)`, // expand-contract-ok: base-schema index (created with the table)
 
   // --- Trigger events: webhook payloads, polling captures, event-bus emissions awaiting flow execution ---
   `CREATE TABLE IF NOT EXISTS trigger_event (
@@ -147,7 +147,7 @@ const STATEMENTS: string[] = [
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_store_entry_project_key ON store_entry(project_id, key)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_store_entry_project_key ON store_entry(project_id, key)`, // expand-contract-ok: base-schema index (created with the table)
 
   // --- Files passed between steps (file-helper, image-helper, etc.) ---
   `CREATE TABLE IF NOT EXISTS workflow_file (
