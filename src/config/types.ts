@@ -363,6 +363,14 @@ export type JarvisConfig = {
      * the token is re-issued with a reachable origin.
      */
     brain_domain?: string;
+    /**
+     * Graceful-drain deadline (ms). On SIGTERM the daemon quiesces (stops
+     * accepting new work) and waits up to this long for in-flight agent turns
+     * and workflow runs to reach a safe point before tearing down. Kept UNDER
+     * the supervisor's kill grace (hosted: systemd `TimeoutStopSec=90`) so the
+     * drain finishes before SIGKILL. Default 75s.
+     */
+    drain_deadline_ms?: number;
   };
   auth?: AuthConfig;
   /**

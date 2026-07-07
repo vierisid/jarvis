@@ -149,6 +149,24 @@ export function listWaitpointsByFlowRun(
     .map(rowToWaitpoint);
 }
 
+/**
+ * Active TIMER waitpoints whose resume time has arrived (`resume_date_time <=
+ * now`). Drives the TIMER scheduler (UPDATES.md) — a delay/wait step whose
+ * timer elapsed (incl. during downtime) has no other resume trigger. ISO-8601
+ * strings sort chronologically, so a lexical `<=` is a time comparison.
+ */
+export function listDueTimerWaitpoints(nowIso: string, limit = 100): Waitpoint[] {
+  return db()
+    .prepare<WaitpointRow, [string, number]>(
+      `SELECT * FROM waitpoint
+       WHERE type = 'TIMER' AND resumed_at IS NULL
+         AND resume_date_time IS NOT NULL AND resume_date_time <= ?
+       ORDER BY resume_date_time ASC LIMIT ?`,
+    )
+    .all(nowIso, limit)
+    .map(rowToWaitpoint);
+}
+
 export function markWaitpointResumed(id: string, now = Date.now()): boolean {
   const r = db()
     .prepare(`UPDATE waitpoint SET resumed_at = ? WHERE id = ? AND resumed_at IS NULL`)

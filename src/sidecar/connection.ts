@@ -160,8 +160,12 @@ export class SidecarConnection {
     }
   }
 
-  /** Close connection and clean up */
-  close(): void {
+  /**
+   * Close connection and clean up. Pass a WS close code + reason for a graceful
+   * "going away" (1001) on drain, so the sidecar sees a clean planned-restart
+   * signal rather than an ambiguous drop (it reconnects either way).
+   */
+  close(code?: number, reason?: string): void {
     this.stopHeartbeat();
 
     // Reject all pending binary waits
@@ -172,7 +176,8 @@ export class SidecarConnection {
     this.pendingBinary.clear();
 
     try {
-      this.ws.close();
+      if (code !== undefined) this.ws.close(code, reason);
+      else this.ws.close();
     } catch {
       // Already closed
     }

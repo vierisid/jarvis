@@ -200,10 +200,12 @@ export class SidecarManager implements Service {
     // Stop scheduler
     this.scheduler.stop();
 
-    // Close all sidecar connections and fail pending RPCs
+    // Close all sidecar connections and fail pending RPCs. Use WS 1001 (Going
+    // Away) + reason so the sidecar recognizes a planned restart and reconnects
+    // promptly against the freshly-booted brain (same keys + JWT).
     for (const [id, conn] of this.sidecarConnections) {
       this.rpcTracker.failAll(id, 'manager stopping');
-      conn.close();
+      conn.close(1001, 'server restarting');
     }
     this.sidecarConnections.clear();
 

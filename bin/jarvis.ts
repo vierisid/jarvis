@@ -4,7 +4,8 @@
  *
  * Usage:
  *   jarvis start [--port N] [-d|--detach]   Start the daemon
- *   jarvis stop [--port N]                  Stop the running daemon
+ *   jarvis stop [--port N]                  Stop the running daemon (graceful drain)
+ *   jarvis drain [--port N]                 Graceful drain + stop (finish in-flight work)
  *   jarvis status                           Show daemon status
  *   jarvis uninstall                        Remove JARVIS (detects install method)
  *   jarvis doctor                           Check environment & connectivity
@@ -22,6 +23,7 @@ import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pi
 import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
+import { loadConfig } from '../src/config/loader.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -134,9 +136,11 @@ async function cmdStart(args: string[]): Promise<void> {
       console.log(c.dim('  Stop it first with: jarvis stop'));
       process.exit(1);
     }
+    // Release the flock on final exit. Do NOT handle SIGINT/SIGTERM here: the
+    // daemon (src/daemon/index.ts) traps them and runs a bounded graceful
+    // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
+    // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
     process.on('exit', () => releaseLock());
-    process.on('SIGINT', () => { releaseLock(); process.exit(0); });
-    process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools });
@@ -195,7 +199,8 @@ async function cmdStart(args: string[]): Promise<void> {
   }
 }
 
-async function cmdStop(args: string[] = []): Promise<void> {
+async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promise<void> {
+  const verb = opts.verb ?? 'Stopping';
   const pid = isLocked();
 
   // Parse `--port N` for the no-lockfile recovery path. Ignored when the
@@ -237,19 +242,27 @@ async function cmdStop(args: string[] = []): Promise<void> {
     return;
   }
 
-  console.log(c.cyan(`Stopping JARVIS daemon (PID ${pid})...`));
+  console.log(c.cyan(`${verb} JARVIS daemon (PID ${pid})...`));
   try {
     process.kill(pid, 'SIGTERM');
 
-    // Wait up to 5s for graceful shutdown, then SIGKILL
+    // SIGTERM triggers a BOUNDED graceful drain in the daemon (finish in-flight
+    // turns/workflows within the deadline). Poll until it exits -- an idle
+    // daemon exits near-instantly; a busy one drains first. SIGKILL only if it
+    // overruns its own drain deadline (+ margin).
+    const cfg = await loadConfig().catch(() => null);
+    const graceMs = (cfg?.daemon?.drain_deadline_ms ?? 75_000) + 20_000;
+    const deadline = Date.now() + graceMs;
     let alive = true;
-    for (let i = 0; i < 10; i++) {
+    let ticks = 0;
+    while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 500));
       try { process.kill(pid, 0); } catch { alive = false; break; }
+      if (++ticks === 6) console.log(c.dim('  Draining in-flight work...'));
     }
 
     if (alive) {
-      console.log(c.dim('  Process still alive, sending SIGKILL...'));
+      console.log(c.dim('  Drain deadline exceeded, sending SIGKILL...'));
       try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
     }
 
@@ -400,6 +413,10 @@ switch (command) {
     break;
   case 'stop':
     await cmdStop(commandArgs);
+    break;
+  case 'drain':
+    // Same signal as stop (SIGTERM -> bounded graceful drain); clearer label.
+    await cmdStop(commandArgs, { verb: 'Draining' });
     break;
   case 'restart':
     await cmdRestart(commandArgs);

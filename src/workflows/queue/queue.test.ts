@@ -8,6 +8,7 @@ import {
   failJob,
   getJob,
   queueStats,
+  recoverOrphanedJobs,
 } from "../db/repos/job-queue";
 import { Worker } from "./worker";
 
@@ -35,6 +36,18 @@ describe("job-queue repo", () => {
 
     completeJob(j.id);
     expect(getJob(j.id)?.status).toBe("SUCCEEDED");
+  });
+
+  test("recoverOrphanedJobs re-queues orphaned RUNNING jobs for immediate re-claim", () => {
+    const j = enqueue({ jobType: "TEST", payload: {} });
+    const claimed = claimNextJob(); // -> RUNNING with a live (future) lease
+    expect(claimed?.id).toBe(j.id);
+    // A normal poll won't re-claim it: the lease hasn't lapsed.
+    expect(claimNextJob()).toBeNull();
+    // Boot recovery treats the orphaned RUNNING job as re-runnable NOW.
+    expect(recoverOrphanedJobs()).toBe(1);
+    expect(getJob(j.id)?.status).toBe("QUEUED");
+    expect(claimNextJob()?.id).toBe(j.id); // immediately re-claimable
   });
 
   test("priority + scheduled_at ordering", () => {

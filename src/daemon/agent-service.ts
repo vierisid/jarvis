@@ -14,7 +14,21 @@ import type { RoleDefinition } from '../roles/types.ts';
 import type { PersonalityModel } from '../personality/model.ts';
 
 import { LLMManager } from '../llm/manager.ts';
+import { activeTurns, DrainingError } from './active-turns.ts';
 import { registerLLMProviders, configureLLMTiers } from '../llm/config-binding.ts';
+
+/** Wrap a turn's stream so the in-flight count is released when it settles
+ *  (exhausted, errored, or the consumer breaks). `endTurn` is idempotent. */
+async function* trackTurnStream(
+  inner: AsyncIterable<LLMStreamEvent>,
+  endTurn: () => void,
+): AsyncGenerator<LLMStreamEvent> {
+  try {
+    yield* inner;
+  } finally {
+    endTurn();
+  }
+}
 import { getDb } from '../vault/schema.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
@@ -271,6 +285,23 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
+    // Refuse new turns once draining; otherwise count this one in-flight so a
+    // graceful drain can await it (released when the tracked stream settles).
+    if (activeTurns.isDraining) throw new DrainingError();
+    const endTurn = activeTurns.begin();
+    try {
+      const inner = this.streamMessageInner(text, channel, siteContext);
+      return { stream: trackTurnStream(inner.stream, endTurn), onComplete: inner.onComplete };
+    } catch (err) {
+      endTurn();
+      throw err;
+    }
+  }
+
+  private streamMessageInner(text: string, channel: string = 'websocket', siteContext?: string): {
+    stream: AsyncIterable<LLMStreamEvent>;
+    onComplete: (fullText: string) => Promise<void>;
+  } {
     if (this.convOrchestrator) {
       return this.streamMessageConv(text, channel);
     }
@@ -430,26 +461,33 @@ export class AgentService implements Service, IAgentService {
    *     ReAct loop on the medium tier).
    */
   async handleMessage(text: string, channel: string = 'websocket'): Promise<string> {
-    let response: string;
+    // Background turns (event reactions, commitments, bg-agent) route here.
+    if (activeTurns.isDraining) throw new DrainingError();
+    const endTurn = activeTurns.begin();
+    try {
+      let response: string;
 
-    if (this.convOrchestrator) {
-      response = await this.handleMessageConv(text, channel);
-    } else {
-      const systemPrompt = this.buildFullSystemPromptParts(channel, text);
-      response = await this.orchestrator.processMessage(systemPrompt, text);
+      if (this.convOrchestrator) {
+        response = await this.handleMessageConv(text, channel);
+      } else {
+        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+        response = await this.orchestrator.processMessage(systemPrompt, text);
+      }
+
+      // Run extraction and learning in parallel (non-blocking but tracked)
+      Promise.allSettled([
+        this.extractKnowledge(text, response).catch((err) =>
+          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+        ),
+        this.learnFromInteraction(text, response, channel).catch((err) =>
+          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+        ),
+      ]);
+
+      return response;
+    } finally {
+      endTurn();
     }
-
-    // Run extraction and learning in parallel (non-blocking but tracked)
-    Promise.allSettled([
-      this.extractKnowledge(text, response).catch((err) =>
-        console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-      ),
-      this.learnFromInteraction(text, response, channel).catch((err) =>
-        console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-      ),
-    ]);
-
-    return response;
   }
 
   /**
