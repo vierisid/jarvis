@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Paperclip, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Icon } from "../../ui";
 import { Tabs, StatusChip, Select, EmptyState, Toast, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
@@ -148,7 +149,7 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
             onSave={async (patch) => toastFrom(await data.updateContent(selected.id, patch))}
             onAdvance={async () => toastFrom(await data.advance(selected.id))}
             onRegress={async () => toastFrom(await data.regress(selected.id))}
-            onDelete={async () => { if (!window.confirm("Delete this content?")) return; const r = await data.deleteContent(selected.id); toastFrom(r); if (r.ok) setSelectedId(null); }}
+            onDelete={async () => { if (!await confirmDialog("Delete this content?")) return; const r = await data.deleteContent(selected.id); toastFrom(r); if (r.ok) setSelectedId(null); }}
             listNotes={() => data.listNotes(selected.id)}
             addNote={(stage, note) => data.addNote(selected.id, stage, note)}
             listAttachments={() => data.listAttachments(selected.id)}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import { confirmDialog } from "../../../ui/ConfirmDialog";
 import { resetOnboarding } from "../../../onboarding/resetClient";
 
 export function ProfileTab({
@@ -61,7 +62,7 @@ export function ProfileTab({
   };
 
   const handleClear = async () => {
-    if (!confirm("Clear the saved user profile context?")) return;
+    if (!await confirmDialog("Clear the saved user profile context?")) return;
     const r = await data.clearProfile();
     if (r.ok) {
       setAnswers({});
@@ -262,7 +263,7 @@ function OnboardingReplaySection({
       scope === "profile"
         ? "Re-run the profile interview? Your saved profile facts will be cleared first. The page will reload."
         : "Replay the dashboard tutorial? The page will reload.";
-    if (!confirm(label)) return;
+    if (!await confirmDialog(label)) return;
     setBusy(scope === "profile" ? "interview" : "tutorial");
     try {
       await resetOnboarding(scope);

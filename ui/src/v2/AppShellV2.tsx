@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { useV2Route } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { BootSplash } from "./shell/BootSplash";
+import { ConfirmHost } from "./ui/ConfirmDialog";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomActionBus";
@@ -53,6 +54,7 @@ export function AppShellV2() {
     const Body = getRoomBody(route.key);
     return (
       <div className="jarvis-v2-root jarvis-v2-panel-mode">
+        <ConfirmHost />
         <RoomActionBusProvider>
           <PanelRoomActionBridge />
           <Body mode="expanded" />
@@ -115,6 +117,8 @@ export function AppShellV2() {
           {/* Cold-start splash — overlays the booting app until the gate
               resolves (dispatches jarvis:boot-ready), then cross-fades away. */}
           <BootSplash />
+          {/* Branded confirm dialogs (replaces native confirm()). */}
+          <ConfirmHost />
           <OnboardingGate>
             <RoomActionBusProvider>
               {/* Phase 2 — room-centric shell. The AppShell renders the active

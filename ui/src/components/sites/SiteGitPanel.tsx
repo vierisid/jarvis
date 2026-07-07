@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../hooks/useApi";
+import { confirmDialog } from "../../v2/ui/ConfirmDialog";
 import type { GitBranch, GitCommit } from "./types";
 import { SiteGitHubModal } from "./SiteGitHubModal";
 
@@ -152,7 +153,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
   };
 
   const handleDisconnect = async () => {
-    if (!confirm("Disconnect this project from GitHub? (The remote repo will not be deleted.)")) return;
+    if (!await confirmDialog("Disconnect this project from GitHub? (The remote repo will not be deleted.)")) return;
     try {
       await api(`/api/sites/projects/${projectId}/github/repo`, { method: "DELETE" });
       setRemoteStatus(null);

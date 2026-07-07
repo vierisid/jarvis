@@ -8,6 +8,7 @@
  */
 
 import React, { useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
 import {
@@ -85,7 +86,7 @@ export function ConnectionsPanel(): React.ReactElement {
               key={c.id}
               connection={c}
               onDelete={async () => {
-                if (!window.confirm(`Delete connection "${c.displayName}"? Secrets are removed permanently.`)) return;
+                if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.`)) return;
                 const r = await conn.remove(c.id);
                 flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"` : `Delete failed: ${r.message}`);
               }}

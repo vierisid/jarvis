@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import { confirmDialog } from "../../../ui/ConfirmDialog";
 
 export function IntegrationsTab({
   data,
@@ -99,7 +100,7 @@ export function IntegrationsTab({
   };
 
   const handleDisconnect = async () => {
-    if (!confirm("Disconnect Google? You'll need to re-authorize to reconnect.")) return;
+    if (!await confirmDialog("Disconnect Google? You'll need to re-authorize to reconnect.")) return;
     const r = await data.disconnectGoogle();
     onToast(r.message, r.ok ? "ok" : "warn");
   };

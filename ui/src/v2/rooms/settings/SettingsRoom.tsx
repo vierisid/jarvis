@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   AlertCircle,
   Bot,
@@ -334,7 +335,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             type="button"
             className="v2-set__banner-btn"
             onClick={async () => {
-              if (!confirm("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
+              if (!await confirmDialog("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
               const r = await data.restartDaemon();
               showToast(r.message, r.ok ? "ok" : "warn");
             }}

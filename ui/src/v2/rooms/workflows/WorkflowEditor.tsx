@@ -15,6 +15,7 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import { createPortal } from "react-dom";
 import {
   ReactFlow,
@@ -218,14 +219,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // stray keystroke doesn't lose work.
   const editorDirty = editor.dirty;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
+    const onKey = async (e: KeyboardEvent): Promise<void> => {
       if (e.key !== "Escape") return;
       // Don't hijack Esc when the user is typing in an input/textarea/select
       // -- React Flow listens too, and form fields commonly use Esc to revert.
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (editorDirty && !window.confirm("Discard unsaved changes?")) return;
+      if (editorDirty && !await confirmDialog("Discard unsaved changes?")) return;
       onClose();
     };
     window.addEventListener("keydown", onKey);
@@ -261,7 +262,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         .map((g) => `  - ${g.stepDisplayName}: ${g.fieldLabel}`)
         .join("\n");
       const more = editor.validationGaps.length > 6 ? `\n  ...and ${editor.validationGaps.length - 6} more` : "";
-      const proceed = window.confirm(
+      const proceed = await confirmDialog(
         `${editor.validationGaps.length} required field${editor.validationGaps.length === 1 ? "" : "s"} empty:\n\n${summary}${more}\n\nSave anyway? Runs will fail at the missing step.`,
       );
       if (!proceed) return;
@@ -586,7 +587,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   const handleRun = useCallback(async (): Promise<void> => {
     if (!flowId) return;
     if (editor.dirty) {
-      const proceed = window.confirm(
+      const proceed = await confirmDialog(
         "You have unsaved changes. Running will use the last SAVED version, not your current edits. Continue?",
       );
       if (!proceed) return;
@@ -1008,8 +1009,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               const created = editor.insertStepAfter(selectedStep.name);
               if (created) setSelectedStepName(created);
             }}
-            onDelete={() => {
-              if (window.confirm(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+            onDelete={async () => {
+              if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
                 editor.deleteStep(selectedStep.name);
                 closePopover();
               }
@@ -3699,7 +3700,7 @@ function SampleInputSection({
   };
 
   const handleClear = async (): Promise<void> => {
-    if (!window.confirm("Clear this step's sample input override?")) return;
+    if (!await confirmDialog("Clear this step's sample input override?")) return;
     setBusy("clear");
     try {
       const r = await onSetSampleInput(null);
@@ -3847,7 +3848,7 @@ function SampleDataSection({
   };
 
   const handleClear = async (): Promise<void> => {
-    if (!window.confirm("Clear this step's sample data?")) return;
+    if (!await confirmDialog("Clear this step's sample data?")) return;
     setBusy("clear");
     try {
       const r = await onSetSampleData(null);
@@ -5019,8 +5020,8 @@ function RouterEditor({
                       <button
                         type="button"
                         className="wf-props__input-remove"
-                        onClick={() => {
-                          if (window.confirm(`Remove branch "${b?.branchName ?? idx}"?`)) {
+                        onClick={async () => {
+                          if (await confirmDialog(`Remove branch "${b?.branchName ?? idx}"?`)) {
                             onRemoveRouterBranch(idx);
                           }
                         }}

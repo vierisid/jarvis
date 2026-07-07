@@ -14,6 +14,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -216,7 +217,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
                     )
                   }
                   onPublish={() => handleAction("Publish", () => data.publishFlow(flow.id))}
-                  onDelete={() => {
+                  onDelete={async () => {
                     // Spell out what disappears: not just the flow row but
                     // every draft on it (including per-step sample data the
                     // user invested time configuring for test-from-here).
@@ -227,7 +228,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
                     const msg = hasDraftOnly
                       ? `Delete "${flow.displayName ?? flow.id}"?\n\nThis flow has no published version -- the draft (including any per-step sample data) will be permanently lost.`
                       : `Delete "${flow.displayName ?? flow.id}"?\n\nThe published version and any draft (including per-step sample data) will be permanently lost.`;
-                    if (window.confirm(msg)) {
+                    if (await confirmDialog(msg)) {
                       void handleAction("Delete", () => data.deleteFlow(flow.id));
                     }
                   }}

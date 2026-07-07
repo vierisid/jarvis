@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   ArrowLeft,
   Box,
@@ -407,7 +408,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
                   setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
                 }}
                 onDelete={async () => {
-                  if (!confirm(`Delete "${p.name}"? Cannot be undone.`)) return;
+                  if (!await confirmDialog(`Delete "${p.name}"? Cannot be undone.`)) return;
                   const r = await data.deleteProject(p.id);
                   setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
                 }}
