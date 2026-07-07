@@ -19,6 +19,7 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun run scripts/check-no-ee-imports.ts
+      - run: bun run scripts/check-migrations.ts
       - run: bun test
       - run: bunx tsc --noEmit
 

@@ -4,6 +4,9 @@ set -e
 echo "[pre-commit] Checking for Activepieces EE-licensed code..."
 bun run scripts/check-no-ee-imports.ts
 
+echo "[pre-commit] Checking migrations are expand/contract (rollback-safe)..."
+bun run scripts/check-migrations.ts
+
 # Bound the test step with a wall-clock timeout. A test that spawns the
 # engine subprocess and forgets to reap it can hang `bun test --bail`
 # indefinitely (observed once in late-May 2026, never reproduced). 240s

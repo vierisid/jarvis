@@ -39,6 +39,7 @@
     "build:ui": "bun build ui/index.html ui/pebble.html --outdir ui/dist",
     "test": "bun test",
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
+    "check:migrations": "bun run scripts/check-migrations.ts",
     "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
     "check:pieces": "bun run scripts/sync-pieces-catalog.ts --check",
     "build:workflows": "bun run scripts/build-workflows.ts",

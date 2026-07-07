@@ -429,8 +429,10 @@ function createTables(db: Database): void {
       created_at INTEGER NOT NULL
     )
   `);
-  // OCR moved to sidecar; thumbnails are no longer generated.
-  try { db.run('ALTER TABLE screen_captures DROP COLUMN thumbnail_path'); } catch { /* already dropped or never present */ }
+  // OCR moved to sidecar; thumbnails are no longer generated. Re-added as a
+  // nullable column below (~line 448) in the same boot, so a rolled-back reader
+  // still finds thumbnail_path.
+  try { db.run('ALTER TABLE screen_captures DROP COLUMN thumbnail_path'); } catch { /* expand-contract-ok: re-added nullable below */ }
   // Track which sidecar owns the capture file so the brain can route
   // fetch_capture RPCs correctly (sidecars may run on different hosts).
   try { db.run('ALTER TABLE screen_captures ADD COLUMN sidecar_id TEXT'); } catch { /* already present */ }
