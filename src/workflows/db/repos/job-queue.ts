@@ -200,10 +200,22 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  */
 export function recoverOrphanedJobs(): number {
   const ts = nowMs();
-  const res = db().run(
+  const d = db();
+  // Poison guard: a job that already hit its attempt ceiling terminates as
+  // FAILED instead of re-running (and possibly re-crashing the daemon on) its
+  // side-effectful steps in a tight boot loop forever. `claimNextJob` doesn't
+  // check max_attempts, so recovery must.
+  d.run(
+    `UPDATE workflow_job
+     SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted', locked_until = NULL, updated = ?
+     WHERE status = 'RUNNING' AND attempt >= max_attempts`,
+    [ts],
+  );
+  // The rest re-queue for immediate re-claim.
+  const res = d.run(
     `UPDATE workflow_job
      SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
-     WHERE status = 'RUNNING'`,
+     WHERE status = 'RUNNING' AND attempt < max_attempts`,
     [ts, ts],
   );
   return res.changes;

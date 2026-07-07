@@ -9,7 +9,7 @@
  * overruns the deadline is ABANDONED (not checkpointed) — the process exits and
  * the user re-asks. One daemon per process, so a singleton is correct.
  */
-class ActiveTurns {
+export class ActiveTurns {
   private count = 0;
   private draining = false;
   private waiters: Array<() => void> = [];

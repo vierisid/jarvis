@@ -163,8 +163,16 @@ function logWithTimestamp(message: string): void {
  */
 async function handleShutdown(signal: string): Promise<void> {
   if (shutdownInProgress) {
-    console.log('\n[Daemon] Force shutdown requested, exiting immediately');
-    process.exit(1);
+    // A repeated SIGNAL means the operator/user wants to force-quit now.
+    if (signal === 'SIGINT' || signal === 'SIGTERM') {
+      console.log('\n[Daemon] Second signal — forcing immediate exit');
+      process.exit(1);
+    }
+    // But an internal error (uncaughtException/unhandledRejection) while we're
+    // already draining -- e.g. a stray rejection from a still-streaming turn --
+    // must NOT abort the drain (that would skip teardown + lose window state).
+    console.warn(`[Daemon] ${signal} during drain (ignored; drain continues)`);
+    return;
   }
 
   shutdownInProgress = true;
@@ -224,6 +232,12 @@ async function handleShutdown(signal: string): Promise<void> {
       triggerManager = null;
     }
 
+    // Begin stopping the workflow worker NOW, unawaited: stop() flips
+    // `running=false` synchronously so it won't claim a FRESH job during the
+    // drain window (which would then get only a sliver of budget and orphan),
+    // while its already-in-flight run keeps going. Awaited, bounded, in phase 3.
+    const workerStopping = workflowWorker ? workflowWorker.stop() : null;
+
     // ---- Phase 2: DRAIN -- await in-flight agent turns up to the deadline ----
     // Per UPDATES.md a turn is NOT checkpointed mid-flight: if it overruns we
     // abandon it (the process exits, the user re-asks). Workflow runs ARE
@@ -256,8 +270,11 @@ async function handleShutdown(signal: string): Promise<void> {
     if (workflowWorker) {
       const wfBudget = Math.max(2000, drainUntil - Date.now());
       const stopped = await Promise.race([
-        workflowWorker.stop().then(() => true),
-        new Promise<boolean>((r) => setTimeout(() => r(false), wfBudget)),
+        (workerStopping ?? Promise.resolve()).then(() => true),
+        new Promise<boolean>((r) => {
+          const t = setTimeout(() => r(false), wfBudget);
+          t.unref?.();
+        }),
       ]);
       if (!stopped) {
         console.log('[Drain] workflow worker over deadline; in-flight run left RUNNING for boot-recovery');
@@ -328,7 +345,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     process.exit(1);
   }
 
-  drainDeadlineMs = jarvisConfig.daemon.drain_deadline_ms ?? 75_000;
+  // Drain budget: default 75s; a non-positive value falls back; cap at 85s so a
+  // misconfig can't push the drain past the supervisor's kill grace (systemd
+  // TimeoutStopSec=90) and get SIGKILLed mid-drain.
+  const configuredDrain = jarvisConfig.daemon.drain_deadline_ms;
+  drainDeadlineMs = configuredDrain && configuredDrain > 0 ? configuredDrain : 75_000;
+  if (drainDeadlineMs > 85_000) {
+    console.warn(`[Daemon] drain_deadline_ms=${drainDeadlineMs} exceeds the safe ceiling; capping at 85000`);
+    drainDeadlineMs = 85_000;
+  }
 
   // Determine data directory: CLI args > config file > default
   const dataDir = userConfig?.dataDir ?? jarvisConfig.daemon.data_dir ?? DEFAULT_DATA_DIR;

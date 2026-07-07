@@ -7,8 +7,8 @@
  * `resumeUrl` in step output so external callers can hit it later to wake the
  * flow.
  *
- * The actual resume scheduling (TIMER tick, WEBHOOK route, etc.) is layered on
- * after this commit; today the row is just persisted.
+ * TIMER/DELAY waitpoints are resumed by the TimerWaitpointScheduler; WEBHOOK by
+ * the resume route.
  */
 
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -27,11 +27,25 @@ interface CreateWaitpointBody {
   httpRequestId?: string;
 }
 
-const ALLOWED_TYPES: ReadonlySet<WaitpointType> = new Set<WaitpointType>([
-  "WEBHOOK",
-  "TIMER",
-  "MANUAL",
-]);
+// Accepted engine-side waitpoint types. The pieces framework emits `DELAY`
+// (timer-based) + `WEBHOOK`; we also accept `TIMER`/`MANUAL`. `DELAY` is a
+// timer, so it's STORED as `TIMER` — both mean "resume at resume_date_time" and
+// the TIMER scheduler keys off that single type.
+const ACCEPTED_TYPES: ReadonlySet<string> = new Set(["WEBHOOK", "TIMER", "MANUAL", "DELAY"]);
+
+function normalizeType(t: string): WaitpointType {
+  return t === "DELAY" ? "TIMER" : (t as WaitpointType);
+}
+
+// `resume_date_time` is compared LEXICALLY by the scheduler, so it must be
+// canonical ISO-8601 UTC. Delay pieces send either `toISOString()` (delay-until)
+// or `toUTCString()` (delay-for, RFC-1123) — normalize both. An unparseable
+// value drops to undefined rather than persisting a never-due timer.
+function normalizeResumeDateTime(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
 
 export interface WaitpointRouteDeps {
   /** Public URL prefix used to construct the resumeUrl returned to the engine. */
@@ -48,7 +62,7 @@ export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
     }
     if (!body.flowRunId) return err("missing flowRunId", 400);
     if (!body.stepName) return err("missing stepName", 400);
-    if (!body.type || !ALLOWED_TYPES.has(body.type as WaitpointType)) {
+    if (!body.type || !ACCEPTED_TYPES.has(body.type)) {
       return err(`unsupported waitpoint type ${body.type}`, 400);
     }
     if (body.flowRunId !== ctx.claims.runId) {
@@ -58,9 +72,9 @@ export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
       flowRunId: body.flowRunId,
       projectId: body.projectId ?? ctx.claims.projectId,
       stepName: body.stepName,
-      type: body.type as WaitpointType,
+      type: normalizeType(body.type),
       version: body.version,
-      resumeDateTime: body.resumeDateTime,
+      resumeDateTime: normalizeResumeDateTime(body.resumeDateTime),
       responseToSend: body.responseToSend,
       workerHandlerId: body.workerHandlerId,
       httpRequestId: body.httpRequestId,

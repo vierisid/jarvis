@@ -50,6 +50,16 @@ describe("job-queue repo", () => {
     expect(claimNextJob()?.id).toBe(j.id); // immediately re-claimable
   });
 
+  test("recoverOrphanedJobs fails a poison job at the attempt ceiling instead of re-queuing", () => {
+    const poison = enqueue({ jobType: "T", payload: {}, maxAttempts: 1 });
+    claimNextJob(); // poison -> RUNNING, attempt 1 == max_attempts
+    const healthy = enqueue({ jobType: "T", payload: {}, maxAttempts: 3 });
+    claimNextJob(); // healthy -> RUNNING, attempt 1 < max_attempts
+    expect(recoverOrphanedJobs()).toBe(1); // only the healthy one re-queues
+    expect(getJob(poison.id)?.status).toBe("FAILED");
+    expect(getJob(healthy.id)?.status).toBe("QUEUED");
+  });
+
   test("priority + scheduled_at ordering", () => {
     const now = Date.now();
     const a = enqueue({ jobType: "T", payload: {}, priority: 1, scheduledAt: now });

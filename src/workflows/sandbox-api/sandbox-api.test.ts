@@ -15,6 +15,7 @@ import { closeWorkflowDb, initWorkflowDb } from "../db";
 import { _clearStoreForTests } from "../db/repos/store-entry";
 import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
+import { getWaitpoint } from "../db/repos/waitpoint";
 
 const sampleIdentity = () => ({
   sandboxId: SandboxRegistry.newSandboxId(),
@@ -643,6 +644,21 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
       }),
     });
     expect(r.status).toBe(403);
+  });
+
+  test("POST /v1/waitpoints accepts DELAY (stored as TIMER) and normalizes RFC-1123 -> ISO", async () => {
+    // delay-for pieces send type 'DELAY' with an RFC-1123 (toUTCString) time.
+    const rfc1123 = new Date("2026-07-07T03:00:00Z").toUTCString();
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowRunId: testRunId, stepName: "delay", type: "DELAY", resumeDateTime: rfc1123 }),
+    });
+    expect(r.status).toBe(200);
+    const { waitpointId } = (await r.json()) as { waitpointId: string };
+    const wp = getWaitpoint(waitpointId);
+    expect(wp?.type).toBe("TIMER"); // DELAY mapped so the scheduler finds it
+    expect(wp?.resumeDateTime).toBe("2026-07-07T03:00:00.000Z"); // normalized to ISO for lexical compare
   });
 
   test("POST /v1/waitpoints rejects unsupported type", async () => {

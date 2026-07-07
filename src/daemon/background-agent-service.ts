@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { Service, ServiceStatus } from './services.ts';
 import type { IAgentService } from './agent-service-interface.ts';
+import { activeTurns } from './active-turns.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -126,21 +127,29 @@ export class BackgroundAgentService implements Service, IAgentService {
    * Handle a reactive event message (from EventReactor / CommitmentExecutor).
    */
   async handleMessage(text: string, channel: string = 'system'): Promise<string> {
-    // Wait if busy — event reactor already has its own queue, so this is a safety net
-    const waitStart = Date.now();
-    while (this.busy && Date.now() - waitStart < 60_000) {
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    this.busy = true;
+    // Don't START a background reaction once draining; count it in-flight
+    // otherwise so the graceful drain awaits it too (same as the primary turns).
+    if (activeTurns.isDraining) return 'skipped: draining';
+    const endTurn = activeTurns.begin();
     try {
-      const systemPrompt = this.buildSystemPromptParts(channel);
-      return await this.orchestrator.processMessage(systemPrompt, text);
-    } catch (err) {
-      console.error('[BackgroundAgent] Message error:', err);
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      // Wait if busy — event reactor already has its own queue, so this is a safety net
+      const waitStart = Date.now();
+      while (this.busy && Date.now() - waitStart < 60_000) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      this.busy = true;
+      try {
+        const systemPrompt = this.buildSystemPromptParts(channel);
+        return await this.orchestrator.processMessage(systemPrompt, text);
+      } catch (err) {
+        console.error('[BackgroundAgent] Message error:', err);
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      } finally {
+        this.busy = false;
+      }
     } finally {
-      this.busy = false;
+      endTurn();
     }
   }
 
