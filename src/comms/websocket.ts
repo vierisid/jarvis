@@ -347,10 +347,15 @@ export class WebSocketServer {
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
 
-        // 3. Health check (always public)
+        // 3. Health check (always public). `version` is the pinned release the
+        // process was launched from (systemd sets JARVIS_VERSION from the
+        // per-instance EnvironmentFile); the hosting control plane reads it to
+        // CONFIRM a rolling update actually landed on the target version rather
+        // than trusting the restart. `null` on self-host (no pin).
         if (pathname === '/health') {
           return Response.json({
             status: 'ok',
+            version: process.env.JARVIS_VERSION ?? null,
             uptime: Date.now() - self.startTime,
             clients: self.clients.size,
             timestamp: Date.now(),

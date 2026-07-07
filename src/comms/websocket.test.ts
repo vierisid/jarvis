@@ -41,8 +41,24 @@ test('WebSocketServer - health endpoint', async () => {
   expect(data.status).toBe('ok');
   expect(data.clients).toBe(0);
   expect(typeof data.uptime).toBe('number');
+  // version reflects the JARVIS_VERSION pin (null when unset, e.g. self-host).
+  expect(data).toHaveProperty('version');
 
   server.stop();
+});
+
+test('WebSocketServer - health reports the JARVIS_VERSION pin', async () => {
+  const prev = process.env.JARVIS_VERSION;
+  process.env.JARVIS_VERSION = '2026.07.01';
+  server.start();
+  try {
+    const data = (await (await fetch('http://localhost:3143/health')).json()) as any;
+    expect(data.version).toBe('2026.07.01');
+  } finally {
+    server.stop();
+    if (prev === undefined) delete process.env.JARVIS_VERSION;
+    else process.env.JARVIS_VERSION = prev;
+  }
 });
 
 test('WebSocketServer - root endpoint returns 404 without static dir', async () => {
