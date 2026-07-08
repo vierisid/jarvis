@@ -13,6 +13,7 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
+import { SystemTakeover, SystemBanners, useSystemStateOverride, type TakeoverKind } from "./SystemStates";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
 import { getRoomBody } from "../rooms/RoomBodyRegistry";
 import { setRoomEntry } from "../rooms/roomEntryStore";
@@ -977,6 +978,24 @@ function ShellLayout({
   // VU bars driven by the live mic level (fixed multipliers, no per-frame RNG).
   const vuBars = [0.45, 0.95, 0.6, 1, 0.5, 0.8].map((m) => Math.max(2, Math.round(2 + vu * 12 * m)));
 
+  // System states. Offline is wired to the real connection; the rest (updating,
+  // crash, out-of-tokens, and both banners) are previewable via the override
+  // until their backend triggers (update feed, crash capture, quota) land.
+  const sysOverride = useSystemStateOverride();
+  const takeover: TakeoverKind | null = connection === "offline" ? "offline" : sysOverride.takeover;
+  const sysHandlers = useMemo(
+    () => ({
+      onRetry: () => window.dispatchEvent(new Event("jarvis:ws-reconnect")),
+      onCheckStatus: () => window.open("https://status.usejarvis.com", "_blank", "noopener"),
+      onReopen: () => window.location.reload(),
+      onSendReport: () => window.open("https://usejarvis.com/support", "_blank", "noopener"),
+      onUpgrade: () => window.open("https://usejarvis.com/pricing", "_blank", "noopener"),
+      onTopUp: () => window.open("https://usejarvis.com/pricing", "_blank", "noopener"),
+      onSwitchLocal: () => { window.location.hash = "#/_room_settings"; },
+    }),
+    [],
+  );
+
   return (
     <div className={`rshell${collapsed ? " slim" : ""}`} data-state={dataState}>
       <IndexSidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
@@ -996,13 +1015,20 @@ function ShellLayout({
           Render the room BODY (mode="expanded") directly, not the RoomShell-
           wrapped overlay, so the room sheds its own header/back chrome and
           inherits the Index + top bar around it. */}
-      {route.kind === "room" ? (
-        <div className="rs-surface rs-room">
-          <RoomSurface roomKey={route.key} />
-        </div>
-      ) : (
-        <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
-      )}
+      <div className="rs-main">
+        {/* Banners over a usable app — sit under the top bar, push content down. */}
+        <SystemBanners
+          update={sysOverride.banners.includes("update")}
+          providerBusy={sysOverride.banners.includes("rate")}
+        />
+        {route.kind === "room" ? (
+          <div className="rs-surface rs-room">
+            <RoomSurface roomKey={route.key} />
+          </div>
+        ) : (
+          <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
+        )}
+      </div>
 
       {/* Docked pebble — opens/closes Talk. It does NOT start voice; the
           mic only engages from the pebble inside the Talk panel (or PTT). */}
@@ -1108,6 +1134,10 @@ function ShellLayout({
       )}
 
       {notificationsSlot}
+
+      {/* Full-window takeover — offline is live (fades back to the app on
+          reconnect); updating/crash/out-of-tokens preview via the override. */}
+      <SystemTakeover kind={takeover} handlers={sysHandlers} />
     </div>
   );
 }

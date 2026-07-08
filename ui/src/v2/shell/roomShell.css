@@ -159,6 +159,10 @@ button.rs-chip:hover { color: var(--ink); border-color: var(--ink3); }
 .rshell[data-state="asking"]    .rs-stl { color: var(--hold-tx); }
 .rshell[data-state="thinking"] .rs-stl, .rshell[data-state="muted"] .rs-stl { color: var(--ink2); }
 
+/* Main column: system banners (in-flow, push content down) over the surface. */
+.rs-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.rs-main > .rs-surface { flex: 1 1 auto; min-height: 0; }
+
 /* ───────────────────────── Surface (Now) ───────────────────────── */
 .rs-surface {
   grid-area: main; padding: 16px 18px; overflow: auto; position: relative;

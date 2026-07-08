@@ -11,6 +11,7 @@ import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
 import { KitShowcase } from "./pages/KitShowcase";
+import { SystemStatesShowcase } from "./pages/SystemStatesShowcase";
 import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
 import { AnswerRoom } from "./rooms/answer/AnswerRoom";
 import "./v2.css";
@@ -103,6 +104,15 @@ export function AppShellV2() {
     return (
       <div className="jarvis-v2-root">
         <KitShowcase />
+      </div>
+    );
+  }
+
+  // System-states gallery (#/_states) — the six states framed in both themes.
+  if (route.kind === "states") {
+    return (
+      <div className="jarvis-v2-root">
+        <SystemStatesShowcase />
       </div>
     );
   }
