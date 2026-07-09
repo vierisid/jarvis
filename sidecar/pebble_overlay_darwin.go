@@ -260,7 +260,7 @@ static int jarvisRenderPebbleSheet(const char* path) {
     const int COLS = 8, CW = 100, CH = 90;
     const int W = COLS*CW, H = 2*CH;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(NULL, W, H, 8, 0, cs, kCGImageAlphaPremultipliedLast);
+    CGContextRef ctx = CGBitmapContextCreate(NULL, W, H, 8, 0, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
     if (!ctx) { CGColorSpaceRelease(cs); return 1; }
     // Flip to y-down so the render matches the NSView (isFlipped=YES).
     CGContextTranslateCTM(ctx, 0, H);

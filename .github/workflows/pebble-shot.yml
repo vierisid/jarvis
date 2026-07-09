@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
       - name: Render pebble state sheet (offscreen, no display)
         working-directory: sidecar
         env:
