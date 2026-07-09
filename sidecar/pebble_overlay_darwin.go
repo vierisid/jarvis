@@ -21,11 +21,10 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Cocoa -framework AppKit -framework CoreGraphics -framework ImageIO
+#cgo LDFLAGS: -framework Cocoa -framework AppKit -framework CoreGraphics
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
-#import <ImageIO/ImageIO.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -240,49 +239,6 @@ static void draw_pebble_state(CGContextRef ctx, int state) {
     }
 }
 
-// ── Offscreen render harness (TEMPORARY — remove once verified via CI) ───────
-// Renders all 8 states × {light, dark} to a PNG grid so the macOS drawing can
-// be eyeballed from CI without a Mac (.github/workflows/pebble-shot.yml). Uses
-// an offscreen CGBitmapContext — no window, no display needed.
-static void render_state_cell(CGContextRef ctx, int state, unsigned long long tick,
-                              CGFloat ox, CGFloat oy, CGFloat cw, CGFloat ch, int dark) {
-    if (dark) CGContextSetRGBFillColor(ctx, 0x10/255.0, 0x12/255.0, 0x16/255.0, 1.0);
-    else      CGContextSetRGBFillColor(ctx, 0xFA/255.0, 0xFB/255.0, 0xFC/255.0, 1.0);
-    CGContextFillRect(ctx, CGRectMake(ox, oy, cw, ch));
-    gFrameTick = tick; gEye = 0; gBlinded = 0;
-    CGContextSaveGState(ctx);
-    CGContextTranslateCTM(ctx, ox + cw/2 - kAnchorX, oy + ch/2 - kAnchorY);
-    draw_pebble_state(ctx, state);
-    CGContextRestoreGState(ctx);
-}
-
-static int jarvisRenderPebbleSheet(const char* path) {
-    const int COLS = 8, CW = 100, CH = 90;
-    const int W = COLS*CW, H = 2*CH;
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(NULL, W, H, 8, 0, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
-    if (!ctx) { CGColorSpaceRelease(cs); return 1; }
-    // Flip to y-down so the render matches the NSView (isFlipped=YES).
-    CGContextTranslateCTM(ctx, 0, H);
-    CGContextScaleCTM(ctx, 1, -1);
-    int states[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-    unsigned long long ticks[8] = {120, 42, 42, 48, 72, 60, 0, 0};
-    for (int c = 0; c < COLS; c++) {
-        render_state_cell(ctx, states[c], ticks[c], c*CW, 0,  CW, CH, 0); // light row
-        render_state_cell(ctx, states[c], ticks[c], c*CW, CH, CW, CH, 1); // dark row
-    }
-    CGImageRef img = CGBitmapContextCreateImage(ctx);
-    CFStringRef p = CFStringCreateWithCString(NULL, path, kCFStringEncodingUTF8);
-    CFURLRef url = CFURLCreateWithFileSystemPath(NULL, p, kCFURLPOSIXPathStyle, false);
-    CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
-    int ok = 0;
-    if (dest) { CGImageDestinationAddImage(dest, img, NULL); ok = CGImageDestinationFinalize(dest); CFRelease(dest); }
-    if (img) CGImageRelease(img);
-    CFRelease(url); CFRelease(p);
-    CGContextRelease(ctx); CGColorSpaceRelease(cs);
-    return ok ? 0 : 2;
-}
-
 @interface JarvisPebbleView : NSView
 @end
 
@@ -392,7 +348,6 @@ void jarvisPebbleClose(void) {
 import "C"
 
 import (
-	"fmt"
 	"log"
 	"sync/atomic"
 	"unsafe"
@@ -541,16 +496,3 @@ func (s *pebbleServiceDarwin) OnPalette(callback func()) { s.paletteCallback.Sto
 // that input wiring is the documented residual in §5.4.
 func (s *pebbleServiceDarwin) OnBlindToggle(callback func())      { _ = callback }
 func (s *pebbleServiceDarwin) OnAnswerOpen(callback func(string)) { _ = callback }
-
-// renderPebbleSheet renders the 8 pebble states (light + dark rows) to a PNG at
-// path, using an offscreen bitmap (no window/display). TEMPORARY: the
-// pebble-shot CI job calls this so the macOS drawing can be verified from CI
-// without a Mac. Remove once the render is confirmed.
-func renderPebbleSheet(path string) error {
-	cpath := C.CString(path)
-	defer C.free(unsafe.Pointer(cpath))
-	if rc := C.jarvisRenderPebbleSheet(cpath); rc != 0 {
-		return fmt.Errorf("render pebble sheet failed (rc=%d)", int(rc))
-	}
-	return nil
-}
