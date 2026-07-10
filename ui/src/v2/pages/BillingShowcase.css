@@ -1,0 +1,21 @@
+/* Billing-states gallery chrome (#/_billing). QA-only. */
+.blx { min-height: 100vh; background: var(--panel2); color: var(--ink); font-family: var(--sans); padding: 32px clamp(20px, 5vw, 64px) 80px; }
+.blx-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.blx-head h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink); }
+.blx-head p { font-size: 13px; line-height: 1.55; color: var(--ink3); max-width: 68ch; margin-top: 6px; }
+.blx-seg { margin-left: auto; display: flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+.blx-seg button { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; padding: 7px 15px; background: transparent; border: none; color: var(--ink3); cursor: pointer; }
+.blx-seg button.on { background: var(--ink); color: var(--bg); }
+
+.blx-sec { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink3); margin: 30px 2px 12px; }
+.blx-sec:first-of-type { margin-top: 8px; }
+
+.blx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; align-items: start; }
+.blx-lab { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); margin: 9px 2px 0; }
+
+.blx-banners { display: flex; flex-direction: column; gap: 12px; }
+.blx-bnrframe { border: 1px solid var(--rule); border-radius: 11px; overflow: hidden; background: var(--bg); box-shadow: var(--sh-sm); }
+.blx-bnrframe .bl-bnr { border-bottom: none; }
+
+.blx-modalframe { display: flex; justify-content: center; padding: 26px; border: 1px solid var(--rule); border-radius: 14px; background: color-mix(in srgb, var(--ink) 8%, var(--bg)); box-shadow: var(--sh-sm) inset; }
+.blx-soonframe { border: 1px solid var(--rule); border-radius: 14px; background: var(--bg); box-shadow: var(--sh-sm); }

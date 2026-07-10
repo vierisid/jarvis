@@ -39,12 +39,12 @@ const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html:
 
 /* — providers (backend kind ids); model lists per the design — */
 type Provider = {
-  id: string; name: string; abbr: string; kind: string; reco?: boolean;
+  id: string; name: string; abbr: string; kind: string; reco?: boolean; soon?: boolean;
   noConfig?: boolean; needsKey?: boolean; needsBaseUrl?: boolean; freeModel?: boolean;
   urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const PROVIDERS: Provider[] = [
-  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", reco: true, noConfig: true },
+  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", soon: true, noConfig: true },
   { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"] },
   { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
   { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
@@ -134,7 +134,7 @@ export function OnboardingWizard({
 
   // permissions
   // brain
-  const [provId, setProvId] = useState("jarvis");
+  const [provId, setProvId] = useState("anthropic");
   const prov = PROVIDERS.find((p) => p.id === provId)!;
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -194,7 +194,7 @@ export function OnboardingWizard({
     }
   }, [provId, model, apiKey, baseUrl, prov]);
 
-  const brainReady = prov.noConfig || test.status === "ok";
+  const brainReady = !prov.soon && (prov.noConfig || test.status === "ok");
 
   /* — the setup POST: fires when leaving Speaking (llm + stt + tts) — */
   const saveSetup = useCallback(async () => {
@@ -424,12 +424,21 @@ export function OnboardingWizard({
       case "brain": return (
         <div className="obw-body"><div className="obw-wrap wide">
           <h2>Pick a brain for Jarvis.</h2>
-          <div className="obw-sub">Jarvis AI runs on our servers with nothing to set up. Or bring your own: Ollama runs locally with no key. Change it anytime in Settings.</div>
+          <div className="obw-sub">Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings.</div>
           <div className="obw-provgrid" style={{ marginTop: 14 }}>
             {PROVIDERS.map((p) => (
-              <button key={p.id} className={`obw-prov ${p.reco ? "reco" : ""} ${provId === p.id ? "on" : ""}`} onClick={() => setProvId(p.id)}>
+              <button
+                key={p.id}
+                className={`obw-prov ${p.reco ? "reco" : ""} ${p.soon ? "soon" : ""} ${provId === p.id ? "on" : ""}`}
+                disabled={p.soon}
+                aria-disabled={p.soon}
+                onClick={() => { if (!p.soon) setProvId(p.id); }}
+              >
                 <span className="pd">{p.abbr}</span>
-                <div><div className="pn">{p.name}</div><div className="pk">{p.kind}</div></div>
+                <div>
+                  <div className="pn">{p.name}{p.soon && <span className="obw-soon">Soon</span>}</div>
+                  <div className="pk">{p.soon ? "coming soon" : p.kind}</div>
+                </div>
               </button>
             ))}
           </div>

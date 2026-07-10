@@ -14,6 +14,7 @@ import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palet
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import { SystemTakeover, SystemBanners, useSystemStateOverride, type TakeoverKind } from "./SystemStates";
+import { BillingBanner } from "../billing/BillingBanner";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
 import { getRoomBody } from "../rooms/RoomBodyRegistry";
 import { setRoomEntry } from "../rooms/roomEntryStore";
@@ -1021,6 +1022,8 @@ function ShellLayout({
           update={sysOverride.banners.includes("update")}
           providerBusy={sysOverride.banners.includes("rate")}
         />
+        {/* Subscription state banner (trial / past-due / canceling / expired). */}
+        <BillingBanner />
         {route.kind === "room" ? (
           <div className="rs-surface rs-room">
             <RoomSurface roomKey={route.key} />

@@ -12,6 +12,7 @@ import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
 import { KitShowcase } from "./pages/KitShowcase";
 import { SystemStatesShowcase } from "./pages/SystemStatesShowcase";
+import { BillingShowcase } from "./pages/BillingShowcase";
 import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
 import { AnswerRoom } from "./rooms/answer/AnswerRoom";
 import "./v2.css";
@@ -113,6 +114,15 @@ export function AppShellV2() {
     return (
       <div className="jarvis-v2-root">
         <SystemStatesShowcase />
+      </div>
+    );
+  }
+
+  // Billing-states gallery (#/_billing) — plan card + banners + change-plan modal.
+  if (route.kind === "billing") {
+    return (
+      <div className="jarvis-v2-root">
+        <BillingShowcase />
       </div>
     );
   }

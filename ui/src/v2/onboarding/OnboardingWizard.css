@@ -126,6 +126,10 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-prov .pd { width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px 1px 7px 7px; background: var(--panel); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink2); }
 .obw-prov.on .pd { background: var(--ink); color: var(--bg); }
 .obw-prov.reco { border-color: color-mix(in srgb, var(--listen) 50%, transparent); }
+.obw-prov.soon { cursor: default; opacity: 0.6; background: var(--panel2); }
+.obw-prov.soon:hover { border-color: var(--rule); }
+.obw-prov.soon .pn { color: var(--ink2); }
+.obw-soon { font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--speak-tx); background: color-mix(in srgb, var(--speak) 13%, transparent); border-radius: 999px; padding: 2px 6px; margin-left: 7px; vertical-align: middle; }
 .obw-prov .pn { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.1; }
 .obw-prov .pk { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); margin-top: 2px; }
 .obw-provdetail { margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--rule); }
