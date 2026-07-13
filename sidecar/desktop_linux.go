@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -472,11 +473,59 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		name = executable[idx+1:]
 	}
 
+	// A spawned process is not an open app: returning immediately made the
+	// next tool call race the window ("no window found"). Poll for a visible
+	// window owned by this PID before declaring success.
+	win, procAlive := waitForWindowLinux(pid, 5*time.Second)
+	if win != nil {
+		return &RPCResult{Result: map[string]any{
+			"success":        true,
+			"pid":            pid,
+			"name":           name,
+			"window_visible": true,
+			"window_title":   win["title"],
+		}}, nil
+	}
+
+	note := fmt.Sprintf("process started (pid %d) but no window appeared within 5s — the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.", pid)
+	if !procAlive {
+		note = fmt.Sprintf("process (pid %d) exited without showing a window — it may be a short-lived launcher, a CLI tool, or it crashed. Run desktop_list_windows to see what is actually open.", pid)
+	}
 	return &RPCResult{Result: map[string]any{
-		"success": true,
-		"pid":     pid,
-		"name":    name,
+		"success":        false,
+		"pid":            pid,
+		"name":           name,
+		"window_visible": false,
+		"note":           note,
 	}}, nil
+}
+
+// waitForWindowLinux polls xdotool for a visible window owned by pid. It
+// returns early when the process disappears (no point waiting the full
+// timeout for a window that can no longer appear). The second return
+// reports whether the process was still alive when polling stopped.
+func waitForWindowLinux(pid int, timeout time.Duration) (map[string]any, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		out, err := runWithTimeout(2*time.Second, "xdotool", "search", "--onlyvisible", "--pid", strconv.Itoa(pid))
+		if err == nil {
+			ids := strings.Fields(strings.TrimSpace(out))
+			if len(ids) > 0 {
+				title := ""
+				if t, err := runWithTimeout(2*time.Second, "xdotool", "getwindowname", ids[0]); err == nil {
+					title = strings.TrimSpace(t)
+				}
+				return map[string]any{"title": title}, true
+			}
+		}
+		if syscall.Kill(pid, 0) != nil {
+			return nil, false // process gone; a window can no longer appear
+		}
+		if time.Now().After(deadline) {
+			return nil, true
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 // splitArgs splits a string into arguments, respecting double-quoted groups.
