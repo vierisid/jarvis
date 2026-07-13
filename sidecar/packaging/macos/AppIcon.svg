@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Monochrome Lab app icon: ink tile, paper drop with the one sharp corner. -->
+  <rect x="96" y="96" width="832" height="832" rx="196" ry="196" fill="#15181D"/>
+  <path d="M512 320 L656 320 A48 48 0 0 1 704 368 L704 512 A192 192 0 0 1 512 704 A192 192 0 0 1 320 512 A192 192 0 0 1 512 320 Z" fill="#EEF1F4"/>
+</svg>

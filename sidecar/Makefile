@@ -27,7 +27,25 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test manifest
+.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test manifest app-macos
+
+# macOS .app bundle. Run on a Mac (cgo needs the macOS SDK). Wraps a built
+# darwin binary so UNUserNotification works (unavailable to a bare binary) and
+# the menu-bar agent gets a stable identity + icon. See packaging/macos/README.md.
+#   make app-macos                                              # ./jarvis -> dist/macos/Jarvis.app
+#   make app-macos BIN=dist/darwin-arm64/jarvis APP_DIR=...     # override inputs
+BIN     ?= ./$(BIN_NAME)
+APP_DIR ?= dist/macos/Jarvis.app
+app-macos:
+	@test -f "$(BIN)" || { echo "binary '$(BIN)' not found — run 'make build' on a Mac (or pass BIN=dist/darwin-arm64/jarvis)"; exit 1; }
+	rm -rf "$(APP_DIR)"
+	mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources"
+	cp "$(BIN)" "$(APP_DIR)/Contents/MacOS/$(BIN_NAME)"
+	@if [ -f helpers/ocr-helper ]; then cp helpers/ocr-helper "$(APP_DIR)/Contents/MacOS/ocr-helper"; else echo "note: helpers/ocr-helper absent — OCR disabled in the bundle (make build-ocr-helper on a Mac)"; fi
+	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist > "$(APP_DIR)/Contents/Info.plist"
+	@if [ -f packaging/macos/AppIcon.icns ]; then cp packaging/macos/AppIcon.icns "$(APP_DIR)/Contents/Resources/AppIcon.icns"; else echo "note: AppIcon.icns absent — run packaging/macos/make-icns.sh on a Mac for a branded icon"; fi
+	@printf 'APPL????' > "$(APP_DIR)/Contents/PkgInfo"
+	@echo "Built $(APP_DIR) (version $(VERSION)). Sign: codesign --deep --force --options runtime --sign \"Developer ID Application: <you>\" \"$(APP_DIR)\""
 
 all: test build
 
@@ -122,14 +140,16 @@ npm-pack: dist
 	@if [ ! -f helpers/ocr-helper ]; then \
 		echo "WARN: helpers/ocr-helper not built — darwin packages will ship without OCR (run 'make build-ocr-helper' on a Mac)"; \
 	fi
-	@# darwin-arm64
+	@# darwin-arm64 — ship the .app bundle (UNUserNotification needs it); the
+	@# launcher runs bin/Jarvis.app/Contents/MacOS/jarvis. ocr-helper is placed
+	@# beside the binary inside the bundle by app-macos.
 	mkdir -p npm/darwin-arm64/bin
-	cp dist/darwin-arm64/$(BIN_NAME) npm/darwin-arm64/bin/
-	@if [ -f helpers/ocr-helper ]; then cp helpers/ocr-helper npm/darwin-arm64/bin/; fi
+	rm -f npm/darwin-arm64/bin/$(BIN_NAME)
+	$(MAKE) app-macos BIN=dist/darwin-arm64/$(BIN_NAME) APP_DIR=npm/darwin-arm64/bin/Jarvis.app
 	@# darwin-x64
 	mkdir -p npm/darwin-x64/bin
-	cp dist/darwin-amd64/$(BIN_NAME) npm/darwin-x64/bin/
-	@if [ -f helpers/ocr-helper ]; then cp helpers/ocr-helper npm/darwin-x64/bin/; fi
+	rm -f npm/darwin-x64/bin/$(BIN_NAME)
+	$(MAKE) app-macos BIN=dist/darwin-amd64/$(BIN_NAME) APP_DIR=npm/darwin-x64/bin/Jarvis.app
 	@# linux-x64
 	mkdir -p npm/linux-x64/bin
 	cp dist/linux-amd64/$(BIN_NAME) npm/linux-x64/bin/

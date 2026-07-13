@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Jarvis</string>
+	<key>CFBundleDisplayName</key>
+	<string>Jarvis</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.jarvis.sidecar</string>
+	<key>CFBundleExecutable</key>
+	<string>jarvis</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!-- Menu-bar agent: no Dock icon (mirrors the tray's NSApplicationActivationPolicyAccessory). -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- TCC usage strings a bundled app needs (a bare binary borrowed its parent's).
+	     Screen Recording + Accessibility (global hotkeys) are prompted at runtime and
+	     need no Info.plist key, but are documented in README.md. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jarvis listens for your voice commands and wake word.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Jarvis controls the apps you ask it to act in.</string>
+</dict>
+</plist>

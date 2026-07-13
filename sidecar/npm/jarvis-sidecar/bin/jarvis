@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
@@ -23,8 +24,15 @@ if (!pkg) {
 let binPath;
 try {
   const pkgDir = path.dirname(require.resolve(`${pkg}/package.json`));
-  const ext = os.platform() === "win32" ? ".exe" : "";
-  binPath = path.join(pkgDir, "bin", `jarvis${ext}`);
+  if (os.platform() === "darwin") {
+    // Prefer the .app bundle's inner binary — running it associates the process
+    // with the bundle so UNUserNotification works. Fall back to a bare binary.
+    const appBin = path.join(pkgDir, "bin", "Jarvis.app", "Contents", "MacOS", "jarvis");
+    binPath = fs.existsSync(appBin) ? appBin : path.join(pkgDir, "bin", "jarvis");
+  } else {
+    const ext = os.platform() === "win32" ? ".exe" : "";
+    binPath = path.join(pkgDir, "bin", `jarvis${ext}`);
+  }
 } catch {
   console.error(
     `Platform package ${pkg} is not installed. Try reinstalling @usejarvis/sidecar.`
