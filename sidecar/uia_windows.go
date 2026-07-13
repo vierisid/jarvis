@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -187,7 +189,7 @@ func uiaGetRootElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
 		uintptr(unsafe.Pointer(&elem)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("GetRootElement failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("GetRootElement", hr)
 	}
 	return elem, nil
 }
@@ -201,7 +203,7 @@ func uiaCreateTrueCondition(automation *ole.IDispatch) (*ole.IDispatch, error) {
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreateTrueCondition failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("CreateTrueCondition", hr)
 	}
 	return cond, nil
 }
@@ -228,7 +230,7 @@ func uiaCreatePropertyCondition(automation *ole.IDispatch, propertyId int, value
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreatePropertyCondition(%d) failed: HRESULT 0x%x", propertyId, hr)
+		return nil, uiaOpError(fmt.Sprintf("CreatePropertyCondition(%d)", propertyId), hr)
 	}
 	return cond, nil
 }
@@ -244,7 +246,7 @@ func uiaCreateAndCondition(automation *ole.IDispatch, cond1, cond2 *ole.IDispatc
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreateAndCondition failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("CreateAndCondition", hr)
 	}
 	return cond, nil
 }
@@ -354,7 +356,7 @@ func uiaElementSetFocus(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(elem)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("SetFocus failed: HRESULT 0x%x", hr)
+		return uiaOpError("SetFocus", hr)
 	}
 	return nil
 }
@@ -371,7 +373,7 @@ func uiaElementFindFirst(elem *ole.IDispatch, scope int, condition *ole.IDispatc
 		uintptr(unsafe.Pointer(&found)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("FindFirst failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("FindFirst", hr)
 	}
 	return found, nil
 }
@@ -388,7 +390,7 @@ func uiaElementFindAll(elem *ole.IDispatch, scope int, condition *ole.IDispatch)
 		uintptr(unsafe.Pointer(&arr)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("FindAll failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("FindAll", hr)
 	}
 	return arr, nil
 }
@@ -404,7 +406,7 @@ func uiaElementGetPattern(elem *ole.IDispatch, patternId int) (*ole.IDispatch, e
 		uintptr(unsafe.Pointer(&pattern)),
 	)
 	if hr != 0 || pattern == nil {
-		return nil, fmt.Errorf("GetCurrentPattern(%d) failed: HRESULT 0x%x", patternId, hr)
+		return nil, uiaOpError(fmt.Sprintf("GetCurrentPattern(%d)", patternId), hr)
 	}
 	return pattern, nil
 }
@@ -709,26 +711,119 @@ func uiaFindElements(state *uiaState, pid int, automationId, name, className, co
 	if err != nil {
 		return nil, err
 	}
-	if arr == nil {
-		return map[string]any{"match_count": 0, "elements": []any{}}, nil
+	if arr != nil {
+		defer arr.Release()
 	}
-	defer arr.Release()
 
 	// Don't clear cache — allow mixing inspect + find results (matches C# behavior)
 	var results []map[string]any
-	length := uiaArrayLength(arr)
-	for i := 0; i < length; i++ {
-		elem := uiaArrayGetElement(arr, i)
-		if elem != nil {
-			id := state.cache.add(elem)
-			results = append(results, buildElementInfo(elem, id, 0))
+	if arr != nil {
+		length := uiaArrayLength(arr)
+		for i := 0; i < length; i++ {
+			elem := uiaArrayGetElement(arr, i)
+			if elem != nil {
+				id := state.cache.add(elem)
+				results = append(results, buildElementInfo(elem, id, 0))
+			}
 		}
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"match_count": len(results),
 		"elements":    results,
-	}, nil
+	}
+	if len(results) == 0 {
+		// An empty result gave the model nothing to correct with (it would
+		// blindly retry the same query). Surface the closest-named elements
+		// in the window so it can fix its search terms — exact-match Name
+		// conditions miss "Save As…" when asked for "Save".
+		if similar := collectNearMisses(state, window, name, controlType); len(similar) > 0 {
+			out["similar"] = similar
+			out["hint"] = "no exact match; 'similar' lists close elements in this window — Name matching is exact and case-sensitive, so retry with one of those exact names, or use desktop_snapshot to see everything"
+		} else {
+			out["hint"] = "no match and nothing similar found in this window — the target may not exist yet (still loading?) or lives in another window; run desktop_list_windows and desktop_snapshot to orient"
+		}
+	}
+	return out, nil
+}
+
+// collectNearMisses walks the window subtree and returns up to 8 elements
+// whose name loosely matches the requested one (or whose control type
+// matches when no name was given). Read-only: nothing is cached.
+func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantType string) []map[string]any {
+	trueCond, err := uiaCreateTrueCondition(state.automation)
+	if err != nil {
+		return nil
+	}
+	defer trueCond.Release()
+
+	arr, err := uiaElementFindAll(window, TreeScope_Descendants, trueCond)
+	if err != nil || arr == nil {
+		return nil
+	}
+	defer arr.Release()
+
+	type scored struct {
+		info  map[string]any
+		score int
+	}
+	want := strings.ToLower(strings.TrimSpace(wantName))
+	wantTokens := strings.Fields(want)
+
+	var candidates []scored
+	length := uiaArrayLength(arr)
+	const scanCap = 500 // bound the walk on huge trees
+	if length > scanCap {
+		length = scanCap
+	}
+	for i := 0; i < length; i++ {
+		elem := uiaArrayGetElement(arr, i)
+		if elem == nil {
+			continue
+		}
+		elemName := uiaElementGetPropertyStr(elem, UIA_NamePropertyId)
+		ctrlType := controlTypeNames[uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId)]
+		autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
+		elem.Release()
+
+		if strings.TrimSpace(elemName) == "" {
+			continue
+		}
+		score := 0
+		if want != "" {
+			lower := strings.ToLower(elemName)
+			switch {
+			case strings.Contains(lower, want) || strings.Contains(want, lower):
+				score = 3
+			default:
+				for _, tok := range wantTokens {
+					if len(tok) >= 3 && strings.Contains(lower, tok) {
+						score = 2
+						break
+					}
+				}
+			}
+		} else if wantType != "" && ctrlType == wantType {
+			score = 1
+		}
+		if score == 0 {
+			continue
+		}
+		candidates = append(candidates, scored{
+			info:  map[string]any{"name": elemName, "control_type": ctrlType, "automation_id": autoID},
+			score: score,
+		})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > 8 {
+		candidates = candidates[:8]
+	}
+	out := make([]map[string]any, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.info
+	}
+	return out
 }
 
 // controlTypeIdFromName maps a human-readable control type name to its UIAutomation ID.
