@@ -615,12 +615,60 @@ export const browserSnapshotTool: ToolDefinition = {
 
 export const browserClickTool: ToolDefinition = {
   name: 'browser_click',
-  description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot.',
+  description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot. Supports right-click (button: "right", opens context menus) and double-click (double: true).',
   category: 'browser',
   parameters: {
     element_id: {
       type: 'number',
       description: 'The [id] of the element to click (from browser_snapshot)',
+      required: true,
+    },
+    button: {
+      type: 'string',
+      description: 'Mouse button: "left" (default) or "right" for a context-menu click',
+      required: false,
+    },
+    double: {
+      type: 'boolean',
+      description: 'Double-click instead of single click (default: false)',
+      required: false,
+    },
+    target: {
+      type: 'string',
+      description: 'Sidecar name or ID to use a remote browser (omit for local)',
+      required: false,
+    },
+  },
+  execute: async (params) => {
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    if (target) {
+      return routeToSidecar(target, 'browser_click', {
+        element_id: params.element_id,
+        button: params.button,
+        double: params.double,
+      }, 'browser');
+    }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
+    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    try {
+      return await browser.click(params.element_id as number, {
+        button: params.button === 'right' ? 'right' : 'left',
+        double: (params.double as boolean) ?? false,
+      });
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+};
+
+export const browserHoverTool: ToolDefinition = {
+  name: 'browser_hover',
+  description: 'Hover the mouse over an element by its [id]. Use this to reveal hover-only UI (message action toolbars, dropdown triggers, tooltips). After hovering, take a browser_snapshot to see the revealed elements, then click them without moving the mouse elsewhere first.',
+  category: 'browser',
+  parameters: {
+    element_id: {
+      type: 'number',
+      description: 'The [id] of the element to hover over (from browser_snapshot)',
       required: true,
     },
     target: {
@@ -632,12 +680,43 @@ export const browserClickTool: ToolDefinition = {
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
-      return routeToSidecar(target, 'browser_click', { element_id: params.element_id }, 'browser');
+      return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      return await browser.click(params.element_id as number);
+      return await browser.hover(params.element_id as number);
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+};
+
+export const browserPressKeyTool: ToolDefinition = {
+  name: 'browser_press_key',
+  description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead.',
+  category: 'browser',
+  parameters: {
+    key: {
+      type: 'string',
+      description: 'Key or combo to press, e.g. "Enter", "Escape", "Ctrl+K", "Shift+Enter"',
+      required: true,
+    },
+    target: {
+      type: 'string',
+      description: 'Sidecar name or ID to use a remote browser (omit for local)',
+      required: false,
+    },
+  },
+  execute: async (params) => {
+    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    if (target) {
+      return routeToSidecar(target, 'browser_press_key', { key: params.key }, 'browser');
+    }
+    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
+    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    try {
+      return await browser.pressKey(params.key as string);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -646,7 +725,7 @@ export const browserClickTool: ToolDefinition = {
 
 export const browserTypeTool: ToolDefinition = {
   name: 'browser_type',
-  description: 'Type text into an input element by its [id]. Set submit to true to press Enter after typing (useful for search forms).',
+  description: 'Type text into an input element by its [id]. IMPORTANT: by default this REPLACES the element\'s existing content (it is cleared first). Set append to true to keep existing content and add at the end. Set submit to true to press Enter after typing (useful for search forms).',
   category: 'browser',
   parameters: {
     element_id: {
@@ -664,6 +743,11 @@ export const browserTypeTool: ToolDefinition = {
       description: 'Press Enter after typing (default: false)',
       required: false,
     },
+    append: {
+      type: 'boolean',
+      description: 'Keep the element\'s existing content and insert at the end, instead of replacing it (default: false)',
+      required: false,
+    },
     target: {
       type: 'string',
       description: 'Sidecar name or ID to use a remote browser (omit for local)',
@@ -677,6 +761,7 @@ export const browserTypeTool: ToolDefinition = {
         element_id: params.element_id,
         text: params.text,
         submit: params.submit,
+        append: params.append,
       }, 'browser');
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
@@ -686,6 +771,7 @@ export const browserTypeTool: ToolDefinition = {
         params.element_id as number,
         params.text as string,
         (params.submit as boolean) ?? false,
+        (params.append as boolean) ?? false,
       );
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -858,6 +944,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   browserSnapshotTool,
   browserClickTool,
   browserTypeTool,
+  browserHoverTool,
+  browserPressKeyTool,
   browserScrollTool,
   browserUploadFileTool,
   browserEvaluateTool,
@@ -907,7 +995,10 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserClickTool.parameters,
       execute: async (params) => {
         try {
-          return await ctrl.click(params.element_id as number);
+          return await ctrl.click(params.element_id as number, {
+            button: params.button === 'right' ? 'right' : 'left',
+            double: (params.double as boolean) ?? false,
+          });
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -924,7 +1015,34 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             params.element_id as number,
             params.text as string,
             (params.submit as boolean) ?? false,
+            (params.append as boolean) ?? false,
           );
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    {
+      name: 'browser_hover',
+      description: browserHoverTool.description,
+      category: 'browser',
+      parameters: browserHoverTool.parameters,
+      execute: async (params) => {
+        try {
+          return await ctrl.hover(params.element_id as number);
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    {
+      name: 'browser_press_key',
+      description: browserPressKeyTool.description,
+      category: 'browser',
+      parameters: browserPressKeyTool.parameters,
+      execute: async (params) => {
+        try {
+          return await ctrl.pressKey(params.key as string);
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }

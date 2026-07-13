@@ -25,10 +25,10 @@ describe('NON_BROWSER_TOOLS', () => {
 });
 
 describe('createBrowserTools', () => {
-  test('returns 7 browser tools', () => {
+  test('returns 9 browser tools', () => {
     const ctrl = new BrowserController(9999);
     const tools = createBrowserTools(ctrl);
-    expect(tools).toHaveLength(7);
+    expect(tools).toHaveLength(9);
   });
 
   test('all tools have browser category', () => {
@@ -46,7 +46,9 @@ describe('createBrowserTools', () => {
     expect(names).toEqual([
       'browser_click',
       'browser_evaluate',
+      'browser_hover',
       'browser_navigate',
+      'browser_press_key',
       'browser_screenshot',
       'browser_scroll',
       'browser_snapshot',
@@ -54,8 +56,8 @@ describe('createBrowserTools', () => {
     ]);
   });
 
-  test('BUILTIN_TOOLS = NON_BROWSER_TOOLS + 8 browser + 9 desktop tools', () => {
-    expect(BUILTIN_TOOLS).toHaveLength(NON_BROWSER_TOOLS.length + 8 + 9);
+  test('BUILTIN_TOOLS = NON_BROWSER_TOOLS + 10 browser + 9 desktop tools', () => {
+    expect(BUILTIN_TOOLS).toHaveLength(NON_BROWSER_TOOLS.length + 10 + 9);
   });
 });
 

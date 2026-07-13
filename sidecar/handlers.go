@@ -66,6 +66,8 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["browser_snapshot"] = makeBrowserSnapshotHandler(cfg)
 		registry["browser_click"] = makeBrowserClickHandler(cfg)
 		registry["browser_type"] = makeBrowserTypeHandler(cfg)
+		registry["browser_hover"] = makeBrowserHoverHandler(cfg)
+		registry["browser_press_key"] = makeBrowserPressKeyHandler(cfg)
 		registry["browser_screenshot"] = makeBrowserScreenshotHandler(cfg)
 		registry["browser_scroll"] = makeBrowserScrollHandler(cfg)
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)

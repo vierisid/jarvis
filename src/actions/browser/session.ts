@@ -11,6 +11,7 @@
 import { CDPClient } from './cdp.ts';
 import { STEALTH_SCRIPT } from './stealth.ts';
 import { launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
+import { parseKeyCombo, SUPPORTED_KEYS_HINT } from './keys.ts';
 
 export type PageElement = {
   id: number;
@@ -251,8 +252,13 @@ export class BrowserController {
 
   /**
    * Click an element by its snapshot ID.
+   * options.button: 'left' (default) or 'right' (context menu).
+   * options.double: double-click instead of single click.
    */
-  async click(elementId: number): Promise<string> {
+  async click(
+    elementId: number,
+    options: { button?: 'left' | 'right'; double?: boolean } = {},
+  ): Promise<string> {
     await this.ensureConnected();
 
     const coords = this.elementCoords.get(elementId);
@@ -260,36 +266,124 @@ export class BrowserController {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
 
+    const button = options.button === 'right' ? 'right' : 'left';
+
+    // Move the pointer onto the element first — hover-sensitive UIs
+    // (menus, message toolbars) expect mouseover before the press.
     await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
+      type: 'mouseMoved',
       x: coords.x,
       y: coords.y,
-      button: 'left',
-      clickCount: 1,
     });
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x: coords.x,
-      y: coords.y,
-      button: 'left',
-      clickCount: 1,
-    });
+
+    const clicks = options.double ? 2 : 1;
+    for (let count = 1; count <= clicks; count++) {
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: coords.x,
+        y: coords.y,
+        button,
+        clickCount: count,
+      });
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: coords.x,
+        y: coords.y,
+        button,
+        clickCount: count,
+      });
+    }
 
     // Wait for navigation/changes
     await Bun.sleep(1000);
 
-    return `Clicked element [${elementId}]`;
+    const kind = options.double ? 'Double-clicked' : button === 'right' ? 'Right-clicked' : 'Clicked';
+    return `${kind} element [${elementId}]`;
+  }
+
+  /**
+   * Hover the pointer over an element by its snapshot ID (trusted CDP mouse
+   * move). Reveals hover-only UI like message action toolbars. The revealed
+   * elements only show up in a NEW snapshot taken after this call.
+   */
+  async hover(elementId: number): Promise<string> {
+    await this.ensureConnected();
+
+    const coords = this.elementCoords.get(elementId);
+    if (!coords) {
+      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+    }
+
+    // Approach from a nearby point so mouseenter/mouseover always fire,
+    // even if the pointer already sat on the target coordinates.
+    await this.cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.max(0, coords.x - 10),
+      y: Math.max(0, coords.y - 10),
+    });
+    await this.cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: coords.x,
+      y: coords.y,
+    });
+
+    // Give the app time to render hover-triggered UI
+    await Bun.sleep(600);
+
+    return `Hovering over element [${elementId}]. Take a browser_snapshot to see any hover-revealed elements, then act before moving the mouse elsewhere.`;
+  }
+
+  /**
+   * Press a key or key combination (trusted CDP key events), e.g. "Enter",
+   * "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter". Keys go to the
+   * currently focused element.
+   */
+  async pressKey(combo: string): Promise<string> {
+    await this.ensureConnected();
+
+    const parsed = parseKeyCombo(combo);
+    if (!parsed) {
+      return `Error: Unsupported key "${combo}". Supported: ${SUPPORTED_KEYS_HINT}.`;
+    }
+
+    const base = {
+      key: parsed.key,
+      code: parsed.code,
+      windowsVirtualKeyCode: parsed.keyCode,
+      nativeVirtualKeyCode: parsed.keyCode,
+      modifiers: parsed.modifiers,
+    };
+
+    await this.cdp.send('Input.dispatchKeyEvent', {
+      type: parsed.text ? 'keyDown' : 'rawKeyDown',
+      ...base,
+      ...(parsed.text ? { text: parsed.text } : {}),
+    });
+    await this.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+
+    // Let the app react (menu open, mode switch, etc.)
+    await Bun.sleep(300);
+
+    return `Pressed ${parsed.display}`;
   }
 
   /**
    * Type text into an input element by its snapshot ID.
    * Optionally press Enter after typing.
    *
+   * By default the element's existing content is CLEARED first (replace
+   * semantics). Pass append=true to keep it and insert at the end instead.
+   *
    * Uses DOM focus + targeted value clearing instead of coordinate-click + Ctrl+A.
    * This prevents misclicks from wiping the wrong field (e.g., typing subject
    * text into the To field in Gmail's compact compose window).
    */
-  async type(elementId: number, text: string, submit: boolean = false): Promise<string> {
+  async type(
+    elementId: number,
+    text: string,
+    submit: boolean = false,
+    append: boolean = false,
+  ): Promise<string> {
     await this.ensureConnected();
 
     const coords = this.elementCoords.get(elementId);
@@ -303,19 +397,29 @@ export class BrowserController {
         const el = window.__jarvis_elements && window.__jarvis_elements[${elementId - 1}];
         if (!el) return 'not_found';
         el.focus();
-        // Clear existing content based on element type
+        const append = ${append};
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-          el.value = '';
-          el.dispatchEvent(new Event('input', { bubbles: true }));
+          if (append) {
+            // Move the caret to the end so the insert lands after existing text
+            try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+          } else {
+            el.value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
         } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
-          // For contenteditable divs, select all within this element only
           const range = document.createRange();
           range.selectNodeContents(el);
           const sel = window.getSelection();
           sel.removeAllRanges();
-          sel.addRange(range);
-          // Delete the selection
-          document.execCommand('delete', false, null);
+          if (append) {
+            // Collapse to the end of the element's content — insert appends
+            range.collapse(false);
+            sel.addRange(range);
+          } else {
+            // Select all within this element only, then delete the selection
+            sel.addRange(range);
+            document.execCommand('delete', false, null);
+          }
         }
         return 'ok';
       })()`,
@@ -328,15 +432,17 @@ export class BrowserController {
       const clickResult = await this.click(elementId);
       if (clickResult.startsWith('Error:')) return clickResult;
       await Bun.sleep(200);
-      // Use Ctrl+A as fallback clearing (old behavior)
-      await this.cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyDown', key: 'a', code: 'KeyA',
-        windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
-      });
-      await this.cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyUp', key: 'a', code: 'KeyA',
-        windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
-      });
+      if (!append) {
+        // Use Ctrl+A as fallback clearing (old behavior)
+        await this.cdp.send('Input.dispatchKeyEvent', {
+          type: 'keyDown', key: 'a', code: 'KeyA',
+          windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
+        });
+        await this.cdp.send('Input.dispatchKeyEvent', {
+          type: 'keyUp', key: 'a', code: 'KeyA',
+          windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
+        });
+      }
     } else {
       await Bun.sleep(200);
     }
@@ -344,7 +450,7 @@ export class BrowserController {
     // Insert text (like paste — much more reliable than char-by-char)
     await this.cdp.send('Input.insertText', { text });
 
-    let result = `Typed "${text}" into element [${elementId}]`;
+    let result = `${append ? 'Appended' : 'Typed'} "${text}" into element [${elementId}]`;
 
     if (submit) {
       await Bun.sleep(100);

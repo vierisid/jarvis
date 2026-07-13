@@ -424,6 +424,26 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
+		// Right-click / double-click need trusted mouse events at the element's
+		// coordinates — synthetic el.click() can't express either.
+		button, _ := params["button"].(string)
+		double, _ := params["double"].(bool)
+		if button == "right" || double {
+			if button != "right" {
+				button = "left"
+			}
+			x, y, err := elementCenter(cdp, int(elemID))
+			if err != nil {
+				return nil, fmt.Errorf("click failed: %w", err)
+			}
+			if err := dispatchClick(cdp, x, y, button, double); err != nil {
+				return nil, fmt.Errorf("click failed: %w", err)
+			}
+			return &RPCResult{Result: map[string]any{
+				"success": true, "button": button, "double": double, "id": int(elemID),
+			}}, nil
+		}
+
 		// Use JavaScript to find and click element by index
 		script := fmt.Sprintf(`
 (function() {
@@ -455,6 +475,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		elemID, hasElem := params["element_id"].(float64)
 		submit, _ := params["submit"].(bool)
+		appendMode, _ := params["append"].(bool)
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
@@ -462,14 +483,20 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		if hasElem {
-			// Focus and set value on element
+			// Focus and set value on element. Default REPLACES existing content;
+			// append=true keeps it and adds at the end (matches the daemon's
+			// local browser_type semantics).
+			assign := "el.value = %s;"
+			if appendMode {
+				assign = "el.value = (el.value || '') + %s;"
+			}
 			script := fmt.Sprintf(`
 (function() {
     var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
     var el = els[%d];
     if (!el) return JSON.stringify({error: "Element not found"});
     el.focus();
-    el.value = %s;
+    `+assign+`
     el.dispatchEvent(new Event('input', {bubbles: true}));
     el.dispatchEvent(new Event('change', {bubbles: true}));
     return JSON.stringify({success: true, tag: el.tagName});
