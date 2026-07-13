@@ -3566,8 +3566,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Approve/Deny to ordinary actions and gave irreversible ones "Review in
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
-    // Wired triggers so far: approval + sidecar-offline (done + update await
-    // their own trigger hooks).
+    // Wired triggers: approval + done (an approved action that finished) +
+    // sidecar-offline. Update awaits an app-updater subsystem (none yet).
     const notifyAll = (payload: Record<string, unknown>): void => {
       for (const sc of sidecarManager.getConnectedSidecars()) {
         void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
@@ -3575,8 +3575,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
 
     // New pending approvals → one notification each, deduped and recent-only so a
-    // sidecar reconnect doesn't blast the whole backlog.
+    // sidecar reconnect doesn't blast the whole backlog. The same poll also
+    // catches approvals that just finished executing → the "done" notification.
     const notifiedApprovalIds = new Set<string>();
+    const notifiedDoneIds = new Set<string>();
     const approvalNotifyTimer = setInterval(() => {
       try {
         if (sidecarManager.getConnectedSidecars().length === 0) return;
@@ -3605,6 +3607,34 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (notifiedApprovalIds.size > 200) {
           const pending = new Set(approvalManager.getPending().map((r) => r.id));
           for (const id of notifiedApprovalIds) if (!pending.has(id)) notifiedApprovalIds.delete(id);
+        }
+
+        // Approved actions that finished → the "Task complete" (done) notification
+        // — the design's own example (the send_email you approved, sent). Scoped
+        // to executed approvals for now: a bounded, non-naggy source (you approved
+        // them); broader task-done hooks can feed the same path later. Ordered by
+        // creation, but approvals execute shortly after creation, so the recent
+        // window catches them.
+        const executed = approvalManager.getHistory({ status: 'executed', limit: 12 });
+        for (const req of executed) {
+          if (notifiedDoneIds.has(req.id)) continue;
+          notifiedDoneIds.add(req.id);
+          const doneAt = req.executed_at ?? req.decided_at ?? req.created_at;
+          if (Date.now() - doneAt > 60_000) continue; // skip the backlog
+          notifyAll({
+            id: `done:${req.id}`,
+            kind: 'done',
+            title: 'Task complete',
+            body: req.reason?.trim() || `${trayHumanizeTool(req.tool_name)} finished.`,
+            actions: [
+              { id: 'view', label: 'View', primary: true },
+              { id: 'dismiss', label: 'Dismiss' },
+            ],
+          });
+        }
+        if (notifiedDoneIds.size > 200) {
+          const recent = new Set(executed.map((r) => r.id));
+          for (const id of notifiedDoneIds) if (!recent.has(id)) notifiedDoneIds.delete(id);
         }
       } catch {
         /* best-effort */
