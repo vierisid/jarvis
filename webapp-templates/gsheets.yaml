@@ -1,6 +1,7 @@
 app_name: Google Sheets
 domains:
-  - docs.google.com
+  - docs.google.com/spreadsheets
+  - sheets.google.com
 keywords:
   - spreadsheet
   - google sheets

@@ -1,6 +1,6 @@
 app_name: Google Docs
 domains:
-  - docs.google.com
+  - docs.google.com/document
 keywords:
   - google docs
   - gdoc

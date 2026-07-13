@@ -40,6 +40,7 @@
     "test": "bun test",
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
     "check:migrations": "bun run scripts/check-migrations.ts",
+    "lint:templates": "bun run scripts/lint-webapp-templates.ts",
     "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
     "check:pieces": "bun run scripts/sync-pieces-catalog.ts --check",
     "build:workflows": "bun run scripts/build-workflows.ts",

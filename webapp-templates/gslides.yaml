@@ -1,6 +1,7 @@
 app_name: Google Slides
 domains:
-  - docs.google.com
+  - docs.google.com/presentation
+  - slides.google.com
 keywords:
   - google slides
   - gslides
