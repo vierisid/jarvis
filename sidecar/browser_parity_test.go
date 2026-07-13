@@ -31,6 +31,21 @@ const parityTestPage = `<!DOCTYPE html>
     const btn = document.getElementById('clickme');
     btn.addEventListener('dblclick', () => window.__events.push('dblclick'));
     btn.addEventListener('contextmenu', (e) => { e.preventDefault(); window.__events.push('contextmenu'); });
+
+    // Same-origin iframe with interactive content (frames[0])
+    const f1 = document.createElement('iframe');
+    f1.style.cssText = 'width:300px;height:120px;border:0;display:block';
+    document.body.appendChild(f1);
+    f1.contentDocument.write('<button aria-label="frame button" style="width:120px;height:30px">Frame Button</button><input aria-label="frame input" type="text">');
+    f1.contentDocument.close();
+    f1.contentDocument.querySelector('button').addEventListener('click', () => parent.__events.push('frame-click'));
+
+    // Tiny clipped iframe hiding a contenteditable — Google Docs pattern (frames[1])
+    const f2 = document.createElement('iframe');
+    f2.style.cssText = 'width:1px;height:1px;border:0;position:absolute;left:0;top:0';
+    document.body.appendChild(f2);
+    f2.contentDocument.write('<div contenteditable="true" role="textbox" aria-label="docs editor"></div>');
+    f2.contentDocument.close();
   </script>
 </body></html>`
 
@@ -168,6 +183,35 @@ func TestBrowserHandlerParityIntegration(t *testing.T) {
 		if !strings.Contains(events, want) {
 			t.Fatalf("%s not seen by the page, events: %s", want, events)
 		}
+	}
+
+	// ── iframe traversal: offset click, iframe marker, hidden contenteditable ──
+	snapOut = callHandler(t, snapshot, withHeadless(nil))
+	if !strings.Contains(snapOut, `iframe="true"`) {
+		t.Fatalf("iframe elements missing the iframe marker:\n%s", snapOut)
+	}
+	frameBtnID := findElementID(t, snapOut, "frame button")
+	callHandler(t, click, withHeadless(map[string]any{"element_id": float64(frameBtnID)}))
+	events = callHandler(t, evaluate, withHeadless(map[string]any{"expression": `window.__events.join(",")`}))
+	if !strings.Contains(events, "frame-click") {
+		t.Fatalf("offset click did not reach the button inside the iframe, events: %s", events)
+	}
+
+	frameInputID := findElementID(t, snapOut, "frame input")
+	callHandler(t, typeText, withHeadless(map[string]any{"element_id": float64(frameInputID), "text": "typed in frame"}))
+	frameValue := callHandler(t, evaluate, withHeadless(map[string]any{"expression": `frames[0].document.querySelector("input").value`}))
+	if frameValue != "typed in frame" {
+		t.Fatalf("frame input value = %q, want %q", frameValue, "typed in frame")
+	}
+
+	// Google Docs pattern: contenteditable in a 1x1 clipped iframe must be
+	// captured (typing-target exemption) and typable with append semantics.
+	docsID := findElementID(t, snapOut, "docs editor")
+	callHandler(t, typeText, withHeadless(map[string]any{"element_id": float64(docsID), "text": "Hello Docs"}))
+	callHandler(t, typeText, withHeadless(map[string]any{"element_id": float64(docsID), "text": " and more", "append": true}))
+	docsText := callHandler(t, evaluate, withHeadless(map[string]any{"expression": `frames[1].document.querySelector("[contenteditable]").innerText`}))
+	if docsText != "Hello Docs and more" {
+		t.Fatalf("docs editor text = %q, want %q", docsText, "Hello Docs and more")
 	}
 
 	// ── scroll reports pixels like the daemon ──

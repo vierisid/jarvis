@@ -27,7 +27,11 @@ export type PageSnapshot = {
   elements: PageElement[];
 };
 
-// JS function injected into the page to extract interactive elements
+// JS function injected into the page to extract interactive elements.
+// Traverses same-origin iframes (Google Docs, Gmail compose, embedded
+// editors) with click coordinates offset to top-page space. Cross-origin
+// frames are skipped (contentDocument is inaccessible). Mirrored in the Go
+// sidecar (sidecar/browser_snapshot.go) — change both together.
 const SNAPSHOT_SCRIPT = `(() => {
   const els = [];
   const seen = new WeakSet();
@@ -39,44 +43,78 @@ const SNAPSHOT_SCRIPT = `(() => {
     '[onclick]', '[contenteditable="true"]', '[tabindex="0"]',
     '[data-testid]'
   ].join(', ');
-  document.querySelectorAll(sel).forEach((el) => {
-    // Skip duplicates (child of already-captured parent)
-    if (seen.has(el)) return;
-    seen.add(el);
 
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    if (rect.width < 5 || rect.height < 5) return;
-    const style = window.getComputedStyle(el);
-    if (style.visibility === 'hidden') return;
-    if (style.display === 'none') return;
-    if (style.opacity === '0') return;
-
-    const tag = el.tagName.toLowerCase();
-    const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 100);
-    const attrs = {};
-    for (const a of ['href', 'name', 'placeholder', 'type', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
-      const v = el.getAttribute(a);
-      if (v) attrs[a] = v.slice(0, 200);
+  // Collect same-origin documents: the top document plus nested iframes,
+  // each with the cumulative offset of its viewport in top-page coordinates.
+  const frames = [];
+  const collectFrames = (doc, ox, oy, depth) => {
+    frames.push({ doc, ox, oy });
+    if (depth >= 3 || frames.length >= 10) return;
+    for (const f of doc.querySelectorAll('iframe, frame')) {
+      let child = null;
+      try { child = f.contentDocument; } catch { continue; }
+      if (!child) continue;
+      const r = f.getBoundingClientRect();
+      collectFrames(child, ox + r.x, oy + r.y, depth + 1);
     }
-    // Capture live value (JS property) for inputs — getAttribute('value') returns the HTML default
-    if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
-    els.push({
-      _el: el,
-      tag,
-      text,
-      attrs,
-      x: Math.round(rect.x + rect.width / 2),
-      y: Math.round(rect.y + rect.height / 2)
+  };
+  collectFrames(document, 0, 0, 0);
+
+  for (const frame of frames) {
+    const doc = frame.doc;
+    const win = doc.defaultView || window;
+    const inFrame = doc !== document;
+    doc.querySelectorAll(sel).forEach((el) => {
+      // Skip duplicates (child of already-captured parent)
+      if (seen.has(el)) return;
+      seen.add(el);
+
+      const rect = el.getBoundingClientRect();
+      const isTypingTarget = el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox';
+      const style = win.getComputedStyle(el);
+      if (style.display === 'none') return;
+      if (isTypingTarget) {
+        // Keep typing targets even when tiny, clipped, or transparent —
+        // editors (Google Docs) hide their real input in an offscreen iframe.
+      } else {
+        if (rect.width === 0 || rect.height === 0) return;
+        if (rect.width < 5 || rect.height < 5) return;
+        if (style.visibility === 'hidden') return;
+        if (style.opacity === '0') return;
+      }
+
+      const tag = el.tagName.toLowerCase();
+      const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 100);
+      const attrs = {};
+      for (const a of ['href', 'name', 'placeholder', 'type', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
+        const v = el.getAttribute(a);
+        if (v) attrs[a] = v.slice(0, 200);
+      }
+      // Capture live value (JS property) for inputs — getAttribute('value') returns the HTML default
+      if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
+      if (inFrame) attrs.iframe = 'true';
+      els.push({
+        _el: el,
+        tag,
+        text,
+        attrs,
+        x: Math.round(frame.ox + rect.x + rect.width / 2),
+        y: Math.round(frame.oy + rect.y + rect.height / 2)
+      });
     });
-  });
+  }
 
   // Assign sequential IDs and store DOM refs for later direct focus
   window.__jarvis_elements = els.map(e => e._el);
   els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
-  // Get visible text, clean up whitespace
+  // Get visible text (top document first, then same-origin frames), clean up whitespace
   let bodyText = document.body.innerText || '';
+  for (const frame of frames) {
+    if (frame.doc === document) continue;
+    const t = frame.doc.body && frame.doc.body.innerText;
+    if (t && t.trim()) bodyText += '\\n' + t;
+  }
   bodyText = bodyText.replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 8000);
 
   return {
@@ -407,9 +445,14 @@ export class BrowserController {
             el.dispatchEvent(new Event('input', { bubbles: true }));
           }
         } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
-          const range = document.createRange();
+          // Use the element's OWN document/window — the element may live
+          // inside a same-origin iframe (Google Docs, Gmail compose), where
+          // the top document's selection can't reach it.
+          const doc = el.ownerDocument || document;
+          const win = doc.defaultView || window;
+          const range = doc.createRange();
           range.selectNodeContents(el);
-          const sel = window.getSelection();
+          const sel = win.getSelection();
           sel.removeAllRanges();
           if (append) {
             // Collapse to the end of the element's content — insert appends
@@ -418,7 +461,7 @@ export class BrowserController {
           } else {
             // Select all within this element only, then delete the selection
             sel.addRange(range);
-            document.execCommand('delete', false, null);
+            doc.execCommand('delete', false, null);
           }
         }
         return 'ok';

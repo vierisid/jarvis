@@ -532,6 +532,7 @@ function formatSnapshot(snap: PageSnapshot): string {
       if (el.attrs.role) attrParts.push(`role="${el.attrs.role}"`);
       if (el.attrs.contenteditable) attrParts.push(`contenteditable="${el.attrs.contenteditable}"`);
       if (el.attrs['data-testid']) attrParts.push(`data-testid="${el.attrs['data-testid']}"`);
+      if (el.attrs.iframe) attrParts.push(`iframe="${el.attrs.iframe}"`);
 
       const textStr = el.text ? ` "${el.text.slice(0, 50)}"` : '';
       const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';

@@ -545,16 +545,18 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
             el.dispatchEvent(new Event('input', { bubbles: true }));
           }
         } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
-          const range = document.createRange();
+          const doc = el.ownerDocument || document;
+          const win = doc.defaultView || window;
+          const range = doc.createRange();
           range.selectNodeContents(el);
-          const sel = window.getSelection();
+          const sel = win.getSelection();
           sel.removeAllRanges();
           if (append) {
             range.collapse(false);
             sel.addRange(range);
           } else {
             sel.addRange(range);
-            document.execCommand('delete', false, null);
+            doc.execCommand('delete', false, null);
           }
         }
         return 'ok';

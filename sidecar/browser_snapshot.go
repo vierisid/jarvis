@@ -17,8 +17,10 @@ import (
 // remote. If you change one side, change the other.
 
 // browserSnapshotScript matches the daemon's SNAPSHOT_SCRIPT: same selector
-// list, same visibility filtering, same attributes, 1-based ids, and element
-// refs stashed on window.__jarvis_elements for focus-based typing.
+// list, same visibility filtering, same attributes, 1-based ids, element
+// refs stashed on window.__jarvis_elements for focus-based typing, and the
+// same same-origin iframe traversal with coordinates offset to top-page
+// space (change both together).
 const browserSnapshotScript = `(() => {
   const els = [];
   const seen = new WeakSet();
@@ -30,40 +32,69 @@ const browserSnapshotScript = `(() => {
     '[onclick]', '[contenteditable="true"]', '[tabindex="0"]',
     '[data-testid]'
   ].join(', ');
-  document.querySelectorAll(sel).forEach((el) => {
-    if (seen.has(el)) return;
-    seen.add(el);
 
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    if (rect.width < 5 || rect.height < 5) return;
-    const style = window.getComputedStyle(el);
-    if (style.visibility === 'hidden') return;
-    if (style.display === 'none') return;
-    if (style.opacity === '0') return;
-
-    const tag = el.tagName.toLowerCase();
-    const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 100);
-    const attrs = {};
-    for (const a of ['href', 'name', 'placeholder', 'type', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
-      const v = el.getAttribute(a);
-      if (v) attrs[a] = v.slice(0, 200);
+  const frames = [];
+  const collectFrames = (doc, ox, oy, depth) => {
+    frames.push({ doc, ox, oy });
+    if (depth >= 3 || frames.length >= 10) return;
+    for (const f of doc.querySelectorAll('iframe, frame')) {
+      let child = null;
+      try { child = f.contentDocument; } catch { continue; }
+      if (!child) continue;
+      const r = f.getBoundingClientRect();
+      collectFrames(child, ox + r.x, oy + r.y, depth + 1);
     }
-    if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
-    els.push({
-      _el: el,
-      tag,
-      text,
-      attrs,
-      x: Math.round(rect.x + rect.width / 2),
-      y: Math.round(rect.y + rect.height / 2)
+  };
+  collectFrames(document, 0, 0, 0);
+
+  for (const frame of frames) {
+    const doc = frame.doc;
+    const win = doc.defaultView || window;
+    const inFrame = doc !== document;
+    doc.querySelectorAll(sel).forEach((el) => {
+      if (seen.has(el)) return;
+      seen.add(el);
+
+      const rect = el.getBoundingClientRect();
+      const isTypingTarget = el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox';
+      const style = win.getComputedStyle(el);
+      if (style.display === 'none') return;
+      if (!isTypingTarget) {
+        if (rect.width === 0 || rect.height === 0) return;
+        if (rect.width < 5 || rect.height < 5) return;
+        if (style.visibility === 'hidden') return;
+        if (style.opacity === '0') return;
+      }
+
+      const tag = el.tagName.toLowerCase();
+      const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 100);
+      const attrs = {};
+      for (const a of ['href', 'name', 'placeholder', 'type', 'aria-label', 'title', 'id', 'role', 'data-testid', 'contenteditable']) {
+        const v = el.getAttribute(a);
+        if (v) attrs[a] = v.slice(0, 200);
+      }
+      if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
+      if (inFrame) attrs.iframe = 'true';
+      els.push({
+        _el: el,
+        tag,
+        text,
+        attrs,
+        x: Math.round(frame.ox + rect.x + rect.width / 2),
+        y: Math.round(frame.oy + rect.y + rect.height / 2)
+      });
     });
-  });
+  }
 
   window.__jarvis_elements = els.map(e => e._el);
   els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
   let bodyText = document.body.innerText || '';
+  for (const frame of frames) {
+    if (frame.doc === document) continue;
+    const t = frame.doc.body && frame.doc.body.innerText;
+    if (t && t.trim()) bodyText += '\n' + t;
+  }
   bodyText = bodyText.replace(/\n{3,}/g, '\n\n').trim().slice(0, 8000);
 
   return JSON.stringify({
@@ -261,6 +292,7 @@ func formatBrowserSnapshot(snap *pageSnapshot) string {
 		addAttr("role", `role="%s"`)
 		addAttr("contenteditable", `contenteditable="%s"`)
 		addAttr("data-testid", `data-testid="%s"`)
+		addAttr("iframe", `iframe="%s"`)
 
 		textStr := ""
 		if el.Text != "" {

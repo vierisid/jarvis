@@ -43,6 +43,22 @@ const TEST_PAGE = `<!DOCTYPE html>
     const btn = document.getElementById('clickme');
     btn.addEventListener('dblclick', () => window.__events.push('dblclick'));
     btn.addEventListener('contextmenu', (e) => { e.preventDefault(); window.__events.push('contextmenu'); });
+
+    // Same-origin iframe with interactive content (frames[0])
+    const f1 = document.createElement('iframe');
+    f1.style.cssText = 'width:300px;height:120px;border:0;display:block';
+    document.body.appendChild(f1);
+    f1.contentDocument.write('<button aria-label="frame button" style="width:120px;height:30px">Frame Button</button><input aria-label="frame input" type="text">');
+    f1.contentDocument.close();
+    f1.contentDocument.querySelector('button').addEventListener('click', () => parent.__events.push('frame-click'));
+
+    // Tiny clipped iframe hiding a contenteditable — simulates Google Docs'
+    // texteventtarget iframe (frames[1])
+    const f2 = document.createElement('iframe');
+    f2.style.cssText = 'width:1px;height:1px;border:0;position:absolute;left:0;top:0';
+    document.body.appendChild(f2);
+    f2.contentDocument.write('<div contenteditable="true" role="textbox" aria-label="docs editor"></div>');
+    f2.contentDocument.close();
   </script>
 </body></html>`;
 
@@ -152,6 +168,45 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     // And replace semantics still clear it
     await browser.type(editorId!, 'fresh');
     expect(await browser.evaluate('document.getElementById("editor").innerText')).toBe('fresh');
+  }, 20_000);
+
+  test('snapshot traverses same-origin iframes with offset coordinates', async () => {
+    const snap = await browser.snapshot();
+    const frameBtn = snap.elements.find(e => e.attrs['aria-label'] === 'frame button');
+    expect(frameBtn).toBeDefined();
+    expect(frameBtn!.attrs.iframe).toBe('true');
+
+    // Clicking by the offset coordinates must reach the button INSIDE the frame
+    await browser.click(frameBtn!.id);
+    expect(await browser.evaluate('window.__events') as string[]).toContain('frame-click');
+  }, 20_000);
+
+  test('type works on inputs inside iframes', async () => {
+    const snap = await browser.snapshot();
+    const frameInput = snap.elements.find(e => e.attrs['aria-label'] === 'frame input');
+    expect(frameInput).toBeDefined();
+
+    await browser.type(frameInput!.id, 'typed in frame');
+    expect(await browser.evaluate('frames[0].document.querySelector("input").value'))
+      .toBe('typed in frame');
+  }, 20_000);
+
+  test('hidden-iframe contenteditable (Google Docs pattern) is visible and typable', async () => {
+    const snap = await browser.snapshot();
+    // 1x1 clipped iframe — the typing-target exemption must keep this element
+    const editor = snap.elements.find(e => e.attrs['aria-label'] === 'docs editor');
+    expect(editor).toBeDefined();
+    expect(editor!.attrs.iframe).toBe('true');
+
+    await browser.type(editor!.id, 'Hello Docs');
+    await browser.type(editor!.id, ' and more', false, true); // append
+    expect(await browser.evaluate('frames[1].document.querySelector("[contenteditable]").innerText'))
+      .toBe('Hello Docs and more');
+  }, 20_000);
+
+  test('iframe text appears in the page text', async () => {
+    const snap = await browser.snapshot();
+    expect(snap.text).toContain('Frame Button');
   }, 20_000);
 
   test('double click and right click dispatch real events', async () => {
