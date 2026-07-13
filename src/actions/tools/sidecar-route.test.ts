@@ -102,3 +102,58 @@ describe("routeToSidecar error messages", () => {
     expect(await routeToSidecar("sc-mac", "run_command", {}, "terminal")).toBe("total 8\\ndrwx");
   });
 });
+
+/**
+ * A timed-out ("detached") RPC must never be reported as background success
+ * for an interactive tool: detached results are only console-logged by
+ * manager.ts's onDetachedComplete and never reach the model, so the old
+ * "running in the background" was a plain false success.
+ */
+describe("routeToSidecar detached handling", () => {
+  const pc: SidecarInfo = {
+    ...mac,
+    id: "sc-pc",
+    name: "Desk PC",
+    os: "windows",
+    platform: "amd64",
+    capabilities: ["terminal", "desktop", "browser"],
+  };
+  const detached = () => stubManager([pc], async () => "detached");
+
+  test("reports an honest timeout for a desktop tool instead of background success", async () => {
+    setSidecarManagerRef(detached());
+    const out = await routeToSidecar("sc-pc", "launch_app", { executable: "notepad.exe" }, "desktop");
+    expect(out).toContain("Error");
+    expect(out).toContain("do NOT assume it succeeded");
+    expect(out).not.toContain("running in the background");
+  });
+
+  test("names the machine and its OS in the timeout, as every other error does", async () => {
+    setSidecarManagerRef(detached());
+    const out = await routeToSidecar("sc-pc", "launch_app", {}, "desktop");
+    expect(out).toContain("Desk PC, Windows");
+  });
+
+  test("reports an honest timeout for a browser tool", async () => {
+    setSidecarManagerRef(detached());
+    const out = await routeToSidecar("sc-pc", "browser_navigate", { url: "https://x.test" }, "browser");
+    expect(out).toContain("Error");
+    expect(out).not.toContain("running in the background");
+  });
+
+  test("keeps fire-and-forget for run_command, with an explicit no-output caveat", async () => {
+    // The one method whose result genuinely does not have to come back, so
+    // it keeps the old behaviour - but says out loud that no output follows.
+    setSidecarManagerRef(detached());
+    const out = await routeToSidecar("sc-pc", "run_command", { command: "sleep 60" }, "terminal");
+    expect(out).toContain("still running in the background");
+    expect(out).toContain("will NOT be reported back");
+    expect(out).not.toContain("Error");
+  });
+
+  test("passes a real object result through as JSON", async () => {
+    setSidecarManagerRef(stubManager([pc], async () => ({ success: true, pid: 42 })));
+    const out = await routeToSidecar("sc-pc", "launch_app", {}, "desktop");
+    expect(JSON.parse(out)).toEqual({ success: true, pid: 42 });
+  });
+});
