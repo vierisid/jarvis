@@ -36,6 +36,7 @@ import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
+import { impactFromCategory } from "../roles/authority.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
@@ -3555,6 +3556,89 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const paused = (event.payload as { paused?: boolean } | undefined)?.paused === true;
       if (paused) emergencyController.pause();
       else emergencyController.resume();
+    });
+
+    // ── Outbound OS notifications (design: usejarvis-tray §01) ──
+    // The four reasons Jarvis interrupts: it needs your OK (approval), it
+    // finished (done), a machine dropped (sidecar), or an update is ready
+    // (update). Each is raised natively by the sidecar via notify.show; the
+    // user's choice returns as a notify.action event. Candor (Authority Book
+    // 08): Approve/Deny from a notification is allowed for ordinary external
+    // actions, but destructive (irreversible) actions carry only "Review in
+    // Jarvis" and open the app. Wired triggers so far: approval + sidecar-offline
+    // (done + update await their own trigger hooks).
+    const notifyAll = (payload: Record<string, unknown>): void => {
+      for (const sc of sidecarManager.getConnectedSidecars()) {
+        void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
+      }
+    };
+
+    // New pending approvals → one notification each, deduped and recent-only so a
+    // sidecar reconnect doesn't blast the whole backlog.
+    const notifiedApprovalIds = new Set<string>();
+    const approvalNotifyTimer = setInterval(() => {
+      try {
+        if (sidecarManager.getConnectedSidecars().length === 0) return;
+        for (const req of approvalManager.getPending()) {
+          if (notifiedApprovalIds.has(req.id)) continue;
+          notifiedApprovalIds.add(req.id);
+          if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
+          const impact = impactFromCategory(req.action_category);
+          const destructive = impact === 'destructive';
+          notifyAll({
+            id: req.id,
+            kind: 'approval',
+            title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
+            body: req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`,
+            meta: `${impact} · ${req.tool_name}`,
+            destructive,
+            actions: destructive
+              ? [{ id: 'review', label: 'Review in Jarvis', primary: true }]
+              : [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
+          });
+        }
+        if (notifiedApprovalIds.size > 200) {
+          const pending = new Set(approvalManager.getPending().map((r) => r.id));
+          for (const id of notifiedApprovalIds) if (!pending.has(id)) notifiedApprovalIds.delete(id);
+        }
+      } catch {
+        /* best-effort */
+      }
+    }, 3000);
+    approvalNotifyTimer.unref?.();
+
+    // A machine dropped → tell the other connected sidecars. Keep a name map so
+    // the body can say which machine (the sidecar object is gone by disconnect).
+    const sidecarNameById = new Map<string, string>();
+    sidecarManager.onSidecarConnected((sc) => {
+      sidecarNameById.set(sc.id, sc.name);
+    });
+    sidecarManager.onSidecarDisconnected((id) => {
+      const name = sidecarNameById.get(id) ?? 'A machine';
+      sidecarNameById.delete(id);
+      notifyAll({
+        id: `sidecar:${id}`,
+        kind: 'sidecar',
+        title: 'Sidecar disconnected',
+        body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
+        destructive: false,
+        actions: [
+          { id: 'review', label: 'Open Jarvis', primary: true },
+          { id: 'dismiss', label: 'Dismiss' },
+        ],
+      });
+    });
+
+    // The user's choice from a notification. Only the approval buttons act on the
+    // brain (Approve/Deny, mirroring the dashboard endpoint); 'review'/'dismiss'
+    // are handled sidecar-side (it opened the app) so there's nothing to do here.
+    sidecarManager.onEvent((_sidecarId, event) => {
+      if (event.event_type !== 'notify.action') return;
+      const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
+      if (p.kind === 'approval' && p.id) {
+        if (p.action === 'approve') approvalManager.approve(p.id, 'notification');
+        else if (p.action === 'deny') approvalManager.deny(p.id, 'notification');
+      }
     });
 
     // Wire authority engine into orchestrator

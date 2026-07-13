@@ -275,11 +275,17 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		ev := uint32(lParam) & 0xFFFF
 		if ev == trayWmRButtonUp || ev == trayWmContextMnu {
 			showTrayMenu(hwnd)
+		} else if ev == ninBalloonUserClick {
+			onBalloonClick()
 		}
 		return 0
 
 	case trayMsgSetState:
 		traySetIconForState(int32(wParam))
+		return 0
+
+	case trayMsgShowBalloon:
+		showBalloonNow()
 		return 0
 
 	case trayWmClose:

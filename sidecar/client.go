@@ -888,6 +888,22 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			setTrayStatus(trayStatusFromParams(params))
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil
 		}
+		// Outbound OS notification (brain → sidecar): the four reasons Jarvis
+		// interrupts — approval / done / sidecar / update (design: usejarvis-tray
+		// §01). The sidecar raises it natively; the choice comes back via
+		// notify.action (emitted below).
+		c.handlers["notify.show"] = func(params map[string]any) (*RPCResult, error) {
+			showNotification(notificationFromParams(params))
+			return &RPCResult{Result: map[string]any{"ok": true}}, nil
+		}
+		notifyEmitAction = func(id, kind, action string) {
+			_ = c.sendEvent(c.obsCtx, SidecarEvent{
+				EventType: "notify.action",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{"id": id, "kind": kind, "action": action},
+			}, nil)
+		}
 		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
 			state, _ := params["state"].(string)
 			// Daemon-initiated teardown (budget / timeout / error): stop the
