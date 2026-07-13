@@ -32,8 +32,10 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 		maxDepth = int(d)
 	}
 
+	semantic, _ := params["semantic"].(bool)
+
 	val, err := comThread.call(func(state *uiaState) (any, error) {
-		return uiaInspect(state, pid, maxDepth, false)
+		return uiaInspect(state, pid, maxDepth, false, semantic)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get_window_tree failed: %w", err)
