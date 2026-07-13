@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -181,7 +180,10 @@ func makeBrowserPressKeyHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		pk := parseKeyCombo(combo)
 		if pk == nil {
-			return nil, fmt.Errorf("unsupported key %q", combo)
+			// Same message the daemon's local pressKey returns, so the LLM gets
+			// consistent guidance regardless of routing.
+			return &RPCResult{Result: fmt.Sprintf(
+				`Error: Unsupported key "%s". Supported: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1-F12, letters, digits, common punctuation — optionally prefixed with Ctrl+/Alt+/Shift+/Meta+ (e.g. "Ctrl+K", "Shift+Enter").`, combo)}, nil
 		}
 
 		cdp, err := getCDPForParams(cfg, params)
@@ -218,47 +220,8 @@ func makeBrowserPressKeyHandler(cfg *SidecarConfig) RPCHandler {
 		// Let the app react (menu open, mode switch, etc.)
 		time.Sleep(300 * time.Millisecond)
 
-		return &RPCResult{Result: map[string]any{"success": true, "pressed": pk.Display}}, nil
+		return &RPCResult{Result: fmt.Sprintf("Pressed %s", pk.Display)}, nil
 	}
-}
-
-// elementCenter resolves the viewport center of snapshot element i using the
-// same selector list the sidecar snapshot/click handlers use.
-func elementCenter(cdp *cdpClient, elemID int) (x, y float64, err error) {
-	script := fmt.Sprintf(`
-(function() {
-    var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
-    var el = els[%d];
-    if (!el) return "";
-    var r = el.getBoundingClientRect();
-    return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});
-})()
-`, elemID)
-
-	result, err := cdp.send("Runtime.evaluate", map[string]any{
-		"expression":    script,
-		"returnByValue": true,
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	var parsed struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-	}
-	json.Unmarshal(result, &parsed)
-	if parsed.Result.Value == "" {
-		return 0, 0, fmt.Errorf("element %d not found", elemID)
-	}
-	var pt struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
-	}
-	if err := json.Unmarshal([]byte(parsed.Result.Value), &pt); err != nil {
-		return 0, 0, fmt.Errorf("parse element rect: %w", err)
-	}
-	return pt.X, pt.Y, nil
 }
 
 func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
@@ -273,10 +236,12 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		x, y, err := elementCenter(cdp, int(elemID))
-		if err != nil {
-			return nil, fmt.Errorf("hover failed: %w", err)
+		id := int(elemID)
+		coords, found := cdp.elementCoordsFor(id)
+		if !found {
+			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
 		}
+		x, y := coords[0], coords[1]
 
 		// Approach from a nearby point so mouseenter/mouseover always fire
 		approachX, approachY := x-10, y-10
@@ -299,10 +264,8 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 		// Give the app time to render hover-triggered UI
 		time.Sleep(600 * time.Millisecond)
 
-		return &RPCResult{Result: map[string]any{
-			"success": true,
-			"hint":    "Hovering. Take a browser_snapshot to see hover-revealed elements, then act before moving the mouse elsewhere.",
-		}}, nil
+		return &RPCResult{Result: fmt.Sprintf(
+			"Hovering over element [%d]. Take a browser_snapshot to see any hover-revealed elements, then act before moving the mouse elsewhere.", id)}, nil
 	}
 }
 

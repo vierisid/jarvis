@@ -46,6 +46,39 @@ type cdpClient struct {
 	pending map[int64]chan cdpReply
 	pendMu  sync.Mutex
 	closed  atomic.Bool
+
+	// Element centers from the last snapshot, keyed by 1-based element id.
+	// Click/hover resolve ids against THIS, not a fresh selector query, so a
+	// click lands where the snapshot said the element was.
+	elemMu     sync.Mutex
+	elemCoords map[int][2]float64
+
+	// One-shot waiters for CDP events (e.g. Page.loadEventFired).
+	eventMu      sync.Mutex
+	eventWaiters map[string][]chan struct{}
+}
+
+// waitForEvent returns a channel that closes when the named CDP event next
+// fires. Register BEFORE the action that triggers the event.
+func (c *cdpClient) waitForEvent(method string) <-chan struct{} {
+	ch := make(chan struct{})
+	c.eventMu.Lock()
+	if c.eventWaiters == nil {
+		c.eventWaiters = make(map[string][]chan struct{})
+	}
+	c.eventWaiters[method] = append(c.eventWaiters[method], ch)
+	c.eventMu.Unlock()
+	return ch
+}
+
+func (c *cdpClient) fireEvent(method string) {
+	c.eventMu.Lock()
+	waiters := c.eventWaiters[method]
+	delete(c.eventWaiters, method)
+	c.eventMu.Unlock()
+	for _, ch := range waiters {
+		close(ch)
+	}
 }
 
 type cdpReply struct {
@@ -155,6 +188,13 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 		c.shutdown()
 		return nil, fmt.Errorf("attach to page: %w", err)
 	}
+
+	// Enable Page events so navigate can wait for Page.loadEventFired.
+	// Non-fatal: navigation falls back to a fixed settle delay without it.
+	if _, err := c.send("Page.enable", nil); err != nil {
+		log.Printf("[browser] Page.enable failed (navigation uses fixed delay): %v", err)
+	}
+
 	return c, nil
 }
 
@@ -232,21 +272,26 @@ func (c *cdpClient) readLoop(r io.Reader) {
 			}
 			var msg struct {
 				ID     int64           `json:"id"`
+				Method string          `json:"method"`
 				Result json.RawMessage `json:"result"`
 				Error  json.RawMessage `json:"error"`
 			}
-			if json.Unmarshal(data, &msg) == nil && msg.ID != 0 {
-				c.pendMu.Lock()
-				ch, ok := c.pending[msg.ID]
-				if ok {
-					delete(c.pending, msg.ID)
-				}
-				c.pendMu.Unlock()
-				if ok {
-					ch <- cdpReply{result: msg.Result, errMsg: msg.Error}
+			if json.Unmarshal(data, &msg) == nil {
+				if msg.ID != 0 {
+					c.pendMu.Lock()
+					ch, ok := c.pending[msg.ID]
+					if ok {
+						delete(c.pending, msg.ID)
+					}
+					c.pendMu.Unlock()
+					if ok {
+						ch <- cdpReply{result: msg.Result, errMsg: msg.Error}
+					}
+				} else if msg.Method != "" {
+					// Protocol event — wake anyone waiting on it.
+					c.fireEvent(msg.Method)
 				}
 			}
-			// id == 0 -> protocol event; ignored.
 		}
 		if err != nil {
 			c.fail()
@@ -376,23 +421,29 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		result, err := cdp.send("Page.navigate", map[string]any{"url": url})
-		if err != nil {
+		// Register the waiter BEFORE navigating so the event can't be missed
+		loaded := cdp.waitForEvent("Page.loadEventFired")
+
+		if _, err := cdp.send("Page.navigate", map[string]any{"url": url}); err != nil {
 			return nil, fmt.Errorf("navigate failed: %w", err)
 		}
 
-		// Wait for page load
-		time.Sleep(1 * time.Second)
+		select {
+		case <-loaded:
+		case <-time.After(30 * time.Second):
+			// Page may still be usable (SPAs, slow loads) — same fallback as
+			// the daemon's local navigate.
+			log.Printf("[browser] page load timeout for %s, continuing anyway", url)
+		}
 
-		// Get page content
-		snapshot, _ := getBrowserSnapshot(cdp)
+		// Let JS settle (matches the daemon's post-load delay)
+		time.Sleep(800 * time.Millisecond)
 
-		return &RPCResult{Result: map[string]any{
-			"success":  true,
-			"url":      url,
-			"navigate": json.RawMessage(result),
-			"snapshot": snapshot,
-		}}, nil
+		formatted, err := takeFormattedSnapshot(cdp)
+		if err != nil {
+			return nil, err
+		}
+		return &RPCResult{Result: formatted}, nil
 	}
 }
 
@@ -403,12 +454,11 @@ func makeBrowserSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		snapshot, err := getBrowserSnapshot(cdp)
+		formatted, err := takeFormattedSnapshot(cdp)
 		if err != nil {
 			return nil, err
 		}
-
-		return &RPCResult{Result: snapshot}, nil
+		return &RPCResult{Result: formatted}, nil
 	}
 }
 
@@ -418,52 +468,37 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 		if !ok {
 			return nil, fmt.Errorf("missing required parameter: element_id")
 		}
+		button, _ := params["button"].(string)
+		if button != "right" {
+			button = "left"
+		}
+		double, _ := params["double"].(bool)
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
 
-		// Right-click / double-click need trusted mouse events at the element's
-		// coordinates — synthetic el.click() can't express either.
-		button, _ := params["button"].(string)
-		double, _ := params["double"].(bool)
-		if button == "right" || double {
-			if button != "right" {
-				button = "left"
-			}
-			x, y, err := elementCenter(cdp, int(elemID))
-			if err != nil {
-				return nil, fmt.Errorf("click failed: %w", err)
-			}
-			if err := dispatchClick(cdp, x, y, button, double); err != nil {
-				return nil, fmt.Errorf("click failed: %w", err)
-			}
-			return &RPCResult{Result: map[string]any{
-				"success": true, "button": button, "double": double, "id": int(elemID),
-			}}, nil
+		id := int(elemID)
+		coords, found := cdp.elementCoordsFor(id)
+		if !found {
+			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
 		}
 
-		// Use JavaScript to find and click element by index
-		script := fmt.Sprintf(`
-(function() {
-    var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
-    var el = els[%d];
-    if (!el) return JSON.stringify({error: "Element not found", id: %d});
-    el.click();
-    return JSON.stringify({success: true, tag: el.tagName, id: %d});
-})()
-`, int(elemID), int(elemID), int(elemID))
-
-		result, err := cdp.send("Runtime.evaluate", map[string]any{
-			"expression":    script,
-			"returnByValue": true,
-		})
-		if err != nil {
+		if err := dispatchClick(cdp, coords[0], coords[1], button, double); err != nil {
 			return nil, fmt.Errorf("click failed: %w", err)
 		}
 
-		return &RPCResult{Result: map[string]any{"result": json.RawMessage(result)}}, nil
+		// Wait for navigation/changes (matches the daemon's local click)
+		time.Sleep(1 * time.Second)
+
+		kind := "Clicked"
+		if double {
+			kind = "Double-clicked"
+		} else if button == "right" {
+			kind = "Right-clicked"
+		}
+		return &RPCResult{Result: fmt.Sprintf("%s element [%d]", kind, id)}, nil
 	}
 }
 
@@ -474,6 +509,9 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("missing required parameter: text")
 		}
 		elemID, hasElem := params["element_id"].(float64)
+		if !hasElem {
+			return nil, fmt.Errorf("missing required parameter: element_id")
+		}
 		submit, _ := params["submit"].(bool)
 		appendMode, _ := params["append"].(bool)
 
@@ -482,71 +520,116 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		if hasElem {
-			// Focus and set value on element. Default REPLACES existing content;
-			// append=true keeps it and adds at the end (matches the daemon's
-			// local browser_type semantics).
-			assign := "el.value = %s;"
-			if appendMode {
-				assign = "el.value = (el.value || '') + %s;"
+		id := int(elemID)
+		coords, found := cdp.elementCoordsFor(id)
+		if !found {
+			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
+		}
+
+		// Focus via the DOM refs the snapshot stored, and clear or position the
+		// caret — same script as the daemon's local type (session.ts).
+		appendJS := "false"
+		if appendMode {
+			appendJS = "true"
+		}
+		script := fmt.Sprintf(`(() => {
+        const el = window.__jarvis_elements && window.__jarvis_elements[%d];
+        if (!el) return 'not_found';
+        el.focus();
+        const append = %s;
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+          if (append) {
+            try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+          } else {
+            el.value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          if (append) {
+            range.collapse(false);
+            sel.addRange(range);
+          } else {
+            sel.addRange(range);
+            document.execCommand('delete', false, null);
+          }
+        }
+        return 'ok';
+      })()`, id-1, appendJS)
+
+		focusResult, err := cdp.send("Runtime.evaluate", map[string]any{
+			"expression":    script,
+			"returnByValue": true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("type into element failed: %w", err)
+		}
+		var focusParsed struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		json.Unmarshal(focusResult, &focusParsed)
+
+		if focusParsed.Result.Value == "not_found" {
+			// Element refs lost (navigation happened) — coordinate-click
+			// fallback + Ctrl+A clearing, same as the daemon.
+			if err := dispatchClick(cdp, coords[0], coords[1], "left", false); err != nil {
+				return nil, fmt.Errorf("type focus fallback failed: %w", err)
 			}
-			script := fmt.Sprintf(`
-(function() {
-    var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
-    var el = els[%d];
-    if (!el) return JSON.stringify({error: "Element not found"});
-    el.focus();
-    `+assign+`
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-    return JSON.stringify({success: true, tag: el.tagName});
-})()
-`, int(elemID), jsonString(text))
-			if _, err := cdp.send("Runtime.evaluate", map[string]any{
-				"expression":    script,
-				"returnByValue": true,
-			}); err != nil {
-				return nil, fmt.Errorf("type into element failed: %w", err)
+			time.Sleep(200 * time.Millisecond)
+			if !appendMode {
+				for _, evType := range []string{"keyDown", "keyUp"} {
+					if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
+						"type": evType, "key": "a", "code": "KeyA",
+						"windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65, "modifiers": 2,
+					}); err != nil {
+						return nil, fmt.Errorf("type clear fallback failed: %w", err)
+					}
+				}
 			}
 		} else {
-			// Type into focused element character by character
-			for _, ch := range text {
-				if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
-					"type": "keyDown",
-					"text": string(ch),
-				}); err != nil {
-					return nil, fmt.Errorf("type failed mid-string: %w", err)
-				}
-				if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
-					"type": "keyUp",
-					"text": string(ch),
-				}); err != nil {
-					return nil, fmt.Errorf("type failed mid-string: %w", err)
-				}
-			}
+			time.Sleep(200 * time.Millisecond)
 		}
+
+		// Insert text (paste-like — same as the daemon's Input.insertText)
+		if _, err := cdp.send("Input.insertText", map[string]any{"text": text}); err != nil {
+			return nil, fmt.Errorf("type failed: %w", err)
+		}
+
+		verb := "Typed"
+		if appendMode {
+			verb = "Appended"
+		}
+		result := fmt.Sprintf("%s %q into element [%d]", verb, text, id)
 
 		if submit {
-			if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
-				"type":                  "keyDown",
-				"key":                   "Enter",
-				"code":                  "Enter",
-				"windowsVirtualKeyCode": 13,
-			}); err != nil {
-				return nil, fmt.Errorf("submit (Enter down) failed: %w", err)
+			time.Sleep(100 * time.Millisecond)
+			if err := pressEnter(cdp); err != nil {
+				return nil, fmt.Errorf("submit failed: %w", err)
 			}
-			if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
-				"type":                  "keyUp",
-				"key":                   "Enter",
-				"code":                  "Enter",
-				"windowsVirtualKeyCode": 13,
-			}); err != nil {
-				return nil, fmt.Errorf("submit (Enter up) failed: %w", err)
-			}
+			time.Sleep(2 * time.Second)
+			result += " and pressed Enter"
 		}
 
-		return &RPCResult{Result: map[string]any{"success": true}}, nil
+		return &RPCResult{Result: result}, nil
 	}
+}
+
+// pressEnter matches the daemon's Enter sequence (rawKeyDown + char + keyUp).
+func pressEnter(cdp *cdpClient) error {
+	for _, evType := range []string{"rawKeyDown", "char", "keyUp"} {
+		if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
+			"type": evType, "key": "Enter", "code": "Enter",
+			"windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
@@ -584,34 +667,53 @@ func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 
 func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		direction, _ := params["direction"].(string)
-		amount, _ := params["amount"].(float64)
-		if amount == 0 {
-			amount = 3
+		direction := "down"
+		if d, _ := params["direction"].(string); d == "up" {
+			direction = "up"
 		}
+		amount, hasAmount := params["amount"].(float64)
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
 			return nil, err
 		}
 
-		pixels := int(amount * 100)
+		// amount is PIXELS, defaulting to one viewport height — the same
+		// contract as the daemon's local scroll (the old sidecar treated
+		// amount as "screens", silently scrolling 100x less than asked).
+		scrollAmount := amount
+		if !hasAmount || scrollAmount == 0 {
+			scrollAmount = 600
+			if raw, err := cdp.send("Runtime.evaluate", map[string]any{
+				"expression":    "window.innerHeight",
+				"returnByValue": true,
+			}); err == nil {
+				var parsed struct {
+					Result struct {
+						Value float64 `json:"value"`
+					} `json:"result"`
+				}
+				if json.Unmarshal(raw, &parsed) == nil && parsed.Result.Value > 0 {
+					scrollAmount = parsed.Result.Value
+				}
+			}
+		}
+
+		pixels := int(scrollAmount)
 		if direction == "up" {
 			pixels = -pixels
 		}
 
-		script := fmt.Sprintf("window.scrollBy(0, %d)", pixels)
 		if _, err := cdp.send("Runtime.evaluate", map[string]any{
-			"expression": script,
+			"expression": fmt.Sprintf("window.scrollBy(0, %d)", pixels),
 		}); err != nil {
 			return nil, fmt.Errorf("scroll failed: %w", err)
 		}
 
-		return &RPCResult{Result: map[string]any{
-			"success":   true,
-			"direction": direction,
-			"pixels":    pixels,
-		}}, nil
+		// Wait for lazy-loaded content (matches the daemon)
+		time.Sleep(500 * time.Millisecond)
+
+		return &RPCResult{Result: fmt.Sprintf("Scrolled %s by %dpx", direction, int(scrollAmount))}, nil
 	}
 }
 
@@ -630,12 +732,40 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 		result, err := cdp.send("Runtime.evaluate", map[string]any{
 			"expression":    expression,
 			"returnByValue": true,
+			"awaitPromise":  true,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("evaluate failed: %w", err)
 		}
 
-		return &RPCResult{Result: map[string]any{"result": json.RawMessage(result)}}, nil
+		// Unwrap to the same shape the daemon's evaluate tool returns:
+		// "(no return value)", the raw string, or pretty-printed JSON.
+		var parsed struct {
+			Result struct {
+				Value json.RawMessage `json:"value"`
+			} `json:"result"`
+			ExceptionDetails json.RawMessage `json:"exceptionDetails"`
+		}
+		if err := json.Unmarshal(result, &parsed); err != nil {
+			return nil, fmt.Errorf("evaluate: parse reply: %w", err)
+		}
+		if parsed.ExceptionDetails != nil {
+			return nil, fmt.Errorf("JS error: %s", string(parsed.ExceptionDetails))
+		}
+		if parsed.Result.Value == nil || string(parsed.Result.Value) == "null" {
+			return &RPCResult{Result: "(no return value)"}, nil
+		}
+		var asString string
+		if json.Unmarshal(parsed.Result.Value, &asString) == nil {
+			return &RPCResult{Result: asString}, nil
+		}
+		var pretty any
+		if json.Unmarshal(parsed.Result.Value, &pretty) == nil {
+			if out, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+				return &RPCResult{Result: string(out)}, nil
+			}
+		}
+		return &RPCResult{Result: string(parsed.Result.Value)}, nil
 	}
 }
 
@@ -644,79 +774,6 @@ func makeBrowserCloseHandler(cfg *SidecarConfig) RPCHandler {
 		closeActiveCDP()
 		return &RPCResult{Result: map[string]any{"closed": true}}, nil
 	}
-}
-
-// ── Browser Snapshot Helper ──────────────────────────────────────────
-
-func getBrowserSnapshot(cdp *cdpClient) (map[string]any, error) {
-	// Get page URL and title
-	urlResult, _ := cdp.send("Runtime.evaluate", map[string]any{
-		"expression":    "JSON.stringify({url: location.href, title: document.title})",
-		"returnByValue": true,
-	})
-
-	var urlInfo struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-	}
-	json.Unmarshal(urlResult, &urlInfo)
-
-	var pageInfo map[string]string
-	json.Unmarshal([]byte(urlInfo.Result.Value), &pageInfo)
-
-	// Get text content and interactive elements
-	script := `
-(function() {
-    var text = document.body ? document.body.innerText.substring(0, 5000) : '';
-    var els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick], [tabindex]');
-    var items = [];
-    for (var i = 0; i < els.length && i < 200; i++) {
-        var el = els[i];
-        var r = el.getBoundingClientRect();
-        if (r.width === 0 && r.height === 0) continue;
-        var item = {
-            id: i,
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || el.value || el.placeholder || el.alt || '').substring(0, 100).trim(),
-            type: el.type || '',
-            href: el.href || '',
-            name: el.name || '',
-            role: el.getAttribute('role') || ''
-        };
-        items.push(item);
-    }
-    return JSON.stringify({text: text, elements: items, element_count: items.length});
-})()
-`
-
-	contentResult, err := cdp.send("Runtime.evaluate", map[string]any{
-		"expression":    script,
-		"returnByValue": true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var contentParsed struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-	}
-	json.Unmarshal(contentResult, &contentParsed)
-
-	var content map[string]any
-	json.Unmarshal([]byte(contentParsed.Result.Value), &content)
-
-	if content == nil {
-		content = map[string]any{}
-	}
-	if pageInfo != nil {
-		content["url"] = pageInfo["url"]
-		content["title"] = pageInfo["title"]
-	}
-
-	return content, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
