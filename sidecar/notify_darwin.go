@@ -88,7 +88,11 @@ static void jarvisNotifySetup(void) {
         UNNotificationAction* dismissS  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
         UNNotificationCategory* sidecar = [UNNotificationCategory categoryWithIdentifier:@"sidecar" actions:@[open, dismissS] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
 
-        [center setNotificationCategories:[NSSet setWithObjects:approval, done, sidecar, nil]];
+        UNNotificationAction* openU     = [UNNotificationAction actionWithIdentifier:@"review" title:@"Open Jarvis" options:UNNotificationActionOptionForeground];
+        UNNotificationAction* later     = [UNNotificationAction actionWithIdentifier:@"later"  title:@"Later"       options:UNNotificationActionOptionNone];
+        UNNotificationCategory* update  = [UNNotificationCategory categoryWithIdentifier:@"update" actions:@[openU, later] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
+
+        [center setNotificationCategories:[NSSet setWithObjects:approval, done, sidecar, update, nil]];
 
         [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
                               completionHandler:^(BOOL granted, NSError* _Nullable error) {

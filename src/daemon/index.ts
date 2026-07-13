@@ -37,6 +37,7 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
+import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
@@ -3566,8 +3567,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Approve/Deny to ordinary actions and gave irreversible ones "Review in
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
-    // Wired triggers: approval + done (an approved action that finished) +
-    // sidecar-offline. Update awaits an app-updater subsystem (none yet).
+    // All four reasons are wired: approval, done (an approved action finished),
+    // sidecar-offline, and update (a connecting sidecar below the recommended
+    // version — the compat verdict already on the ConnectedSidecar).
     const notifyAll = (payload: Record<string, unknown>): void => {
       for (const sc of sidecarManager.getConnectedSidecars()) {
         void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
@@ -3644,9 +3646,31 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // A machine dropped → tell the other connected sidecars. Keep a name map so
     // the body can say which machine (the sidecar object is gone by disconnect).
+    // On connect we also fire the "update" notification when the sidecar's
+    // version verdict is 'suggested' (below SIDECAR_RECOMMENDED_VERSION) — the
+    // honest, already-computed signal for the fourth reason. Sent only to that
+    // machine, deduped per (id, version) so a reconnect flap can't nag.
     const sidecarNameById = new Map<string, string>();
+    const notifiedUpdateKeys = new Set<string>();
     sidecarManager.onSidecarConnected((sc) => {
       sidecarNameById.set(sc.id, sc.name);
+      if (sc.updateStatus === 'suggested') {
+        const key = `${sc.id}:${sc.version}`;
+        if (!notifiedUpdateKeys.has(key)) {
+          notifiedUpdateKeys.add(key);
+          void sidecarManager.dispatchRPC(sc.id, 'notify.show', {
+            id: `update:${sc.id}`,
+            kind: 'update',
+            title: 'Update Jarvis',
+            body: `This machine is on ${sc.version}; ${SIDECAR_RECOMMENDED_VERSION} is recommended.`,
+            destructive: false,
+            actions: [
+              { id: 'review', label: 'Open Jarvis', primary: true },
+              { id: 'later', label: 'Later' },
+            ],
+          }).catch(() => {});
+        }
+      }
     });
     sidecarManager.onSidecarDisconnected((id) => {
       const name = sidecarNameById.get(id) ?? 'A machine';
