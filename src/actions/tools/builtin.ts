@@ -551,6 +551,24 @@ function formatSnapshot(snap: PageSnapshot): string {
 
 // --- Browser Tool Implementations ---
 
+/**
+ * Resolve which browser stack serves this call and log the decision.
+ * Two divergent implementations exist (Go sidecar over CDP pipe vs local
+ * TS over CDP websocket) and selection was previously silent, which made
+ * "sometimes works, sometimes doesn't" undiagnosable. One line per call
+ * names the stack so failures can be attributed.
+ */
+function resolveBrowserTarget(params: Record<string, unknown>, tool: string): string | null {
+  const explicit = (params.target as string | undefined)?.trim() || null;
+  const target = explicit || autoTargetForCapability('browser');
+  if (target) {
+    console.log(`[browser] ${tool} → sidecar stack (target=${target}${explicit ? ', explicit' : ', auto'})`);
+  } else {
+    console.log(`[browser] ${tool} → local TS stack`);
+  }
+  return target;
+}
+
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
   description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
@@ -573,7 +591,7 @@ export const browserNavigateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
       const result = await routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
       return globalWebappTemplateDelivery.withInstructions(result, params.url as string);
@@ -601,7 +619,7 @@ export const browserSnapshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_snapshot');
     if (target) {
       const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
       return globalWebappTemplateDelivery.withInstructions(result);
@@ -682,7 +700,7 @@ export const browserHoverTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_hover');
     if (target) {
       return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
     }
@@ -759,7 +777,7 @@ export const browserTypeTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_type');
     if (target) {
       return routeToSidecar(target, 'browser_type', {
         element_id: params.element_id,
@@ -795,7 +813,7 @@ export const browserScreenshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_screenshot');
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
@@ -871,7 +889,7 @@ export const browserScrollTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_scroll');
     if (target) {
       return routeToSidecar(target, 'browser_scroll', {
         direction: params.direction,
@@ -907,7 +925,7 @@ export const browserEvaluateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_evaluate');
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }
