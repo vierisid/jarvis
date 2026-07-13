@@ -2,46 +2,264 @@
 
 package main
 
-// Windows notifications — tray balloon (Shell_NotifyIcon NIF_INFO) reusing the
-// existing tray icon. A balloon has no action buttons, so a click always opens
-// the app to review (the click-only-in-app rule holds for every kind); inline
-// Approve/Deny via a real WinRT toast is a separate increment. All trayNID
-// access stays on the tray thread — showNotification stores the pending
-// notification and posts a message the tray message-loop picks up.
+// Windows notifications.
+//
+// Primary path: a real WinRT toast with inline action buttons (design §01,
+// candor: Approve/Deny inline for ordinary external actions, "Review in Jarvis"
+// only for destructive ones). Getting a button click back into the ALREADY-
+// RUNNING sidecar without a COM activator is done by protocol activation:
+//   - each button's `arguments` is a jarvis://n?id=..&kind=..&a=.. URI;
+//   - clicking launches this exe with that URI (the jarvis:// scheme + the AUMID
+//     are registered under HKCU at startup, which also lets an unpackaged app
+//     raise toasts at all);
+//   - that launched instance finds the running sidecar's hidden tray window and
+//     forwards the URI via WM_COPYDATA, then exits (never booting a 2nd sidecar);
+//   - the running instance parses it and emits notify.action to the brain.
+// The toast XML is shown by a hidden PowerShell call (no WinRT COM bindings).
+//
+// Fallback: if the toast fails to launch, a tray balloon (Shell_NotifyIcon
+// NIF_INFO) — buttonless, so a click only ever opens the app to review.
 
 import (
+	"encoding/base64"
+	"fmt"
+	"log"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 const (
-	trayMsgShowBalloon  = 0x0400 + 3 // WM_APP+3: client goroutine → tray thread
-	ninBalloonUserClick = 0x0405     // user clicked the balloon body
-	trayNifInfo         = 0x00000010 // NIF_INFO — this NIM_MODIFY carries a balloon
-	trayNiifUser        = 0x00000004 // NIIF_USER — show our brand icon in the balloon
+	notifyAUMID         = "Jarvis.Sidecar" // app id toasts attribute to
+	trayMsgShowBalloon  = 0x0400 + 3       // WM_APP+3: client goroutine → tray thread (balloon)
+	trayWmCopyData      = 0x004A           // WM_COPYDATA (forwarder → running instance)
+	ninBalloonUserClick = 0x0405           // user clicked the balloon body
+	trayNifInfo         = 0x00000010       // NIF_INFO — this NIM_MODIFY carries a balloon
+	trayNiifUser        = 0x00000004       // NIIF_USER — show our brand icon in the balloon
+	notifyCopyDataMagic = 0x4A415256       // 'JARV' — tags our WM_COPYDATA so we ignore others
+	// createNoWindow (CREATE_NO_WINDOW) is declared in subprocess_windows.go —
+	// reused here to keep the PowerShell toast call headless.
 )
 
 var (
+	procFindWindowW = pebbleUser32.NewProc("FindWindowW")
+	procSetAUMID    = trayShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
+
 	pendingNotifyMu sync.Mutex
 	pendingNotify   Notification
 )
 
+type copyDataStruct struct {
+	dwData uintptr
+	cbData uint32
+	lpData uintptr
+}
+
 func init() {
-	showNotification = func(n Notification) {
-		pendingNotifyMu.Lock()
-		pendingNotify = n
-		pendingNotifyMu.Unlock()
-		if h := trayHwnd.Load(); h != 0 {
-			procPostMessageW.Call(h, trayMsgShowBalloon, 0, 0)
+	showNotification = windowsShowNotification
+	setupNotifications = windowsSetupNotifications
+	maybeForwardProtocolLaunch = windowsForwardProtocolLaunch
+}
+
+// ── setup: AUMID + jarvis:// scheme (idempotent, every startup) ──────────────
+
+func windowsSetupNotifications() {
+	if aumid, err := syscall.UTF16PtrFromString(notifyAUMID); err == nil {
+		procSetAUMID.Call(uintptr(unsafe.Pointer(aumid)))
+	}
+	exe, _ := os.Executable()
+
+	// AUMID display identity — an unpackaged app needs this (or a Start-menu
+	// shortcut) for its toasts to appear at all.
+	regSetString(`Software\Classes\AppUserModelId\`+notifyAUMID, "DisplayName", "Jarvis")
+	if exe != "" {
+		regSetString(`Software\Classes\AppUserModelId\`+notifyAUMID, "IconUri", exe)
+	}
+
+	// jarvis:// URI scheme → this exe, so a toast button's protocol activation
+	// launches us with the action URI.
+	regSetString(`Software\Classes\jarvis`, "", "URL:Jarvis Protocol")
+	regSetString(`Software\Classes\jarvis`, "URL Protocol", "")
+	if exe != "" {
+		regSetString(`Software\Classes\jarvis\shell\open\command`, "", `"`+exe+`" "%1"`)
+	}
+}
+
+func regSetString(path, name, val string) {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, path, registry.SET_VALUE)
+	if err != nil {
+		log.Printf("[notify] registry create %q: %v", path, err)
+		return
+	}
+	defer k.Close()
+	if err := k.SetStringValue(name, val); err != nil {
+		log.Printf("[notify] registry set %q\\%q: %v", path, name, err)
+	}
+}
+
+// ── forwarder: launched by a button click, forward to the running instance ───
+
+func windowsForwardProtocolLaunch() bool {
+	var uri string
+	for _, a := range os.Args[1:] {
+		if strings.HasPrefix(a, "jarvis://") {
+			uri = a
+			break
+		}
+	}
+	if uri == "" {
+		return false
+	}
+	// Find the running sidecar's hidden tray window (registered class) and hand it
+	// the URI via WM_COPYDATA. If there's no running instance, drop it silently —
+	// there's nothing to approve against.
+	if cls, err := syscall.UTF16PtrFromString("JarvisSidecarTray"); err == nil {
+		hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
+		if hwnd != 0 {
+			b := append([]byte(uri), 0)
+			cds := copyDataStruct{
+				dwData: notifyCopyDataMagic,
+				cbData: uint32(len(b)),
+				lpData: uintptr(unsafe.Pointer(&b[0])),
+			}
+			procSendMessageW.Call(hwnd, trayWmCopyData, 0, uintptr(unsafe.Pointer(&cds)))
+		}
+	}
+	return true
+}
+
+// onNotifyCopyData runs on the tray thread when the forwarder posts an action.
+// It validates the tag, parses jarvis://n?id=..&kind=..&a=.., and dispatches.
+func onNotifyCopyData(lParam uintptr) {
+	cds := (*copyDataStruct)(unsafe.Pointer(lParam))
+	if cds == nil || cds.dwData != notifyCopyDataMagic || cds.cbData == 0 || cds.lpData == 0 {
+		return
+	}
+	raw := unsafe.Slice((*byte)(unsafe.Pointer(cds.lpData)), cds.cbData)
+	uri := strings.TrimRight(string(raw), "\x00")
+	handleNotifyURI(uri)
+}
+
+func handleNotifyURI(uri string) {
+	q := uri
+	if i := strings.Index(uri, "?"); i >= 0 {
+		q = uri[i+1:]
+	}
+	vals, err := url.ParseQuery(q)
+	if err != nil {
+		return
+	}
+	action := vals.Get("a")
+	if action == "" {
+		return
+	}
+	// Let the brain act on approve/deny; everything else (review/view/reconnect/
+	// restart) opens the app. Emit for all so the brain can mark-seen.
+	notifyEmitAction(vals.Get("id"), vals.Get("kind"), action)
+	switch action {
+	case "review", "view", "reconnect", "restart":
+		if trayOpenChat != nil {
+			go trayOpenChat()
 		}
 	}
 }
 
-// showBalloonNow raises the tray balloon for the pending notification. Tray
-// thread only (owns trayNID). Uses a local copy so the persistent trayNID keeps
-// its steady-state flags — a lingering NIF_INFO would re-fire the balloon on the
-// next icon swap.
+// ── primary path: WinRT toast with buttons via hidden PowerShell ─────────────
+
+func windowsShowNotification(n Notification) {
+	// Fire the toast off the RPC-handler goroutine; on failure fall back to a
+	// balloon so a broken toast path still notifies.
+	go func() {
+		if err := showToast(n); err != nil {
+			log.Printf("[notify] toast failed, falling back to balloon: %v", err)
+			pendingNotifyMu.Lock()
+			pendingNotify = n
+			pendingNotifyMu.Unlock()
+			if h := trayHwnd.Load(); h != 0 {
+				procPostMessageW.Call(h, trayMsgShowBalloon, 0, 0)
+			}
+		}
+	}()
+}
+
+func notifyURI(id, kind, action string) string {
+	return "jarvis://n?id=" + url.QueryEscape(id) + "&kind=" + url.QueryEscape(kind) + "&a=" + url.QueryEscape(action)
+}
+
+func showToast(n Notification) error {
+	body := n.Body
+	if n.Meta != "" {
+		body += " · " + n.Meta
+	}
+
+	var acts strings.Builder
+	for _, a := range n.Actions {
+		fmt.Fprintf(&acts, `<action content="%s" activationType="protocol" arguments="%s"/>`,
+			xmlEscape(a.Label), xmlEscape(notifyURI(n.ID, n.Kind, a.ID)))
+	}
+
+	// launch (body click) always reviews in-app — never an approve.
+	xml := `<toast activationType="protocol" launch="` + xmlEscape(notifyURI(n.ID, n.Kind, "review")) + `">` +
+		`<visual><binding template="ToastGeneric">` +
+		`<text>` + xmlEscape(n.Title) + `</text>` +
+		`<text>` + xmlEscape(body) + `</text>` +
+		`</binding></visual>`
+	if acts.Len() > 0 {
+		xml += `<actions>` + acts.String() + `</actions>`
+	}
+	xml += `</toast>`
+
+	// The XML is one line (no newlines / no '@ sequence), safe inside a literal
+	// single-quoted here-string.
+	script := `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null
+[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null
+$d=New-Object Windows.Data.Xml.Dom.XmlDocument
+$d.LoadXml(@'
+` + xml + `
+'@)
+$t=New-Object Windows.UI.Notifications.ToastNotification $d
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('` + notifyAUMID + `').Show($t)`
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", psEncode(script))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	return cmd.Run() // wait so a toast/AUMID failure surfaces for the balloon fallback
+}
+
+// psEncode encodes a script as UTF-16LE base64 for powershell -EncodedCommand,
+// sidestepping all shell quoting of the XML.
+func psEncode(s string) string {
+	u := utf16.Encode([]rune(s))
+	b := make([]byte, len(u)*2)
+	for i, r := range u {
+		b[i*2] = byte(r)
+		b[i*2+1] = byte(r >> 8)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func xmlEscape(s string) string {
+	r := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	)
+	return r.Replace(s)
+}
+
+// ── fallback: tray balloon (buttonless) ──────────────────────────────────────
+
+// showBalloonNow raises the tray balloon. Tray thread only (owns trayNID). Uses
+// a local copy so trayNID keeps its steady-state flags — a lingering NIF_INFO
+// would re-fire the balloon on the next icon swap.
 func showBalloonNow() {
 	pendingNotifyMu.Lock()
 	n := pendingNotify
@@ -70,8 +288,7 @@ func showBalloonNow() {
 }
 
 // onBalloonClick — a buttonless balloon click is never an approve; it always
-// opens the app to review (the click-only-in-app rule). Inline Approve/Deny
-// buttons are a separate WinRT-toast increment.
+// opens the app to review (the click-only-in-app rule).
 func onBalloonClick() {
 	pendingNotifyMu.Lock()
 	n := pendingNotify

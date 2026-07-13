@@ -288,6 +288,11 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		showBalloonNow()
 		return 0
 
+	case trayWmCopyData:
+		// A notification-button click, forwarded from the launched instance.
+		onNotifyCopyData(lParam)
+		return 1
+
 	case trayWmClose:
 		procShellNotifyIconW.Call(trayNimDelete, uintptr(unsafe.Pointer(&trayNID)))
 		procDestroyWindow.Call(hwnd)

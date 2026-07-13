@@ -36,6 +36,15 @@ var (
 	// notifyEmitAction sends the user's choice back to the brain as a
 	// `notify.action` event. Set by the client once its connection exists.
 	notifyEmitAction = func(id, kind, action string) {}
+	// setupNotifications registers the platform bits notifications need (Windows:
+	// the AUMID + jarvis:// URI scheme). Called once at startup; no-op elsewhere.
+	setupNotifications = func() {}
+	// maybeForwardProtocolLaunch handles the case where this process was launched
+	// by the OS to service a notification-button click (a jarvis:// URI in argv):
+	// it forwards the action to the already-running sidecar and returns true so
+	// main exits without booting a second instance. Returns false on a normal
+	// launch. No-op (false) on platforms without protocol-activated notifications.
+	maybeForwardProtocolLaunch = func() bool { return false }
 )
 
 // notificationFromParams decodes a `notify.show` RPC payload.
