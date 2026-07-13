@@ -23,6 +23,11 @@ var (
 	// trayRefresh nudges the platform tray to update (icon/tooltip) when the
 	// status changes out of band. Set by the platform tray; no-op elsewhere.
 	trayRefresh = func() {}
+	// trayApplyMute gates the microphone locally when the tray "Mute microphone"
+	// toggle flips. Mic control the sidecar owns (not the brain): it pauses the
+	// wake listener, ends any live realtime session, and reflects it on the
+	// pebble. Set by the client once its audio services exist; no-op until then.
+	trayApplyMute = func(muted bool) {}
 )
 
 func setTrayStatus(s TrayStatus) {

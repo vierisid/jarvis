@@ -53,6 +53,7 @@ func goTrayMute() {
 	ts := getTrayStatus()
 	ts.Muted = !ts.Muted
 	setTrayStatus(ts)
+	trayApplyMute(ts.Muted) // gate the mic locally (sidecar owns mic control)
 	if trayEmitDarwin != nil {
 		trayEmitDarwin("tray.set_mute", map[string]any{"muted": ts.Muted})
 	}

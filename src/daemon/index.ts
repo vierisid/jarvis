@@ -3494,8 +3494,38 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // ── Tray menu live data (design: usejarvis-tray §00) ──
     // Push a status snapshot to each connected sidecar every few seconds so the
-    // tray menu (read on open) shows pending approvals, pause state, and health.
-    // The pebble state is pushed separately by the ambient-ui loop, deduped.
+    // tray menu (read on open) shows pending approvals, pause state, health, and
+    // the recent-activity block. The pebble state is pushed separately by the
+    // ambient-ui loop, deduped.
+    const trayRelTime = (ts: number): string => {
+      const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (s < 60) return 'just now';
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h`;
+      return `${Math.floor(h / 24)}d`;
+    };
+    // Humanize a tool_name ("send_email") into a short activity label ("Send email").
+    const trayHumanizeTool = (tool: string): string => {
+      const words = tool.replace(/[_-]+/g, ' ').trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
+    };
+    // Recent activity = the last few actions Jarvis actually carried out, newest
+    // first. Sourced from approvals that were approved/executed (the actions the
+    // user cares about); auto-approved low-risk actions aren't gated so don't
+    // appear here. Best-effort — never let it break the heartbeat.
+    const buildTrayRecent = (): string[] => {
+      try {
+        return approvalManager
+          .getHistory({ limit: 8 })
+          .filter((r) => r.status === 'executed' || r.status === 'approved')
+          .slice(0, 3)
+          .map((r) => `${trayHumanizeTool(r.tool_name)} · ${trayRelTime(r.executed_at ?? r.decided_at ?? r.created_at)}`);
+      } catch {
+        return [];
+      }
+    };
     const trayStatusTimer = setInterval(() => {
       try {
         const connected = sidecarManager.getConnectedSidecars();
@@ -3507,6 +3537,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           brain_online: true,
           port: config.port,
           sidecars: `${connected.length}/${enrolled}`,
+          recent: buildTrayRecent(),
         };
         for (const sc of connected) {
           void sidecarManager.dispatchRPC(sc.id, 'tray.status', payload).catch(() => {});

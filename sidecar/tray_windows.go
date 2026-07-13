@@ -401,6 +401,7 @@ func showTrayMenu(hwnd uintptr) {
 		ts := getTrayStatus()
 		ts.Muted = !ts.Muted
 		setTrayStatus(ts)
+		trayApplyMute(ts.Muted) // gate the mic locally (sidecar owns mic control)
 		if trayEmit != nil {
 			trayEmit("tray.set_mute", map[string]any{"muted": ts.Muted})
 		}

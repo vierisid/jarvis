@@ -670,6 +670,29 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// Tear the session down when this connection ends.
 		defer c.realtime.Stop(false)
 
+		// Tray "Mute microphone" toggle → gate the mic locally. Muting ends any
+		// live realtime session (which re-arms the wake listener), then releases
+		// the always-on wake mic and shows the muted pebble; unmuting re-arms the
+		// wake listener and clears the pebble. Note the Stop-then-Pause order:
+		// realtime.Stop() calls resumeWake internally, so Pause must come after.
+		trayApplyMute = func(muted bool) {
+			if muted {
+				if c.realtime != nil {
+					c.realtime.Stop(true)
+				}
+				if wakeListener != nil {
+					wakeListener.Pause()
+				}
+				_ = c.pebble.SetState(PebbleMuted)
+			} else {
+				if wakeListener != nil {
+					wakeListener.Resume(ctx)
+				}
+				_ = c.pebble.SetState(PebbleIdle)
+			}
+		}
+		defer func() { trayApplyMute = func(bool) {} }()
+
 		// Long-answer overflow — click on the "open full ↗" button emits
 		// pebble.open_answer with the answer id stored via SetAnswerOverflow.
 		c.pebble.OnAnswerOpen(func(answerID string) {
