@@ -3562,11 +3562,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // The four reasons Jarvis interrupts: it needs your OK (approval), it
     // finished (done), a machine dropped (sidecar), or an update is ready
     // (update). Each is raised natively by the sidecar via notify.show; the
-    // user's choice returns as a notify.action event. Candor (Authority Book
-    // 08): Approve/Deny from a notification is allowed for ordinary external
-    // actions, but destructive (irreversible) actions carry only "Review in
-    // Jarvis" and open the app. Wired triggers so far: approval + sidecar-offline
-    // (done + update await their own trigger hooks).
+    // user's choice returns as a notify.action event. Book 08 originally held
+    // Approve/Deny to ordinary actions and gave irreversible ones "Review in
+    // Jarvis" only; the founder opted to allow Approve/Deny on every approval
+    // notification (the impact still shows in the body's meta as a risk cue).
+    // Wired triggers so far: approval + sidecar-offline (done + update await
+    // their own trigger hooks).
     const notifyAll = (payload: Record<string, unknown>): void => {
       for (const sc of sidecarManager.getConnectedSidecars()) {
         void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
@@ -3583,18 +3584,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
+          // Product call (founder): Approve/Deny on every approval notification,
+          // including irreversible ones — the review-only candor exception is
+          // dropped. The impact still rides along in `meta` ("destructive ·
+          // delete_data") so the toast reads the risk even when it's approvable.
           const impact = impactFromCategory(req.action_category);
-          const destructive = impact === 'destructive';
           notifyAll({
             id: req.id,
             kind: 'approval',
             title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
             body: req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`,
             meta: `${impact} · ${req.tool_name}`,
-            destructive,
-            actions: destructive
-              ? [{ id: 'review', label: 'Review in Jarvis', primary: true }]
-              : [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
+            destructive: impact === 'destructive',
+            actions: [
+              { id: 'deny', label: 'Deny' },
+              { id: 'approve', label: 'Approve', primary: true },
+            ],
           });
         }
         if (notifiedApprovalIds.size > 200) {
