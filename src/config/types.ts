@@ -302,6 +302,12 @@ export type LLMProviderEntry = {
   api_key?: string;
   /** Base URL for self-hosted / local providers (ollama, OpenAI-compatible gateways, OmniRoute). */
   base_url?: string;
+  /**
+   * Context window (tokens) for local providers (ollama). Sets the server's
+   * num_ctx and the history-compaction budget. Lower this on VRAM-constrained
+   * machines; raise it for large-context local models. Default 32000.
+   */
+  context_window?: number;
 };
 
 /**

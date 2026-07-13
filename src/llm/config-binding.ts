@@ -82,7 +82,7 @@ export function instantiateProvider(
       break;
     case 'ollama':
       if (!entry.base_url) return null;
-      provider = new OllamaProvider(entry.base_url);
+      provider = new OllamaProvider(entry.base_url, undefined, entry.context_window);
       break;
     case 'openai_compatible':
       if (!entry.base_url) return null;

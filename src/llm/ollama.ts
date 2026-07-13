@@ -11,10 +11,27 @@ import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OllamaMessage = {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   images?: string[];
+  // Assistant messages that invoked tools must replay those calls, or the
+  // model cannot see its own prior actions and re-issues/hallucinates steps.
+  tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+  // Tool-result messages: Ollama links results by function name (tool_name);
+  // newer servers also accept tool_call_id. Send both.
+  tool_name?: string;
+  tool_call_id?: string;
 };
+
+// Ollama's server-side default num_predict (~128) truncates any structured
+// reply mid-JSON and reports it as a normal stop. Always lift the cap.
+const DEFAULT_NUM_PREDICT = 4096;
+// Small local models emit malformed tool JSON at their default sampling
+// temperature (~0.8). Tool-calling turns default low unless the caller opts in.
+const DEFAULT_TOOL_TEMPERATURE = 0.2;
+// Must match the history budget below AND be sent as num_ctx: Ollama's own
+// default context (4096) would silently truncate the 32k history we send.
+const DEFAULT_CONTEXT_WINDOW = 32000;
 
 type OllamaToolDef = {
   type: 'function';
@@ -76,34 +93,47 @@ export class OllamaProvider implements LLMProvider {
   name = 'ollama';
   private baseUrl: string;
   private defaultModel: string;
+  private contextWindow: number;
 
-  constructor(baseUrl = 'http://localhost:11434', defaultModel = 'llama3') {
+  constructor(baseUrl = 'http://localhost:11434', defaultModel = 'llama3', contextWindow = DEFAULT_CONTEXT_WINDOW) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
     this.defaultModel = defaultModel;
+    this.contextWindow = contextWindow;
+  }
+
+  /**
+   * Map our cross-provider options to Ollama's `body.options` bag, with
+   * defaults that keep tool use alive: lift the ~128-token num_predict cap,
+   * pin num_ctx to the same window the history budget assumes, and run
+   * tool-calling turns at low temperature unless the caller overrides.
+   */
+  private buildOptions(options: LLMOptions): Record<string, unknown> {
+    const { temperature, max_tokens, tools } = options;
+    const ollamaOptions: Record<string, unknown> = {
+      num_predict: max_tokens ?? DEFAULT_NUM_PREDICT,
+      num_ctx: this.contextWindow,
+    };
+    if (temperature !== undefined) {
+      ollamaOptions.temperature = temperature;
+    } else if (tools && tools.length > 0) {
+      ollamaOptions.temperature = DEFAULT_TOOL_TEMPERATURE;
+    }
+    return ollamaOptions;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, tools } = options;
 
     // Compact history for Ollama's context limits
-    const budget = calculateHistoryBudget(32000);
+    const budget = calculateHistoryBudget(this.contextWindow);
     const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: false,
+      options: this.buildOptions(options),
     };
-
-    // Map our cross-provider options to Ollama's `body.options` bag.
-    // Ollama's default `num_predict` is 128 -- way too short for a JSON
-    // composer reply or any structured response. Callers that don't
-    // pass `max_tokens` still get the Ollama default; pass it
-    // explicitly to lift the cap.
-    const ollamaOptions: Record<string, unknown> = {};
-    if (temperature !== undefined) ollamaOptions.temperature = temperature;
-    if (max_tokens !== undefined) ollamaOptions.num_predict = max_tokens;
-    if (Object.keys(ollamaOptions).length > 0) body.options = ollamaOptions;
 
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
@@ -127,24 +157,18 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, tools } = options;
 
     // Compact history for Ollama's context limits
-    const budget = calculateHistoryBudget(32000);
+    const budget = calculateHistoryBudget(this.contextWindow);
     const compactedMessages = compactHistory(messages, budget);
 
     const body: Record<string, unknown> = {
       model,
       messages: this.convertMessages(compactedMessages),
       stream: true,
+      options: this.buildOptions(options),
     };
-
-    // See chat(): map our cross-provider options to Ollama's bag.
-    // `num_predict` lifts Ollama's 128-token default cap.
-    const ollamaOptions: Record<string, unknown> = {};
-    if (temperature !== undefined) ollamaOptions.temperature = temperature;
-    if (max_tokens !== undefined) ollamaOptions.num_predict = max_tokens;
-    if (Object.keys(ollamaOptions).length > 0) body.options = ollamaOptions;
 
     if (tools && tools.length > 0) {
       body.tools = this.convertTools(tools);
@@ -263,33 +287,59 @@ export class OllamaProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): OllamaMessage[] {
-    return messages.map(m => {
-      if (typeof m.content === 'string') {
-        return {
-          role: m.role as 'system' | 'user' | 'assistant',
-          content: m.content,
-        };
+    // Ollama links tool results to calls by function name (tool_name), not by
+    // id — recover the name for each tool_call_id from the assistant turns.
+    const callNames = new Map<string, string>();
+    for (const m of messages) {
+      if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) callNames.set(tc.id, tc.name);
       }
+    }
 
-      // ContentBlock[] — extract text and images separately
-      let text = '';
+    return messages.map(m => {
+      let text: string;
       const images: string[] = [];
 
-      for (const block of m.content) {
-        if (block.type === 'text') {
-          text += (text ? '\n' : '') + block.text;
-        } else if (block.type === 'image') {
-          images.push(block.source.data);
+      if (typeof m.content === 'string') {
+        text = m.content;
+      } else {
+        // ContentBlock[] — extract text and images separately
+        text = '';
+        for (const block of m.content) {
+          if (block.type === 'text') {
+            text += (text ? '\n' : '') + block.text;
+          } else if (block.type === 'image') {
+            images.push(block.source.data);
+          }
         }
       }
 
       const msg: OllamaMessage = {
-        role: m.role as 'system' | 'user' | 'assistant',
+        role: m.role,
         content: text,
       };
       if (images.length > 0) {
         msg.images = images;
       }
+
+      // Replay the assistant's own tool calls — without these the model sees
+      // an empty assistant turn and a dangling result, and cannot know which
+      // actions it already took (the root cause of re-issued/hallucinated
+      // steps on multi-step desktop tasks).
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+        msg.tool_calls = m.tool_calls.map(tc => ({
+          function: { name: tc.name, arguments: tc.arguments },
+        }));
+      }
+
+      // Anchor tool results to their call: tool_name for Ollama's linkage,
+      // tool_call_id passthrough for servers that support it.
+      if (m.role === 'tool' && m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+        const name = callNames.get(m.tool_call_id);
+        if (name) msg.tool_name = name;
+      }
+
       return msg;
     });
   }
