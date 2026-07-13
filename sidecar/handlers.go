@@ -72,6 +72,11 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["browser_scroll"] = makeBrowserScrollHandler(cfg)
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
 		registry["browser_close"] = makeBrowserCloseHandler(cfg)
+		// Accessibility-tree provider (structural runtime, Phase 1 spike):
+		// element-addressed snapshot/actions over backendDOMNodeId + refs.
+		registry["browser_ax_snapshot"] = makeBrowserAXSnapshotHandler(cfg)
+		registry["browser_ax_click"] = makeBrowserAXClickHandler(cfg)
+		registry["browser_ax_set_value"] = makeBrowserAXSetValueHandler(cfg)
 	}
 
 	if caps[CapWindows] && panels != nil {

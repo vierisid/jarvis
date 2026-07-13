@@ -9,7 +9,6 @@ package main
 
 import (
 	"fmt"
-	"hash/fnv"
 	"log"
 	"runtime"
 	"sort"
@@ -30,15 +29,15 @@ var (
 
 // UIAutomation property IDs
 const (
-	UIA_BoundingRectanglePropertyId  = 30001
-	UIA_ProcessIdPropertyId          = 30002
-	UIA_ControlTypePropertyId        = 30003
-	UIA_NamePropertyId               = 30005
+	UIA_BoundingRectanglePropertyId   = 30001
+	UIA_ProcessIdPropertyId           = 30002
+	UIA_ControlTypePropertyId         = 30003
+	UIA_NamePropertyId                = 30005
 	UIA_IsKeyboardFocusablePropertyId = 30009
-	UIA_IsEnabledPropertyId          = 30010
-	UIA_AutomationIdPropertyId       = 30011
-	UIA_ClassNamePropertyId          = 30012
-	UIA_IsOffscreenPropertyId        = 30022
+	UIA_IsEnabledPropertyId           = 30010
+	UIA_AutomationIdPropertyId        = 30011
+	UIA_ClassNamePropertyId           = 30012
+	UIA_IsOffscreenPropertyId         = 30022
 )
 
 // UIAutomation pattern IDs
@@ -568,26 +567,6 @@ func resolvePid(pid int) (int, error) {
 	return int(fgPid), nil
 }
 
-// semanticSig computes the durable, content-derived signature for an element:
-// hash(control_type | name | automation_id | ancestry path | ordinal). This —
-// not the session-scoped integer id — is what skills and the daemon-side
-// resolver store, so a target can be re-found after ids churn or the UI
-// relayouts (rot-proof addressing).
-func semanticSig(ctrl, name, autoID string, path []map[string]any, ordinal int) string {
-	h := fnv.New64a()
-	write := func(s string) { h.Write([]byte(s)); h.Write([]byte{0}) }
-	write(ctrl)
-	write(name)
-	write(autoID)
-	for _, p := range path {
-		role, _ := p["role"].(string)
-		pname, _ := p["name"].(string)
-		write(role + "/" + pname)
-	}
-	write(fmt.Sprintf("%d", ordinal))
-	return fmt.Sprintf("%016x", h.Sum64())
-}
-
 // walkTree recursively walks the UIAutomation tree using FindAll(TreeScope_Children).
 // trueCond is a pre-created TrueCondition to avoid repeated COM allocations.
 // When semantic is true each emitted element also carries its ancestry path,
@@ -625,11 +604,11 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 			name = name[:100]
 		}
 		kids = append(kids, childMeta{
-			elem:    child,
-			name:    name,
-			ctrl:    controlTypeName(uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId)),
-			autoID:  uiaElementGetPropertyStr(child, UIA_AutomationIdPropertyId),
-			x:       x, y: y, w: w, h: h,
+			elem:   child,
+			name:   name,
+			ctrl:   controlTypeName(uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId)),
+			autoID: uiaElementGetPropertyStr(child, UIA_AutomationIdPropertyId),
+			x:      x, y: y, w: w, h: h,
 			visible: w > 0 && h > 0,
 		})
 	}
@@ -920,15 +899,15 @@ func controlTypeIdFromName(name string) int {
 // ── Win32 helpers ────────────────────────────────────────────────────
 
 var (
-	user32                   = syscall.NewLazyDLL("user32.dll")
-	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
-	procGetForegroundWindow  = user32.NewProc("GetForegroundWindow")
+	user32                    = syscall.NewLazyDLL("user32.dll")
+	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcId = user32.NewProc("GetWindowThreadProcessId")
-	procSetCursorPos         = user32.NewProc("SetCursorPos")
-	procMouseEvent           = user32.NewProc("mouse_event")
-	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
-	procShowWindow           = user32.NewProc("ShowWindow")
-	procSleep                = kernel32.NewProc("Sleep")
+	procSetCursorPos          = user32.NewProc("SetCursorPos")
+	procMouseEvent            = user32.NewProc("mouse_event")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procSleep                 = kernel32.NewProc("Sleep")
 )
 
 func win32GetForegroundWindow() uintptr {
