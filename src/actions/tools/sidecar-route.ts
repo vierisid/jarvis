@@ -105,7 +105,15 @@ export async function routeToSidecar(
     const result = await sidecarManager.dispatchRPC(sidecar.id, method, params);
 
     if (result === 'detached') {
-      return `Task dispatched to "${sidecar.name}" and running in the background.`;
+      // The RPC outlived the initial timeout. Detached completions are only
+      // console-logged (manager.ts onDetachedComplete) — the result never
+      // reaches the model — so claiming background success would be a lie
+      // for anything interactive. Only run_command keeps fire-and-forget
+      // semantics; everything else reports an honest timeout.
+      if (method === 'run_command') {
+        return `Command dispatched to "${sidecar.name}" and still running in the background. Its output will NOT be reported back — verify its effect yourself if it matters.`;
+      }
+      return `Error [${sidecar.name}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`;
     }
 
     return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
