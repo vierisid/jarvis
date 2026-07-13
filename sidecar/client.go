@@ -859,6 +859,12 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 			return &RPCResult{Result: map[string]any{"enabled": enabled}}, nil
 		}
+		// Tray menu live data (brain → sidecar): approvals count, recent
+		// activity, pause/mute, brain/sidecar health (design: usejarvis-tray §00).
+		c.handlers["tray.status"] = func(params map[string]any) (*RPCResult, error) {
+			setTrayStatus(trayStatusFromParams(params))
+			return &RPCResult{Result: map[string]any{"ok": true}}, nil
+		}
 		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
 			state, _ := params["state"].(string)
 			// Daemon-initiated teardown (budget / timeout / error): stop the
