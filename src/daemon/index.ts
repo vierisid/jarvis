@@ -561,11 +561,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // text wins over the per-state placeholder ("speaking…", "listening —
       // go ahead.") so we can surface the live LLM response instead of the
       // generic copy. Empty/undefined text falls back to the placeholder.
+      // Last state mirrored to each sidecar's tray menu, so we only push
+      // `tray.status` when the state actually changes (state churns fast during
+      // a turn; the tray only reads it on menu-open, so a per-change push would
+      // be pure waste otherwise).
+      const lastTrayState = new Map<string, string>();
       const setState = async (sidecarId: string, state: string, text?: string) => {
         try {
           const params: { state: string; text?: string } = { state };
           if (text !== undefined) params.text = text;
           await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_state', params);
+          // Mirror the state to the tray menu header (best-effort, deduped).
+          if (lastTrayState.get(sidecarId) !== state) {
+            lastTrayState.set(sidecarId, state);
+            void sidecarManager.dispatchRPC(sidecarId, 'tray.status', { state }).catch(() => {});
+          }
         } catch (err) {
           console.warn(`[ambient-ui] pebble.set_state(${state}) on ${sidecarId} failed:`, err);
         }
@@ -3480,6 +3490,40 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       } catch (err) {
         console.error('[Daemon] Failed to persist emergency state:', err);
       }
+    });
+
+    // ── Tray menu live data (design: usejarvis-tray §00) ──
+    // Push a status snapshot to each connected sidecar every few seconds so the
+    // tray menu (read on open) shows pending approvals, pause state, and health.
+    // The pebble state is pushed separately by the ambient-ui loop, deduped.
+    const trayStatusTimer = setInterval(() => {
+      try {
+        const connected = sidecarManager.getConnectedSidecars();
+        if (connected.length === 0) return;
+        const enrolled = sidecarManager.listSidecars().length || connected.length;
+        const payload = {
+          waiting: approvalManager.getPending().length,
+          paused: emergencyController.getState() === 'paused',
+          brain_online: true,
+          port: config.port,
+          sidecars: `${connected.length}/${enrolled}`,
+        };
+        for (const sc of connected) {
+          void sidecarManager.dispatchRPC(sc.id, 'tray.status', payload).catch(() => {});
+        }
+      } catch {
+        /* best-effort heartbeat */
+      }
+    }, 4000);
+    trayStatusTimer.unref?.(); // the heartbeat must not keep the process alive
+
+    // Tray → brain: the "Pause Jarvis" toggle drives the emergency controller.
+    // ("Mute microphone" is mic control the sidecar owns locally, not here.)
+    sidecarManager.onEvent((_sidecarId, event) => {
+      if (event.event_type !== 'tray.set_pause') return;
+      const paused = (event.payload as { paused?: boolean } | undefined)?.paused === true;
+      if (paused) emergencyController.pause();
+      else emergencyController.resume();
     });
 
     // Wire authority engine into orchestrator

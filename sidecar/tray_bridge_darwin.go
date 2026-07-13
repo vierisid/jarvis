@@ -37,3 +37,31 @@ func goTrayOpenLogs() {
 		go trayOpenLogsDarwin()
 	}
 }
+
+//export goTrayPause
+func goTrayPause() {
+	ts := getTrayStatus()
+	ts.Paused = !ts.Paused
+	setTrayStatus(ts) // triggers trayRefresh → menu/icon rebuild
+	if trayEmitDarwin != nil {
+		trayEmitDarwin("tray.set_pause", map[string]any{"paused": ts.Paused})
+	}
+}
+
+//export goTrayMute
+func goTrayMute() {
+	ts := getTrayStatus()
+	ts.Muted = !ts.Muted
+	setTrayStatus(ts)
+	if trayEmitDarwin != nil {
+		trayEmitDarwin("tray.set_mute", map[string]any{"muted": ts.Muted})
+	}
+}
+
+//export goTrayWaiting
+func goTrayWaiting() {
+	// Into the dashboard to review the pending approval (Authority).
+	if trayOpenChatDarwin != nil {
+		go trayOpenChatDarwin()
+	}
+}

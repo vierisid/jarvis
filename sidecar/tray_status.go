@@ -40,6 +40,30 @@ func getTrayStatus() TrayStatus {
 	return s
 }
 
+// trayStateCode maps a pebble state string (as pushed in tray.status) to the
+// pebble state int the tray icon dot is drawn from — same numbering as
+// pebbleStateToInt. Platform-neutral so Windows + macOS share the mapping.
+func trayStateCode(s string) int {
+	switch s {
+	case "listening":
+		return 1
+	case "thinking":
+		return 2
+	case "speaking":
+		return 3
+	case "working":
+		return 4
+	case "asking":
+		return 5
+	case "done":
+		return 6
+	case "muted":
+		return 7
+	default:
+		return 0
+	}
+}
+
 // trayStatusFromParams merges a `tray.status` RPC payload over the current
 // status (partial updates are fine — the brain may send only what changed).
 func trayStatusFromParams(params map[string]any) TrayStatus {
