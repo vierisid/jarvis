@@ -339,9 +339,6 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 			return nil, fmt.Errorf("launch_app: open -a %q failed: %w", executable, err)
 		}
 
-		// Wait briefly for the app to register, then resolve its PID
-		time.Sleep(500 * time.Millisecond)
-
 		name := executable
 		if strings.HasSuffix(name, ".app") {
 			name = name[:len(name)-4]
@@ -350,13 +347,14 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 			name = name[idx+1:]
 		}
 
-		pgrepOut, _ := exec.Command("pgrep", "-n", name).Output()
-		pidStr := strings.TrimSpace(string(pgrepOut))
-		pid, _ := strconv.Atoi(pidStr)
+		// Poll for the process AND a visible window instead of a fixed
+		// 500ms sleep — returning before the window exists made the next
+		// tool call fail ("no window found") or, worse, act on the wrong app.
+		pid, hasWindow := waitForAppWindowDarwin(name, 0, 5*time.Second)
 		if pid == 0 {
-			return nil, fmt.Errorf("launch_app: open -a %q succeeded but process PID could not be resolved via pgrep %q", executable, name)
+			return nil, fmt.Errorf("launch_app: open -a %q succeeded but the process never appeared in pgrep %q within 5s", executable, name)
 		}
-		return &RPCResult{Result: map[string]any{"success": true, "pid": pid, "name": name}}, nil
+		return launchResultDarwin(pid, name, hasWindow), nil
 	}
 
 	// Absolute/relative path to a binary — start detached
@@ -387,7 +385,49 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		name = executable[idx+1:]
 	}
 
-	return &RPCResult{Result: map[string]any{"success": true, "pid": pid, "name": name}}, nil
+	_, hasWindow := waitForAppWindowDarwin("", pid, 5*time.Second)
+	return launchResultDarwin(pid, name, hasWindow), nil
+}
+
+// waitForAppWindowDarwin polls until the app has a visible window, up to
+// timeout. When pid is 0 it is first resolved via `pgrep -n name`. Returns
+// the pid (0 if the process never appeared) and whether a window exists.
+func waitForAppWindowDarwin(name string, pid int, timeout time.Duration) (int, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if pid == 0 && name != "" {
+			out, _ := exec.Command("pgrep", "-n", name).Output()
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(out)))
+		}
+		if pid != 0 {
+			script := fmt.Sprintf(`tell application "System Events" to count windows of (first process whose unix id is %d)`, pid)
+			if out, err := exec.Command("osascript", "-e", script).Output(); err == nil {
+				if n, _ := strconv.Atoi(strings.TrimSpace(string(out))); n > 0 {
+					return pid, true
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return pid, false
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// launchResultDarwin builds the launch_app result with an honest
+// window_visible flag: success means "the app is on screen", not merely
+// "a process was spawned".
+func launchResultDarwin(pid int, name string, hasWindow bool) *RPCResult {
+	res := map[string]any{
+		"success":        hasWindow,
+		"pid":            pid,
+		"name":           name,
+		"window_visible": hasWindow,
+	}
+	if !hasWindow {
+		res["note"] = fmt.Sprintf("process started (pid %d) but no window appeared within 5s — the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.", pid)
+	}
+	return &RPCResult{Result: res}
 }
 
 // ── focus_window ─────────────────────────────────────────────────────

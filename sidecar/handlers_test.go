@@ -268,7 +268,10 @@ func TestLaunchAppNonexistentBinary(t *testing.T) {
 }
 
 func TestLaunchAppSuccessReturnsNonZeroPid(t *testing.T) {
-	// Use a real binary that exists and exits quickly
+	// Use a real binary that exists and exits quickly. It is windowless, so
+	// under launch_app's honest contract (success == "a window is visible",
+	// not "a process was spawned") this must report success: false with an
+	// explanatory note — while still returning the real pid.
 	result, err := handleLaunchApp(map[string]any{
 		"executable": "/bin/sleep",
 		"args":       "0.1",
@@ -282,10 +285,17 @@ func TestLaunchAppSuccessReturnsNonZeroPid(t *testing.T) {
 		t.Fatalf("pid is not int: %T", m["pid"])
 	}
 	if pid == 0 {
-		t.Error("expected non-zero pid on success")
+		t.Error("expected non-zero pid")
 	}
-	if m["success"] != true {
-		t.Error("expected success: true")
+	if m["success"] != false {
+		t.Errorf("expected success: false for a windowless process, got %v", m["success"])
+	}
+	if m["window_visible"] != false {
+		t.Errorf("expected window_visible: false, got %v", m["window_visible"])
+	}
+	note, _ := m["note"].(string)
+	if note == "" {
+		t.Error("expected an explanatory note for the windowless launch")
 	}
 }
 
