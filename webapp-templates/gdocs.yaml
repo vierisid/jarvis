@@ -2,19 +2,17 @@ app_name: Google Docs
 domains:
   - docs.google.com/document
 keywords:
-  - google docs
-  - gdoc
-  - gdocs
+  - google doc
   - google document
   - create a document
   - create a doc
   - make a document
-  - new document
   - new doc
   - blank doc
   - write a document
   - write a doc
   - draft a document
+  - draft a doc
   - start a doc
   - open my doc
   - open the doc
@@ -23,330 +21,87 @@ keywords:
   - edit the document
   - append to the doc
   - add to the doc
-  - take notes
-  - write notes
-  - notes document
-  - meeting notes
-  - notes doc
-  - summarize the doc
-  - summarize this document
-  - read the doc
-  - find in the doc
   - find and replace in the doc
-  - replace in the doc
-  - insert a heading
   - insert a bullet list
   - insert a numbered list
-  - insert a comment
-  - add a comment on the doc
-  - word count
-  - check word count
   - share the doc
   - share the document
   - rename the doc
   - rename the document
-description: Google Docs — create, write, edit, format, comment, find/replace, insert headings/lists/links, read or summarize text content, rename and share documents.
-version: 1
+description: Google Docs — create, open and rename documents, type or append text, headings and lists, bold/italic, find and replace, insert links, share, word count. Cannot read the document body (canvas-rendered).
+version: 2
 instructions: |
   URL: https://docs.google.com/document/d/{DOCUMENT_ID}/edit
 
-  ### TOOL INTERFACE — READ THIS FIRST
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll.
+  BANNED: browser_evaluate, browser_screenshot.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the element's content by default. `append=true` preserves existing content and types at the end. `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — sends a real key event to the page. Docs handles its own shortcuts: `"Ctrl+B"`/`"Ctrl+I"`/`"Ctrl+U"`, `"Ctrl+Z"`/`"Ctrl+Y"`, `"Ctrl+Home"`/`"Ctrl+End"`, `"ArrowUp"`/`"ArrowDown"`/`"ArrowLeft"`/`"ArrowRight"`, `"Enter"`, `"Ctrl+Alt+1"`/`"Ctrl+Alt+2"`/`"Ctrl+Alt+3"` (heading 1/2/3), `"Ctrl+Alt+0"` (normal text), `"Ctrl+K"` (link), `"Alt+/"` (menu search).
 
-  Google Docs requires TWO types of tools working together:
+  ### WHAT THIS SURFACE CANNOT DO — tell the user, don't improvise
+  The document body is rendered on <canvas>. Body text NEVER appears in the snapshot's Page Text, and words/paragraphs are NOT clickable elements.
+  - **Reading or summarizing an existing doc's content is NOT supported.** If asked, say so plainly and stop. The only partial read: the document OUTLINE panel lists headings as DOM elements (open it via the "Show document outline" button in the left margin, or View menu → "Show outline") [LIVE-VERIFY] — offer headings-only structure, never pretend it is the text.
+  - **Comments are NOT supported** (comment anchors are hover-marginalia on the canvas). Tell the user and stop.
+  - **Precise mid-document edits are limited**: you cannot see the text, so you cannot navigate to an arbitrary sentence. Supported: append at the end (Ctrl+End), edit at the very top (Ctrl+Home), and whole-phrase swaps via Find and replace.
+  - **Verification of body writes is WEAK**: the snapshot cannot read the text back. Verify what you can — a new heading appearing in the outline panel, a "Replaced N instances" message in the Find-and-replace dialog [LIVE-VERIFY] — otherwise report "typed without a tool error" and SAY the verification is limited.
 
-  **Browser tools** (navigation, snapshots, clicking DOM elements, typing):
-  - `browser_navigate(url)` — open a URL
-  - `browser_snapshot()` — returns page text + interactive DOM elements with `[id]` numbers
-  - `browser_click(element_id)` — click by `[id]`
-  - `browser_type(element_id, text, submit=true/false)` — type text. `submit=true` presses **Enter** only.
-  - `browser_scroll(direction)`
+  ### STATE RECOGNITION (check on the FIRST snapshot of every session)
+  - **Login wall**: URL on `accounts.google.com`, or a sign-in / "Choose an account" form → you cannot log in for the user. Tell them to log in to Google in the JARVIS browser, then STOP.
+  - **Loading**: no title input and no menu bar yet → snapshot once more. Still loading after 2 tries → report and stop.
+  - **Ready**: the document title INPUT (top-left) and menu bar are present. The typing target is a contenteditable inside a tiny same-origin iframe — it appears in the snapshot marked `iframe="true"` [LIVE-VERIFY against real Docs; if it is absent, click once anywhere in the page body area is NOT allowed — instead report that the editor element did not appear].
+  - **View-only / Suggesting**: a "Request edit access" button, or a mode chip near the toolbar showing "Viewing" or "Suggesting" instead of "Editing" [LIVE-VERIFY] → you cannot (cleanly) edit. Tell the user you need edit access / Editing mode and STOP for any write task.
+  - **Retry rule**: the same step failing twice in a row (element not found after a fresh snapshot, dialog not appearing, key with no visible effect) → STOP and tell the user exactly what failed. Do not loop.
 
-  **Desktop tool** (every keypress that isn't Enter):
-  - `desktop_press_keys(keys)` — comma-separated keys. e.g. `"ctrl,home"`, `"ctrl,end"`, `"ctrl,alt,1"`, `"ctrl,shift,8"`, `"alt,slash"`.
-
-  **THERE IS NO `browser_press_key` TOOL.** Every non-Enter keypress flows through `desktop_press_keys`.
-
-  ### CRITICAL RULES
-  1. **ALLOWED tools**: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. That is it.
-  2. **BANNED tools**: browser_evaluate, browser_screenshot, run_command (xdotool, xdg-open, etc.). Do NOT use them.
-  3. **Docs text renders on `<canvas>`**: you CANNOT click a specific word, sentence, or paragraph in the document body. Individual characters and runs are NOT in the snapshot. Position the cursor with keyboard shortcuts (`ctrl,home`, `ctrl,end`, `ctrl,f` + search) and type into the editor's keyboard target (the contenteditable input that appears in snapshots once the doc has focus).
-  4. **The document title INPUT, toolbar, menu bar, outline sidebar, find dialog, comments sidebar, and Share dialog ARE all in the DOM.** Those you can click normally.
-  5. **`browser_type(submit=true)` in the doc body inserts a NEW PARAGRAPH.** This is usually desired. Unlike Slides, you can freely use submit=true inside a Docs body to end a paragraph.
-  6. **Google Docs is LOCALE-DEPENDENT**: toolbar/menu text is translated. Match DOM elements by `[id]`, by role, or by the `(Ctrl+X)` hint in aria-labels (which stays English across locales). Keyboard shortcuts themselves are locale-independent.
-  7. **Auto-save**: no Save action needed. Changes persist automatically.
-  8. **Menu search (`alt,slash`) is the universal fallback**: for any command without a known shortcut, press `alt,slash`, type the command, submit.
-
-  ### FORBIDDEN ACTIONS
-  - **DO NOT try to click text inside the document body.** The canvas has no sub-elements for words or paragraphs.
-  - **DO NOT use `run_command` or xdotool.** Every keyboard shortcut flows through `desktop_press_keys`.
-  - **DO NOT snapshot after every typed word.** Snapshot once per major state change (doc ready, Find dialog open, comment inserted, etc.).
-  - **DO NOT match toolbar/menu buttons by English text alone.** Match structurally or by `(Ctrl+…)` substring.
-  - **DO NOT assume the editor `[id]` is stable forever**: it usually persists across typing and cursor moves, but reset to the latest snapshot if `browser_type` errors with "element not found".
-
-  ### URL PATTERNS (locale-independent)
+  ### URL PATTERNS (locale-independent — prefer these)
   - Create new blank doc: `https://docs.google.com/document/create`
   - Docs home / file picker: `https://docs.google.com/document/u/0/`
   - Open existing doc: `https://docs.google.com/document/d/{ID}/edit`
-  - Open a specific heading in a doc: `https://docs.google.com/document/d/{ID}/edit#heading=h.{HEADING_ID}` (heading ID comes from the outline — fine to skip unless you already have it)
 
-  ### KEYBOARD SHORTCUTS (sent via `desktop_press_keys`)
+  ### CORE MECHANICS — writing into the canvas editor
+  The elements that ARE normal DOM and clickable: title input, menu bar (File/Edit/View/Insert/Format/Tools), toolbar buttons, dialogs (Find and replace, link, word count, Share), the outline panel. Toolbar buttons carry locale-stable shortcut hints in their aria-labels, e.g. "Bold (Ctrl+B)" — match on the "(Ctrl+…)" substring, never on English words alone.
 
-  Cursor navigation (editor focus):
-  - `"ctrl,home"` → top of document
-  - `"ctrl,end"` → bottom of document
-  - `"home"` / `"end"` → start / end of current line
-  - `"ctrl,left"` / `"ctrl,right"` → jump word left / right
-  - `"up"` / `"down"` / `"left"` / `"right"` → move cursor one row/char
+  **The write recipe (ALWAYS this, in this order):**
+  1. Position the cursor with `browser_press_key` — `"Ctrl+End"` (end of doc), `"Ctrl+Home"` (top), arrows for small moves. Never try to click a position in the body.
+  2. Find the editor element in the snapshot: the contenteditable marked `iframe="true"` [LIVE-VERIFY].
+  3. `browser_type(editor_id, "text", append=true)` — **ALWAYS `append=true`** when typing document text. Never plain (replace-mode) browser_type into the editor: whether clearing hits the document itself is unverified, so treat it as destructive [LIVE-VERIFY].
+  4. New paragraph: `browser_press_key("Enter")` between browser_type calls — one call per paragraph, don't embed newlines in the text.
+  5. Formatting toggles apply AT THE CURSOR while typing: `browser_press_key("Ctrl+B")` → type the bold words (append=true) → `"Ctrl+B"` again to turn it off. Same for Ctrl+I / Ctrl+U.
+  6. Paragraph style applies to the CURRENT paragraph: `"Ctrl+Alt+1"`/`"Ctrl+Alt+2"`/`"Ctrl+Alt+3"` before typing the heading text; after Enter, Docs returns to normal text (or press `"Ctrl+Alt+0"`).
+  Element ids come from the last snapshot; the editor id usually persists — take a fresh snapshot only when a call fails with "element not found", and stop after the second failure (retry rule).
 
-  Selection:
-  - `"ctrl,a"` → select all
-  - `"shift,left"` / `"shift,right"` → extend selection by char
-  - `"ctrl,shift,left"` / `"ctrl,shift,right"` → extend by word
-  - `"shift,home"` / `"shift,end"` → extend to line start/end
-  - `"ctrl,shift,home"` / `"ctrl,shift,end"` → extend to doc start/end
+  **Menus**: click the menu name in the menu bar (normal DOM), snapshot, click the entry. Menu labels are locale-translated — if labels don't match the English names below, use menu search: `browser_press_key("Alt+/")`, snapshot, type the command into the search box, snapshot, click the match.
 
-  Text formatting (with selection OR at cursor):
-  - `"ctrl,b"` / `"ctrl,i"` / `"ctrl,u"` → bold / italic / underline
-  - `"ctrl,shift,x"` → strikethrough
-  - `"ctrl,period"` → superscript
-  - `"ctrl,comma"` → subscript
-  - `"ctrl,backslash"` → clear formatting
+  ### TASKS
+  **Create a new blank document** — `browser_navigate("https://docs.google.com/document/create")` → snapshot → ready when the title input shows "Untitled document". Auto-save is on; there is never a Save step.
 
-  Paragraph styles (apply to current paragraph):
-  - `"ctrl,alt,0"` → normal text
-  - `"ctrl,alt,1"` → heading 1
-  - `"ctrl,alt,2"` → heading 2
-  - `"ctrl,alt,3"` → heading 3
-  - `"ctrl,alt,4"` / `"ctrl,alt,5"` / `"ctrl,alt,6"` → heading 4 / 5 / 6
-  - `"ctrl,shift,l"` → left align
-  - `"ctrl,shift,e"` → center align
-  - `"ctrl,shift,r"` → right align
-  - `"ctrl,shift,j"` → justify
+  **Open an existing document** — by ID: navigate the edit URL. By name: navigate the Docs home URL → snapshot → click the file by its name.
 
-  Lists (on current paragraph):
-  - `"ctrl,shift,8"` → bulleted list
-  - `"ctrl,shift,7"` → numbered list
-  - `"tab"` / `"shift,tab"` → indent / outdent list item
+  **Rename the document** — snapshot → find the doc title INPUT (top-left, holds the current name) → `browser_type(title_id, "New Name", submit=true)`. browser_type's replace-by-default is exactly right here; Enter commits. Verify: the page title in the next snapshot shows the new name.
 
-  Clipboard / undo:
-  - `"ctrl,z"` → undo
-  - `"ctrl,y"` → redo
-  - `"ctrl,c"` / `"ctrl,v"` / `"ctrl,x"` → copy / paste / cut
-  - `"ctrl,shift,v"` → paste without formatting
+  **Type / append text** — the write recipe at Ctrl+End. For "write a document from scratch": create doc → heading style → heading text → Enter → paragraphs (Enter between). Budget: ~8 calls for a heading + 2 paragraphs. Verify: heading via the outline panel; body text only as "typed without error" (say so).
 
-  Insert:
-  - `"ctrl,k"` → insert link
-  - `"ctrl,alt,m"` → insert comment on current selection / cursor
-  - `"ctrl,m"` → insert page break (in pages mode)
+  **Insert a heading** — cursor at target (end of doc for new content) → `browser_press_key("Ctrl+Alt+2")` (or 1/3) → type the heading (append=true) → Enter. Fallback: the toolbar styles dropdown (the combobox showing "Normal text") → click → snapshot → click "Heading 2" [LIVE-VERIFY]. Verify in the outline panel.
 
-  Find / Replace:
-  - `"ctrl,f"` → find toolbar
-  - `"ctrl,h"` → find and replace dialog
-  - `"escape"` → close find toolbar (leaves cursor at last match)
-  - `"enter"` in find toolbar → next match
+  **Insert a bulleted / numbered list** — cursor in place → Format menu → "Bullets & numbering" → "Bulleted list" / "Numbered list" [LIVE-VERIFY submenu labels], or the toolbar button whose aria-label contains "Bulleted list" / "Numbered list" [LIVE-VERIFY]. Then type items with the write recipe, `"Enter"` between items. Exit the list: press `"Enter"` twice on an empty item, or `"Ctrl+Alt+0"`.
 
-  Other:
-  - `"ctrl,shift,c"` → word count
-  - `"alt,slash"` → menu search (universal fallback)
-  - `"ctrl,shift,f"` → toggle compact toolbar
+  **Bold / italic / underline while typing** — see write recipe step 5. (Formatting EXISTING text needs a selection you cannot reliably make on canvas — for existing text, only offer Find-and-replace-style rewrites or tell the user it's out of reach.)
 
-  ### SNAPSHOT FORMAT
+  **Find and replace** — Edit menu → "Find and replace" → snapshot: the dialog has an input labeled "Find" and one labeled "Replace with" [LIVE-VERIFY labels] → type into each (replace-mode fine in dialog inputs) → click the button LABELED "Replace all" — by its label, never by its position in the button row → the dialog reports how many instances changed [LIVE-VERIFY] → click Done/close. That count message is your verification; if it doesn't appear, say the outcome is unconfirmed.
 
-  `browser_snapshot` returns:
-  ```
-  Page: Document Name - Google Docs
-  URL: https://docs.google.com/document/d/.../edit
-  --- Page Text ---
-  (page text — usually contains the document body content for accessibility; useful for read/summarize tasks)
-  --- Interactive Elements ---
-  [12] input "Document Name"                    ← doc title INPUT (top-left)
-  [13] button "Undo (Ctrl+Z)"                   ← toolbar buttons have "(Ctrl+…)" hints
-  [14] button "Redo (Ctrl+Y)"
-  ...
-  [55] input contenteditable                    ← the live text editor (appears once doc has focus)
-  ...
-  [80] button "Share"                           ← top-right Share button (text may be localized)
-  ```
+  **Insert a link** — cursor in place → `browser_press_key("Ctrl+K")` → snapshot → the link popup has a text field and a "Search or paste a link" field [LIVE-VERIFY] → type anchor text and URL → click Apply.
 
-  Key elements to identify:
-  1. **Doc title INPUT** (top-left): INPUT holding the current document name. Use to rename.
-  2. **Editor contenteditable**: the element you type INTO for document body text. Appears after clicking anywhere in the editor area or after keyboard nav puts the cursor in the body.
-  3. **Toolbar buttons**: match by `(Ctrl+…)` substring in aria-label (locale-stable).
-  4. **Menu search combobox**: appears after `alt,slash`. Snapshot and locate.
-  5. **Find toolbar INPUT**: appears after `ctrl,f`. Snapshot to find it.
-  6. **Find and Replace dialog inputs**: appears after `ctrl,h` — has a "Find" INPUT, "Replace" INPUT, and buttons.
-  7. **Comments sidebar textbox**: appears after `ctrl,alt,m` — a contenteditable for the comment text plus a "Comment" submit button.
-  8. **Outline sidebar**: a list of heading links (match by role=link and text matching a heading).
+  **Share the document** — snapshot → click the "Share" button (top-right; label may be localized — match aria-label containing "Share" or its position group near the avatar [LIVE-VERIFY]) → snapshot → type the email into the "Add people, groups…" input → `submit=true` to turn it into a chip → set the role via the dropdown next to the input (Viewer/Commenter/Editor) [LIVE-VERIFY] → click the button labeled "Send" (or "Share"). Verify: the dialog closes or shows an access-updated confirmation [LIVE-VERIFY].
 
-  ### HOW TO IDENTIFY ELEMENTS IN THE SNAPSHOT
-  - **Editor input**: the single contenteditable that is NOT the title INPUT. Usually unlabeled. Its `[id]` tends to persist across typing and cursor moves.
-  - **Toolbar**: buttons have English `(Ctrl+…)` hints. E.g., "Bold (Ctrl+B)" / "Grassetto (Ctrl+B)" — match on `(Ctrl+B)`.
-  - **Dialogs**: Find toolbar, Find and Replace dialog, and Share dialog each add new input elements. Snapshot AFTER opening to grab the new `[id]`s.
+  **Word count** — Tools menu → "Word count" → snapshot → the dialog's counts are normal DOM: read words/characters from it → close (OK button). This works even though the body text doesn't: dialogs are DOM.
 
-  ### CORE PATTERNS
+  **Undo / Redo** — `browser_press_key("Ctrl+Z")` / `browser_press_key("Ctrl+Y")`. Undo is also your rollback if a write went wrong.
 
-  **Pattern A: Position the cursor at top or end of the document**
-  - Top: `desktop_press_keys("ctrl,home")`.
-  - Bottom: `desktop_press_keys("ctrl,end")`.
-  - After positioning, the editor contenteditable still has focus — you can type immediately.
-
-  **Pattern B: Type paragraphs into the doc body**
-  1. `browser_snapshot()` — find the editor contenteditable `[id]`, call it `E`.
-  2. `browser_type(E, "First paragraph text", submit=true)` → writes the paragraph and presses Enter → new paragraph started.
-  3. `browser_type(E, "Second paragraph text", submit=true)`.
-  4. Continue. Each `submit=true` ends the paragraph and starts a fresh one.
-  5. For the LAST paragraph (if you don't want a trailing blank line): `browser_type(E, "Last paragraph", submit=false)`.
-
-  **Pattern C: Start a new document with a heading + body**
-  1. `browser_navigate("https://docs.google.com/document/create")`.
-  2. `browser_snapshot()` — find the editor contenteditable `[id]`, call it `E`.
-  3. `desktop_press_keys("ctrl,alt,1")` → set current paragraph to Heading 1 style.
-  4. `browser_type(E, "My Heading", submit=true)` → writes heading, Enter starts a new paragraph in the default style (normal text, NOT a continuation of Heading 1).
-  5. `browser_type(E, "Body paragraph 1", submit=true)`.
-  6. `browser_type(E, "Body paragraph 2", submit=false)`.
-
-  **Pattern D: Append to an existing document**
-  1. `browser_navigate` to the doc URL.
-  2. `browser_snapshot()` — find editor `[id]` `E`.
-  3. `desktop_press_keys("ctrl,end")` → cursor at end of doc.
-  4. `browser_type(E, "\n")` is NOT needed — instead, use `submit=true` on a previous line, or type `browser_type(E, "New line starts here", submit=false)` and rely on the cursor position.
-  5. If the last char of the doc isn't a newline: `desktop_press_keys("end")` then `desktop_press_keys("enter")` to push to a new paragraph, THEN type.
-
-  **Pattern E: Jump to a location via Find**
-  1. `desktop_press_keys("ctrl,f")` → opens find toolbar.
-  2. `browser_snapshot()` → find the find INPUT `[id]`, call it `F`.
-  3. `browser_type(F, "search phrase", submit=true)` → jumps to first match; cursor is at match.
-  4. `desktop_press_keys("escape")` → closes find toolbar; cursor remains at the match, ready for editing.
-
-  **Pattern F: Format a selection**
-  1. Select the target text (Pattern E to position, then `"shift,end"` / `"ctrl,shift,end"` / `"ctrl,shift,right"` to extend, or `"ctrl,a"` for the whole doc).
-  2. Apply format: `"ctrl,b"` / `"ctrl,i"` / `"ctrl,shift,8"` (bullet list) / `"ctrl,alt,2"` (Heading 2), etc.
-
-  ---
-
-  ### TASK: Create a new blank document
-  1. `browser_navigate("https://docs.google.com/document/create")`.
-  2. `browser_snapshot()` — confirm the doc loaded. Title defaults to "Untitled document".
-
-  ### TASK: Open an existing document
-  - If you know the doc ID: `browser_navigate("https://docs.google.com/document/d/{ID}/edit")`.
-  - Otherwise:
-    1. `browser_navigate("https://docs.google.com/document/u/0/")`.
-    2. `browser_snapshot()` → file rows appear as interactive elements.
-    3. `browser_click([row_id])`.
-
-  ### TASK: Rename the document
-  1. `browser_snapshot()` → find the deck title INPUT at the top-left (holds current doc name).
-  2. `browser_click([title_id])`.
-  3. `desktop_press_keys("ctrl,a")` → select all.
-  4. `browser_type([title_id], "New Name", submit=true)` → submit=true is CORRECT here (this INPUT accepts Enter to commit, like any text input).
-
-  ### TASK: Write a document from scratch (heading + body paragraphs)
-  See Pattern C. Budget: ~6–8 tool calls for a short doc (heading + 2 paragraphs).
-
-  ### TASK: Append text to an existing doc
-  See Pattern D. Budget: ~4–6 tool calls.
-
-  ### TASK: Insert a bulleted list
-  1. Ensure editor has focus (snapshot to confirm the contenteditable `[id]`).
-  2. `desktop_press_keys("ctrl,shift,8")` → starts a bulleted list at the cursor.
-  3. `browser_type(E, "First item", submit=true)` → new bullet.
-  4. `browser_type(E, "Second item", submit=true)` → new bullet.
-  5. `browser_type(E, "Third item", submit=true)` → new bullet.
-  6. To exit the list: `desktop_press_keys("enter")` twice (two empty bullets exit the list and restore normal text). Or apply `"ctrl,alt,0"` to switch back to normal text.
-
-  ### TASK: Insert a numbered list
-  Same as above but start with `desktop_press_keys("ctrl,shift,7")`.
-
-  ### TASK: Apply a heading style to an existing paragraph
-  1. Position cursor inside the target paragraph (Pattern E to find it).
-  2. `desktop_press_keys("ctrl,alt,2")` (or 1/3/4/5/6) → applies Heading N.
-
-  ### TASK: Bold / italic / underline a selection
-  1. Select target text (Pattern F).
-  2. `desktop_press_keys("ctrl,b")` / `"ctrl,i"` / `"ctrl,u"`.
-
-  ### TASK: Insert a link on selected text
-  1. Select the text to link.
-  2. `desktop_press_keys("ctrl,k")` → opens link dialog.
-  3. `browser_snapshot()` → find the URL INPUT `[id]`.
-  4. `browser_type([url_id], "https://example.com", submit=true)`.
-
-  ### TASK: Find text
-  1. `desktop_press_keys("ctrl,f")` → find toolbar.
-  2. `browser_snapshot()` → find the search INPUT.
-  3. `browser_type([find_id], "search phrase", submit=true)` → jumps to first match.
-  4. `desktop_press_keys("enter")` → next match. Repeat as needed.
-  5. `desktop_press_keys("escape")` → close toolbar, cursor stays at last match.
-
-  ### TASK: Find and replace
-  1. `desktop_press_keys("ctrl,h")` → opens Find and Replace dialog.
-  2. `browser_snapshot()` → locate the "Find" INPUT and "Replace with" INPUT.
-  3. `browser_type([find_id], "old phrase")`.
-  4. `browser_type([replace_id], "new phrase")`.
-  5. `browser_click([replace_all_button_id])` → "Replace all" is usually the rightmost or last button in the dialog button row. Match by `(Ctrl+…)` hint if present, else by position.
-  6. `desktop_press_keys("escape")` → close dialog.
-
-  ### TASK: Insert a comment
-  1. Select the text you want to comment on (Pattern E + selection extension).
-  2. `desktop_press_keys("ctrl,alt,m")` → opens the comment box in the sidebar.
-  3. `browser_snapshot()` → find the comment contenteditable `[id]`.
-  4. `browser_type([comment_id], "Your comment text")` — do NOT use submit=true (Enter adds a newline inside the comment).
-  5. `browser_snapshot()` → find the "Comment" submit button in the sidebar (usually labeled "Comment" or with a submit-related aria-label).
-  6. `browser_click([comment_button_id])`.
-
-  ### TASK: Read or summarize the document content
-  - The document body text appears in the `--- Page Text ---` portion of `browser_snapshot()` output.
-  1. `browser_snapshot()` — read page text directly.
-  2. For long docs, `browser_scroll(down)` and snapshot again to capture off-screen content.
-  Budget: usually 2–4 snapshots for a multi-page doc.
-
-  ### TASK: Get word count
-  1. `desktop_press_keys("ctrl,shift,c")` → opens word count dialog.
-  2. `browser_snapshot()` → read the word/character counts from the page text.
-  3. `desktop_press_keys("escape")` → close.
-
-  ### TASK: Share the document
-  1. `browser_snapshot()` → find the Share button (top-right). Match by position near the top-right or by role=button. Text may be translated.
-  2. `browser_click([share_id])` → opens Share dialog.
-  3. `browser_snapshot()` → find the "Add people and groups" INPUT.
-  4. `browser_type([people_id], "recipient@example.com", submit=true)` → adds the recipient as a chip.
-  5. `browser_snapshot()` → find the "Send" button.
-  6. `browser_click([send_id])`.
-
-  ### TASK: Navigate via document outline
-  1. If the outline is hidden: `desktop_press_keys("alt,slash")`, snapshot, type "Show document outline" in the menu search, submit.
-  2. `browser_snapshot()` → the outline sidebar lists headings as links.
-  3. `browser_click([heading_link_id])` → jumps the cursor to that heading.
-
-  ### TASK: Undo / Redo
-  - `desktop_press_keys("ctrl,z")` → undo.
-  - `desktop_press_keys("ctrl,y")` → redo.
-
-  ---
-
-  ### Common Gotchas
-  - **Canvas text**: the document body is rendered on a `<canvas>`. You CANNOT click a word, sentence, or paragraph. Use keyboard nav + Find to position the cursor.
-  - **`submit=true` = new paragraph**: inside the Docs body editor, Enter creates a new paragraph. This is usually what you want — use it for paragraph breaks. Use `submit=false` if you want no trailing newline.
-  - **Inside comment / link / find dialog inputs**: `submit=true` behaves as "commit/search" — different from the body editor. Inside a comment textbox, Enter adds a newline (don't submit=true); you must click the comment's submit button to post.
-  - **Title INPUT DOES accept `submit=true`**: the top-left document title is a regular text INPUT. Enter commits the rename.
-  - **Editor `[id]` persists across typing**: unlike short-lived modals, the main editor contenteditable usually keeps the same `[id]` across many type calls. Reuse it optimistically; snapshot again only if a `browser_type` errors.
-  - **Heading shortcut only affects the current paragraph**: `ctrl,alt,1` sets the CURRENT paragraph's style. After pressing Enter for a new paragraph, Docs may drop back to normal text automatically — this is by design.
-  - **List exit**: inside a bulleted/numbered list, pressing Enter on an empty item exits the list. Press Enter twice after your last item if needed.
-  - **Page text in snapshots = document text**: useful for summarize/read tasks. No OCR or canvas scraping required.
-  - **Locale-dependent toolbar**: match buttons by `(Ctrl+…)` hints or role/position, not English labels.
-  - **Menu search fallback**: `alt,slash` covers every menu command (insert table, document outline, language, etc.). Don't try to navigate the menu bar in foreign locales.
-  - **Auto-save**: no Save button or prompt on close.
-  - **Share dialog may auto-change email chip behavior**: after typing an email, you usually need `submit=true` (Enter) to turn the text into a recipient chip before clicking Send.
-  - **Long docs**: if content is off-screen, the page text in a single snapshot may be truncated. Scroll and re-snapshot for full reads.
-
-  ### Rules (MUST follow)
-  1. ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, desktop_press_keys. BANNED: browser_evaluate, browser_screenshot, run_command.
-  2. Do NOT click document body text — it's canvas. Use `ctrl,home` / `ctrl,end` / `ctrl,f` to position the cursor, then `browser_type`.
-  3. Inside the body editor, `submit=true` is OK (creates new paragraph). Inside comment/link/Find-Replace dialogs, `submit=true` behaves as "commit the field" — use accordingly.
-  4. Match toolbar/menu elements by `(Ctrl+…)` in aria-labels or by role/position — NEVER by English text alone.
-  5. Use `alt,slash` (menu search) for any command without a known shortcut.
-  6. Snapshot ONCE per major state change. Don't snapshot after every `browser_type`.
-  7. Reuse editor `[id]` across typing. Re-snapshot only if a call errors.
-  8. Budget: a 300-word doc with one heading ≈ 5–8 tool calls. A "summarize this doc" task ≈ 2–4 snapshots. If you exceed 2x the budget, stop and re-read this template.
-  9. Auto-save means no Save step is ever needed.
+  ### RULES
+  1. Only the ALLOWED tools. Never click in the document body; position the cursor only with browser_press_key.
+  2. ALWAYS `append=true` when typing document text; plain browser_type into the editor is treated as destructive.
+  3. If the task requires reading body text or commenting, tell the user it isn't supported by this surface — do not fake it from the outline or guess.
+  4. Match buttons/menus by aria-label "(Ctrl+…)" hints or labels, never by position on anything destructive; use Alt+/ menu search when labels are localized.
+  5. State every weak verification as weak in your report ("typed without error; Docs' canvas can't be read back").
+  6. Auto-save is on — never look for a Save button.
+  7. Stop conditions: login wall, view-only/suggesting mode on a write task, unsupported request (read/summarize/comment), or the same step failing twice.
