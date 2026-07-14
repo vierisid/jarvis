@@ -368,8 +368,9 @@ export const desktopClickTool: ToolDefinition = {
     },
     action: {
       type: 'string',
-      description: 'Action to perform: click (default), double_click, right_click, invoke, toggle, select, set_value, get_value, get_text, expand, collapse, scroll_into_view, focus',
+      description: 'Action to perform (default click). invoke/toggle/select/set_value/get_value/get_text/expand/collapse/scroll_into_view are Windows-only; macOS/Linux support click/double_click/right_click/focus.',
       required: false,
+      enum: ['click', 'double_click', 'right_click', 'invoke', 'toggle', 'select', 'set_value', 'get_value', 'get_text', 'expand', 'collapse', 'scroll_into_view', 'focus'],
     },
     value: {
       type: 'string',

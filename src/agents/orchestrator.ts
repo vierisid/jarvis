@@ -8,6 +8,7 @@ import { AgentInstance, canSpawnChildren } from './agent.ts';
 import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
+import { selectRelevantTools } from './tool-relevance.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
@@ -85,6 +86,8 @@ export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
   private llmManager: LLMManager | null;
   private toolRegistry: ToolRegistry | null;
+  /** Per-turn tool relevance filtering (fail-open). Off preserves old behavior. */
+  private toolFilterEnabled = true;
 
   // Authority engine components
   private authorityEngine: AuthorityEngine | null = null;
@@ -352,7 +355,7 @@ export class AgentOrchestrator {
       ...primary.getMessages(),
     ];
 
-    const tools = this.getLLMTools();
+    const tools = this.getLLMTools(message);
     let finalText = '';
 
     // Tool execution loop
@@ -446,7 +449,7 @@ export class AgentOrchestrator {
         ];
 
     // Include the standard tools plus the special clarification tool.
-    const baseTools = this.getLLMTools() ?? [];
+    const baseTools = this.getLLMTools(opts.userMessage) ?? [];
     const tools: LLMTool[] = [...baseTools, ASK_FOR_CLARIFICATION_TOOL];
 
     let finalText = '';
@@ -555,7 +558,10 @@ export class AgentOrchestrator {
       ...primary.getMessages(),
     ];
 
-    const tools = this.getLLMTools();
+    const filterText = typeof message === 'string'
+      ? message
+      : message.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+    const tools = this.getLLMTools(filterText);
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
     let finalText = '';
     let responseModel = 'unknown';
@@ -701,12 +707,18 @@ export class AgentOrchestrator {
   /**
    * Get LLM-formatted tools from the ToolRegistry.
    */
-  private getLLMTools(): LLMTool[] | undefined {
+  private getLLMTools(message?: string): LLMTool[] | undefined {
     if (!this.toolRegistry || this.toolRegistry.count() === 0) {
       return undefined;
     }
 
-    return this.toolRegistry.list().map(toolDefToLLMTool);
+    const all = this.toolRegistry.list().map(toolDefToLLMTool);
+    // Relevance-filter when we have the turn's message. Fail-open: an
+    // ambiguous message keeps the full set (see selectRelevantTools).
+    if (message !== undefined) {
+      return selectRelevantTools(all, message, { enabled: this.toolFilterEnabled });
+    }
+    return all;
   }
 
   /**

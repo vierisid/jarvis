@@ -139,12 +139,12 @@ Daemon-side, provider-agnostic (needed whichever way Phase 1 goes):
 - ☐ Route awareness screen-capture to prefer structural where coverage is high (OCR stays for low-coverage) — screenpipe's "event + a11y-text" pattern. **Deferred to Phase 4/5** — awareness rewiring is higher-risk and not on the critical path to the acceptance test; the coverage score it needs already exists.
 - ☑ Coverage/vision-usage telemetry (`src/structural/telemetry.ts`): every action records structural-vs-vision + coverage + verify outcome; vision fallbacks are logged with a reason (feeds §4 metrics + System 2 ledger). `perceptionStats()` exposes the structural ratio for the metrics harness.
 
-### Phase 3 — Small-model-native interface · ☐
-- ☐ Relevance-filtered tool sets per task class (`orchestrator.ts:704-710`).
-- ☐ Real enums + when-to-use text on all control schemas; scripted launch→confirm→act procedure in the control prompt; slim prompt variant for text control tasks (the voice path already proved the ~10k→lean win).
-- ☐ Forced post-act verify: runtime appends scoped diff to mutating tool results.
-- ☐ `ax` text mode end-to-end with a 7B–32B local model as a CI target, not an afterthought.
-- ☐ Optional **grounding fallback adapter**: Holo2-8B or UI-TARS-1.5-7B resolves elements when coverage is low (WAA's hybrid finding); strictly behind the coverage gate, always logged.
+### Phase 3 — Small-model-native interface · ◐ built 2026-07-14 (2 model-dependent items deferred to end-of-roadmap validation)
+- ☑ Relevance-filtered tool sets per task class (`src/agents/tool-relevance.ts`, wired into `orchestrator.getLLMTools(message)`). **Fail-open**: an always-available core set is never dropped, unknown/ungrouped tools are never dropped, and an ambiguous message keeps the full set — so a wrong guess costs tokens, never a capability. The control group spans desktop+browser+ui so refs never dangle across a partial surface. 8 unit tests.
+- ☑ Real enums on control schemas: `ToolParameter` gained `enum`/`items`, `toolDefToLLMTool` now emits them (previously stripped — the audit's §3.2 finding), applied to `desktop_click.action` (the 12-value prose enum), `ui_act.action`/`kind`/`verify`, `ui_snapshot.kind`. When-to-use text + scripted launch→confirm→act procedure added to `tool-guide.ts` (Phase 2).
+- ☑ Forced post-act verify: `ui_act` re-snapshots and appends a scoped diff to every mutating result (Phase 2).
+- ☐ `ax` text mode end-to-end with a 7B–32B local model as a CI target. **Deferred to end-of-roadmap validation** — needs downloaded local weights + a machine to run them; the code path (non-vision `ui_snapshot`/`ui_act` text output, Ollama tool_calls fix) is in place, only the measurement is pending. `bench/control/acceptance.ts` already drives it provider-agnostically.
+- ☐ Optional **grounding fallback adapter** (Holo2-8B / UI-TARS-1.5-7B for low-coverage surfaces). **Deferred** — the coverage gate + vision-fallback telemetry that gate it exist; the model adapter is a self-contained later add-on, not on the critical path to the acceptance test.
 
 ### Phase 4 — Skills + learn-by-watching (the killer feature) · ☐
 - ☐ `Skill` store (`src/vault/skills.ts`), `run_skill` executor over `ui_act` with the self-heal ladder; migrate `webapp_templates` (dual-run; make matching URL/active-tab-aware in the interim; add the missing tests).
