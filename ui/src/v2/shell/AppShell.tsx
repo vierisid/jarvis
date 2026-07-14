@@ -976,9 +976,6 @@ function ShellLayout({
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [talkOpen]);
 
-  // VU bars driven by the live mic level (fixed multipliers, no per-frame RNG).
-  const vuBars = [0.45, 0.95, 0.6, 1, 0.5, 0.8].map((m) => Math.max(2, Math.round(2 + vu * 12 * m)));
-
   // System states. Offline is wired to the real connection; the rest (updating,
   // crash, out-of-tokens, and both banners) are previewable via the override
   // until their backend triggers (update feed, crash capture, quota) land.
@@ -1114,23 +1111,6 @@ function ShellLayout({
                 disabled={composerDisabled}
                 placeholder={composerPlaceholder}
               />
-            </div>
-            <div className="hint">
-              <span className="rs-stl">{dataState}</span>
-              <span style={{ color: "var(--ink3)" }}>·</span>
-              <span>{TALK_HINT[voiceState]}</span>
-              {voiceState === "listening" && (
-                <span className="vu">{vuBars.map((h, i) => <i key={i} style={{ height: h }} />)}</span>
-              )}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 15px 11px", fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink3)" }}>
-              <button
-                onClick={onToggleMute}
-                style={{ border: "1px solid var(--rule)", borderRadius: "6px 1px 6px 6px", padding: "4px 10px", color: "var(--ink2)", background: "var(--raise)", cursor: "pointer", fontFamily: "var(--mono)", fontSize: 9 }}
-              >
-                {voiceState === "muted" ? "Unmute" : "Mute"}
-              </button>
-              <span>⌴ hold to talk</span>
             </div>
           </div>
         </div>

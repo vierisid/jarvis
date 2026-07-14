@@ -171,7 +171,7 @@ button.rs-chip:hover { color: var(--ink); border-color: var(--ink3); }
 .rs-surface.rs-room { display: block; padding: 0; background: var(--bg); position: relative; }
 .rs-surface.rs-room > * { min-height: 100%; }
 
-.rs-wid { border: 1px solid var(--rule); border-radius: var(--corner); background: var(--raise); box-shadow: var(--sh-sm); position: relative; }
+.rs-wid { border: 1px solid var(--rule); border-radius: var(--corner); background: var(--raise); box-shadow: var(--sh-sm); position: relative; overflow: hidden; }
 .rs-wid.w2 { grid-column: span 2; }
 .rs-ch {
   display: flex; align-items: center; gap: 8px; padding: 10px 14px;
