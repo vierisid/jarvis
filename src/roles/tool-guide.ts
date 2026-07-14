@@ -133,10 +133,25 @@ export function buildToolGuide(hasSidecars: boolean): string {
     lines.push('');
   }
 
-  // --- Desktop ---
-  lines.push('## Desktop Automation');
+  // --- Structural runtime (perception policy) ---
+  lines.push('## Operating apps and web pages (READ THIS FIRST)');
   lines.push('');
-  lines.push('Control desktop applications on any platform (Windows, macOS, Linux). Works like browser tools but for native desktop apps. The same tools work on all platforms — the sidecar handles OS-specific details internally.');
+  lines.push('Perceive and act through the accessibility tree, not screenshots. It is faster, cheaper, and reliable on small models.');
+  lines.push('');
+  lines.push('Primary tools:');
+  lines.push('- `ui_snapshot` — see an app window (kind="desktop") or the web page (kind="browser") as a numbered list of interactable elements. Prefer this over desktop_screenshot/browser_screenshot.');
+  lines.push('- `ui_act` — act on an element by its [id] from the most recent ui_snapshot AND verify the effect in one call. It returns what actually changed, so you usually do NOT need a separate snapshot to confirm.');
+  lines.push('');
+  lines.push('Perception policy:');
+  lines.push('- Default to `ui_snapshot`/`ui_act`. Take a screenshot ONLY when ui_snapshot reports low coverage (it says so), when the element you need is genuinely absent even with full:true, or when a step fails structurally.');
+  lines.push('- To open then use an app: `desktop_launch_app` → wait for it to report the window is visible → `ui_snapshot kind="desktop"` → `ui_act`. Never type into an app you have not confirmed is open and focused.');
+  lines.push('- Pass `verify` to `ui_act` for consequential steps (e.g. verify="window_appeared" after opening a dialog, "element_gone" after closing one). The runtime self-heals a failed verify before reporting.');
+  lines.push('');
+
+  // --- Desktop ---
+  lines.push('## Desktop Automation (low-level)');
+  lines.push('');
+  lines.push('The desktop_* tools are the low-level layer beneath ui_snapshot/ui_act — use them for listing windows, launching apps, screenshots, and key chords, or when you need an action ui_act does not expose. Works on Windows, macOS, Linux; the sidecar handles OS-specific details.');
   lines.push('');
   lines.push('Workflow:');
   lines.push('1. `desktop_list_windows` to see available windows with PIDs');

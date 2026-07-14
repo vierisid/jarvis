@@ -133,11 +133,11 @@ Run two desktop spikes + one browser spike against the same acceptance test, the
 - ☐ **Acceptance test (from v1):** drive **Gmail (CDP)** and **Slack or Outlook (desktop)** compose+send end-to-end with zero vision tokens; mutate the UI (resize/theme/relayout) and confirm ref re-resolution by `sig`; measure tokens vs screenshot baseline.
 - **Exit criterion:** ≥90% step success on both flows, re-resolution ≥95%, ≥8× token reduction — via whichever option wins. Decision recorded with the matrix (latency / coverage / maintenance / license / packaging). Preliminary read: the daemon structural core is needed under both outcomes; leaning "B as default Windows engine + A as optional engine behind a config flag" — the SemanticSurface model keeps providers interchangeable.
 
-### Phase 2 — Structural runtime core · ☐
+### Phase 2 — Structural runtime core · ◐ core built 2026-07-14 (awaiting end-of-roadmap validation)
 Daemon-side, provider-agnostic (needed whichever way Phase 1 goes):
-- ☐ `src/structural/{types,resolver,surface}.ts`; salience filter + coverage score; `ui_snapshot`/`ui_act` tools with postcondition verify + self-heal ladder; perception policy in `prompt-builder.ts` (structural-first, vision-last, logged).
-- ☐ Route awareness screen-capture to prefer structural where coverage is high (OCR stays for low-coverage) — screenpipe's "event + a11y-text" pattern.
-- ☐ Coverage/vision-usage telemetry (feeds System 2 ledger + §4 metrics).
+- ☑ `src/structural/{types,resolver,surface,verifier,telemetry}.ts`; salience filter + coverage score; `ui_snapshot`/`ui_act` tools (`src/actions/tools/ui.ts`, registered in `BUILTIN_TOOLS`) with postcondition verify + self-heal ladder (re_resolve→retry→vision→ask); perception policy in `tool-guide.ts` (structural-first, vision-last). 23 structural unit tests. `ui_act` re-snapshots and returns a scoped diff so the model needn't snapshot again to confirm.
+- ☐ Route awareness screen-capture to prefer structural where coverage is high (OCR stays for low-coverage) — screenpipe's "event + a11y-text" pattern. **Deferred to Phase 4/5** — awareness rewiring is higher-risk and not on the critical path to the acceptance test; the coverage score it needs already exists.
+- ☑ Coverage/vision-usage telemetry (`src/structural/telemetry.ts`): every action records structural-vs-vision + coverage + verify outcome; vision fallbacks are logged with a reason (feeds §4 metrics + System 2 ledger). `perceptionStats()` exposes the structural ratio for the metrics harness.
 
 ### Phase 3 — Small-model-native interface · ☐
 - ☐ Relevance-filtered tool sets per task class (`orchestrator.ts:704-710`).
