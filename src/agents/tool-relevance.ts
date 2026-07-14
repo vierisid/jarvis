@@ -36,7 +36,7 @@ type Group = {
  */
 const GROUPS: Record<string, Group> = {
   control: {
-    match: ['desktop_', 'browser_', 'ui_', 'capture_screen'],
+    match: ['desktop_', 'browser_', 'ui_', 'run_skill', 'manage_skills', 'record_skill', 'capture_screen'],
     keywords: /\b(open|launch|click|type|scroll|screenshot|window|app|application|notepad|chrome|browser|navigate|website|url|web ?page|tab|button|form|login|desktop|snapshot|menu|dialog|calc|excel|word|slack|gmail|outlook|notion)\b/i,
   },
   workflow: {

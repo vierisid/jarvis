@@ -9,6 +9,7 @@ export type PromptContext = {
   recentObservations?: string[];
   agentHierarchy?: string;
   knowledgeContext?: string;
+  skillIndex?: string;
   availableSpecialists?: string;
   contentPipeline?: string[];
   authorityRules?: string;
@@ -227,6 +228,11 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
       dynamicSections.push('## Relevant Knowledge');
       dynamicSections.push('The following is what you remember about entities mentioned in this conversation:');
       dynamicSections.push(context.knowledgeContext);
+    }
+
+    if (context.skillIndex) {
+      dynamicSections.push('');
+      dynamicSections.push(context.skillIndex);
     }
 
     if (context.activeCommitments && context.activeCommitments.length > 0) {

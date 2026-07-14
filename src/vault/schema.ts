@@ -730,6 +730,35 @@ function createTables(db: Database): void {
     db.run(`ALTER TABLE webapp_templates ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'`);
   }
 
+  // Skills: parameterized, verified, replayable procedures. The structural-
+  // runtime replacement for markdown webapp_templates — steps address elements
+  // by durable SemanticRef and carry postconditions. `match`, `params`, and
+  // `steps` are JSON blobs (see src/skills/types.ts).
+  db.run(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      app TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      match_json TEXT NOT NULL DEFAULT '{}',
+      params_json TEXT NOT NULL DEFAULT '[]',
+      steps_json TEXT NOT NULL DEFAULT '[]',
+      provenance TEXT NOT NULL DEFAULT 'authored'
+        CHECK(provenance IN ('recorded', 'authored', 'marketplace')),
+      version INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      run_count INTEGER NOT NULL DEFAULT 0,
+      verified_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      CHECK(enabled IN (0, 1))
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_skills_app ON skills(app)`);
+
   // Recent objects: cross-device LRU of palette picks. The dashboard primarily
   // reads `picked_at` desc and dedupes on (object_type, object_id) so the same
   // pick repeated bumps the timestamp instead of accumulating rows.

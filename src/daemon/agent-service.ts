@@ -64,6 +64,7 @@ import { extractAndStore } from '../vault/extractor.ts';
 import { getKnowledgeForMessage } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { getUserProfile } from '../vault/user-profile.ts';
+import { buildSkillIndex } from '../actions/tools/skills.ts';
 import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
@@ -867,6 +868,18 @@ export class AgentService implements Service, IAgentService {
         }
       } catch (err) {
         console.error('[AgentService] Error retrieving knowledge:', err);
+      }
+
+      // Inject the compact skill index. Webapp templates are delivered by
+      // browsed URL at browse time (webapp-template-injection.ts), so skills
+      // are the only message-time playbook injection.
+      try {
+        const skillIndex = buildSkillIndex();
+        if (skillIndex) {
+          context.skillIndex = skillIndex;
+        }
+      } catch (err) {
+        console.error('[AgentService] Error building skill index:', err);
       }
     }
 
