@@ -1,0 +1,97 @@
+app_name: Google Maps
+domains:
+  - google.com/maps
+  - maps.google.com
+keywords:
+  - directions to
+  - near me
+  - nearest
+  - opening hours
+  - how far is
+  - how long to drive
+description: Google Maps — search for places, read place details (address, hours, phone, rating, reviews), and get directions with per-route durations, all via URLs and the sidebar panel. No map-canvas interaction.
+version: 1
+instructions: |
+  URL: https://www.google.com/maps
+
+  ### THE ONE THING TO KNOW
+  Google Maps is TWO surfaces. The map CANVAS is WebGL — invisible to browser_snapshot and NOT automatable; never try to click, drag, or read the map itself. The SIDEBAR panel (search results, place details, directions) is regular DOM whose content lands in Page Text. Everything below drives URLs and reads/clicks the sidebar only. If a request needs the canvas, it is unsupported (see UNSUPPORTED).
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Maps. Never use desktop or sidecar tools.
+  2. URL-FIRST: search, directions, and place lookups all have stable URLs (below). Always build the URL instead of typing into the search box; type only to refine an already-open panel.
+  3. READ, don't click, wherever possible: names, ratings, review counts, hours, addresses, phone numbers, and route durations all appear in Page Text. Answer from Page Text; click a result only when the user needs details the list view doesn't show.
+  4. UI LANGUAGE: labels are locale-translated. Match buttons/tabs by aria-label MEANING, never by exact English text on a non-English UI.
+  5. browser_type REPLACES field content by default — that is what the search box wants.
+  6. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  8. NO GPS: the browser has no location, so "near me" means nothing to Maps here. If the user gives no area, ASK for one (city / neighborhood / address) before searching. Never guess a location.
+
+  ### State Recognition
+  - **Consent interstitial** (EU / first run): URL contains consent.google.com, or a dialog asks to accept cookies → snapshot → click the accept-all button [LIVE-VERIFY: label localized, e.g. "Accept all"] → re-navigate to your target URL. If it persists after 2 tries, tell the user and stop.
+  - **No sign-in needed** for search, place details, or directions. Sign-in is only required for saving places and posting reviews — if a sign-in prompt appears there, tell the user to log in manually and stop.
+  - **Ready**: the search box is present (combobox/input with aria-label ≈ "Search Google Maps" [LIVE-VERIFY]).
+  - **Loading**: sidebar empty, no results text → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Search**: `https://www.google.com/maps/search/{query}` — URL-encode, spaces as `+`, and include the AREA in the query: `https://www.google.com/maps/search/coffee+near+duomo+milan`.
+  - **Directions**: `https://www.google.com/maps/dir/{origin}/{destination}` — e.g. `/maps/dir/Milan+Central+Station/Duomo+di+Milano`. Extra waypoints = extra `/segments`: `/maps/dir/A/B/C`. Leaving origin empty (`/maps/dir//Duomo+di+Milano`) opens the panel with only the destination filled.
+    - Travel mode: the `data=` URL parameter is fragile — do NOT construct it. Load the dir URL, then click the mode tab (aria-labels ≈ "Driving", "Transit", "Walking", "Cycling" [LIVE-VERIFY]) and re-snapshot.
+  - **Place**: `https://www.google.com/maps/place/{name}` resolves straight to the place panel: `/maps/place/Eiffel+Tower`. An ambiguous name falls back to a results list — then click the intended result.
+  - **The current URL IS the shareable link**: after any search/place/directions load, the snapshot's URL field encodes the exact view (`/@lat,lng,zoom` plus panel state). When the user asks for a link, report THAT URL — never open the Share dialog.
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: coffee near duomo milan - Google Maps
+  URL: https://www.google.com/maps/search/coffee+near+duomo+milan/@45.4641,9.1919,15z
+  --- Page Text ---
+  Results  Caffè Vergnano 1882  4.2 (1,824)  Coffee shop  Open ⋅ Closes 21:00 …
+  --- Interactive Elements ---
+  [3] combobox "Search Google Maps"
+  [15] link "Caffè Vergnano 1882"       ← result entry [LIVE-VERIFY: exact role]
+  [16] button "Directions"
+  ```
+  The map canvas contributes NOTHING to the snapshot — that is expected, not an error.
+
+  ### TASK: Search places / "best X in Y"
+  1. browser_navigate the search URL (area included — Rule 8) → browser_snapshot.
+  2. Page Text carries the ranked list: name, rating, review count, category, price level, open/closed status with hours. Answer directly from it.
+  3. Detail on one result → click its entry (the link whose text is the place name [LIVE-VERIFY]) → snapshot → place panel.
+  4. More results: browser_scroll moves the WINDOW, but the results feed is a nested scrollable pane — it may not move [LIVE-VERIFY]. If Page Text is unchanged after one scroll attempt, refine the query (narrower area or category) instead of fighting the pane.
+
+  ### TASK: Place details (address, hours, phone, rating)
+  1. browser_navigate `/maps/place/{name}` → snapshot. (Or click a search result.)
+  2. Everything is in Page Text: full address, opening hours (click the hours row to expand the weekly table [LIVE-VERIFY]), phone, website, rating, review snippets, popular times. Report from Page Text.
+
+  ### TASK: Directions A→B
+  1. browser_navigate `/maps/dir/{origin}/{destination}` → snapshot.
+  2. Route options are in the sidebar: per-route duration, distance, and summary ("via A1") in Page Text. The FIRST listed route is Maps' recommended one.
+  3. Travel mode: click the mode tab (see URL PATTERNS) → snapshot → durations update per mode.
+  4. Step-by-step: click a route option → snapshot → the step list ("Details" [LIVE-VERIFY]) lands in Page Text.
+  5. Transit mode lists line names and departure/arrival times per route in Page Text.
+
+  ### TASK: "How far is X" / "how long to drive"
+  Run the Directions task and report the top route's distance and duration. If the origin is unknown, ASK the user (Rule 8) — never assume where they are.
+
+  ### TASK: Read reviews
+  1. Open the place panel → snapshot → click the Reviews tab [LIVE-VERIFY: tab label localized] → snapshot.
+  2. Review text, star ratings, and dates land in Page Text. Same nested-pane scroll caveat as search results — report what is visible rather than fighting for more.
+
+  ### TASK: Save a place (requires sign-in — optional)
+  1. Place panel → click the Save button [LIVE-VERIFY] → snapshot → a list picker appears (Favorites, Want to go, …) → click a list → snapshot to verify.
+  2. If a sign-in prompt appears instead, tell the user to log in manually and stop.
+
+  ### TASK: Share / link to a view
+  Report the snapshot's current URL (see URL PATTERNS). Do not open the Share dialog — the URL is equivalent and always available.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Live / turn-by-turn navigation (needs GPS and the mobile app).
+  - Street View, satellite-layer inspection, or reading anything drawn on the map canvas.
+  - Measuring distance by clicking map points, dropping pins, drawing areas.
+  - Anything else requiring canvas interaction — the map is WebGL and invisible to snapshots.
+
+  ### Gotchas
+  - Maps rewrites the URL after load (adds `/@lat,lng,zoom` and `data=`) — the rewritten URL is fine to report and to re-navigate to.
+  - Hours in Page Text are in the PLACE's local time zone — say so when answering "is it open now" for far-away places.
+  - Sponsored results can appear first, marked "Sponsored" in Page Text [LIVE-VERIFY] — skip them when ranking by rating.
+  - A confidently-resolved search may skip the list and land directly on the place panel — both outcomes are success; check the URL (`/place/` vs `/search/`).

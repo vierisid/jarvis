@@ -1,0 +1,87 @@
+app_name: Google Meet
+domains:
+  - meet.google.com
+keywords:
+  - meet link
+  - meeting code
+  - join the video call
+description: Google Meet — join meetings by code or link, create instant meetings, mute/unmute, in-call chat, captions, participants
+version: 1
+instructions: |
+  URL patterns (URL-first — prefer these over clicking through UI):
+  - Join a meeting:  https://meet.google.com/xxx-yyyy-zzz  (3-4-3 letter meeting code)
+  - Instant meeting: https://meet.google.com/new  — redirects to a fresh meeting URL; that redirected URL IS the meeting link
+  - Home / landing:  https://meet.google.com/landing
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. **PRESENCE SAFETY — the top rule.** Joining a meeting makes the user VISIBLE and AUDIBLE to real people.
+     (a) NEVER join a meeting the user did not explicitly ask to join.
+     (b) Before clicking Join now / Ask to join, MUTE the microphone AND turn the camera OFF on the pre-join screen — unless the user explicitly asked for mic and/or camera on.
+     (c) In-call, never unmute the mic or enable the camera unless the user explicitly asks.
+     (d) Never click a Join button twice. If nothing seems to happen, snapshot again — the state may be transitioning. A blind re-click risks double "knock" requests or joining twice.
+  3. [id]s change every snapshot — never reuse an id from an older snapshot. Match elements by role + aria-label meaning. Labels are locale-dependent (English shown below); on non-English UIs the "(ctrl + d)" / "(ctrl + e)" hints inside the mic/camera labels are locale-stable anchors.
+  4. Meeting code input: accept "abc-defg-hij", "abcdefghij" (insert dashes 3-4-3), or a full https://meet.google.com/... link. Strip any ?query suffix before navigating.
+  5. Snapshot at checkpoints: after navigation, after mute toggles, after Join, after opening a panel. If an expected element is missing after 2 retry snapshots, tell the user and stop — no workarounds.
+  6. Meet intercepts these in-page shortcuts (they DO work via browser_press_key): "Ctrl+D" = toggle microphone, "Ctrl+E" = toggle camera. Assume no other shortcuts.
+
+  ### State Recognition (identify the state after EVERY navigation or Join click)
+  - **Google sign-in**: URL contains accounts.google.com, or the page asks you to sign in → tell the user: "Google Meet needs you signed into Google — please log in manually." Stop.
+  - **Landing page**: URL is meet.google.com/landing (or bare meet.google.com); has a meeting code/link input and a "New meeting" button. [LIVE-VERIFY input aria-label/placeholder ≈ "Enter a code or link"]
+  - **Pre-join (ready check)**: a distinct screen BEFORE being in the call — camera preview, mic/camera toggle buttons, and a "Join now" OR "Ask to join" button. You are NOT in the meeting yet; nobody can see or hear the user on this screen. [LIVE-VERIFY]
+  - **Devices blocked**: the pre-join screen indicates mic/camera are blocked or need permission (text ≈ "Do you want people to see and hear you in the meeting?" / "Microphone and camera are blocked" [LIVE-VERIFY exact text]). The browser's permission prompt is BROWSER CHROME, not page DOM — it never appears in a snapshot and cannot be clicked. Tell the user to grant (or deliberately deny) camera/mic permission manually in the browser, and stop.
+  - **Waiting to be admitted**: after clicking "Ask to join", page text ≈ "Asking to be let in..." [LIVE-VERIFY]. Re-snapshot every few seconds, max 4 tries; if still waiting, tell the user the host hasn't admitted them yet.
+  - **In call**: bottom toolbar with mic/camera buttons and a "Leave call" button; URL is the meeting URL. [LIVE-VERIFY]
+  - **Cannot join**: page text ≈ "Check your meeting code", "You can't join this call", or "The meeting hasn't started yet" [LIVE-VERIFY texts] → report the exact message to the user and stop. Do not retry the same code.
+  - **Left / call ended**: "You left the meeting" screen with "Rejoin" and "Return to home screen" buttons. [LIVE-VERIFY]
+
+  ### Element Reference (labels from the English UI; every claim [LIVE-VERIFY] pending the live-capture pass)
+  **Pre-join screen:**
+  - Mic toggle: button, aria-label ≈ "Turn off microphone (ctrl + d)" when mic is ON (click = mute), ≈ "Turn on microphone (ctrl + d)" when already muted. The label states the ACTION, not the state — "Turn off..." means it is currently ON. [LIVE-VERIFY]
+  - Camera toggle: aria-label ≈ "Turn off camera (ctrl + e)" / "Turn on camera (ctrl + e)" — same action-label logic. [LIVE-VERIFY]
+  - Join button: "Join now" (you enter immediately) OR "Ask to join" (host must admit you — expect the waiting state). Read which one is present before clicking; it changes what happens next. [LIVE-VERIFY]
+  **In-call bottom toolbar:** mic ≈ "Turn off microphone (ctrl + d)", camera ≈ "Turn off camera (ctrl + e)", captions ≈ "Turn on captions", leave ≈ "Leave call". [LIVE-VERIFY]
+  **Panel buttons (bottom-right cluster):** chat ≈ "Chat with everyone", participants ≈ "People". Each opens a right-side panel; close via the panel's close (X) button. [LIVE-VERIFY]
+  **Chat panel:** message input is a textarea/textbox, aria-label/placeholder ≈ "Send a message" [LIVE-VERIFY]; a send button sits next to it.
+
+  ---
+
+  ### TASK: Join a meeting by code or link
+  1. Normalize the code/link (rule 4) → browser_navigate to https://meet.google.com/xxx-yyyy-zzz
+  2. browser_snapshot → run State Recognition. Sign-in wall / cannot-join / devices-blocked → tell user, stop.
+  3. On the pre-join screen, enforce PRESENCE SAFETY: if the mic label reads "Turn off microphone", click it to mute; snapshot; if the camera label reads "Turn off camera", click it; snapshot to confirm both labels now read "Turn on ..." (= both off). Skip a toggle only if the user explicitly wants that device live.
+  4. Click "Join now" (or "Ask to join" — tell the user a host admit is required, then wait per State Recognition).
+  5. browser_snapshot → verify the in-call state (Leave call button present). Report joined, and that mic/camera are muted.
+
+  ### TASK: Create an instant meeting and report the link
+  1. browser_navigate to https://meet.google.com/new
+  2. browser_snapshot → the page redirects to the new meeting's URL and shows the pre-join screen (or a "Your meeting is ready" dialog with a copyable link [LIVE-VERIFY]).
+  3. The redirected URL in the snapshot's Page line (https://meet.google.com/xxx-yyyy-zzz) IS the shareable link — report it to the user verbatim.
+  4. Do NOT join it unless the user asked to join. If they did, continue with Join steps 3-5 (mute first).
+
+  ### TASK: Leave the call
+  1. browser_snapshot → confirm in-call state; click the button whose aria-label means "Leave call" (never pick by toolbar position).
+  2. browser_snapshot → verify the "You left the meeting" / Rejoin screen. If a feedback or rating dialog appears instead, it is safe to ignore — leaving already succeeded.
+
+  ### TASK: Toggle mic / camera in-call
+  1. browser_press_key("Ctrl+D") for mic, browser_press_key("Ctrl+E") for camera — or click the toolbar toggle button.
+  2. browser_snapshot → verify the toggle's aria-label flipped (e.g. "Turn off microphone" → "Turn on microphone"). Remember PRESENCE SAFETY rule 2c: only unmute/enable when explicitly asked.
+
+  ### TASK: Send a chat message
+  1. In-call, click the chat button (≈ "Chat with everyone") → browser_snapshot — chat panel opens with the message input.
+  2. browser_type(message input id, text) — NO submit yet → browser_snapshot → verify the typed text is exactly right (chat messages go to everyone and cannot be edited).
+  3. browser_press_key("Enter") (or click the send button) → browser_snapshot → the message appears in the chat panel's Page Text. If it doesn't after one more snapshot, tell the user — do NOT retype (double-send risk).
+
+  ### TASK: Toggle captions
+  1. In-call, click the captions button (aria-label ≈ "Turn on captions" / "Turn off captions") → browser_snapshot → label flipped = done. Captions render at the bottom of the video area and show up in Page Text.
+
+  ### TASK: See who is in the meeting
+  1. In-call, click the participants button (≈ "People") → browser_snapshot
+  2. Read participant names from the panel's Page Text; the button/panel usually shows a count. browser_scroll within the panel for long lists. Report the names.
+
+  ---
+
+  ### Gotchas
+  - **Host-side admit dialog**: if a "Someone wants to join this call" dialog appears (user is host), do NOT click Admit or Deny on your own — tell the user who is asking and let them decide, unless they already told you to admit that person.
+  - Joining from the landing page input also works (type code → Enter), but navigating straight to the meeting URL is fewer steps and locale-proof — prefer it.
+  - Camera preview on pre-join is a live video element; its content never appears in Page Text — rely on the toggle aria-labels, not the preview, to judge mic/camera state.

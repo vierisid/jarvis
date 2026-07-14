@@ -1,0 +1,111 @@
+app_name: Trello
+domains:
+  - trello.com
+keywords:
+  - kanban
+  - kanban board
+description: Trello — open boards, find/create/open cards, edit descriptions, move cards between lists via menus (no drag), comments, checklists, due dates, labels, archive/unarchive, create lists.
+version: 1
+instructions: |
+  URLs (Trello's most robust selectors — prefer them over clicking):
+  - All boards: https://trello.com/u/{username}/boards — https://trello.com/ redirects here when logged in.
+  - A board: https://trello.com/b/{boardId}/{slug}
+  - A card: https://trello.com/c/{cardId} — opens the board WITH that card's modal already open. The single most reliable way to reach a known card.
+
+  ### RULES (stated once — MUST follow)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. No desktop tools.
+  2. **THERE IS NO DRAG TOOL. Trello's signature interaction — dragging cards between lists — is IMPOSSIBLE here.** Never attempt or simulate a drag. ALL card movement and reordering goes through menus: open the card and use its Move action, or right-click the card for a context menu (see TASK: Move a card). If a request genuinely needs freehand dragging that the Move dialog cannot express, tell the user and stop.
+  3. [id]s are 1-based and valid ONLY for the latest snapshot — every snapshot renumbers them. Never reuse an id after any action, never guess ids. Element missing after 2 retry snapshots → tell the user what you looked for and stop. No workarounds.
+  4. browser_type REPLACES the field's content by default. To ADD to a field that already has content (an existing description, a draft comment) pass append:true — plain typing silently erases what was there.
+  5. One verify-snapshot after each state-changing action; verification must distinguish success from failure (the card title under the RIGHT list in Page Text, not just "no error").
+  6. browser_press_key("Escape") closes any open popover, composer, or the card modal. Popover edits (labels, dates already Saved) persist; UNSAVED editor text (description, comment) is lost — click Save first.
+  7. Do NOT use Trello's single-letter shortcuts (n, f, e, q, …): they depend on mouse-hover focus and misfire. Click the real controls.
+  8. UI button labels may be localized; user-set board/list/card names are stable. Match boards/cards by their names and by href (/b/, /c/); match controls by role/aria-label meaning.
+  9. If a Save/submit seems to have failed, re-snapshot and CHECK for the comment/card before retrying — blind retries double-post.
+
+  ### STATE RECOGNITION (check after every navigate)
+  - **Logged out**: trello.com marketing page ("Log in", "Sign up") or an Atlassian login form (URL id.atlassian.com / "Log in to continue"). NEVER type credentials → tell the user: "Trello requires an Atlassian sign-in. Please log in to Trello in this browser." and stop.
+  - **Boards directory**: URL contains /u/ and /boards; board tiles are links whose text is the board name.
+  - **Board view**: URL contains /b/; list columns, each with its list-name heading, its cards (links with href containing /c/), and an "Add a card" button; "Add another list" at the far right.
+  - **Card modal open**: URL contains /c/; a dialog with the card title, an "in list {name}" line, Description area, comment box, and a close (X) button. The board is still rendered behind it — expect BOTH sets of elements; modal elements come after the board's in the snapshot [LIVE-VERIFY].
+  - **Loading**: near-empty snapshot or no list columns on a /b/ URL → wait, re-snapshot (max 2 retries), then tell the user.
+
+  ### ELEMENT MAP (get ids from the current snapshot)
+  - Board canvas: each list = a column with a list-name heading (textarea or h2 [LIVE-VERIFY]) at top, card links below it, "Add a card" button at the bottom. Snapshot order is column-by-column: a list's cards and its "Add a card" button appear AFTER its heading and BEFORE the next list's heading — use that ordering to bind cards and buttons to the right list [LIVE-VERIFY].
+  - Card on the board: `<a>` whose href contains /c/ and whose text starts with the card title (badges may append text).
+  - Board header: board name, Filter button [LIVE-VERIFY label/icon], board "..." menu (right side) which opens the board menu containing "Archived items" [LIVE-VERIFY].
+  - Top nav: a search input, placeholder ≈ "Search" [LIVE-VERIFY] — searches across boards.
+  - Card modal: title field (topmost textbox in the modal); "+ Add" button opening a menu with Labels / Dates / Checklist / Members / Attachment [LIVE-VERIFY: these may instead be individual sidebar buttons in older UI]; Description block; comment composer ("Write a comment…"); a "..." / actions menu in the modal header containing Move, Copy, Archive [LIVE-VERIFY: Move may also be reachable by clicking the "in list {name}" breadcrumb, which opens list/position dropdowns].
+  - Page Text mirrors the visible columns: list names followed by their card titles — your primary read/verify surface.
+
+  ---
+
+  ### TASK: Open a board
+  1. browser_navigate to https://trello.com/ (or /u/{username}/boards if known) → browser_snapshot
+  2. Click the link whose text is the board name (tiles and the left "Your boards" rail both work)
+  3. Snapshot → verify URL contains /b/ and list columns are present.
+  If you already know the board URL, navigate straight to it.
+
+  ### TASK: Find a card on a board
+  Primary: open the board → snapshot → scan Page Text (list names followed by card titles). Off-screen lists: browser_scroll → re-snapshot.
+  Fallback A: click the board's Filter button → snapshot → browser_type the card keyword into the filter input → snapshot: only matching cards remain on the board [LIVE-VERIFY the filter popover]. Press Escape and clear the filter when done [LIVE-VERIFY: a "Clear" control in the popover].
+  Fallback B (cross-board): browser_type the card name into the top-nav search input → snapshot → click the matching card result (href contains /c/) [LIVE-VERIFY results dropdown].
+
+  ### TASK: Create a card
+  1. On the board, find the TARGET list's "Add a card" button — the one after that list's cards in snapshot order (rule: bind by ordering, see ELEMENT MAP). Click it.
+  2. Snapshot → a composer textarea appears in that list (placeholder ≈ "Enter a title") [LIVE-VERIFY]
+  3. browser_type(textarea id, title, submit: true) — Enter adds the card and leaves the composer open for another
+  4. browser_press_key("Escape") to close the composer
+  5. Snapshot → verify the title appears under the CORRECT list in Page Text. Under the wrong list → tell the user (move it via TASK: Move a card if asked).
+
+  ### TASK: Open a card / read it
+  Click the card's `<a>` (href contains /c/) → snapshot: modal with title, description, activity. Known card id → browser_navigate https://trello.com/c/{cardId} instead. Long cards: browser_scroll → re-snapshot.
+
+  ### TASK: Edit the card description
+  1. Open the card → snapshot → click the Description area (existing text, or the "Add a more detailed description…" placeholder [LIVE-VERIFY])
+  2. Snapshot → an editor (contenteditable) with Save/Cancel appears [LIVE-VERIFY]
+  3. browser_type into it — **append: true to ADD to an existing description; plain (replace) ONLY when the user wants it rewritten**
+  4. Click Save → snapshot → verify the text shows in the description block.
+
+  ### TASK: Move a card to another list (NO DRAG — menu only)
+  1. Open the card (click it or navigate to /c/{cardId}) → snapshot
+  2. Open the Move dialog: click "Move" in the modal's "..." actions menu [LIVE-VERIFY: may be a direct button, or reachable by clicking the "in list {name}" breadcrumb]
+  3. Snapshot → popover with Board / List / Position dropdowns [LIVE-VERIFY: native selects vs custom comboboxes]. Click the List dropdown → snapshot → click the destination list option. Position the same way if the user asked for a spot (top = 1).
+  4. Click the popover's "Move" confirm button (if the dropdowns apply immediately, skip [LIVE-VERIFY])
+  5. Escape to close the modal → snapshot → VERIFY: the card title now sits under the destination list in Page Text and is gone from the source list.
+  Board-side alternative: browser_click(card id, button: "right") → snapshot → context menu with a Move entry [LIVE-VERIFY the menu exists] → same dropdown popover. If neither path yields a Move control after 2 retries, stop and tell the user.
+
+  ### TASK: Add a comment
+  1. Open the card → snapshot → click the comment composer ("Write a comment…" [LIVE-VERIFY]) → snapshot: it expands with a Save/Send control
+  2. browser_type the comment (no submit — Enter may just insert a newline [LIVE-VERIFY])
+  3. Click Save → snapshot → verify the comment text appears in the activity feed. Not there? Re-snapshot once before ANY retry (rule 9).
+
+  ### TASK: Add a checklist / check items
+  1. Open the card → click "+ Add" → snapshot → click "Checklist" [LIVE-VERIFY menu vs sidebar button]
+  2. Snapshot → popover with a title input (default "Checklist") and an Add button → optionally type a title → click Add
+  3. Snapshot → the checklist block appears with an "Add an item" control → click it → browser_type(item text, submit: true) — repeat per item [LIVE-VERIFY: whether the item composer stays open]
+  4. Escape to close the composer → snapshot: items listed.
+  **Check off an item**: snapshot → click the checkbox next to the item's text → snapshot: it renders checked/struck [LIVE-VERIFY].
+
+  ### TASK: Set a due date (FRAGILE — flag any doubt)
+  1. Open the card → "+ Add" → "Dates" [LIVE-VERIFY] → snapshot: a popover with a calendar and date input(s)
+  2. Prefer CLICKING the day on the calendar (arrows to change month) over typing: the text input's date format is locale-dependent and silently mis-parses [LIVE-VERIFY the whole popover — calendar markup, due-date checkbox, time field]
+  3. Click Save → snapshot → verify the date chip on the card shows the INTENDED date. Wrong or ambiguous → tell the user rather than guessing again.
+
+  ### TASK: Add a label
+  1. Open the card → "+ Add" → "Labels" [LIVE-VERIFY] → snapshot: a popover lists labels with checkboxes/toggle rows
+  2. Click the target label (match by its name; color-only labels match by position ONLY if the user named the color) → snapshot: it shows selected
+  3. Escape to close → verify the label chip on the card.
+
+  ### TASK: Archive a card
+  1. Open the card → snapshot → click Archive in the modal's "..." actions menu — match by label meaning, never by menu position [LIVE-VERIFY location]
+  2. Snapshot → an "archived" banner appears on the card [LIVE-VERIFY] → Escape → snapshot: the card is GONE from its list (this is the success check).
+  **Un-archive**: the banner's "Send to board" button; or board "..." menu → "Archived items" → find the card → its "Send to board" control [LIVE-VERIFY both paths].
+
+  ### TASK: Create a list
+  1. On the board, click "Add another list" (far right; browser_scroll right if off-screen) → snapshot
+  2. browser_type(name, submit: true) into its textarea (placeholder ≈ "Enter list name" [LIVE-VERIFY]) → Escape to close the composer
+  3. Snapshot → the new column heading appears.
+
+  ### Budgets (stop and reconsider at ~2x)
+  Open board ≈ 3 calls · find card ≈ 4 · create card ≈ 6 · open card ≈ 2 · edit description ≈ 6 · move card ≈ 9 · comment ≈ 6 · checklist with 2 items ≈ 9 · due date ≈ 7 · label ≈ 6 · archive ≈ 5 · create list ≈ 4.

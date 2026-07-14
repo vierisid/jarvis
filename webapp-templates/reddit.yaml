@@ -1,0 +1,98 @@
+app_name: Reddit
+domains:
+  - reddit.com
+keywords:
+  - subreddit
+  - subreddits
+  - upvote
+  - upvotes
+  - downvote
+description: Reddit — browse subreddits, read posts and comment threads (great for research/summarization), search site-wide or within a subreddit, submit posts, comment, vote, join/leave communities, and view user profiles.
+version: 1
+instructions: |
+  URL: https://www.reddit.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Reddit. Never use desktop or sidecar tools.
+  2. URL-FIRST: Reddit's URLs are the backbone — subreddit feeds, sort orders, time windows, search, user profiles, and post permalinks are ALL addressable by URL (patterns below). Always ask "is there a URL for this?" before clicking; navigation by URL beats clicking through the UI every time.
+  3. SHADOW DOM WARNING: the modern Reddit UI is built from "shreddit" web components that render inside shadow DOM. Some interactive elements (vote arrows, Join, comment boxes) MAY be missing from a snapshot's Interactive Elements list even though they are visible on screen [LIVE-VERIFY: which controls surface per page type]. The Page Text still carries post titles, scores, and comment text — READING always works even when buttons don't appear. If an interactive element you need is absent after 2 snapshots, try the old-UI fallback (Rule 4) for reading, or tell the user which control is missing and stop.
+  4. OLD-UI FALLBACK (reading only): `https://old.reddit.com/...` serves the same content as plain server-rendered HTML with no shadow DOM — same URL paths apply [LIVE-VERIFY: still available logged-out]. Prefer www for actions, old for stubborn reads.
+  5. **browser_type REPLACES the field's content by default.** Titles/search want that. To add to a comment or body draft that already has text, pass append: true.
+  6. PUBLIC SAFETY: posts and comments are PUBLIC and tied to the user's account. Before clicking Post/Comment, the composed text MUST be visible in the latest snapshot exactly as intended. After submitting, verify via the page (your comment/post appears). NEVER blind-retry a submit — if you cannot tell whether it went through, check the thread or the user's profile (/user/{name}/) before ANY second attempt; a blind retry risks a public double-post.
+  7. Snapshot at checkpoints: after navigate, after opening a composer, after each typed field, and after submit. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. Feeds are infinite-scroll: browser_scroll down then snapshot to load more posts/comments. Don't scroll more than ~4 times for one question — summarize what you have.
+
+  ### State Recognition
+  - **Logged out**: READING works fine (browse, search, read posts/comments — no account needed). Posting, commenting, voting, and joining REQUIRE login. Detect logged-out by a "Log In" button in the top bar / no username menu [LIVE-VERIFY: top-bar structure]. If a write action is requested while logged out, or clicking a vote/Join/comment control pops a login dialog, tell the user: "This needs your Reddit login — please sign in in the browser first." Stop. NEVER type credentials.
+  - **Cookie/consent banner**: may overlay the page on first visit [LIVE-VERIFY: appears mostly in EU locales]. If it blocks interaction, click the reject/"necessary only" option if present, else accept — then snapshot and continue.
+  - **NSFW / mature interstitial**: a page asking to confirm you are over 18 before showing the community. Tell the user and STOP — do not click through unless the user explicitly asked for that content.
+  - **Quarantined / banned / private community**: an interstitial explains the state ("quarantined" needs an explicit opt-in; private needs an invite). Report it to the user; opt in to a quarantined sub only if they explicitly ask.
+  - **Loading**: 0 interactive elements and near-empty page text → wait 2–3s, snapshot again. Max 2 retries.
+  - **Blocked/ratelimited**: "you've been blocked by network security" or a challenge page → tell the user, stop.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Subreddit (default "hot" feed): `https://www.reddit.com/r/{sub}/`
+  - Newest posts: `https://www.reddit.com/r/{sub}/new/`
+  - Top posts by window: `https://www.reddit.com/r/{sub}/top/?t=day` (t = `hour|day|week|month|year|all`)
+  - Rising: `https://www.reddit.com/r/{sub}/rising/`
+  - Search WITHIN a subreddit: `https://www.reddit.com/r/{sub}/search/?q={query}&restrict_sr=1` (add `&sort=new|top|relevance`)
+  - Site-wide search: `https://www.reddit.com/search/?q={query}` (add `&type=communities` to find subreddits, `&sort=top&t=year` etc.)
+  - Post permalink: `https://www.reddit.com/r/{sub}/comments/{post_id}/{slug}/` (any reddit.com/.../comments/... link a user pastes — navigate to it directly)
+  - Comment sort on a post: append `?sort=top|new|controversial|old` to the permalink
+  - User profile: `https://www.reddit.com/user/{name}/` — posts only: `/user/{name}/submitted/`, comments only: `/user/{name}/comments/`
+  - Submit a post: `https://www.reddit.com/r/{sub}/submit` (type presets: `?type=TEXT`, `?type=LINK`, `?type=IMAGE`) [LIVE-VERIFY: type param]
+  - Home front page: `https://www.reddit.com/` (logged-in: user's subscriptions; logged-out: r/popular). r/all: `https://www.reddit.com/r/all/`
+  - URL-encode queries (space → %20). Subreddit names have no spaces; strip a leading "r/" the user typed before building URLs.
+
+  ### TASK: Browse a subreddit
+  1. browser_navigate the subreddit URL with the sort the user wants (top/?t=week etc.) → browser_snapshot.
+  2. Read post titles, scores (upvote counts), comment counts, and flairs straight from Page Text — no clicking needed for a "what's on r/X" summary.
+  3. More posts: browser_scroll down → snapshot (Rule 9 budget).
+
+  ### TASK: Read a post + its top comments  ← strongest use case (research/summarization)
+  1. browser_navigate the post permalink (append `?sort=top` for best-first) → browser_snapshot.
+  2. Page Text contains the post title, body, score, and the comment tree with authors and scores — genuinely readable as-is. Summarize from it directly.
+  3. Deeper comments: browser_scroll down → snapshot; expand collapsed branches by clicking "load more comments" / "View more comments" elements when present [LIVE-VERIFY: exact label]. 2–3 rounds is usually enough for the top discussion.
+  4. To find the post first (user gave a topic, not a link): search task below, then open the best-matching result's permalink.
+
+  ### TASK: Search (site-wide or within a subreddit)
+  1. Build the search URL (patterns above): in-sub → `/r/{sub}/search/?q=...&restrict_sr=1`; site-wide → `/search/?q=...`; finding communities → `&type=communities`.
+  2. browser_navigate it → browser_snapshot → results (titles, subs, scores, dates) are in Page Text. Open a result via its permalink link.
+  - UI fallback: browser_type(search box id, query, submit: true) — the top-bar search input [LIVE-VERIFY].
+
+  ### TASK: Post to a subreddit (login-gated)
+  1. Confirm logged in (State Recognition) — if not, tell the user and stop.
+  2. browser_navigate `https://www.reddit.com/r/{sub}/submit?type=TEXT` (or LINK/IMAGE) → browser_snapshot.
+  3. browser_type(title input id, title) [LIVE-VERIFY: title is a textbox near the top of the form]. Text post: browser_type(body textbox id, body) — the body is a contenteditable rich-text area [LIVE-VERIFY]. Link post: browser_type(URL input id, link).
+  4. Image post: do NOT click the upload area (native OS picker) — call browser_upload_file("/absolute/path/to/img.png") to set the hidden file input [LIVE-VERIFY: input present on the submit page].
+  5. FLAIR: some subreddits require post flair — if the form shows a flair picker or the Post button stays disabled with a flair prompt [LIVE-VERIFY], click the flair button, snapshot, click the flair the user wants (ask if unspecified).
+  6. browser_snapshot → VERIFY title and body read exactly as intended (Rule 6).
+  7. Click the Post/submit button → snapshot → success = you land on the new post's permalink. If an error/rule violation message shows (sub rules, karma requirements), report it verbatim — do not retry.
+
+  ### TASK: Comment on a post (login-gated)
+  1. Open the post permalink → browser_snapshot.
+  2. The comment box may render as a collapsed placeholder ("Add a comment") that needs one click to expand into the real textbox [LIVE-VERIFY] → click it, snapshot.
+  3. browser_type(comment textbox id, text) → browser_snapshot → VERIFY the text (Rule 6).
+  4. Click the Comment/submit button → snapshot → your comment appears in the thread under the user's name. No blind retries (Rule 6).
+  - Reply to a specific comment: click that comment's "Reply" control [LIVE-VERIFY], then same flow.
+
+  ### TASK: Upvote / downvote (login-gated)
+  1. On the post page (or next to a comment), find the vote arrows — match by aria-label ≈ "Upvote"/"Downvote" [LIVE-VERIFY: labels and whether they surface through shadow DOM].
+  2. Click once → snapshot → the button state/score changes (aria-pressed or score ±1) [LIVE-VERIFY]. Clicking again UNDOES the vote — do not click twice.
+  3. If arrows never appear in snapshots (shadow DOM), tell the user voting isn't reachable on this page — do not improvise.
+
+  ### TASK: Join / leave a subreddit (login-gated)
+  1. Navigate to `/r/{sub}/` → snapshot → click the "Join" button near the subreddit title [LIVE-VERIFY].
+  2. Snapshot → the button now reads "Joined" (leave = click it again; it may need a confirm/menu step [LIVE-VERIFY]). Verify by the button state, not a toast.
+
+  ### TASK: View a user profile + recent posts
+  1. browser_navigate `/user/{name}/` (or `/submitted/` / `/comments/` for just posts / just comments) → snapshot.
+  2. Karma, cake day, and their recent items are in Page Text. Scroll for more (Rule 9).
+
+  ### Gotchas
+  - Scores are approximate and fuzzed by Reddit; "1.2k" style abbreviations appear in Page Text — report them as shown.
+  - Deleted/removed content renders as "[deleted]"/"[removed]" — report that, don't dig for it.
+  - Some posts are crossposts or media-only (image/video): Page Text then has only the title + metadata; say so instead of inventing body text.
+  - A pasted reddit.com share link (reddit.com/r/.../s/{token}) redirects to the real permalink — just navigate it and snapshot.
+  - Each subreddit has its own rules (sidebar). If a submit fails with a rules error, relay the rule to the user rather than rewording and retrying on your own.

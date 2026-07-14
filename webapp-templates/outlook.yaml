@@ -1,0 +1,126 @@
+app_name: Outlook
+domains:
+  - outlook.live.com
+  - outlook.office.com
+keywords:
+  - hotmail
+  - o365
+  - office 365 mail
+  - microsoft mail
+description: Outlook on the web (consumer + work/school) — read, compose, reply, reply-all, forward, search, delete, archive, flag, move to folder, attachments
+version: 1
+instructions: |
+  URLs: https://outlook.live.com/mail/ (consumer/Hotmail) | https://outlook.office.com/mail/ (work/school, Microsoft 365)
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Outlook. Never use desktop or sidecar tools.
+  2. **browser_type REPLACES the field's content by default** (clears, then types). To ADD text to a field that already has content — reply/reply-all/forward bodies contain the quoted thread — you MUST pass `append: true`, or you silently destroy the quoted content.
+  3. Snapshot at CHECKPOINTS, not after every action: after navigation, after opening compose or a message, and after Send/Delete/Archive/Move to verify the outcome. [id]s come from the most recent snapshot; you may chain several actions on one snapshot's ids while the layout is stable (To → Subject → Body from one compose snapshot).
+  4. browser_type(element_id, text) types directly into that element — do NOT click the field first.
+  5. Message-list row actions (archive/delete/flag/read icons) are HOVER-REVEALED: they are not in the snapshot until you browser_hover the row, then snapshot again. [LIVE-VERIFY]
+  6. Buttons for destructive actions (Delete, Archive, Move, Report): match by aria-label/name MEANING, NEVER by position in a toolbar.
+  7. NEVER type credentials, passwords, or 2FA codes. On any sign-in page, tell the user and stop.
+  8. browser_press_key("Escape") closes menus and dialogs. Do NOT use Outlook's single-letter shortcuts (e, r, c, ...): they depend on the user's keyboard-shortcut setting (Settings can set them to Off/Gmail/Yahoo modes).
+  9. NO BLIND RETRY on Send: if the outcome of a Send click is unclear, check the Sent Items folder BEFORE clicking Send again — a re-click can double-send.
+  10. If an element is not found after 2 retry snapshots, tell the user. No workarounds, no browser_evaluate.
+  11. Budget: a simple "send email" is at most 10 tool calls (happy path below is 8).
+
+  ### CONSUMER vs WORK ACCOUNT
+  Detect from the current URL: outlook.live.com = consumer, outlook.office.com = work/school. If a browser tab is already on one of them, STAY on that host. If starting fresh: personal/Hotmail address → outlook.live.com/mail/; work/school address → outlook.office.com/mail/; unknown → ask the user which account. If the chosen host bounces to a sign-in page, the account may live on the other host — say so when you report the login wall. Consumer URLs carry an account index segment (/mail/0/); work URLs usually don't. [LIVE-VERIFY]
+
+  ### URL PATTERNS (prefer navigation over clicking folder links) [LIVE-VERIFY deep-link stability]
+  - Inbox: {host}/mail/0/ (consumer) or {host}/mail/ (work)
+  - Folders: append the folder segment — /mail/0/sentitems, /mail/0/drafts, /mail/0/deleteditems, /mail/0/archive, /mail/0/junkemail (work: same segments without /0/)
+  - New compose deep link: {host}/mail/0/deeplink/compose (work: /mail/deeplink/compose) — fallback if the New mail button is not found
+
+  ### UI LANGUAGE
+  Outlook adapts to the user's locale: button text AND aria-labels may be in any language. References below use roles and English aria-labels; expect the locale translation of each label. URLs and folder path segments are locale-STABLE — prefer them.
+
+  ### State Recognition
+  - **Sign-in wall**: URL contains login.microsoftonline.com, login.live.com, or login.microsoft.com → tell user: "Outlook requires Microsoft sign-in. Please log in manually (your account may be on the other Outlook host — outlook.live.com for personal, outlook.office.com for work)." Stop. Never type credentials.
+  - **Loading**: 0 interactive elements, or a splash/spinner and no message rows → wait 3s, snapshot again. Max 2 retries.
+  - **Ready**: a "New mail" button and message-list rows are present. [LIVE-VERIFY]
+  - **Message open**: the reading pane shows the message body in page text alongside the list (default layout keeps BOTH visible — see LAYOUT).
+  - **Compose open**: To recipient field + subject input + Send button present.
+
+  ### LAYOUT
+  Left folder pane (Inbox, Junk Email, Drafts, Sent Items, Deleted Items, Archive, custom folders) | middle message list (consumer inbox may show Focused/Other tabs) | right READING PANE — clicking a row opens the message there, so a snapshot shows list AND open message together; don't confuse list-row text with the open message's body. Compose also opens in the reading-pane area (or a popup window over it). Top: search box, then a command toolbar whose buttons change with selection.
+
+  ### Element Reference (no live capture yet — every claim [LIVE-VERIFY])
+  - New mail button: `role="button"` labeled "New mail", top of the left pane / toolbar. [LIVE-VERIFY]
+  - Search box: `role="searchbox"` (or textbox) aria-label ≈ "Search", top center. [LIVE-VERIFY]
+  - Folder links: left-pane `role="treeitem"` entries — locale text; prefer URL navigation. [LIVE-VERIFY]
+  - Message rows: `role="option"` items inside the list (aria-label concatenates sender, subject, preview, date). Unread rows also say "Unread" in the aria-label. [LIVE-VERIFY]
+  - Hover-revealed row icons (after browser_hover on a row): small `role="button"`s on the row — aria-labels ≈ "Archive", "Delete", "Flag this message", "Mark as read"/"Mark as unread". [LIVE-VERIFY]
+  - Reading-pane header buttons: aria-labels ≈ "Reply", "Reply all", "Forward", plus a "More actions" (…) menu containing the same and Move/Print/etc. [LIVE-VERIFY]
+  - Toolbar (message selected/open): aria-labels ≈ "Delete", "Archive", "Report", "Move to", "Flag / Unflag", "Read / Unread". [LIVE-VERIFY]
+  - Compose fields: To = recipient well `role="textbox"` aria-label ≈ "To"; Subject = `<input>` aria-label ≈ "Add a subject"; Body = `role="textbox" contenteditable` aria-label ≈ "Message body". [LIVE-VERIFY]
+  - Send button: `role="button"` aria-label ≈ "Send" inside the compose area (Ctrl+Enter also sends — use the button; it's verifiable). [LIVE-VERIFY]
+
+  ---
+
+  ### TASK: Check inbox / read the email list
+  1. browser_navigate to the inbox URL (skip if already there) → browser_snapshot
+  2. Read PAGE TEXT for sender/subject/preview/date per row. Consumer "Other" tab: click its tab element, snapshot. More emails: browser_scroll the list (it lazy-loads; no pagination buttons). [LIVE-VERIFY]
+
+  ### TASK: Open and read an email
+  1. Click the message's `role="option"` row → browser_snapshot — the message opens in the READING PANE; its body is in page text (below/after the list rows)
+  2. Long email: browser_scroll down, snapshot again.
+
+  ### TASK: Compose and send a new email
+  1. Click New mail (or navigate to the compose deep link) → browser_snapshot — wait for To/Subject/Send; if missing, wait 2-3s and snapshot again
+  2. browser_type(To field id, recipient address, submit: true) — ONE call: types the address, Enter resolves it into a recipient chip. [LIVE-VERIFY chip resolution] Repeat once per extra recipient.
+  3. browser_type(subject input id, subject) — no submit
+  4. browser_type(body textbox id, body text) — no submit (a NEW compose body is empty unless a signature is set; if a signature is present and must be kept, use append: true)
+  5. Click Send → browser_snapshot — compose pane gone (no To/Subject fields) = sent. If compose is still open, check for an error/red text in page text; if the outcome is unclear, verify in Sent Items (rule 9) — never re-click Send blindly.
+  6. Optional verification: navigate to the sentitems URL, confirm the top row matches the subject.
+
+  ### TASK: Send email with attachment
+  1. Open compose; fill To, Subject, Body as above
+  2. Do NOT click the Attach button — it opens a menu/native OS file picker the browser tools cannot drive
+  3. browser_upload_file with the absolute file path (e.g. "/home/user/report.pdf") — sets the compose's hidden file input directly [LIVE-VERIFY hidden input present]
+  4. browser_snapshot — verify an attachment chip with the filename appears in the compose (upload may take a few seconds); only then Send.
+
+  ### TASK: Reply / Reply all
+  1. Open the email → click the reading-pane button labeled "Reply" (or "Reply all") → browser_snapshot — an inline reply editor appears; its body may already hold the quoted thread
+  2. browser_type(reply body id, text, append: true) — append is MANDATORY: plain type would erase the quoted thread
+  3. Click Send → snapshot to verify the editor closed (rule 9 if unclear).
+
+  ### TASK: Forward an email
+  1. Open the email → click "Forward" (header button, or via the "More actions" … menu) → browser_snapshot — the draft body ALREADY CONTAINS the quoted message
+  2. browser_type(To field, recipient, submit: true)
+  3. To add a note: browser_type(body id, note, append: true) — MUST be append:true; plain browser_type would ERASE the quoted email. (The note lands after the quote — acceptable; never trade placement for data loss.)
+  4. Click Send, snapshot to verify.
+
+  ### TASK: Search for emails
+  1. browser_type(search box id, query, submit: true) — one call. Operators: from:, to:, subject:, hasattachment:yes, received:2026-03-01..2026-04-01 [LIVE-VERIFY operators]
+  2. browser_snapshot — results replace the message list. Exit search: browser_press_key("Escape") or navigate back to the inbox URL.
+
+  ### TASK: Delete an email
+  1. Open the email (or hover its row for the row icons) → click the button whose aria-label means "Delete" — matched by label, never by toolbar position
+  2. browser_snapshot — the message leaves the list. "Gone from the list" alone does NOT prove Delete ran (Archive and Junk look identical afterwards). If the label match was uncertain, navigate to the deleteditems URL and confirm the email is listed there.
+
+  ### TASK: Archive an email
+  1. Open the email (or hover its row) → click the button whose aria-label means "Archive" (never by position)
+  2. browser_snapshot — gone from the list. To confirm archived (NOT deleted): navigate to the archive folder URL and find it there; it must NOT be in deleteditems.
+
+  ### TASK: Flag / unflag an email
+  - Hover the message row → snapshot → click the flag `role="button"` (aria-label ≈ "Flag this message"; flips to ≈ "Unflag"). [LIVE-VERIFY]
+  - Or open the email and use the toolbar Flag button. Verify: snapshot shows the flag label flipped / row marked flagged.
+
+  ### TASK: Mark read / unread
+  - Opening an email marks it read.
+  - Explicitly: hover the row → click the row icon aria-label ≈ "Mark as read"/"Mark as unread"; or open the email and click the toolbar "Read / Unread" button. Verify via the row's Unread state in a fresh snapshot.
+
+  ### TASK: Move to folder
+  1. Open the email → click the toolbar "Move to" button → browser_snapshot — a folder menu opens (with a search-folders field)
+  2. Click the target folder entry (type its name into the menu's filter field first if the list is long) [LIVE-VERIFY]
+  3. Snapshot; confirm by navigating to that folder's URL and finding the email.
+
+  ---
+
+  ### Gotchas
+  - **submit:true scope**: only on the To/Cc recipient fields (resolves the chip) and the search box. Never on Subject or Body (Enter there inserts a newline or mis-fires).
+  - **Reading pane ≠ list**: page text contains BOTH the row previews and the open message — attribute text to the right region before quoting an email to the user.
+  - **Focused/Other (consumer)**: an email the user swears exists may be under the Other tab or Junk Email — check both before declaring it missing.
+  - **Abandoned compose**: Outlook auto-saves drafts; if you abort a compose (Escape or navigation), tell the user a draft may remain in Drafts.

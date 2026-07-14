@@ -1,0 +1,100 @@
+app_name: Jira
+domains:
+  - atlassian.net
+keywords:
+  - jql
+  - sprint board
+  - story points
+description: Jira (Atlassian Cloud) — open issues by key, search with JQL URLs, read/create/comment/assign issues, change status via the issue's status dropdown, edit descriptions, view boards and sprints.
+version: 1
+instructions: |
+  URL: https://{workspace}.atlassian.net — every Jira Cloud site lives on the customer's own subdomain. You MUST know the workspace name before doing anything (see State Recognition).
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Jira. Never use desktop or sidecar tools.
+  2. URL-FIRST: Jira's URLs are excellent and are this template's backbone. Issues, any JQL query, boards and backlogs all have stable URLs — always ask "is there a URL for this?" before clicking through the UI.
+  3. **There is NO drag tool. Dragging cards between board columns is IMPOSSIBLE.** All status changes go through the issue view's status dropdown: open the issue → click the status button → click the target status. Never attempt or promise a board drag.
+  4. browser_type REPLACES the field's content by default. When ADDING to a field that already has content (e.g. appending to a description), you MUST pass append: true, or you silently destroy the existing text.
+  5. Snapshot at checkpoints (after navigate, after a modal/editor opens, after Create/Save). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. Match elements by role / aria-label / placeholder MEANING, never by position on destructive or irreversible actions. Jira translates UI text to the user's locale — expect translations of the English labels below.
+  7. browser_press_key("Escape") closes modals, menus and inline editors. browser_press_key("/") focuses Jira's global search [LIVE-VERIFY]. Do not rely on other letter shortcuts (they can be disabled per user).
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. Before an irreversible click (Create, comment Save): verify the filled fields in a snapshot FIRST. Never blind-retry such a click — re-snapshot and check the outcome before even considering a second attempt (duplicate issues/comments).
+
+  ### State Recognition
+  - **Workspace unknown**: every URL needs {workspace}. If you don't know the user's {workspace}.atlassian.net domain (from the request, an open tab's URL, or earlier context), ASK the user for it and stop.
+  - **Atlassian login**: URL contains id.atlassian.com, or the page asks for an email/password → tell the user: "Jira requires Atlassian sign-in. Please log in manually, then ask me again." Stop. NEVER type credentials.
+  - **No access / not found**: page text like "You don't have access" or "issue does not exist" → report exactly that and stop; don't retry.
+  - **Loading skeletons**: Jira renders gray placeholder blocks before content; if a snapshot has almost no interactive elements or no issue content → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers** — issue: the key (e.g. PROJ-123) and summary are in the page text; search: result rows with issue keys; board: column names in the page text.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Open an issue: `https://{workspace}.atlassian.net/browse/{KEY-123}`
+  - Any JQL query: `https://{workspace}.atlassian.net/issues/?jql={URL-encoded JQL}` — this one URL replaces most navigation.
+  - Project board: `https://{workspace}.atlassian.net/jira/software/projects/{KEY}/boards/{n}` [LIVE-VERIFY: the board number n comes from the sidebar link — 1 for most single-board projects]. Append `/backlog` for the backlog view.
+  - Your work overview: `https://{workspace}.atlassian.net/jira/your-work` [LIVE-VERIFY]
+  - All projects: `https://{workspace}.atlassian.net/jira/projects`
+
+  **JQL crash course** (URL-encode it: space → %20, = → %3D, " → %22):
+  - `assignee = currentUser() AND status != Done ORDER BY updated DESC` — my open issues, freshest first
+  - `project = PROJ AND sprint in openSprints()` — the current sprint's issues
+  - `text ~ "payment bug"` — full-text search across summaries/descriptions/comments
+  - `project = PROJ AND status = "In Progress" ORDER BY priority DESC` — by status, highest priority first
+  Operators: = != ~ (contains) < > IN; combine with AND / OR; ORDER BY field ASC|DESC. Invalid JQL shows an error banner on the results page — fix the query, don't retry it unchanged.
+
+  ### TASK: Open an issue by key
+  1. browser_navigate("https://{workspace}.atlassian.net/browse/PROJ-123") → browser_snapshot. This is the single most reliable operation in Jira — always prefer it when you have or can infer the key.
+  2. Verify: the key and summary appear in the page text. "Issue does not exist" → report to the user (wrong key or no permission).
+
+  ### TASK: Search issues (JQL)
+  1. Build the JQL, URL-encode it, browser_navigate the `/issues/?jql=…` URL → browser_snapshot.
+  2. Read the RESULT LIST from the Page Text: each row carries key, summary, and usually status/assignee. browser_scroll down + snapshot for more results.
+  3. To open a hit: navigate to `/browse/{key}` directly (more reliable than clicking the row).
+  - UI fallback for quick lookups: browser_press_key("/") → snapshot → browser_type(search input id, terms, submit: true) [LIVE-VERIFY: search input placeholder ≈ "Search"].
+
+  ### TASK: Read an issue (summary, description, status, assignee, comments)
+  1. Open by key → snapshot. Summary = the main heading. Status = the text on the status dropdown button [LIVE-VERIFY: a button showing e.g. "To Do" / "In Progress", near the top of the right-hand Details panel]. Assignee / Reporter / Priority / Labels / Sprint are listed in the Details panel — read them from the Page Text.
+  2. Description sits under the summary. Comments live in the Activity section at the bottom: browser_scroll down + snapshot to read them (long threads need several scrolls; sort order may be newest-first [LIVE-VERIFY]).
+
+  ### TASK: Create an issue
+  1. Snapshot → click the global "Create" button in the top navigation bar [LIVE-VERIFY: button labeled "Create" (locale-translated)].
+  2. Snapshot → a modal opens with: Project picker (pre-filled with the last-used project) [LIVE-VERIFY], Work/Issue type picker (Task / Bug / Story) [LIVE-VERIFY], required Summary input, and a rich-text Description area [LIVE-VERIFY: field layout].
+  3. Wrong project? Click the project picker → snapshot → type the project name → click the match. Same pattern for issue type.
+  4. browser_type(summary input id, "the summary") — NO submit: Enter could submit the modal early [LIVE-VERIFY].
+  5. Description (optional): click the description area → snapshot → browser_type(editor id, text).
+  6. Snapshot to VERIFY project, type and summary are as intended, then click the modal's "Create" button.
+  7. Snapshot → success = a confirmation flag with the NEW ISSUE KEY ("PROJ-124 created", often linked) [LIVE-VERIFY]. Report that key to the user. If no flag is visible, do NOT click Create again — run JQL `project = PROJ ORDER BY created DESC` and check the top hit.
+
+  ### TASK: Comment on an issue
+  1. Open the issue → browser_scroll to the bottom → snapshot → click the "Add a comment…" placeholder box [LIVE-VERIFY: placeholder text].
+  2. Snapshot → a rich-text editor (contenteditable textbox) with Save and Cancel buttons appears [LIVE-VERIFY].
+  3. browser_type(editor id, comment text) → snapshot: the text is in the editor → click Save.
+  4. Snapshot → the comment appears in the Activity feed under the user's name. If it doesn't after 2 re-snapshots, tell the user — never re-click Save (risk of a duplicate comment).
+
+  ### TASK: Change status (the ONLY way — no dragging)
+  1. Open the issue → snapshot → click the status dropdown button (shows the current status, e.g. "To Do") [LIVE-VERIFY].
+  2. Snapshot → the open menu lists the transitions available from the current status [LIVE-VERIFY: menu structure].
+  3. Click the target status → snapshot → the status button now shows the new status = done.
+  4. If the target status is NOT in the menu, the project's workflow forbids that transition from here — tell the user which options you saw instead of improvising.
+
+  ### TASK: Assign an issue
+  1. Open the issue → snapshot → click the Assignee value in the Details panel [LIVE-VERIFY: clicking turns it into a search combobox].
+  2. Snapshot → browser_type(combobox id, the person's name) → snapshot → click the matching person in the suggestion list (special entries: "Assign to me", "Unassigned") [LIVE-VERIFY].
+  3. Snapshot → the Assignee field shows the new name.
+
+  ### TASK: Edit the description
+  1. Open the issue → click the description body text (Jira's click-to-edit) [LIVE-VERIFY: an editor with Save/Cancel replaces the read view].
+  2. ADDING text: browser_type(editor id, addition, append: true) — MANDATORY: plain browser_type would ERASE the whole existing description. Use the default replace behavior ONLY when the user explicitly wants the description replaced.
+  3. Snapshot to verify the content → click Save → snapshot: the read view shows the change. Escape abandons the edit.
+
+  ### TASK: View a board / the current sprint
+  1. browser_navigate the board URL (or click the project's "Board" entry in the left sidebar [LIVE-VERIFY]) → snapshot.
+  2. Read COLUMNS from the Page Text: column names with card counts, then each card's key + summary. Answer "what's in progress?"-style questions straight from this text. Sprint name and dates render near the top [LIVE-VERIFY].
+  3. Backlog: append `/backlog` to the board URL.
+  4. To MOVE a card: never drag (impossible — Rule 3). Click the card (it opens the issue, as a side panel or full page [LIVE-VERIFY]) and use the status-dropdown task above; prefer navigating to `/browse/{key}` — the full issue view is the more reliable surface.
+
+  ### Gotchas
+  - browser_type into Jira's rich-text editors inserts text without real keystrokes — markdown-style auto-formatting may not trigger; keep comment/description text plain.
+  - Team-managed vs company-managed projects place some fields slightly differently — trust the live snapshot over this template's layout notes.
+  - Issue keys are case-insensitive in URLs, but always report them uppercase (PROJ-123).
+  - The board's card side-panel has the same fields as the full issue view, just denser; when in doubt open `/browse/{key}`.

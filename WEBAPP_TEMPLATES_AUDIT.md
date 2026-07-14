@@ -122,7 +122,26 @@ REMAINING P1 SUB-ITEM:
 - ☐ **Live-capture pass** (LAST OPEN ITEM before P3): re-verify element references from real snapshots on current app UIs. The five P2 rewrites carry **56 `[LIVE-VERIFY]`-marked lines** as the worklist (slack 17, gdocs 11, gdrive 10, notion 10, gslides 8; grep `LIVE-VERIFY` webapp-templates/). The two critical items: (1) real Google Docs — does the texteventtarget iframe contenteditable appear in snapshots and does append-typing reach the document; (2) WhatsApp/Gmail label refresh + locale variance (en-GB capture noted). Needs the user's logged-in browser on the Windows side (daemon routes browser to the Windows sidecar).
 
 ### P3 — library expansion (launch)
-Write new templates ONLY against the post-P0 contract, from live snapshots, with the lint harness green. Candidate order (ICP-driven): GitHub, X/Twitter, LinkedIn, YouTube, Google Meet, Discord, Telegram Web, Outlook web, Trello, Jira, Airtable, Reddit, Google Maps, Amazon.
+☑ DONE 2026-07-14: all 14 candidates written; **library is now 23 templates, 0 lint errors / 0 warnings, 234KB instructions total, zero cross-template keyword/domain collisions**. Written WITHOUT live snapshots (user defers testing) — structured URL-first with `[LIVE-VERIFY]` markers on every uncaptured element claim.
+
+| new template | size | kw | notes |
+|---|---|---|---|
+| github v1 | 11.1KB | 7 | read-anonymous OK; merge task refuses blocked PRs, never looks for override paths |
+| twitter v1 | 11.1KB | 3 | app_name "Twitter" not "X" (single-letter hijack); verify-before-Post, no blind retry |
+| linkedin v1 | 11.6KB | 7 | authwall/checkpoint handling; Apply/Easy-Apply gated behind explicit request |
+| youtube v1 | 11.0KB | 3 | transcript task = the summarization path; player keys k/m/f/arrows; toggle-state guards |
+| gmeet v1 | 8.5KB | 3 | presence safety: mute mic+cam pre-join, never join uninvited, never Admit/Deny unasked |
+| discord v1 | 10.8KB | 0 | slack-v2 model; channel URLs primary |
+| telegram v1 | 9.2KB | 0 | whatsapp-v4 model; right-click context menus; A/K client caveat |
+| outlook v1 | 11.3KB | 4 | gmail-v5 mirror; consumer vs work host detection; kw: hotmail/o365/office 365 mail/microsoft mail |
+| trello v1 | 10.8KB | 2 | no-drag rule #2 — all movement via card modal Move |
+| jira v1 | 10.0KB | 3 | /browse/{KEY} + JQL URLs backbone; workspace-unknown → ask user; no-drag status dropdown |
+| airtable v1 | 7.7KB | 0 | most conservative: grid = scan only, all reads/writes via expanded-record modal |
+| reddit v1 | 10.1KB | 5 | "subreddit" kw carries real recall (not word-bounded-contained by app name); shreddit shadow-DOM caveat + old.reddit fallback |
+| gmaps v1 | 7.5KB | 6 | URL-first (search/dir/place); canvas explicitly non-automatable; no-GPS ask-the-user rule |
+| amazon v1 | 9.9KB | 4 | MONEY SAFETY rule #1: hard stop at cart, never checkout/Buy Now/payment, overrides "buy it" |
+
+`[LIVE-VERIFY]` totals: 314 marked lines library-wide — this is the live-capture worklist (old + new together).
 
 ### Template style contract (for all new/rewritten templates, distilled from what works)
 1. Tool whitelist that matches the REAL surface; never ban a tool a task needs.

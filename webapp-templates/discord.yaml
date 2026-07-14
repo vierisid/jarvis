@@ -1,0 +1,111 @@
+app_name: Discord
+domains:
+  - discord.com
+keywords: []
+description: Discord web — open servers/channels/DMs, send and read messages, reply, react with emoji, edit/delete your own messages, upload files, search, check unread channels.
+version: 1
+instructions: |
+  URL: https://discord.com/app
+
+  ### URL PATTERNS — use these FIRST, they are the most robust navigation
+  - `https://discord.com/app` — opens the app at the user's last location
+  - `https://discord.com/channels/@me` — the DM list (Direct Messages home)
+  - `https://discord.com/channels/@me/{dmChannelId}` — a specific DM conversation
+  - `https://discord.com/channels/{serverId}/{channelId}` — a specific server channel
+  Channel URLs are stable — if a server/channel/DM URL is known (from the user, from an earlier snapshot's links, or from the address after clicking), navigate straight to it. Otherwise use the click path: server rail -> channel list -> channel.
+
+  ### RULES (stated once — MUST follow)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. No desktop, sidecar, or shell tools.
+  2. NEVER send to the wrong recipient: before typing any message, snapshot and confirm the channel name / DM username in the conversation header matches the intended target. This is the #1 rule.
+  3. ONE browser_snapshot after each state-changing action to verify. Not zero, not two.
+  4. If an element is not found after 2 retries, tell the user what you see and stop. No workarounds.
+  5. [id] numbers change on EVERY snapshot — never reuse an id from an earlier snapshot. Match by role, aria-label, or text.
+  6. LOCALE: labels below are from the ENGLISH UI; on other locales match by role/structure (the composer is the contenteditable textbox at the bottom of the message pane). Server, channel, and user names are user-set and stable in any locale; button labels are translated.
+  7. browser_type CLEARS the target element before typing by default. Use append:true whenever you are ADDING to existing text (multi-line messages, a caption next to an attachment). Replace-by-default is what you want when rewriting text in the edit box.
+  8. Chrome-reserved shortcuts never reach the page — never try browser new-window/new-tab/tab-switch keys. In-page keys that DO work via browser_press_key: "Enter", "Shift+Enter", "Escape", "Ctrl+K" (Discord's quick switcher intercepts it).
+  9. Budgets: send a message ≈ 6 tool calls; hover-based message actions ≈ 8; search ≈ 4. At 2x the budget, stop and tell the user.
+
+  ### State Recognition — check after every browser_navigate
+  - **Logged out**: discord.com shows the marketing page ("Download", "Open Discord in your browser" / "Log In" links) or navigating to /app redirects to /login with a QR code plus email/password fields [LIVE-VERIFY]. -> Tell the user to log in to Discord in the JARVIS browser first; stop. NEVER type credentials, 2FA codes, or backup codes yourself — any password/verification screen means tell the user and stop.
+  - **"Open Discord in your browser" landing**: a logged-in visit to discord.com may show a landing page with an "Open Discord" / "Open Discord in your browser" button [LIVE-VERIFY exact label] — click it to enter the app.
+  - **Loading**: sparse snapshot, spinner/placeholder blocks, no composer. -> Re-snapshot (max 2 retries), then tell the user.
+  - **Ready**: the server rail (far-left column of server icons) and a channel list or DM list are present; inside a conversation, the message composer (contenteditable textbox, aria-label like "Message #channel-name" / "Message @username" [LIVE-VERIFY]) is present.
+
+  ### Layout & elements [LIVE-VERIFY all labels below against a real snapshot]
+  - **Server rail** (far-left column): one button/link per server, aria-label = the server name [LIVE-VERIFY]; at the top, a "Direct Messages" home button [LIVE-VERIFY label]. Unread servers show a white pill marker; mention counts show as a red numeric badge [LIVE-VERIFY how these appear in the snapshot].
+  - **Channel list** (second column, inside a server): `link "# channel-name"`-style entries grouped under category headers [LIVE-VERIFY]. Unread channels render with an unread marker/bold style; mentions show a numeric badge [LIVE-VERIFY snapshot markers]. In DM home this column is the DM conversation list (one entry per person/group).
+  - **Conversation header** (top of the main pane): the channel name (with the # prefix) or DM username — your rule-2 verification anchor.
+  - **Composer**: contenteditable textbox at the bottom, aria-label like "Message #channel-name" [LIVE-VERIFY]. Next to it: an attach "+" button [LIVE-VERIFY], emoji/GIF/sticker buttons. Enter sends (submit:true on browser_type sends the message).
+  - **Messages**: read/verify message text via the Page Text section (newest at the bottom). The per-message action bar (Add Reaction, Reply, More) is HOVER-RENDERED: it is NOT in the DOM until you browser_hover the message row, and appears only in a snapshot taken AFTER the hover. Hover, snapshot, act immediately.
+  - **Top search box**: input near the top-right, placeholder/aria-label like "Search" [LIVE-VERIFY].
+
+  ### Navigate to a server channel (precedes channel tasks)
+  1. If the channel URL is known: browser_navigate to `https://discord.com/channels/{serverId}/{channelId}`; snapshot; verify the header; done.
+  2. Otherwise: browser_snapshot; click the server's icon in the server rail (match by aria-label = server name [LIVE-VERIFY]).
+  3. Snapshot; click the target channel link in the channel list (browser_scroll the list if it is not visible — a category may also be collapsed; click the category header to expand [LIVE-VERIFY]).
+  4. Secondary path — quick switcher: browser_press_key "Ctrl+K"; snapshot; browser_type the channel/server/user name (NO submit); snapshot to inspect results; click the correct result (never blind-Enter — the switcher is fuzzy).
+  5. Snapshot: confirm the conversation header shows the intended channel (rule 2). Only then act.
+
+  ### Navigate to a DM
+  1. browser_navigate to `https://discord.com/channels/@me`; snapshot.
+  2. Click the person's entry in the DM list. If not visible: browser_scroll the list, or click the "Find or start a conversation" box at the top of the DM list [LIVE-VERIFY label], type the username, snapshot, click the matching person.
+  3. Snapshot: confirm the header shows the intended username (rule 2).
+
+  ### TASK: Send a message (channel or DM)
+  1. Navigate to the target; verify the header.
+  2. Click the composer; browser_type the text with submit:true — Enter sends in Discord.
+  3. Snapshot: the message text appears in Page Text at the bottom of the conversation. If absent, take ONE more snapshot; if still absent, tell the user — do NOT retype (double-send risk).
+  Note: if a "slowmode" cooldown or a permission notice ("You do not have permission to send messages" [LIVE-VERIFY wording]) shows instead of the composer, report it and stop.
+
+  ### TASK: Send a multi-line message
+  browser_type clears by default, so every line after the first MUST use append:true or the previous lines are destroyed:
+  1. Click the composer; browser_type the first line (NO submit).
+  2. browser_press_key "Shift+Enter".
+  3. browser_type the next line with append:true. Repeat steps 2-3 per line.
+  4. Send: browser_press_key "Enter". Snapshot to verify (rule: no retype on a missing message).
+
+  ### TASK: Read recent messages
+  1. Navigate to the channel/DM; snapshot.
+  2. Read the Page Text section — messages appear in order, newest at the bottom, with author names.
+  3. For older history: browser_scroll direction="up" in the message pane, then snapshot again. Repeat as needed within budget.
+
+  ### TASK: Reply to a specific message
+  1. Navigate; snapshot; locate the target message by its text in Page Text (scroll up if needed).
+  2. browser_hover the message row; snapshot — the hover action bar is now present.
+  3. Click "Reply" [LIVE-VERIFY label — may live under the action bar directly or inside "More"].
+  4. Snapshot: the composer area now shows a "Replying to [name]" context bar [LIVE-VERIFY].
+  5. browser_type the reply with submit:true; snapshot — the reply appears with a reference to the original message.
+
+  ### TASK: React to a message with an emoji
+  1. Navigate; locate the message; browser_hover its row; snapshot.
+  2. Click "Add Reaction" [LIVE-VERIFY label] in the hover action bar; snapshot — an emoji picker with a search input opens.
+  3. browser_type the emoji name (e.g. "thumbsup") into the picker search; snapshot; click the emoji.
+  4. Snapshot: a reaction pill now shows under the message. If no pill appears, tell the user — do not spam-click.
+
+  ### TASK: Edit your own message
+  Only YOUR OWN messages can be edited.
+  1. browser_hover YOUR message; snapshot; click "Edit" in the hover action bar [LIVE-VERIFY — may be under "More"]. If no Edit option exists, it is not your message — tell the user and stop.
+  2. An edit box opens pre-filled with the old text. browser_type the FULL corrected text — replace-by-default clears the box first, which is exactly right here.
+  3. browser_press_key "Enter" (Escape aborts); snapshot — Page Text shows the new text with an "(edited)" marker [LIVE-VERIFY].
+
+  ### TASK: Delete your own message
+  1. browser_hover YOUR message; snapshot; click "More" (three-dots) in the hover action bar [LIVE-VERIFY]; snapshot; click the "Delete Message" menu item [LIVE-VERIFY label].
+  2. A confirmation dialog opens. Click the confirming Delete control INSIDE the dialog — match it by its label/aria-label, never by position.
+  3. Snapshot: the message text is GONE from Page Text. If the text is still present, the deletion did not happen — tell the user; never report success on an unchanged page.
+
+  ### TASK: Upload a file
+  1. Navigate to the target conversation; verify the header (rule 2).
+  2. Call browser_upload_file("/absolute/path/to/file") directly — do NOT click the "+" attach button first (it opens a native OS picker the browser cannot drive); the tool sets the page's hidden file input without any picker. The file MUST already be under the user's home directory; otherwise tell the user to move it there and stop.
+  3. Snapshot: an attachment preview/chip appears above the composer [LIVE-VERIFY]. Verify it is there BEFORE sending.
+  4. Optionally add a caption: click the composer and browser_type with append:true (preserves the attachment).
+  5. Send with browser_press_key "Enter"; snapshot to confirm the file message posted.
+
+  ### TASK: Search messages
+  1. Click the top search box [LIVE-VERIFY]; browser_type the query with submit:true; snapshot — results open in a right-side panel [LIVE-VERIFY].
+  2. Click a result to jump to it in context.
+  Modifiers (type them as part of the query): `from: username`, `in: channel-name`, `has: link`, `before:`/`after:` dates.
+
+  ### TASK: Check unread channels / mentions
+  1. Snapshot at the current location. Server rail: servers with unread activity carry a pill marker; red numeric badges are mention counts [LIVE-VERIFY markers].
+  2. Click into a server; snapshot; unread channels stand out in the channel list (unread marker/bold, numeric badge for mentions) [LIVE-VERIFY].
+  3. Report which servers/channels have unreads. Note: opening a channel marks it read — don't open channels the user only wanted counted.

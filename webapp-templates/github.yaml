@@ -1,0 +1,118 @@
+app_name: GitHub
+domains:
+  - github.com
+keywords:
+  - pull request
+  - pull requests
+  - merge the pr
+  - open an issue
+  - file an issue
+  - my repositories
+  - starred repos
+description: GitHub — read repos/READMEs/files, search repos/code/issues, read and create issues, comment, review and merge PRs, star repos, notifications triage
+version: 1
+instructions: |
+  URL: https://github.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for GitHub. Never use desktop or sidecar tools.
+  2. URL-FIRST: GitHub's URLs are its most reliable selectors. Always prefer navigating a deep link (patterns below) over clicking through menus. Confirm where you landed from the "Page:" line of the next snapshot.
+  3. **browser_type REPLACES the field's content by default.** Pass `append: true` whenever the field may already hold text — adding to a comment draft you already typed, quoting a line, or editing a prefilled merge-commit message.
+  4. Snapshot at CHECKPOINTS (after navigation, after a form opens, after submit), not after every keystroke. [id]s change every snapshot; you may chain several fills from one snapshot while the layout is stable.
+  5. Match elements by role / aria-label / href / name — never by position for anything destructive or outward-facing.
+  6. OUTWARD ACTIONS (create issue, post comment, merge, close): before the final click, the CURRENT snapshot must show (a) the Page: URL is the intended issue/PR/repo and (b) your exact text sitting in the field. After the click, verify the outcome in ONE snapshot; if unclear, ONE more. NEVER blindly re-click or re-submit — a double-posted comment or double-fired merge is worse than stopping to ask.
+  7. If an element is not found after 2 retry snapshots, tell the user and stop. No workarounds.
+  8. Budgets: read a README ≤4 calls; search ≤4; read an issue ≤5; create an issue ≤9; comment ≤8; merge a PR ≤10.
+
+  ### State Recognition
+  - **Logged out**: header shows "Sign in" / "Sign up" links, or the URL is github.com/login. Public READING still works (repos, files, issues, PRs, repo search) — continue for read-only tasks. Everything else (create issue, comment, merge, star, notifications, CODE search) requires login → tell the user: "This needs your GitHub session — please sign in in the browser, then ask me again." STOP. NEVER type credentials, OTP, or 2FA codes.
+  - **404** ("This is not the web page you are looking for"): wrong owner/repo/number, or a private repo while logged out → report exactly that, stop.
+  - **Rate limited** ("Whoa there!" / "abuse detection"): tell the user, stop.
+  - **Loading / near-empty snapshot**: re-snapshot after ~2s; max 2 retries, then tell the user.
+  - **Ready markers**: the Page: line matches the URL you navigated to and Page Text shows repo/issue/PR content.
+
+  ### URL PATTERNS (substitute {…} and navigate — this does most of the work)
+  - Repo home + README:    https://github.com/{owner}/{repo}
+  - Issues list:           https://github.com/{owner}/{repo}/issues   (filtered: /issues?q=is%3Aissue%20is%3Aopen%20label%3Abug — URL-encode the q)
+  - One issue:             https://github.com/{owner}/{repo}/issues/{n}
+  - New issue form:        https://github.com/{owner}/{repo}/issues/new
+  - Repo PR list:          https://github.com/{owner}/{repo}/pulls
+  - YOUR PRs (all repos):  https://github.com/pulls    | your issues: https://github.com/issues
+  - One PR (conversation): https://github.com/{owner}/{repo}/pull/{n}
+  - PR diff:               https://github.com/{owner}/{repo}/pull/{n}/files
+  - PR commits:            https://github.com/{owner}/{repo}/pull/{n}/commits
+  - File contents:         https://github.com/{owner}/{repo}/blob/{branch}/{path}   ({branch}=HEAD works for the default branch; add ?plain=1 to see markdown source)
+  - Directory listing:     https://github.com/{owner}/{repo}/tree/{branch}/{path}
+  - Releases:              https://github.com/{owner}/{repo}/releases
+  - Search:                https://github.com/search?q={query}&type=repositories | code | issues | pullrequests | users   (URL-encode; qualifiers: repo:o/r, org:, user:, language:, in:name, is:open, author:, label:)
+  - Notifications:         https://github.com/notifications   (unread only: /notifications?query=is%3Aunread)
+  - Starred repos:         https://github.com/stars   (or the user's profile ?tab=stars)
+  If the user gives a repo by name only, search type=repositories first and take the top full-name match — confirm owner/repo with the user if ambiguous before any outward action.
+
+  ### Element Reference
+  GitHub is server-rendered and readable: body text (README, issue threads, diffs) appears in the snapshot's **Page Text**, links carry real hrefs. Prefer hrefs over labels. NOTE: Page Text is truncated (~2000 chars shown) — long content needs browser_scroll + re-snapshot to read in slices.
+  - Header search: press_key "/" focuses the global search input (GitHub intercepts "/") [LIVE-VERIFY] — secondary path; the /search?q= URL is primary.
+  - Issue/PR rows in lists: `<a>` whose href ends /issues/{n} or /pull/{n} — click by href, read state (Open/Closed/Merged) from the row text.
+  - New-issue title: input with aria-label/placeholder "Title" [LIVE-VERIFY]. Body: markdown editor — a textarea or contenteditable with aria-label ≈ "Markdown value" / placeholder "Type your description here" [LIVE-VERIFY]. Submit button labeled "Create" or "Submit new issue" [LIVE-VERIFY].
+  - Comment box (bottom of any issue/PR): textarea/contenteditable, aria-label ≈ "Comment body" or placeholder ≈ "Add your comment here" [LIVE-VERIFY]; button labeled "Comment" [LIVE-VERIFY].
+  - Merge area (PR conversation, above the comment box): checks summary text ("All checks have passed" / "Some checks were unsuccessful" / "…in progress") and mergeability text ("This branch has no conflicts with the base branch" / "This branch has conflicts") [LIVE-VERIFY]; button "Merge pull request" — may be a split button whose dropdown offers "Squash and merge" / "Rebase and merge" [LIVE-VERIFY].
+  - Star control (repo header): button whose accessible name contains "Star" and flips to "Starred"/"Unstar" [LIVE-VERIFY]; the star count sits beside it.
+  - Notification rows: each has a "Done" (checkmark) button, aria-label ≈ "Done" or "Mark as done" [LIVE-VERIFY]; row action icons may be hover-revealed — browser_hover the row, then re-snapshot [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Open a repo and read its README
+  1. browser_navigate to https://github.com/{owner}/{repo} → browser_snapshot
+  2. The README body is in Page Text below the file list. browser_scroll down + re-snapshot to read past the truncation. Report content; never guess unseen sections.
+
+  ### TASK: Read a specific file
+  1. Navigate to /blob/HEAD/{path} (guess sensible paths like src/…; on 404, browse /tree/HEAD to find it) → snapshot; file text is in Page Text; scroll for more.
+
+  ### TASK: Search repos / code / issues
+  1. Build the query with qualifiers, navigate to https://github.com/search?q={encoded}&type={repositories|code|issues} → snapshot
+  2. Results are `<a>` rows; report name/description or click one by href. CODE search requires login — if logged out, fall back to repo-scoped browsing or tell the user.
+
+  ### TASK: List / read issues
+  1. Navigate to {repo}/issues (add a ?q= filter if the user gave criteria) → snapshot; rows show number, title, state.
+  2. To read one: click its href (or navigate /issues/{n}) → snapshot. Description + comments (with authors) are in Page Text, oldest first; scroll + re-snapshot for long threads.
+
+  ### TASK: Create an issue (outward — login required)
+  1. Navigate to {repo}/issues/new → snapshot. If a template chooser appears instead (URL /issues/new/choose), click the blank-issue option or the template the user wants [LIVE-VERIFY], snapshot.
+  2. browser_type(title input, title) — no submit (Enter here may submit the form early)
+  3. browser_type(body editor, body markdown)
+  4. browser_snapshot — verify title AND body text are visible on the /issues/new page (rule 6)
+  5. Click the Create/Submit button → snapshot. SUCCESS = URL is now {repo}/issues/{number}; report that number and URL. If still on the form with a validation error, report it — do not re-click blindly.
+
+  ### TASK: Comment on an issue or PR (outward — login required)
+  1. Open the issue/PR URL → snapshot; scroll to the bottom until the comment box is present.
+  2. browser_type(comment box, text). If adding MORE text after that (e.g. appending a quoted line you fetched), use append: true — a plain second type call would erase the draft.
+  3. browser_snapshot — verify your text is in the box and the Page: URL is the intended thread (rule 6)
+  4. Click the "Comment" button → snapshot. SUCCESS = your comment text now appears in the thread's Page Text. If absent after one extra snapshot, tell the user — NEVER re-post.
+
+  ### TASK: Review a PR (read description + diff)
+  1. Navigate to /pull/{n} → snapshot: title, state badge (Open/Merged/Closed), description, and discussion are in Page Text (scroll for more).
+  2. Navigate to /pull/{n}/files → snapshot: changed file paths and +/- diff lines are in Page Text. Large diffs: scroll + re-snapshot repeatedly (Page Text truncates ~2000 chars); collapsed files show a "Load diff" button — click it, then re-snapshot [LIVE-VERIFY]. Summarize per file.
+
+  ### TASK: MERGE a PR (destructive + outward — strict gate)
+  ONLY when the user explicitly asked to merge THIS pr. Never merge as a side effect, never pick "some PR" by position.
+  1. Navigate to /pull/{n} → snapshot. Confirm from Page Text: title matches what the user asked for, state is Open, checks summary shows passed (or the user explicitly said to merge despite failures), and mergeability text shows no conflicts.
+  2. BLOCKED cases — conflicts, failing/pending checks (without explicit override), review required, draft PR, or a disabled/"Merge blocked" button: report the exact blocker to the user and STOP. Never look for admin/override paths.
+  3. Click "Merge pull request" (or, if the user asked for squash/rebase: click the split-button dropdown, snapshot, click that method).
+  4. browser_snapshot — a confirmation step appears with an editable commit message and a "Confirm merge" (or "Confirm squash and merge") button [LIVE-VERIFY]. To edit the message, use append: true or retype fully — then click Confirm.
+  5. browser_snapshot — SUCCESS = Page Text shows "Merged" state / "successfully merged and closed". If not confirmed after one extra snapshot, report — NEVER click merge again.
+
+  ### TASK: Star / unstar a repo (login required)
+  1. On the repo home page, click the button whose name contains "Star" (or "Starred" to unstar) → snapshot
+  2. Verify the label flipped (Star→Starred or back). Report the state; if the label did not change, do not spam-click — one retry max.
+
+  ### TASK: Notifications triage (login required)
+  1. Navigate to https://github.com/notifications → snapshot; rows show repo, title, reason. Report the unread list.
+  2. To mark one done: click that row's Done/checkmark button (hover the row first if no such button is in the snapshot) → snapshot: the row leaves the list.
+  3. To open one: click the row's link href, handle it as an issue/PR.
+
+  ---
+
+  ### Gotchas
+  - "/" focuses the search box because the page intercepts it — never rely on other single-letter GitHub shortcuts (they vary with user settings). browser_press_key("Escape") closes open dropdowns/palettes.
+  - GitHub ships UI experiments: old and new issue/PR layouts differ in exact labels. Trust roles, hrefs, and URL patterns over label spelling; re-snapshot rather than assume.
+  - Enter inside single-line inputs on forms can submit early — only use submit:true where a search is wanted.

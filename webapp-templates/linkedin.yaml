@@ -1,0 +1,121 @@
+# Keywords deliberately conservative: none contain "linkedin" (the app name already
+# word-bound-matches), and none fire on everyday non-webapp requests ("jobs" and
+# "job search" alone are too generic for a career-advice-adjacent product; "job posting"
+# / "recruiter" / "connection request" are things users only say about this app).
+app_name: LinkedIn
+domains:
+  - linkedin.com
+keywords:
+  - connection request
+  - connection requests
+  - connect with
+  - my network
+  - job posting
+  - job postings
+  - recruiter
+description: LinkedIn — post to feed, read feed, search people/companies, view profiles, connection requests, messaging, job search, notifications
+version: 1
+instructions: |
+  URL: https://www.linkedin.com/feed/
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after a new snapshot; re-locate by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default. To add to text already in a composer, pass append: true; to correct a composer, plain browser_type (replace) with the FULL corrected text.
+  4. Snapshot at CHECKPOINTS (after navigation, after a modal/composer opens, before and after Post/Send/Connect) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording/locale, rather than demanding the exact string.
+  7. browser_press_key("Escape") closes an open modal (composer, connect dialog). LinkedIn may ask whether to save or discard the draft — pick per the user's intent and tell them what you did [LIVE-VERIFY].
+
+  ### OUTWARD-ACTION SAFETY (posts, connection requests, and messages are seen by other people)
+  - BEFORE the final click (Post / Send / Connect): snapshot and confirm (a) the composed text is EXACTLY the intended text and (b) the target is the intended person — name AND headline in the dialog/conversation header, not just the name (many people share a name).
+  - AFTER the final click: verify ONCE via snapshot. If you cannot confirm success, tell the user "it may or may not have gone through — please check" and STOP. NEVER blind-retry: a retry risks a public double-post, a duplicate message, or a second invitation.
+  - If the request is ambiguous — what to write, which person, note or no note — ASK the user. Never guess words or targets that other people will see.
+  - Never click Apply / Easy Apply on a job unless the user explicitly asked to apply — it submits a real application. Even then, confirm with the user before the final submit step.
+
+  ### State Recognition (LinkedIn is AGGRESSIVE with login walls — check on EVERY navigation)
+  - **Logged out / auth wall**: URL contains /authwall, /login, /signup, /checkpoint, or /uas/ ; or the page shows "Sign in" + "Join now" prompts, an email/password form, or a "Sign in to view" overlay on top of blurred content. LinkedIn throws these mid-session on profile/search/jobs pages even when the feed worked -> tell the user: "LinkedIn is showing a login wall — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Join-now interstitial**: a modal pushing sign-up/Premium over otherwise-visible content. If it has a dismiss (X) button, click it once and re-snapshot [LIVE-VERIFY]; if content stays blocked, treat as a login wall.
+  - **Security checkpoint / CAPTCHA**: "Let's do a quick security check" or puzzle content -> tell the user to complete it manually. STOP.
+  - **Loading**: 0 interactive elements or skeleton placeholders only -> snapshot again (max 2 retries, then tell the user).
+  - **Ready (feed)**: the top nav links (/feed/, /mynetwork/, /jobs/, /messaging/, /notifications/) are present plus the "Start a post" button [LIVE-VERIFY].
+
+  ### URL MAP (URL-first: prefer navigating here over clicking through the UI)
+  - Feed: https://www.linkedin.com/feed/
+  - My Network (invitations): https://www.linkedin.com/mynetwork/
+  - Jobs home: https://www.linkedin.com/jobs/
+  - Job search: https://www.linkedin.com/jobs/search/?keywords=QUERY&location=PLACE  (URL-encode both; location optional)
+  - Messaging: https://www.linkedin.com/messaging/
+  - Notifications: https://www.linkedin.com/notifications/
+  - Profile: https://www.linkedin.com/in/HANDLE/  (handle = the slug from the profile URL, not the display name)
+  - People search: https://www.linkedin.com/search/results/people/?keywords=QUERY
+  - Company search: https://www.linkedin.com/search/results/companies/?keywords=QUERY
+  - Everything search: https://www.linkedin.com/search/results/all/?keywords=QUERY
+
+  ### Element Reference (ALL claims here [LIVE-VERIFY]; match by meaning, never by position)
+  - **Top nav**: `<a>` links — match by href containing /feed/, /mynetwork/, /jobs/, /messaging/, /notifications/ (locale-stable). Search box: input with placeholder/aria-label meaning "Search" at the top left.
+  - **Feed composer trigger**: "Start a post" role="button" at the top of the feed.
+  - **Post composer modal**: contenteditable role="textbox" with aria-label/placeholder meaning "What do you want to talk about?" / "Text editor for creating content". Submit: role="button" labeled "Post" — disabled until there is text. The modal renders AFTER the feed elements in the snapshot (higher ids).
+  - **Feed posts**: author, headline, timestamp, and post text are readable in Page Text. Truncated posts have a "…see more" button. Per-post actions: buttons meaning Like / Comment / Repost / Send.
+  - **Profile page** (/in/HANDLE/): name, headline, location at top; About / Experience / Education section text is in Page Text. Action buttons under the name: "Connect", "Message", "Follow", "More" — on some profiles Connect is hidden inside the "More" dropdown (Follow shows instead).
+  - **Connect dialog**: after clicking Connect, a modal offers buttons meaning "Add a note" and "Send" / "Send without a note". The note field is a textarea (~200-char limit for free accounts).
+  - **Messaging**: thread list on the left of /messaging/ with a search input meaning "Search messages"; conversation pane on the right with a contenteditable role="textbox" meaning "Write a message" and a "Send" button. Enter-to-send is a per-user LinkedIn setting — ALWAYS click the Send button, never rely on submit: true.
+  - **Message overlay**: clicking "Message" on a profile opens a small composer overlay bottom-right (not /messaging/) with the same textbox + Send structure. A collapsed messaging bar sits bottom-right on every page — its elements appear in snapshots; don't mistake them for the main page.
+  - **Jobs**: on /jobs/search/, job cards are links on the left; the selected job's title, company, location, and description render on the right and appear in Page Text.
+
+  ---
+
+  ### TASK: Post to the feed  (budget: 8 calls)
+  1. browser_navigate https://www.linkedin.com/feed/ -> browser_snapshot (check State Recognition).
+  2. Click the "Start a post" button -> browser_snapshot — composer modal with the contenteditable textbox is open.
+  3. browser_type(composer textbox id, text) — no submit (Enter is a newline).
+  4. browser_snapshot — VERIFY the composer shows exactly the intended text (Outward-Action Safety).
+  5. Click the "Post" button inside the modal -> browser_snapshot — success = modal gone and/or a toast meaning "Post successful" [LIVE-VERIFY]. Unconfirmed -> tell the user, do NOT re-post.
+
+  ### TASK: Read the feed
+  1. browser_navigate https://www.linkedin.com/feed/ -> browser_snapshot.
+  2. Read posts from Page Text (author, headline, text). browser_scroll down + snapshot for more (infinite feed — 2-3 scrolls is plenty; report, don't keep scrolling). For a truncated post the user cares about, click its "…see more" button, snapshot, read.
+
+  ### TASK: Search for people or companies  (budget: 5 calls)
+  1. browser_navigate to the people or company search URL (URL-encoded query) -> browser_snapshot.
+  2. Results (name, headline/industry, location) are in Page Text. Open one: click the result link whose href contains /in/ (people) or /company/ (companies). Filter buttons exist above the results [LIVE-VERIFY], but refine via URL keywords first.
+
+  ### TASK: View a profile
+  1. browser_navigate https://www.linkedin.com/in/HANDLE/ (handle unknown? people-search the name and click the right result — match name AND headline) -> browser_snapshot.
+  2. Read name, headline, About, Experience, Education from Page Text. browser_scroll down + snapshot for deeper sections. Blurred/gated content = an auth wall (State Recognition).
+
+  ### TASK: Send a connection request  (budget: 10 calls)
+  1. Open the target profile; snapshot; CONFIRM name + headline match the intended person — ambiguous? Ask the user.
+  2. Click the "Connect" button. Not visible? Click "More" -> snapshot -> click the dropdown item meaning "Connect" [LIVE-VERIFY]. (A "Pending" label means an invitation was ALREADY sent — tell the user, stop.)
+  3. browser_snapshot — the connect dialog is open (Add a note / Send options).
+  4. If the user provided note text: click "Add a note", snapshot, browser_type the note (≤200 chars — over limit? tell the user, don't truncate silently), snapshot to VERIFY the note text.
+     If the user did NOT provide a note: ask whether to send with a note or without — do not invent one. Only proceed without asking if they explicitly said "no note" / "just connect".
+  5. Click "Send" -> browser_snapshot — dialog gone / button now "Pending" [LIVE-VERIFY] = sent. Unconfirmed -> tell the user, do NOT retry.
+
+  ### TASK: Message a connection  (budget: 10 calls)
+  Path A (from profile): open the profile, verify the person, click "Message" -> snapshot — the overlay composer opens with their name in its header.
+  Path B (from messaging): browser_navigate https://www.linkedin.com/messaging/ -> snapshot -> existing thread listed? Click it. Otherwise browser_type the name into the messages search input, snapshot, click the matching thread/person.
+  Then:
+  1. browser_snapshot — CONFIRM the conversation header names the intended person before typing.
+  2. browser_type(message textbox id, text) — NO submit: true (Enter-to-send is a user setting; a newline or premature send are both possible).
+  3. browser_snapshot — VERIFY the composed text, then click the "Send" button.
+  4. browser_snapshot — the message appears in the conversation's Page Text. Absent after one extra snapshot -> tell the user; do NOT retype (double-send risk).
+  Note: messaging non-connections may require Premium/InMail — if the compose surface pushes InMail or credits, tell the user instead of proceeding.
+
+  ### TASK: Job search + read a posting  (budget: 6 calls)
+  1. browser_navigate https://www.linkedin.com/jobs/search/?keywords=QUERY&location=PLACE -> browser_snapshot.
+  2. Job cards (title, company, location) are in Page Text. Click a job card link -> snapshot — the full description renders in the right pane / job page; read it from Page Text; scroll if truncated.
+  3. Report title, company, location, and description highlights. Do NOT click Apply / Easy Apply (Outward-Action Safety).
+
+  ### TASK: Notifications triage
+  1. browser_navigate https://www.linkedin.com/notifications/ -> browser_snapshot.
+  2. Read Page Text: reactions, comments, mentions, invitation updates, job alerts. Filter tabs (All / My posts / Mentions) sit above the list [LIVE-VERIFY]. Summarize; to act on one (e.g. reply to a comment), click its notification link, snapshot, then follow the matching task's safety steps.
+
+  ---
+
+  ### Gotchas
+  - The bottom-right messaging bar is on EVERY page — its thread buttons appear in every snapshot. Ignore it unless doing the Message task via the overlay.
+  - The feed re-renders and inserts posts; ids from a pre-scroll snapshot are stale — re-snapshot before clicking anything in the feed.
+  - Page Text mixes in right-rail content ("Add to your feed", "People also viewed", news) — don't report it as feed posts or profile data.
+  - Premium upsell modals appear on search/profile/InMail limits: dismiss via their X button or Escape, and tell the user if a limit blocked the task.
+  - LinkedIn rate-limits heavy profile viewing/search ("commercial use limit") — if search results stop rendering, report the limit rather than retrying.

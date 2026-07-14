@@ -1,0 +1,124 @@
+# Keywords deliberately minimal: youtube.com/youtu.be links and the word "youtube"
+# (app name, word-bound-matched) carry most real requests. Bare "video"/"watch"/"play"
+# style phrases are far too generic for a substring matcher. The two strong intent
+# phrases are transcript/summarization requests, which are THIS template's flagship task.
+app_name: YouTube
+domains:
+  - youtube.com
+  - youtu.be
+keywords:
+  - video transcript
+  - summarize the video
+  - summarize this video
+description: YouTube — search, play and control videos, read transcripts for summarization, descriptions, comments, like/subscribe/Watch Later, channels
+version: 1
+instructions: |
+  URL: https://www.youtube.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a panel/dialog opens, before and after posting a comment) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording, rather than demanding the exact string.
+  7. YouTube localizes ALL button text and aria-labels. Prefer URLs and player keys (locale-independent); match labels by meaning.
+
+  ### PLAYER KEYS (via browser_press_key — YouTube's page shortcuts; the most reliable player controls)
+  "k" play/pause | "m" mute/unmute | "f" fullscreen toggle | "ArrowLeft"/"ArrowRight" seek -/+5s | bare digits "0"-"9" jump to 0%..90% of the video | "c" captions toggle [LIVE-VERIFY]
+  - Keys only reach the player when focus is NOT in a text field: after using the search box, press "Escape" (or click the player area) first.
+  - Never press Ctrl-modified browser shortcuts — Chrome intercepts those before the page sees them.
+
+  ### PUBLIC SAFETY (comments post publicly under the user's account)
+  - BEFORE clicking Comment: snapshot and confirm the comment box shows EXACTLY the intended text. Wrong? Retype the full text (replace default), re-verify, then click.
+  - AFTER clicking: verify ONCE via snapshot. Unconfirmed -> tell the user "the comment may or may not have posted — please check" and STOP. NEVER re-submit on uncertainty (public double-post risk).
+  - If what to write is ambiguous, ASK the user before posting anything public.
+  - Like/subscribe/save are visible account actions and all TOGGLE: never click one already in the desired state (you would undo it).
+
+  ### State Recognition
+  - **Consent interstitial** (fresh sessions, mainly EU): URL contains consent.youtube.com, or the page says "Before you continue to YouTube" with Accept all / Reject all buttons [LIVE-VERIFY] -> click the button meaning "Reject all" (privacy-safe default), snapshot, then continue the task.
+  - **Logged out is fine for reading**: search, watching, transcripts, descriptions, and reading comments all work logged out. LOGIN IS REQUIRED for: like, subscribe, posting comments, Watch Later, /feed/subscriptions, /feed/history. If such a task surfaces a "Sign in" prompt/dialog [LIVE-VERIFY], tell the user: "This needs your YouTube login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Home/results ready**: links with href="/watch?v=..." present.
+  - **Watch page ready**: URL is /watch?v=ID and the video title is in Page Text.
+  - **Ad playing**: Page Text shows "Ad"/"Sponsored" near the player [LIVE-VERIFY]; a button meaning "Skip" may appear after a few seconds [LIVE-VERIFY] -> click it if present, else one re-snapshot to wait it out. Player keys still work during ads.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Search: https://www.youtube.com/results?search_query=QUERY (URL-encode QUERY)
+  - Watch: https://www.youtube.com/watch?v=VIDEO_ID — youtu.be/VIDEO_ID redirects here
+  - Start at a timestamp: append &t=95s (or &t=1h2m10s) to the watch URL — the most reliable long seek
+  - Channel: https://www.youtube.com/@HANDLE | channel uploads newest-first: /@HANDLE/videos
+  - Playlist: https://www.youtube.com/playlist?list=ID | Watch Later (login): /playlist?list=WL
+  - Subscriptions feed (login): /feed/subscriptions | Watch history (login): /feed/history
+
+  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
+  - **Search box** (top of every page): input with name="search_query" / placeholder meaning "Search" [LIVE-VERIFY]; browser_type with submit: true runs the search.
+  - **Result/feed items**: each video is an `<a href="/watch?v=...">`; title, channel, duration ("12:34" badge), views and age are in Page Text near it.
+  - **Player controls** (bottom edge of the player; may be HIDDEN until you browser_hover the player area — hover, then snapshot) [LIVE-VERIFY]:
+    play/pause button aria-label "Play (k)" when paused / "Pause (k)" when playing — read it to KNOW the playback state [LIVE-VERIFY]; mute button "Mute (m)"/"Unmute (m)" [LIVE-VERIFY]; settings gear; fullscreen.
+  - **Below the player**: video title; channel link + Subscribe button (label meaning "Subscribe", flips to "Subscribed") [LIVE-VERIFY]; like button whose aria-label contains "like this video" and carries a pressed/active state [LIVE-VERIFY]; Share; a Save action that may sit inside a "...more"/three-dot overflow menu [LIVE-VERIFY].
+  - **Description box**: collapsed by default with an expander meaning "...more" [LIVE-VERIFY]; expanded, it ends with a "Show transcript" button when the video has captions [LIVE-VERIFY].
+  - **Transcript panel**: opens beside/below the player; timestamped lines are plain DOM text readable in Page Text [LIVE-VERIFY].
+  - **Comments**: below the description, lazy-loaded on scroll. Comment box: contenteditable with placeholder meaning "Add a comment..." [LIVE-VERIFY]; clicking it reveals Comment/Cancel buttons [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Search videos and read results  (budget: 4 calls)
+  1. browser_navigate https://www.youtube.com/results?search_query=QUERY -> browser_snapshot.
+  2. Read titles/channels/durations/views from Page Text. browser_scroll down + snapshot for more. Report after 2-3 scrolls — don't keep scrolling an infinite feed.
+
+  ### TASK: Play a video  (budget: 6 calls)
+  1. Given a URL or ID: browser_navigate to the watch URL. Given a title/topic: search, snapshot, click the matching /watch?v= link.
+  2. browser_snapshot — watch pages usually AUTOPLAY. To confirm state: browser_hover the player, snapshot, read the play/pause button's aria-label ("Pause (k)" = playing) [LIVE-VERIFY]. Paused -> browser_press_key("k").
+  3. If an ad runs first, see State Recognition.
+
+  ### TASK: Pause / resume — browser_press_key("k") (ensure focus isn't in a text field); verify by hovering the player + snapshot: the button label flipped [LIVE-VERIFY].
+  ### TASK: Mute / unmute — browser_press_key("m"); verify via the mute button's label [LIVE-VERIFY].
+  ### TASK: Seek — nudge: "ArrowRight"/"ArrowLeft" (5s per press). Coarse: a bare digit ("5" = 50%). Exact: re-navigate to the watch URL with &t=TIMEs.
+  ### TASK: Fullscreen — browser_press_key("f") toggles.
+
+  ### TASK: Get the transcript (THE way to summarize a video)  (budget: 8 calls)
+  You cannot watch or listen to video. The transcript is the ONLY reliable source of a video's spoken content — never pass off a summary built from title/description/comments without saying so.
+  1. browser_navigate to the watch URL -> browser_snapshot.
+  2. In the description box below the title, click the expander meaning "...more" [LIVE-VERIFY] -> snapshot.
+  3. Click the "Show transcript" button at the bottom of the expanded description [LIVE-VERIFY]. Not found after 2 retry snapshots -> the video has no captions; tell the user a transcript isn't available.
+  4. browser_snapshot — the transcript panel's timestamped lines are in Page Text.
+  5. Page Text is capped (~8000 chars): long transcripts get TRUNCATED. browser_scroll down + snapshot to read further chunks [LIVE-VERIFY whether page scroll advances the panel]; if the rest is unreachable, summarize what you have and SAY the transcript was partial.
+
+  ### TASK: Read the video description — steps 1-2 of the transcript task; the full description (links, chapters, timestamps) is then in Page Text.
+
+  ### TASK: Read top comments  (budget: 6 calls)
+  1. Open the watch page -> browser_scroll down past the description -> snapshot (comments lazy-load; one more scroll+snapshot if absent).
+  2. Comments (author, text, like counts, replies) are in Page Text; default order is Top comments [LIVE-VERIFY]. Scroll for more.
+
+  ### TASK: Post a comment (LOGIN required; PUBLIC)  (budget: 10 calls)
+  1. Open the watch page; scroll down to the comment box (placeholder meaning "Add a comment...") [LIVE-VERIFY]. Sign-in prompt instead -> State Recognition; stop.
+  2. Click the box -> snapshot (Comment/Cancel buttons appear [LIVE-VERIFY]) -> browser_type the text. NO submit: Enter inserts a newline, it does not post [LIVE-VERIFY].
+  3. browser_snapshot — VERIFY the box shows exactly the intended text (Public Safety).
+  4. Click the button meaning "Comment" -> snapshot — your comment appears at the top of the thread [LIVE-VERIFY]. Unconfirmed -> tell the user; do NOT re-submit.
+
+  ### TASK: Like a video (login)
+  1. Open the watch page -> snapshot; find the like button (aria-label contains "like this video") [LIVE-VERIFY].
+  2. Already in the pressed/liked state? Tell the user it's already liked — clicking would UNlike. Otherwise click -> snapshot: the button now shows the pressed state [LIVE-VERIFY].
+
+  ### TASK: Subscribe to a channel (login)
+  1. On the watch page (button beside the channel name) or the channel page -> snapshot.
+  2. Button already means "Subscribed"? Already subscribed — tell the user (clicking it opens the UNsubscribe menu). Otherwise click "Subscribe" -> snapshot — the label flips to "Subscribed" [LIVE-VERIFY].
+
+  ### TASK: Save to Watch Later (login)  (budget: 8 calls)
+  1. On the watch page, find the action meaning "Save" below the video; if not visible, click the "...more"/three-dot overflow among the action buttons -> snapshot -> click "Save" [LIVE-VERIFY].
+  2. snapshot — a "Save video to..." dialog lists playlists with checkboxes; click "Watch later" [LIVE-VERIFY].
+  3. snapshot — checkbox checked = saved; browser_press_key("Escape") closes the dialog. Optional confirm: /playlist?list=WL lists the video.
+
+  ### TASK: Open a channel and list its recent videos  (budget: 5 calls)
+  1. browser_navigate https://www.youtube.com/@HANDLE/videos (handle unknown -> search the channel name and click the channel result [LIVE-VERIFY]) -> browser_snapshot.
+  2. The grid is newest-first: titles/dates/views in Page Text. Scroll for more. Other tabs: Videos / Shorts / Live / Playlists [LIVE-VERIFY].
+
+  ---
+
+  ### Gotchas
+  - Watch pages autoplay with sound: if the user only wants to READ (transcript/description/comments), press "k" once after load to pause, or "m" to mute.
+  - Page Text on watch pages mixes in "Up next" sidebar recommendations — never report those as the current video's content.
+  - youtu.be/ID?t=95 links carry a start time; preserve it when converting to the /watch URL.
+  - Shorts (/shorts/ID) use a different player; open https://www.youtube.com/watch?v=ID instead for full controls and the transcript path [LIVE-VERIFY].
+  - Live streams have no transcript and limited seeking — tell the user instead of retrying.

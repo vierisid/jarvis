@@ -1,0 +1,105 @@
+app_name: Telegram
+domains:
+  - web.telegram.org
+  - t.me
+keywords: []
+description: Telegram Web messaging — open chats, send/read messages, reply, forward, react, send files, mute
+version: 1
+instructions: |
+  URL: https://web.telegram.org
+
+  ### RULES (stated once — MUST follow)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. No desktop, sidecar, or other tools.
+  2. WRONG-RECIPIENT CHECK: before sending ANYTHING, the current snapshot must show the intended chat is open — the right-panel chat header shows the target's name. Similar display names are common; verify the open-chat header, not just the chat-list row you clicked.
+  3. To type and send: click the message input, then browser_type with submit:true — this types the text AND presses Enter to send in ONE call. Do NOT hunt for a send button.
+  4. After each action, ONE browser_snapshot to verify. If a sent message does not appear in Page Text, take ONE more snapshot; if still absent, tell the user the send may have failed. Do NOT retype — that risks a double-send.
+  5. If an element is not found after 2 retries, tell the user. No workarounds.
+  6. NEVER reuse numeric [id]s across snapshots — ids change every snapshot. Match by role, aria-label, title, or text content.
+  7. TWO CLIENTS: web.telegram.org serves two different apps with different DOMs — client A (URL contains /a/) and client K (URL contains /k/). Use whichever loads by default (check the URL in the snapshot) and stay on it. Element details below can differ between the two; any claim marked [LIVE-VERIFY] was not captured from a live snapshot — ALWAYS trust the real snapshot over this document.
+  8. LOCALE: labels below are from the English UI. On other locales match by role/structure, not label text.
+
+  ### State Recognition
+  - **Logged out**: page text contains "Log in to Telegram by QR Code" (QR canvas) or a phone-number login form. -> Tell the user: "Scan the QR code with your phone: Telegram > Settings > Devices > Link Desktop Device." NEVER type a phone number or login code yourself. Stop.
+  - **Loading**: near-empty snapshot or a spinner. -> Take another snapshot; max 2 retries, then tell the user.
+  - **Ready**: the left panel shows a chat list (rows with chat name + time + last-message preview) and a search input at the top. [LIVE-VERIFY row roles — chat rows may be links or role="listitem"]
+  - **Chat open**: a message input sits at the bottom of the right panel — a contenteditable div with placeholder/aria text "Message" [LIVE-VERIFY]. The left-panel chat list STAYS visible (two-panel layout) — that is normal, not a failed open. In broadcast channels you cannot post: there is no input (a Mute/Unmute bar sits there instead) — tell the user and stop.
+
+  ### t.me links
+  t.me/{username} refers to that user/channel/group. Navigating a t.me URL directly may show an interstitial page ("Preview channel" / "VIEW IN TELEGRAM" / "Open in Web") instead of the chat [LIVE-VERIFY how it resolves]. If an "Open in Web"-style link is present, click it. Otherwise PREFER: open https://web.telegram.org and search the @username in-app. On client K, https://web.telegram.org/k/#@username may open the chat directly [LIVE-VERIFY]; client A has no equivalent stable URL — use in-app search.
+
+  ### Element Reference (NOT captured from live snapshots — treat every line as [LIVE-VERIFY])
+  - Left panel: search input at the top (placeholder "Search"); chat rows show name, time, preview; unread chats carry a numeric badge readable in Page Text; a pencil/"New message" floating button sits bottom-right; the ☰ menu (top-left) holds Saved Messages, Settings, New Group/Channel.
+  - Right panel header: chat name + status line ("online", "last seen ...", "N members") — this is your rule-2 recipient check. Clicking the name opens the profile/info panel. A search icon and a "More actions" (⋮) menu live in this header.
+  - Message input: contenteditable div at the bottom; paperclip (attach) button next to it.
+  - Messages: read them from Page Text, newest at bottom. Per-message actions are in a RIGHT-CLICK context menu — browser_click the message element with button: "right" — containing Reply, Forward, Copy Text, Pin, Edit (own messages), Delete (own or as admin). Hovering a message may also reveal a quick-reaction button [LIVE-VERIFY].
+
+  ### TASK: Open a chat
+  1. browser_navigate to https://web.telegram.org (skip if already there); browser_snapshot
+  2. If a chat-list row starts with the target name: click it; go to step 5
+  3. Else click the search input; browser_type the name or @username
+  4. browser_snapshot — results appear (possibly grouped: your chats first, then global results). Click the match. For global results double-check the @handle — many accounts share display names.
+  5. browser_snapshot — the chat is open when the header shows the target name and the message input is present.
+
+  ### TASK: Send a message
+  1. Open the target chat; VERIFY the header name (rule 2)
+  2. Click the message input; browser_type the text with submit: true
+  3. browser_snapshot — the message text appears at the bottom of Page Text. If absent, follow rule 4 (no retype).
+
+  ### TASK: Read recent messages
+  1. Open the chat; browser_snapshot — Page Text contains the conversation, newest at the bottom
+  2. For older messages: browser_scroll direction="up", then snapshot again
+  3. In group chats each message block is preceded by the sender's name.
+
+  ### TASK: Search globally
+  1. Click the left-panel search input; browser_type the keyword
+  2. browser_snapshot — matching chats and messages are listed; click a result to jump to it in its chat.
+
+  ### TASK: Search within a chat
+  1. Open the chat; click the search icon in the chat header — it may sit inside the ⋮ "More actions" menu [LIVE-VERIFY]
+  2. browser_type the keyword in the search input that appears; browser_snapshot; move between matches with the up/down arrow buttons.
+
+  ### TASK: Reply to a specific message (quote reply)
+  1. Open the chat; browser_snapshot; locate the target message (its text in Page Text)
+  2. browser_click that message element with button: "right" — a context menu appears
+  3. browser_snapshot; click "Reply"
+  4. browser_snapshot — the input area now shows a quoted preview of the target message. Wrong message quoted? browser_press_key "Escape" (or click the X on the preview) and redo.
+  5. browser_type the reply with submit: true; verify per rule 4.
+
+  ### TASK: Forward a message
+  1. Right-click the message (browser_click, button: "right"); browser_snapshot; click "Forward"
+  2. A chat-picker dialog opens — search/select the destination chat, then confirm/Send
+  3. browser_snapshot — the forwarded message appears (labelled "Forwarded from ..." in the destination chat).
+
+  ### TASK: Delete your own message
+  1. Right-click the message; browser_snapshot; click "Delete"
+  2. A confirmation dialog appears, often with a checkbox "Also delete for [name]" / "Delete for everyone". Default to deleting ONLY for yourself unless the user explicitly asked to delete for everyone — set the checkbox accordingly, then click the Delete button in the dialog.
+  3. browser_snapshot — the message text is gone from Page Text.
+
+  ### TASK: React to a message
+  1. Right-click the message; browser_snapshot — the context menu usually opens with a quick-reaction emoji row at the top [LIVE-VERIFY]
+  2. Click the desired emoji. If no emoji row is present, browser_hover the message, snapshot, and look for a hover-revealed reaction button [LIVE-VERIFY].
+  3. browser_snapshot — the reaction emoji now shows on the message.
+
+  ### TASK: Edit your own message
+  1. Right-click YOUR message; browser_snapshot; click "Edit" (entry absent on other people's messages — then tell the user)
+  2. The input is pre-filled with the old text. browser_type the FULL corrected text with submit: true (typing replaces the input's content by default — exactly what you want here)
+  3. browser_snapshot — the updated text shows an "edited" marker.
+
+  ### TASK: Send a file/photo
+  1. Open the chat; click the paperclip (attach) button; if a menu offers "Photo or Video" vs "Document", click the appropriate entry [LIVE-VERIFY]
+  2. browser_upload_file with the absolute file path — no selector needed; it sets the page's file input directly, so NEVER wait for or expect a native OS file picker. The file MUST already be under the user's home directory (/tmp and system paths may be sandbox-blocked); if it is elsewhere, tell the user to move it and stop.
+  3. browser_snapshot — a preview dialog appears with an optional caption input and a Send button; add a caption if requested (click the caption input, browser_type)
+  4. Click Send; browser_snapshot — the file message appears in the chat.
+
+  ### TASK: Mute a chat
+  1. Right-click the chat's row in the LEFT-panel chat list (browser_click, button: "right"); browser_snapshot; click "Mute" (a duration submenu may appear — pick one) [LIVE-VERIFY]
+  2. Fallback: open the chat -> header ⋮ menu -> "Mute".
+
+  ### TASK: Check unread chats
+  1. browser_navigate to https://web.telegram.org; browser_snapshot
+  2. Unread chats show a count badge next to their row in Page Text — report the chat names and counts; browser_scroll the chat list down for more.
+
+  ### TASK: Create a group
+  1. Click the pencil/"New message" floating button (bottom-right) or open the ☰ menu (top-left) and pick "New Group" [LIVE-VERIFY which client A/K offers]
+  2. Search and select members; proceed (arrow/Next button); browser_type the group name; confirm creation
+  3. browser_snapshot — the new group's chat is open.

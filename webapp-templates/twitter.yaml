@@ -1,0 +1,128 @@
+# app_name is "Twitter", NOT "X": the matcher word-bound-matches the app name against
+# the whole user message, and a single-letter name would match any lone "x" ("solve for x",
+# "x out of 10") and inject this template. The x.com domain entry still catches explicit
+# links/mentions of x.com; the instructions call the product "X (formerly Twitter)".
+app_name: Twitter
+domains:
+  - x.com
+  - twitter.com
+# Keywords deliberately minimal: "tweet" word-bound-covers "tweet about", "quote tweet",
+# "tweet this" etc. (longer phrases containing it would be dead weight); "x" is unusable
+# (too short/ambiguous). Nothing here contains "twitter" (app name already matches).
+keywords:
+  - tweet
+  - tweets
+  - retweet
+description: X (formerly Twitter) — post, reply, like, repost, quote, search, read threads, DMs, profiles, notifications
+version: 1
+instructions: |
+  URL: https://x.com/home  (twitter.com redirects here)
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default. To add to text already in a composer, pass append: true; to correct a composer, plain browser_type (replace) with the FULL corrected text is the right move.
+  4. Snapshot at CHECKPOINTS (after navigation, after a composer opens, before and after Post/Send) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that, in the UI's current wording/locale, rather than demanding the exact string.
+  7. browser_press_key("Escape") closes an open compose/repost dialog without posting (X may ask "Discard?" — click Discard to abandon, Save to keep a draft) [LIVE-VERIFY].
+
+  ### PUBLIC POSTING SAFETY (posts, replies, quotes, reposts publish instantly under the user's name)
+  - BEFORE clicking Post/Reply: snapshot and confirm the composer text is EXACTLY the intended text — no truncation, no leftovers from an earlier attempt. Wrong? Retype the full text (replace default), re-verify, then click.
+  - AFTER clicking: verify ONCE via snapshot. If you cannot confirm success, tell the user "the post may or may not have gone out — please check" and STOP. NEVER re-post on uncertainty: a blind retry risks a public double-post.
+  - If the request is ambiguous — what to say, which tweet to reply to, repost vs quote — ASK the user. Never guess words that get published.
+  - Post button disabled/greyed usually means an empty composer or text over the 280-character limit. Do not trim or rewrite the user's text to fit; tell them the length and ask.
+
+  ### State Recognition
+  - **Logged out**: URL is /i/flow/login or the page shows a sign-in wall / "Sign in" dialog / "Create account" prompts (X shows read-only previews with a signup overlay when logged out) -> tell the user: "You're logged out of X — please log in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Loading**: 0 interactive elements, or page text shows only a spinner/"Something went wrong" -> snapshot again (max 2 retries, then tell the user). On "Something went wrong", one "Retry" button click is allowed before the retry cap.
+  - **Ready (timeline)**: tweet articles present (see Element Reference) and the sidebar nav links (/home, /explore, /notifications, /messages) are in the snapshot.
+  - **Compose open**: a contenteditable role="textbox" whose aria-label means "Post text" is present [LIVE-VERIFY].
+
+  ### URL MAP (URL-first: prefer navigating to these over clicking through the UI)
+  - Home timeline: https://x.com/home ("For you" / "Following" tabs)
+  - Explore/trending: https://x.com/explore
+  - Search: https://x.com/search?q=QUERY&f=live  (URL-encode QUERY; f=live -> Latest, omit f -> Top, f=user -> People [LIVE-VERIFY f=user])
+    Operators work in q: from:handle, to:handle, "exact phrase", since:2026-01-01, until:2026-02-01, min_faves:100, filter:links, -filter:replies
+  - Notifications: https://x.com/notifications (tabs: All / Verified / Mentions [LIVE-VERIFY])
+  - Messages (DMs): https://x.com/messages ; new DM dialog: https://x.com/messages/compose [LIVE-VERIFY]
+  - Profile: https://x.com/HANDLE (no @) ; replies tab /with_replies ; media tab /media
+  - Single tweet + its replies: https://x.com/HANDLE/status/ID
+  - Compose dialog deep link: https://x.com/compose/post [LIVE-VERIFY]
+
+  ### Element Reference (X is a React app with aria-labels on everything; ALL claims here [LIVE-VERIFY])
+  - **Tweet**: each tweet is an article element (role="article", aria-label starts with the author) [LIVE-VERIFY]. Tweet text is readable in the snapshot's Page Text. Inside each article, the timestamp is an `<a>` whose href is /HANDLE/status/ID — click it to open that tweet's permalink page [LIVE-VERIFY].
+  - **Per-tweet action bar** (buttons in DOM order Reply, Repost, Like, Views/Bookmark, Share; aria-labels embed the count, e.g. "3 Replies. Reply", "12 Likes. Like") [LIVE-VERIFY]:
+    Reply [LIVE-VERIFY] | Repost (label "Reposted" when already reposted) [LIVE-VERIFY] | Like (label "Liked" when already liked) [LIVE-VERIFY] | Bookmark | Share.
+    Match these by aria-label meaning, NEVER by position — the bar's buttons look identical as bare ids.
+  - **Composer**: contenteditable role="textbox", aria-label meaning "Post text" (placeholder "What's happening?") [LIVE-VERIFY]. The submit button next to it: role="button" labeled "Post" (labeled "Reply" in a reply composer) [LIVE-VERIFY]. Do NOT confuse it with the left sidebar's big "Post" NAV button, which only OPENS a composer [LIVE-VERIFY] — the real submit button sits inside/below the composer, AFTER the textbox in the snapshot.
+  - **Sidebar nav**: `<a>` links — match by href (/home, /explore, /notifications, /messages, /HANDLE for own profile), locale-stable.
+  - **Search box**: input with aria-label/placeholder meaning "Search" on /explore, /search and the right column [LIVE-VERIFY]. Prefer the search URL instead.
+  - **Home tabs**: "For you" / "Following" role="tab" at the top of /home [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Post a tweet  (budget: 8 calls)
+  1. browser_navigate https://x.com/compose/post -> browser_snapshot. If the compose dialog didn't open [LIVE-VERIFY], go to /home and click the sidebar "Post" button, snapshot.
+  2. browser_type(composer textbox id, text) — no submit (Enter would just newline).
+  3. browser_snapshot — VERIFY the composer shows exactly the intended text (Public Posting Safety).
+  4. Click the "Post" button (the one inside the dialog, after the textbox).
+  5. browser_snapshot — success = dialog gone and a confirmation toast meaning "Your post was sent" [LIVE-VERIFY] or the new post at the top of the timeline. Unconfirmed -> tell the user, do NOT re-post.
+
+  ### TASK: Post with an image/video
+  1. Open the composer and type the text as above. Do NOT click the media (photo) button — native OS picker.
+  2. browser_upload_file with the absolute file path (finds the composer's hidden file input; file must be under the user's home directory).
+  3. browser_snapshot — verify the media preview thumbnail appears in the composer, then verify text and Post as above.
+
+  ### TASK: Read the home timeline
+  1. browser_navigate https://x.com/home -> browser_snapshot. Want the chronological feed? Click the "Following" tab, snapshot.
+  2. Read tweets from Page Text (author, text, timestamps). browser_scroll down + snapshot for more (it's an infinite feed — 2-3 scrolls is plenty; report, don't keep scrolling).
+
+  ### TASK: Search and read results  (budget: 5 calls)
+  1. browser_navigate to https://x.com/search?q=QUERY&f=live (URL-encoded; use the operators above) -> browser_snapshot.
+  2. Read results from Page Text; scroll for more. For accounts, use f=user [LIVE-VERIFY].
+
+  ### TASK: Open and read a thread / replies
+  1. Open the tweet's permalink (given URL, or click its timestamp `<a href=".../status/...">` from a timeline) -> browser_snapshot.
+  2. The tweet + replies are in Page Text (author's own thread continuation appears first). browser_scroll down + snapshot for more; click "Show more replies" / "Show probable spam" buttons if present [LIVE-VERIFY].
+
+  ### TASK: Reply to a tweet  (budget: 9 calls)
+  1. Open the tweet's permalink; snapshot; confirm from Page Text this is the right tweet — if the user's reference is ambiguous, ask.
+  2. Click the tweet's Reply action button -> browser_snapshot — a reply composer opens (textbox placeholder meaning "Post your reply") [LIVE-VERIFY].
+  3. browser_type the reply; browser_snapshot to VERIFY the text; click the "Reply" submit button [LIVE-VERIFY].
+  4. browser_snapshot — your reply appears among the replies / toast confirms. Unconfirmed -> tell user, never re-send.
+
+  ### TASK: Like a tweet
+  1. Open the tweet (permalink preferred — on a timeline, make sure the Like belongs to the SAME article as the target text).
+  2. Click the Like action button -> browser_snapshot — its aria-label now means "Liked" [LIVE-VERIFY]. Already "Liked" before clicking? It's already liked — clicking would UNlike; leave it and tell the user.
+
+  ### TASK: Repost (retweet)
+  1. Open the tweet's permalink; verify it's the right tweet in Page Text.
+  2. Click the Repost action button -> browser_snapshot — a small menu appears with items meaning "Repost" and "Quote" [LIVE-VERIFY].
+  3. Click "Repost" -> browser_snapshot — the action button's label now means "Reposted" [LIVE-VERIFY]. This is public: unconfirmed -> stop, don't retry. (Button already "Reposted"? Clicking opens "Undo repost" — tell the user instead.)
+
+  ### TASK: Quote-post
+  1. Steps 1-2 of Repost, then click "Quote" -> browser_snapshot — a composer opens with the quoted tweet embedded below the textbox [LIVE-VERIFY].
+  2. browser_type the comment; snapshot to VERIFY text + embedded tweet; click "Post"; snapshot to confirm.
+
+  ### TASK: Send a DM  (budget: 10 calls)
+  1. browser_navigate https://x.com/messages -> browser_snapshot.
+  2. Existing conversation listed (match the person's name in a conversation row)? Click it. Otherwise click the new-message button (aria-label meaning "New message" / compose DM) [LIVE-VERIFY], type the name in the people-search field, snapshot, click the right person, then Next if shown [LIVE-VERIFY].
+  3. browser_snapshot — the conversation is open when the message textbox (aria-label meaning "Text message" [LIVE-VERIFY]) is present. Confirm the conversation HEADER names the intended person before typing.
+  4. browser_type(message textbox, text, submit: true) — Enter sends [LIVE-VERIFY]; if it only newlines, click the Send button next to the textbox instead.
+  5. browser_snapshot — the message appears in the conversation's Page Text. Absent after one extra snapshot -> tell the user; do NOT retype (double-send risk).
+
+  ### TASK: Look up a profile + recent posts
+  1. browser_navigate https://x.com/HANDLE (handle unknown? search the name with f=user [LIVE-VERIFY] and click the matching account).
+  2. browser_snapshot — bio, follower counts, pinned + recent posts are in Page Text. Scroll for more; /with_replies for their replies.
+
+  ### TASK: Check notifications
+  1. browser_navigate https://x.com/notifications -> browser_snapshot; read Page Text (likes, reposts, follows, mentions).
+  2. Only mentions wanted: the Mentions tab, or https://x.com/notifications/mentions [LIVE-VERIFY]. Reply to a mention = open its permalink, then the Reply task.
+
+  ---
+
+  ### Gotchas
+  - Timelines re-render constantly (live updates insert new tweets); ids from a pre-scroll snapshot are ALWAYS stale — re-snapshot before clicking anything in a feed.
+  - Page Text mixes in "Trends"/"Who to follow" sidebar content — don't report right-column trends as timeline tweets; tweets come from article elements' text.
+  - An aborted composer may leave a draft (Save/Discard prompt) — tell the user if you kept or discarded one.

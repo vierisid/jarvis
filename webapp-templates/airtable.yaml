@@ -1,0 +1,72 @@
+app_name: Airtable
+domains:
+  - airtable.com
+# No keywords on purpose: Airtable vocabulary ("base", "record", "grid view",
+# "table") is generic developer/database language and would hijack unrelated
+# requests. The app name and domain carry the trigger.
+keywords: []
+description: Airtable — open bases, switch tables and views, scan grid records, and read or edit field values through the expanded-record modal. Cannot create bases/tables/fields, edit formulas, configure views, or import data.
+version: 1
+instructions: |
+  URL: https://airtable.com/{baseId}/{tableId}/{viewId}  (ids look like appXXXX / tblXXXX / viwXXXX)
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll.
+  BANNED: browser_evaluate, browser_screenshot.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the element's content by default; `append=true` preserves it. `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — real key events: `"Enter"`, `"Escape"`, `"Space"`, `"Tab"`, arrows.
+  - Element ids are 1-based `[id]`s from the LAST snapshot and change every snapshot — never reuse ids across a state change.
+
+  ### CENTRAL CAUTION — the grid is not a normal table
+  Airtable's grid view is a heavily virtualized custom canvas/DOM hybrid. Treat it accordingly:
+  - Individual grid CELLS may not appear as distinct clickable elements in the snapshot, and inline cell editing is NOT the supported path [LIVE-VERIFY whether cells surface at all].
+  - Only the rows currently scrolled into view exist in the snapshot (virtualization) — Page Text shows a WINDOW of the table, never the whole table. Scroll to see more; never claim "the table contains N records" from one snapshot.
+  - **All reading and editing of field values goes through the EXPANDED RECORD modal**, which is regular DOM with labeled fields. Grid view is for navigation and scanning only.
+
+  ### STATE RECOGNITION (check on the FIRST snapshot of every session)
+  - **Login wall**: URL on `airtable.com/login` / `airtable.com/signup`, or a sign-in form (email/password, "Sign in with Google/SSO") → you cannot log in for the user. Tell them to log in to Airtable in the JARVIS browser, then STOP. NEVER type credentials.
+  - **Home / workspace page**: URL is `airtable.com` root-ish and the page lists bases by name [LIVE-VERIFY] → click a base to open it, or navigate by URL.
+  - **Open base (grid view)**: table tabs across the top, a view sidebar on the left, and row content in Page Text [LIVE-VERIFY markers] → ready for table work.
+  - **Expanded record**: a modal/dialog overlaying the grid showing one record's field names and values [LIVE-VERIFY] → ready for field reads/writes. `browser_press_key("Escape")` returns to the grid.
+  - **Loading**: none of the above yet → snapshot once more. Still nothing after 2 tries → report and stop.
+  - **Read-only base**: no editable fields in the expanded record, or a read-only/commenter notice [LIVE-VERIFY wording] → tell the user you need editor access and STOP for any write task (reading still works).
+  - **Retry rule**: the same step failing twice in a row (element not found after a fresh snapshot, modal not opening, value not sticking) → STOP and tell the user exactly what failed. Do not loop.
+
+  ### URL PATTERNS (prefer these — locale-independent)
+  - Home / base list: `https://airtable.com/`
+  - Open a base/table/view directly: `https://airtable.com/{appId}/{tblId}/{viwId}` [LIVE-VERIFY that these URLs are shareable and stable]. If the user gives you an Airtable link, navigate it verbatim — it encodes base, table, and view.
+  - After navigating, the URL bar reflects the current table/view — use it to verify where you are.
+
+  ### TASKS
+  **Open a base** — If you have a URL/appId: `browser_navigate` it directly. Otherwise: navigate `https://airtable.com/` → snapshot → click the base by its NAME in the base list [LIVE-VERIFY list structure] → snapshot → verify grid-view markers (table tabs, view sidebar).
+
+  **Switch table** — snapshot → click the table's named tab in the top tab strip [LIVE-VERIFY] → snapshot → verify the URL's tbl segment or the active tab changed.
+
+  **Switch view** — snapshot → click the view's name in the left view sidebar [LIVE-VERIFY; if the sidebar is collapsed, look for a views toggle button in the view bar] → snapshot → verify the URL's viw segment changed.
+
+  **Scan / read records** — snapshot → read row content from Page Text. Remember virtualization: this is only the visible window. To see more, `browser_scroll` down and re-snapshot; repeat as needed within budget. For a specific record, prefer Search (below) over scrolling. Report what you actually saw ("first N visible records"), not totals you can't see.
+
+  **Expand a record** (the gateway to all field reads/writes) — snapshot → find the target row by its primary-field text. Preferred: `browser_hover` the row → snapshot → click the row's expand icon/button that hover revealed [LIVE-VERIFY icon presence and label]. Fallbacks, in order: click the row's expand control if it's already in the snapshot without hover; click the row once to select it, then `browser_press_key("Space")` [LIVE-VERIFY Space-expands behavior]. Verify: a modal with the record's field labels appears in the next snapshot. If no modal after two attempts, stop (retry rule).
+
+  **Read a record's fields** — expand it, then read field names and values straight from the modal's DOM in the snapshot. Scroll INSIDE the modal if it has many fields [LIVE-VERIFY]. Close with `browser_press_key("Escape")`.
+
+  **Edit a field value** — expand the record → snapshot → click the field's input by its FIELD NAME label → `browser_type(field_id, "new value")`. browser_type REPLACES the existing value by default — exactly right for "change X to Y"; use `append=true` only when the user asked to add to existing text. Commit: `browser_press_key("Escape")` (or click outside the field, staying inside the modal) — Airtable saves automatically, there is no Save button [LIVE-VERIFY commit behavior]. Verify: re-snapshot and read the new value in the modal before closing. Select/date/linked-record fields open pickers — snapshot after clicking and choose the option by its label; if the picker's structure is unclear, stop and tell the user rather than guessing.
+
+  **Add a record** — snapshot → click the "+" add-row control at the bottom of the grid [LIVE-VERIFY label/position; a toolbar "Add record"-style button is an alternative] → the new empty row appears at the bottom → immediately EXPAND it (task above) and fill each field in the modal (task above). Never try to fill the new record inline in the grid. Verify each field in the modal, then Escape to close.
+
+  **Search within a table** — snapshot → click the search (magnifying-glass) icon in the view bar (top-right of the grid area) [LIVE-VERIFY] → snapshot → `browser_type` the query into the search input that appeared → snapshot → matching cells are highlighted and the search box reports match info [LIVE-VERIFY]; the grid scrolls to matches, so matching rows now appear in Page Text. Close the search with `browser_press_key("Escape")` when done.
+
+  ### NOT SUPPORTED — tell the user, don't improvise
+  - Creating bases, tables, or fields; deleting any of them.
+  - Editing field types or formulas; configuring/creating views (filters, sorts, groups, hidden fields).
+  - CSV/Excel imports and extensions/automations.
+  If asked for any of these, say plainly that this surface doesn't support it and stop that part of the task.
+
+  ### RULES
+  1. Only the ALLOWED tools. All field reads and writes go through the expanded-record modal — never edit inline in the grid.
+  2. Match rows, tabs, views, and fields by their NAME/label text, never by position — especially before any edit.
+  3. One verify-snapshot after each state change (open base, switch table/view, expand, edit); don't snapshot between keystrokes of a single type call.
+  4. Budgets: read/scan tasks ≤ 10 calls; a single-record edit ≤ 12 calls; adding + filling a record ≤ 6 calls + 2 per field. Hitting the budget without success = report and stop.
+  5. Virtualized grid: never claim completeness from one snapshot; say how much of the table you actually saw.
+  6. Airtable auto-saves — never look for a Save button; Escape closes/commits.
+  7. Stop conditions: login wall, read-only base on a write task, an unsupported request, or the same step failing twice.
