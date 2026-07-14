@@ -44,7 +44,22 @@ Source-verified against github.com/trycua/cua (primary URLs in commit history / 
 
 ## What must be measured on the Windows machine (acceptance test, roadmap Phase 1)
 
-1. Gmail (browser): `browser_ax_snapshot` → compose+send via `browser_ax_click`/`browser_ax_set_value`, zero vision tokens; token count vs screenshot baseline.
-2. Slack or Outlook (desktop): `get_window_tree {semantic:true}` → drive compose+send via element ids; then resize/theme-change and confirm `resolveRef` re-finds the stored refs (≥95%).
-3. Same flows through cua-driver (`cua-driver call` or MCP) for the matrix columns.
-4. Exit: ≥90% step success, re-resolution ≥95%, ≥8× token reduction — whichever option wins.
+**Automated by `bench/control/acceptance.ts`** (runbook: `bench/control/README.md`). It drives the paired sidecar directly through a gated `/api/debug/rpc` endpoint — no LLM in the loop, so failures are attributable to the control stack. Run:
+
+```
+# 1. build+install the sidecar from THIS branch, then:
+JARVIS_DEBUG_RPC=<secret> jarvis start
+# 2. from the worktree:
+JARVIS_DEBUG_RPC=<secret> bun bench/control/acceptance.ts   # writes bench/control/last-report.md
+```
+
+It checks:
+1. Gmail (browser): `browser_ax_snapshot` → compose located + clicked + To/Subject set via `browser_ax_set_value` (read-back verified), zero vision tokens; AX-payload-vs-screenshot size ratio.
+2. Desktop: `get_window_tree {semantic:true}` emits sig/path/ordinal; sig re-resolution across a re-snapshot.
+3. Phase 0 regression: honest bogus-exe failure, Notepad launch→visible-window→type over N runs, native `list_windows` latency, stale-id churn error, find_element near-miss, win+r chord.
+
+**Still manual / not yet scripted:**
+- The cua-driver (Spike A) columns: run the same Gmail/desktop flows through `cua-driver call --tool ...` or its MCP server, record latency + tree quality into the matrix above.
+- A true *relayout* rot test (resize/theme-change between snapshots) — the script only checks same-page sig stability as a floor; a real mutation test needs a human to drag/resize mid-run.
+
+**Exit:** ≥90% step success, re-resolution ≥95%, ≥8× token reduction — whichever option wins.
