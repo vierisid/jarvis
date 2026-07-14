@@ -558,6 +558,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.error('[Daemon] Keychain relocation failed; continuing with the existing store:', err);
     }
 
+    // 2a-ter. Seed the starter skills (structural replacement for templates).
+    // Only fills absent skills, so recorded/edited skills are preserved.
+    const { seedSkills } = await import('../skills/seeds.ts');
+    seedSkills();
+
     // 2b. Load all LLM settings (providers, credentials, single-LLM default,
     // tiers) from the DB + encrypted keychain. This is the sole source of LLM
     // config - config.yaml and env vars contribute nothing.
