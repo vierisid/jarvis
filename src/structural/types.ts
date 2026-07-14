@@ -154,3 +154,83 @@ export function surfaceFromUia(result: {
     capturedAt: Date.now(),
   };
 }
+
+/**
+ * Raw element shape emitted by the Go CDP AX provider (browser_ax_snapshot,
+ * see sidecar/browser_ax.go buildAXElements).
+ */
+export type CdpAxElement = {
+  ax_id: string;
+  backend_node_id: number;
+  role: string;
+  name: string;
+  interactive: boolean;
+  path?: SemanticPathSegment[];
+  ordinal?: number;
+  sig?: string;
+  stable_id?: string;
+  value?: string;
+  disabled?: boolean;
+  focused?: boolean;
+  expanded?: boolean;
+  checked?: boolean | string;
+  selected?: boolean;
+};
+
+/** ARIA roles that carry actions in the browser action space. */
+const AX_ROLE_ACTIONS: Record<string, string[]> = {
+  button: ['click'],
+  link: ['click'],
+  tab: ['click'],
+  menuitem: ['click'],
+  option: ['select'],
+  checkbox: ['toggle'],
+  radio: ['select'],
+  switch: ['toggle'],
+  textbox: ['set_value'],
+  searchbox: ['set_value'],
+  combobox: ['set_value', 'expand'],
+  textfield: ['set_value'],
+};
+
+export function semanticNodeFromCdp(el: CdpAxElement): SemanticNode {
+  const actions = el.interactive ? (AX_ROLE_ACTIONS[el.role] ?? ['click']) : [];
+  return {
+    ref: {
+      role: el.role,
+      name: el.name,
+      stableId: el.stable_id || undefined,
+      path: el.path ?? [],
+      ordinal: el.ordinal ?? 0,
+      sig: el.sig ?? '',
+    },
+    role: el.role,
+    name: el.name,
+    value: el.value ?? null,
+    state: {
+      enabled: el.disabled !== true,
+      focused: el.focused,
+      expanded: el.expanded,
+      checked: typeof el.checked === 'boolean' ? el.checked : el.checked === 'true',
+      selected: el.selected,
+    },
+    bounds: null, // AX tree has no bounds until getBoxModel; filled on demand
+    actions,
+    sessionId: el.backend_node_id,
+  };
+}
+
+/** Adapt a browser_ax_snapshot result into a surface. */
+export function surfaceFromCdp(result: {
+  url?: string;
+  title?: string;
+  elements: CdpAxElement[];
+}): SemanticSurface {
+  return {
+    provider: 'cdp',
+    root: { app: 'browser', title: result.title ?? '', url: result.url },
+    nodes: result.elements.map(semanticNodeFromCdp),
+    coverage: 0,
+    capturedAt: Date.now(),
+  };
+}

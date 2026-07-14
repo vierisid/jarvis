@@ -19,6 +19,7 @@ import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './si
 import { WebappTemplateDelivery, globalWebappTemplateDelivery } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
+import { UI_TOOLS } from './ui.ts';
 
 const terminal = new TerminalExecutor({ timeout: 30000 });
 
@@ -963,6 +964,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   browserEvaluateTool,
   browserScreenshotTool,
   ...DESKTOP_TOOLS,
+  ...UI_TOOLS,
 ];
 
 /**

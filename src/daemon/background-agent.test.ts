@@ -56,8 +56,8 @@ describe('createBrowserTools', () => {
     ]);
   });
 
-  test('BUILTIN_TOOLS = NON_BROWSER_TOOLS + 10 browser + 9 desktop tools', () => {
-    expect(BUILTIN_TOOLS).toHaveLength(NON_BROWSER_TOOLS.length + 10 + 9);
+  test('BUILTIN_TOOLS = NON_BROWSER_TOOLS + 10 browser + 9 desktop + 2 ui tools', () => {
+    expect(BUILTIN_TOOLS).toHaveLength(NON_BROWSER_TOOLS.length + 10 + 9 + 2);
   });
 });
 
