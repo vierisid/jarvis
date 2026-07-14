@@ -3584,6 +3584,54 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Raw sidecar RPC passthrough for the control-plane bench harness
+    // (bench/control/acceptance.ts). Deliberately double-gated: the route
+    // does not exist unless the daemon was started with JARVIS_DEBUG_RPC set,
+    // and the caller must echo that value back as a shared secret — the HTTP
+    // server may be bound beyond loopback, and this endpoint can drive the
+    // desktop.
+    '/api/debug/rpc': {
+      POST: async (req: Request) => {
+        const gate = process.env.JARVIS_DEBUG_RPC;
+        if (!gate || req.headers.get('x-debug-rpc-token') !== gate) {
+          return error('Not found', 404);
+        }
+        try {
+          if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+          const body = await req.json() as {
+            target?: string;
+            method?: string;
+            params?: Record<string, unknown>;
+          };
+          if (!body.method) return error('Missing "method" field');
+
+          const sidecars = ctx.sidecarManager.listSidecars();
+          const target = body.target
+            ? sidecars.find((s) => s.id === body.target || s.name.toLowerCase() === body.target!.toLowerCase())
+            : sidecars.find((s) => s.connected);
+          if (!target) return error(body.target ? `No sidecar matching "${body.target}"` : 'No connected sidecar', 409);
+          if (!target.connected) return error(`Sidecar "${target.name}" is offline`, 409);
+
+          const started = Date.now();
+          const result = await ctx.sidecarManager.dispatchRPC(
+            target.id,
+            body.method,
+            body.params ?? {},
+            { initial: 60_000, max: 120_000 },
+          );
+          return json({
+            sidecar: target.name,
+            method: body.method,
+            elapsed_ms: Date.now() - started,
+            detached: result === 'detached',
+            result: result === 'detached' ? null : result,
+          });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+      },
+    },
+
     '/api/sidecars/enroll': {
       POST: async (req: Request) => {
         try {
