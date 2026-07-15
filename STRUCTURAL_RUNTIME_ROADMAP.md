@@ -153,14 +153,14 @@ Daemon-side, provider-agnostic (needed whichever way Phase 1 goes):
 - ☑ 5 seed skills (Gmail, Calendar, Notion, Sheets, Slack) — `src/skills/seeds.ts`, idempotent, name-addressed refs.
 - **Acceptance (end-of-roadmap):** demonstrate a 6-step task once → parameterized skill replays; move one element → self-heal recovers; author time <2 min. Recorder runtime needs a real Windows session to validate the hooks; the compiler + runtime + store are unit-tested and the seed skills exercise the full compile→store→run path in tests.
 
-### Phase 5 — Push the boundaries (past 2026 parity) · ☐
+### Phase 5 — Push the boundaries (past 2026 parity) · ◐ built 2026-07-15 (awaiting end-of-roadmap validation; 1 item deferred)
 What none of the incumbents ship together — our headline capabilities:
-- ☐ **Ghost mode (background operation):** actions via UIA patterns / PostMessage with a synthetic agent cursor — JARVIS operates apps *while the user keeps typing elsewhere*, never stealing focus or the real cursor. (Free if Phase 1 picks cua-driver; a scoped port if not.) Honest `background_unavailable` downgrade to foreground with user notice.
-- ☐ **Speculative perception:** the awareness subsystem pre-warms `SemanticSurface` snapshots for the foreground app (event-driven, diff-only), so the agent's first action starts from a hot cache — perceived latency → near-zero.
-- ☐ **Self-benchmark harness:** an OSWorld-style local suite (N tasks × M runs across Notepad/Chrome/Gmail/Slack) runnable nightly and on PR; publishes the success matrix + structural-vs-vision ratio + token cost. Reliability claims become regression-tested numbers — and marketing material.
-- ☐ **Best-of-N for high-stakes steps:** Agent S3-style parallel candidate rollouts judged before irreversible actions (send/delete/pay), integrated with the Authority gate.
-- ☐ **Cross-platform parity:** macOS acts via AX actions (not coordinates); Linux AT-SPI without the python3 dependency.
-- ☐ **Marketplace hooks:** skill export/import (signed manifest), `successRate` surfacing, imported skills always run under Authority + ledger.
+- ☑ **Ghost mode (background operation):** `click_element`/`ui_act` `background` flag — UIA Invoke (no cursor) or PostMessage(WM_LBUTTONDOWN/UP) to the deepest child window, so JARVIS operates apps while the user keeps typing. Honest `background_unavailable` downgrade (`sidecar/uia_actions_windows.go`, `win32_native_windows.go`).
+- ☑ **Speculative perception:** `src/structural/surface-cache.ts` — short-TTL surface cache; awareness `context_changed` pre-warms the foreground app (throttled, best-effort); `ui_act` bypasses it for verification and invalidates on mutate. 6 unit tests.
+- ☑ **Self-benchmark harness:** `bench/control/metrics.ts` — N-run success matrix + structural-vs-screenshot payload reduction + latency, via the gated debug RPC (no LLM, so regressions are attributable to the stack). `perceptionStats()` covers the live structural-vs-vision usage ratio.
+- ☑ **Best-of-N for high-stakes steps:** `src/agents/best-of-n.ts` — N rollouts × M judges, weak-majority approval gate before an irreversible action; generator/judge-injected + 5 unit tests. **Wiring into the live Authority gate is the remaining integration** (needs LLM rollouts — end-of-roadmap).
+- ☐ **Cross-platform parity:** macOS acts via AX actions (not coordinates); Linux AT-SPI without python3. **Deferred** — large platform-specific Go with no way to runtime-validate here; the daemon-side runtime is already provider-agnostic so this is additive. Windows (the primary wedge) is complete.
+- ☑ **Marketplace hooks:** `src/skills/manifest.ts` — export/import via sha256 content-hashed manifest; imported skills are `provenance:'marketplace'`, never auto-overwrite local skills, reset run stats (trust earned locally), run under the same approval gate. `manage_skills` export/import actions. 5 unit tests.
 
 ---
 

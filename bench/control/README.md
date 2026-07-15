@@ -66,6 +66,22 @@ unsent for manual inspection.)
 **Desktop (Phase 1)** — `get_window_tree {semantic:true}` emits sig/path/
 ordinal on every element; sigs re-resolve ≥95% across a re-snapshot.
 
+## metrics.ts — self-benchmark (regression numbers)
+
+`acceptance.ts` is a pass/fail gate; `metrics.ts` produces the *matrix* for the
+decision doc and marketing: N runs per structural task with the success rate,
+latency, element count, and the structural-vs-screenshot payload reduction
+(the token-cost proxy). Same prerequisites and gating as acceptance.
+
+```
+JARVIS_DEBUG_RPC=<secret> bun bench/control/metrics.ts --runs 5
+# writes bench/control/metrics-report.md
+```
+
+The live structural-vs-vision *usage* ratio (how often real agent runs fell
+back to a screenshot) is tracked separately by `perceptionStats()` in
+`src/structural/telemetry.ts`.
+
 ## Note on the debug endpoint
 
 `/api/debug/rpc` is a deliberate, double-gated backdoor for this harness
