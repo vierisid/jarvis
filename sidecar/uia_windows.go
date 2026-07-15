@@ -37,6 +37,7 @@ const (
 	UIA_IsEnabledPropertyId           = 30010
 	UIA_AutomationIdPropertyId        = 30011
 	UIA_ClassNamePropertyId           = 30012
+	UIA_IsPasswordPropertyId          = 30019
 	UIA_IsOffscreenPropertyId         = 30022
 )
 
@@ -193,6 +194,76 @@ func uiaGetRootElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
 		return nil, uiaOpError("GetRootElement", hr)
 	}
 	return elem, nil
+}
+
+// uiaGetFocusedElement returns the element with keyboard focus (used by the
+// skill recorder to capture what the user is acting on).
+func uiaGetFocusedElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
+	var elem *ole.IDispatch
+	// IUIAutomation::GetFocusedElement = IUnknown(3) + offset 5 = vtable[8]
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(automation, 8),
+		uintptr(unsafe.Pointer(automation)),
+		uintptr(unsafe.Pointer(&elem)),
+	)
+	if hr != 0 {
+		return nil, uiaOpError("GetFocusedElement", hr)
+	}
+	if elem == nil {
+		return nil, fmt.Errorf("no focused element")
+	}
+	return elem, nil
+}
+
+// focusedElementInfo captures the focused element's identity for a recorded
+// interaction: role, name, automation id, whether it is a secure (password)
+// field, plus a durable sig. Ancestry path is left empty here — the recorder
+// trades a full ancestry walk for low per-keystroke latency; the resolver's
+// role+name+ordinal rung still re-finds these at replay time.
+type focusedElementInfo struct {
+	Role     string
+	Name     string
+	AutoID   string
+	Secure   bool
+	Sig      string
+}
+
+func uiaFocusedElementInfo(state *uiaState) (*focusedElementInfo, error) {
+	elem, err := uiaGetFocusedElement(state.automation)
+	if err != nil {
+		return nil, err
+	}
+	defer elem.Release()
+
+	role := controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
+	name := uiaElementGetPropertyStr(elem, UIA_NamePropertyId)
+	if len(name) > 100 {
+		name = name[:100]
+	}
+	autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
+	secure := uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId)
+	return &focusedElementInfo{
+		Role:   role,
+		Name:   name,
+		AutoID: autoID,
+		Secure: secure,
+		Sig:    semanticSig(role, name, autoID, nil, 0),
+	}, nil
+}
+
+// uiaFocusedValue returns the focused element's Value-pattern value (empty
+// string if unsupported). Used by the recorder to capture a committed field.
+func uiaFocusedValue(state *uiaState) (string, error) {
+	elem, err := uiaGetFocusedElement(state.automation)
+	if err != nil {
+		return "", err
+	}
+	defer elem.Release()
+	v, err := patternGetValue(elem)
+	if err != nil {
+		return "", nil // unsupported → no value, not an error for the recorder
+	}
+	return v, nil
 }
 
 func uiaCreateTrueCondition(automation *ole.IDispatch) (*ole.IDispatch, error) {

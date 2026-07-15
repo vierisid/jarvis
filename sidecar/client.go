@@ -585,6 +585,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	c.mu.Unlock()
 
 	StartObservers(obsCtx, c.config, c.availableCaps, sendFn)
+	// Give the skill recorder access to the event channel so recorder_start
+	// can stream ui_interaction events to the brain.
+	setRecorderSender(obsCtx, sendFn)
 
 	// "Open dashboard at startup" — the user asked to see the full window and
 	// not just the pebble. Placed after the c.mu block above so obsCtx is

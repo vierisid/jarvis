@@ -52,6 +52,8 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 	if caps[CapDesktop] {
 		registry["list_windows"] = handleListWindows
 		registry["get_window_tree"] = handleGetWindowTree
+		registry["recorder_start"] = handleRecorderStart
+		registry["recorder_stop"] = handleRecorderStop
 		registry["click_element"] = handleClickElement
 		registry["type_text"] = handleTypeText
 		registry["press_keys"] = handlePressKeys
