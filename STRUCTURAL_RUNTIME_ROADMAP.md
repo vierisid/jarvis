@@ -8,6 +8,8 @@
 
 > **Evidence base:** `CONTROL_STACK_AUDIT.md` — every claim below about the current stack is file:line-cited there. Strategic frame: System 1 of the two-system reframe (System 2 = Trust Layer).
 
+> **Execution status (2026-07-15):** all six phases are code-complete on branch `worktree-control-plane-v2` (based on the rebrand branch so it runs with the new voice system). Everything cross-compiles (Windows via mingw, Linux, macOS) and the full TS suite is green (~1700 tests). Per the owner's request, **all on-machine/manual validation is batched for the end** — nothing was gated on live testing between phases. What remains before merge is one validation pass on a real Windows machine (`bench/control/acceptance.ts` + `metrics.ts`, protocol in `bench/control/README.md` and `PHASE1_ADOPT_VS_BUILD.md`) plus the explicitly-deferred items: the Phase 1 adopt-vs-build measurement (cua-driver columns), ax-text-mode with a local 7B–32B model, the Holo2/UI-TARS grounding adapter, live Authority-gate wiring for best-of-N, and native macOS/Linux actions. The pre-existing `TestSubPebbleRGBDistinctPerColor` Go failure comes from the rebrand base (unrelated tray work), not this work.
+
 ---
 
 ## 0. Ground truth after the audit
