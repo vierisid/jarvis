@@ -1,0 +1,84 @@
+app_name: Stack Overflow
+domains:
+  - stackoverflow.com
+keywords:
+  - accepted answer
+description: Stack Overflow — find and read programming Q&A (search with tag/phrase operators, extract fixes and code from answers), browse tags, check user reputation; ask/answer/vote when logged in.
+version: 1
+instructions: |
+  URL: https://stackoverflow.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Stack Overflow. Never use desktop or sidecar tools.
+  2. READ-FIRST: the overwhelmingly common job here is finding and reading an answer. Pages are server-rendered — question body, all answers, comments, scores, and CODE BLOCKS arrive in the snapshot's Page Text. Most tasks are navigate → snapshot → read, zero clicks.
+  3. URL-FIRST: search, questions, answers, tags, and users are all addressable by URL (patterns below). Build the URL instead of clicking through the UI.
+  4. CODE VERBATIM: when the fix is a code block, report the code EXACTLY as it appears in Page Text — never paraphrase, "improve", or re-indent code you are quoting from an answer. Say which answer it came from (accepted / top-scored), its score, and its date.
+  5. **browser_type REPLACES a field's content by default.** Pass append: true to add to text already in a field (e.g. extending a drafted question or answer body).
+  6. PUBLIC SAFETY: questions and answers are PUBLIC and tied to the user's account. Before clicking any Post button, the full composed text MUST be visible in the latest snapshot exactly as intended. After submitting, verify via the page (you land on the question / your answer appears in the thread). NEVER blind-retry a submit — if unsure whether it went through, re-open the question or the user's profile first; a blind retry risks a public double-post.
+  7. Snapshot at checkpoints: after navigate, after opening a form, after each typed field, after submit. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. Scroll budget: browser_scroll down → snapshot to read long answer threads; ~4 scrolls max per question, then summarize what you have.
+
+  ### State Recognition
+  - **Anonymous reading is normal**: browsing, searching, and reading questions/answers need NO login — don't check login state before read tasks.
+  - **Login-gated**: asking, answering, commenting, and voting require an account (voting also needs reputation: 15 to upvote, 125 to downvote). Detect logged-out by "Log in"/"Sign up" links in the top bar [LIVE-VERIFY: top-bar structure]. If a write action is requested while logged out, or an action redirects to /users/login, tell the user: "This needs your Stack Overflow login — please sign in in the browser first." STOP at the login page. NEVER type credentials.
+  - **CAPTCHA / human-verification page** (Cloudflare challenge or a "prove you're human" step — can appear on posting or on heavy anonymous searching): STOP immediately and tell the user. Never attempt to solve it.
+  - **Cookie/consent banner** on first visit: click the decline/"necessary only" option if present, else accept — snapshot, continue.
+  - **Ready markers**: question page = title + "Asked / Modified / Viewed" line + "N Answers" in Page Text; search results = a results-count line + question list; tag page = tag name + question list. Near-empty Page Text with 0 interactive elements → wait 2–3s, snapshot again, max 2 retries.
+  - **Rate-limited / "too many requests"** page: tell the user, stop.
+
+  ### URL PATTERNS (the backbone)
+  - Search: `https://stackoverflow.com/search?q={query}` — URL-encode the query (space → %20, `[`/`]` → %5B/%5D).
+    OPERATORS (inside q): `[tag]` scopes to a tag; `"quoted phrase"` exact match (best for error messages); `isaccepted:yes` has an accepted answer; `answers:0` unanswered; `score:3` min score; `is:question` / `is:answer`; `user:me` the signed-in user's posts (login), `user:{id}` anyone's; `closed:no`. Combine freely: `[django] "CSRF verification failed" isaccepted:yes`
+  - Question: `https://stackoverflow.com/questions/{id}/{slug}` (slug optional; `/q/{id}` is a shorthand). Any stackoverflow.com/questions/... link the user pastes — navigate it directly.
+  - Specific answer: `https://stackoverflow.com/a/{answer_id}` — redirects to the question, scrolled to that answer (share links use this form; treat it like a question page).
+  - Tag feed: `https://stackoverflow.com/questions/tagged/{tag}?tab=Newest` (tab = Newest|Active|Votes|Frequent|Unanswered [LIVE-VERIFY: tab values]); multiple tags: `tagged/{tag1}+{tag2}`
+  - User profile: `https://stackoverflow.com/users/{id}` — their answers: `?tab=answers`; the signed-in user's own: `/users/current` [LIVE-VERIFY]
+  - Ask: `https://stackoverflow.com/questions/ask` (login-gated)
+
+  ### TASK: Open a question link and extract the fix  ← the canonical flow
+  Users usually arrive with a URL (a web search for an error very often lands directly on a Stack Overflow question).
+  1. browser_navigate the URL → browser_snapshot.
+  2. Page Text carries, in order: question title, question body (with code), then the answers. The ACCEPTED answer is pinned first when one exists (marked by a green checkmark / "Accepted" indicator [LIVE-VERIFY: how the marker renders in text]); otherwise answers run in score order.
+  3. Extract the fix: prefer the accepted answer; if none, the highest-scored. Quote its code verbatim (Rule 4).
+  4. Long threads: scroll + snapshot (Rule 9). Comments under the question and answers often carry corrections ("this broke in v3…") — relay them when they contradict the answer you're quoting.
+
+  ### TASK: Search for a question (user has an error/topic, not a link)
+  1. Build the search URL with operators — a tag scope plus the distinctive part of the error message in quotes is the strongest query (`[python] "connection reset by peer"`, URL-encoded).
+  2. browser_navigate → snapshot → results (title, excerpt, votes, answer count, accepted marker) are in Page Text.
+  3. Open the best result via its /questions/{id} link → run the extract-the-fix task above.
+  4. If nothing useful after ONE reformulation (e.g. drop the tag, shorten the quote), say so and suggest a broader web search — do not loop on query variants.
+  - Heavy anonymous searching occasionally bounces to a login or human-check page [LIVE-VERIFY: how often] — State Recognition applies.
+
+  ### TASK: Browse a tag
+  1. browser_navigate `/questions/tagged/{tag}?tab=Votes` (or Newest/Unanswered per the user's ask) → snapshot.
+  2. Question titles, excerpts, votes/answers/views counts are in Page Text — summarize directly; scroll or use the pagination links for more.
+
+  ### TASK: Ask a question (login-gated)
+  1. Confirm logged in (State Recognition) — if not, tell the user and stop.
+  2. browser_navigate `/questions/ask` → snapshot. First-time askers may get a "how to ask" wizard/checklist before the form [LIVE-VERIFY] — click through to the actual form.
+  3. browser_type(title input, title) → snapshot. A "similar questions" DUPLICATE panel may appear under the title [LIVE-VERIFY: when it renders] — READ it; if an existing question matches the user's problem, STOP and show them that question instead of posting a duplicate.
+  4. browser_type(body editor, body) — a markdown textarea [LIVE-VERIFY]; put code in fenced ``` blocks. Include what was tried and the exact error, per site rules.
+  5. browser_type(tags input, tags) [LIVE-VERIFY: autocomplete may require clicking a suggestion to commit each tag].
+  6. Snapshot → VERIFY title, body, and tags read exactly as intended (Rule 6). The flow may end with a Review step before the final submit [LIVE-VERIFY].
+  7. Click the "Post your question" button → snapshot → success = you land on the new question's /questions/{id} URL. Validation or quality-gate errors (title rules, new-account rate limits) → report verbatim, do not retry.
+
+  ### TASK: Answer a question (login-gated)
+  1. Confirm logged in. Open the question → scroll to the "Your Answer" section below the existing answers [LIVE-VERIFY: markdown textarea] → snapshot.
+  2. browser_type(answer textarea, text) → snapshot → VERIFY the text (Rule 6).
+  3. Click "Post Your Answer" → snapshot → your answer now appears in the thread under the user's name. No blind retries (Rule 6). If the page says the question is protected/closed to new answers, report that and stop.
+
+  ### TASK: Upvote an answer or question (login-gated + reputation-gated)
+  1. Find the vote arrows beside the post — match by aria-label ≈ "Up vote"/"Down vote" [LIVE-VERIFY: labels]. Make sure it's the arrows of the RIGHT answer (each answer has its own pair).
+  2. Click once → snapshot → the arrow's pressed state / the score changes [LIVE-VERIFY]. Clicking again UNDOES the vote — never click twice. A "requires 15 reputation" popup → report it and stop.
+
+  ### TASK: Check a user profile / reputation
+  1. browser_navigate `/users/{id}` (get the id from the name link on any of their posts, or search `user:{id}`) → snapshot.
+  2. Reputation, badge counts, top tags, and recent posts are in Page Text; `?tab=answers` lists their answers. Report numbers as shown.
+
+  ### Gotchas
+  - ANSWER AGE: top answers can be years old. Always report the answer's date; if it targets an old version or comments call it outdated, say so.
+  - Closed / duplicate questions show a notice box linking the canonical question — follow that link for the real fix instead of reading a closed stub.
+  - Runnable "code snippet" widgets inside answers: the code is still in Page Text — read it, never click "Run code snippet".
+  - Deleted answers are invisible to anonymous users; vote counts render abbreviated ("1.2k") — report them as shown.
+  - Sister sites (superuser.com, serverfault.com, askubuntu.com, *.stackexchange.com) share this layout and URL scheme — the same procedures apply to a pasted link there.

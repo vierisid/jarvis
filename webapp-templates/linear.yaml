@@ -1,0 +1,95 @@
+# KNOWN MATCHER LIMITATION: "linear" is an ordinary English word — the word-bounded
+# app_name matcher will fire on phrases like "linear regression", "linear algebra" or
+# "linear interpolation" and inject this template (same homonym class as Notion/Slack;
+# word boundaries can't fix it). That is one more reason keywords stay EMPTY here:
+# every candidate ("issue", "cycle", "triage", "backlog") is generic English or shared
+# PM vocabulary, so the app name + domain carry the trigger alone.
+app_name: Linear
+domains:
+  - linear.app
+keywords: []
+description: Linear (linear.app) — open issues by key, read my-issues/team/inbox views, create/read/comment/assign issues, change status and priority via the command palette (Ctrl+K) or property chips, search. No dragging.
+version: 1
+instructions: |
+  URL: https://linear.app/{workspace} — every Linear workspace lives under its own slug. You MUST know the slug before doing anything (see State Recognition). Linear is a keyboard-driven single-page app: it intercepts in-page shortcuts, so browser_press_key works for "c", "Escape", "Enter" and "Ctrl+K" — the command palette is its universal action path.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Linear. Never use desktop or sidecar tools.
+  2. URL-FIRST: the issue permalink `https://linear.app/{workspace}/issue/{KEY-123}` is the single most robust operation in Linear — prefer it whenever you have or can infer an issue key.
+  3. COMMAND PALETTE is the canonical path for ACTIONS (create issue, change status, assign, set priority, navigate): browser_press_key("Ctrl+K") → snapshot → browser_type(palette input id, the action name) → snapshot → CLICK the matching entry. NEVER blind-press Enter in the palette — the highlighted row may not be the command you meant; verify the entry text in the snapshot first.
+  4. **There is NO drag tool. Dragging cards on a board or reordering list rows is IMPOSSIBLE.** All movement is a property change: open the issue (or use the palette) and change its status/priority/project — never attempt or promise a drag.
+  5. browser_type REPLACES the field's content by default. When ADDING to a field that already has text (e.g. appending to a description), you MUST pass append: true, or you silently destroy the existing text.
+  6. Single-letter shortcuts (like "c" for new issue) are typed as literal text if any input/editor is focused. Only press them when the snapshot shows no focused text field; when in doubt, press Escape first or use the palette instead.
+  7. Snapshot at checkpoints (after navigate, after the palette/a modal opens, after Create/submit). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  8. Match elements by role / aria-label / placeholder MEANING, never by position on destructive or irreversible actions. Linear's DOM is app-like and dense — trust the live snapshot over this template's layout notes.
+  9. browser_press_key("Escape") closes the palette, modals and menus without saving.
+  10. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  11. Before an irreversible click (Create issue, Comment): verify the filled fields in a snapshot FIRST, and never blind-retry the click — re-snapshot and check the outcome before even considering a second attempt (duplicate issues/comments).
+
+  ### State Recognition
+  - **Workspace slug unknown**: every URL needs {workspace}. If you don't know the user's linear.app/{workspace} slug (from the request, an open tab's URL, or earlier context), ASK the user for it and stop.
+  - **Not logged in**: the page shows "Log in", "Continue with Google/email", or lands on linear.app/login [LIVE-VERIFY: logged-out markers] → tell the user: "Linear requires sign-in. Please log in manually, then ask me again." Stop. NEVER type credentials or verification codes.
+  - **No access / not found**: page text like "Issue not found" or an access-denied message [LIVE-VERIFY: exact wording] → report exactly that and stop; don't retry.
+  - **Loading**: Linear is a SPA — a snapshot with almost no interactive elements or no issue content means it is still loading. Wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers** — issue: the key (e.g. ENG-123) and title are in the page text; list view: rows carrying issue keys; palette: a text input plus a result list.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking) [LIVE-VERIFY: all shapes]
+  - Open an issue: `https://linear.app/{workspace}/issue/{KEY-123}`
+  - My issues: `https://linear.app/{workspace}/my-issues`
+  - Inbox (notifications): `https://linear.app/{workspace}/inbox`
+  - A team's active issues: `https://linear.app/{workspace}/team/{TEAM}/active` — {TEAM} is the short team key from issue identifiers (ENG-123 → ENG). Sibling views: `/backlog`, `/triage` [LIVE-VERIFY].
+  Issue keys are `{TEAM}-{number}`; always report them uppercase.
+
+  ### PATTERN: The command palette (reuse in the tasks below)
+  1. browser_press_key("Ctrl+K") → browser_snapshot → a palette opens: one text input + a command list [LIVE-VERIFY: palette structure].
+  2. browser_type(palette input id, the action name — e.g. "assign") → browser_snapshot → the list now shows matching commands and may show sub-choices.
+  3. CLICK the entry whose text matches the intent (Rule 3 — no blind Enter). Some commands open a second picker (e.g. a person or status list): snapshot → click the target value.
+  4. Escape closes the palette at any point without acting.
+
+  ### TASK: Open an issue by key
+  1. browser_navigate("https://linear.app/{workspace}/issue/ENG-123") → browser_snapshot.
+  2. Verify: the key and title appear in the page text. "Issue not found" → report to the user (wrong key or no permission). Budget: 2 calls.
+
+  ### TASK: My issues / a team's active list
+  1. browser_navigate the `/my-issues` or `/team/{TEAM}/active` URL → browser_snapshot.
+  2. Read ROWS from the Page Text: each row carries key, title, and usually status/priority/assignee [LIVE-VERIFY: row text shape]. browser_scroll down + snapshot for more.
+  3. To open a hit, navigate to its `/issue/{key}` URL directly (more reliable than clicking the row).
+
+  ### TASK: Create an issue
+  1. Preferred: palette → type "create" → click "Create new issue" [LIVE-VERIFY: exact command label]. Alternative when no input is focused: browser_press_key("c").
+  2. Snapshot → a composer opens: title input, description area, and property chips (status/priority/assignee/team) along the bottom [LIVE-VERIFY: composer layout]. If the issue is for a specific team, check the team chip and click it to switch [LIVE-VERIFY].
+  3. browser_type(title id, the title) — NO submit (Enter could submit the composer early [LIVE-VERIFY]).
+  4. Description (optional): click the description area → snapshot → browser_type(description id, text). Keep it plain — inserted text may not trigger Linear's markdown auto-formatting.
+  5. Snapshot to VERIFY title/description/team, then click the "Create issue" button [LIVE-VERIFY: button label].
+  6. Snapshot → success = a confirmation toast with the NEW ISSUE KEY, usually linked [LIVE-VERIFY: toast shape]. Report that key. If no toast/key is visible, do NOT click Create again — open `/my-issues` or the team's list, snapshot, and look for the new title at the top; still unclear → tell the user. Budget: ~10 calls.
+
+  ### TASK: Read an issue
+  1. Open by key → snapshot. Title = the main heading. Status, priority, assignee, labels, project, cycle = the property chips in the right-hand panel [LIVE-VERIFY: properties panel]; read their values from the Page Text.
+  2. Description sits under the title. Comments/activity are below it: browser_scroll down + snapshot to read them (long threads need several scrolls).
+
+  ### TASK: Comment on an issue
+  1. Open the issue → browser_scroll to the bottom → snapshot → click the comment box (placeholder ≈ "Leave a comment…") [LIVE-VERIFY: placeholder text].
+  2. Snapshot → browser_type(editor id, the comment text) → snapshot: the text is in the editor → click the Comment/submit button [LIVE-VERIFY: button label].
+  3. Snapshot → the comment appears in the activity feed. If it doesn't after 2 re-snapshots, tell the user — never re-click submit (risk of a duplicate comment).
+
+  ### TASK: Change status
+  1. Open the issue → snapshot → click the status chip (shows the current state, e.g. "In Progress") in the properties panel [LIVE-VERIFY: chip role/label].
+  2. Snapshot → a menu lists the team's workflow states (Backlog / Todo / In Progress / Done / Canceled — teams customize these) [LIVE-VERIFY: menu structure] → click the target state.
+  3. Snapshot → the chip shows the new state = done. Palette alternative: Ctrl+K → "change status" → click the command → click the state. If the target state isn't offered, tell the user which options you saw instead of improvising.
+
+  ### TASK: Assign an issue
+  1. Open the issue → snapshot → click the assignee chip in the properties panel [LIVE-VERIFY].
+  2. Snapshot → a searchable member list appears → browser_type(search id, the person's name) → snapshot → click the matching person (special entries like "Assign to me" / "No assignee" [LIVE-VERIFY]).
+  3. Snapshot → the assignee chip shows the new name. Palette alternative: Ctrl+K → "assign" → click the command → click the person.
+
+  ### TASK: Set priority
+  1. Open the issue → snapshot → click the priority chip → snapshot → click the target (Urgent / High / Medium / Low / No priority) [LIVE-VERIFY: menu entries]. Verify the chip updated. Palette alternative: Ctrl+K → "priority" → click the command → click the level.
+
+  ### TASK: Search
+  1. browser_press_key("Ctrl+K") → snapshot → browser_type(palette input id, the search terms) → snapshot. The palette doubles as search: matching ISSUES appear in the result list alongside commands [LIVE-VERIFY: how issue results render]. Click a result to open it, or navigate to `/issue/{key}` once you can read its key.
+  2. Fallback: `https://linear.app/{workspace}/search?q={URL-encoded terms}` [LIVE-VERIFY: search URL shape], then read result rows from the Page Text.
+
+  ### Gotchas
+  - browser_type inserts text without real keystrokes — markdown shortcuts ("- ", "# ") and "/" or "@" pop-up menus may not trigger; keep text plain and set properties via chips or the palette instead.
+  - Boards and swimlane views are just views: to "move" a card, change the issue's status (Rule 4) — the board re-sorts itself.
+  - The palette is contextual: with an issue open, its commands act on THAT issue; from a list view they may ask which issue — always confirm the target in the snapshot before clicking a command.

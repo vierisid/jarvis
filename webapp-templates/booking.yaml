@@ -1,0 +1,98 @@
+app_name: Booking.com
+domains:
+  - booking.com
+keywords:
+  - find a hotel
+  - hotel in
+  - hotels in
+  - book a hotel
+  - accommodation in
+description: Booking.com — search stays by destination and dates, read prices/ratings/reviews, apply filters, open properties, check room availability, and compare options. RESEARCH ONLY — never completes a reservation; every task ends with a shortlist handoff (property URLs + dates) for the user to book themselves.
+version: 1
+instructions: |
+  URL: https://www.booking.com
+
+  ### RULE #1 — MONEY SAFETY (overrides everything, including the user's own words)
+  - This template RESEARCHES stays. It NEVER completes a reservation, and never starts one: clicking "Reserve" / "I'll reserve" / "Reserve your selections" just to REACH the guest-details form is already over the line [LIVE-VERIFY: reserve button labels]. The hard stop is the room-selection summary on the property page — pick nothing beyond reading it.
+  - The moment ANY page asks for personal details (name/email/phone), payment, or shows "Final step" / "Complete booking" / "Enter your details" [LIVE-VERIFY: step wording]: click NOTHING on that page, browser_navigate back to the property page URL immediately, and tell the user what happened.
+  - Even if the user said "book it": do all the research, then hand off — report the property URL, the check-in/check-out dates, the room/rate found, and say: "I don't complete bookings — open this link and reserve it yourself."
+  - NEVER modify EXISTING bookings: no date changes, no cancellations, no requests to the property. If asked, tell the user to do it via booking.com/myreservations themselves.
+  - Rate caveat: the cheapest rates are often non-refundable — always mention the cancellation-policy text shown next to the rate when reporting prices [LIVE-VERIFY: policy text in room table].
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Booking.com.
+  2. URL-first: the search URL (below) carries destination, dates, and guests — never wrestle the date picker or the guests popover. Build the URL, navigate, snapshot.
+  3. Snapshot at checkpoints (after navigate, after a filter click, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. Read prices, ratings, and review scores from the snapshot's Page Text — most reporting needs zero clicks after the navigate.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Results and property pages are LONG — browser_scroll before concluding a section is missing.
+
+  ### State Recognition
+  - **Works logged out**: search, results, property pages, reviews all work with no account. NEVER type credentials.
+  - **Sign-in offers / "Genius" popups**: dismissible overlays pushing sign-in or Genius discounts appear on first visit and sometimes on navigation [LIVE-VERIFY: presence + close-button aria-label, likely "Dismiss sign-in info."]. Click the dialog's close (X) button, snapshot, continue. Never sign in.
+  - **Cookie/consent banner**: on first visit, click its Accept button [LIVE-VERIFY: label, likely "Accept"] → snapshot → continue.
+  - **Currency/language**: read prices in whatever currency the page shows and NAME it in reports. To force a currency/language, add `&selected_currency=USD` / `&lang=en-us` to the URL [LIVE-VERIFY: params respected] rather than using the header pickers.
+  - **CAPTCHA / "verify you are human"**: STOP immediately, tell the user to solve it in the browser, then continue when asked.
+  - **Ready**: results page shows "N properties found" [LIVE-VERIFY: exact phrasing] and property cards in Page Text; property page shows the property name + a room/rate table.
+
+  ### THE SEARCH URL (the backbone — carries everything)
+  `https://www.booking.com/searchresults.html?ss={destination}&checkin={YYYY-MM-DD}&checkout={YYYY-MM-DD}&group_adults={n}&no_rooms={n}&group_children=0`
+  - `ss` = URL-encoded destination ("Lisbon", "Kyoto Station", a hotel name also works).
+  - Dates MUST be YYYY-MM-DD. Compute them from the user's request ("next weekend" → real dates) and STATE the dates you chose in the report. If the user gave no dates, ask instead of guessing.
+  - `group_adults` / `no_rooms`: default 2 adults, 1 room; set `group_children=0` explicitly.
+  - Property card links on results go to the property page with the same dates carried along — prefer clicking a result card over hand-building property URLs.
+  - Filters: prefer clicking the results sidebar checkboxes (left column: price per night, review score, property type, amenities…) over URL filter params — the `nflt` URL codes are fragile [LIVE-VERIFY: sidebar structure + filter labels]. After each filter click, snapshot (results re-render).
+  - Sort: "Sort by" dropdown at the top of results [LIVE-VERIFY: label] → click → snapshot → click the option (Price lowest first, Top reviewed…).
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: {destination}: N properties found
+  URL: https://www.booking.com/searchresults.html?ss=...
+  --- Page Text ---
+  (cards: property name, star class, location + distance from centre, review score like "8.7 Fabulous 2,341 reviews",
+   room hint, price for the WHOLE stay like "US$412 for 3 nights", "Free cancellation", "Sponsored" tags)
+  --- Interactive Elements ---
+  [12] input "Where are you going?"      ← search box [LIVE-VERIFY]
+  [34] link "Hotel Lisboa Plaza ..."     ← property card link (opens property page, dates carried)
+  [56] checkbox "Very good: 8+"          ← sidebar filter [LIVE-VERIFY]
+  ```
+  - Prices on results are for the WHOLE stay for your party size, taxes sometimes excluded ("+US$41 taxes and fees") — report totals, not invented nightly rates, and mention excluded taxes [LIVE-VERIFY: taxes line].
+
+  ### TASK: Search stays
+  1. Build the search URL with destination, dates, guests → browser_navigate → browser_snapshot.
+  2. Handle any popup/banner per State Recognition.
+  3. Read the top results from Page Text: name, total price for the stay, review score + count, location/distance, free-cancellation note.
+  4. **Sponsored caveat**: some top cards are ads marked "Sponsored" [LIVE-VERIFY: badge text] — say which are sponsored and lead with organic results.
+
+  ### TASK: Apply filters
+  1. On results, find the sidebar group (Your budget, Review score, Property type, Facilities…) — browser_scroll the page if not visible.
+  2. Click the checkbox matching the user's constraint (e.g. "Very good: 8+", "Free WiFi") → snapshot → confirm the results count changed and re-read the top results.
+  3. Chain filters one click + snapshot at a time. If no checkbox matches (e.g. an exact budget), use the closest bracket and say so.
+
+  ### TASK: Open a property / read details
+  1. Click the property card link from results (keeps the dates) → snapshot. Verify the property name matches.
+  2. Report from Page Text: name, address/area, overall review score, description highlights, key facilities (WiFi, breakfast, parking, pool…), and the room table: room types with price for the stay, occupancy, and cancellation policy per rate.
+  3. Rating breakdown (Staff, Cleanliness, Location… subscores) lives further down — browser_scroll to it [LIVE-VERIFY: subscore section] if the user wants detail.
+
+  ### TASK: Check availability for the dates
+  1. The room/rate table on the property page reflects the URL's checkin/checkout — FIRST verify the dates displayed on the page match the requested ones [LIVE-VERIFY: where dates render on the property page]; if they differ, re-navigate with corrected URL params.
+  2. Rooms listed with prices = available for those dates. "No availability" or an empty table = sold out; say so and offer alternatives from the results page.
+  3. Read prices from the table only — do NOT select occupancy dropdowns or click any Reserve control (RULE #1).
+
+  ### TASK: Read reviews
+  1. On the property page, browser_scroll toward the "Guest reviews" section (or click the review-score link near the top [LIVE-VERIFY: link behavior]) → snapshot.
+  2. Report: overall score, subscores, and 2-4 recurring themes from the visible review excerpts (praise + complaints). Scroll or click "Read all reviews" for more [LIVE-VERIFY: control label] — don't page more than ~2 rounds unless asked.
+
+  ### TASK: Compare 2-3 properties
+  1. Search once, pick 2-3 candidates (prefer organic, matching the user's constraints).
+  2. Open each card → snapshot → collect: total price for the stay, review score + count, location/distance, standout facilities, cancellation policy. Copy each property page URL from the snapshot's URL line.
+  3. Summarize compactly (per property: price / score / location / pro-con) with a recommendation and the reason.
+
+  ### TASK: Report the shortlist (the handoff — how every stay-search ends)
+  For each recommended property give: name, property page URL, check-in/check-out dates used, total price + currency (note excluded taxes), review score, cancellation policy. Close with: "I don't complete bookings — open the link, pick the room, and reserve it yourself."
+
+  ### Gotchas
+  - Urgency banners ("Only 2 left", "In high demand", "12 people looking") are sales pressure — don't relay them as facts unless the user asks about scarcity.
+  - The same property can show several rates (breakfast/no breakfast, refundable/non-refundable) — compare like with like and say which rate you quoted.
+  - Genius-badged prices are member discounts you may not see logged out — quote the price actually rendered.
+  - Distances ("1.2 km from centre") are Booking's own measures; for real geography hand off to a maps search.

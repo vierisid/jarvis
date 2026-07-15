@@ -143,6 +143,27 @@ REMAINING P1 SUB-ITEM:
 
 `[LIVE-VERIFY]` totals: 314 marked lines library-wide — this is the live-capture worklist (old + new together).
 
+### P3.2 — expansion batch 2 (23 → 36 templates)
+☑ DONE 2026-07-15: all 13 written; **library is now 36 templates, 0 lint errors / 0 warnings, 365KB instructions, zero cross-template keyword/domain collisions, 609 [LIVE-VERIFY] markers** (the live-capture worklist).
+
+| new template | size | kw | notes |
+|---|---|---|---|
+| gitlab v1 | 11.7KB | 3 | github mirror; merge gate reports blockers incl. RUNNING pipelines and stops; self-hosted note |
+| hackernews v1 | 8.3KB | 4 | friendliest DOM in the library; Algolia search; kw incl. "hn"/"ask hn"/"show hn" |
+| stackoverflow v1 | 9.5KB | 1 | read-first (find + extract the fix); "stack trace" keyword deliberately rejected |
+| linear v1 | 9.8KB | 0 | Ctrl+K palette as first-class pattern (click the entry, never blind-Enter); "linear" homonym noted |
+| asana v1 | 10.5KB | 0 | no-drag via task fields; fragile date-picker flagged |
+| confluence v1 | 10.3KB | 2 | domain `atlassian.net/wiki` (path-qualified so jira keeps bare atlassian.net); notion-style append-safe editing |
+| dropbox v1 | 9.9KB | 0 | gdrive mirror: SELECT→ACT, no local-filesystem keywords |
+| spotify v1 | 10.4KB | 5 | playback verified via player bar; volume slider honestly unsupported (drag) |
+| instagram v1 | 12.0KB | 1 | GO SLOW rule (anti-automation flags): one action per request, refuse bulk like/follow/DM; challenge/rate-limit → STOP |
+| wikipedia v1 | 7.8KB | 2 | read-only research; 2000-char Page-Text window scroll technique; editing unsupported |
+| booking v1 | 9.0KB | 5 | search URL carries dates/guests; money hard-stop BEFORE the details form |
+| ebay v1 | 10.8KB | 4 | bids are BINDING → refuse-safely task with watchlist alternative; cart hard-stop |
+| zoom v1 | 11.2KB | 2 | /wc/ web-client URL rewrite; gmeet presence model; hard NEVER on recordings |
+
+Batch-2 note: the launch hit a session usage limit twice — 11 files were written before the cut, ebay/zoom were written on resume, gitlab/instagram trimmed on resume. All agents completed after resume.
+
 ### Template style contract (for all new/rewritten templates, distilled from what works)
 1. Tool whitelist that matches the REAL surface; never ban a tool a task needs.
 2. State Recognition section: login wall, loading, ready markers, view-only/permission detection, explicit "tell the user and stop" conditions.

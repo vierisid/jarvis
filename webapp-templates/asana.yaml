@@ -1,0 +1,97 @@
+app_name: Asana
+domains:
+  - app.asana.com
+# No keywords on purpose: Asana vocabulary ("my tasks", "task list", "section",
+# "assignee") is generic task-management language and would hijack local todo
+# or coding requests. The app name and domain carry the trigger.
+keywords: []
+description: Asana — open My Tasks and projects, read task lists, create tasks, open a task's detail pane, set assignee and due date, complete tasks, edit descriptions, comment, move tasks between sections/projects via fields (no drag), search.
+version: 1
+instructions: |
+  URL: https://app.asana.com — one shared domain for every customer; the workspace is chosen in-app (sidebar/top bar), not by subdomain.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Asana. Never use desktop or sidecar tools.
+  2. URL-FIRST: a task permalink is the most robust way back to a known task — prefer navigating a URL you have seen over clicking through the UI (see URL PATTERNS).
+  3. **There is NO drag tool. Dragging tasks between board columns, list sections, or priority orders is IMPOSSIBLE.** All movement goes through the task's Projects/section field in the detail pane (see TASK: Move a task). Never attempt or promise a drag.
+  4. browser_type REPLACES a field's content by default. When ADDING to a field that already has text (an existing description, a comment draft), pass append: true — plain typing silently erases what was there.
+  5. Snapshot at checkpoints (after navigate, after a pane/menu/picker opens, after a submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed, never guess ids.
+  6. Match elements by role / aria-label / placeholder MEANING, never by position on destructive or irreversible actions. Asana translates UI labels to the user's locale — expect translations of the English labels below; user-set project/task/section names are the stable anchors.
+  7. browser_press_key("Escape") closes menus, date pickers, composers and the task detail pane; Enter submits the add-task composer. Do NOT use Asana's other keyboard shortcuts (its "Tab+…" combos): they depend on focus state and misfire.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. If a comment/save seems to have failed, re-snapshot and CHECK for the change before any retry — blind retries create duplicate tasks and comments.
+
+  ### STATE RECOGNITION (check after every navigate)
+  - **Logged out**: a login form (email input, "Log in", Google/SSO buttons) or the asana.com marketing site → tell the user: "Asana requires sign-in. Please log in to Asana in this browser, then ask me again." Stop. NEVER type credentials.
+  - **Loading**: Asana renders gray skeleton placeholders first; a snapshot with almost no interactive elements or no task rows on a project/My Tasks URL → wait 2–3s, re-snapshot. Max 2 retries, then tell the user.
+  - **List view** (ready): section headings with task rows beneath them; each row = a round completion checkmark + the task name (+ assignee/due-date chips); an "Add task" control near the top [LIVE-VERIFY: "+ Add task" button in the toolbar].
+  - **Board view**: columns (= the same sections) holding task cards. Read it like a list; ALL mutations still go through the detail pane — no drag (Rule 3).
+  - **Task detail pane** (opens to the RIGHT when a task's name is clicked; the list stays rendered behind it — expect BOTH element sets, pane elements after the list's [LIVE-VERIFY]): a "Mark complete" button at the top, the task name, Assignee and Due date fields, a Projects row showing "{project} ▸ {section}", a Description area, and a comment box at the bottom [LIVE-VERIFY: exact layout].
+  - **No access / not found**: page text like "you don't have access" or a missing-task notice [LIVE-VERIFY wording] → report exactly that and stop; don't retry.
+
+  ### URL PATTERNS
+  - Task permalink: `https://app.asana.com/0/{projectId}/{taskId}` — opens the project with that task's detail pane already open. [LIVE-VERIFY: workspaces migrated to Asana's newer URL scheme instead show `https://app.asana.com/1/{workspaceId}/project/{projectId}/task/{taskId}`; old /0/ links redirect. Trust whatever shape the live app's address bar shows and reuse it verbatim.]
+  - "Copy task link" URLs (ending in `/f`) work too. NEVER construct ids — only reuse URLs you have seen in a snapshot, the user's message, or earlier context.
+  - My Tasks, Inbox, and projects have no guessable URLs — reach them via the left sidebar, then remember the resulting URL for direct re-navigation later in the session.
+
+  ### TASK: Open My Tasks / read the list
+  1. browser_navigate("https://app.asana.com") → browser_snapshot (state check).
+  2. Click "My Tasks" in the left sidebar [LIVE-VERIFY: sidebar entry label] → snapshot.
+  3. Read rows from the Page Text: sections (e.g. "Recently assigned" / user-defined) followed by their task names and due dates. browser_scroll down + re-snapshot for long lists. Completed tasks are HIDDEN by default [LIVE-VERIFY: a filter control can reveal them].
+
+  ### TASK: Open a project
+  1. Snapshot → click the project's name in the left sidebar (under starred/recent projects) [LIVE-VERIFY: a "Projects" group that may need expanding].
+  2. Not in the sidebar? Use TASK: Search with the project name and click the project result.
+  3. Verify: the project name is the page heading and task rows (or board columns) are present.
+
+  ### TASK: Create a task
+  1. Open the target project (or My Tasks) → snapshot → click "+ Add task" [LIVE-VERIFY: toolbar button; adds the composer row to the FIRST section — to target another section, hover that section's heading and use its own add control if one appears, else create first and move via TASK: Move a task].
+  2. Snapshot → a composer row with an editable task-name field appears [LIVE-VERIFY].
+  3. browser_type(field id, title, submit: true) — Enter CREATES the task and opens another blank row, so only press it when the title is final.
+  4. browser_press_key("Escape") to close the composer → snapshot → VERIFY the title appears under the intended section in Page Text. Wrong section → move it (Rule 3 path) only if the user asked for a specific section.
+  5. Assignee/due date/description: open the new task's detail pane (next task) and set fields there.
+
+  ### TASK: Open a task's detail pane / read a task
+  - Click the task's NAME text in its row — NOT the round checkmark to its left (that toggles completion!). Known URL → browser_navigate the permalink instead.
+  - Snapshot → the detail pane shows name, Assignee, Due date, Projects+section, Description, and the activity/comment feed (browser_scroll within long panes + re-snapshot). Answer read questions straight from this text.
+
+  ### TASK: Set the assignee
+  1. Open the task's detail pane → snapshot → click the Assignee field [LIVE-VERIFY: it becomes a search combobox].
+  2. browser_type(combobox id, the person's name) → snapshot → click the matching person in the suggestion list [LIVE-VERIFY: suggestions render name + email].
+  3. Snapshot → VERIFY the Assignee field now shows that name. No match in suggestions → Escape, tell the user who you searched for.
+
+  ### TASK: Set a due date (FRAGILE — flag any doubt)
+  1. Open the detail pane → snapshot → click the Due date field → snapshot → a calendar popover appears [LIVE-VERIFY: popover markup, month-arrow controls, optional time field].
+  2. Prefer CLICKING the day cell on the calendar (month arrows to navigate) over typing into the date input: typed dates parse locale-dependently and silently mis-set.
+  3. Escape to close → snapshot → VERIFY the Due date field shows the INTENDED date. Wrong or ambiguous → tell the user rather than guessing again.
+
+  ### TASK: Complete a task
+  1. Open the task's detail pane (safest binding) → snapshot → click "Mark complete" [LIVE-VERIFY: top-of-pane button].
+  2. Snapshot → VERIFY the button now reads "Completed" [LIVE-VERIFY] or the row shows the completed style. In My Tasks the row VANISHING from the list is the success signal (completed tasks are hidden by default) — do not treat it as an error and do not click again (a second click un-completes).
+  - Row-level alternative: the round checkmark on the task's row toggles completion — only use it when the row→task binding is unambiguous in the snapshot.
+
+  ### TASK: Add / edit the description
+  1. Open the detail pane → snapshot → click the Description area (existing text, or its placeholder ≈ "What is this task about?" [LIVE-VERIFY]).
+  2. browser_type into the editor — **append: true to ADD to an existing description; plain replace ONLY when the user wants it rewritten** (Rule 4). Keep text plain: insertText may not trigger Asana's rich-text auto-formatting.
+  3. Click elsewhere in the pane (or Escape) to blur → snapshot → VERIFY the text shows in the description block [LIVE-VERIFY: descriptions autosave; no explicit Save button expected].
+
+  ### TASK: Comment on a task
+  1. Open the detail pane → browser_scroll the pane to the bottom → snapshot → click the comment box (placeholder ≈ "Ask a question or post an update" [LIVE-VERIFY]).
+  2. browser_type(comment text) — NO submit: Enter may post prematurely or just newline [LIVE-VERIFY which].
+  3. Snapshot → VERIFY the draft text is in the box → click the "Comment" button [LIVE-VERIFY: bottom-right of the composer].
+  4. Snapshot → the comment appears in the activity feed under the user's name. Not there after 2 re-snapshots → tell the user; never re-click Comment (duplicate risk, Rule 9).
+
+  ### TASK: Move a task to another section / project (NO DRAG — fields only)
+  1. Open the task's detail pane → snapshot → find the Projects row: "{project name} ▸ {section name}".
+  2. Same project, different section: click the section part → snapshot → a dropdown lists the project's sections [LIVE-VERIFY] → click the target section.
+  3. Different project: click "Add to projects" / the projects field [LIVE-VERIFY] → type the project name → click the match → then set its section the same way. If the user said MOVE (not "also add"), remove the old project via that project row's remove control [LIVE-VERIFY: an X on hover] — confirm with the user first if unsure.
+  4. Snapshot → VERIFY the Projects row shows the new project/section; back in the list, the task sits under the target section heading.
+  - Alternative: browser_click(task row id, button: "right") → snapshot → a context menu with move options [LIVE-VERIFY the menu exists]. If neither path works after 2 retries, stop and tell the user.
+
+  ### TASK: Search
+  1. Snapshot → click the search box in the top bar (placeholder ≈ "Search" [LIVE-VERIFY]) → browser_type(query, submit: true).
+  2. Snapshot → either a typeahead dropdown (clicking a hit is fine) or a full results page listing tasks/projects/people [LIVE-VERIFY: result layout].
+  3. Open a hit by clicking it; reuse the resulting URL as that task's permalink from then on.
+
+  ### Budgets (stop and reconsider at ~2x)
+  Open My Tasks ≈ 4 calls · open project ≈ 3 · create task ≈ 6 · open task ≈ 2 · assignee ≈ 6 · due date ≈ 6 · complete ≈ 4 · description ≈ 6 · comment ≈ 7 · move task ≈ 8 · search ≈ 4.

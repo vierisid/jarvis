@@ -1,0 +1,119 @@
+app_name: Dropbox
+domains:
+  - dropbox.com
+# No keywords on purpose: Dropbox vocabulary ("upload", "folder", "shared
+# link", "sync") is generic file-management language and would hijack local
+# filesystem requests. The app name and domain carry the trigger.
+keywords: []
+description: Dropbox web — browse folders, open/preview files, search, upload into the current folder, create folders, rename/move/delete/restore files, share and copy links, download files.
+version: 1
+instructions: |
+  URL: https://www.dropbox.com/home
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Dropbox. Never use desktop or sidecar tools.
+  2. URL navigation beats clicking: the file browser, every folder, deleted files, and recents all have stable URLs (below). Always ask "is there a URL for this?" before clicking.
+  3. Row model — SELECT/HOVER → ACT: clicking a file's NAME opens/previews it; clicking the row's checkbox (or the row background) SELECTS it and raises a selection toolbar (Share, Download, Delete, Move, Copy, "More" ⋯) [LIVE-VERIFY: which actions are top-level vs under ⋯]. Per-row action buttons (Share, Copy link, ⋯) are hover-revealed: browser_hover(row_id) → snapshot → the buttons appear [LIVE-VERIFY].
+  4. UI LANGUAGE: Dropbox localizes button text and aria-labels. Match toolbar/menu items by aria-label MEANING (the locale translation of the English labels below), by role, or by URL — never by exact English text on a non-English UI.
+  5. browser_type REPLACES the field's content by default; pass append: true only when adding to existing content. Rename/search/share inputs want the default replace.
+  6. Snapshot at checkpoints (after navigate, after hover/select, after a dialog opens, after the action). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  8. NEVER drag-and-drop (move goes through the Move dialog) and NEVER click a button that opens a native OS file picker (Upload → Files/Folder) — the browser tools cannot drive it. Uploads use browser_upload_file directly.
+
+  ### State Recognition
+  - **Login wall**: URL contains /login or /signin, or the page shows email/password fields → tell the user: "Dropbox requires sign-in. Please log in manually." NEVER type credentials. Stop.
+  - **Loading**: 0 interactive elements, or no file rows and no empty-state text → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready**: the top search input is present and the file area shows file/folder rows (or an explicit empty-state message).
+  - **Empty folder**: page text shows an empty-state hint ("This folder is empty" or similar) and no file rows — report "nothing here", do not retry.
+
+  ### URL PATTERNS (locale-independent — PREFER these over clicking)
+  - All files (root): `https://www.dropbox.com/home`
+  - Specific folder: `https://www.dropbox.com/home/{Folder%20Name}` — the PATH from root, URL-encoded (space → %20), nested: `/home/Parent/Child`
+  - Deleted files: `https://www.dropbox.com/deleted_files`
+  - Recents: `https://www.dropbox.com/recents`
+  - Search results: `https://www.dropbox.com/search?query={url-encoded-terms}` [LIVE-VERIFY: exact search URL shape — may redirect to /search/personal?query=…; if it 404s, use the search box instead]
+  - A shared link the user pastes (`dropbox.com/s/…`, `/scl/…`) can be opened directly with browser_navigate.
+
+  ### SNAPSHOT FORMAT
+  browser_snapshot returns:
+  ```
+  Page: All files - Dropbox
+  URL: https://www.dropbox.com/home
+  --- Page Text ---
+  (visible file/folder names, modified dates, sizes)
+  --- Interactive Elements ---
+  [10] input "Search"                  ← top search box (aria-label localized)
+  [12] button "Create"                 ← create menu (folder, doc, …) [LIVE-VERIFY: may read "Create folder" or "+ Create"]
+  [13] button "Upload"                 ← DO NOT USE (native picker, Rule 8)
+  [30] link "Q2 report.pdf"            ← file NAME — clicking OPENS/previews
+  [31] link "Team Folder"              ← folder NAME — clicking navigates into it
+  [32] checkbox "Select Q2 report.pdf" ← row checkbox — clicking SELECTS [LIVE-VERIFY]
+  [55] button "Share"                  ← per-row, hover-revealed / selection toolbar
+  ```
+  - **File/folder rows**: match the element whose text equals or contains the NAME. If several share a name, disambiguate via the page text (modified date, size) or the parent folder path.
+  - Elements inside iframes are marked iframe="true".
+
+  ### CORE PATTERN (all mutations)
+  1. Navigate to the folder URL containing the item → browser_snapshot.
+  2. Find the item's row by name text → browser_hover(row_id) → snapshot: per-row buttons (Share, Copy link, ⋯ "More") are now visible [LIVE-VERIFY]. (Alternative: click the row checkbox → snapshot → use the selection toolbar.)
+  3. Click ⋯ → snapshot → the context menu lists Rename, Move, Copy, Delete, Download, Star… [LIVE-VERIFY: exact entries] → click the entry by meaning.
+  4. Complete the dialog if one opens → snapshot to verify the outcome.
+
+  ### TASK: Browse a folder / list its contents
+  - browser_navigate the folder URL (or click the folder name link) → snapshot. The page text lists names + modified dates + sizes — read it directly for "what's in …" questions. Breadcrumb links at the top go back up.
+
+  ### TASK: Open / preview a file
+  1. Find the row → browser_click(file name link id) — or browser_click(row_id, double: true) if the name is not a separate link [LIVE-VERIFY: which of the two applies].
+  2. browser_snapshot → verify: the URL changed to a preview URL (e.g. gains `?preview={name}` or a /scl/ path [LIVE-VERIFY]) or a preview overlay covers the page with the file name in the header. browser_press_key("Escape") closes the overlay.
+  3. Preview shows page text for docs/PDFs only partially — for full content, download instead.
+
+  ### TASK: Search
+  1. browser_type(search input id, "terms", submit: true) → snapshot: results replace the file list (URL moves to the search results URL above).
+  2. Results are rows like any folder view — the CORE PATTERN works on them directly.
+
+  ### TASK: Upload into a folder
+  1. Navigate to the DESTINATION folder first (uploads land in the current folder).
+  2. Call browser_upload_file("/absolute/path/to/file.pdf") directly — [LIVE-VERIFY: Dropbox keeps a hidden file input in the DOM; if the tool reports no file input found, tell the user to upload manually and stop].
+  3. browser_snapshot → verify the new file row appears in the list (upload progress may take a moment — one extra snapshot after 2–3s is allowed).
+  4. NEVER click the Upload button (Rule 8).
+
+  ### TASK: Create a folder
+  1. In the parent folder, snapshot → click the "Create" button (or "Create folder" if it is a direct button) [LIVE-VERIFY] → snapshot → click the "Folder" menu entry if a menu opened [LIVE-VERIFY].
+  2. Snapshot → browser_type(folder-name input id, "Name", submit: true) — a dialog may instead need its confirm/"Create" button clicked [LIVE-VERIFY].
+  3. Snapshot → verify the new folder row appears.
+
+  ### TASK: Rename
+  1. CORE PATTERN → ⋯ menu → "Rename" entry.
+  2. Snapshot → the name input is pre-filled (inline on the row or in a dialog [LIVE-VERIFY]) → browser_type(input id, "New name", submit: true) — default replace is what you want here. Keep the file extension unless the user asked to change it.
+  3. Snapshot → verify the row shows the new name.
+
+  ### TASK: Move to a folder
+  1. CORE PATTERN → ⋯ menu → "Move" entry → snapshot: a folder-picker dialog opens.
+  2. Click through to the destination (clicking a folder in the picker navigates INTO it — it does not move yet), snapshot each level.
+  3. Click the dialog's "Move" confirm button → snapshot → verify the item is gone from the current folder. Never drag (Rule 8).
+
+  ### TASK: Delete
+  1. CORE PATTERN → ⋯ menu → "Delete" entry → snapshot: a confirm dialog opens → click its Delete/confirm button [LIVE-VERIFY: exact confirm label].
+  2. Verify BOTH outcomes: (a) snapshot — the row is GONE from the folder list; (b) browser_navigate("https://www.dropbox.com/deleted_files") → snapshot — the item IS listed there. If (a) holds but (b) does not, the item may still exist elsewhere — report exactly what you observed, do not retry the delete.
+  3. Deleted files are recoverable (30 days on Basic, longer on paid) — mention this to the user.
+
+  ### TASK: Restore a deleted file
+  1. browser_navigate("https://www.dropbox.com/deleted_files") → snapshot → find the item's row (hover if its buttons are hidden).
+  2. Click "Restore" (per-row or in the ⋯ menu [LIVE-VERIFY]) → confirm if a dialog appears → snapshot.
+  3. Verify: item gone from deleted files; navigate to its original folder and confirm the row is back.
+
+  ### TASK: Share / copy a link
+  1. CORE PATTERN → click the row's "Share" button → snapshot: the share dialog opens.
+  2. To share with a person: browser_type(the "To:" / email input id, "person@example.com", submit: true) → snapshot → set the permission dropdown ("can view" / "can edit") if the user specified one [LIVE-VERIFY: dropdown structure] → click the primary Share/Send button → snapshot: dialog closed or confirmation shown.
+  3. To copy a link: click "Copy link" [LIVE-VERIFY: may first say "Create link"] — this puts it on the clipboard, which you CANNOT read. If the dialog displays the link text, report it from the snapshot; otherwise tell the user the link is on the clipboard.
+  4. PERMISSION CAVEAT: report which access the link grants — the dialog states "can view" or "can edit" near the link controls [LIVE-VERIFY: default is view-only on most plans]. Never widen permissions unless the user asked.
+
+  ### TASK: Download
+  1. CORE PATTERN → ⋯ menu (or selection toolbar) → "Download" entry. Folders download as a .zip.
+  2. The browser saves it to the user's Downloads folder — tell the user that is where it landed. There is NO in-page progress or confirmation visible to you — do not retry on silence; a single attempt is correct.
+
+  ### Gotchas
+  - Dropbox may show an "Open in app?" / desktop-app upsell banner or a cookie consent dialog on first load — dismiss via its close/decline button, then proceed.
+  - Items in folders shared by others may lack Rename/Move/Delete — the menu entry just won't be in the snapshot. Report it instead of retrying.
+  - Most mutations show a brief toast with Undo; verify by list state or URL, never by toast text.
+  - A focused input swallows key presses — browser_press_key("Escape") first after using search or a dialog.

@@ -1,0 +1,96 @@
+# KNOWN MATCHER LIMITATION: app_name "Zoom" also matches the English verb
+# ("zoom in on this chart", "zoom out on the map") — word-bounded matching
+# cannot fix a homonym, same class as Linear/Notion/Slack. Trigger hygiene
+# here relies on the injected instructions being obviously irrelevant to
+# camera-zoom requests; keywords below deliberately avoid the word.
+app_name: Zoom
+domains:
+  - zoom.us
+  - app.zoom.us
+keywords:
+  - meeting id
+  - webinar
+description: Zoom web client — join meetings by link or meeting ID + passcode (browser join, no desktop app), leave, mute/unmute mic and camera, in-meeting chat, participants list, raise hand. Never touches recording or host controls.
+version: 1
+instructions: |
+  URL patterns (URL-first — the web-client rewrite is the PRIMARY join path):
+  - Meeting links look like: https://zoom.us/j/{meetingId}?pwd=... or https://{subdomain}.zoom.us/j/{meetingId}?pwd=...
+  - REWRITE to the browser (web client) path before navigating: replace /j/ with /wc/join/ on the SAME host, keeping the ?pwd= query verbatim → https://{host}/wc/join/{meetingId}?pwd=... [LIVE-VERIFY]
+  - Bare meeting ID (9-11 digits, users often write it with spaces "123 4567 8901" — strip spaces): https://zoom.us/wc/join/{meetingId} [LIVE-VERIFY]
+  - The plain /j/ link opens a "launch the desktop app" interstitial — see State Recognition; the /wc/ rewrite skips it.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. **PRESENCE SAFETY — the top rule.** Joining a meeting makes the user VISIBLE and AUDIBLE to real people.
+     (a) NEVER join a meeting the user did not explicitly ask to join.
+     (b) Before clicking Join, MUTE the microphone AND turn the camera OFF on the pre-join screen — unless the user explicitly asked for mic and/or camera on.
+     (c) In-meeting, never unmute the mic or start the video unless the user explicitly asks.
+     (d) **NEVER start or stop a RECORDING under any circumstances** — not even if asked. Recording other people has consent implications; tell the user to operate the Record control themselves.
+     (e) Never use host controls — admit/deny waiting-room requests, mute others, rename, put in waiting room, or "End Meeting for All" — without the user's explicit per-action decision.
+     (f) Never click a Join button twice. If nothing seems to happen, snapshot again — the state may be transitioning; a blind re-click risks a double join request.
+  3. [id]s change every snapshot — never reuse an id from an older snapshot. Match elements by role + aria-label/text meaning, never by toolbar position. Labels below are from the English UI; the web client follows the browser locale, so match by meaning on non-English UIs.
+  4. **The in-meeting toolbar AUTO-HIDES** after a few seconds without mouse movement. If Mute / Start Video / Chat / Leave are missing from a snapshot while in-meeting, browser_hover the meeting/video area first, then snapshot again — the toolbar reappears on mouse movement.
+  5. Snapshot at checkpoints: after navigation, after each pre-join toggle, after Join, after opening a panel. If an expected element is missing after 2 retry snapshots (including the rule-4 hover for toolbar items), tell the user and stop — no workarounds.
+  6. Zoom web intercepts these in-page shortcuts (they work via browser_press_key): "Alt+A" = mute/unmute microphone, "Alt+V" = start/stop video [LIVE-VERIFY both]. Assume no other shortcuts.
+  7. Keep the ?pwd= query parameter verbatim when rewriting URLs — it is an opaque token, not the human-typeable passcode; never try to decode it or type its value into a passcode field.
+
+  ### State Recognition (identify the state after EVERY navigation or Join click)
+  - **Desktop-app interstitial**: a /j/ link lands on a page trying to open the Zoom desktop app ("Launch Meeting" button, text ≈ "Click Open Zoom Meetings on the dialog shown by your browser"). Do NOT wait for or expect the app. Preferred exit: navigate to the /wc/join/ rewrite of the same URL. Fallback: click the small "Join from Your Browser" link — it can appear only after the "Launch Meeting" attempt fails, sometimes under a "Having issues?"/"Launch Meeting" retry line [LIVE-VERIFY both].
+  - **Sign-in required**: joining with just a name usually needs NO Zoom account. But if the page demands sign-in (URL contains /signin, or text ≈ "This meeting is for authorized attendees only" / "Sign in to join" [LIVE-VERIFY]) → tell the user this meeting requires them to log in to Zoom manually, and stop. Never type credentials.
+  - **Name entry / pre-join**: an input for your name (placeholder ≈ "Your Name" [LIVE-VERIFY]) plus mic/camera toggle buttons and a "Join" button. You are NOT in the meeting yet; nobody can see or hear the user here. Layout varies — the name field and the audio/video preview may be one screen or two consecutive ones [LIVE-VERIFY].
+  - **Passcode prompt**: input labeled ≈ "Meeting Passcode" [LIVE-VERIFY]. If the user's link had ?pwd= and you kept it, this usually never appears. If it appears anyway, ask the user for the numeric passcode (often printed next to the meeting ID in their invite) — never guess, never paste the pwd token.
+  - **Devices blocked**: page text indicates microphone/camera are blocked or need permission [LIVE-VERIFY exact text]. The browser's permission prompt is BROWSER CHROME, not page DOM — it never appears in a snapshot and cannot be clicked. Tell the user to grant (or deliberately deny) mic/camera permission manually, and stop. Note: joining muted with camera off usually still works without permissions.
+  - **Waiting room**: text ≈ "Please wait, the meeting host will let you in soon" [LIVE-VERIFY]. Re-snapshot every few seconds, max 4 tries; if still waiting, tell the user the host hasn't admitted them yet and stop polling.
+  - **In-meeting**: bottom toolbar (may be hidden — rule 4) with Mute, Start/Stop Video, Participants, Chat, Reactions, and a red "Leave" button [LIVE-VERIFY]. A webinar joined as attendee has NO mic/camera controls — you are view-only; say so instead of hunting for a Mute button [LIVE-VERIFY].
+  - **Cannot join / not started**: text ≈ "This meeting link is invalid", "Waiting for the host to start this meeting" [LIVE-VERIFY texts] → report the exact message and stop. Do not retry the same ID.
+  - **Left / ended**: text ≈ "You have left the meeting" or "This meeting has been ended by host" [LIVE-VERIFY], sometimes with a feedback dialog — safe to ignore; leaving already succeeded.
+
+  ### Element Reference (English labels; every claim [LIVE-VERIFY] pending the live-capture pass)
+  - Mic toggle (pre-join and in-meeting): button ≈ "Mute" when the mic is LIVE (click = mute), ≈ "Unmute" when muted. The label states the ACTION, not the state — "Mute" visible means the user is currently audible. [LIVE-VERIFY]
+  - Camera toggle: ≈ "Stop Video" when the camera is LIVE, ≈ "Start Video" when off — same action-label logic. [LIVE-VERIFY]
+  - Toolbar panels: "Participants" (opens list with a count on/near the button), "Chat" (right-side panel, message input placeholder ≈ "Type message here..." [LIVE-VERIFY]), "Reactions" (menu containing "Raise Hand" / "Lower Hand" [LIVE-VERIFY]).
+  - "Leave" opens a confirm popup: "Leave Meeting" — and, only if the user is host, also "End Meeting for All" (a host control, rule 2e). [LIVE-VERIFY]
+  - A "Record" button may be visible — rule 2d: never click it.
+
+  ---
+
+  ### TASK: Join a meeting from a link or ID + passcode
+  1. Normalize: from a link, extract host, meeting ID, and ?pwd=; build https://{host}/wc/join/{id}?pwd=... From a bare ID, strip spaces and use https://zoom.us/wc/join/{id}. browser_navigate there.
+  2. browser_snapshot → run State Recognition. Interstitial → rewrite or "Join from Your Browser"; sign-in / cannot-join / devices-blocked → tell user, stop; passcode prompt → resolve per State Recognition, then continue.
+  3. On name entry: browser_type the user's name (ask the user if you don't know what name to use — it is shown to everyone in the meeting).
+  4. Enforce PRESENCE SAFETY: if a "Mute" button is present, click it (→ label becomes "Unmute"); if "Stop Video" is present, click it (→ "Start Video"). Snapshot after each toggle to confirm [LIVE-VERIFY toggles exist on this screen; some flows only expose them after Join — if so, do these clicks as step 6 immediately after joining]. Skip a toggle only if the user explicitly wants that device live.
+  5. Click "Join" → browser_snapshot → expect waiting room (report and poll per State Recognition) or in-meeting.
+  6. Verify in-meeting state (Leave button present, hover first if needed). Report joined, and that mic and camera are off.
+
+  ### TASK: Leave the meeting
+  1. browser_snapshot (hover the meeting area first if the toolbar is hidden) → click the "Leave" button.
+  2. browser_snapshot → in the confirm popup click "Leave Meeting" — never "End Meeting for All" unless the user is host and explicitly asked to end it for everyone.
+  3. browser_snapshot → verify the left/ended state.
+
+  ### TASK: Toggle mic / camera in-meeting
+  1. browser_press_key("Alt+A") for mic, browser_press_key("Alt+V") for camera [LIVE-VERIFY] — or hover to reveal the toolbar and click the toggle button.
+  2. browser_snapshot → verify the label flipped (e.g. "Unmute" → "Mute" means the mic is now LIVE). Remember rule 2c: only unmute/start video when explicitly asked; state the resulting device state to the user.
+
+  ### TASK: Send a chat message
+  1. In-meeting, hover to reveal the toolbar → click "Chat" → browser_snapshot — panel opens with the message input.
+  2. browser_type(input id, text) — NO submit yet → browser_snapshot → verify the text is exactly right (messages go to the meeting and cannot be unsent). Default recipient is "Everyone"; if the user wants a private message, select the person in the To/recipient dropdown first and verify the selection [LIVE-VERIFY dropdown].
+  3. browser_press_key("Enter") → browser_snapshot → the message appears in the panel's Page Text. If it doesn't after one more snapshot, tell the user — do NOT retype (double-send risk).
+
+  ### TASK: See who is in the meeting
+  1. Hover to reveal the toolbar → click "Participants" → browser_snapshot.
+  2. Read names from the panel's Page Text (browser_scroll within the panel for long lists); the participant count usually appears on the Participants button or panel header. Report names and count.
+
+  ### TASK: Raise / lower hand
+  1. Hover to reveal the toolbar → click "Reactions" → browser_snapshot → click "Raise Hand" (or "Lower Hand") [LIVE-VERIFY menu items].
+  2. browser_snapshot → verify: the menu entry flips to "Lower Hand" and/or a hand indicator appears by the user's name in Participants [LIVE-VERIFY].
+
+  ### TASK: Report meeting state
+  Report only what snapshots can actually read: meeting topic/ID (page title or Participants header [LIVE-VERIFY]), participant count and names (Participants panel), the user's own mic/camera state (action labels, rule on Element Reference), raised-hand status, and recent chat messages. Be honest about limits: the active-speaker highlight and per-person talking indicators are video-rendered and unreliable in snapshots — say "I can't reliably tell who is speaking" rather than guessing.
+
+  ---
+
+  ### Gotchas
+  - **Host-side admit requests**: if the user is host and "(name) has entered the waiting room" / an Admit prompt appears, do NOT click Admit or Deny on your own — tell the user who is waiting and let them decide (rule 2e).
+  - Joining via the web client does not require being logged in; a Zoom account prompt mid-flow is a sign you hit a restricted meeting (see Sign-in required), not a normal step.
+  - "Join Audio": the web client may show a "Join Audio by Computer" button after entering [LIVE-VERIFY]. Clicking it connects audio but the mic stays muted if you muted pre-join; verify the Mute/Unmute label afterward before telling the user they are inaudible or audible.
+  - Webinars: the same /wc/ rewrite applies, but attendees may be asked for email + name instead of just a name, and have no mic/camera to manage [LIVE-VERIFY].

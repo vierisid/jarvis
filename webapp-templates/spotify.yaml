@@ -1,0 +1,109 @@
+# Keywords deliberately music-intent phrases: the app name "Spotify" (word-bound-matched)
+# and open.spotify.com links carry most real requests. Bare "music"/"play"/"song" style
+# words are far too generic for a substring matcher. None of these fire on the lint
+# corpus or shadow another template's keywords.
+app_name: Spotify
+domains:
+  - open.spotify.com
+keywords:
+  - play a song
+  - now playing
+  - add to playlist
+  - next track
+  - skip this song
+description: Spotify Web Player — search music, play tracks/albums/playlists, pause/skip, like/save, add to playlists, shuffle/repeat, read what's playing
+version: 1
+instructions: |
+  URL: https://open.spotify.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a menu/dialog opens, after a playback-changing click) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording, rather than demanding the exact string.
+  7. Spotify localizes button text and aria-labels. Prefer URLs (locale-independent); match labels by meaning.
+  8. Never press Ctrl-modified shortcuts — Chrome intercepts those before the page sees them.
+
+  ### THE PLAYER BAR (bottom of every page — your single source of truth for playback)
+  Left: the CURRENT track's title + artist links, plus a +/heart save control [LIVE-VERIFY]. Center: previous / play-pause / next buttons with shuffle and repeat beside them; the play-pause button's aria-label means "Pause" while playing and "Play" while paused — READ it to know the state [LIVE-VERIFY]. Right: a Connect-to-device control and a mute/volume control [LIVE-VERIFY].
+  - VERIFICATION RULE: a playback action succeeded only when the player bar shows the EXPECTED TRACK TITLE and the play-pause button's label means "Pause". Check both.
+  - "Space" via browser_press_key toggles play/pause — but ONLY when focus is NOT in a text field (after using the search box, press "Escape" or click empty page area first, or Space types a space into the box). The player-bar button is the primary path; Space is secondary.
+
+  ### PLAYBACK DEVICE (Connect)
+  The web player plays audio in THIS browser tab. If the user's Spotify is active on another device (phone, desktop app, speaker), the player bar controls THAT device instead — look for a device indicator such as a highlighted Connect icon or a "Playing on <device>" banner near the player bar [LIVE-VERIFY device indicator]. If present, tell the user the play state you see belongs to that device, and that clicking play here still controls it remotely. Never switch the playback device unless asked.
+
+  ### State Recognition
+  - **Logged out**: open.spotify.com loads with prominent "Sign up" / "Log in" buttons in the header [LIVE-VERIFY]. Search and reading metadata (track/album/artist/playlist pages) still WORK logged out, but playback is locked or limited to short previews [LIVE-VERIFY preview behavior] — clicking play typically raises a signup prompt. If the task is play/like/save/add-to-playlist and you see the logged-out header, tell the user: "This needs your Spotify login — please sign in manually in the browser" and finish only the read-only part. Liked Songs, saving, and playlist edits ALWAYS need login; ad-free and some playback behaviors need Premium — say which one blocks the task.
+  - **Login page**: URL on accounts.spotify.com or a form asking for email/password/Google/Facebook login -> tell the user to sign in themselves. STOP. NEVER type credentials, even if the user provides them.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Ready**: the player bar controls are present at the bottom and the left sidebar (Home/Search/Your Library) is visible [LIVE-VERIFY].
+  - **Cookie/consent banner** on fresh sessions [LIVE-VERIFY] -> click the button meaning "Accept"/"Close", snapshot, continue.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Search: https://open.spotify.com/search/QUERY (URL-encode QUERY) — the PRIMARY way to search
+  - Track: https://open.spotify.com/track/ID | Album: /album/ID | Artist: /artist/ID | Playlist: /playlist/ID
+  - Liked Songs (login): https://open.spotify.com/collection/tracks
+  - A pasted spotify.link or spotify:track:ID URI -> use the matching open.spotify.com URL
+
+  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
+  - **Search results page**: sections meaning "Top result", "Songs", "Artists", "Albums", "Playlists" [LIVE-VERIFY]. Song rows show title, artist, album, duration in Page Text; artist/album cards are links to /artist/ID and /album/ID.
+  - **Track rows** (search results, albums, playlists, Liked Songs): each row's PLAY button is HOVER-REVEALED — it is not in the snapshot until you browser_hover the row, then re-snapshot [LIVE-VERIFY]. Alternative that needs no hover: browser_click the row with double: true — double-click plays it [LIVE-VERIFY].
+  - **Row "more options" (⋯) button**: also hover-revealed; aria-label means "More options for <track>" [LIVE-VERIFY].
+  - **Album/playlist/artist pages**: a large green play button near the page title plays the whole thing [LIVE-VERIFY]; track list below.
+  - **Shuffle/repeat** (player bar): toggle buttons whose aria-label/checked state flips between enable/disable (repeat cycles off -> all -> one) [LIVE-VERIFY aria states].
+  - **Volume**: the volume SLIDER is drag-based and drag is not in the tool surface — volume level CANNOT be changed. The adjacent mute/unmute button CAN be clicked [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Search and read results  (budget: 4 calls)
+  1. browser_navigate https://open.spotify.com/search/QUERY -> browser_snapshot.
+  2. Report songs (title/artist/duration), artists, albums, playlists from Page Text. browser_scroll down + snapshot for more. Works logged out.
+
+  ### TASK: Play a track  (budget: 8 calls)
+  1. Given a track URL: browser_navigate to it. Given a name: navigate to /search/QUERY -> snapshot -> locate the matching song row (confirm artist if given — same-titled covers are common).
+  2. browser_hover the row -> snapshot -> click the revealed play button [LIVE-VERIFY]; OR browser_click the row with double: true [LIVE-VERIFY]. On a /track/ page, click the big play button instead.
+  3. snapshot -> VERIFY via the player bar: expected title + button meaning "Pause". Signup prompt instead -> State Recognition (login). Check the device indicator — audio may be on another device.
+
+  ### TASK: Pause / resume  (budget: 3 calls)
+  Click the player bar's play-pause button (or "Space" — focus caveat above). Verify: its aria-label flipped [LIVE-VERIFY]. Nothing has ever played -> the bar is empty/disabled [LIVE-VERIFY]; tell the user there is nothing to resume.
+
+  ### TASK: Next / previous track  (budget: 3 calls)
+  Click the player-bar button meaning "Next"/"Previous" [LIVE-VERIFY] -> snapshot -> the player-bar title CHANGED (verify). Note: "Previous" restarts the current track if it has been playing a while — click it twice to truly go back [LIVE-VERIFY].
+
+  ### TASK: Adjust volume — NOT SUPPORTED (drag-based slider). Say so. Offer instead: mute/unmute via the player-bar mute button [LIVE-VERIFY] (verify the label flips), or the user's OS/hardware volume.
+
+  ### TASK: Play an album or playlist  (budget: 6 calls)
+  1. browser_navigate to /album/ID or /playlist/ID (or search and click the album/playlist card) -> snapshot.
+  2. Click the big play button near the title [LIVE-VERIFY] -> snapshot -> player bar shows a track FROM this album/playlist + "Pause" state.
+
+  ### TASK: Like / save a track (login)  (budget: 5 calls)
+  1. Best while it's playing: snapshot -> the +/heart control next to the player-bar title [LIVE-VERIFY]. Otherwise: hover the track's row -> snapshot -> its +/heart control [LIVE-VERIFY].
+  2. TOGGLE GUARD: if the control already shows the saved state (checkmark/filled, label meaning "Remove from..." or similar) [LIVE-VERIFY], tell the user it's already saved — clicking would UNsave. Otherwise click -> snapshot -> the control now shows the saved state. A "+" control may open a playlist-picker menu instead of instantly saving [LIVE-VERIFY] -> pick "Liked Songs".
+
+  ### TASK: Add a track to a playlist (login)  (budget: 8 calls)
+  1. Locate the track's row -> browser_hover it -> snapshot -> click the ⋯ "More options" button [LIVE-VERIFY].
+  2. snapshot -> click the menu item meaning "Add to playlist" [LIVE-VERIFY] -> snapshot -> a submenu/dialog lists the user's playlists (with a search field) [LIVE-VERIFY].
+  3. Click the target playlist. Ambiguous or missing -> browser_press_key("Escape") and ask the user; NEVER create a new playlist unasked.
+  4. Verify: a confirmation appears in Page Text [LIVE-VERIFY], or navigate to the playlist and confirm the track is listed.
+
+  ### TASK: What's currently playing  (budget: 2 calls)
+  browser_navigate to https://open.spotify.com (any page shows the bar) -> snapshot -> report the player-bar title + artist and whether the button means "Pause" (= playing). Empty bar -> nothing is playing in this web player; a device indicator means it may be playing elsewhere (see PLAYBACK DEVICE).
+
+  ### TASK: Open an artist and their top tracks  (budget: 5 calls)
+  1. browser_navigate /artist/ID, or /search/NAME -> snapshot -> click the artist card under "Artists" [LIVE-VERIFY].
+  2. snapshot -> the "Popular" section lists top tracks with play counts [LIVE-VERIFY]; discography below (browser_scroll for more). Play one via the Play-a-track row technique.
+
+  ### TASK: Shuffle / repeat  (budget: 4 calls)
+  1. snapshot -> read the player-bar shuffle/repeat button's CURRENT aria state [LIVE-VERIFY]. Already as requested -> tell the user, don't click (toggle!).
+  2. Click -> snapshot -> verify the aria state changed. Repeat cycles off -> all -> one: click until the requested mode, max 3 clicks.
+
+  ---
+
+  ### Gotchas
+  - Free (non-Premium) accounts get ads and may restrict skips or exact-track playback [LIVE-VERIFY current free-tier web rules]; if playback lands on the WRONG track or an ad, report it — don't fight it with retries.
+  - When a track/album ends, Spotify often AUTOPLAYS similar music — the player bar then shows a track the user never asked for; that is autoplay, not a failed command.
+  - Page Text on album/playlist pages includes recommendation sections ("You might also like") — never report those as the album's/playlist's own tracks.
+  - Track rows are virtualized on long playlists: only visible rows are in the snapshot — scroll to find a track; never claim it's absent from one snapshot.
+  - Podcasts/audiobooks share the search UI (/episode/, /show/ URLs); the same player-bar verification applies.

@@ -1,0 +1,114 @@
+# Keyword choice: only "insta". It survives the redundant-keyword lint (that check asks
+# whether the KEYWORD contains the app name — "insta" does not contain "instagram"; the
+# reverse containment doesn't matter) and carries real recall: users say "post this on
+# insta" without ever writing the full name, which app_name/domain matching would miss.
+# Nothing else qualifies: "my feed"/"story"/"dm" are generic, and longer phrases like
+# "dm on insta" are already word-bound-covered by "insta" itself.
+app_name: Instagram
+domains:
+  - instagram.com
+keywords:
+  - insta
+description: Instagram — view profiles and posts, like, comment, search hashtags, read/send DMs, post photos, watch stories, follow/unfollow
+version: 1
+instructions: |
+  URL: https://www.instagram.com/
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate by role/aria-label/href/text. Instagram's DOM is obfuscated (auto-generated class names) — aria-labels, roles, and hrefs are the ONLY stable handles; every element claim below is [LIVE-VERIFY]: match the label's MEANING in the current wording/locale, not an exact string.
+  3. browser_type REPLACES a field's content by default. To add to text already in a caption/comment/DM box, pass append: true; to correct one, plain browser_type (replace) with the FULL corrected text.
+  4. Snapshot at CHECKPOINTS (after navigation, after a dialog opens, before and after Share/Post/Send) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. GO SLOW — Instagram aggressively flags automation and bans accounts for it. One user request = one action (one like, one comment, one DM, one follow, one post). NEVER loop over lists ("like all her posts", "DM these 20 people") — refuse and explain the ban risk; never fire rapid bursts of likes/follows/comments.
+  7. browser_press_key("Escape") closes an open dialog (post viewer, create flow, story) without publishing; the create flow may ask to discard — confirm discarding only if the user aborted [LIVE-VERIFY].
+
+  ### PUBLIC POSTING SAFETY (posts and comments publish instantly under the user's name)
+  - BEFORE clicking Share/Post: snapshot and confirm the caption/comment text is EXACTLY the intended text — no truncation, no leftovers. Wrong? Retype the full text (replace default), re-verify, then click.
+  - AFTER clicking: verify ONCE via snapshot. If you cannot confirm success, tell the user "it may or may not have gone out — please check" and STOP. NEVER retry on uncertainty: a blind retry risks a public double-post.
+  - If the request is ambiguous — what to write, which post to comment on — ASK the user. Never guess words that get published.
+
+  ### State Recognition
+  - **Logged out**: Instagram is one of the most aggressive login-wallers — logged out, almost EVERY page shows a login/signup wall (password field, "Log in", "Sign up", a "See more from USERNAME" overlay). Any of those -> tell the user: "You're logged out of Instagram — please log in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Rate limited / action blocked**: text meaning "Please wait a few minutes before you try again", "Try again later", "We limit how often…", "Action blocked" -> STOP IMMEDIATELY and tell the user. No retries, no navigating around it — continuing escalates to account restrictions.
+  - **Challenge / checkpoint**: "Confirm it's you", "Suspicious login attempt", CAPTCHA, phone/email verification (URL often contains /challenge/) -> STOP, tell the user to resolve it manually in the browser.
+  - **Loading**: 0 interactive elements or only a spinner -> snapshot again (max 2 retries, then tell the user).
+  - **Ready**: nav links/buttons for Home (/), Explore, Messages (/direct/inbox/) and the user's own profile are in the snapshot [LIVE-VERIFY].
+  - **One-time dialogs** — dismiss before anything else: "Turn on Notifications" -> "Not Now"; "Save your login info?" -> "Not now"; app-install/"Open Instagram?" banners -> close [LIVE-VERIFY].
+
+  ### URL MAP (URL-first: Instagram's UI is click-heavy — URLs skip most of it)
+  - Home feed: https://www.instagram.com/
+  - Profile: https://www.instagram.com/USERNAME/  (no @)
+  - Single post: https://www.instagram.com/p/SHORTCODE/  (reels: /reel/SHORTCODE/ — treat the same for caption/comments)
+  - Explore: https://www.instagram.com/explore/
+  - Hashtag: https://www.instagram.com/explore/tags/TAGNAME/  (no #) [LIVE-VERIFY — on 404/redirect, use the search box]
+  - DM inbox: https://www.instagram.com/direct/inbox/
+  - Story viewer: https://www.instagram.com/stories/USERNAME/  [LIVE-VERIFY]
+
+  ### Element Reference (ALL [LIVE-VERIFY])
+  - **Left nav** (desktop): links/buttons for Home, Search, Explore, Reels, Messages, Notifications, Create, own profile — match by aria-label meaning or href (/, /explore/, /direct/inbox/, /USERNAME/).
+  - **Post** (feed or /p/ page): article element; author link at the top (href /USERNAME/); caption + comments readable in Page Text; action row of buttons whose aria-labels/svg titles mean Like (heart), Comment, Share, Save. Already-liked state: the label means "Unlike" (filled heart). Match action buttons by label meaning, NEVER by position.
+  - **Comment box**: textarea/contenteditable with placeholder meaning "Add a comment…"; a "Post" button beside it enables once text is present.
+  - **Search panel**: the nav "Search" opens a panel with an input meaning "Search"; results are account/hashtag rows — click the intended row rather than pressing Enter blindly.
+  - **Profile header**: username, post/follower/following counts, bio in Page Text; Follow/Following/Requested button; "Message" button on others' profiles; story ring = profile picture button whose label mentions the story when active.
+
+  ---
+
+  ### TASK: View a profile + recent posts
+  1. browser_navigate https://www.instagram.com/USERNAME/ -> browser_snapshot. Bio + counts are in Page Text. The post grid is thumbnails only (links with href /p/…) — CAPTIONS ARE NOT IN THE GRID.
+  2. To read post content, open posts one at a time: click a grid link (or navigate its /p/ href), read as in "Open and read a post". browser_scroll + snapshot for older grid rows. "This account is private" -> nothing to read; tell the user.
+
+  ### TASK: Open and read a post  (budget: 5 calls)
+  1. browser_navigate the /p/SHORTCODE/ URL (or click the post's link) -> browser_snapshot.
+  2. Read from Page Text: the caption is the FIRST comment-style block, by the author; the like count reads like "1,234 likes" or "Liked by NAME and others" (counts can be hidden — report what's shown); comments follow. browser_scroll down + snapshot for more; click the "load more comments" (+) button if present [LIVE-VERIFY]. 2-3 scrolls is plenty — report, don't keep scrolling.
+
+  ### TASK: Like a post
+  1. Open the post's /p/ page (preferred — in a feed, make sure the heart belongs to the SAME article as the target post).
+  2. browser_snapshot: find the action button meaning "Like". If its label already means "Unlike", the post is ALREADY liked — clicking would unlike it; leave it and tell the user.
+  3. browser_click -> browser_snapshot — the label now means "Unlike". Unconfirmed -> report, don't re-click (you might toggle it back).
+
+  ### TASK: Comment on a post  (budget: 8 calls)
+  1. Open the /p/ page; snapshot; confirm from Page Text this is the right post — ambiguous reference? Ask.
+  2. Click the "Add a comment…" box; browser_type the comment (no submit).
+  3. browser_snapshot — VERIFY the box shows exactly the intended text (Public Posting Safety).
+  4. Click the "Post" button beside the box -> browser_snapshot — success = your comment visible among the comments / box empty again. Unconfirmed -> tell the user, never re-post.
+
+  ### TASK: Search / browse a hashtag
+  1. Hashtag known: browser_navigate https://www.instagram.com/explore/tags/TAGNAME/ -> browser_snapshot — Top/Recent grid of posts; captions require opening posts individually (grid is thumbnails, as on profiles).
+  2. Account or fuzzy search: click the nav "Search", browser_type the query into the search input, snapshot, then CLICK the matching account/hashtag row in the results panel.
+
+  ### TASK: Read DMs
+  1. browser_navigate https://www.instagram.com/direct/inbox/ -> browser_snapshot — conversation rows (name + last-message preview) in Page Text. Mention "Requests" if a message-requests entry shows pending items [LIVE-VERIFY].
+  2. Click a conversation row -> snapshot — messages are in Page Text (newest at the bottom); browser_scroll up + snapshot for history.
+
+  ### TASK: Send a DM  (budget: 10 calls)
+  1. Open the inbox. Existing conversation with the person? Click its row. Else click the new-message button (aria-label meaning "New message") [LIVE-VERIFY], type the name into the recipient search field, snapshot, click the right person from the results, then the Next/Chat button [LIVE-VERIFY].
+  2. WRONG-RECIPIENT CHECK: browser_snapshot — the open thread's HEADER must name the intended person BEFORE you type anything. Wrong or unsure -> stop and ask.
+  3. browser_type(message box — placeholder meaning "Message…", text, submit: true) — Enter sends [LIVE-VERIFY]; if it only inserts a newline, click the Send button instead.
+  4. browser_snapshot — the message appears at the bottom of the thread. Absent after one extra snapshot -> tell the user; do NOT retype (double-send risk).
+
+  ### TASK: Post a photo  (budget: 12 calls; whole flow [LIVE-VERIFY])
+  Web posting supports SINGLE IMAGES best — for carousels or video, warn the user the web flow is unreliable and confirm before trying.
+  1. Click the nav "Create" (aria-label meaning "New post") -> browser_snapshot — a "Create new post" dialog with a "Select from computer" button.
+  2. Do NOT click "Select from computer" — it opens a native OS picker the browser tools can't drive. Call browser_upload_file with the image's absolute path (targets the dialog's hidden file input [LIVE-VERIFY it exists]; file must be under the user's home directory). Snapshot — the image preview appears in the dialog.
+  3. Click "Next" through the crop step, snapshot, then "Next" through the filter/edit step, snapshot [LIVE-VERIFY step count].
+  4. On the final step, browser_type the caption into the field meaning "Write a caption…" -> browser_snapshot — VERIFY the caption is exactly the intended text.
+  5. Click "Share" -> browser_snapshot — success = text meaning "Your post has been shared" [LIVE-VERIFY]. Unconfirmed -> tell the user to check their profile; do NOT retry the flow.
+
+  ### TASK: View stories
+  1. If the user only asks WHETHER someone has a story: open their profile and report the story ring on the profile picture — do NOT open it (viewing a story reveals the user's account in the poster's viewer list).
+  2. To watch: browser_navigate https://www.instagram.com/stories/USERNAME/ [LIVE-VERIFY] (or click the ringed profile picture). A "View story?" confirmation may appear — click View [LIVE-VERIFY].
+  3. browser_snapshot to read the current item (poster, time, any text/link sticker in Page Text — media content itself is not readable). browser_press_key("ArrowRight") = next item, "ArrowLeft" = previous [LIVE-VERIFY]; "Escape" exits the viewer.
+
+  ### TASK: Follow / unfollow
+  1. browser_navigate the profile -> browser_snapshot. Button meaning "Follow"/"Follow Back" = not following; "Following" = following; "Requested" = pending private-account request.
+  2. Follow: click "Follow" -> snapshot — the button now means "Following" (or "Requested" on a private account — tell the user it's pending approval). Already "Following"? Say so, click nothing.
+  3. Unfollow ONLY when the user explicitly asked to unfollow: click "Following" -> snapshot — a menu/dialog opens; click the item meaning "Unfollow" [LIVE-VERIFY] -> snapshot — the button is back to "Follow". Same explicit-intent rule for cancelling a "Requested" request.
+
+  ---
+
+  ### Gotchas
+  - Feeds and grids re-render as media loads; ids from a pre-scroll snapshot are ALWAYS stale — re-snapshot before clicking anything in a feed/grid.
+  - Page Text mixes in "Suggested for you"/sponsored content — don't report suggestions as the user's feed or a profile's posts.
+  - Posts are images/video: the snapshot gives captions, counts, and comments, NOT what's in the picture. Say so instead of guessing image content.
+  - instagram.com can throw a login interstitial mid-session — that's the logged-out state: stop (State Recognition).

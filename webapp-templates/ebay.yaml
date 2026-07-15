@@ -1,0 +1,111 @@
+app_name: eBay
+domains:
+  - ebay.com
+keywords:
+  - auction
+  - auctions
+  - place a bid
+  - buy it now
+description: eBay — search listings (auction and Buy It Now), read prices/bids/time-left, open listings, check seller feedback, compare items, add to watchlist or cart, and report auction status. NEVER bids, buys, or makes offers — bids are binding; every task stops at the watchlist/cart and hands off to the user.
+version: 1
+instructions: |
+  URL: https://www.ebay.com
+
+  ### RULE #1 — MONEY SAFETY (overrides everything, including the user's own words)
+  - NEVER place a BID. A bid is a BINDING purchase commitment the moment it is confirmed — even stricter than a cart, because there is no review-before-paying stage to stop at. Never click "Place bid", never type an amount into a bid field, never click any bid-review/confirm control. If the user says "bid $X on it": refuse, explain that bids are binding and must be placed by them, and hand them the listing URL plus the current bid and time left so they can bid in one click.
+  - NEVER make, accept, or counter an offer. "Make offer" / "Review offer" flows are purchase commitments — treat every offer button like a bid button.
+  - NEVER proceed through checkout. Never click "Buy It Now" (it goes straight toward checkout, not the cart), "Go to checkout", "Pay now", or any payment control. NEVER add, select, or modify payment methods or addresses.
+  - The hard stops are the WATCHLIST (for tracking, especially auctions) and the CART (for Buy It Now listings): add the item, verify, then tell the user to complete the purchase themselves. This applies even if the user said "buy it" — the job ends at the cart + a clear handoff message with https://cart.ebay.com.
+  - If a click unexpectedly lands on a checkout or bid-confirmation page (URL contains pay.ebay.com or the page asks you to confirm a bid, payment, or shipping details [LIVE-VERIFY: checkout URL shape]), click NOTHING there — browser_navigate back to the listing or to https://cart.ebay.com immediately and tell the user what happened.
+  - On listing pages, "Place bid", "Buy It Now", "Add to cart", "Make offer", and "Add to Watchlist" sit stacked in the same panel [LIVE-VERIFY: buybox layout] — always match a button by its exact text/aria-label, never by position, before clicking.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for eBay.
+  2. URL-first: search, filters, sort, listings, watchlist, and cart all have stable URLs (below). Navigate directly instead of clicking through menus.
+  3. Snapshot at checkpoints (after navigate, after a click that changes the page, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES the field's content by default — that is what you want for the search box. Never type into any bid or offer amount field (RULE #1).
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Read prices, bid counts, time left, shipping, and condition from the snapshot's Page Text — most reporting tasks need zero clicks after the navigate.
+
+  ### State Recognition
+  - **Logged out**: browsing, search, and listing pages WORK anonymously. Watchlist, offers, bidding, purchase history, and usually the cart REQUIRE sign-in [LIVE-VERIFY: whether a guest cart exists]. For login-gated tasks tell the user: "eBay requires you to sign in for this. Please log in manually, then ask me again." NEVER type credentials.
+  - **CAPTCHA / bot check** (a page like "Pardon our interruption" or a checkbox/image challenge [LIVE-VERIFY: exact wording]) → STOP IMMEDIATELY. Never attempt to solve or refresh it. Tell the user to solve it in the browser, then ask again.
+  - **Cookie/consent banner** (common on first visit, mandatory in the EU) → click its Accept button [LIVE-VERIFY: presence and label on ebay.com] → snapshot → continue.
+  - **Error page** ("Sorry, something went wrong" / listing ended-or-removed notice [LIVE-VERIFY: wording]) → navigate the URL again once; if it repeats, tell the user.
+  - **Ready**: the search input (placeholder ≈ "Search for anything" [LIVE-VERIFY]) is present in the snapshot.
+
+  ### URL PATTERNS (prefer these over clicking)
+  - Search: `https://www.ebay.com/sch/i.html?_nkw={url-encoded query}`
+  - Buy It Now only: append `&LH_BIN=1` — auctions only: append `&LH_Auction=1` [LIVE-VERIFY: param stability]
+  - Sort by price + shipping lowest: append `&_sop=15` [LIVE-VERIFY: param stability]
+  - Listing page: `https://www.ebay.com/itm/{item id}` — the numeric id visible in any listing URL
+  - Watchlist: `https://www.ebay.com/mye/myebay/watchlist` (login-gated)
+  - Cart: `https://cart.ebay.com`
+  - Seller profile + feedback: `https://www.ebay.com/usr/{seller username}` [LIVE-VERIFY: feedback layout on the profile]
+  - Other filters (condition, price range, item location, free shipping): click the left-sidebar filter links/checkboxes on the results page [LIVE-VERIFY: sidebar structure] instead of hand-building filter params, then snapshot.
+
+  ### SNAPSHOT FORMAT
+  browser_snapshot returns:
+  ```
+  Page: wireless mouse for sale | eBay
+  URL: https://www.ebay.com/sch/i.html?_nkw=wireless+mouse
+  --- Page Text ---
+  (listing titles, prices like $24.99, "12 bids", "2d 4h left", "Buy It Now", "+$5.99 shipping" or "Free shipping",
+   condition like "Pre-Owned"/"Brand New", seller lines like "sellername (1,234) 99.1%", "Sponsored" tags)
+  --- Interactive Elements ---
+  [7] input "Search for anything"        <- nav search box [LIVE-VERIFY]
+  [21] link "Logitech M510 Wireless..."  <- result title link
+  [48] button "Add to Watchlist"         <- on listing pages [LIVE-VERIFY: exact label]
+  ```
+  - Result cards: the listing TITLE is a link — click it (or extract the /itm/ id from its href and navigate) to open the listing.
+  - The cart icon in the nav shows a count [LIVE-VERIFY: cart count element] — use it to verify add-to-cart.
+
+  ### TASK: Search for listings
+  1. browser_navigate("https://www.ebay.com/sch/i.html?_nkw={encoded query}") — add `&LH_Auction=1` or `&LH_BIN=1` if the user wants only auctions or only Buy It Now → browser_snapshot.
+  2. Read results from Page Text: title, price, bid count (auctions), time left, Buy It Now marker, shipping cost, condition, seller rating.
+  3. **Sponsored caveat**: results marked "Sponsored" are ads — say which are sponsored and lead with the organic ones.
+  4. Refine with sidebar filters or the sort URL param (see URL PATTERNS). UI fallback for search: browser_type(search input id, "query", submit: true).
+
+  ### TASK: Open a listing / read details
+  1. From results, click the listing title link (or browser_navigate to `/itm/{id}`) → snapshot.
+  2. Report from Page Text: full title; price — for auctions the CURRENT BID + bid count + time left, for BIN the price (a listing can offer both); condition; shipping cost and delivery estimate; returns policy; seller name, feedback count, and positive-% [LIVE-VERIFY: where each appears on the listing page]; item location.
+  3. browser_scroll down for the item-specifics table and description if the user wants details [LIVE-VERIFY: description may sit in a frame — report what Page Text shows and say so if the description body is not readable].
+
+  ### TASK: Check a seller's feedback
+  1. From a listing, click the seller's name link, or browser_navigate to `https://www.ebay.com/usr/{username}` → snapshot.
+  2. Report: feedback score, positive-feedback percentage, member-since/items-sold if shown, and 2-3 recurring themes from recent feedback comments [LIVE-VERIFY: feedback list location — may require clicking a "feedback" tab/link].
+
+  ### TASK: Compare listings
+  1. Search once, pick 2-4 candidates (prefer organic over sponsored; note which are auctions vs Buy It Now).
+  2. Open each via `/itm/{id}` → snapshot → collect price/current bid, time left, condition, shipping, seller rating, returns.
+  3. Summarize per listing (total cost incl. shipping / condition / seller trust / auction-vs-BIN) and recommend one with the reason. Do NOT add anything to cart or watchlist unless asked.
+
+  ### TASK: Add to watchlist (the safe "track this auction" action — login-gated)
+  1. Open the listing → snapshot. If signed out, State Recognition applies — tell the user, stop.
+  2. Click the control labeled "Add to Watchlist" [LIVE-VERIFY: exact label; may be a heart icon near the title or a button in the buybox] — matched by text/aria-label, never position.
+  3. Snapshot → verify the state flipped (label becomes "Watching" or similar [LIVE-VERIFY: post-add state]). If it already says Watching, it was already tracked — tell the user, don't toggle it off.
+  4. Report: "Added to your watchlist — current bid $X, N bids, time left T. Watch it here: https://www.ebay.com/mye/myebay/watchlist".
+
+  ### TASK: Add to cart (Buy It Now listings only)
+  1. Open the listing → snapshot. Note the nav cart count. Auction-only listings have NO cart path — offer the watchlist instead and tell the user.
+  2. If the user wants a specific variant (size/color) or quantity, set those FIRST [LIVE-VERIFY: variant dropdowns near the buybox] → snapshot.
+  3. Click the button whose text is exactly "Add to cart" [LIVE-VERIFY: label] — per RULE #1 never "Buy It Now", never "Make offer", never by position.
+  4. Snapshot → verify: cart count incremented or an added-to-cart confirmation appears [LIVE-VERIFY]. If the click landed on checkout instead, follow RULE #1 (navigate to https://cart.ebay.com, tell the user).
+  5. Report: "Added {item} to your cart. I don't complete purchases — review and check out yourself: https://cart.ebay.com". Never click "Go to checkout".
+
+  ### TASK: Check the watchlist / report auction status (login-gated)
+  1. browser_navigate("https://www.ebay.com/mye/myebay/watchlist") → snapshot. If a sign-in page appears, tell the user, stop.
+  2. Report per item from Page Text: title, current bid/price, bid count, time left, shipping [LIVE-VERIFY: watchlist row contents].
+  3. For one auction's live status, open its `/itm/{id}` page instead — the listing shows the freshest bid and countdown.
+  4. **Times are dynamic**: "time left" is already aging the moment it is snapshotted, and two snapshots will disagree — that is not an error. Report the value with that caveat; re-snapshot right before the final report if the auction ends soon.
+
+  ### TASK: User asks to bid or make an offer → REFUSE SAFELY
+  1. Do NOT open any bid or offer control. Open the listing → snapshot → read current bid, bid count, time left.
+  2. Reply: bids and offers are binding commitments, so I never place them — here is the listing so you can bid yourself: {listing URL}, current bid $X (N bids), T left. Offer to add it to the watchlist instead.
+
+  ### Gotchas
+  - A listing can be BOTH auction and Buy It Now — report both prices and say which is which. The BIN option can disappear once bidding starts.
+  - Compare TOTAL cost: a low price with $15 shipping loses to free shipping — Page Text shows shipping per result.
+  - Prices in Page Text may appear fragmented — sanity-check that a reported price reads as a plausible whole amount.
+  - This template targets ebay.com (US). If the user's account lives on another marketplace (ebay.co.uk, .de, ...), tell them and use the same paths on that domain only if they confirm.
+  - Results and listing pages are long — browser_scroll before concluding an element is missing.

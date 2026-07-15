@@ -1,0 +1,120 @@
+# Keyword note: "merge request(s)" is GitLab-native vocabulary (GitHub says "pull
+# request" — github.yaml owns that phrase; no cross-template shadowing) and "ci
+# pipeline" is how users name GitLab CI without naming the app. Everything else
+# rides on the app name / domain word-bound match. "the mr" was evaluated and
+# rejected (too short, fires on unrelated text).
+app_name: GitLab
+domains:
+  - gitlab.com
+keywords:
+  - merge request
+  - merge requests
+  - ci pipeline
+description: GitLab — read projects/READMEs/files, search projects/code/issues, read and create issues, comment, review and merge MRs, pipeline status for branches/MRs, todos triage. Same recipes apply to self-hosted GitLab instances.
+version: 1
+instructions: |
+  URL: https://gitlab.com
+  SELF-HOSTED: self-hosted GitLab shares these URL shapes and UI — if the user names their own GitLab host, use it as the base URL with the same recipes.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for GitLab. Never use desktop or sidecar tools.
+  2. URL-FIRST: GitLab's URLs are its most reliable selectors — prefer deep links (patterns below) over clicking through menus. Confirm arrival from the "Page:" line of the next snapshot.
+  3. **browser_type REPLACES the field's content by default.** Pass `append: true` whenever the field may already hold text (extending a comment draft, editing a prefilled merge-commit message).
+  4. Snapshot at CHECKPOINTS (after navigation, form open, submit), not after every keystroke. [id]s change every snapshot; you may chain several fills from one snapshot while the layout is stable.
+  5. Match elements by role / aria-label / href / name — never by position for anything destructive or outward-facing.
+  6. OUTWARD ACTIONS (create issue, post comment, merge): before the final click, the CURRENT snapshot must show (a) the Page: URL is the intended issue/MR/project and (b) your exact text in the field. After the click, verify the outcome in ONE snapshot; if unclear, ONE more. NEVER blindly re-click or re-submit — a double-posted comment or double-fired merge is worse than stopping to ask.
+  7. If an element is not found after 2 retry snapshots, tell the user and stop. No workarounds.
+  8. Budgets: README ≤4 calls; read a file ≤4; search ≤4; read an issue ≤5; create an issue ≤9; comment ≤8; review an MR ≤6; merge an MR ≤10; pipeline status ≤5; todos ≤6.
+
+  ### State Recognition
+  - **Logged out**: header shows "Sign in" / "Register", or URL is /users/sign_in. PUBLIC project READING still works (projects, files, issues, MRs, pipelines, /explore) — continue for read-only tasks. gitlab.com may redirect anonymous /search to sign-in [LIVE-VERIFY] — fall back to /explore/projects?name={q}. Outward actions, /dashboard pages, and todos require login → tell the user: "This needs your GitLab session — please sign in in the browser, then ask me again." STOP. NEVER type credentials, OTP, or 2FA codes.
+  - **404** ("404 Page Not Found"): wrong path/number, or a private project while logged out → report exactly that, stop. "Access Denied" = insufficient permissions, same handling.
+  - **Rate limited / checking-browser interstitial**: tell the user, stop.
+  - **Loading / near-empty snapshot**: GitLab hydrates parts client-side (MR widget, pipelines) — re-snapshot after ~2s; max 2 retries, then tell the user.
+  - **Ready markers**: the Page: line matches the URL you navigated to and Page Text shows project/issue/MR content.
+
+  ### URL PATTERNS (substitute {…} and navigate)
+  Project paths can be NESTED: {group}/{subgroup}/{project} — keep the full path the user gave. "…" = https://gitlab.com/{group}/{project}.
+  - Project home + README:  https://gitlab.com/{group}/{project}
+  - Issues list:            …/-/issues   (?state=opened|closed|all, &label_name[]=bug — URL-encode)
+  - One issue:              …/-/issues/{n}   | new issue form: …/-/issues/new
+  - MR list:                …/-/merge_requests   (?state=opened|merged|closed|all)
+  - One MR (overview):      …/-/merge_requests/{n}   | diffs: …/{n}/diffs | pipelines: …/{n}/pipelines
+  - Project pipelines:      …/-/pipelines   (branch filter: ?ref={branch} [LIVE-VERIFY])   | one pipeline: …/-/pipelines/{id}
+  - File contents:          …/-/blob/{branch}/{path}   ({branch} must be a real ref — read the default branch from the project home's ref switcher)
+  - Directory listing:      …/-/tree/{branch}/{path}
+  - Global search:          https://gitlab.com/search?search={q}&scope=projects | issues | merge_requests | blobs   (URL-encode {q}; blobs = code)
+  - Project-scoped search:  add &project_id={id}   (numeric Project ID printed on the project home under the title [LIVE-VERIFY])
+  - Explore projects:       https://gitlab.com/explore/projects?name={q}   (works anonymously)
+  - Your issues / MRs:      https://gitlab.com/dashboard/issues | /dashboard/merge_requests   | todos: /dashboard/todos   (login)
+  If the user gives a project by name only, search scope=projects first and take the top full-path match — confirm {group}/{project} with the user if ambiguous before any outward action.
+
+  ### Element Reference
+  GitLab is mostly server-rendered: README, issue threads, and diffs appear in the snapshot's **Page Text**; links carry real hrefs — prefer hrefs over labels. Page Text truncates (~2000 chars) — read long content via browser_scroll + re-snapshot.
+  - Header search: press_key "/" (or "s") focuses global search [LIVE-VERIFY] — secondary; the /search URL is primary.
+  - Issue/MR rows: `<a>` whose href ends /-/issues/{n} or /-/merge_requests/{n}; read state (Open/Closed/Merged) from row text.
+  - New-issue form: title input with aria-label/placeholder "Title" [LIVE-VERIFY]; description markdown textarea, placeholder ≈ "Write a description…" [LIVE-VERIFY]; button "Create issue" [LIVE-VERIFY].
+  - Comment box (bottom of issue / MR Overview tab): textarea placeholder ≈ "Write a comment or drag your files here…" [LIVE-VERIFY]; button "Comment" — may be a split button offering "Comment & close" / "Start thread" [LIVE-VERIFY]; use plain Comment unless asked otherwise.
+  - MR widget (Overview, above discussion): pipeline line ("Pipeline #{id} passed/failed/running…"), approvals line ("Requires N approvals…" / "Approved by …"), mergeability text ("Merge blocked: …" / "Merge conflicts must be resolved" / "Ready to merge!") [LIVE-VERIFY]; the "Merge" button sits here with "Delete source branch" / "Squash commits" checkboxes and an editable commit-message section [LIVE-VERIFY].
+  - Draft MRs: title prefixed "Draft:", widget shows "Mark as ready" instead of Merge [LIVE-VERIFY] — merging is blocked.
+  - Todo rows: each has a "Done" button [LIVE-VERIFY]; "Mark all as done" at the top [LIVE-VERIFY].
+  - Pipeline status words: passed, failed, running, pending, canceled, skipped — read from row text, never icon color.
+
+  ---
+
+  ### TASK: Open a project and read its README
+  1. browser_navigate to https://gitlab.com/{group}/{project} → browser_snapshot
+  2. README body is in Page Text below the file list. browser_scroll + re-snapshot to read past truncation. Report content; never guess unseen sections.
+
+  ### TASK: Read a specific file
+  1. If the default branch is unknown, open the project home and read it from the ref switcher. Navigate /-/blob/{branch}/{path} → snapshot; file text is in Page Text; scroll for more. On 404, browse /-/tree/{branch} to find the real path.
+
+  ### TASK: Search projects / issues / MRs / code
+  1. Navigate to https://gitlab.com/search?search={encoded}&scope={…} → snapshot
+  2. Results are `<a>` rows; report or click by href. If /search bounces to sign-in, use /explore/projects?name={q} for projects; code (blobs) search may need &project_id — add it, or tell the user.
+
+  ### TASK: List / read issues
+  1. Navigate to …/-/issues (add filters if given) → snapshot; rows show number, title, state.
+  2. To read one: click its href (or navigate /-/issues/{n}) → snapshot. Description + comments (with authors) are in Page Text, oldest first; scroll + re-snapshot for long threads.
+
+  ### TASK: Create an issue (outward — login required)
+  1. Navigate to …/-/issues/new → snapshot. If a type/template chooser appears, pick the plain issue type the user wants [LIVE-VERIFY], snapshot.
+  2. browser_type(title input, title) — no submit (Enter may submit the form early)
+  3. browser_type(description textarea, body markdown)
+  4. browser_snapshot — verify title AND description are visible on the /issues/new page (rule 6)
+  5. Click "Create issue" → snapshot. SUCCESS = URL is now …/-/issues/{number}; report number + URL. If still on the form with a validation error, report it — do not re-click blindly.
+
+  ### TASK: Comment on an issue or MR (outward — login required)
+  1. Open the issue/MR URL → snapshot; scroll to the bottom until the comment box is present.
+  2. browser_type(comment box, text). Adding MORE text after that requires append: true — a plain second type call erases the draft.
+  3. browser_snapshot — verify your text is in the box and the Page: URL is the intended thread (rule 6)
+  4. Click "Comment" (the plain action, not "Comment & close") → snapshot. SUCCESS = your comment appears in the thread's Page Text. If absent after one extra snapshot, tell the user — NEVER re-post.
+
+  ### TASK: Review an MR (description + changed files)
+  1. Navigate to /-/merge_requests/{n} → snapshot: title, state badge, description, discussion, and the widget's pipeline/approval lines are in Page Text (scroll for more).
+  2. Navigate to /-/merge_requests/{n}/diffs → snapshot: changed file paths and +/- diff lines are in Page Text. Large diffs: scroll + re-snapshot repeatedly; collapsed files show an expand / "Show file contents" control — click it, re-snapshot [LIVE-VERIFY]. Summarize per file.
+
+  ### TASK: MERGE an MR (destructive + outward — strict gate)
+  ONLY when the user explicitly asked to merge THIS merge request. Never merge as a side effect, never pick "some MR" by position.
+  1. Navigate to /-/merge_requests/{n} → snapshot. Confirm from Page Text: title matches the request, state is Open (not Draft), pipeline line shows passed (or the user explicitly said to merge despite failures), approvals satisfied, no conflict text.
+  2. BLOCKED cases — conflicts, failed pipeline (without explicit override), RUNNING/pending pipeline, missing approvals, Draft, or a disabled button / any "Merge blocked:" text: report the exact blocker and STOP. Never look for admin/override paths. A running pipeline is a blocker: do not click "Merge when pipeline succeeds" / auto-merge unless the user explicitly asked for auto-merge — if they did, click it and verify the widget says the MR is set to merge automatically [LIVE-VERIFY].
+  3. If the user asked for squash or delete-source-branch, set those checkboxes FIRST and re-snapshot to confirm; otherwise leave defaults. To edit the prefilled commit message, use append: true or retype fully.
+  4. Click "Merge" → snapshot. If a confirmation step/dialog appears instead of an immediate merge, click its confirm action [LIVE-VERIFY].
+  5. browser_snapshot — SUCCESS = state badge / Page Text shows "Merged". If not confirmed after one extra snapshot, report — NEVER click Merge again.
+
+  ### TASK: Pipeline status for a branch or MR
+  1. Branch: navigate …/-/pipelines?ref={branch} (or /-/pipelines and read the newest row for that branch). MR: read the widget's pipeline line on /-/merge_requests/{n}, or /{n}/pipelines for history. → snapshot
+  2. Report status word, pipeline #, and branch/sha from row text. For failure details: click the pipeline href (/-/pipelines/{id}) → snapshot; failed job names appear in Page Text — report them; job logs are beyond this recipe.
+
+  ### TASK: Todos triage (login required)
+  1. Navigate to https://gitlab.com/dashboard/todos → snapshot; rows show project, item, author, reason ("assigned you", "mentioned you"…). Report the pending list.
+  2. To mark one done: click that row's "Done" button (hover the row first if it's not in the snapshot) → snapshot: the row leaves the list. Only "Mark all as done" if the user explicitly asked for ALL.
+  3. To open one: click the row's link href, handle it as an issue/MR.
+
+  ---
+
+  ### Gotchas
+  - GitLab redesigns its UI often — label spelling varies. Trust roles, hrefs, and URL patterns; re-snapshot rather than assume.
+  - The `/-/` path segment is part of modern GitLab routes; old links without it usually redirect — follow the redirect.
+  - Enter inside single-line inputs can submit early — only use submit:true where a search is wanted. browser_press_key("Escape") closes dropdowns/modals.
+  - Don't rely on single-letter shortcuts beyond search focus — they vary with user settings.

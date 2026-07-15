@@ -1,0 +1,98 @@
+app_name: Confluence
+# Domain is path-qualified ON PURPOSE: jira.yaml owns bare "atlassian.net".
+# Every Confluence Cloud URL contains /wiki/, so "atlassian.net/wiki" matches
+# only Confluence links — and, being the longer entry, outscores Jira's
+# bare-domain match on those — while plain Jira URLs never inject this template.
+domains:
+  - atlassian.net/wiki
+keywords:
+  - wiki page
+  - the wiki
+description: Confluence (Atlassian Cloud) — read wiki pages, search, create and publish pages, append-safe edits to existing pages, page comments, share page links, list a space's pages.
+version: 1
+instructions: |
+  URL: https://{workspace}.atlassian.net/wiki — Confluence Cloud lives under the /wiki/ path of the customer's own Atlassian subdomain. You MUST know the workspace name before doing anything (see State Recognition).
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Confluence. Never use desktop or sidecar tools.
+  2. URL-FIRST: pages, spaces and search all have stable URLs (below) — always ask "is there a URL for this?" before clicking through the UI.
+  3. VIEW mode and EDIT mode are two different surfaces (see State Recognition). Know which one you are in before every action: reading happens in view mode; typing into the page body happens ONLY in edit mode.
+  4. browser_type REPLACES the target's content by default. When ADDING to something that already has text you MUST pass append: true — a plain browser_type silently erases the existing content.
+  5. Snapshot at checkpoints (after navigate, after entering/leaving edit mode, after Publish, after a menu or composer opens). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. Match elements by role / aria-label / placeholder MEANING, never by position on destructive or irreversible actions. Confluence translates UI text to the user's locale — expect translations of the English labels below.
+  7. browser_press_key("Escape") closes menus and dialogs. Rely on no letter shortcuts except "e" (open editor, see the edit task) and "/" (editor insert menu) — others can be disabled per user.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. NEVER leave silent drafts. A task that entered edit mode must end in exactly one of: (a) Publish/Update clicked and the published view verified, or (b) the user explicitly told an unpublished draft was left behind and why. Never blind-retry Publish — re-snapshot and check the outcome first (risk of duplicate pages).
+
+  ### State Recognition
+  - **Workspace unknown**: every URL needs {workspace}. If you don't know the user's {workspace}.atlassian.net domain (from the request, an open tab's URL, or earlier context), ASK the user for it and stop.
+  - **Atlassian login**: URL contains id.atlassian.com, or the page asks for an email/password → tell the user: "Confluence requires Atlassian sign-in. Please log in manually, then ask me again." Stop. NEVER type credentials.
+  - **No access / not found**: page text like "You don't have access" / "Page not found" → report exactly that and stop; don't retry.
+  - **Loading skeletons**: gray placeholder blocks, almost no interactive elements or page content → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **VIEW MODE (ready)**: URL is /wiki/spaces/{KEY}/pages/{id}/…; the page title and body text are in the Page Text; an Edit control (pencil icon) sits near the title / top bar [LIVE-VERIFY: aria-label ≈ "Edit"]. Read-only for you until you enter edit mode. No Edit control at all → you likely have view-only permission; say so instead of forcing it.
+  - **EDIT MODE (ready)**: URL changes to an editor route (contains "edit") [LIVE-VERIFY: ≈ /wiki/spaces/{KEY}/pages/edit-v2/{id}]; a Publish or Update button sits top-right [LIVE-VERIFY: "Publish" for a new page, "Update" for an already-published one]; the body is a large contenteditable block area. Unsure which mode you're in? Snapshot and check the URL first.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Open a page (most robust): `https://{workspace}.atlassian.net/wiki/spaces/{KEY}/pages/{id}/{Title-Slug}` — the numeric {id} does the resolving; the trailing slug is optional and may be stale. `/wiki/spaces/{KEY}/pages/{id}` works too.
+  - Space overview: `https://{workspace}.atlassian.net/wiki/spaces/{KEY}/overview`
+  - All pages in a space: `https://{workspace}.atlassian.net/wiki/spaces/{KEY}/pages` [LIVE-VERIFY]
+  - Search: `https://{workspace}.atlassian.net/wiki/search?text={URL-encoded terms}`
+  - Wiki home: `https://{workspace}.atlassian.net/wiki/home` [LIVE-VERIFY]
+
+  ### EDITOR TYPING MODEL (edit mode only — the #1 source of bugs)
+  - The body is a BLOCK editor: every paragraph / heading / list item is its own block (contenteditable). browser_type inserts text paste-like (no per-character keystrokes) and follows Rule 4's replace-by-default.
+  - NEVER chain two plain browser_type calls into the same block — the second wipes the first. NEVER "append" by plain-typing into an existing block.
+  - Markdown autoformat and the "/" insert menu react to real keystrokes; paste-like insertion may NOT trigger them. Keep content as plain text whenever possible.
+
+  **RECIPE — append new blocks at the end of the body (the only safe append):**
+  1. snapshot → click the LAST body block (the lowest contenteditable in the editor area)
+  2. browser_press_key "End" (caret to end) → browser_press_key "Enter" (real keydown → a new empty block below)
+  3. snapshot → browser_type the text into the NEW empty block. Repeat Enter → snapshot → type per additional paragraph; each new block has a NEW id.
+  - Special block type (heading, to-do, table…): with the caret in an EMPTY block, browser_press_key "/" → snapshot → menu is open → CLICK the wanted entry [LIVE-VERIFY: whether typed text filters this menu; if it does not, pick from the unfiltered list — never arrow-key blind].
+
+  ### TASK: Read a page
+  1. browser_navigate the page URL (or find it via Search / the space tree tasks) → snapshot.
+  2. Verify VIEW MODE. The body renders into the Page Text — read it from there; browser_scroll down + snapshot for long pages.
+  3. Title = the main heading; author and last-updated line sit under the title [LIVE-VERIFY]. Report content from what you actually read, never from the title alone.
+
+  ### TASK: Search the wiki
+  1. URL-encode the terms → browser_navigate the /wiki/search?text=… URL → snapshot.
+  2. Read result rows (page title, space name, excerpt) from the Page Text; browser_scroll + snapshot for more.
+  3. To open a hit: click its link — or better, navigate straight to its /pages/{id} URL if the href is visible in the snapshot.
+
+  ### TASK: Create a page
+  1. Pages are created in the CURRENT space. If the user didn't say which space, ASK before publishing into the wrong one. browser_navigate the target space's overview → snapshot.
+  2. Click the "Create" button in the top navigation bar [LIVE-VERIFY: label "Create", locale-translated] → snapshot → EDIT MODE opens on a new draft with a title field (placeholder ≈ "Give this page a title" [LIVE-VERIFY]) and an empty body block.
+  3. browser_type the title into the title field → browser_press_key "Enter" (focus moves into the first body block) [LIVE-VERIFY].
+  4. browser_type the first paragraph into the empty body block; additional blocks via the RECIPE above.
+  5. Snapshot to VERIFY title and content, then click "Publish" (top-right).
+  6. Snapshot → success = VIEW MODE of the new page (URL now /wiki/spaces/{KEY}/pages/{id}/…). Report that URL to the user. No view mode and no error visible? Do NOT click Publish again — re-snapshot, check the URL, and report the state honestly (Rule 9).
+
+  ### TASK: Edit an existing page (append or change content)
+  1. Open the page (VIEW MODE) → snapshot → click the Edit pencil control. Fallback: browser_press_key("e") in view mode opens the editor [LIVE-VERIFY].
+  2. Snapshot → verify EDIT MODE (URL + Update/Publish button).
+  3. APPEND (the default ask): use the RECIPE — never plain-type into existing blocks. REPLACE a specific block's text: click that block → plain browser_type (replace-by-default is correct ONLY here, when the user wants that text gone). ADD within an existing block: browser_type with append: true.
+  4. Snapshot to verify the new content, then click "Update" (or "Publish") top-right.
+  5. Snapshot → back in VIEW MODE with the change visible in the Page Text = done. Mistyped? browser_press_key "Ctrl+Z" while still in the editor. Abandoning instead: tell the user a draft may remain (Rule 9).
+
+  ### TASK: Comment on a page
+  1. Open the page in VIEW MODE → browser_scroll to the bottom → snapshot → click the comment box (placeholder ≈ "Add a comment…" [LIVE-VERIFY]). Use only this bottom page-comment box; inline comments are selection-anchored and not reliably automatable — don't attempt them.
+  2. Snapshot → a rich-text composer with Save and Cancel buttons appears [LIVE-VERIFY] → browser_type the comment (plain text; Rule 4 doesn't bite — the composer starts empty).
+  3. Snapshot: the text is in the composer → click Save.
+  4. Snapshot → the comment appears in the comments section under the user's name. If it doesn't after 2 re-snapshots, tell the user — never re-click Save (risk of a duplicate comment).
+
+  ### TASK: Copy / share a page link
+  The page URL IS the link — no clipboard involved. Open the page (or spot its href in a search/tree snapshot) and report the /wiki/spaces/{KEY}/pages/{id}/… URL to the user; the numeric {id} keeps it valid even if the title changes later, and recipients see it only with their own permissions. Do NOT automate the page's "Share" button — it sends emails/notifications to the people entered.
+
+  ### TASK: List a space's pages
+  1. browser_navigate the space overview → snapshot. The left sidebar holds the space's page TREE: links with the page titles; parent pages have expand chevrons [LIVE-VERIFY].
+  2. Read titles from the sidebar links; click a chevron to expand a branch → snapshot. browser_scroll + snapshot for long trees.
+  3. Flat, complete listing: the /wiki/spaces/{KEY}/pages URL [LIVE-VERIFY: sortable "Pages" list view]. Report the titles you actually saw, never guesses.
+
+  ### Gotchas
+  - browser_type into the editor or comment composer inserts without real keystrokes — markdown-style auto-formatting may not trigger; write plain text and set block types via the "/" menu recipe.
+  - Confluence auto-saves editor drafts continuously; closing the tab does NOT discard your typing. That's exactly why Rule 9 exists.
+  - A Jira issue link and a Confluence page can share the same {workspace}.atlassian.net — anything under /wiki/ is Confluence; /browse/ or /jira/ paths are Jira, not this template's job.
+
+  ### Budgets
+  Read a page ≈ 3 calls · search ≈ 3 · create + publish (title + 2 paragraphs) ≈ 12 · append one paragraph ≈ 9 · comment ≈ 8 · list a space's pages ≈ 4. If you exceed roughly double the budget, stop and reconsider instead of thrashing.
