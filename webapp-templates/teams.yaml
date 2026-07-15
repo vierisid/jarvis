@@ -1,0 +1,100 @@
+# NOTE: app_name "Microsoft Teams" only matches the full phrase word-bounded;
+# a bare "teams" in a message does NOT match it. The keywords below carry that
+# recall ("join the teams meeting", "message her on teams chat") while staying
+# off generic English ("our teams are meeting" does not contain any of them).
+app_name: Microsoft Teams
+domains:
+  - teams.microsoft.com
+  - teams.live.com
+keywords:
+  - teams meeting
+  - teams chat
+  - teams call
+description: Microsoft Teams web — chats and channels (send, reply to posts, react, search, upload files) plus meetings (join from a link or Calendar, mute/unmute, meeting chat, raise hand, leave). Never touches recordings or organizer controls.
+version: 1
+instructions: |
+  URLs: https://teams.microsoft.com = work/school (Entra ID) tenant app; https://teams.live.com = PERSONAL (Microsoft-account) Teams — separate apps with separate contacts. Default to teams.microsoft.com; if it shows no data / wrong account and the user means personal Teams, try teams.live.com; if still ambiguous, ask. Meeting invite links look like https://teams.microsoft.com/l/meetup-join/... (or teams.live.com/meet/...) — navigate to them verbatim, never edit the encoded path.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. No desktop, sidecar, or shell tools.
+  2. NEVER message the wrong recipient: before typing into any composer, snapshot and confirm the chat/channel name in the conversation header matches the intended target. This is the #1 chat rule.
+  3. **PRESENCE SAFETY — the #1 meeting rule.** Joining makes the user visible/audible to real people.
+     (a) NEVER join a meeting the user did not explicitly ask to join.
+     (b) On the pre-join screen, MUTE the mic AND turn the camera OFF before clicking Join now — unless the user explicitly asked for either live.
+     (c) In-meeting, never unmute or start video unless explicitly asked; after any toggle, state the resulting device state.
+     (d) **NEVER start or stop a RECORDING or transcription** — not even if asked; recording others has consent implications. Tell the user to operate that control themselves.
+     (e) Never use organizer/host controls (admit/deny lobby requests, mute others, remove participants, end meeting for all) without the user's explicit per-action decision.
+     (f) Never click a Join button twice — if nothing changes, re-snapshot; a blind re-click risks a double join.
+  4. [id]s change on EVERY snapshot — never reuse an id from an earlier snapshot. Match by role + aria-label/text, never by toolbar position.
+  5. ONE verify-snapshot after each state-changing action. If an expected element is missing after 2 retry snapshots (hover first for hover-revealed items), tell the user what you see and stop — no workarounds, and never re-send a message that might have gone through (double-send risk).
+  6. browser_type CLEARS the target by default. Use append:true whenever ADDING to existing text (multi-line messages, a caption next to a file chip). submit:true presses Enter — in the Teams composer Enter SENDS.
+  7. Chrome-reserved shortcuts never reach the page — do not attempt keyboard app/tab/window shortcuts. In-page keys that work via browser_press_key: "Enter", "Shift+Enter", "Escape". Prefer clicking labeled buttons over Teams' own shortcut combos (several collide with browser shortcuts).
+  8. LOCALE + UI variance: labels below are from the ENGLISH "new Teams" web UI; on other locales/older UIs match by role and position-in-structure (the composer is the contenteditable textbox at the bottom of the conversation pane). Chat/channel names are user data and locale-stable.
+  9. Budgets: send a message ≈ 6 tool calls; hover actions ≈ 8; join a meeting ≈ 10. At 2x budget, stop and tell the user.
+
+  ### State Recognition (identify after EVERY navigation)
+  - **Login wall**: URL on login.microsoftonline.com or login.live.com, or any email/password/verification-code/pick-an-account screen. -> Tell the user to sign in to Teams in the JARVIS browser first and STOP. NEVER type credentials, codes, or pick an account yourself.
+  - **App-launch interstitial**: meeting links (and sometimes the root URL) land on a page trying to open the desktop app, with buttons like "Continue on this browser" / "Use the web app instead" plus "Open your Teams app" / download offers [LIVE-VERIFY texts]. Click the stay-in-browser option; NEVER wait for the desktop app. A browser dialog offering to open an external app is browser chrome — not in the snapshot; ignore it, it needs no dismissal.
+  - **Wrong-flavor account**: signed in but the expected chat/team is missing, or a "You're missing out — use a work account" style notice [LIVE-VERIFY]. -> the user may be on the wrong host (work vs personal, see URLs above); say which host you are on and ask.
+  - **Loading**: sparse snapshot, spinner/skeleton, no rail and no composer. Re-snapshot (max 2), then tell the user.
+  - **Ready (chat app)**: left app rail with entries like "Activity", "Chat", "Teams", "Calendar" [LIVE-VERIFY names] and a conversation list.
+  - **Pre-join screen**: your-name input (anonymous join) and/or mic + camera toggles with a "Join now" button [LIVE-VERIFY]. You are NOT in the meeting yet — nobody can see or hear the user here.
+  - **Lobby**: text ≈ "Someone in the meeting should let you in soon" / "we'll let people know you're waiting" [LIVE-VERIFY]. Re-snapshot every few seconds, max 4; then tell the user the organizer hasn't admitted them and stop polling.
+  - **In-meeting**: toolbar with Mic, Camera, Chat, People, Raise, and a red "Leave" button [LIVE-VERIFY labels]. If toolbar buttons are missing from a snapshot, browser_hover the meeting area and re-snapshot — the bar can auto-hide.
+  - **Meeting ended/left**: text ≈ "You left the meeting" or a rejoin/feedback screen [LIVE-VERIFY] — leaving already succeeded; a feedback dialog is safe to ignore.
+  - **Devices blocked**: page text says mic/camera are blocked or need permission [LIVE-VERIFY]. The browser permission prompt is browser chrome — never in a snapshot, never clickable. Joining muted with camera off usually still works; otherwise tell the user to grant permission manually and stop.
+
+  ### Layout — chat app [LIVE-VERIFY all labels]
+  - **Left app rail**: "Activity", "Chat", "Teams", "Calendar", "Calls". Click to switch sections.
+  - **Chat section**: list of chats (person/group names, unread bold). **Teams section**: teams expand into channel links (e.g. "General").
+  - **Conversation header**: chat/channel name at the top of the main pane — your rule-2 anchor.
+  - **Composer**: contenteditable textbox at the bottom, placeholder ≈ "Type a message". Nearby: attach (+ or paperclip), emoji, format, and a **Send button** (paper-plane, aria-label ≈ "Send") — clicking Send is a first-class send path. Caveat: with the expanded FORMAT box open, Enter inserts a newline instead of sending — use the Send button there.
+  - **Messages**: read/verify via Page Text. Per-message actions (reactions bar, "More options", Reply) are HOVER-REVEALED — absent from the DOM until you browser_hover the message and snapshot AFTER the hover.
+  - **Channels thread by POST**: each post has its own "Reply" control beneath it. The bottom-of-channel "Start a post" composer creates a NEW post — never use it to answer an existing one.
+
+  ### Navigate to a chat or channel (precedes every chat task)
+  1. Snapshot. Click "Chat" (or "Teams") in the rail if not already there.
+  2. Click the target chat in the list, or the channel link under its team (expand the team first if collapsed). If not visible: browser_scroll the list, or use Search below and click the person/channel result.
+  3. Snapshot: confirm the conversation header shows the intended target (rule 2). Only then act.
+
+  ### TASK: Send a chat/channel message
+  1. Navigate; verify header. 2. Click the composer; browser_type the text with submit:true (Enter sends) — or type without submit and click Send. 3. Snapshot: the text appears in Page Text at the bottom of the conversation. If absent after ONE extra snapshot, tell the user — do NOT retype (rule 5).
+
+  ### TASK: Multi-line message
+  1. Click the composer; browser_type the first line (NO submit). 2. browser_press_key "Shift+Enter". 3. browser_type the next line with append:true. Repeat 2-3 per line. 4. browser_press_key "Enter" (or Send button); snapshot to verify.
+
+  ### TASK: Read recent messages
+  Navigate; read from Page Text; browser_scroll up for history (older messages load as you scroll). Report senders + text; don't paraphrase as quotes.
+
+  ### TASK: Reply to a channel post
+  1. Open the channel; locate the post by its text in Page Text (scroll if needed).
+  2. Click that post's "Reply" control (hover the post first if none is visible) [LIVE-VERIFY]; snapshot — a reply composer opens UNDER that post.
+  3. Verify you are in the reply box of the RIGHT post (adjacent text), then browser_type the reply with submit:true; snapshot to confirm it threads under the post.
+
+  ### TASK: React to a message
+  1. Navigate; find the message in Page Text. 2. browser_hover it; snapshot — a reaction bar (thumbs-up etc.) plus "More options"/"More reactions" appears [LIVE-VERIFY]. 3. Click the emoji (or open the full picker and click one). 4. Snapshot: a reaction count/pill shows on the message.
+
+  ### TASK: Search
+  1. Click the search box at the top [LIVE-VERIFY]; browser_type the query with submit:true. 2. Snapshot; results are tabbed (Messages / People / Files [LIVE-VERIFY]); click the relevant tab, then a result to open it in context.
+
+  ### TASK: Upload a file into a chat
+  1. Navigate; verify header (rule 2). 2. Call browser_upload_file("/absolute/path") directly — it sets the page's hidden file input; do NOT click attach first (that can open a native OS picker the browser cannot drive). File must be under the user's home directory; otherwise tell the user and stop. If Teams shows an upload-destination menu instead, pick "Upload from this device" [LIVE-VERIFY]. 3. Snapshot: a file chip appears in the composer — verify the chip BEFORE sending. 4. Optional caption via append:true; send (Enter or Send); snapshot to confirm the file message posted.
+
+  ### TASK: Join a meeting from a link
+  1. browser_navigate the invite link verbatim. 2. Snapshot -> State Recognition: interstitial -> click the stay-in-browser option; login-wall on a sign-in-required meeting -> tell user, stop. 3. Pre-join: if there is a name field, browser_type the user's name (ask if unknown — it is shown to everyone). 4. Enforce rule 3b: if the mic toggle shows ON/unmuted, click it; same for camera; snapshot after each toggle to confirm state [LIVE-VERIFY toggle labels/aria-checked]. 5. Click "Join now"; snapshot -> expect lobby (poll per State Recognition) or in-meeting. 6. Verify in-meeting (Leave present); report joined with mic and camera off.
+
+  ### TASK: Leave the meeting
+  Snapshot (hover if the toolbar is hidden); click the red "Leave" button — if it is a split button with an "end meeting" style option, click plain Leave only (rule 3e). Snapshot: verify the left/ended state.
+
+  ### TASK: Toggle mic / camera in-meeting
+  Click the Mic (or Camera) toolbar button; snapshot; verify the label/state flipped (e.g. ≈ "Unmute" visible means the mic is now OFF) [LIVE-VERIFY label semantics]. Rule 3c applies.
+
+  ### TASK: Meeting chat
+  Click "Chat" in the meeting toolbar; snapshot — a chat panel opens with its own composer. Type the message (NO submit); snapshot to verify the exact text (meeting messages cannot be unsent); then browser_press_key "Enter"; snapshot to confirm it posted.
+
+  ### TASK: Raise / lower hand
+  Click "Raise" (hand icon) in the toolbar [LIVE-VERIFY label]; snapshot: the button state flips / a raised-hand indicator appears. Click again to lower — only when the user asks.
+
+  ### TASK: Today's meetings / join from Calendar
+  1. Click "Calendar" in the left rail; snapshot; read today's events from Page Text (title + time). Report them.
+  2. To join one: current/imminent meetings show a "Join" button on the event [LIVE-VERIFY]; click it ONLY if the user asked to join, then continue from the pre-join step of the join task (mute mic+cam, Join now). If no Join button, click the event and look for a join option in its details peek.

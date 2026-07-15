@@ -1,0 +1,70 @@
+app_name: Figma
+domains:
+  - figma.com
+# No keywords on purpose: design vocabulary ("mockup", "wireframe", "design
+# file", "prototype") describes user INTENT, not this site — those words are
+# just as likely about Sketch, local files, or code. The app name and domain
+# carry the trigger.
+keywords: []
+description: Figma — browse and search design files, open files and prototypes, read and reply to comments, and report share links. The design canvas itself (layers, objects, edits, exports, dev mode) is not automatable.
+version: 1
+instructions: |
+  URL: https://www.figma.com/files
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll.
+  BANNED: browser_evaluate, browser_screenshot.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the element's content by default; `append=true` preserves it. `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — real key events, e.g. `"Escape"`, `"Enter"`, `"C"`.
+  - Element ids are 1-based `[id]`s from the LAST snapshot and change every snapshot — never reuse ids across a state change.
+
+  ### CENTRAL CAUTION — the canvas is a picture, not a page
+  Figma's design canvas is WebGL. It contributes NOTHING to browser_snapshot: no layers, no frames, no shapes, no text objects, nothing clickable. This is expected, not an error. Consequences — be plain about them with the user:
+  - You CANNOT read what a design looks like, select or move objects, edit anything on the canvas, type into design text, or click through a prototype.
+  - The automatable surface is ONLY: the FILE BROWSER (regular DOM), the chrome AROUND the canvas (toolbar, panels, dialogs), the COMMENTS system (DOM sidebar), and share links.
+  - Never improvise canvas interaction (clicking blind coordinates, guessing). If a request needs the canvas, it is unsupported — see NOT SUPPORTED.
+
+  ### STATE RECOGNITION (check on the FIRST snapshot of every session)
+  - **Login wall**: URL on `figma.com/login` / `figma.com/signup`, or a sign-in form (email/password, "Continue with Google"/SSO) → you cannot log in for the user. Tell them to log in to Figma in the JARVIS browser, then STOP. NEVER type credentials.
+  - **File browser**: URL under `figma.com/files` and the page lists file tiles/rows by name with a sidebar of teams/projects [LIVE-VERIFY structure] → ready for browsing/searching/opening.
+  - **Open design file**: URL matches `figma.com/design/{key}/…` (or legacy `figma.com/file/{key}/…`) and the toolbar shows the file name [LIVE-VERIFY marker]. The snapshot will look nearly EMPTY apart from toolbar/panel chrome — that means the file is open and the canvas (invisible to you) is rendering.
+  - **Canvas loading**: the URL is a file URL but no toolbar/file name yet, or a loading indicator → snapshot once more. Still nothing after 2 tries → report and stop.
+  - **Prototype view**: URL matches `figma.com/proto/{key}/…` → the prototype is open; that is ALL you can confirm (the player is canvas).
+  - **View-only file**: no editing chrome / a view-only notice [LIVE-VERIFY wording] → irrelevant for this template's tasks except comment replies, which may still work with comment access; if the reply box is absent, say the user lacks comment access and stop.
+  - **Retry rule**: the same step failing twice in a row (element not found after a fresh snapshot, panel not opening, reply not appearing) → STOP and tell the user exactly what failed. Do not loop.
+
+  ### URL PATTERNS (prefer these)
+  - File browser / recents: `https://www.figma.com/files`
+  - Design file: `https://www.figma.com/design/{key}/{name-slug}` — Figma migrated `/file/` → `/design/`; old `/file/{key}/…` links redirect [LIVE-VERIFY both shapes and whether the name slug is required].
+  - Prototype: `https://www.figma.com/proto/{key}/…`
+  - If the user gives you a Figma link, navigate it VERBATIM — it encodes file, page, and node. After navigating, the URL bar tells you which state you are in (`/files` vs `/design/` vs `/proto/`).
+
+  ### TASKS
+  **Browse recent files** — `browser_navigate("https://www.figma.com/files")` → snapshot → file names, project names, and last-edited times appear in Page Text [LIVE-VERIFY layout]. Report what is visible; the list may be windowed — `browser_scroll` and re-snapshot for more, and say how much you actually saw.
+
+  **Search for a file** — in the file browser, click the search box (top of page [LIVE-VERIFY placement/label]) → `browser_type` the file name → snapshot → results list files by name [LIVE-VERIFY whether results render live or need Enter] → report matches, or click one by its NAME to open it.
+
+  **Open a file** — by URL: navigate it directly. By name: file browser → find/search it → click the file by its name [LIVE-VERIFY whether opening needs a double-click: try single click, snapshot, `double=true` if still in the browser]. Verify the open-file state (URL + toolbar file name), then report the file is open. Page list: the left panel MAY list the file's pages as DOM entries [LIVE-VERIFY] — if page names appear in the snapshot, list them for the user and switch pages by clicking a name; if they don't, say that page contents can't be read.
+
+  **Read comments** — with the file open: click the comment tool in the toolbar [LIVE-VERIFY icon label] or `browser_press_key("C")` [LIVE-VERIFY toggles comment mode] → snapshot → a comments sidebar/panel lists threads; thread text, authors, and timestamps are DOM [LIVE-VERIFY] → report them from Page Text, scrolling the panel for more if needed. Use the SIDEBAR list only — pins on the canvas are not reliably clickable. `browser_press_key("Escape")` exits comment mode when done.
+
+  **Reply in an existing comment thread** — open the comments sidebar (above) → click the target thread by its TEXT → snapshot → find the reply input [LIVE-VERIFY label] → `browser_type(reply_id, "text")` → SNAPSHOT AND VERIFY the typed text is exactly right BEFORE submitting (replies are visible to all collaborators) → submit via the send/submit button by its label [LIVE-VERIFY; Enter may also send — do not rely on it unverified] → snapshot → verify the reply now appears in the thread. If submission is unconfirmed, re-snapshot the thread FIRST and check whether it posted — NEVER blind-retry (double-post risk). Placing a NEW pinned comment requires clicking a canvas location — unsupported; only replies in existing threads.
+
+  **Copy the share link** — the file's URL IS its share link: report the current URL from the snapshot. To report who can access it: click the "Share" button (top-right toolbar [LIVE-VERIFY label]) → snapshot → read the general-access line (e.g. "Anyone with the link can view" [LIVE-VERIFY wording]) and report it alongside the link; there is also a "Copy link" button [LIVE-VERIFY] but the clipboard is unreadable to you, so always REPORT the URL itself. Do not change access settings — if the user wants permissions changed, describe what the dialog shows and let them decide; close with `browser_press_key("Escape")`.
+
+  **Open a prototype** — navigate the `/proto/` URL → snapshot → verify the page title/URL shows the prototype loaded [LIVE-VERIFY marker] → report it is open. That is the whole task: the prototype player is canvas, so clicking through screens, reading flow content, or verifying interactions is unsupported — say so if asked.
+
+  ### NOT SUPPORTED — tell the user plainly, don't improvise
+  - Any design edit: creating, moving, resizing, or deleting objects; typing text on the canvas; styles, components, auto-layout.
+  - Reading or inspecting design content: layers, frames, what a screen looks like, copy on a mockup.
+  - Exporting assets; dev-mode measurements, CSS, or token values.
+  - Placing new pinned comments on the canvas (thread REPLIES only).
+  - Interacting with a prototype beyond opening it.
+
+  ### RULES
+  1. Only the ALLOWED tools. Nothing on the canvas is readable or clickable — never pretend otherwise, never guess at design content.
+  2. Match files, threads, and buttons by NAME/label text, never by position.
+  3. One verify-snapshot after each state change; don't reuse element ids across snapshots.
+  4. Budgets: browse/search ≤ 8 calls; open-and-report ≤ 6; read comments ≤ 10; one reply ≤ 12. Hitting the budget without success = report and stop.
+  5. Comment replies are outward-facing: verify text before submitting, verify outcome after, never blind-retry a submit.
+  6. Stop conditions: login wall, an unsupported (canvas) request, missing comment access on a reply task, or the same step failing twice.

@@ -1,0 +1,61 @@
+app_name: Google Translate
+domains:
+  - translate.google.com
+keywords:
+  - translate this
+  - translate to
+  - translate into
+  - how do you say
+description: Google Translate — translate text between languages via the URL API (sl/tl/text params), auto-detect the source language, translate one text into several target languages, and chunk long texts. Read the result from the page snapshot. Audio pronunciation and document translation are not supported.
+version: 1
+instructions: |
+  URL: https://translate.google.com
+
+  ### THE ONE THING TO KNOW
+  The URL is the API. `https://translate.google.com/?sl={source}&tl={target}&text={URL-encoded text}&op=translate` loads the page with the translation already rendered — no typing, no clicking. Build the URL, snapshot, read the result: almost every task is exactly 2 tool calls (browser_navigate → browser_snapshot).
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_scroll. browser_click is normally needed only for the consent page. browser_evaluate and browser_screenshot are BANNED for Google Translate. Never use desktop or sidecar tools.
+  2. URL-FIRST, always: never type into the source box when the text fits in the URL. Encode the text exactly as specified below — one unencoded `&` or `#` silently truncates the input, and a truncated input produces a confidently wrong "translation".
+  3. [id]s are 1-based and CHANGE with every snapshot; if the result is still not readable after 2 retry snapshots, tell the user what you tried and stop — no workarounds.
+
+  ### URL PATTERN (the whole API)
+  `https://translate.google.com/?sl={source}&tl={target}&text={text}&op=translate`
+  - `sl` = source language code, or `auto` to auto-detect. Use `auto` unless the user names the source language.
+  - `tl` = target language code.
+  - `text` = the text, URL-encoded: space `%20`, newline `%0A`, and critically `&`→`%26`, `#`→`%23`, `+`→`%2B`, `?`→`%3F`, `%`→`%25`.
+  - Language codes are (mostly) ISO-639-1: en, de, fr, es, it, pt, nl, ru, ja, ko, ar, hi, tr, pl, sv, uk, vi, id — plus `zh-CN` (Simplified Chinese) / `zh-TW` (Traditional). A wrong/unknown code makes the page fall back or error — fix the code; do not retry the same URL.
+  - Examples:
+    - auto-detect → English: `https://translate.google.com/?sl=auto&tl=en&text=Wie%20geht%20es%20dir&op=translate`
+    - English → German: `https://translate.google.com/?sl=en&tl=de&text=Where%20is%20the%20train%20station%3F&op=translate`
+    - Reverse direction: swap the `sl` and `tl` values in a fresh URL — never click the on-page swap button; the URL is more reliable.
+
+  ### State Recognition
+  - **No sign-in needed** — translation works fully logged out. Never enter credentials; if a Google login page appears you navigated wrong — go back to the translate URL.
+  - **Consent interstitial**: on a fresh browser (esp. EU) a consent.google.com page ("Before you continue" with Accept all / Reject all buttons [LIVE-VERIFY: exact labels/roles]) may appear instead of the translator. Click "Reject all" (or "Accept all" if no reject option) → snapshot → the translator loads with your URL params intact [LIVE-VERIFY: params survive the consent redirect — if the source box is empty, re-navigate the translate URL once].
+  - **Ready**: page title contains "Google Translate", the source box shows your text, and the output panel carries the translation [LIVE-VERIFY: which snapshot element carries the result — Page Text, an output textarea, or the region near the "Copy translation" button].
+
+  ### TASK: Translate a text snippet (PRIMARY)
+  1. Build the URL: `sl=auto` (or the stated source), the requested `tl`, the encoded text → browser_navigate → browser_snapshot.
+  2. Read the translation from the output panel [LIVE-VERIFY element, see Ready]. It must differ from your input and be non-empty; if empty, re-snapshot once (the result can render a beat after page load).
+  3. If `sl=auto` was used, also report the detected source language — the source-language tab reads "{Language} - Detected" [LIVE-VERIFY: exact label text/casing]. Quote the translation verbatim; do not "improve" it.
+
+  ### TASK: Translate into multiple target languages
+  Repeat the primary task once per target: identical `sl` and `text`, a different `tl` per navigate (one navigate + one snapshot each). Collect the results and present them together, labeled by language.
+
+  ### TASK: Detect the language only ("what language is this?")
+  Navigate with `sl=auto&tl=en` → snapshot → report the detected language from the "- Detected" tab label, and include the English translation as a bonus. The page's detector beats your guess — report what it says, not what you think.
+
+  ### TASK: Long texts (over the input limit)
+  The input caps at 5,000 characters [LIVE-VERIFY: current limit — a counter like "4,988 / 5,000" sits under the source box]. Long texts also make unwieldy URLs, so stay well under it: split at paragraph (preferred) or sentence boundaries into chunks of at most ~2,500 characters, run the primary task per chunk, and join the outputs in order. Tell the user it was translated in N chunks. Never split mid-sentence — it wrecks both sides of the cut.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Listen / pronunciation / text-to-speech: audio cannot travel through snapshots.
+  - Document translation (`op=docs`): built around a native file picker and a download; a direct browser_upload_file into its file input MAY work but is unverified [LIVE-VERIFY] — out of scope, do not attempt.
+  - Image and website translation modes.
+  - Saved translations, history, phrasebook, "Contribute" — account features.
+
+  ### Gotchas
+  - `text=` in the URL both fills the source box and triggers translation — there is no submit step.
+  - `%0A` newlines survive into the output; preserve the line structure when reporting multi-line results.
+  - The page may show alternative translations or dictionary entries below the main result — mention them only if the user asked for options or nuance.

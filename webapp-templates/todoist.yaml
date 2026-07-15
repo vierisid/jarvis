@@ -1,0 +1,84 @@
+# No keywords on purpose: todo vocabulary ("todo list", "my tasks", "add a task",
+# "remind me") is exactly the local-productivity language a desktop agent hears
+# all day — any of it would hijack unrelated requests. The app name and domain
+# carry the trigger alone.
+app_name: Todoist
+domains:
+  - app.todoist.com
+  - todoist.com
+keywords: []
+description: Todoist — read Today/Upcoming/Inbox, add tasks via quick add with natural-language dates/projects/priorities, complete tasks (with undo), reschedule, open task details, add comments, move tasks between projects, search, create a project.
+version: 1
+instructions: |
+  URL: https://app.todoist.com — a keyboard-friendly single-page app. It intercepts in-page keys: "q" opens quick add (its signature action), "Escape" closes modals, "Enter" submits. Everything else here is clicks + URLs.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Todoist. Never use desktop or sidecar tools.
+  2. URL-FIRST: navigate view URLs directly (see URL PATTERNS) instead of clicking through the sidebar when you know where you're going.
+  3. **COMPLETE vs DELETE**: completing a task (the circle checkbox) is the normal "done" action — it shows a brief Undo toast, and tell the user it can be undone from the activity log if it was wrong. DELETING a task is permanent and is NOT the same thing — only delete when the user explicitly says "delete", never as a substitute for completing, and confirm the exact task name in a snapshot before clicking Delete.
+  4. Single-letter shortcuts ("q") are typed as LITERAL TEXT if any input/editor is focused. Only press them when the snapshot shows no focused text field; when in doubt, press Escape first or click the "+ Add task" button instead.
+  5. browser_type REPLACES a field's content by default. When ADDING to an existing description or comment draft, pass append: true — plain typing silently erases what was there.
+  6. Snapshot at checkpoints (after navigate, after a modal/menu/picker opens, after a submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed, never guess ids.
+  7. Match elements by role / aria-label / placeholder MEANING, never by position on destructive actions. Todoist localizes UI labels — expect translations of the English labels below; the user's own task/project names are the stable anchors.
+  8. Task-row action icons (schedule, comment, more "...") are HOVER-REVEALED: browser_hover(row id) → browser_snapshot → the icons appear for that row [LIVE-VERIFY: which icons a hovered row exposes]. Without the hover they are not in the snapshot.
+  9. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  10. If an add/comment seems to have failed, re-snapshot and CHECK for the change before any retry — blind retries create duplicate tasks and comments.
+
+  ### STATE RECOGNITION (check after every navigate)
+  - **Logged out**: a login form (email/password inputs, "Log in", Google/Apple/Facebook buttons) or the todoist.com marketing site → tell the user: "Todoist requires sign-in. Please log in to Todoist in this browser, then ask me again." Stop. NEVER type credentials.
+  - **Loading**: SPA — a snapshot with almost no interactive elements or no task list on a view URL → wait 2–3s, re-snapshot. Max 2 retries, then tell the user.
+  - **Ready**: left sidebar (Inbox, Today, Upcoming, Filters & Labels, a "My Projects" group [LIVE-VERIFY: exact entries]) + a main pane with the view heading and task rows. Each row = a round completion circle + the task text (+ due date / project / label chips) [LIVE-VERIFY: row text shape].
+  - **Empty view**: a "no tasks" illustration/message is a VALID state (e.g. Today with everything done) — report it, don't retry.
+
+  ### URL PATTERNS [LIVE-VERIFY: all shapes]
+  - Today: `https://app.todoist.com/app/today` · Upcoming: `/app/upcoming` · Inbox: `/app/inbox`
+  - Project: `https://app.todoist.com/app/project/{id}` — the live app may use `{name-slug}-{id}`; NEVER construct ids. Only reuse project/task URLs you have seen in a snapshot, the user's message, or earlier context; otherwise reach projects via the sidebar and remember the resulting URL.
+  - Search: `https://app.todoist.com/app/search/{URL-encoded query}` [LIVE-VERIFY: search URL works when navigated directly].
+
+  ### TASK: Read Today / Upcoming / Inbox / a project
+  1. browser_navigate the view URL → browser_snapshot (state check).
+  2. Read rows from the Page Text: task content plus due-date / project / label chips. Sections or date headings group the rows (Upcoming groups by day). Overdue tasks appear at the top of Today under an "Overdue" heading [LIVE-VERIFY].
+  3. browser_scroll down + re-snapshot for long lists. Completed tasks are hidden by default.
+
+  ### TASK: Add a task (quick add — the signature flow)
+  1. Snapshot; make sure no input is focused (Rule 4) → browser_press_key("q") → snapshot → the quick-add modal: a task-name editor, a description field, and explicit Date / Priority / Project buttons along the bottom [LIVE-VERIFY: modal layout]. If "q" produced nothing, click "+ Add task" in the view instead [LIVE-VERIFY: button label/position].
+  2. browser_type(task-name editor id, the task in Todoist's natural language) — e.g. "pay rent tomorrow 6pm #Bills p2". Grammar: date phrases ("tomorrow 6pm", "every monday", "jan 15"), #ProjectName, p1–p4 priority, @label.
+  3. Snapshot → VERIFY the parse: recognized tokens become chips (date / project / priority) shown in the modal, and parsed tokens leave the title text [LIVE-VERIFY: chip rendering]. CAUTION: parsing happens on real keystrokes — insertText may NOT trigger it, leaving the whole string as plain title text [LIVE-VERIFY]. If chips did NOT appear: clear the field, retype ONLY the plain task name, then set date/project/priority by clicking the modal's explicit buttons and choosing from their pickers (calendar day cells; searchable project list; p1–p4 menu).
+  4. Chips correct → browser_press_key("Enter") to save (the modal may stay open for another add — Escape to close) → navigate/snapshot the target view → VERIFY the task appears with the right date/project. Wrong parse (e.g. "#Bills" stayed in the title) → open the task and fix its fields; do NOT add a second task.
+
+  ### TASK: Complete a task
+  1. Open the view containing the task → snapshot → identify the task's row by its text.
+  2. Click the round completion circle at the LEFT of that row — not the task text (that opens the detail modal).
+  3. Snapshot → VERIFY: the row disappears from the active list and a toast "1 task completed" with Undo appears briefly [LIVE-VERIFY: toast wording]. Mention to the user that Undo was available. If you completed the WRONG task, immediately click Undo in the toast.
+  4. Recurring tasks don't disappear — the due date advances to the next occurrence [LIVE-VERIFY]. Report that instead of treating it as a failure.
+
+  ### TASK: Reschedule a task
+  1. Open the task's detail modal (next task) and click its Date field, OR hover the row (Rule 8) and click the schedule/calendar icon that appears [LIVE-VERIFY: icon aria-label].
+  2. Snapshot → a scheduler popover: quick options (Today, Tomorrow, Next week…), a month calendar, and a type-a-date input [LIVE-VERIFY: popover layout].
+  3. Prefer CLICKING a quick option or a calendar day cell (month arrows to navigate) over typing a date — typed dates parse locale-dependently.
+  4. The popover closes on pick → snapshot → VERIFY the row/modal now shows the INTENDED date. Wrong → tell the user rather than guessing again.
+
+  ### TASK: Open a task / read details, subtasks, comments
+  1. Click the task's TEXT in its row (NOT the circle — that completes it!). Known task URL → navigate it instead.
+  2. Snapshot → the detail modal: task name, description, sub-tasks list, "+ Add sub-task", comment area, and Project / Date / Priority / Labels fields in a side panel [LIVE-VERIFY: modal layout]. browser_scroll within the modal + re-snapshot for long content. Answer read questions from this text. Escape closes without saving anything.
+
+  ### TASK: Add a comment
+  1. Open the task's detail modal → snapshot → click the comment box (placeholder ≈ "Comment" [LIVE-VERIFY]).
+  2. browser_type(comment text) — NO submit (Enter behavior in the composer is unverified [LIVE-VERIFY: Enter may post or newline]).
+  3. Snapshot → VERIFY the draft is in the box → click the post/send button [LIVE-VERIFY: label] → snapshot → the comment appears in the thread. Not there after 2 re-snapshots → tell the user; never re-click (Rule 10).
+
+  ### TASK: Move a task to another project
+  1. Open the task's detail modal → snapshot → click the Project field in the side panel (shows the current project) [LIVE-VERIFY: it opens a searchable project list].
+  2. browser_type(the project name into the picker's search) → snapshot → click the matching project (sections show indented under it [LIVE-VERIFY]).
+  3. Snapshot → VERIFY the Project field shows the new project. Alternative: browser_click(row id, button: "right") → snapshot → a context menu with "Move to…" [LIVE-VERIFY: the menu exists]. Neither works after 2 retries → stop and tell the user.
+
+  ### TASK: Search
+  1. browser_navigate("https://app.todoist.com/app/search/{URL-encoded query}") → snapshot; OR click "Search" in the sidebar [LIVE-VERIFY: entry label] → browser_type(query, submit: true) → snapshot.
+  2. Read task/project hits from the Page Text; click a hit to open its detail modal and reuse the resulting URL later.
+
+  ### TASK: Create a project (only when asked)
+  1. Snapshot → click the "+" next to "My Projects" in the sidebar [LIVE-VERIFY: aria-label ≈ "Add project"] → snapshot → a modal with a Name input.
+  2. browser_type(name) → snapshot to verify → click "Add" [LIVE-VERIFY: button label] → snapshot → the project appears in the sidebar.
+
+  ### Budgets (stop and reconsider at ~2x)
+  Read a view ≈ 3 calls · add task ≈ 7 (plus ~4 if the parse fallback is needed) · complete ≈ 4 · reschedule ≈ 6 · open task ≈ 2 · comment ≈ 7 · move ≈ 7 · search ≈ 3 · create project ≈ 6.

@@ -1,0 +1,116 @@
+# Keywords: twitch.tv links and the word "twitch" (app name, word-bound-matched)
+# carry most real requests. "livestream"/"live stream"/"streamer" are how users
+# phrase these tasks without naming the site; "vod"/"vods" are platform-native
+# vocabulary with near-zero collision. Rejected: "is live" (fragment — fires on
+# "the site is live"), bare "stream"/"live"/"chat"/"channel" (everyday English +
+# YouTube/Discord/Slack collisions), "clip" (screen-recording collision).
+app_name: Twitch
+domains:
+  - twitch.tv
+keywords:
+  - livestream
+  - live stream
+  - streamer
+  - vod
+  - vods
+description: Twitch — open live channels and report status, check who's live, browse categories, search, mute/fullscreen the player, read and send chat, follow/unfollow, VODs and schedules
+version: 1
+instructions: |
+  URL: https://www.twitch.tv
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a dialog/menu opens, before and after sending chat) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording, rather than demanding the exact string.
+  7. Twitch localizes button text and aria-labels. Prefer URLs (locale-independent); match labels by meaning.
+
+  ### PUBLIC CHAT SAFETY (chat posts publicly and instantly under the user's account)
+  - BEFORE sending: snapshot and confirm the chat input shows EXACTLY the intended text. Wrong? Retype the full text (replace default), re-verify, then send.
+  - AFTER sending: verify ONCE via snapshot. In a fast chat your message may already have scrolled out of view — absence is NOT proof of failure. Unconfirmed -> tell the user "the message was sent but I couldn't confirm it in the scroll" and STOP. NEVER re-send on uncertainty (public double-post risk).
+  - If what to write is ambiguous, ASK the user before posting anything.
+  - Follow/unfollow are TOGGLES: never click one already in the desired state (you would undo it).
+
+  ### State Recognition
+  - **Watching is anonymous**: opening channels, browsing categories, search, VODs, schedules and READING chat all work logged out. LOGIN IS REQUIRED for: sending chat, follow/unfollow, /directory/following. If such a task surfaces a "Log In" prompt or dialog [LIVE-VERIFY], tell the user: "This needs your Twitch login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Mature-content gate**: an interstitial covering the player meaning "intended for certain audiences" with a Start Watching button [LIVE-VERIFY] -> do NOT click through on your own; ask the user first. If they confirm, click it, snapshot, continue.
+  - **Channel OFFLINE**: no LIVE badge; the page shows an offline banner and/or recent videos, often text meaning "offline" [LIVE-VERIFY]. Report offline — don't retry hoping it goes live.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Channel live & ready**: URL is /{channel}, a LIVE badge near the player/avatar [LIVE-VERIFY], and stream title + category + viewer count in Page Text.
+  - **Unknown channel**: a page meaning "content is unavailable" / "time machine" 404 [LIVE-VERIFY] -> the name is wrong or it's a display name; search it instead.
+  - **Consent/cookies banner** (fresh sessions) [LIVE-VERIFY] -> click the option meaning reject/essential-only, then continue the task.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Channel (live player + chat): https://www.twitch.tv/CHANNEL — CHANNEL is the login name (lowercase, no spaces); display names can differ, so search when unsure
+  - Category directory (live channels for a game): https://www.twitch.tv/directory/category/SLUG — slug is the lowercased hyphenated name, e.g. just-chatting [LIVE-VERIFY slug shape; when unsure, use search and click the category card instead]
+  - Search: https://www.twitch.tv/search?term=QUERY (URL-encode QUERY)
+  - Channel VODs: https://www.twitch.tv/CHANNEL/videos — a VOD plays at https://www.twitch.tv/videos/VIDEO_ID
+  - Channel schedule: https://www.twitch.tv/CHANNEL/schedule
+  - Followed channels, live now (login): https://www.twitch.tv/directory/following
+  - All categories: https://www.twitch.tv/directory
+
+  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
+  - **Search box** (top nav): input with placeholder/aria-label meaning "Search" [LIVE-VERIFY]; browser_type with submit: true runs it — but the /search?term= URL is more reliable.
+  - **Player** (center of a channel page): controls are HIDDEN until you browser_hover the player area — hover, THEN snapshot [LIVE-VERIFY]. Controls: mute/unmute button whose aria-label states the current state [LIVE-VERIFY], volume slider (never drag it), settings gear, Theatre mode, Fullscreen [LIVE-VERIFY]. Pause exists, but a paused live stream just falls behind the live edge — prefer mute.
+  - **Stream info** (below the player): stream title, category link (href contains /directory/category/), tags, viewer count and uptime — all in Page Text [LIVE-VERIFY placement].
+  - **Follow button** (near the channel name): label meaning "Follow"; while following it becomes a heart/"Unfollow" control [LIVE-VERIFY]. "Subscribe" is a SEPARATE PAID button — never click it unless explicitly asked, and hard-stop at any payment screen.
+  - **Chat column** (right side): recent messages appear in Page Text as "username: message" lines [LIVE-VERIFY format]. Input: textbox meaning "Send a message" [LIVE-VERIFY] with a send ("Chat") button beside it [LIVE-VERIFY]. Room-mode notices (slow mode, followers-only, sub-only, emote-only) appear near the input [LIVE-VERIFY].
+  - **Directory/search cards**: each live channel is a link to /{channel}; stream title, streamer name, category and viewer count sit nearby in Page Text.
+
+  ---
+
+  ### TASK: Open a channel and report its live status  (budget: 4 calls)
+  1. browser_navigate https://www.twitch.tv/CHANNEL -> browser_snapshot.
+  2. LIVE badge present -> report LIVE with the stream title, category, viewer count and uptime from Page Text. No badge / offline banner -> report OFFLINE, plus anything useful shown (recent VODs, schedule hint). Unknown-channel page -> State Recognition.
+
+  ### TASK: Check if a specific streamer is live — the task above; answer directly: live or not, and what they're streaming.
+
+  ### TASK: Browse a category's live channels  (budget: 6 calls)
+  1. Slug known -> browser_navigate the category URL. Unsure -> /search?term=CATEGORY -> snapshot -> click the category card [LIVE-VERIFY].
+  2. snapshot — cards are ordered by viewers, highest first [LIVE-VERIFY]. Read streamer/title/viewers from Page Text; browser_scroll down + snapshot for more. Report after 2-3 scrolls — the grid is effectively infinite.
+
+  ### TASK: Search channels  (budget: 4 calls)
+  1. browser_navigate https://www.twitch.tv/search?term=QUERY -> browser_snapshot.
+  2. Results group into Channels / Categories and live results [LIVE-VERIFY grouping]. Report matches with live status; click a /{channel} link to open one.
+
+  ### TASK: Watch — mute/unmute, fullscreen  (budget: 6 calls)
+  1. Navigate to the channel: a live stream AUTOPLAYS (fresh sessions may start muted [LIVE-VERIFY]).
+  2. browser_hover the player -> snapshot -> click the needed control (mute/unmute, Fullscreen).
+  3. Verify: hover again + snapshot — the control's label flipped to the opposite state [LIVE-VERIFY].
+
+  ### TASK: Read chat  (budget: 5 calls)
+  1. Open the channel -> snapshot. Recent messages are in Page Text as "username: message" lines [LIVE-VERIFY].
+  2. FIREHOSE caveat: fast chats churn completely between snapshots — each snapshot is a few-second SAMPLE, not a log. Take 2-3 snapshots a moment apart and report it as a sample. Don't scroll chat upward for history — it re-pins to live [LIVE-VERIFY].
+
+  ### TASK: Send a chat message (LOGIN; PUBLIC)  (budget: 8 calls)
+  1. Open the channel -> snapshot. Logged out shows a prompt meaning "Log in to chat" instead of the input [LIVE-VERIFY] -> State Recognition; stop.
+  2. Check room-mode notices first: followers-only (and the user doesn't follow), sub-only, or emote-only -> report the restriction honestly and stop. Slow mode -> proceed, but mention the cooldown.
+  3. Click the chat input -> browser_type the text WITHOUT submit -> snapshot -> VERIFY the input shows exactly the intended text (Public Chat Safety).
+  4. browser_press_key("Enter") (or click the send button) -> snapshot ONCE. If a notice replaced the send (slow-mode cooldown, banned phrase, AutoMod held it [LIVE-VERIFY]) -> report it verbatim; do NOT re-send.
+
+  ### TASK: Follow a channel (login)  (budget: 5 calls)
+  1. Open the channel -> snapshot; find the follow control near the channel name.
+  2. Already in the following state (heart/label meaning "Unfollow") [LIVE-VERIFY]? Tell the user it's already followed — clicking would UNFOLLOW. Otherwise click Follow -> snapshot: the control flipped [LIVE-VERIFY].
+
+  ### TASK: Unfollow a channel (login) — ONLY on an explicit unfollow request, never as cleanup. Click the following/heart control; if a confirmation dialog appears [LIVE-VERIFY], click the option meaning Unfollow. Verify the button returned to "Follow".
+
+  ### TASK: Who's live among followed channels (login)  (budget: 4 calls)
+  1. browser_navigate https://www.twitch.tv/directory/following -> snapshot. Login wall -> State Recognition; stop.
+  2. Live followed channels are listed with title/category/viewers in Page Text [LIVE-VERIFY tabs: Overview/Live/Videos/Channels]. Report who's live and what they're streaming.
+
+  ### TASK: Open a VOD  (budget: 6 calls)
+  1. browser_navigate https://www.twitch.tv/CHANNEL/videos -> snapshot — cards link to /videos/VIDEO_ID with title/date/duration nearby. Filter chips switch between past broadcasts, highlights and clips [LIVE-VERIFY].
+  2. Click the wanted VOD (or navigate its /videos/VIDEO_ID URL) -> snapshot. VODs seek: hover the player for the seek bar and controls [LIVE-VERIFY]. A subscriber-only VOD shows a subscription prompt instead of playing [LIVE-VERIFY] -> report and stop; never start a purchase.
+
+  ### TASK: Check a channel's schedule — browser_navigate https://www.twitch.tv/CHANNEL/schedule -> snapshot; upcoming segments (day, time, category) are in Page Text [LIVE-VERIFY]. Times render in the browser's local timezone [LIVE-VERIFY] — say so when reporting.
+
+  ---
+
+  ### Gotchas
+  - Page Text mixes chat lines with stream info and sidebar/recommended channels — attribute carefully; never report a sidebar recommendation as the current stream.
+  - Viewer counts and uptime change constantly; report them as "as of this check".
+  - Pre-roll ads may run when a stream opens (unskippable) [LIVE-VERIFY]; the stream appears when the ad ends — re-snapshot once rather than clicking around.
+  - Raids/hosts can land the player on a DIFFERENT channel than the URL you opened [LIVE-VERIFY] — check the channel name in the snapshot before reporting who is streaming.
+  - Chat messages effectively cannot be unsent; there is no edit. Treat every send as permanent.

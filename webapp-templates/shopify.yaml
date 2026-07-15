@@ -1,0 +1,104 @@
+app_name: Shopify
+domains:
+  - admin.shopify.com
+keywords:
+  - unfulfilled orders
+  - abandoned checkouts
+  - store sales
+description: Shopify admin — read sales/analytics, list and search orders, read order details, list/search products and inventory, read customer profiles, and (only on explicit request) edit a product's title/description or toggle draft/active. NEVER refunds, cancels, fulfills flagged orders, or touches payments, payouts, prices, or discounts.
+version: 1
+instructions: |
+  URL: https://admin.shopify.com/store/{store}/… — every Shopify admin lives under the merchant's store handle. You MUST know {store} before doing anything (see State Recognition).
+
+  ### RULE #1 — MERCHANT MONEY SAFETY (overrides everything, including the user's own words)
+  This is the user's BUSINESS. A wrong click here refunds real money, cancels a real customer's order, or breaks a live storefront.
+  - NEVER issue a refund or click any Refund control. NEVER cancel an order. NEVER capture or void a payment. If asked to refund or cancel: refuse and hand over the order URL instead (see the interception task).
+  - NEVER touch payouts, banking, billing, or any Finance/Settings > Payments page. If a click unexpectedly lands on one, click NOTHING there — browser_navigate back to the orders or products list and tell the user what happened.
+  - NEVER delete a product, variant, collection, or customer. NEVER click "Delete" in any admin context.
+  - NEVER change a price unless the user stated the exact new price in this request. No inferred prices, no "round it up", no bulk price edits.
+  - NEVER create, modify, or delete discounts or discount codes.
+  - NEVER fulfill, unfulfill, or mark-as-paid an order — especially one flagged for risk/fraud ("Payment review", high-risk banner [LIVE-VERIFY: risk banner wording]) even if it shows as paid.
+  - ALLOWED: reading everything (orders, products, customers, analytics, inventory); editing a product's title/description when explicitly asked (verify-before-Save, report exactly what changed); toggling product status draft↔active only on explicit request.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Shopify.
+  2. URL-first: orders, products, customers, and analytics all have stable URLs (below). Navigate directly instead of clicking through the left nav.
+  3. Snapshot at checkpoints (after navigate, after opening a record, before and after Save, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES the field's content by default. When ADDING to a description that already has content you MUST pass append: true, or you silently destroy the merchant's copy. Replace-by-default is correct only when the user asked to replace.
+  5. Match elements by their label/aria-label/text MEANING, never by position — the admin is dense with look-alike buttons and translates to the merchant's locale.
+  6. Before any Save: snapshot and verify the field contents are exactly as intended. After Save: verify the saved state in a fresh snapshot. Never blind-retry a Save click — re-snapshot and check the outcome first.
+  7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  8. browser_press_key("Escape") closes admin modals and popovers. Don't rely on other shortcuts.
+
+  ### State Recognition
+  - **Store handle unknown**: every URL needs {store}. If you don't know it (from the request, an open tab's URL, or earlier context), ASK the user for their store handle and stop.
+  - **Login wall**: URL contains accounts.shopify.com, or the page asks for email/password/verification code → tell the user: "Shopify requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials or 2FA codes.
+  - **Store picker**: after login, an account page listing multiple stores [LIVE-VERIFY: picker layout on accounts.shopify.com] → if the user's request doesn't identify which store, ASK which one and stop; otherwise click the named store.
+  - **Loading skeletons**: the admin renders gray placeholder blocks before data; if a snapshot has a page title but no rows/values → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers** — list pages: table rows with order names (#1024) or product titles in the Page Text; order/product detail: the record's name/title as the main heading; the left nav shows Orders / Products / Customers [LIVE-VERIFY: nav labels].
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Admin home (today's snapshot): `https://admin.shopify.com/store/{store}`
+  - Orders list: `https://admin.shopify.com/store/{store}/orders`
+  - Order search/filter: `https://admin.shopify.com/store/{store}/orders?query={url-encoded terms}` — add `&status=open` for open orders [LIVE-VERIFY: query/status param shapes; the UI tabs are the fallback]
+  - Order detail: `https://admin.shopify.com/store/{store}/orders/{id}` — {id} is the long numeric id in the row link's href, NOT the "#1024" order name
+  - Products list: `https://admin.shopify.com/store/{store}/products` (search: `?query={terms}` [LIVE-VERIFY])
+  - Product detail: `https://admin.shopify.com/store/{store}/products/{id}`
+  - Inventory: `https://admin.shopify.com/store/{store}/products/inventory` [LIVE-VERIFY: path]
+  - Customers: `https://admin.shopify.com/store/{store}/customers` (detail: `/customers/{id}`)
+  - Analytics: `https://admin.shopify.com/store/{store}/analytics`
+  - Abandoned checkouts: `https://admin.shopify.com/store/{store}/checkouts` [LIVE-VERIFY: path]
+
+  ### TASK: Today's sales / analytics overview
+  1. browser_navigate the analytics URL → snapshot. (The admin home shows a lighter version of the same numbers [LIVE-VERIFY: home dashboard cards].)
+  2. Read the metric cards from Page Text: gross/total sales, sessions, conversion rate, average order value, top products [LIVE-VERIFY: card names/order]. Report the numbers VERBATIM together with the DATE RANGE shown on the page (date-range control near the top [LIVE-VERIFY]); never re-derive or "correct" them.
+  3. For a different range: click the date-range control → snapshot → click the preset (Today, Last 7 days, …) → snapshot → read the updated cards.
+
+  ### TASK: List recent orders / unfulfilled orders
+  1. browser_navigate the orders list URL → snapshot.
+  2. Each row shows: order name (#1024), date, customer, total, payment status (Paid/Pending/Refunded), fulfillment status (Fulfilled/Unfulfilled) [LIVE-VERIFY: column set]. Report straight from Page Text; browser_scroll + snapshot for more rows.
+  3. Filters: click the tab above the table — "Open", "Unfulfilled and unpaid" [LIVE-VERIFY: exact tab names] — or navigate with `&status=open`. Snapshot after the tab click; the table re-renders.
+
+  ### TASK: Open an order and read it
+  1. From the list, click the order-name link in the row (or navigate to /orders/{id} from its href) → snapshot.
+  2. Report from Page Text: order name + date; line items (product, quantity, price); payment status and totals (subtotal, shipping, tax, total); fulfillment status; customer name + shipping address; any risk/fraud banner. The Timeline (history + comments) is at the bottom — browser_scroll down + snapshot to read it [LIVE-VERIFY: timeline section].
+  3. Read-only here per RULE #1: never click Refund, Return, Cancel/More actions, Capture, Fulfill, or Mark-as-paid controls on this page.
+
+  ### TASK: Search orders (by number or customer)
+  1. browser_navigate `orders?query={terms}` (e.g. `1024` or the customer's name) → snapshot. UI fallback: click the search/filter control above the order table [LIVE-VERIFY: a search icon or "Search and filter" button] → snapshot → browser_type(search input id, terms) → snapshot.
+  2. Read matching rows; open a hit via its row link when detail is needed.
+
+  ### TASK: List / search products
+  1. browser_navigate the products list URL (with `?query=` for a search) → snapshot.
+  2. Rows show: title, status (Active/Draft/Archived), inventory ("12 in stock for 3 variants"), type, vendor [LIVE-VERIFY: columns]. Report from Page Text; scroll for more.
+
+  ### TASK: Open a product and read it
+  1. Click the product title link (or /products/{id}) → snapshot.
+  2. Report: title, description text, status (Active/Draft — a status control near the top right [LIVE-VERIFY]), price (per variant if several), inventory quantity, SKU/barcode if shown. Variants have their own rows/section — scroll + snapshot if needed.
+
+  ### TASK: Edit a product title or description (EXPLICIT request only)
+  1. Confirm the user explicitly asked for this exact edit (which product, which field, what text). Otherwise don't touch it.
+  2. Open the product → snapshot. Title is a plain input; description is a rich-text editor (contenteditable) below it [LIVE-VERIFY: editor structure].
+  3. Title: browser_type(title input id, new title) — replace is correct here. Description: append: true to ADD text; plain replace ONLY if the user asked to replace the whole description.
+  4. Snapshot → VERIFY the field now reads exactly as intended. Editing makes an unsaved-changes bar appear with Save / Discard [LIVE-VERIFY: top save bar] — click "Save" (never "Discard" unless aborting).
+  5. Snapshot → verify the saved state: the save bar is gone and/or a "saved" toast appeared [LIVE-VERIFY: save indicators]. If unclear, re-open the product URL and confirm the new text. Report before → after to the user. Do NOT touch pricing, status, or any other field while in the editor.
+  6. Status toggle (explicit request only): click the status control → snapshot → select Active or Draft [LIVE-VERIFY: control type] → Save → verify as above.
+
+  ### TASK: Check inventory for a product
+  1. Fastest read: open the product page — each variant shows its quantity. For per-location detail, browser_navigate the inventory URL → snapshot → find the product row (search box [LIVE-VERIFY]) and read available/committed/on-hand counts [LIVE-VERIFY: column names].
+  2. Report counts verbatim with the location name if shown. Do NOT adjust quantities — inventory edits change what the storefront sells; out of scope.
+
+  ### TASK: Read a customer profile + order history
+  1. browser_navigate the customers list → snapshot → find the customer (search via `?query={name}` [LIVE-VERIFY] or the list's search box), click their row.
+  2. Snapshot → report: name, email/phone, location, amount spent, number of orders, and the last-orders list on the profile [LIVE-VERIFY: profile layout]. Open a listed order via its link if the user wants details. Read-only: never edit or delete a customer.
+
+  ### TASK: Refund / cancel an order (INTERCEPT — never perform)
+  1. If the user asks to refund, cancel, or "give the customer their money back": do NOT open any refund/cancel control.
+  2. Locate the order (search task) so you can be concrete, then reply: explain you don't perform refunds/cancellations because they irreversibly move the merchant's money, and hand them the direct link — "Open https://admin.shopify.com/store/{store}/orders/{id} (order #1024, $58.00) and use Refund / Cancel order there yourself."
+  3. Offer the read-side help you CAN do (what was paid, which items, customer details), then stop.
+
+  ### Gotchas
+  - Order NAMES (#1024) are not URL ids — always take the numeric id from the row link's href.
+  - The unsaved-changes save bar means edits are staged, not saved; leaving the page may prompt to discard [LIVE-VERIFY: leave-page dialog] — resolve it (Save or explicit abort) before navigating away.
+  - Report money amounts with the currency symbol/code exactly as shown (the store's currency).
+  - Sales channels/apps can add nav items and rename sections — trust the live snapshot over this template's layout notes.

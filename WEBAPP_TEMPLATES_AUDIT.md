@@ -164,6 +164,24 @@ REMAINING P1 SUB-ITEM:
 
 Batch-2 note: the launch hit a session usage limit twice — 11 files were written before the cut, ebay/zoom were written on resume, gitlab/instagram trimmed on resume. All agents completed after resume.
 
+### P3.3 — expansion batch 3 (36 → 48 templates)
+☑ DONE 2026-07-15: all 12 written, no session-limit interruptions this round. **Library is now 48 templates, 0 lint errors / 0 warnings, 480KB instructions, zero cross-template keyword/domain collisions, 902 [LIVE-VERIFY] markers.**
+
+| new template | size | kw | notes |
+|---|---|---|---|
+| teams v1 | 11.6KB | 3 | slack-chat + zoom-presence fusion; "Start a post ≠ reply" trap; never recordings/organizer controls |
+| twitch v1 | 10.9KB | 5 | Subscribe-is-paid never-click; chat-firehose honesty; mature gate asks first |
+| gphotos v1 | 9.4KB | 4 | /search/{query} deep link is the killer feature; delete gated (named-in-this-request + 60-day note) |
+| shopify v1 | 11.1KB | 3 | merchant money safety: never refund/cancel/payout/fulfill; edits explicit-only with save verification |
+| figma v1 | 8.1KB | 0 | canvas = WebGL, contributes nothing; comments sidebar is the automatable surface |
+| keep v1 | 8.9KB | 2 | Escape-is-save; append mandatory on existing notes; "sticky note(s)" recall keywords |
+| todoist v1 | 9.4KB | 0 | quick-add natural language with parse-chip verification + explicit-buttons fallback |
+| bluesky v1 | 11.5KB | 3 | twitter mirror; handles-are-domains; feed-pinning gated; kw bsky/skeet(s) |
+| netflix v1 | 9.4KB | 0 | account/plan/profile pages banned; DRM errors report-and-stop; region check carefully hedged |
+| stripe v1 | 10.8KB | 2 | STRICTLY read-only; /apikeys off-limits entirely; live-vs-test mode is a first-class state; kw mrr/failed payments |
+| calendly v1 | 10.0KB | 4 | booking gate: slot+name+email from the user this conversation; timezone-led reporting; cancel only via pasted links |
+| translate v1 | 6.0KB | 4 | smallest in library; URL-is-the-API with encoding table; happy path = 2 calls |
+
 ### Template style contract (for all new/rewritten templates, distilled from what works)
 1. Tool whitelist that matches the REAL surface; never ban a tool a task needs.
 2. State Recognition section: login wall, loading, ready markers, view-only/permission detection, explicit "tell the user and stop" conditions.

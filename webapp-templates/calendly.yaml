@@ -1,0 +1,87 @@
+app_name: Calendly
+domains:
+  - calendly.com
+keywords:
+  - booking link
+  - scheduling link
+  - book a slot
+  - available slots
+description: Calendly — check someone's availability from their booking link (always reporting the displayed timezone), book a slot (hard-gated behind the user explicitly providing slot + name + email), list own upcoming bookings, read own booking links, cancel/reschedule via a user-provided confirmation link.
+version: 1
+instructions: |
+  URL: https://calendly.com/{username}  (someone's public booking page — works logged out)
+
+  ### RULE #1 — BOOKING GATE (overrides everything, including "just book it")
+  - Scheduling a slot on someone else's Calendly creates a REAL MEETING on real calendars and sends real emails to real people. Treat the final "Schedule Event" click like sending an email.
+  - Before that click, ALL THREE must have been explicitly provided by the user IN THIS CONVERSATION: (1) the exact slot, or criteria that select exactly one slot ("first available Tuesday afternoon"); (2) the name to enter; (3) the email to enter. Missing any one → report the available slots and ASK. Never invent details; never reuse a name/email from memory, a profile, or an earlier task.
+  - Verify-before-submit: the snapshot taken immediately before clicking Schedule Event must show the selected date + time + timezone AND the name/email values you typed. Anything unexpected → stop and report instead of submitting.
+  - After clicking Schedule Event, if the next snapshot does not clearly show the confirmation screen, DO NOT click again and DO NOT restart the flow — the booking may have gone through anyway (double-booking risk). Report exactly what the page shows and stop.
+  - Cancelling/rescheduling an EXISTING booking works ONLY via the cancel/reschedule link from the user's own confirmation email or confirmation page, which the user must paste. NEVER guess or hand-build such a link, and never try to cancel from someone's public booking page.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Calendly.
+  2. Snapshot at checkpoints (after navigate, after selecting day/slot, before and after any submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed.
+  3. browser_type REPLACES a field's content by default; append:true preserves it. Name/email fields want the replace default.
+  4. TIMEZONE IS FIRST-CLASS: every time shown on a booking page is rendered in the timezone selector's current value — which auto-detects from the BROWSER machine's system timezone and may NOT be the user's. Read the selector and NAME the timezone before reporting any slot. Never report bare times.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Checking availability is read-only and always safe; it must never click Next, Schedule Event, or Confirm.
+
+  ### State Recognition
+  - **Public booking pages** (calendly.com/{username} and /{username}/{event-type}): fully usable logged out. NEVER sign in and NEVER type credentials to check availability or book.
+  - **Own dashboard** (URLs under calendly.com/app/…): login-gated [LIVE-VERIFY]. If the snapshot shows a login/sign-in form (email/password/SSO buttons, URL containing /login or an auth host) → tell the user "Calendly needs you to log in manually" and STOP. Never type credentials.
+  - **Invalid link**: a "This Calendly URL is not valid" / page-not-found body [LIVE-VERIFY: wording] → the username or event-type slug is wrong; report it, don't guess variants.
+  - **Cookie/consent banner**: on first visit, click its accept/close button [LIVE-VERIFY: label] → snapshot → continue.
+  - **Loading**: spinner / calendar grid absent → snapshot again, max 2 retries.
+  - **Booking page ready**: left panel shows host name, event-type name and duration; a month calendar grid is present; the timezone control shows a zone name plus the current time there [LIVE-VERIFY: control role + text shape].
+
+  ### URL PATTERNS
+  - `calendly.com/{username}` — landing page listing that person's event types as cards ("30 Minute Meeting", "15 Minute Chat", …) [LIVE-VERIFY: card structure].
+  - `calendly.com/{username}/{event-type}` — the booking page for one event type (this is where the calendar lives). Links people share are usually already this form.
+  - `?month=YYYY-MM` appended to a booking page jumps the calendar to that month [LIVE-VERIFY: param respected] — prefer it over clicking arrows repeatedly.
+  - `calendly.com/app/scheduled_events/user/me` — own upcoming meetings (login-gated) [LIVE-VERIFY].
+  - `calendly.com/app/event_types/user/me` — own event types with their share links (login-gated) [LIVE-VERIFY].
+  - `calendly.com/cancellations/{id}` / `calendly.com/reschedulings/{id}` — per-booking action links that exist ONLY in a confirmation email/page [LIVE-VERIFY: paths]; the user must provide them (RULE #1).
+
+  ### BOOKING PAGE ANATOMY (uncaptured — verify against a live snapshot)
+  - Calendar: one button per day; days with availability are enabled with aria-labels like "Monday, July 20 - Times available", unavailable days are disabled [LIVE-VERIFY]. Month arrows have aria-labels like "Go to next month" [LIVE-VERIFY].
+  - Timezone selector: a button/combobox below the calendar showing e.g. "Central European Time (14:32)" [LIVE-VERIFY]; clicking it opens a searchable list — type a city/zone, click the match.
+  - Clicking a day reveals a column of time-slot buttons ("10:00am", "10:30am", …). Clicking a slot splits it into the time plus a "Next" button [LIVE-VERIFY].
+  - "Next" opens the Enter Details form: Name and Email textboxes, any custom questions the host added, an "Add Guests" button, and the "Schedule Event" submit button [LIVE-VERIFY: field labels].
+  - Confirmation screen after submit: a "You are scheduled" heading with the event summary and "A calendar invitation has been sent to your email address." [LIVE-VERIFY: wording].
+
+  ### TASK: check someone's availability (read-only — the most common ask)
+  1. browser_navigate to the provided link → browser_snapshot. Landed on the landing page (multiple event-type cards)? If the user named a duration/type, click that card → snapshot; otherwise list the event types and ask which one.
+  2. Read the timezone selector FIRST and lead the report with it ("times shown in Europe/Rome"). If the user asked in a specific timezone that differs, set the selector to theirs (click → type zone/city → click match → snapshot) so displayed slots need no mental conversion.
+  3. Enumerate the enabled day buttons in the visible month. Need further out → navigate with ?month=YYYY-MM (or click the next-month arrow) → snapshot.
+  4. For a specific day's times: click the day → snapshot → list the slot buttons.
+  5. Report available days/slots WITH the timezone. Never click Next in this task.
+
+  ### TASK: book a slot (GATED — re-read RULE #1 before starting)
+  1. Confirm the gate: exact slot (or unambiguous criteria) + name + email, all from the user in this conversation. Anything missing → run the availability task and ask instead.
+  2. Reach the event type's booking page and set the timezone selector to the timezone the user spoke in (step 2 above) so the slot you click is the slot they meant.
+  3. Click the day → snapshot → click the time slot → snapshot (slot shows selected, "Next" appeared) → click Next → snapshot: the Enter Details form with the chosen date/time/timezone summarized in the left panel [LIVE-VERIFY].
+  4. browser_type the name into Name, the email into Email. Custom/required questions: fill ONLY from answers the user gave; a required question you have no answer for → stop and ask.
+  5. Verification snapshot: confirm the summary shows the intended date + time + timezone and the fields hold the exact name/email. State all of it in your next message. Mismatch → fix or stop; never submit on a wrong snapshot.
+  6. Click "Schedule Event" → snapshot. "You are scheduled" confirmation → report it (event, time, timezone, invitee email). No clear confirmation → RULE #1: no retry, report the page as-is.
+  - A payment step (Stripe/PayPal) appearing at any point → STOP immediately; never enter payment details.
+
+  ### TASK: report own upcoming Calendly bookings (login-gated)
+  1. browser_navigate to calendly.com/app/scheduled_events/user/me → snapshot. Login wall → State Recognition: tell the user and stop.
+  2. Read the Upcoming tab (tabs: Upcoming / Pending / Past [LIVE-VERIFY]): per meeting — event type, invitee name/email, date + time + timezone as displayed. Scroll for more before declaring the list complete.
+
+  ### TASK: copy own booking link (login-gated)
+  1. browser_navigate to calendly.com/app/event_types/user/me → snapshot (login wall → stop).
+  2. Each event-type card shows/carries its share URL and a "Copy link" control [LIVE-VERIFY]. Do NOT rely on the clipboard (it belongs to the automation browser, not the user) — read the URL from the card's link href or the page text and paste the full https://calendly.com/… URL into your reply. Ambiguous which event type → list them and ask.
+
+  ### TASK: cancel / reschedule an existing booking (only via the user's own link)
+  1. Require the cancellation/reschedule link from the user's confirmation email or confirmation page (RULE #1). No link → tell them where to find it; never construct one.
+  2. Before ANY click, restate which meeting will be affected and confirm that is what they want.
+  3. Cancel: navigate the link → snapshot → verify the event shown matches the user's description → optional reason textbox (fill only if the user gave one) → click "Cancel Event" [LIVE-VERIFY: label] → snapshot confirming the cancelled state. This notifies the host by email.
+  4. Reschedule: navigate the link → the slot picker reopens with details prefilled [LIVE-VERIFY] → the NEW slot must come explicitly from the user (gate again) → pick day/time → verify-before-submit snapshot → confirm → snapshot. Unclear result → no retry (RULE #1).
+
+  ### Gotchas
+  - Slots are live inventory: one can vanish between snapshot and click. If the chosen slot is gone, report it — never silently book a neighboring time.
+  - A disabled next-month arrow usually means the end of the host's scheduling window, not an error.
+  - Some links open a routing form (questions before any calendar) [LIVE-VERIFY] — answer only from user-provided information, else ask.
+  - Durations matter: "the 30 minute one" selects an event type, not a slot. Confirm both type and slot before booking.
+  - The confirmation screen may offer "Schedule another event" — never click it; one gated booking per explicit request.

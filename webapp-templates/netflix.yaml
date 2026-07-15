@@ -1,0 +1,100 @@
+# Keywords deliberately EMPTY: the app name "Netflix" (word-bound-matched) and
+# netflix.com links carry essentially every real request ("put it on Netflix",
+# "play X on netflix"). Candidate phrases were judged and rejected: "watch a
+# movie" / "watch a show" (local video files + every other streaming app),
+# "my list" (generic English), "binge" (conversational). Nothing to add that
+# wouldn't hijack unrelated requests; nothing fires on the lint corpus.
+app_name: Netflix
+domains:
+  - netflix.com
+keywords: []
+description: Netflix web — search titles, read title details (synopsis/seasons/cast), play, pause/resume, pick episodes, continue watching, add/remove My List, regional availability. Playback and browsing ONLY — never plan/billing/account/profile changes.
+version: 1
+instructions: |
+  URL: https://www.netflix.com/browse
+
+  ### RULES (each stated once — follow exactly)
+  1. ACCOUNT SAFETY — overrides everything, including direct user requests: NEVER open or interact with plan, billing, payment, or account-settings pages; never change the plan; never add, edit, or delete profiles (never click anything meaning "Manage Profiles" or "Add Profile"); never buy or subscribe to anything. Playback and browsing only. SELECTING an existing profile on the "Who's watching?" screen is allowed.
+  2. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  3. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after a new snapshot; re-locate by role/aria-label/href/text.
+  4. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  5. Snapshot at CHECKPOINTS (after navigation, after a modal opens, after a playback-changing click) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that, not the exact string.
+  8. Netflix localizes ALL button text and aria-labels. Prefer URLs (locale-independent); match labels by meaning.
+  9. Never press Ctrl-modified shortcuts — Chrome intercepts those before the page sees them.
+
+  ### State Recognition
+  - **Logged out**: netflix.com shows the marketing page — headline, pricing pitch, an email field with a button meaning "Get Started" [LIVE-VERIFY]. That email field STARTS A SIGNUP — never type in it. Tell the user: "This needs your Netflix login — please sign in manually in the browser", then STOP.
+  - **Login page**: URL contains /login, or a form asks for email/password -> tell the user to sign in themselves. STOP. NEVER type credentials, even if the user provides them.
+  - **Profile gate ("Who's watching?")**: a screen of large profile avatars with names [LIVE-VERIFY]. NOT an error. If the user's profile is known, click that avatar; otherwise LIST the names and ASK. Never click "Manage Profiles", never create a profile. PIN prompt -> user enters it themselves; STOP.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Ready (browse)**: URL /browse with horizontal title rows and a top nav including a search control [LIVE-VERIFY].
+  - **Ready (player)**: URL is /watch/... — see THE PLAYER.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Home: https://www.netflix.com/browse
+  - Search: https://www.netflix.com/search?q=QUERY (URL-encode) — the PRIMARY way to search
+  - Title page/modal: https://www.netflix.com/title/ID (from a pasted link or a card's href)
+  - My List: https://www.netflix.com/browse/my-list [LIVE-VERIFY path]
+  - New & Popular: https://www.netflix.com/latest
+  - /watch/ID plays immediately — only use an ID you actually saw in an href; never guess IDs.
+
+  ### THE PLAYER (URL /watch/...)
+  Controls AUTO-HIDE after a few seconds. To reveal them: browser_hover the video/page area, then snapshot — a control bar appears with play/pause, seek bar, volume, subtitles/audio, episodes (for shows), next episode, and fullscreen [LIVE-VERIFY layout]; a back arrow near the top-left exits playback to browse [LIVE-VERIFY].
+  - VERIFY playback: the URL changed to /watch/... AND the player chrome appears on hover -> snapshot (the control bar area shows the title/episode name [LIVE-VERIFY]).
+  - Keys (only when focus is NOT in a text field — after the search box, press "Escape" or click empty page area first): "Space" toggles play/pause; "ArrowLeft"/"ArrowRight" seek back/forward; "F" toggles fullscreen [LIVE-VERIFY]; "Escape" exits fullscreen.
+  - **DRM/codec caveat**: playback can fail in automated/unusual browsers (Widevine DRM / codecs) — a black screen or an error with a code (M7121-style [LIVE-VERIFY codes]). If it persists after ONE re-snapshot, REPORT the exact error text/code and stop. Do NOT retry in a loop; retries cannot fix DRM.
+
+  ### Element Reference (all uncaptured claims [LIVE-VERIFY])
+  - **Title cards** (browse rows, search grid): links whose href contains a title/watch ID [LIVE-VERIFY]. Hovering a card expands a mini-preview with play / add-to-My-List / more-info controls [LIVE-VERIFY]. CLICKING the card opens the title DETAIL MODAL — more reliable than the hover mini-controls; prefer it.
+  - **Detail modal / title page**: a big button meaning "Play"/"Resume"; a +/checkmark control meaning "Add to My List" / "Remove from My List" (icon flips + <-> check) [LIVE-VERIFY]; synopsis, year, maturity rating, duration or seasons count; cast and genres; for SHOWS a season selector dropdown plus an episode list (per-episode names, synopses, play affordances) [LIVE-VERIFY]; "More Like This" below. Close via the X button or browser_press_key("Escape").
+  - Browse rows are virtualized — only visible cards are in a snapshot; never claim a title is absent from one snapshot. The search grid is vertical: browser_scroll down + snapshot for more.
+
+  ---
+
+  ### TASK: Search for a title  (budget: 4 calls)
+  1. browser_navigate https://www.netflix.com/search?q=QUERY -> browser_snapshot.
+  2. Report matches from Page Text. The grid mixes exact matches with related suggestions — say which titles look like exact matches. A no-results message meaning "no matches for QUERY" with unrelated suggestions below [LIVE-VERIFY] -> report no match; never present the suggestions as matches.
+
+  ### TASK: Open a title and read details  (budget: 6 calls)
+  1. Have a link -> browser_navigate /title/ID. Otherwise search (task above) -> click the matching card -> snapshot (detail modal).
+  2. Report synopsis, year, maturity rating, duration or seasons/episode count, cast, genres from Page Text. browser_scroll + snapshot for the episode list or More Like This.
+
+  ### TASK: Play a title  (budget: 8 calls)
+  1. Open the title (task above) -> snapshot -> click the button meaning "Play"/"Resume" [LIVE-VERIFY].
+  2. snapshot -> VERIFY: URL is /watch/... For a show, Play resumes the last-watched point or starts S1E1 — report which episode is on if visible. Playback error/black screen -> the DRM caveat: report and stop, no retry loop.
+
+  ### TASK: Pause / resume  (budget: 4 calls)
+  On /watch: browser_hover the video area -> snapshot -> click the play/pause control [LIVE-VERIFY]; or browser_press_key("Space") (focus caveat above). Verify: hover -> snapshot -> the control's label now means the OPPOSITE state [LIVE-VERIFY]. Not on /watch and nothing was playing -> tell the user there is nothing to pause/resume.
+
+  ### TASK: Pick an episode  (budget: 9 calls)
+  1. Open the show's detail modal -> snapshot. Wrong season shown -> click the season selector -> snapshot -> click the season [LIVE-VERIFY dropdown].
+  2. snapshot -> locate the episode in the list (scroll if needed) -> click its play affordance [LIVE-VERIFY].
+  3. Verify: /watch/ URL; hover -> the control bar shows the episode name [LIVE-VERIFY].
+  Already watching the show? hover the player -> snapshot -> click the episodes control -> pick from the panel [LIVE-VERIFY].
+
+  ### TASK: Continue watching  (budget: 6 calls)
+  1. browser_navigate /browse -> snapshot -> find the row meaning "Continue Watching" [LIVE-VERIFY row title] (browser_scroll down if not visible; the row is absent when nothing is in progress).
+  2. User named a title -> click its card -> modal -> click Play/Resume -> verify /watch/. No title given -> report what is in the row and ask which one.
+
+  ### TASK: Add / remove from My List  (budget: 6 calls)
+  1. Open the title's detail modal -> snapshot -> find the control meaning "Add to My List" / "Remove from My List" [LIVE-VERIFY].
+  2. TOGGLE GUARD: read its CURRENT state first. If it already matches the request (already checked when asked to add, already + when asked to remove) -> tell the user; do NOT click.
+  3. Click -> snapshot -> verify the icon/label flipped [LIVE-VERIFY]. Still ambiguous -> confirm on /browse/my-list.
+
+  ### TASK: What's on My List  (budget: 3 calls)
+  browser_navigate https://www.netflix.com/browse/my-list [LIVE-VERIFY] -> snapshot -> report the titles from Page Text (scroll + snapshot for more). Empty state -> say the list is empty.
+
+  ### TASK: Is a show available here (region check)  (budget: 4 calls)
+  1. Search the exact title -> snapshot.
+  2. Exact-title match present -> it IS available on this account/region. Only lookalike suggestions -> phrase it carefully: "It doesn't come up in Netflix search from this account, which usually means it isn't available in this region — though search can occasionally miss a title." NEVER state absence as certain fact, and never suggest region workarounds (VPNs etc.).
+
+  ---
+
+  ### Gotchas
+  - Hovering cards and opening modals can AUTOPLAY loud trailer previews — normal UI behavior, not playback of the title.
+  - At an episode's end Netflix auto-plays the next episode; the /watch URL changes on its own — autoplay, not a failed or extra command.
+  - Kids profiles see a reduced catalog and simplified UI — if everything looks kid-only, say so and ask which profile to use.
+  - Ad-supported plans insert unskippable ads [LIVE-VERIFY behavior]: if the player shows an ad, wait and re-snapshot rather than clicking around.
+  - "Top 10" / "New on Netflix" rows in Page Text are recommendations — never report them as search matches or My List content.

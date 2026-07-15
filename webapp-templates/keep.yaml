@@ -1,0 +1,81 @@
+app_name: Google Keep
+domains:
+  - keep.google.com
+keywords:
+  - sticky note
+  - sticky notes
+description: Google Keep — create text and checklist notes, read, append, check off items, search, pin, archive, label, and (gated) delete notes.
+version: 1
+instructions: |
+  URL: https://keep.google.com
+
+  ### RULES (each stated once — they apply everywhere below)
+  1. Allowed tools: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED. If the allowed tools cannot do it, stop and report why.
+  2. LOCALE RULE: Keep translates every label to the account language. Quoted text below is documentation from one locale, NOT a selector — match by role + structure + position. Note titles and note text are user content (locale-free) — prefer matching cards by them.
+  3. browser_type REPLACES the field's content by default. When touching an EXISTING note's text, plain browser_type DESTROYS what is there — use append:true, or replace only when the user explicitly asked for a full rewrite (and say so in your report).
+  4. browser_press_key("Escape") closes the open note AND saves it — Close/Escape IS the save action; there is no separate Save button.
+  5. ARCHIVE ≠ DELETE. Archive hides the note into /#archive — fully recoverable, not in trash. Delete moves it to /#trash where it is auto-purged after ~7 days. Do exactly the one the user asked for and name which one you did.
+  6. DESTRUCTIVE GATE: never delete a note unless the user named that specific note in THIS request. "Clean up my notes" is not enough — list the candidates and ask first.
+  7. Card action buttons (pin, reminder, color, archive, More) are hover-revealed: browser_hover the card, THEN browser_snapshot — they appear in the next snapshot, not the current one. [LIVE-VERIFY]
+  8. Snapshot [id]s are 1-based and change on EVERY snapshot — never reuse an id across snapshots.
+  9. After 2 failed attempts to locate an element, STOP and tell the user what you saw. No workarounds.
+  10. Budgets: create ≤6 calls | read ≤4 | append ≤6 | search ≤3 | pin/archive ≤5 | delete ≤7 | label ≤7. Exceeding a budget means you have left the recipe — re-read it.
+
+  ### URL PATTERNS
+  - Grid (home): https://keep.google.com
+  - Search: https://keep.google.com/#search/text%3DQUERY — URL-encode QUERY; %3D is a literal "=". [LIVE-VERIFY URL shape — fallback: click the search box on the grid and browser_type(query, submit:true)]
+  - Archive: /#archive | Trash: /#trash | Reminders: /#reminders | Label view: /#label/NAME
+  - Individual notes have NO constructible URL — reach a note by finding its card in the grid or via search, then clicking it.
+
+  ### STATE RECOGNITION (check on every snapshot)
+  - Not signed in: URL on accounts.google.com, or the page offers a "Sign in" button → tell the user "Google Keep needs you to sign in manually" and STOP. NEVER type credentials.
+  - Grid ready: the note composer near the top — a textbox with a "Take a note…"-style placeholder [LIVE-VERIFY exact role/label] — with note cards below (a "Pinned" section first when any note is pinned, then "Others").
+  - Open note (modal): a dialog holding a title textbox, a body text element, a bottom toolbar, and a Close button [LIVE-VERIFY structure]. This is a distinct state: while it is open, interact only inside it; Escape-close it before doing anything else on the page.
+  - Loading / blank: no composer and no cards → snapshot again after a moment, max 2 retries. A signed-in empty account still shows the composer (plus an empty-state illustration) — that is ready, not loading.
+
+  ### ELEMENT REFERENCE ([LIVE-VERIFY] = claim not yet captured from a real snapshot)
+  - Note card: shows its title and text; identify a card by that user content. [LIVE-VERIFY how title/text map to the card's accessible name]
+  - Hover on a card reveals: a pin toggle near the card's top corner, and a toolbar row — reminder, collaborator, color, image, archive, "More" (three-dot). [LIVE-VERIFY names/roles]
+  - "More" menu: Delete note, Add label, Make a copy, Show/Hide checkboxes, Copy to Google Docs. [LIVE-VERIFY]
+  - Composer: clicking the "Take a note…" box expands it to a Title textbox + body element + the same toolbar + Close. To its right (collapsed state): a New-list (checklist) button and image/drawing buttons. [LIVE-VERIFY]
+  - Open checklist note: one row per item — a checkbox + the item's text; a "+ List item" row appends items; checked items collapse under a "Completed items" section. [LIVE-VERIFY]
+
+  ### TASK: create a text note (max 6 calls)
+  1. browser_navigate https://keep.google.com 2. snapshot — grid ready? 3. click the composer box. 4. snapshot — composer expanded; browser_type(title) into the Title textbox, then browser_type(body) into the body element (two separate elements — never both strings into one). 5. browser_press_key("Escape"). 6. snapshot — a card with your title is now in the grid = success. Card missing → report failure; do NOT retype blindly (duplicate risk).
+
+  ### TASK: create a checklist note
+  1-2. as above. 3. click the New-list (checklist) button beside the composer [LIVE-VERIFY]. 4. snapshot — type the title into the Title textbox. 5. click the first item field, browser_type the first item, then press Enter between items (Enter creates the next empty item: type, Enter, type, …). If Enter does not create a new row, snapshot and click the "+ List item" row instead — one browser_type per item. 6. Escape. 7. snapshot — verify the card with title + items.
+
+  ### TASK: read a note
+  1. Find the card (grid scan, or the search task for anything not visible). 2. click the card's TEXT (not a toolbar button). 3. snapshot — the open dialog's content is in Page Text; report it. 4. browser_press_key("Escape") to close (nothing typed = nothing changed).
+
+  ### TASK: append to an existing note
+  1. Open the note (click its card, snapshot). 2. click the body text element. 3. browser_type(text, append:true) — append:true is MANDATORY here; without it the existing text is erased (rule 3). 4. browser_press_key("Escape"). 5. snapshot — the card now shows the appended text.
+
+  ### TASK: check off / uncheck a checklist item
+  1. Open the note; snapshot. 2. Find the checkbox in the same row as the item's text (match by the text — user content). Toggle guard: already in the requested state → report that, do not click. 3. click the checkbox. 4. snapshot — the item moved under "Completed items" (or back) = success. 5. Escape.
+
+  ### TASK: search notes (max 3 calls)
+  1. browser_navigate to the search URL (pattern above). 2. snapshot — the cards shown are the results; report titles/snippets. If the page ignored the URL (grid state unchanged, no query visible) [LIVE-VERIFY]: click the search box at the top, browser_type(query, submit:true), snapshot.
+
+  ### TASK: pin / unpin a note
+  1. Locate the card. 2. browser_hover it. 3. snapshot — the pin toggle is now visible; read its state first (its label/pressed state distinguishes pin vs unpin [LIVE-VERIFY]). Already in the requested state → report, don't click. 4. click it. 5. snapshot — pinned notes sit in the "Pinned" section at the top.
+
+  ### TASK: archive a note (recoverable — NOT delete)
+  1. Locate the card. 2. browser_hover it. 3. snapshot — click the archive action in the revealed toolbar [LIVE-VERIFY name]. 4. snapshot — card gone from the grid = archived. Report: "archived — recoverable from Archive; this is not deletion." To unarchive: /#archive → hover the card → click the unarchive action.
+
+  ### TASK: delete a note (GATED by rule 6)
+  Only when the user named this exact note. 1. Locate the card. 2. hover. 3. snapshot — click "More" (three-dot). 4. snapshot — click "Delete note" in the menu [LIVE-VERIFY]. 5. snapshot — card gone = moved to Trash. Report: it is in Trash and auto-deleted after ~7 days; restorable from /#trash until then. NEVER touch "Delete forever" or empty the trash unless the user explicitly asked for permanent deletion.
+
+  ### TASK: add a label
+  1. hover the card → snapshot → click "More". 2. snapshot — click "Add label" [LIVE-VERIFY]. 3. snapshot — a label picker appears: a text field plus checkboxes for existing labels. Existing label → click its checkbox. New label → browser_type(name) into the field, then click the create-new entry that appears. 4. browser_press_key("Escape") to close the picker. 5. snapshot — the card shows the label chip.
+
+  ### TASK: set a reminder (OPTIONAL — fragile)
+  hover the card → snapshot → click the reminder action [LIVE-VERIFY] → snapshot — a menu of presets (later today / tomorrow / next week) plus a custom date-time option. Prefer a preset that satisfies the request. The custom picker is fragile [LIVE-VERIFY]; if 2 attempts fail, stop and ask the user to set the exact time manually.
+
+  ### GOTCHAS
+  - The composer autosaves: navigating away mid-compose can still create a partial note — always Escape-close before any navigation.
+  - Clicking a card's hover toolbar acts on the card WITHOUT opening it; clicking the card's text opens the modal. Don't confuse the two states.
+  - The grid is masonry and may virtualize: a note that exists may be absent from the snapshot until you browser_scroll. Scroll (or search) before declaring a note missing.
+  - Search results, /#archive, and label views reuse the same card + hover-toolbar structure as the grid — the same recipes apply there.
+  - There is no reliable per-note undo — that is exactly why append:true (rule 3) and the delete gate (rule 6) exist.

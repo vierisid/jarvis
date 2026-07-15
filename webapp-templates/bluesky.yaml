@@ -1,0 +1,126 @@
+# app_name "Bluesky" word-bound-matches the whole user message; the bsky.app domain
+# catches pasted links. Keywords deliberately tiny: "bsky" is the casual name users
+# actually type ("on bsky", "check bsky") and does NOT contain "bluesky", so it carries
+# real recall; "skeet"/"skeets" are the community's slang for a Bluesky post ("skeet
+# this"). No generic words — posting/social phrasing would hijack other apps' requests.
+app_name: Bluesky
+domains:
+  - bsky.app
+keywords:
+  - bsky
+  - skeet
+  - skeets
+description: Bluesky — post, reply, like, repost, quote, search, read threads, profiles, follow, notifications, custom feeds
+version: 1
+instructions: |
+  URL: https://bsky.app  (home)
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default. To add to text already in a composer, pass append: true; to correct a composer, plain browser_type (replace) with the FULL corrected text is the right move.
+  4. Snapshot at CHECKPOINTS (after navigation, after a composer opens, before and after Post/Reply) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that, in the UI's current wording/locale, rather than demanding the exact string.
+  7. browser_press_key("Escape") closes an open composer without posting (Bluesky may ask to discard the draft — click the option meaning "Discard" to abandon) [LIVE-VERIFY].
+
+  ### PUBLIC POSTING SAFETY (posts, replies, quotes, reposts publish instantly under the user's name)
+  - BEFORE clicking Post/Reply: snapshot and confirm the composer text is EXACTLY the intended text — no truncation, no leftovers from an earlier attempt. Wrong? Retype the full text (replace default), re-verify, then click.
+  - AFTER clicking: verify ONCE via snapshot. If you cannot confirm success, tell the user "the post may or may not have gone out — please check" and STOP. NEVER re-post on uncertainty: a blind retry risks a public double-post.
+  - If the request is ambiguous — what to say, which post to reply to, repost vs quote — ASK the user. Never guess words that get published.
+  - Posts cap at 300 characters; the composer counts down and disables Post when over [LIVE-VERIFY]. Do NOT trim or rewrite the user's text to fit; tell them the length and ask.
+
+  ### State Recognition
+  - **Logged out**: bsky.app home shows a sign-in screen ("Sign in" / "Create account"). Bluesky content is public, so direct profile/post URLs usually still render read-only [LIVE-VERIFY] — reading may proceed. But posting, replying, liking, reposting, following, notifications, chat, and pinning feeds ALL need login: for those, tell the user "You're logged out of Bluesky — please log in manually in the browser," then STOP. NEVER type credentials, even if the user provides them.
+  - **Loading**: 0 interactive elements or only a spinner in the page text -> snapshot again (max 2 retries, then tell the user).
+  - **Ready (home)**: post feed items present (see Element Reference) and the sidebar nav links (/search, /notifications, /feeds, /profile/...) are in the snapshot.
+  - **Compose open**: a dialog with a contenteditable role="textbox" meaning the post text is present [LIVE-VERIFY].
+
+  ### URL MAP (URL-first: prefer navigating to these over clicking through the UI)
+  - Home: https://bsky.app/ — feed tabs across the top: "Following", "Discover", plus any feeds the user pinned [LIVE-VERIFY].
+  - Search: https://bsky.app/search?q=QUERY (URL-encode QUERY; result tabs mean Top / Latest / People / Feeds [LIVE-VERIFY]). The operator from:HANDLE works inside q [LIVE-VERIFY].
+  - Hashtag: https://bsky.app/hashtag/TAG [LIVE-VERIFY]
+  - Notifications: https://bsky.app/notifications (tabs meaning All / Mentions [LIVE-VERIFY])
+  - Chat (DMs): https://bsky.app/messages [LIVE-VERIFY — confirm chat is available on this account; some settings disable it]
+  - Profile: https://bsky.app/profile/HANDLE — the FULL handle, no @: alice.bsky.social, or a custom domain like alice.dev.
+  - Single post + its thread: https://bsky.app/profile/HANDLE/post/ID
+  - Feeds directory (custom feeds — a Bluesky signature): https://bsky.app/feeds
+  - Own profile: click the sidebar "Profile" nav link (href /profile/OWN_HANDLE) [LIVE-VERIFY].
+
+  ### Element Reference (ALL claims here [LIVE-VERIFY]; match by role + label meaning, never by position)
+  - **Post (feed item)**: author name + handle, text readable in the snapshot's Page Text [LIVE-VERIFY]. The post's relative timestamp is a link whose href is /profile/HANDLE/post/ID — click it to open the post's own page [LIVE-VERIFY].
+  - **Per-post action bar** (buttons whose aria-labels embed counts, e.g. "Reply (3 replies)", "Like (12 likes)") [LIVE-VERIFY]: Reply | Repost (opens a small menu) | Like (label means "Unlike" when already liked [LIVE-VERIFY]) | a "..." more-options menu. The buttons look identical as bare ids — match by aria-label meaning ONLY.
+  - **Composer**: opened by the sidebar "New post" / "Compose post" button [LIVE-VERIFY] — a dialog with a contenteditable role="textbox" (placeholder meaning "What's up?") [LIVE-VERIFY], a character counter, and a submit button labeled "Post" [LIVE-VERIFY]. Do NOT confuse it with the sidebar compose button that only OPENS the dialog — the submit sits inside the dialog, after the textbox in the snapshot.
+  - **Sidebar nav**: links — match by href (/search, /notifications, /messages, /feeds, /profile/...), locale-stable.
+  - **Follow button**: on a profile, a button labeled "Follow"; already-following shows "Following" [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Post (a "skeet")  (budget: 8 calls)
+  1. browser_navigate https://bsky.app/ -> browser_snapshot. Click the sidebar "New post" compose button [LIVE-VERIFY] -> browser_snapshot (composer open).
+  2. browser_type(composer textbox id, text) — no submit (don't rely on Enter [LIVE-VERIFY]).
+  3. browser_snapshot — VERIFY the composer shows exactly the intended text (Public Posting Safety; check the character counter isn't negative).
+  4. Click the "Post" submit button inside the dialog.
+  5. browser_snapshot — success = dialog gone and/or a toast meaning the post was sent, or the new post atop the Following feed [LIVE-VERIFY]. Unconfirmed -> tell the user, do NOT re-post.
+
+  ### TASK: Post with an image
+  1. Open the composer and type the text as in Post. Do NOT click the image/photo button — it opens a native OS picker.
+  2. browser_upload_file with the absolute file path (finds the composer's hidden file input; file must be under the user's home directory).
+  3. browser_snapshot — verify the image preview appears in the composer [LIVE-VERIFY]. User supplied alt text? Click the preview's "ALT" control and type it [LIVE-VERIFY]. Then verify text and Post as above.
+
+  ### TASK: Read the home feed / Discover
+  1. browser_navigate https://bsky.app/ -> browser_snapshot. Click the "Following" or "Discover" tab as requested [LIVE-VERIFY] -> snapshot.
+  2. Read posts from Page Text (author, handle, text, timestamps). browser_scroll down + snapshot for more (infinite feed — 2-3 scrolls is plenty; report, don't keep scrolling).
+
+  ### TASK: Search posts or people  (budget: 5 calls)
+  1. browser_navigate https://bsky.app/search?q=QUERY (URL-encoded; from:HANDLE to scope to an author [LIVE-VERIFY]) -> browser_snapshot.
+  2. Read results from Page Text; scroll for more. For accounts, click the tab meaning "People" [LIVE-VERIFY]; for feeds, the "Feeds" tab.
+
+  ### TASK: Open and read a thread / replies
+  1. Open the post's page (given URL, or click its timestamp link href /profile/.../post/... from a feed) -> browser_snapshot.
+  2. Parent context appears above the post, replies below, all in Page Text [LIVE-VERIFY]. browser_scroll down + snapshot for more; click buttons meaning "Show more replies"/"Load more" if present [LIVE-VERIFY].
+
+  ### TASK: Reply  (budget: 9 calls)
+  1. Open the post's page; snapshot; confirm from Page Text this is the right post — if the user's reference is ambiguous, ask.
+  2. Click the post's Reply action button -> browser_snapshot — a reply composer opens showing the post being replied to [LIVE-VERIFY].
+  3. browser_type the reply; browser_snapshot to VERIFY the text; click the "Reply"/"Post" submit button [LIVE-VERIFY].
+  4. browser_snapshot — the reply appears in the thread / composer gone. Unconfirmed -> tell user, never re-send.
+
+  ### TASK: Like a post
+  1. Open the post's page (on a feed, make sure the Like button belongs to the SAME feed item as the target text).
+  2. Click the Like action button -> browser_snapshot — its label now means "Unlike" / the like count incremented [LIVE-VERIFY]. Label already meant "Unlike" BEFORE clicking? It's already liked — clicking would UNlike; leave it and tell the user.
+
+  ### TASK: Repost
+  1. Open the post's page; verify it's the right post in Page Text.
+  2. Click the Repost action button -> browser_snapshot — a menu appears with items meaning "Repost" and "Quote post" [LIVE-VERIFY].
+  3. Click "Repost" -> browser_snapshot — the menu closes and the repost count/state updates [LIVE-VERIFY]. This is public: unconfirmed -> stop, don't retry. (Menu shows "Undo repost" instead? It's already reposted — tell the user rather than undoing.)
+
+  ### TASK: Quote-post
+  1. Steps 1-2 of Repost, then click "Quote post" -> browser_snapshot — a composer opens with the quoted post embedded below the textbox [LIVE-VERIFY].
+  2. browser_type the comment; snapshot to VERIFY text + embedded post; click "Post"; snapshot to confirm.
+
+  ### TASK: View a profile + recent posts
+  1. browser_navigate https://bsky.app/profile/HANDLE (handle unknown? search the name and use the People tab [LIVE-VERIFY], click the matching account — verify handle AND display name before acting on it).
+  2. browser_snapshot — bio, follower/following counts, recent posts are in Page Text. Tabs mean Posts / Replies / Media [LIVE-VERIFY]; scroll for more.
+
+  ### TASK: Follow / unfollow
+  1. Open the profile; snapshot; confirm it's the intended person (handle + display name — many similar handles exist).
+  2. Follow: button says "Follow" -> click -> snapshot -> it now means "Following" [LIVE-VERIFY]. Already "Following"? Do nothing and tell the user.
+  3. Unfollow ONLY when the user explicitly asked to unfollow: click the "Following" button (it may need a confirming menu item meaning "Unfollow" [LIVE-VERIFY]) -> snapshot -> button back to "Follow".
+
+  ### TASK: Check notifications
+  1. browser_navigate https://bsky.app/notifications -> browser_snapshot; read Page Text (likes, reposts, follows, replies, mentions). Only mentions wanted: click the tab meaning "Mentions" [LIVE-VERIFY]. Replying to one = open its post page, then the Reply task.
+
+  ### TASK: Browse a custom feed  (a Bluesky signature — algorithmic feeds anyone can publish)
+  1. browser_navigate https://bsky.app/feeds -> browser_snapshot -> type the feed name into the feed-search input [LIVE-VERIFY] -> snapshot -> click the matching feed (verify name + creator handle).
+  2. browser_snapshot on the feed page (URL /profile/CREATOR/feed/NAME [LIVE-VERIFY]) — read posts from Page Text, scroll for more.
+  3. Pin/save the feed ONLY if explicitly asked (it changes the user's home tabs): click the pin/save control on the feed page [LIVE-VERIFY], snapshot to confirm.
+
+  ---
+
+  ### Gotchas
+  - Feeds re-render and load in new posts; ids from a pre-scroll snapshot are ALWAYS stale — re-snapshot before clicking anything in a feed.
+  - Handles are DOMAINS (alice.bsky.social, alice.dev) — never assume .bsky.social for a custom-domain user; when unsure, search and confirm.
+  - Reply-gated threads exist (author limited who can reply): the reply box may be absent or disabled [LIVE-VERIFY] — report that instead of hunting for a workaround.
+  - Content labels may hide a post behind a "Show" button [LIVE-VERIFY] — click it only when the user asked to read that specific post.
+  - An aborted composer may offer to save a draft — tell the user if you kept or discarded one.

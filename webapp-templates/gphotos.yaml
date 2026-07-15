@@ -1,0 +1,107 @@
+app_name: Google Photos
+domains:
+  - photos.google.com
+keywords:
+  - photo album
+  - photo albums
+  - photo library
+  - photos of
+description: Google Photos — natural-language search of the photo library, browse the stream, open/favorite/download photos, create/list/share albums, upload photos; deletion strictly gated (photos are irreplaceable memories).
+version: 1
+instructions: |
+  URL: https://photos.google.com/
+
+  ### RULES (each stated once — follow exactly)
+  1. **DESTRUCTIVE-ACTION GATE — overrides everything else.** Photos are irreplaceable memories. NEVER move a photo to trash unless the user named the SPECIFIC photo(s) in THIS request; bulk requests ("clean up my library", "delete duplicates", "delete my old photos") → refuse and explain you don't bulk-delete photos. NEVER edit photos — do not open the editor, no crop/rotate/adjust. After any delete, tell the user the photo moved to Trash and is recoverable there for 60 days. Removing a photo FROM AN ALBUM is NOT deletion (it stays in the library) — always state which of the two is happening.
+  2. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Photos. Never use desktop or sidecar tools.
+  3. URL-first. Search, albums, favorites, trash, sharing all have stable URLs (below). The search URL is the killer feature — prefer it over any scrolling hunt.
+  4. Photo-TILE action buttons (select checkmark, favorite star) are HOVER-REVEALED: not in the snapshot until you browser_hover the tile, then re-snapshot [LIVE-VERIFY: which buttons appear on hover]. Buttons in the photo VIEWER toolbar and top action bars are always visible — no hover needed there.
+  5. browser_type REPLACES field content by default; pass append: true only to extend existing text. Album titles and search inputs want the default replace.
+  6. Snapshot at checkpoints (after navigate, after hover, after a dialog opens, after the action). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  7. UI language: Photos localizes all labels — match buttons by aria-label MEANING, role, or URL, never by exact English text on a non-English UI.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+
+  ### State Recognition
+  - **Sign-in wall**: URL contains accounts.google.com, or the page asks to choose an account / sign in → tell the user: "Google Photos requires Google sign-in. Please log in manually." NEVER type credentials. Stop.
+  - **Loading**: 0 interactive elements, or no photo tiles and no empty-state text → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready**: the search input is present and the grid shows photo tiles / date headers (or an explicit empty-state message).
+  - **Empty result / empty view**: "no results"-style text and no tiles → report it, do not retry.
+
+  ### URL PATTERNS (locale-independent — PREFER these over clicking)
+  - Photo stream (library): `https://photos.google.com/`
+  - **Search: `https://photos.google.com/search/{url-encoded-query}`** — natural language: things ("beach", "receipts", "dog"), people (a name the user has labeled), places ("Paris"), dates ("june 2024", "2019"), types ("screenshots", "videos", "selfies"), combinations ("beach 2024"). Space → %20.
+  - Albums list: `https://photos.google.com/albums`
+  - One album: `https://photos.google.com/album/{ALBUM_ID}`
+  - Favorites: `https://photos.google.com/favorites`
+  - Trash: `https://photos.google.com/trash`
+  - Sharing (shared albums/links): `https://photos.google.com/sharing`
+  - Archive: `https://photos.google.com/archive`
+
+  ### SNAPSHOT FORMAT & THE GRID
+  - Photo tiles appear as checkbox/link elements whose aria-label carries the description + date, e.g. "Photo - Landscape - Jun 12, 2026, 3:41 PM" [LIVE-VERIFY: exact label pattern]. Use these labels to pick the right photo; date headers appear in Page Text.
+  - The grid is VIRTUALIZED: only tiles near the viewport are in the DOM. To reach older photos: browser_scroll down → re-snapshot, repeat. For anything date- or content-specific, use the search URL instead of scrolling.
+  - Snapshots give labels, dates, and metadata only — never guess what a photo actually shows.
+
+  ### CORE PATTERN: SELECT TILES (multi-photo actions)
+  1. browser_hover(tile_id) → browser_snapshot → a select checkmark appears on that tile [LIVE-VERIFY].
+  2. browser_click(checkmark_id) → the tile is selected; repeat hover→snapshot→click per photo.
+  3. Snapshot → a top action bar appears with the selection count and actions: add to album (+), share, favorite, delete [LIVE-VERIFY: exact aria-labels]. Click the action by aria-label meaning.
+  4. browser_press_key("Escape") clears the selection if you need to abort.
+
+  ### TASK: Search photos
+  1. browser_navigate("https://photos.google.com/search/beach%202024") → browser_snapshot.
+  2. Read the result tiles' aria-labels + Page Text; report count/dates or proceed to open one.
+  - UI fallback: browser_type(search input id, query, submit: true).
+  - Person search: the person's name works as a query only if the user has labeled that face; if results are empty, say that may be why.
+
+  ### TASK: Browse the stream / "what's in my library from X"
+  - Navigate the stream (or better, a search/date URL) → snapshot → read date headers + tile labels; scroll + re-snapshot to continue. Cap at ~5 scroll rounds, then summarize and ask before continuing.
+
+  ### TASK: Open a photo (viewer)
+  1. browser_click(tile link id) → snapshot → the viewer opens (URL becomes a /photo/… path [LIVE-VERIFY]) with a toolbar: back, favorite star, info, delete, more options (⋮) [LIVE-VERIFY: labels].
+  2. Navigate: browser_press_key("ArrowRight") next / "ArrowLeft" previous → snapshot to see where you are.
+  3. Details (date, location, camera): click the info button or browser_press_key("i") → snapshot → the info panel text appears [LIVE-VERIFY: "i" shortcut and panel contents].
+  4. browser_press_key("Escape") closes the panel/viewer.
+
+  ### TASK: Favorite / unfavorite
+  1. Open the photo in the viewer → snapshot → find the star button; its aria-label states the CURRENT direction (≈ "Add to favorites" vs "Remove from favorites") [LIVE-VERIFY].
+  2. TOGGLE GUARD: only click if the label matches the user's intent — if they said "favorite it" and the label already means remove-from-favorites, report it's already a favorite and stop.
+  3. Click → snapshot → verify the label flipped. Alternative for a tile in the grid: hover the tile → snapshot → hover-revealed star [LIVE-VERIFY].
+
+  ### TASK: List albums / open one
+  - browser_navigate("https://photos.google.com/albums") → snapshot → album cards show title + item count [LIVE-VERIFY]; report them. Click a card (or navigate its /album/{ID} href) to open; snapshot lists its photos.
+
+  ### TASK: Create an album (+ add photos)
+  1. Select the photos first (CORE PATTERN above) — or skip selection to create an empty album.
+  2. With a selection: click the add-to (+) button in the top action bar → snapshot → a menu/dialog offers "Album" → "New album" [LIVE-VERIFY: flow]. Without a selection: on /albums click the "Create album" button [LIVE-VERIFY].
+  3. Snapshot → browser_type(title input id, "Album name") → click the done/checkmark button (or Enter via submit: true) [LIVE-VERIFY: how the title saves].
+  4. Snapshot → verify the album page shows the title and the added photos.
+
+  ### TASK: Add photos to an EXISTING album
+  - Select photos → add-to (+) → snapshot → click "Album" → snapshot → click the target album by name in the picker [LIVE-VERIFY] → snapshot → confirmation toast ≈ "Added to …".
+
+  ### TASK: Upload photos
+  1. Call browser_upload_file("/absolute/path/to/photo.jpg") directly — Photos keeps a hidden file input in the DOM [LIVE-VERIFY]; NEVER click the Upload button first (native OS picker the tools cannot drive).
+  2. Snapshot → verify the upload toast (≈ "1 item backed up") or the new tile at the top of the stream.
+  3. If no file input is found, tell the user to upload manually and stop.
+
+  ### TASK: Share an album
+  1. Open the album → snapshot → click the Share button in the album toolbar [LIVE-VERIFY].
+  2. Snapshot → the share dialog offers recipients and a "Create link" / "Copy link" option [LIVE-VERIFY: dialog structure]. You CANNOT read the clipboard — if the dialog shows the link text, report it from the snapshot; otherwise tell the user the link is on their clipboard.
+  3. ALWAYS tell the user: a shared link makes the album viewable by ANYONE who has the link.
+
+  ### TASK: Delete a photo (GATED — Rule 1 applies in full)
+  1. Confirm the user named the specific photo(s) in this request; locate via search URL; open the ONE photo in the viewer (safer than grid selection — exactly one photo is in scope).
+  2. Snapshot → click the viewer's delete/trash button by aria-label meaning [LIVE-VERIFY] → snapshot → a confirm dialog appears (≈ "Move to trash") → click its confirm button.
+  3. Snapshot to verify, then report: "Moved to Trash — recoverable at photos.google.com/trash for 60 days."
+  - NEVER act in the Trash view's "Delete permanently"; never "Empty trash".
+
+  ### TASK: Download a photo
+  1. Open the photo in the viewer → click the more-options (⋮) button → snapshot → click the Download entry [LIVE-VERIFY] (shortcut alternative: browser_press_key("Shift+D") [LIVE-VERIFY]).
+  2. The browser saves it to the user's Downloads folder — tell the user; no in-page confirmation is guaranteed, do not retry on silence.
+
+  ### Gotchas
+  - A focused search input swallows single-key shortcuts — browser_press_key("Escape") first if in doubt.
+  - Selection persists across scrolling; always Escape before starting an unrelated action so a stale selection can't receive it.
+  - Shared/partner items may appear in search but live in someone else's library — album/organize actions on them can be limited; report a missing button instead of retrying.
+  - "Backup in progress" banners are informational — not an error, not a step.

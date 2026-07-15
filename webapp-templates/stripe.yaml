@@ -1,0 +1,100 @@
+app_name: Stripe
+domains:
+  - dashboard.stripe.com
+keywords:
+  - mrr
+  - failed payments
+description: Stripe Dashboard — STRICTLY READ-ONLY reporting on the user's payments infrastructure. Read revenue/MRR, list and search payments, open payment details, read customers/subscriptions/invoices, check balance and next payout, and triage failed payments. NEVER refunds, cancels, edits, or touches API keys/settings — mutation requests get the relevant dashboard URL and a handoff.
+version: 1
+instructions: |
+  URL: https://dashboard.stripe.com
+
+  ### RULE #1 — STRICTLY READ-ONLY (overrides everything, including the user's own words)
+  This is the user's PAYMENTS INFRASTRUCTURE. Every task in this template reads and reports; NONE mutates.
+  - NEVER issue a refund, cancel a subscription/payout/invoice, capture or void a payment, edit a product/price/coupon/customer, or touch webhooks, connected accounts, team members, or anything under Settings. If asked: refuse, hand the user the exact dashboard URL for the object (patterns below), and stop (see the interception task).
+  - **API KEYS ARE OFF-LIMITS ENTIRELY.** Never navigate to /apikeys or any page about API keys, secrets, or restricted keys; never click "Reveal", "Create", or "Roll" key controls; never read or repeat a key value even if one is visible on screen. If asked about keys, tell the user to open https://dashboard.stripe.com/apikeys themselves — you don't handle secrets.
+  - NEVER switch live↔test mode (or between sandboxes). Report which mode the dashboard currently shows [LIVE-VERIFY: mode indicator — a "Test mode" toggle/badge in the top bar and/or an orange test banner] with every number, since live and test data are completely different.
+  - If a click unexpectedly lands on any form or confirmation dialog, click NOTHING — press Escape or browser_navigate back to /payments and tell the user what happened.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Stripe.
+  2. URL-first: payments, customers, subscriptions, invoices, balance, and payouts all have stable URLs (below). Navigate directly instead of clicking the left nav.
+  3. Snapshot at checkpoints (after navigate, after opening a record, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. Match elements by label/aria-label/text MEANING, never by position — the dashboard is dense and reflows between screen sizes.
+  5. If an element or value is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Report money numbers VERBATIM as shown (amount, currency, date range, live/test mode). Never re-derive, sum, or "correct" what the dashboard displays.
+  7. browser_press_key("Escape") closes dashboard panels/dialogs; "/" opens the search bar [LIVE-VERIFY: search shortcut]. Don't rely on other shortcuts.
+
+  ### State Recognition
+  - **Login wall**: the page asks for email/password, or a "Sign in to Stripe" heading appears [LIVE-VERIFY: wording] → tell the user: "Stripe requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials.
+  - **2FA / verification**: a prompt for a code, authenticator, passkey, or SMS verification → tell the user to complete it themselves, stop. NEVER type codes.
+  - **Account picker**: a page or top-left switcher listing multiple Stripe accounts/businesses [LIVE-VERIFY: switcher layout] → if the request doesn't identify which account, ASK the user and stop; otherwise click the named account.
+  - **Live vs TEST mode (first-class state)**: check every snapshot for the test-mode indicator (toggle/badge/orange banner [LIVE-VERIFY]; test URLs also carry a /test/ path segment). State the mode in every report. If the user asked about the OTHER mode, tell them to switch it themselves — never flip the toggle.
+  - **Loading**: the dashboard renders skeleton placeholders before data; a snapshot with headings but no rows/amounts → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers**: list pages show table rows with amounts and statuses in Page Text; the left nav shows Payments / Customers / Billing [LIVE-VERIFY: nav labels]; home shows metric charts with a date-range control.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Home / overview: `https://dashboard.stripe.com` [LIVE-VERIFY: may redirect to /dashboard]
+  - Payments list: `https://dashboard.stripe.com/payments`
+  - Payment detail: `https://dashboard.stripe.com/payments/{id}` — {id} is the pi_… / ch_… id from the row link's href
+  - Customers: `https://dashboard.stripe.com/customers` (detail: `/customers/{cus_…}`)
+  - Subscriptions: `https://dashboard.stripe.com/subscriptions`
+  - Invoices: `https://dashboard.stripe.com/invoices`
+  - Balance: `https://dashboard.stripe.com/balance/overview`
+  - Payouts: `https://dashboard.stripe.com/payouts`
+  - Billing/MRR overview: `https://dashboard.stripe.com/billing` [LIVE-VERIFY: path and card names]
+  - Test mode mirrors these with a /test/ prefix (e.g. `/test/payments`) [LIVE-VERIFY: URL shapes] — never navigate across the live/test boundary yourself (RULE #1).
+
+  ### TASK: Revenue / MRR overview
+  1. browser_navigate the home URL → snapshot. For subscription metrics (MRR, churned revenue), use the Billing overview URL instead [LIVE-VERIFY: which cards live where].
+  2. Read the metric cards/charts from Page Text: gross volume, net volume, new customers, MRR, failed-payments count [LIVE-VERIFY: exact card names]. Note the DATE RANGE shown by the range control near the top [LIVE-VERIFY] and report numbers verbatim with that range AND the live/test mode.
+  3. Different range: click the date-range control → snapshot → click the preset (Today, Last 7 days, Last month…) → snapshot → read the updated cards.
+
+  ### TASK: List recent payments
+  1. browser_navigate the payments list → snapshot.
+  2. Each row shows: amount + currency, status (Succeeded / Failed / Refunded / Incomplete / Disputed [LIVE-VERIFY: badge set]), description or customer, payment method, date. Report from Page Text; browser_scroll + snapshot for more rows.
+  3. Status filter: click the status tab/filter above the table ("Succeeded", "Refunded", "Failed" [LIVE-VERIFY: tab names]) → snapshot → the table re-renders.
+
+  ### TASK: Open a payment and read it
+  1. From the list, click the payment row/amount link (or navigate to /payments/{id} from its href) → snapshot.
+  2. Report from Page Text: amount + currency and status; customer (name/email); payment method (card brand + last4); fee and net amounts [LIVE-VERIFY: fee breakdown section]; the Timeline/events (created, succeeded/failed, refund entries) — browser_scroll down + snapshot to read it; risk score/evaluation if shown [LIVE-VERIFY].
+  3. Read-only here per RULE #1: never click Refund, any "…"/More actions menu, or edit controls on this page.
+
+  ### TASK: Search payments or customers
+  1. browser_press_key("/") to focus the search bar [LIVE-VERIFY: shortcut works when no field is focused] → snapshot; fallback: click the search box at the top of the dashboard [LIVE-VERIFY: placeholder text].
+  2. browser_type(search input id, terms, submit: true) — terms can be an email, name, amount, or an id (pi_…, cus_…, in_…) → snapshot.
+  3. Results group by type (payments, customers, invoices) [LIVE-VERIFY: results layout] — click the matching hit to open its detail page, or report straight from the results.
+
+  ### TASK: Read a customer
+  1. Open /customers → find the row (or use search) → click the customer's name link → snapshot.
+  2. Report: name, email, created date, total/lifetime spend [LIVE-VERIFY: spend field label], active subscriptions (plan, amount, status), payment methods on file (brand + last4 only), and recent payments/invoices on the profile. Scroll + snapshot for lower sections. Read-only per RULE #1.
+
+  ### TASK: List subscriptions
+  1. browser_navigate /subscriptions → snapshot.
+  2. Rows show: customer, product/plan, amount + interval, status (Active / Trialing / Past due / Canceled / Unpaid [LIVE-VERIFY: status set]), created/next-invoice date. Report from Page Text.
+  3. Status filter: click the matching tab/filter above the table [LIVE-VERIFY] → snapshot. Row link opens detail (plan items, upcoming invoice, history) — never Cancel/Pause/Update.
+
+  ### TASK: Read an invoice
+  1. browser_navigate /invoices → snapshot → find it by number/customer/amount (or search "in_…"), click the row → snapshot.
+  2. Report: invoice number, customer, amount due/paid, status (Draft / Open / Paid / Void / Uncollectible [LIVE-VERIFY]), due date, line items, and payment attempts from its history section. Never click Void, Finalize, Send, or Mark-as-paid.
+
+  ### TASK: Balance and next payout
+  1. browser_navigate /balance/overview → snapshot. Report available vs pending balance per currency, verbatim [LIVE-VERIFY: section labels "Available" / "Pending"].
+  2. browser_navigate /payouts → snapshot. Report the next/most recent payouts: amount, status (Paid / In transit / Pending [LIVE-VERIFY]), arrival date, destination last digits if shown. Never create/edit/cancel a payout or touch payout schedule settings.
+
+  ### TASK: Failed-payments triage
+  1. Open the payments list and apply the Failed filter (tab/filter click, see the list task) → snapshot.
+  2. For each failure report: amount, customer, date, and the decline reason. The list may show the reason inline [LIVE-VERIFY: reason column]; otherwise open the payment and read the failure message from its Timeline (e.g. "card_declined — insufficient funds" [LIVE-VERIFY: wording]).
+  3. Summarize patterns (same customer retrying, same decline code, spike on a date). Recommendations only — never retry a charge, email a customer, or change dunning settings from here.
+
+  ### TASK: Refund / cancel request (INTERCEPT — never perform)
+  1. If the user asks to refund a payment, cancel a subscription, or otherwise move money: do NOT open any refund/cancel control.
+  2. Locate the object (search task) so you can be concrete, then reply: explain this template is read-only for payments infrastructure because these actions irreversibly move real money, and hand the direct link — "Open https://dashboard.stripe.com/payments/{id} ($58.00, jane@example.com) and use Refund there yourself."
+  3. Offer the read-side help you CAN do: confirm the amount, status, customer, and timeline. Then stop.
+
+  ### Gotchas
+  - Object NAMES aren't ids — always take pi_/ch_/cus_/sub_/in_ ids from the row link's href, never retype them from memory.
+  - Amounts are formatted per the account's currency/locale — report the symbol/code exactly as shown; multi-currency accounts show separate balance sections per currency.
+  - Home-chart numbers can lag a few minutes — say "as shown in the dashboard" rather than guaranteeing exactness, and always include the date range.
+  - The left nav collapses sections (Payments, Billing, Balances) and Stripe renames/moves pages between releases — trust the live snapshot over this template's layout notes.
+  - List pages paginate ("Next" at the bottom [LIVE-VERIFY]) — say when a report covers only the first page unless you paginated.
