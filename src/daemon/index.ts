@@ -18,6 +18,7 @@ import { resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
+import { getRecorder } from "../skills/recorder.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -1432,6 +1433,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         } catch (err) {
           console.warn('[ambient-ui] blind_toggle failed:', err);
         }
+      });
+
+      // Skill recorder — while a record_skill session is live, the sidecar
+      // emits ui_interaction events (each click/commit + the focused
+      // element's SemanticRef). Buffer them for the compiler. Redaction
+      // happens inside the recorder at push time.
+      sidecarManager.onEvent(async (_sidecarId, event) => {
+        if (event.event_type !== 'ui_interaction') return;
+        const rec = getRecorder();
+        if (!rec.isRecording()) return;
+        const p = (event.payload ?? {}) as Record<string, unknown>;
+        rec.push({
+          action: (p.action as 'click' | 'set_value' | 'press_keys' | 'launch_app' | 'navigate') ?? 'click',
+          ref: p.ref as import('../structural/types.ts').SemanticRef | undefined,
+          value: typeof p.value === 'string' ? p.value : undefined,
+          ts: typeof p.ts === 'number' ? p.ts : Date.now(),
+          app: typeof p.app === 'string' ? p.app : undefined,
+          title: typeof p.title === 'string' ? p.title : undefined,
+          url: typeof p.url === 'string' ? p.url : undefined,
+          surface: p.surface === 'browser' ? 'browser' : 'desktop',
+          secure: p.secure === true,
+        });
       });
 
       // W6-T1 — pebble eye glyph fires when sidecar emits a screen_capture

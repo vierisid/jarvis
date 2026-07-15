@@ -146,12 +146,12 @@ Daemon-side, provider-agnostic (needed whichever way Phase 1 goes):
 - ☐ `ax` text mode end-to-end with a 7B–32B local model as a CI target. **Deferred to end-of-roadmap validation** — needs downloaded local weights + a machine to run them; the code path (non-vision `ui_snapshot`/`ui_act` text output, Ollama tool_calls fix) is in place, only the measurement is pending. `bench/control/acceptance.ts` already drives it provider-agnostically.
 - ☐ Optional **grounding fallback adapter** (Holo2-8B / UI-TARS-1.5-7B for low-coverage surfaces). **Deferred** — the coverage gate + vision-fallback telemetry that gate it exist; the model adapter is a self-contained later add-on, not on the critical path to the acceptance test.
 
-### Phase 4 — Skills + learn-by-watching (the killer feature) · ☐
-- ☐ `Skill` store (`src/vault/skills.ts`), `run_skill` executor over `ui_act` with the self-heal ladder; migrate `webapp_templates` (dual-run; make matching URL/active-tab-aware in the interim; add the missing tests).
-- ☐ Prompt swap: compact Skill index + `run_skill` instead of markdown prose injection — the model exits the per-click loop.
-- ☐ Recorder: input hook × focused-element `SemanticRef` capture (`recorder_windows.go` first) → `ui_interaction` events; compiler coalesces steps, infers params, derives postconditions from snapshot diffs; secret redaction; Authority-gated.
-- ☐ Hand-author 5 seed skills (Gmail, Slack, Calendar, Notion, Sheets) to validate the schema first.
-- **Acceptance:** demonstrate a 6-step task once → parameterized skill replays; move one element → self-heal recovers. Author time <2 min.
+### Phase 4 — Skills + learn-by-watching (the killer feature) · ◐ built 2026-07-15 (awaiting end-of-roadmap validation)
+- ☑ `Skill` store (`src/vault/skills.ts` + `skills` table), `run_skill` executor (`src/skills/runtime.ts`) over the structural path with per-step postcondition verify + self-heal (re-resolve→retry); `webapp_templates` coexists (dual-run) and `matchSkills` is now URL/active-tab/process-aware. `run_skill`/`manage_skills` tools. Full unit coverage.
+- ☑ Prompt swap: `buildSkillIndex()` injects the compact skill index into the prompt (alongside the legacy markdown during migration); the model calls `run_skill(name, params)` and exits the per-click loop.
+- ☑ Recorder: Go input hooks (`sidecar/recorder_windows.go` — WH_MOUSE_LL + WH_KEYBOARD_LL, never swallows input) × focused-element ref capture via the COM thread → `ui_interaction` events (`recorder_start`/`recorder_stop` RPCs; cross-platform stub for mac/linux). Daemon `src/skills/recorder.ts` (session buffer + secret redaction at capture) + `compiler.ts` (coalesce click→type into set_value, parameterize typed values, derive postconditions, redacted secrets → params). `record_skill` tool. Keystroke *content* is never transmitted — the committed field value comes from UIA and secure fields are marked+redacted.
+- ☑ 5 seed skills (Gmail, Calendar, Notion, Sheets, Slack) — `src/skills/seeds.ts`, idempotent, name-addressed refs.
+- **Acceptance (end-of-roadmap):** demonstrate a 6-step task once → parameterized skill replays; move one element → self-heal recovers; author time <2 min. Recorder runtime needs a real Windows session to validate the hooks; the compiler + runtime + store are unit-tested and the seed skills exercise the full compile→store→run path in tests.
 
 ### Phase 5 — Push the boundaries (past 2026 parity) · ☐
 What none of the incumbents ship together — our headline capabilities:

@@ -11,8 +11,10 @@ import type { ToolDefinition } from './registry.ts';
 import { getSidecarManager, autoTargetForCapability } from './sidecar-route.ts';
 import { captureSurface } from '../../structural/surface.ts';
 import { runSkill, type SkillRuntimeDeps } from '../../skills/runtime.ts';
-import { getSkillByName, listSkills, recordSkillRun } from '../../vault/skills.ts';
+import { getSkillByName, listSkills, recordSkillRun, upsertSkill } from '../../vault/skills.ts';
 import { skillIndexLine } from '../../skills/types.ts';
+import { getRecorder } from '../../skills/recorder.ts';
+import { compileSkill } from '../../skills/compiler.ts';
 
 const RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 
@@ -103,6 +105,57 @@ export const manageSkillsTool: ToolDefinition = {
   },
 };
 
+export const recordSkillTool: ToolDefinition = {
+  name: 'record_skill',
+  description:
+    'Learn a new skill by watching the user do a task once. action="start" begins recording the user\'s clicks and typing; the user then performs the task; action="stop" with a name compiles what was demonstrated into a reusable, parameterized skill. Typed values become parameters and secrets are redacted automatically.',
+  category: 'ui',
+  parameters: {
+    action: { type: 'string', description: 'start or stop.', required: true, enum: ['start', 'stop'] },
+    name: { type: 'string', description: 'On stop: the name to save the skill under (kebab-case, e.g. "gmail-compose").', required: false },
+    description: { type: 'string', description: 'On stop: a one-line description of what the skill does.', required: false },
+    target: { type: 'string', description: 'Sidecar name/ID (omit to auto-select).', required: false },
+  },
+  execute: async (params) => {
+    const action = params.action as string;
+    const recorder = getRecorder();
+    const manager = getSidecarManager();
+    const target = (params.target as string | undefined)?.trim() || autoTargetForCapability('desktop') || '';
+
+    if (action === 'start') {
+      if (recorder.isRecording()) return 'Already recording — call record_skill action="stop" first.';
+      const id = `rec-${Math.random().toString(36).slice(2, 10)}`;
+      recorder.start(id, Date.now());
+      if (manager && target) {
+        const sc = manager.listSidecars().find((s) => s.id === target || s.name === target);
+        try { await manager.dispatchRPC(sc?.id ?? target, 'recorder_start', {}, RPC_TIMEOUT); } catch { /* input hook optional */ }
+      }
+      return 'Recording started. Tell the user to perform the task now, then call record_skill action="stop" with a name.';
+    }
+
+    if (action === 'stop') {
+      const session = recorder.stop();
+      if (manager && target) {
+        const sc = manager.listSidecars().find((s) => s.id === target || s.name === target);
+        try { await manager.dispatchRPC(sc?.id ?? target, 'recorder_stop', {}, RPC_TIMEOUT); } catch { /* ignore */ }
+      }
+      if (!session || session.interactions.length === 0) {
+        return 'Nothing was recorded (no interactions captured). The recorder input hook may not be available on this platform yet.';
+      }
+      const name = (params.name as string | undefined)?.trim();
+      if (!name) return `Recorded ${session.interactions.length} interactions but no name given. Call again with a name to save.`;
+      const compiled = compileSkill(session.interactions, {
+        name,
+        description: params.description as string | undefined,
+      });
+      const saved = upsertSkill(compiled);
+      return `Saved skill "${saved.name}" with ${saved.steps.length} steps and ${saved.params.length} parameters (${saved.params.map((p) => p.name).join(', ') || 'none'}). Run it with run_skill.`;
+    }
+
+    return 'Error: action must be "start" or "stop".';
+  },
+};
+
 /** Compact skill index for prompt injection (empty string when none). */
 export function buildSkillIndex(): string {
   const skills = listSkills(true);
@@ -110,4 +163,4 @@ export function buildSkillIndex(): string {
   return ['# Available Skills (run with run_skill)', ...skills.map(skillIndexLine)].join('\n');
 }
 
-export const SKILL_TOOLS: ToolDefinition[] = [runSkillTool, manageSkillsTool];
+export const SKILL_TOOLS: ToolDefinition[] = [runSkillTool, manageSkillsTool, recordSkillTool];

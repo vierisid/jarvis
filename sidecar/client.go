@@ -512,6 +512,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	c.mu.Unlock()
 
 	StartObservers(obsCtx, c.config, c.availableCaps, sendFn)
+	// Give the skill recorder access to the event channel so recorder_start
+	// can stream ui_interaction events to the brain.
+	setRecorderSender(obsCtx, sendFn)
 
 	// Wire the pebble's summon hotkey to the brain via a SidecarEvent.
 	// The daemon listens for "pebble.summon" and drives state transitions
