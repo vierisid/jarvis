@@ -337,9 +337,22 @@ async function main() {
     console.error(`Cannot reach daemon at ${opts.base}: ${e}`);
     process.exit(2);
   }
+  // /api/sidecars returns an array on success, or {error} (e.g. the sidecar
+  // subsystem isn't up). Surface the real response instead of crashing.
+  if (!Array.isArray(sidecars)) {
+    const body = sidecars as unknown as { error?: string };
+    console.error(
+      `Daemon reachable but /api/sidecars did not return a list — got: ${JSON.stringify(sidecars)}.\n` +
+      (body?.error
+        ? `The daemon reports: "${body.error}". The sidecar subsystem may not have started — check the daemon's startup logs.`
+        : 'Is this the branch daemon (bun run src/daemon/index.ts), not the global "jarvis"?'),
+    );
+    process.exit(2);
+  }
   const connected = sidecars.filter((s) => s.connected);
   if (connected.length === 0) {
-    console.error('No connected sidecar. Pair + start one, then retry.');
+    const names = sidecars.map((s) => s.name).join(', ') || 'none enrolled';
+    console.error(`No connected sidecar (enrolled: ${names}). Start the sidecar exe on Windows and confirm it connects, then retry.`);
     process.exit(2);
   }
   const chosen = opts.target
