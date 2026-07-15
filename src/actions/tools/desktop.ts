@@ -377,6 +377,11 @@ export const desktopClickTool: ToolDefinition = {
       description: 'Value to set (only for set_value action)',
       required: false,
     },
+    background: {
+      type: 'boolean',
+      description: 'Ghost mode (Windows): act without moving the real cursor or stealing focus, so the user can keep working. Uses the accessibility Invoke pattern or a posted click. If the element cannot be actioned in the background the result says so — retry without background. Default false.',
+      required: false,
+    },
   },
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target);

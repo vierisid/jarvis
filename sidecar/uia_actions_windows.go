@@ -15,6 +15,16 @@ import (
 
 // uiaPerformAction executes an action on a cached element.
 func uiaPerformAction(state *uiaState, elementID int, action, value string) (map[string]any, error) {
+	return uiaPerformActionMode(state, elementID, action, value, false)
+}
+
+// uiaPerformActionMode is uiaPerformAction with an explicit background flag.
+// In background mode, actions must not steal focus or move the real cursor:
+// UIA pattern calls (which never do) are preferred, and the coordinate
+// fallback uses PostMessage instead of SetCursorPos+mouse_event. When neither
+// is possible the result carries background_unavailable so the caller can
+// honestly downgrade to a foreground action with the user's notice.
+func uiaPerformActionMode(state *uiaState, elementID int, action, value string, background bool) (map[string]any, error) {
 	elem := state.cache.get(elementID)
 	if elem == nil {
 		return nil, fmt.Errorf("element %d is not in the current element cache — every desktop_snapshot invalidates all previous ids, so only ids from the MOST RECENT snapshot/find_element are valid; take a fresh desktop_snapshot and use an id from that result", elementID)
@@ -30,7 +40,11 @@ func uiaPerformAction(state *uiaState, elementID int, action, value string) (map
 
 	switch action {
 	case "click":
-		err = actionClick(elem)
+		if background {
+			err = actionClickBackground(elem, result)
+		} else {
+			err = actionClick(elem)
+		}
 	case "double_click":
 		err = actionDoubleClick(elem)
 	case "right_click":
@@ -93,6 +107,29 @@ func actionClick(elem *ole.IDispatch) error {
 	}
 	win32Click(x, y)
 	return nil
+}
+
+// actionClickBackground is actionClick for ghost mode: UIA Invoke first (never
+// touches the cursor/focus), else a PostMessage click. It annotates result with
+// how it was delivered; when the element has no Invoke pattern AND no layout
+// box for a PostMessage target, it sets background_unavailable so the caller
+// can downgrade honestly rather than silently steal focus.
+func actionClickBackground(elem *ole.IDispatch, result map[string]any) error {
+	if err := patternInvoke(elem); err == nil {
+		result["delivery"] = "invoke"
+		return nil
+	}
+	x, y, err := elementCenter(elem)
+	if err != nil {
+		result["background_unavailable"] = true
+		return fmt.Errorf("cannot click in the background: the element supports neither the Invoke pattern nor a clickable point — retry without background to use a foreground click (this will briefly move the cursor)")
+	}
+	if postMessageClick(x, y) {
+		result["delivery"] = "post_message"
+		return nil
+	}
+	result["background_unavailable"] = true
+	return fmt.Errorf("cannot click in the background: no window accepted a posted click at the element — retry without background to use a foreground click")
 }
 
 // actionDoubleClick moves the mouse to the element center and double-clicks.

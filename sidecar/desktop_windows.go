@@ -59,9 +59,10 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	}
 
 	value, _ := params["value"].(string)
+	background, _ := params["background"].(bool)
 
 	val, err := comThread.call(func(state *uiaState) (any, error) {
-		return uiaPerformAction(state, int(elemID), action, value)
+		return uiaPerformActionMode(state, int(elemID), action, value, background)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("click_element (action=%s) failed: %w", action, err)

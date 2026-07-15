@@ -32,7 +32,52 @@ var (
 	procOpenProcess        = kernel32.NewProc("OpenProcess")
 	procNativeCloseHandle  = kernel32.NewProc("CloseHandle")
 	procQueryFullImageName = kernel32.NewProc("QueryFullProcessImageNameW")
+	procWindowFromPoint    = user32.NewProc("WindowFromPoint")
+	procScreenToClient     = user32.NewProc("ScreenToClient")
+	procChildWindowFromPt  = user32.NewProc("ChildWindowFromPointEx")
+	// procPostMessageW is declared in panels_windows.go.
 )
+
+// Background-click Win32 message constants (wmLButtonUp 0x0202 is declared in
+// sub_pebble_overlay_windows.go as wmLButtonUp; we post it via that name).
+const (
+	wmLButtonDown  = 0x0201
+	wmLButtonUpMsg = 0x0202
+)
+
+type w32Pt struct{ X, Y int32 }
+
+// postMessageClick delivers a left click at screen (x, y) to the window under
+// that point WITHOUT moving the real cursor or changing focus — the mechanism
+// behind ghost mode. It posts WM_LBUTTONDOWN/UP with client-relative
+// coordinates. Returns false when no target window is found (caller should
+// report background_unavailable and offer the foreground path).
+func postMessageClick(x, y int) bool {
+	pt := w32Pt{X: int32(x), Y: int32(y)}
+	// WindowFromPoint takes the POINT by value (packed into one uintptr on amd64).
+	packed := uintptr(uint32(pt.X)) | (uintptr(uint32(pt.Y)) << 32)
+	hwnd, _, _ := procWindowFromPoint.Call(packed)
+	if hwnd == 0 {
+		return false
+	}
+	// Descend to the deepest child at the point so the message reaches the
+	// actual control, not just the top-level window.
+	client := pt
+	procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+	childPacked := uintptr(uint32(client.X)) | (uintptr(uint32(client.Y)) << 32)
+	const cwpAll = 0x0000
+	if child, _, _ := procChildWindowFromPt.Call(hwnd, childPacked, cwpAll); child != 0 && child != hwnd {
+		hwnd = child
+		client = pt
+		procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+	}
+
+	lparam := uintptr(uint32(client.X)&0xFFFF) | (uintptr(uint32(client.Y)&0xFFFF) << 16)
+	const mkLButton = 0x0001
+	procPostMessageW.Call(hwnd, wmLButtonDown, mkLButton, lparam)
+	procPostMessageW.Call(hwnd, wmLButtonUpMsg, 0, lparam)
+	return true
+}
 
 // windowInfo describes one visible top-level window. JSON keys match the
 // shape the previous PowerShell implementation produced, so daemon-side
@@ -223,10 +268,10 @@ func waitForWindow(pid int, exeBase string, timeout time.Duration) (*windowInfo,
 // ── SendInput keyboard injection ─────────────────────────────────────
 
 const (
-	inputKeyboard         = 1
-	keyeventfExtendedKey  = 0x0001
-	keyeventfKeyUp        = 0x0002
-	keyeventfUnicode      = 0x0004
+	inputKeyboard        = 1
+	keyeventfExtendedKey = 0x0001
+	keyeventfKeyUp       = 0x0002
+	keyeventfUnicode     = 0x0004
 )
 
 // kbdInput is the Win32 INPUT struct specialized for keyboard events on
@@ -345,7 +390,7 @@ var modifierKeys = map[string]uint16{
 	"ctrl": vkControl, "control": vkControl,
 	"alt":   vkMenu,
 	"shift": vkShift,
-	"win": vkLWin, "windows": vkLWin, "meta": vkLWin, "super": vkLWin,
+	"win":   vkLWin, "windows": vkLWin, "meta": vkLWin, "super": vkLWin,
 }
 
 // resolveVk maps a key name to a virtual-key code.

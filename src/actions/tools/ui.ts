@@ -66,6 +66,7 @@ async function dispatchAct(
   sessionId: number,
   action: string,
   value?: string,
+  background?: boolean,
 ): Promise<unknown> {
   const manager = getSidecarManager();
   if (!manager) throw new Error('Sidecar system not initialized');
@@ -79,7 +80,7 @@ async function dispatchAct(
     return manager.dispatchRPC(id, 'browser_ax_click', { backend_node_id: sessionId }, ACT_RPC_TIMEOUT);
   }
   // desktop → click_element handles all action variants
-  return manager.dispatchRPC(id, 'click_element', { element_id: sessionId, action, value }, ACT_RPC_TIMEOUT);
+  return manager.dispatchRPC(id, 'click_element', { element_id: sessionId, action, value, background }, ACT_RPC_TIMEOUT);
 }
 
 function parsePostcondition(raw: unknown, actedRef: SemanticNode | undefined): Postcondition | null {
@@ -137,6 +138,7 @@ export const uiActTool: ToolDefinition = {
     value: { type: 'string', description: 'The text to set (required for set_value).', required: false },
     kind: { type: 'string', description: 'Must match the ui_snapshot you took. Default "desktop".', required: false, enum: ['desktop', 'browser'] },
     verify: { type: 'string', description: 'Optional postcondition to confirm after acting; on failure the runtime self-heals before reporting.', required: false, enum: ['window_appeared', 'element_gone', 'element_present', 'focus_moved'] },
+    background: { type: 'boolean', description: 'Ghost mode (desktop, Windows): act without moving the cursor or stealing focus so the user can keep working. Default false.', required: false },
     target: { type: 'string', description: 'Sidecar name/ID (omit to auto-select).', required: false },
   },
   execute: async (params) => {
@@ -144,6 +146,7 @@ export const uiActTool: ToolDefinition = {
     const action = (params.action as string) || 'click';
     const sessionId = params.element_id as number;
     const value = params.value as string | undefined;
+    const background = params.background === true;
     const cap = kind === 'browser' ? 'browser' : 'desktop';
     const target = (params.target as string | undefined)?.trim() || autoTargetForCapability(cap) || '';
     if (!target) return `Error: no connected sidecar with the "${cap}" capability`;
@@ -162,7 +165,7 @@ export const uiActTool: ToolDefinition = {
 
     let actResult: unknown;
     try {
-      actResult = await dispatchAct(kind, target, sessionId, action, value);
+      actResult = await dispatchAct(kind, target, sessionId, action, value, background);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -204,12 +207,12 @@ export const uiActTool: ToolDefinition = {
       if (rung === 're_resolve' && actedRef) {
         const r = resolveRef(actedRef.ref, after);
         if (r.node && r.node.sessionId !== sessionId) {
-          try { await dispatchAct(kind, target, r.node.sessionId, action, value); } catch { /* keep climbing */ }
+          try { await dispatchAct(kind, target, r.node.sessionId, action, value, background); } catch { /* keep climbing */ }
           continue;
         }
       } else if (rung === 'retry') {
         await new Promise((res) => setTimeout(res, 400));
-        try { await dispatchAct(kind, target, sessionId, action, value); } catch { /* keep climbing */ }
+        try { await dispatchAct(kind, target, sessionId, action, value, background); } catch { /* keep climbing */ }
         continue;
       } else {
         // vision / ask: the runtime cannot resolve structurally.
