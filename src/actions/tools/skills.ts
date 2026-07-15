@@ -15,6 +15,7 @@ import { getSkillByName, listSkills, recordSkillRun, upsertSkill } from '../../v
 import { skillIndexLine } from '../../skills/types.ts';
 import { getRecorder } from '../../skills/recorder.ts';
 import { compileSkill } from '../../skills/compiler.ts';
+import { exportSkill, importSkill, serializeManifest, type SkillManifest } from '../../skills/manifest.ts';
 
 const RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 
@@ -93,12 +94,33 @@ export const runSkillTool: ToolDefinition = {
 
 export const manageSkillsTool: ToolDefinition = {
   name: 'manage_skills',
-  description: 'List the available skills (verified, parameterized procedures you can run with run_skill).',
+  description: 'Manage skills (verified, parameterized procedures). action="list" shows available skills with their success rates; "export" produces a shareable signed manifest for one skill; "import" installs a skill from a manifest (marked marketplace, never auto-trusted — it runs under the same approval gate as any skill).',
   category: 'ui',
   parameters: {
-    action: { type: 'string', description: 'Only "list" is supported.', required: false, enum: ['list'] },
+    action: { type: 'string', description: 'list, export, or import.', required: false, enum: ['list', 'export', 'import'] },
+    name: { type: 'string', description: 'For export: the skill name to export.', required: false },
+    manifest: { type: 'object', description: 'For import: the skill manifest object (from a prior export).', required: false },
   },
-  execute: async () => {
+  execute: async (params) => {
+    const action = (params.action as string) || 'list';
+
+    if (action === 'export') {
+      const name = (params.name as string | undefined)?.trim();
+      if (!name) return 'Error: export needs a skill name.';
+      const skill = getSkillByName(name);
+      if (!skill) return `Error: no skill named "${name}".`;
+      return serializeManifest(exportSkill(skill));
+    }
+
+    if (action === 'import') {
+      const manifest = params.manifest as SkillManifest | undefined;
+      if (!manifest || typeof manifest !== 'object') return 'Error: import needs a manifest object.';
+      const res = importSkill(manifest);
+      if (!res.ok) return `Import failed: ${res.error}`;
+      const renamed = res.renamedFrom ? ` (renamed from "${res.renamedFrom}" to avoid clobbering a local skill)` : '';
+      return `Imported "${res.skill.name}"${renamed} as a marketplace skill. It will run under the normal approval gate; its success rate starts fresh on this machine.`;
+    }
+
     const skills = listSkills(true);
     if (skills.length === 0) return 'No skills available yet. Skills are recorded by demonstration (record_skill) or authored.';
     return ['Available skills:', ...skills.map(skillIndexLine)].join('\n');
