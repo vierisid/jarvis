@@ -43,14 +43,26 @@ sidecar binary (replace the one the daemon launches), or point the daemon at it.
 
 ---
 
-## 2. Start the daemon with the debug gate
+## 2. Start the daemon with the debug gate — FROM SOURCE, not the global install
+
+**Critical:** `jarvis` on your PATH is the *globally-installed* daemon (old code —
+no `/api/debug/rpc`, none of the Phase 0–5 changes). Do NOT use it. Run the
+daemon from source **in the worktree**, with the env var set from the start (no
+restart dance needed — the var only gates the debug route; pairing persists
+independently):
 
 ```bash
-JARVIS_DEBUG_RPC=<pick-a-long-secret> jarvis start
+cd /home/vierisid/jarvis/.claude/worktrees/control-plane-v2
+# stop any other daemon first — only one can own port 3142
+JARVIS_DEBUG_RPC=<pick-a-long-secret> bun run src/daemon/index.ts
 ```
 
 The `/api/debug/rpc` endpoint does not exist unless this env var is set. Unset it
 for normal runs afterward — it can drive the desktop.
+
+Both the daemon (above) AND the sidecar (§1, the freshly-built `jarvis-sidecar.exe`)
+must come from this branch. If either is the old installed build, the test is
+measuring the wrong code.
 
 ---
 
