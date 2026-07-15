@@ -415,14 +415,6 @@
      dark-theme tokens with hardcoded inline styles. Remapping the
      variables in this scope re-skins them onto the v2 bone palette
      without editing a single legacy component. */
-  --j-bg: var(--paper);
-  --j-surface: var(--paper-2);
-  --j-border: var(--rule);
-  --j-text: var(--ink);
-  --j-text-dim: var(--ink-2);
-  --j-text-muted: var(--ink-3);
-  --j-accent: var(--ink);
-  --j-success: var(--ok);
   --j-warning: var(--warn);
   --j-error: var(--accent);
 }

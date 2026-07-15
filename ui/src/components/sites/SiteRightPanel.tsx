@@ -27,7 +27,7 @@ export function SiteRightPanel({ rightTab, setRightTab, project, openFilePath }:
         >
           Editor
           {openFilePath && (
-            <span style={{ marginLeft: 6, fontSize: "10px", color: "var(--j-text-muted)", fontWeight: 400 }}>
+            <span style={{ marginLeft: 6, fontSize: "10px", color: "var(--ink3)", fontWeight: 400 }}>
               {openFilePath.split("/").pop()}
             </span>
           )}
@@ -48,8 +48,8 @@ export function SiteRightPanel({ rightTab, setRightTab, project, openFilePath }:
 
 const tabBarStyle: React.CSSProperties = {
   display: "flex",
-  borderBottom: "1px solid var(--j-border)",
-  background: "var(--j-bg)",
+  borderBottom: "1px solid var(--rule)",
+  background: "var(--bg)",
 };
 
 const tabBtnStyle: React.CSSProperties = {
@@ -57,7 +57,7 @@ const tabBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
   borderBottom: "2px solid transparent",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   fontWeight: 600,
   cursor: "pointer",
@@ -67,6 +67,6 @@ const tabBtnStyle: React.CSSProperties = {
 
 const activeTabBtnStyle: React.CSSProperties = {
   ...tabBtnStyle,
-  color: "var(--j-accent)",
-  borderBottom: "2px solid var(--j-accent)",
+  color: "var(--ink)",
+  borderBottom: "2px solid var(--ink)",
 };

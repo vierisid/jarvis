@@ -30,8 +30,8 @@ export function SiteTopBar({
             key={project.id}
             style={{
               ...tabStyle,
-              background: project.id === activeProjectId ? "var(--j-surface)" : "transparent",
-              borderBottom: project.id === activeProjectId ? "2px solid var(--j-accent)" : "2px solid transparent",
+              background: project.id === activeProjectId ? "var(--panel)" : "transparent",
+              borderBottom: project.id === activeProjectId ? "2px solid var(--ink)" : "2px solid transparent",
             }}
             onClick={() => onSelectTab(project.id)}
           >
@@ -67,14 +67,14 @@ export function SiteTopBar({
                   style={dropdownItemStyle}
                 >
                   {p.name}
-                  <span style={{ fontSize: "10px", color: "var(--j-text-muted)", marginLeft: "auto" }}>{p.framework}</span>
+                  <span style={{ fontSize: "10px", color: "var(--ink3)", marginLeft: "auto" }}>{p.framework}</span>
                 </button>
               ))}
               {projects.filter((p) => !openTabs.some((t) => t.id === p.id)).length === 0 && (
-                <div style={{ padding: "8px 12px", fontSize: "11px", color: "var(--j-text-muted)" }}>No other projects</div>
+                <div style={{ padding: "8px 12px", fontSize: "11px", color: "var(--ink3)" }}>No other projects</div>
               )}
-              <div style={{ borderTop: "1px solid var(--j-border)", marginTop: "4px", paddingTop: "4px" }}>
-                <button onClick={() => { onNewProject(); setShowProjectList(false); }} style={{ ...dropdownItemStyle, color: "var(--j-accent)" }}>
+              <div style={{ borderTop: "1px solid var(--rule)", marginTop: "4px", paddingTop: "4px" }}>
+                <button onClick={() => { onNewProject(); setShowProjectList(false); }} style={{ ...dropdownItemStyle, color: "var(--ink)" }}>
                   + New Project
                 </button>
               </div>
@@ -90,7 +90,7 @@ export function SiteTopBar({
             {activeProject.gitBranch && (
               <button
                 onClick={() => setShowGitPanel(!showGitPanel)}
-                style={{ ...gitBtnStyle, borderColor: showGitPanel ? "var(--j-accent)" : "var(--j-border)" }}
+                style={{ ...gitBtnStyle, borderColor: showGitPanel ? "var(--ink)" : "var(--rule)" }}
               >
                 <span style={{ fontSize: "13px" }}>&#9745;</span>
                 {activeProject.gitBranch}
@@ -140,8 +140,8 @@ const barStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   height: 38,
-  background: "var(--j-bg)",
-  borderBottom: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  borderBottom: "1px solid var(--rule)",
   padding: "0 8px",
   gap: "4px",
 };
@@ -154,13 +154,13 @@ const tabStyle: React.CSSProperties = {
   borderRadius: "4px 4px 0 0",
   cursor: "pointer",
   maxWidth: 180,
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
 };
 
 const closeBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   fontSize: "11px",
   padding: "0 2px",
@@ -170,9 +170,9 @@ const closeBtnStyle: React.CSSProperties = {
 
 const addTabStyle: React.CSSProperties = {
   background: "none",
-  border: "1px solid var(--j-border)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   fontSize: "14px",
   width: 24,
@@ -187,8 +187,8 @@ const dropdownStyle: React.CSSProperties = {
   top: "100%",
   left: 0,
   marginTop: "4px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "6px",
   minWidth: 200,
   zIndex: 100,
@@ -205,7 +205,7 @@ const dropdownItemStyle: React.CSSProperties = {
   background: "none",
   border: "none",
   borderRadius: "4px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   fontSize: "12px",
   cursor: "pointer",
   textAlign: "left",
@@ -218,9 +218,9 @@ const gitBtnStyle: React.CSSProperties = {
   padding: "2px 8px",
   fontSize: "11px",
   background: "none",
-  border: "1px solid var(--j-border)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
   cursor: "pointer",
 };
 
@@ -231,7 +231,7 @@ const ghIndicatorStyle: React.CSSProperties = {
   background: "rgba(0,212,255,0.1)",
   border: "1px solid rgba(0,212,255,0.3)",
   borderRadius: "4px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   textDecoration: "none",
   cursor: "pointer",
 };
@@ -252,17 +252,17 @@ const newProjectBtnStyle: React.CSSProperties = {
   background: "rgba(0, 212, 255, 0.1)",
   border: "1px solid rgba(0, 212, 255, 0.3)",
   borderRadius: "4px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
 
 function statusDot(status: string): React.CSSProperties {
   const colors: Record<string, string> = {
-    running: "var(--j-success)",
+    running: "var(--ok)",
     starting: "var(--j-warning)",
     error: "var(--j-error)",
-    stopped: "var(--j-text-muted)",
+    stopped: "var(--ink3)",
   };
   return {
     width: 6,

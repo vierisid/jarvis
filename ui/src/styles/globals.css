@@ -2,26 +2,13 @@
 @import "./tokens.css";
 
 :root {
-  /* The honest graft (Workspaces §02): the legacy IDE's --j-* tokens are
-     remapped onto Monochrome Lab so the editor suite re-themes without a
-     rewrite. Theme-aware — they follow --bg/--ink/etc. per data-theme.
-     (Slated for removal in Phase 6 once the IDE is rebuilt native.) */
-  --j-bg: var(--bg);
-  --j-surface: var(--panel);
-  --j-surface-hover: var(--panel2);
-  --j-border: var(--rule);
-  --j-border-bright: var(--rule2);
-  --j-accent: var(--ink);
-  --j-accent-dim: var(--ink2);
-  --j-accent2: var(--ink3);
-  --j-success: var(--ok);
+  /* Legacy IDE (Workspaces §02) error/warning hues — the last two of the old
+     --j-* graft. The rest were flattened onto Monochrome Lab tokens in Phase 6;
+     these two stay only because the IDE overrides them room-scoped to the
+     -tx text variants, so a global flatten would shift the colour. Remove with
+     the native IDE rebuild. */
   --j-warning: var(--hold);
   --j-error: var(--listen);
-  --j-text: var(--ink);
-  --j-text-dim: var(--ink2);
-  --j-text-muted: var(--ink3);
-  --j-glow: none;
-  --j-glow-strong: none;
 }
 
 * {
@@ -89,16 +76,16 @@ body {
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  color: var(--j-text);
+  color: var(--ink);
   font-weight: 600;
   margin: 16px 0 8px;
   line-height: 1.3;
 }
 
-.markdown-content h1 { font-size: 1.4em; border-bottom: 1px solid var(--j-border); padding-bottom: 4px; }
+.markdown-content h1 { font-size: 1.4em; border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
 .markdown-content h2 { font-size: 1.25em; }
 .markdown-content h3 { font-size: 1.1em; }
-.markdown-content h4 { font-size: 1em; color: var(--j-text-dim); }
+.markdown-content h4 { font-size: 1em; color: var(--ink2); }
 
 .markdown-content p {
   margin: 6px 0;
@@ -119,7 +106,7 @@ body {
 }
 
 .markdown-content li::marker {
-  color: var(--j-text-muted);
+  color: var(--ink3);
 }
 
 /* Task list checkboxes */
@@ -129,28 +116,28 @@ body {
 }
 
 .markdown-content strong {
-  color: var(--j-text);
+  color: var(--ink);
   font-weight: 600;
 }
 
 .markdown-content em {
-  color: var(--j-text-dim);
+  color: var(--ink2);
   font-style: italic;
 }
 
 .markdown-content del {
-  color: var(--j-text-muted);
+  color: var(--ink3);
   text-decoration: line-through;
 }
 
 .markdown-content a:hover {
-  border-bottom-color: var(--j-accent) !important;
+  border-bottom-color: var(--ink) !important;
 }
 
 /* ── Highlight.js Theme (Cyberpunk Dark) ─────────────────── */
 
 .hljs {
-  color: var(--j-text);
+  color: var(--ink);
 }
 
 .hljs-keyword,
@@ -191,7 +178,7 @@ body {
 
 .hljs-variable,
 .hljs-params {
-  color: var(--j-text);
+  color: var(--ink);
 }
 
 .hljs-regexp {

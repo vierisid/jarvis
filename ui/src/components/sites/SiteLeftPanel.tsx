@@ -85,17 +85,17 @@ export function SiteLeftPanel({ leftTab, setLeftTab, projectId, onFileSelect, se
                     borderRadius: "6px",
                     fontSize: "12px",
                     lineHeight: 1.5,
-                    background: msg.role === "user" ? "rgba(0,212,255,0.08)" : "var(--j-surface)",
-                    color: "var(--j-text)",
-                    borderLeft: msg.role === "user" ? "2px solid var(--j-accent)" : "2px solid var(--j-border)",
+                    background: msg.role === "user" ? "rgba(0,212,255,0.08)" : "var(--panel)",
+                    color: "var(--ink)",
+                    borderLeft: msg.role === "user" ? "2px solid var(--ink)" : "2px solid var(--rule)",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                   }}>
-                    <div style={{ fontSize: "10px", color: "var(--j-text-muted)", marginBottom: 2, fontWeight: 600 }}>
+                    <div style={{ fontSize: "10px", color: "var(--ink3)", marginBottom: 2, fontWeight: 600 }}>
                       {msg.role === "user" ? "You" : "JARVIS"}
                     </div>
                     {msg.content}
-                    {msg.isStreaming && <span style={{ color: "var(--j-accent)" }}> ▍</span>}
+                    {msg.isStreaming && <span style={{ color: "var(--ink)" }}> ▍</span>}
                   </div>
                 ))
               )}
@@ -103,7 +103,7 @@ export function SiteLeftPanel({ leftTab, setLeftTab, projectId, onFileSelect, se
             </div>
 
             {/* Chat input */}
-            <div style={{ padding: "8px", borderTop: "1px solid var(--j-border)" }}>
+            <div style={{ padding: "8px", borderTop: "1px solid var(--rule)" }}>
               <div style={{ display: "flex", gap: "6px" }}>
                 <input
                   type="text"
@@ -130,8 +130,8 @@ export function SiteLeftPanel({ leftTab, setLeftTab, projectId, onFileSelect, se
 
 const tabBarStyle: React.CSSProperties = {
   display: "flex",
-  borderBottom: "1px solid var(--j-border)",
-  background: "var(--j-bg)",
+  borderBottom: "1px solid var(--rule)",
+  background: "var(--bg)",
 };
 
 const tabBtnStyle: React.CSSProperties = {
@@ -140,7 +140,7 @@ const tabBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
   borderBottom: "2px solid transparent",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   fontWeight: 600,
   cursor: "pointer",
@@ -148,18 +148,18 @@ const tabBtnStyle: React.CSSProperties = {
 
 const activeTabBtnStyle: React.CSSProperties = {
   ...tabBtnStyle,
-  color: "var(--j-accent)",
-  borderBottom: "2px solid var(--j-accent)",
+  color: "var(--ink)",
+  borderBottom: "2px solid var(--ink)",
 };
 
 const inputStyle: React.CSSProperties = {
   flex: 1,
   padding: "6px 10px",
   fontSize: "12px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   outline: "none",
 };
 
@@ -169,13 +169,13 @@ const sendBtnStyle: React.CSSProperties = {
   background: "rgba(0, 212, 255, 0.15)",
   border: "1px solid rgba(0, 212, 255, 0.3)",
   borderRadius: "4px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
 
 const emptyStyle: React.CSSProperties = {
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   textAlign: "center",
   padding: "20px",
