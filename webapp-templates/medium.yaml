@@ -1,0 +1,108 @@
+# NOTE on the app name: "medium" is a common English word (the same homonym class as
+# linear/zoom) — the word-bounded matcher will false-inject this template on phrases
+# like "medium size", "medium effort", "medium rare". Known matcher limitation; the
+# keyword list below deliberately avoids adding any further generic surface (and no
+# keyword contains "medium" — the app name already matches).
+app_name: Medium
+domains:
+  - medium.com
+keywords:
+  - blog post
+  - blog posts
+description: Medium — read articles (with honest paywall detection), search stories and authors, browse tags, view author profiles, clap, respond, write auto-saved drafts, and publish only with explicit confirmation.
+version: 1
+instructions: |
+  URL: https://medium.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. URL-FIRST: articles, search, tags, authors, and the editor are all addressable by URL (map below). Navigate directly; click through the UI only when no URL exists.
+  3. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after the page changed; re-locate elements by role/aria-label/text.
+  4. browser_type REPLACES the target's content by default. In the story editor this is the #1 bug source — see EDITOR TYPING MODEL. Pass append: true to preserve existing text.
+  5. Snapshot at checkpoints (after navigate, after the editor opens, after each typed block, before and after any public submit) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the current UI wording, not the exact string.
+  8. Feeds and long articles load via infinite scroll: browser_scroll down → snapshot. Max ~4 scroll rounds per question; summarize what you have.
+
+  ### PUBLISHING GATE (drafts are private; publishing is public and permanent-ish)
+  - Writing a DRAFT is allowed when the user explicitly asked for one — the Medium editor auto-saves continuously (no Save button; a "Saved" indicator appears near the top [LIVE-VERIFY]). Report the draft as saved; do NOT publish it.
+  - PUBLISHING puts the story publicly under the user's name. Only click Publish if the user explicitly said "publish" IN THIS CONVERSATION. "Write a post about X" means draft, not publish. Before the final Publish click, the title AND body must be verified in the latest snapshot exactly as intended.
+  - Claps and responses are also public-ish actions tied to the user's account: verify target/text in-snapshot before submitting, verify ONCE after, and NEVER blind-retry a submit — an unconfirmed retry risks a public double-post.
+
+  ### State Recognition
+  - **Reading is mostly anonymous** — browsing, search, tags, profiles, and free articles work logged out, subject to the metered paywall.
+  - **Member-only paywall**: Medium meters free reads; member-only stories show a "Member-only story" marker and/or truncate the body under an upgrade overlay ("Read this story with a free account…" / "Upgrade" / "Get unlimited access") [LIVE-VERIFY wording]. Detect it, report honestly: summarize ONLY the visible portion and tell the user the rest is behind Medium's paywall. NEVER attempt to bypass (no mirror/cache/reader tricks, no dismissing the wall to scrape hidden text).
+  - **Logged out + write action requested** (clap, respond, draft, publish, drafts list): a sign-in wall or /m/signin redirect appears → tell the user: "This needs your Medium login — please sign in in the browser first." STOP. NEVER type credentials, even if the user provides them.
+  - **Ready (logged in)**: avatar/profile menu and a "Write" link in the top bar [LIVE-VERIFY].
+  - **Loading**: near-empty snapshot → wait, re-snapshot (max 2 retries), then tell the user.
+  - **Cookie/consent banner**: if it blocks interaction, click reject/"necessary only" if present, else accept → continue.
+
+  ### URL MAP (prefer these over clicking)
+  - Home feed: https://medium.com/
+  - Search stories: https://medium.com/search?q={query} (URL-encode; space → %20)
+  - Search people: https://medium.com/search/people?q={query} [LIVE-VERIFY path]
+  - Tag feed: https://medium.com/tag/{tag} (tag is lowercase, hyphenated: "machine-learning")
+  - Author profile: https://medium.com/@{username} — their about page: /@{username}/about
+  - Own drafts: https://medium.com/me/stories/drafts (login-gated [LIVE-VERIFY: redirects to sign-in when logged out])
+  - New story editor: https://medium.com/new-story (login-gated)
+  - Any pasted medium.com article link (including custom-domain publications on medium.com paths): navigate to it directly.
+
+  ### EDITOR TYPING MODEL (block editor — Notion-class caution; all behavior [LIVE-VERIFY])
+  The story editor is a contenteditable block editor: the title is one block, each paragraph is its own block. browser_type inserts paste-like (no per-key events) and CLEARS the target block by default.
+  - NEVER chain two plain browser_type calls into the same block — the second wipes the first.
+  - New paragraph = browser_press_key "Enter" (real keydown creates a fresh block below), then snapshot, then type into the NEW block. Repeat Enter → snapshot → type per paragraph.
+  - To add to an existing block, use append: true — never plain-type "additions" into it.
+  - Markdown-style autoformat and the "+" insert menu depend on real keystrokes and may not fire on paste-like insertion — don't rely on them; plain paragraphs are the safe path.
+
+  ### TASK: Read an article  ← strongest use case
+  1. browser_navigate the article URL (from the user, or found via search) → browser_snapshot.
+  2. Page Text carries the title, author, claps, and body — summarize from it directly. Long article: browser_scroll down → snapshot (Rule 8 budget).
+  3. Paywall check FIRST: if the member-only wall is present (State Recognition), report it and summarize only what is visible.
+
+  ### TASK: Search stories or authors
+  1. Build the search URL (map above) → browser_navigate → browser_snapshot.
+  2. Results (titles, authors, subtitles, dates) are in Page Text. Open a result by clicking its title link; scroll for more.
+  3. Author search: the People tab/URL; open the right profile from the results.
+
+  ### TASK: Browse a tag
+  1. browser_navigate https://medium.com/tag/{tag} → browser_snapshot.
+  2. Report the stories from Page Text (title, author, read time). Scroll for more (Rule 8).
+
+  ### TASK: View an author + recent articles
+  1. browser_navigate https://medium.com/@{username} → browser_snapshot.
+  2. Bio, follower count, and recent stories are in Page Text. Scroll for more; /about for the full bio.
+  3. Username unknown? Search-people task first, then click the matching profile.
+
+  ### TASK: Clap for an article (login-gated)
+  1. Open the article → snapshot → find the clap button, aria-label meaning "clap" (hands icon, shows the count) [LIVE-VERIFY].
+  2. Click ONCE → snapshot → the count incremented / button state changed [LIVE-VERIFY]. Medium allows up to 50 claps per reader, but perform exactly ONE clap action per user request — never loop clicks to inflate claps. If a sign-in prompt appears instead, State Recognition applies.
+
+  ### TASK: Respond to an article (login-gated, public)
+  1. Open the article → snapshot → click the respond/comment control (speech-bubble icon, aria-label meaning "responses") [LIVE-VERIFY: opens a responses side panel with a composer].
+  2. snapshot → browser_type the response into the composer textbox.
+  3. snapshot → VERIFY the text reads exactly as intended (Publishing Gate).
+  4. Click the "Respond" submit button [LIVE-VERIFY] → snapshot → your response appears in the panel. Unconfirmed → tell the user, never re-submit.
+
+  ### TASK: Write a DRAFT (login-gated; only on explicit request)
+  1. browser_navigate https://medium.com/new-story → browser_snapshot. Sign-in wall? State Recognition, stop.
+  2. The editor shows a title block (placeholder "Title") above a body block (placeholder meaning "Tell your story…") [LIVE-VERIFY].
+  3. browser_type(title block id, title) → browser_press_key "Enter" (focus moves to a new body block) → snapshot.
+  4. Body paragraphs via the EDITOR TYPING MODEL: type into the current empty block → Enter → snapshot → type the next paragraph. One paragraph per block, never two plain types into one block.
+  5. Final snapshot: verify title + body, and the "Saved" indicator [LIVE-VERIFY]. Report: "Draft saved on Medium (auto-saved) — it's in your drafts at medium.com/me/stories/drafts." Do NOT click Publish.
+
+  ### TASK: Publish a draft (THE GATE — explicit "publish" from the user in this conversation required)
+  1. Open the draft (from /me/stories/drafts click its title, or continue in the open editor) → snapshot → VERIFY title and body are exactly what the user approved.
+  2. Click the "Publish" button (top bar of the editor) [LIVE-VERIFY] → snapshot → a pre-publish dialog appears: preview, topics/tags input, and a final publish button [LIVE-VERIFY: dialog layout].
+  3. Topics: if the user named topics, type one into the topics input → snapshot → click the matching suggestion; repeat (max 5). None named → leave empty.
+  4. Click the final "Publish now" button [LIVE-VERIFY label] → snapshot → success = the live story page / a "published" confirmation. Unconfirmed → tell the user to check medium.com/me/stories/public; NEVER click Publish again blind.
+
+  ### TASK: List own drafts (login-gated)
+  1. browser_navigate https://medium.com/me/stories/drafts → snapshot. Sign-in redirect → State Recognition, stop.
+  2. Report draft titles + last-edited times from Page Text [LIVE-VERIFY layout]. Open one by clicking its title (lands in the editor).
+
+  ### Gotchas
+  - Many "Medium" articles live on publication custom domains; if a pasted non-medium.com URL renders the same Medium UI, these instructions still apply — but this template only auto-triggers on medium.com.
+  - Page Text mixes in "Recommended from Medium" / "More from author" rails at the bottom of articles — don't report those as part of the article body.
+  - Read time and clap counts are approximate ("5 min read", "1.2K") — report them as shown.
+  - An article behind the METERED wall (free-article limit, not member-only) shows a similar overlay — same honest handling: report it, never bypass.
+  - browser_press_key "Escape" closes the publish dialog without publishing [LIVE-VERIFY] — use it to abort if verification fails.

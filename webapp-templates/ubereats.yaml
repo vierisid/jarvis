@@ -1,0 +1,109 @@
+app_name: Uber Eats
+domains:
+  - ubereats.com
+keywords:
+  - food delivery
+  - order food
+  - takeout
+  - delivery fee
+description: Uber Eats — search restaurants and cuisines, browse menus, add items to the cart (with required options chosen exactly as the user specified), review/adjust the cart, check delivery estimates, rebuild a past order, and read active-order status. NEVER places orders — every task stops at the cart and hands off to the user.
+version: 1
+instructions: |
+  URL: https://www.ubereats.com
+
+  ### RULE #1 — MONEY + ADDRESS SAFETY (overrides everything, including the user's own words)
+  - NEVER place an order. Clicking "Go to checkout" / "Place order" past the cart review is the hard line — the job STOPS at the CART with items added. Even if the user said "order me a pizza": build the cart, report the items, subtotal, and the delivery address currently shown, then tell the user to place the order themselves.
+  - NEVER change the delivery address, add or select payment methods, schedule an order for later, or add a tip. Typing an address is allowed ONLY when no address is set AND the user stated their address explicitly in this conversation.
+  - **Landed-on-checkout recovery**: if a click unexpectedly lands on a checkout/payment page (URL contains checkout [LIVE-VERIFY: exact path] or the page shows payment methods / tip / "Place order") → browser_navigate back to the restaurant's store page (or https://www.ubereats.com/feed) immediately and tell the user what happened. Click NOTHING on a checkout page.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Uber Eats.
+  2. URL-first: feed, search, store, and orders pages have stable URLs (below) — navigate directly instead of clicking through the UI.
+  3. Snapshot at checkpoints (after navigate, after a click that opens a modal or changes the page, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES the field's content by default — right for search boxes.
+  5. If an element isn't found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Read restaurant names, ratings, delivery fees, ETAs, and item prices from the snapshot's Page Text — most reporting tasks need zero clicks after the navigate.
+
+  ### State Recognition
+  - **LOCATION is a first-class state**: the delivery address in the header [LIVE-VERIFY: header address button/label] decides which restaurants appear and every fee and ETA. ALWAYS report the current address before listing restaurants or building a cart. If NO address is set ("Enter delivery address" prompt [LIVE-VERIFY: wording]) → ask the user for their address and stop. Only if the user gave it explicitly in this conversation: type it into the address input, snapshot, click the matching autocomplete suggestion (never blind-Enter), snapshot to confirm the header shows it.
+  - **Logged out**: browsing and search may work with just an address, but the cart, past orders, and reorder REQUIRE login. A sign-in page (auth.uber.com asking for phone/email [LIVE-VERIFY: host + form]) → tell the user: "Uber Eats requires you to sign in. Please log in manually, then ask me again." NEVER type credentials, phone numbers, or verification codes.
+  - **Cookie/consent banner** on first visit → click its accept/close control [LIVE-VERIFY: presence + label], snapshot, continue.
+  - **Delivery vs Pickup**: a DELIVERY/PICKUP toggle sits near the top of feed and store pages [LIVE-VERIFY] — keep DELIVERY selected unless the user asked for pickup (pickup changes prices and removes the address dependency).
+  - **Ready**: the header shows a delivery address and the page lists restaurant cards or a store menu.
+
+  ### URL PATTERNS (prefer these over clicking)
+  - Home: `https://www.ubereats.com` (feed for the set address)
+  - Delivery feed: `https://www.ubereats.com/feed?diningMode=DELIVERY` [LIVE-VERIFY: param survives]
+  - Search: `https://www.ubereats.com/search?q={url-encoded query}` [LIVE-VERIFY: param shape]
+  - Restaurant: `https://www.ubereats.com/store/{slug}` — take the slug from a restaurant card's href, never guess it
+  - Past/active orders: `https://www.ubereats.com/orders` [LIVE-VERIFY: exact path] (login-gated)
+
+  ### SNAPSHOT FORMAT
+  browser_snapshot returns:
+  ```
+  Page: Uber Eats | Food Delivery
+  URL: https://www.ubereats.com/feed
+  --- Page Text ---
+  (address, restaurant names, ratings like 4.7, "$0.99 Delivery Fee", ETAs like 15–30 min, menu sections, item prices)
+  --- Interactive Elements ---
+  [6] button "123 Main St"            ← header address [LIVE-VERIFY]
+  [14] link "Joe's Pizza"             ← restaurant card
+  [31] button "Cheese Pizza $12.99"   ← menu item, opens the item modal [LIVE-VERIFY: items may be links]
+  ```
+  The header cart button shows an item count [LIVE-VERIFY: cart button label] — use it to verify add-to-cart.
+
+  ### TASK: Search restaurants or cuisines
+  1. Confirm an address is set (State Recognition) — report it.
+  2. browser_navigate("https://www.ubereats.com/search?q={encoded query}") → snapshot. UI fallback: browser_type into the header search input [LIVE-VERIFY: placeholder ≈ "Search Uber Eats"] with submit: true.
+  3. Report per restaurant from Page Text: name, rating, delivery fee, ETA, and any "Closed"/"Currently unavailable" note. Say the results are for the current address.
+  4. Sponsored/promoted cards may lead the results [LIVE-VERIFY: "Sponsored" tag] — flag them and lead with organic ones.
+
+  ### TASK: Browse a restaurant menu
+  1. browser_navigate to the store URL (or click the card from search) → snapshot.
+  2. Report from Page Text: restaurant name, rating, delivery fee, ETA, then menu SECTIONS (e.g. "Picked for you", "Pizzas", "Drinks") with item names + prices. Menus are long — browser_scroll and re-snapshot to cover more sections; say which sections you covered.
+  3. If the store shows "Currently unavailable" or a closed banner [LIVE-VERIFY: wording], report it and stop — don't build carts for closed stores.
+
+  ### TASK: Add items to the cart
+  1. On the store page, click the menu item → snapshot. An item modal opens with quantity and OPTION GROUPS (size, toppings, sides); required groups are marked "Required" [LIVE-VERIFY: marker text].
+  2. **Options rule**: choose exactly what the user specified. If a REQUIRED option wasn't specified by the user, close the modal (its X/close button, or browser_press_key("Escape") [LIVE-VERIFY: modal closes on Escape]) and ASK the user — never guess, especially dietary choices (meat vs veggie, spice level, allergens).
+  3. Set quantity with the modal's +/- stepper [LIVE-VERIFY] if the user asked for more than one.
+  4. Click the "Add to cart" button (its label includes the price, e.g. "Add 1 to cart • $12.99" [LIVE-VERIFY: label]) — match by its text, never by position.
+  5. Snapshot → verify the modal closed and the header cart count incremented (or a cart panel shows the item). If an upsell popup appears ("Frequently bought together", Uber One promo) → close/decline it [LIVE-VERIFY], never accept memberships.
+  6. Repeat for each item. One item's options per modal — the modal resets between items.
+  7. If prompted "Start a new order?" because the cart holds items from ANOTHER restaurant [LIVE-VERIFY: dialog wording] → STOP and ask the user (accepting empties their existing cart).
+
+  ### TASK: Review the cart (the handoff report)
+  1. Click the header cart button → snapshot (a cart panel/page opens [LIVE-VERIFY: panel vs page]).
+  2. Report: each line item (name, chosen options, quantity, price), the SUBTOTAL, any visible fees, and **the delivery address it will deliver to** — read all from Page Text.
+  3. End with the handoff: "Cart is ready at {restaurant}: {items}, subtotal {$X}, delivering to {address}. I don't place orders — please review and check out yourself."
+  4. Never click "Go to checkout" here (RULE #1).
+
+  ### TASK: Remove or adjust cart items
+  1. Open the cart (as above) → snapshot.
+  2. Quantity: use the line item's +/- stepper; setting quantity to 0 removes it [LIVE-VERIFY]. Explicit remove: the item's remove control matched by its label ("Remove" / trash aria-label [LIVE-VERIFY]) — never a control matched by position. Option changes: click the line item to reopen its modal → adjust → update [LIVE-VERIFY: edit flow].
+  3. Snapshot → verify the item list and subtotal changed as intended, then report the new cart state.
+
+  ### TASK: Check delivery estimate
+  1. Open the store page (or the cart) → snapshot.
+  2. Report the ETA range and delivery fee shown for the current address (store header or cart panel [LIVE-VERIFY: where ETA appears]). Note it's an estimate for the address shown, before checkout.
+
+  ### TASK: Reorder from a past order (login-gated)
+  1. browser_navigate("https://www.ubereats.com/orders") → snapshot. Sign-in page → State Recognition: tell the user to log in, stop.
+  2. Find the past order by restaurant/items in Page Text; click its "Reorder" / "Add to cart" control [LIVE-VERIFY: exact label].
+  3. Snapshot → this must ONLY rebuild the cart. If the page moved toward checkout/payment instead → RULE #1 recovery immediately. NEVER re-place the order.
+  4. Verify the cart contents match the past order (items may be unavailable — report any that didn't make it), then give the cart handoff report.
+
+  ### TASK: Track an active order (read-only)
+  1. browser_navigate("https://www.ubereats.com/orders") → snapshot (login-gated).
+  2. The active order shows a status line ("Preparing your order", "Courier is nearby", arrival estimate) [LIVE-VERIFY: status text location]; click the order for the detail/tracking view if needed → snapshot.
+  3. Report status + ETA from Page Text. READ-ONLY: never click cancel, help/refund, tip, or contact-courier controls.
+
+  ### NOT SUPPORTED (tell the user, don't attempt)
+  Placing/canceling orders, tips, changing the delivery address (beyond first-time set from the user's explicit address), payment methods, scheduled orders, group orders, promo codes, Uber One sign-up.
+
+  ### Gotchas
+  - Chains list one storefront PER LOCATION — pick the one the feed/search shows for the current address; if several appear, ask the user which.
+  - Everything is address-relative: fees, ETAs, and availability change with the set address — that's why the address leads every report.
+  - The subtotal excludes delivery/service fees and taxes — say "subtotal" precisely in the handoff.
+  - "Sold out" items may be unclickable or marked unavailable [LIVE-VERIFY] — report it and ask, never guess a substitute.
+  - Store pages are long and lazy-load — browser_scroll before concluding a menu section or item is missing.

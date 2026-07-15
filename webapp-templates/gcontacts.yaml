@@ -1,0 +1,71 @@
+app_name: Google Contacts
+domains:
+  - contacts.google.com
+keywords:
+  - contact info
+  - contact details
+  - phone number of
+  - email address of
+description: Google Contacts — look up a contact's email/phone/company, list contacts by label, and (explicit-only, gated) create, edit, label, or delete contacts.
+version: 1
+instructions: |
+  URL: https://contacts.google.com
+
+  ### RULES (each stated once — they apply everywhere below)
+  1. Allowed tools: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED. If the allowed tools cannot do it, stop and report why.
+  2. LOCALE RULE: every UI label is translated to the account language. Quoted labels below are documentation from one locale, NOT selectors — match by role + structure + position. Contact names, emails, and phone numbers are user content (locale-free) — prefer matching rows and fields by them.
+  3. browser_type REPLACES a field's content by default. EDIT SAFETY: before changing any field on an existing contact, read and record its current value from a snapshot, then replace, then report "old → new" to the user. Never edit a field whose current value you did not capture first.
+  4. NEVER INVENT DATA: create or edit contacts only with values the user gave in THIS conversation. A field the user didn't provide stays empty — never guess, pad, or copy a value from elsewhere.
+  5. DESTRUCTIVE GATE: never delete a contact unless the user named that specific contact in THIS request. "Clean up my contacts" is not enough — list the candidates and ask first. Delete moves the contact to Trash, auto-purged after ~30 days [LIVE-VERIFY window length]; say so in your report.
+  6. Snapshot [id]s are 1-based and change on EVERY snapshot — never reuse an id across snapshots.
+  7. Row action icons (star, edit, more) at a list row's right edge are hover-revealed: browser_hover the row, THEN browser_snapshot — they appear in the next snapshot, not the current one. [LIVE-VERIFY]
+  8. After 2 failed attempts to locate an element, STOP and tell the user what you saw. No workarounds.
+  9. Budgets: look up ≤5 calls | list by label ≤4 | create ≤7 | edit ≤8 | add label ≤7 | delete ≤8. Exceeding a budget means you have left the recipe — re-read it.
+  10. Bulk export is NOT SUPPORTED: the Export action starts a native file download the browser tools cannot drive. Single-contact info is read straight off the detail page instead; for a file, tell the user to run the export manually.
+
+  ### URL PATTERNS
+  - Contact list (home): https://contacts.google.com
+  - Search: https://contacts.google.com/search/QUERY — URL-encode QUERY. [LIVE-VERIFY URL shape — fallback: click the search box on the list page and browser_type(query, submit:true)]
+  - Contact detail: /person/{id} — the id is opaque, you cannot construct it. Reach a contact via list or search, then click its row.
+  - New contact form: https://contacts.google.com/new [LIVE-VERIFY — fallback: the "Create contact" button near the top of the left sidebar]
+  - Label view: /label/{id} — ids are opaque; click the label's entry in the left sidebar instead.
+  - Left-sidebar sections: Frequently contacted, Other contacts, Trash. [LIVE-VERIFY names]
+
+  ### STATE RECOGNITION (check on every snapshot)
+  - Not signed in: URL on accounts.google.com, or the page offers a "Sign in" button → tell the user "Google Contacts needs you to sign in manually" and STOP. NEVER type credentials.
+  - List ready: a search box near the top plus contact rows (each showing name and usually email/phone), or an empty-state message on a fresh account; a left sidebar with Contacts / labels / Trash entries. [LIVE-VERIFY]
+  - Contact detail (distinct state): URL contains /person/, and the page/panel shows the contact's name as a heading, field sections (Email, Phone, Company…), and an Edit button. While here, list-row recipes do not apply — use the detail-page controls.
+  - Edit form (distinct state): labeled inputs (First name, Last name, Company, Email, Phone…) with Save and Cancel controls. [LIVE-VERIFY structure] Nothing persists until Save is clicked.
+  - Loading / blank: no search box and no rows → snapshot again after a moment, max 2 retries.
+
+  ### ELEMENT REFERENCE ([LIVE-VERIFY] = claim not yet captured from a real snapshot)
+  - Contact row: name + email + phone (+ label chips). Click the row's name/text area to open the detail view; hover reveals star/edit/more icons (rule 7). [LIVE-VERIFY]
+  - Detail view header: star toggle, a label button, a "More actions" (three-dot) menu that holds Delete, and a prominent Edit button. [LIVE-VERIFY names/roles]
+  - Edit form: First name, Last name, Company, Job title, Email, Phone inputs; a "Show more" control reveals extra fields; each additional email/phone gets its own input plus a type dropdown (Home/Work…). [LIVE-VERIFY]
+  - Label picker: checkbox list of existing labels + a create-new entry, opened from the label button. [LIVE-VERIFY]
+
+  ### TASK: look up a contact (the backbone — max 5 calls)
+  "What's Marco's email/phone?" 1. browser_navigate the search URL with the name. 2. snapshot — if the URL was ignored (plain list, no query visible), click the search box, browser_type(name, submit:true), snapshot. 3. Exactly one matching row → if the requested field (email/phone) is already visible in the row, report it and stop; otherwise click the row. MULTIPLE matches → report the candidates (name + email) and ask which one — do NOT guess. Zero matches → say so and mention it might live under "Other contacts" (sidebar). 4. snapshot the detail view — the fields are in Page Text; report exactly what was asked. Requested field absent → say the contact exists but has no phone/email on file; never substitute a different field.
+
+  ### TASK: list contacts under a label (max 4 calls)
+  1. browser_navigate https://contacts.google.com 2. snapshot — find the label's entry in the left sidebar (match by the label's name — user content). Not there → report which labels DO exist. 3. click it. 4. snapshot — the rows shown are the label's members; report names (plus emails/phones if asked). Long lists may virtualize — browser_scroll before declaring the list complete. [LIVE-VERIFY]
+
+  ### TASK: create a contact (EXPLICIT REQUEST ONLY — rule 4; max 7 calls)
+  1. browser_navigate https://contacts.google.com/new — if that lands on the plain list [LIVE-VERIFY], click "Create contact" (may open a small menu: pick the single-contact entry, never "Create multiple" [LIVE-VERIFY]). 2. snapshot — edit form present? 3. browser_type each PROVIDED value into its matching field — one call per field (First name, Last name, Email, Phone, Company); skip anything the user didn't provide. 4. snapshot — verify every value sits in the RIGHT field; a swapped field = fix it before saving. 5. click Save. 6. snapshot — success = the new contact's detail view (or its row in the list). Cannot verify → report uncertainty and STOP; do NOT fill the form again (duplicate risk).
+
+  ### TASK: edit a contact field (GATED by rule 3 — max 8 calls)
+  1-3. Find and open the contact (look-up recipe steps 1-3). 4. snapshot the detail view — RECORD the current value of the target field. Field absent → treat as an "add", old value = (empty). 5. click Edit. 6. snapshot — locate the field's input; its current content must equal what you recorded (mismatch → stop and re-read, you may have the wrong contact or wrong field). browser_type(new value) — the replace default is exactly right here. 7. click Save. 8. snapshot — the detail view shows the new value. Report: "Phone: <old> → <new>".
+
+  ### TASK: add a label to a contact
+  1. Open the contact (look-up recipe). 2. snapshot — click the label button in the detail header [LIVE-VERIFY]. 3. snapshot — the picker: existing label → click its entry/checkbox; new label → use the create-new entry and type the name [LIVE-VERIFY flow]. 4. Apply/close the picker (browser_press_key("Escape") if there is no explicit Apply [LIVE-VERIFY]). 5. snapshot — the label chip now shows on the contact.
+
+  ### TASK: delete a contact (GATED by rule 5 — max 8 calls)
+  Only when the user named this exact contact. 1-3. Open the contact and CONFIRM identity from the detail view (name plus one identifying field — same-name contacts exist). 4. click "More actions" (three-dot) in the detail header. 5. snapshot — click the Delete entry in the menu [LIVE-VERIFY]. 6. snapshot — a confirmation dialog appears → click its confirm/Delete control. 7. snapshot — back on the list, the contact is gone. Report: moved to Trash, restorable for ~30 days from the Trash section [LIVE-VERIFY]. NEVER empty the Trash or use any "delete forever" option unless the user explicitly asked for permanent deletion.
+
+  ### GOTCHAS
+  - "Other contacts" holds auto-saved addresses of people you've merely emailed — someone can be findable without being a saved contact. Say which section a result came from when it matters.
+  - Workspace accounts also show a Directory of coworkers — directory entries are read-only; report their info, never try to edit them. [LIVE-VERIFY]
+  - Search matches names, emails, phone numbers, and companies — searching by a phone number or employer works.
+  - Contacts often carry multiple emails/phones: report ALL values of the requested field with their type labels (Home/Work) unless the user asked for one specific type.
+  - The list virtualizes on large accounts: when hunting one person, search — don't scroll the full list.
+  - The header star (and row star) is a toggle — read its current state before clicking so you don't unstar by accident.

@@ -182,6 +182,25 @@ Batch-2 note: the launch hit a session usage limit twice — 11 files were writt
 | calendly v1 | 10.0KB | 4 | booking gate: slot+name+email from the user this conversation; timezone-led reporting; cancel only via pasted links |
 | translate v1 | 6.0KB | 4 | smallest in library; URL-is-the-API with encoding table; happy path = 2 calls |
 
+### P3.4 — expansion batch 4 (48 → 61 templates)
+☑ DONE 2026-07-15: all 13 written. **Library is now 61 templates, 0 lint errors / 0 warnings, 608KB instructions, zero cross-template keyword/domain collisions, 1192 [LIVE-VERIFY] markers.**
+
+| new template | size | kw | notes |
+|---|---|---|---|
+| facebook v1 | 12.0KB | 2 | Meta GO SLOW posture; audience selector verified before every post; Messenger out of scope; kw fb / fb marketplace |
+| tiktok v1 | 10.7KB | 2 | read-first, NO posting; hardest anti-bot stance (CAPTCHA/slider → STOP); kw fyp / for you page |
+| airbnb v1 | 10.0KB | 5 | booking-model money stop; TOTAL price not nightly teaser; host contact double-gated; kw disjoint from booking's hotel set |
+| gflights v1 | 10.0KB | 5 | form-driven (tfs= blob honestly non-constructable); handoff = results URL + named booking options |
+| imdb v1 | 7.9KB | 5 | read-only reference; parental guide + episode guide; write actions refused |
+| ubereats v1 | 10.0KB | 4 | cart hard-stop even on "order me X"; address = first-class state; never tips/scheduling |
+| medium v1 | 10.9KB | 2 | draft allowed, PUBLISH gated on explicit confirm; paywall never bypassed; "medium" homonym noted |
+| vercel v1 | 10.3KB | 3 | read-first infra; env-vars page off-limits (stripe /apikeys pattern); redeploy/promote/cancel gated |
+| sentry v1 | 11.8KB | 2 | read+triage; resolve/assign/archive gated with identity confirmation; all /settings/ off-limits |
+| npm v1 | 7.4KB | 0 | 2nd-smallest; read-only; deprecation banners quoted verbatim |
+| huggingface v1 | 9.9KB | 5 | model cards + safetensors size-summing; gated-model wall = first-class state, never auto-request access |
+| ganalytics v1 | 10.2KB | 4 | tables-not-charts honesty; /admin off-limits; property+range mandatory in every report; kw ga4/pageviews/… |
+| gcontacts v1 | 9.0KB | 4 | "what's X's email" backbone; edits report old→new; deletes gated with 30-day trash note |
+
 ### Template style contract (for all new/rewritten templates, distilled from what works)
 1. Tool whitelist that matches the REAL surface; never ban a tool a task needs.
 2. State Recognition section: login wall, loading, ready markers, view-only/permission detection, explicit "tell the user and stop" conditions.

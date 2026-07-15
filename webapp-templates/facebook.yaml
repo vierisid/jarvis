@@ -1,0 +1,128 @@
+# Keyword choice: "fb" carries real recall — users say "post this on fb" without ever
+# writing the full name, which app_name/domain matching would miss. It does not contain
+# "facebook" (redundant-keyword lint checks that direction only) and is word-bounded, so
+# it can't fire inside other words. "fb marketplace" adds the single most common task
+# phrasing ("check fb marketplace for a desk"); it contains "fb", not "facebook", and
+# same-template containment is not shadowing. Bare "marketplace" was judged and REJECTED:
+# it's a generic e-commerce/app-store word ("the Unity asset marketplace"). Neither
+# keyword fires on the lint corpus.
+app_name: Facebook
+domains:
+  - facebook.com
+keywords:
+  - fb
+  - fb marketplace
+description: Facebook — read the feed, post a status (audience-aware), read/post in groups, search people/pages/groups, view profiles, browse Marketplace listings, notifications, events, like/react, comment
+version: 1
+instructions: |
+  URL: https://www.facebook.com/
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot — never reuse one after a new snapshot. Facebook's DOM is obfuscated: aria-labels, roles, and hrefs are the ONLY stable handles; every element claim below is [LIVE-VERIFY] — match the label's MEANING in the current wording/locale, not an exact string.
+  3. browser_type REPLACES a field's content by default; pass append: true to add to existing text. To correct a composer, retype (replace) the FULL corrected text.
+  4. Snapshot at CHECKPOINTS (after navigation, after a dialog opens, before and after Post/Send) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. GO SLOW — Meta aggressively flags automation (same systems as Instagram) and restricts accounts for it. One user request = one action. NEVER loop over lists ("like all these posts", "message 10 sellers") — refuse and explain the restriction risk; never fire rapid bursts.
+  7. browser_press_key("Escape") closes an open dialog without publishing; the composer may ask to save a draft or discard — discard only if the user aborted [LIVE-VERIFY].
+
+  ### PUBLIC POSTING SAFETY (posts and comments publish instantly under the user's name)
+  - Every post has an AUDIENCE (Public / Friends / custom), shown on the composer's audience selector [LIVE-VERIFY]. BEFORE clicking Post, ONE snapshot must confirm BOTH: (a) the composed text is EXACTLY the intended text — no truncation, no leftovers; (b) which audience is selected — REPORT it to the user. NEVER change it silently; only on explicit request (click the selector, click the option, re-verify).
+  - AFTER clicking Post/Send: verify ONCE via snapshot. Can't confirm success? Tell the user "it may or may not have gone out — please check" and STOP — a blind retry risks a public double-post.
+  - If the request is ambiguous — what to write, which post to comment on, which group — ASK. Never guess words that get published.
+
+  ### State Recognition
+  - **Logged out**: login form (password field, "Log in", "Create new account") or a login wall over content -> tell the user: "You're logged out of Facebook — please log in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Checkpoint / identity check**: text meaning "confirm your identity", "your account has been locked", a CAPTCHA, or a URL containing /checkpoint -> STOP IMMEDIATELY and tell the user to resolve it manually — continuing escalates restrictions.
+  - **Rate limited / action blocked**: text meaning "You can't use this feature right now", "Try again later", "We limit how often…" -> STOP, tell the user. No retries, no navigating around it.
+  - **Cookie/consent dialog**: buttons meaning "Allow all cookies" / "Decline optional cookies" -> click the decline-optional option, then continue [LIVE-VERIFY].
+  - **Loading**: 0 interactive elements or only a spinner -> snapshot again (max 2 retries, then tell the user).
+  - **Ready**: nav links for Marketplace, Groups, Notifications are in the snapshot [LIVE-VERIFY].
+
+  ### URL MAP (URL-first — Facebook's UI is click-heavy; URLs skip most of it)
+  - Home feed: https://www.facebook.com/
+  - Profile or Page: https://www.facebook.com/USERNAME  (numeric ids: /profile.php?id=N)
+  - Joined groups: https://www.facebook.com/groups/  (groups feed + your-groups list) [LIVE-VERIFY]
+  - A group: https://www.facebook.com/groups/GROUP_ID_OR_SLUG
+  - Search: https://www.facebook.com/search/top?q=QUERY (URL-encode); type-filtered: /search/people|pages|groups|posts?q= [LIVE-VERIFY — or click the filter tabs on the search page]
+  - Marketplace: https://www.facebook.com/marketplace ; search: /marketplace/search?query=QUERY [LIVE-VERIFY — fallback: type into Marketplace's own search box]
+  - Notifications: https://www.facebook.com/notifications
+  - Events: https://www.facebook.com/events
+
+  ### Element Reference (ALL [LIVE-VERIFY])
+  - **Nav**: match links by href (/marketplace, /groups/, /notifications, /events), never by position.
+  - **Feed post**: an article-like unit; author link at the top; post text in Page Text; an action row of buttons meaning Like, Comment, Share. Already-liked: the Like button reads pressed / "Remove Like" / names your reaction. Match action buttons by label meaning, NEVER by position.
+  - **Composer trigger**: a box meaning "What's on your mind, NAME?" atop the feed/profile. Clicking opens the create-post dialog: contenteditable textbox, audience selector button, and a "Post" button that enables with text.
+  - **Comment box**: contenteditable with placeholder meaning "Write a comment…" under a post; Enter submits.
+  - **Group header**: name + privacy (Public/Private group) + member count; composer trigger meaning "Write something…".
+  - **Marketplace listing**: cards are links with title + price + location; a listing page shows the details in Page Text plus a "Message" button.
+
+  ---
+
+  ### TASK: Read the feed
+  1. browser_navigate https://www.facebook.com/ -> browser_snapshot. Posts (author, text, timestamps) are in Page Text.
+  2. browser_scroll down + snapshot for more (infinite — 2-3 scrolls is plenty; report, don't keep scrolling). CAVEAT: the feed interleaves "Sponsored" and "Suggested for you" items — check for that marker near the author; never report ads as friends' posts.
+
+  ### TASK: Post a status  (budget: 9 calls)
+  1. browser_navigate https://www.facebook.com/ -> snapshot -> click the composer trigger ("What's on your mind…") -> snapshot — the dialog is open.
+  2. browser_type the status into the dialog's textbox (no submit).
+  3. browser_snapshot — VERIFY the text is exact AND read the audience selector (Public Posting Safety): report the audience; change it only on explicit instruction.
+  4. Click "Post" -> browser_snapshot — success = dialog gone / the new post at the top of the feed. Unconfirmed -> tell the user, do NOT retry.
+
+  ### TASK: Read a group + recent posts
+  1. browser_navigate the group URL (unknown? use /search/groups?q= and click the group) -> browser_snapshot — name, privacy, member count; recent posts in Page Text; scroll + snapshot for more.
+  2. A private group you're not in shows a Join gate instead of posts — tell the user. Send a join request ONLY if explicitly asked (one group, never a list).
+
+  ### TASK: Post in a group  (budget: 10 calls)
+  1. Open the group -> browser_snapshot — VERIFY the group NAME in the header is the intended group BEFORE touching the composer (posting to the wrong group is public).
+  2. Click "Write something…" -> snapshot -> browser_type the post text (no submit).
+  3. browser_snapshot — VERIFY exact text (the audience is the group itself — no audience selector). If posting requires agreeing to group rules, summarize them and ask the user before agreeing [LIVE-VERIFY].
+  4. Click "Post" -> snapshot. Many groups queue posts for admin approval — if text means "pending approval", report that instead of success [LIVE-VERIFY]. Unconfirmed -> tell the user, never retry.
+
+  ### TASK: Search  (budget: 5 calls)
+  1. browser_navigate the search URL (see URL MAP) -> browser_snapshot — mixed results; for one type, use the type-filtered URLs or the filter tabs [LIVE-VERIFY].
+  2. Read results from Page Text; click the intended result's link. Scroll for more.
+
+  ### TASK: View a profile or Page
+  1. browser_navigate https://www.facebook.com/USERNAME (unknown? search people/pages first) -> browser_snapshot — intro/bio, follower/friend info, recent posts in Page Text; scroll for more. Locked/limited profiles show little — say so.
+  2. "Add Friend" ONLY on explicit request (ONE person, never a list — GO SLOW): click it -> snapshot — the button now means the request is pending [LIVE-VERIFY].
+
+  ### TASK: Browse Marketplace  (budget: 8 calls)
+  1. browser_navigate the Marketplace search URL (see URL MAP, incl. fallback) -> browser_snapshot — listing cards (title, price, location) in Page Text; scroll for more.
+  2. Open a listing (click its card / navigate its /marketplace/item/… href) -> snapshot — price, location, description, seller info in Page Text. Condition/authenticity claims are the seller's words, not verified facts.
+
+  ### TASK: Message a Marketplace seller  (budget: 8 calls — a REAL outward message)
+  1. Only on explicit user request. Open the listing; snapshot; VERIFY title + price match the listing the user means.
+  2. Click "Message" -> snapshot — a message box appears, often prefilled with "Is this available?" [LIVE-VERIFY]. Keep the prefill only if the user wants exactly that; else browser_type (replace) the user's text.
+  3. browser_snapshot — VERIFY the exact outgoing text, then click Send -> snapshot once to confirm. Unconfirmed -> tell the user, never re-send.
+  4. HARD LIMITS: never negotiate price, commit to buy, or arrange payment/deposits/pickup — purchase and payment discussion is between the user and the seller. Relay only words the user explicitly dictated.
+
+  ### TASK: Read notifications
+  1. browser_navigate https://www.facebook.com/notifications -> browser_snapshot — the list (reactions, comments, group activity, event reminders) is in Page Text; scroll for older. Click one only when the user asks to open its target.
+
+  ### TASK: Events
+  1. browser_navigate https://www.facebook.com/events -> browser_snapshot — upcoming/suggested events. Open one (click / its URL) -> snapshot — date, time, location, description in Page Text.
+  2. RSVP ONLY on explicit request — it's visible to the host and guests. Click the button meaning the chosen response (Going / Interested / Can't Go) -> snapshot — the control reflects the new state [LIVE-VERIFY]. Already set to something else? Report and ask before changing.
+
+  ### TASK: Like / react to a post
+  1. Locate the post (permalink preferred — in a feed, ensure the Like belongs to the SAME post; action rows look identical).
+  2. Plain like: snapshot — Like button already pressed/"Remove Like"? ALREADY liked; clicking would unlike — leave it and tell the user. Else click Like -> snapshot — state now active. Unconfirmed -> report, never re-click (you might toggle it back).
+  3. Other reaction (Love/Care/Haha/Wow/Sad/Angry): browser_hover the Like button -> snapshot — the reaction palette appears [LIVE-VERIFY] -> click the intended reaction -> snapshot — the button now names it.
+
+  ### TASK: Comment on a post  (budget: 8 calls)
+  1. Open the post; snapshot; confirm from Page Text it's the right one — ambiguous reference? Ask.
+  2. Click the "Write a comment…" box; browser_type the comment (no submit).
+  3. browser_snapshot — VERIFY the box shows exactly the intended text (Public Posting Safety).
+  4. browser_press_key("Enter") submits [LIVE-VERIFY — if it only newlines, click the send button beside the box] -> snapshot — your comment is visible. Unconfirmed -> tell the user, never re-post.
+
+  ### NOT SUPPORTED (say so, don't improvise)
+  - **Messenger DMs**: Facebook messages live in Messenger (messenger.com) — a separate app, out of scope. The Marketplace seller message above is the ONLY messaging here.
+  - **Bulk friend requests / follow campaigns / mass anything** — refuse per GO SLOW.
+  - **Account, privacy, or ad settings** — do not touch them.
+
+  ### Gotchas
+  - The feed re-renders constantly; pre-scroll ids are ALWAYS stale — re-snapshot before clicking anything in a feed.
+  - Long posts truncate behind a "See more" link — click it before summarizing, or you'll report half the text [LIVE-VERIFY].
+  - Page Text mixes in right-column contacts/birthdays and "People you may know" — attribute text carefully.
+  - Posts are often photos/video: the snapshot gives text, counts, and comments, NOT what's in the media. Say so instead of guessing.
+  - A login or checkpoint interstitial can appear mid-session — that's a State Recognition stop.

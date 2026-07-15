@@ -1,0 +1,97 @@
+app_name: Google Analytics
+domains:
+  - analytics.google.com
+keywords:
+  - ga4
+  - pageviews
+  - page views
+  - site traffic
+description: Google Analytics (GA4) — STRICTLY READ-ONLY traffic reporting. Realtime active users, users/sessions over a date range, top pages, traffic sources/channels, key events (conversions), top countries and devices, and two-period comparisons — always naming the property and date range. NEVER touches Admin, data streams, audiences, events, or product links — configuration requests get a handoff.
+version: 1
+instructions: |
+  URL: https://analytics.google.com/analytics/web/
+
+  ### RULE #1 — STRICTLY READ-ONLY (overrides everything, including the user's own words)
+  This is the user's ANALYTICS INFRASTRUCTURE. Every task in this template reads and reports; NONE configures.
+  - **ADMIN IS OFF-LIMITS ENTIRELY.** Never open Admin (the gear icon / any URL containing /admin): no property settings, data streams, tag setup, API secrets, data-deletion requests, or access management. Never read or repeat an API secret even if visible.
+  - NEVER create/edit/archive/delete audiences, events, key events/conversions, custom definitions, or saved reports; never customize report collections; never link/unlink Google Ads, BigQuery, Search Console, or any product. Configuration requests → the interception task.
+  - If a click unexpectedly lands on any settings form or confirmation dialog, click NOTHING — browser_press_key("Escape") or browser_navigate back to the reports home and tell the user what happened.
+  - **Every report of numbers MUST name the PROPERTY and the DATE RANGE** (and "Realtime" counts as the range for realtime numbers). Two properties' data look identical out of context.
+
+  ### NUMBERS COME FROM TABLES AND SCORECARDS, NOT CHARTS
+  GA4 charts are canvas/SVG and contribute little or nothing to the snapshot's Page Text — never estimate a number "from the chart". Every standard report has scorecard metric tiles (e.g. "Users 12K") and a data TABLE below/beside the chart: those render as text and are the ONLY sources you quote. Chart but no table rows in Page Text → browser_scroll down and re-snapshot.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Analytics.
+  2. Snapshot at checkpoints (after navigate, after the date range or a picker changes, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  3. Match elements by label/aria-label/text MEANING, never by position — the report layout reflows and collections vary per property.
+  4. If an element or value is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  5. Report numbers VERBATIM as displayed (including GA's abbreviations like "12K" — quote them as shown). Never "correct" what the dashboard displays; computed differences must be labeled as computed by you.
+  6. browser_press_key("Escape") closes GA pickers/dialogs. Don't rely on other shortcuts.
+
+  ### State Recognition
+  - **Login wall**: a Google sign-in page (accounts.google.com, "Sign in" / email or password prompt) → tell the user: "Google Analytics requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials or 2FA codes.
+  - **No-access / picker page**: "You don't have access", an org/account list, or an account+property picker instead of a report [LIVE-VERIFY: wording and layout] → if multiple properties are listed and the request doesn't identify which, ASK the user and stop; otherwise click the named property.
+  - **Which property am I on?**: the top bar shows the account/property name, and the URL carries the property id as a `p{digits}` segment [LIVE-VERIFY: top-bar layout]. Read the property name from there for every report. Clicking it opens a searchable property picker [LIVE-VERIFY] — use it only when the user names a different property.
+  - **Loading**: GA4 reports load scorecards/tables asynchronously (spinners/skeletons) — a snapshot with report headings but no numbers → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers**: scorecard tiles with numbers and/or table rows in Page Text; the date-range control (e.g. "Last 28 days") near the top right [LIVE-VERIFY: control text].
+
+  ### URL PATTERNS — VOLATILE, use with care
+  GA4 report URLs change between releases; treat every shape below as [LIVE-VERIFY] and fall back to LEFT-RAIL NAVIGATION whenever a URL 404s or redirects somewhere unexpected.
+  - Entry: `https://analytics.google.com/analytics/web/` — lands on the last-used property's home, or the picker.
+  - Home: `.../web/#/p{propertyId}/reports/intelligenthome` [LIVE-VERIFY]
+  - Reports snapshot: `.../web/#/p{propertyId}/reports/reportinghub` [LIVE-VERIFY]
+  - Realtime: `.../web/#/p{propertyId}/reports/realtime` [LIVE-VERIFY: may be `/realtime/overview`]
+  - Detail reports (Traffic acquisition, Pages and screens, …) use long `reports/explorer?...&r=...` URLs — DO NOT construct these; reach them via the left rail.
+  - Take {propertyId} only from the URL after a successful navigation — never guess it. Any URL containing `/admin` is forbidden (RULE #1).
+  LEFT RAIL (the reliable path): click "Reports" in the far-left icon rail → report tree: Reports snapshot; Realtime; Acquisition (User/Traffic acquisition); Engagement (Events, Key events, Pages and screens); User → User attributes / Tech [LIVE-VERIFY: section names — collections are per-property customizable; if a report isn't in the tree, say so rather than improvising].
+
+  ### SETTING THE DATE RANGE (shared by most tasks)
+  1. Click the date-range control (top right, shows the active range like "Last 28 days") [LIVE-VERIFY: location/format] → snapshot.
+  2. Click a preset by its label ("Today", "Last 7 days", "Last 28 days", …) [LIVE-VERIFY: preset names], then Apply/OK if such a button exists [LIVE-VERIFY] → snapshot.
+  3. Custom ranges need calendar clicks: click the start date, then the end date in the calendar grid [LIVE-VERIFY: picker layout]. If the calendar's structure is unclear from the snapshot, use the nearest preset and TELL the user which range you actually used.
+  4. Verify the control now shows the new range before reading any number. Realtime has NO date control.
+
+  ### TASK: Traffic snapshot ("how is the site doing?")
+  1. browser_navigate the entry URL → snapshot → resolve property (State Recognition).
+  2. Open Reports snapshot (rail or URL) → snapshot; browser_scroll for lower cards.
+  3. Report the scorecards/summary cards from Page Text (Users, New users, Average engagement time, Event count… [LIVE-VERIFY: card set varies]) verbatim, with property name + displayed date range.
+
+  ### TASK: Realtime check ("is the site getting traffic right now?")
+  1. Open the Realtime report (rail or URL) → snapshot.
+  2. Report "Active users in last 30 minutes" from its scorecard, plus the realtime tables if asked (users by page title/screen, by source, by country [LIVE-VERIFY: card titles]). Scroll + snapshot for lower cards. State that this is realtime, not a date range.
+
+  ### TASK: Users / sessions over a period
+  1. Rail → Acquisition → Traffic acquisition → snapshot → set the date range (procedure above).
+  2. Read the table's TOTALS row (first data row, labeled with grand totals under the column headers [LIVE-VERIFY: totals-row shape]) and/or scorecards: Users, Sessions. Report verbatim + property + range. For new-vs-returning framing use User acquisition instead [LIVE-VERIFY].
+
+  ### TASK: Top pages
+  1. Rail → Engagement → Pages and screens → snapshot → set the date range.
+  2. Table rows = page title (or path — a dimension dropdown above the table switches this [LIVE-VERIFY]) with Views, Active users, … columns. Report the top rows from Page Text in table order.
+  3. For a specific page: browser_type its title/path into the table's search box [LIVE-VERIFY: search field above the table], submit, snapshot, read the filtered row. Note: the table paginates — say if you only read the first page.
+
+  ### TASK: Traffic sources / channels
+  1. Rail → Acquisition → Traffic acquisition → snapshot → set the date range.
+  2. Rows are channel groups (Organic Search, Direct, Referral, Paid Search, … [LIVE-VERIFY: channel names]) with Users/Sessions columns. Report top channels verbatim. The dimension dropdown can switch to Session source/medium for finer grain [LIVE-VERIFY].
+
+  ### TASK: Key events (conversions) readout
+  1. Rail → Engagement → Key events (older UIs label this "Conversions" [LIVE-VERIFY: which label appears]) → snapshot → set the date range.
+  2. Report the table: event name, count, and any value column, verbatim. Read-only per RULE #1: never create a key event, never toggle an event's key-event status.
+
+  ### TASK: Compare two periods
+  Preferred (always works): run the same read twice — period A, then change the date range and read period B — and compute the difference YOURSELF, reporting both periods' numbers verbatim, both ranges, and your delta clearly labeled as computed.
+  Alternative: the date-range picker has a "Compare" option [LIVE-VERIFY: toggle + preceding-period presets] — if its UI is clear in the snapshot, enable it, apply, and read the paired values/% change from the scorecards or table. If anything about the compare UI is unclear, fall back to two reads.
+
+  ### TASK: Top countries / devices
+  - Countries: rail → User → User attributes → Demographics details [LIVE-VERIFY: report name] → set range → report top rows of the Country table.
+  - Devices/browsers: rail → User → Tech → Tech details [LIVE-VERIFY] → set range → report top rows (Device category / Browser via the dimension dropdown [LIVE-VERIFY]).
+
+  ### TASK: Configuration request (INTERCEPT — never perform)
+  If the user asks to create/edit an audience, event, key event, or custom dimension, change data retention or streams, get tag/measurement details, or link a product: do NOT open Admin or any create/edit control. Explain this template is read-only for analytics configuration, tell them those live under Admin (gear icon, bottom left) in their own hands, offer the read-side (e.g. current key-event counts), and stop.
+
+  ### Gotchas
+  - **Freshness**: standard reports lag up to 24–48h; "today" is always incomplete — say so when the range includes today, and use Realtime for "right now".
+  - **Thresholding / "(other)"**: GA withholds low-volume rows and may bucket long tails into "(other)"; visible rows may not sum to the totals row. Report what is displayed, don't reconcile.
+  - Metric names shift between GA4 releases (Views vs Pageviews, Key events vs Conversions) — quote the column header the table actually shows.
+  - Report collections are per-property customizable; if a report named here is absent from the rail, say so — never wander into Admin or the report Library to "fix" it.
+  - Table footers have pagination / rows-per-page controls [LIVE-VERIFY] — state when a report covers only the visible page.

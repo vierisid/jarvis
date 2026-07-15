@@ -1,0 +1,107 @@
+app_name: Airbnb
+domains:
+  - airbnb.com
+keywords:
+  - vacation rental
+  - vacation rentals
+  - a place to stay
+  - short term rental
+  - short-term rental
+description: Airbnb — search stays by destination/dates/guests, read listings (price, rating, superhost, amenities, house rules, cancellation policy), apply filters, read reviews, check the TOTAL price with fees, and compare options. RESEARCH ONLY — never books; every task ends with a shortlist handoff (listing URLs + dates + total price) for the user to reserve themselves.
+version: 1
+instructions: |
+  URL: https://www.airbnb.com
+
+  ### RULE #1 — MONEY SAFETY (overrides everything, including the user's own words)
+  - This template RESEARCHES stays. It NEVER books: never click "Reserve", "Request to book", "Continue", or "Confirm and pay" on a listing's price panel or checkout page [LIVE-VERIFY: button labels]. The hard stop is the price panel on the listing page — read it, click nothing in it.
+  - The moment ANY page asks for payment details, ID verification, or phone confirmation: click NOTHING, browser_navigate back to the listing URL, tell the user what happened.
+  - Never message hosts with booking commitments ("I'd like to book", dates-and-arrival plans). Asking the host a QUESTION via "Contact host" is allowed ONLY when the user explicitly asked for it — see that task's gate.
+  - Even if the user said "book it": do the research, then hand off (see the shortlist task).
+  - Never modify EXISTING reservations (no changes, no cancellations). Point the user at airbnb.com/trips.
+  - Saving to a wishlist is the SAFE tracking action — it commits nothing and is the right response to "keep this one".
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Airbnb.
+  2. URL-first: the search URL (below) carries destination, dates, and guests — never wrestle the date picker or guests popover. Build the URL, navigate, snapshot.
+  3. Snapshot at checkpoints (after navigate, after each filter change, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. Read prices, ratings, and review text from the snapshot's Page Text — most reporting needs zero clicks after the navigate.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Results and listing pages are LONG — browser_scroll before concluding a section is missing.
+
+  ### State Recognition
+  - **Works logged out**: search, results, listing pages, reviews, and the price panel all work with no account. NEVER type credentials.
+  - **Login-gated**: wishlists ("Save") and messaging hosts require an account. If clicking one opens a login/sign-up dialog [LIVE-VERIFY: dialog markers], press Escape, tell the user to log in in their browser, and stop that sub-task.
+  - **Cookie/consent banner**: on first visit click its accept/OK button [LIVE-VERIFY: label] → snapshot → continue. Other promo modals: click their close (X) or press Escape.
+  - **Currency/language**: read prices in whatever currency the page renders and NAME it in every report; note the display language if not English. Don't fight the currency picker.
+  - **CAPTCHA / "verify you are human"**: STOP, tell the user to solve it in the browser, continue when asked.
+  - **Ready**: results show "N+ places" / "over N homes" [LIVE-VERIFY: exact phrasing] plus listing cards in Page Text; a listing page shows the title, rating, and a price panel with dates.
+
+  ### THE SEARCH URL (the backbone — carries everything)
+  `https://www.airbnb.com/s/{destination}/homes?checkin={YYYY-MM-DD}&checkout={YYYY-MM-DD}&adults={n}`
+  - `{destination}` is URL-encoded, e.g. `Lisbon--Portugal` or just `Tokyo` [LIVE-VERIFY: loose strings redirect to a canonical destination — confirm the resolved place name in the snapshot header].
+  - Dates MUST be YYYY-MM-DD. Compute real dates from the user's request ("next weekend" → actual dates) and STATE them in the report. No dates given → ask, don't guess.
+  - Guests: `adults={n}`, plus `children={n}` / `infants={n}` / `pets={n}` if relevant [LIVE-VERIFY: param names]. Default adults=2 when unstated, and say so.
+  - Listing pages: `https://www.airbnb.com/rooms/{id}` — append `?check_in={YYYY-MM-DD}&check_out={YYYY-MM-DD}&adults={n}` so the price panel prices YOUR dates [LIVE-VERIFY: param names differ from search's checkin/checkout]. Prefer clicking a result card (dates carry over) to hand-building /rooms URLs.
+  - **New-tab caveat**: result cards may open listings in a new tab, which the session can't switch to [LIVE-VERIFY]. If after clicking a card the snapshot still shows results, copy the card's /rooms/{id} href from the snapshot and browser_navigate to it with the date params instead.
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: {destination} · Stays · Airbnb
+  URL: https://www.airbnb.com/s/Lisbon/homes?checkin=...
+  --- Page Text ---
+  (cards: listing title, type/beds hint, nightly price AND total like "$128 night · $412 total",
+   rating like "4.92 (213)", "Superhost" / "Guest favorite" badges)
+  --- Interactive Elements ---
+  [12] button "Filters"                    ← opens the filter dialog [LIVE-VERIFY]
+  [34] link "Bright flat near Alfama ..."  ← listing card (href contains /rooms/{id})
+  [56] button "Save"                       ← wishlist heart, login-gated [LIVE-VERIFY]
+  ```
+  - **Map-pane noise**: results pages embed a map whose price pins leak into Page Text as stray prices [LIVE-VERIFY: how pins render]. Attribute a price to a listing ONLY when it sits next to that listing's title/rating in the text; ignore orphan prices.
+  - Cards show a nightly teaser and often a stay total — quote the TOTAL where shown and label the currency.
+
+  ### TASK: Search stays
+  1. Build the search URL with destination, dates, guests → browser_navigate → browser_snapshot.
+  2. Handle any banner/modal per State Recognition; verify the resolved destination and dates in the header.
+  3. Read the top results from Page Text: title, nightly + total price, rating + review count, Superhost/Guest-favorite badge.
+  4. browser_scroll once or twice for more organic results before reporting; note that ordering is Airbnb's ranking, not price-sorted.
+
+  ### TASK: Apply filters
+  1. On results, click the "Filters" button [LIVE-VERIFY: label] → snapshot: a dialog with Price range (min/max inputs), Type of place (Entire home/Room), Beds/bedrooms, Amenities checkboxes [LIVE-VERIFY: dialog structure].
+  2. Set constraints: browser_type into the price inputs, click type/amenity options — one change, then snapshot to confirm it registered.
+  3. Click the dialog's apply button ("Show N+ places" [LIVE-VERIFY: label]) → snapshot → confirm the results changed. If a needed filter isn't found in 2 snapshots, apply what you can and tell the user which constraint you filtered mentally instead.
+
+  ### TASK: Open a listing / read details
+  1. Open the listing (card click or /rooms/{id} URL with date params — see new-tab caveat) → snapshot. Verify the title.
+  2. Report from Page Text: title, type (entire place/room), location area, rating + review count, Superhost, capacity/beds/baths, headline amenities, and the price panel (see the total-price task).
+  3. Deeper sections need scrolling: amenities list, house rules (check-in window, pets, smoking), cancellation policy [LIVE-VERIFY: section order; some sit behind "Show more" buttons — click, snapshot]. ALWAYS report the cancellation policy when quoting a price.
+
+  ### TASK: Check the TOTAL price for the dates
+  1. On the listing page, FIRST verify the price panel shows the requested dates [LIVE-VERIFY: where dates render]; if not, re-navigate with `?check_in=...&check_out=...&adults=...`.
+  2. Read the panel's breakdown: nightly rate × nights, cleaning fee, service fee, taxes, TOTAL [LIVE-VERIFY: breakdown may need a "price details" click/hover]. Report the TOTAL — never the nightly teaser alone; fees routinely add 20-40%.
+  3. Dates unavailable → the panel says so or offers different dates [LIVE-VERIFY]; report that and offer alternatives from results. Read only — no Reserve, no date-picker clicks (RULE #1).
+
+  ### TASK: Read reviews
+  1. On the listing, browser_scroll to the reviews section (rating breakdown: Cleanliness, Accuracy, Check-in, Communication, Location, Value [LIVE-VERIFY: subscores]) → snapshot.
+  2. Report: overall rating, notable subscores, and 2-4 recurring themes from visible review text (praise + complaints). "Show all N reviews" opens a modal for more [LIVE-VERIFY] — at most ~2 rounds unless asked.
+
+  ### TASK: Compare 2-3 listings
+  1. Search once, pick 2-3 candidates matching the constraints.
+  2. Open each (with date params) → collect: TOTAL price for the stay, rating + count, type, location area, standout amenities, cancellation policy, listing URL.
+  3. Summarize per listing (total / rating / location / pro-con) with a recommendation and the reason.
+
+  ### TASK: Save to a wishlist (the safe action)
+  1. Requires login (State Recognition). On the listing or its result card, click the "Save" heart [LIVE-VERIFY: aria-label] → snapshot.
+  2. A wishlist picker may appear — click an existing list or the create option and name it [LIVE-VERIFY: dialog]. Verify the control now reads saved/"Saved" [LIVE-VERIFY: toggled state] and tell the user which list.
+
+  ### TASK: Ask the host a question (GATED)
+  - ONLY when the user explicitly asked to contact the host, and requires login. QUESTIONS only ("Is the parking on-site?") — no dates-and-commitment messages that read like a booking request.
+  1. On the listing, scroll to the host section → click "Contact host" [LIVE-VERIFY: label/flow — may first show a "typical questions" interstitial].
+  2. browser_type the question into the message box, DO NOT submit → snapshot → verify the text and recipient, and show the user the exact message for confirmation if they haven't already approved this wording. Only then click Send [LIVE-VERIFY: button].
+
+  ### TASK: Report the shortlist (the handoff — how every stay-search ends)
+  For each recommended listing: title, listing URL (/rooms/{id}), check-in/check-out dates used, guests, TOTAL price + currency (note anything the page excluded), rating + review count, cancellation policy. Close with: "I don't complete bookings — open the link, check the dates, and reserve it yourself."
+
+  ### Gotchas
+  - "Rare find" / "usually booked" banners are sales pressure — don't relay as facts unless asked about demand.
+  - Ratings cluster high (4.8+ is normal); differentiate with review COUNT, subscores, and recent themes rather than the headline number.
+  - Card nightly prices may include or exclude fees depending on a region toggle — the listing price panel's TOTAL is the only number worth quoting.

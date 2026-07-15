@@ -1,0 +1,109 @@
+# Keyword choice: "fyp" (community shorthand — users say "what's on my fyp" without ever
+# writing the app name; carries real recall the app_name/domain match would miss) and
+# "for you page" (the feed's proper name — nobody says it about anything else). Both are
+# clean against the lint corpus and shadow no other template's keywords. Everything else
+# ("short video", "viral", "scroll my feed", "sounds") is far too generic for a
+# substring matcher.
+app_name: TikTok
+domains:
+  - tiktok.com
+keywords:
+  - fyp
+  - for you page
+description: TikTok — browse the For You feed, search videos and creators, read captions/comments/stats, view profiles and hashtags, like a video, follow a creator (watch/search/read only — no posting)
+version: 1
+instructions: |
+  URL: https://www.tiktok.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate by role/aria-label/href/text. TikTok's DOM uses hashed class names — aria-labels, roles, and hrefs are the only stable handles, and every element claim below is [LIVE-VERIFY]: match the label's MEANING in the current wording/locale, not an exact string.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a panel opens, after a toggle click) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. GO SLOW — TikTok is one of the most aggressively anti-bot sites on the web: it fingerprints automation and answers with CAPTCHAs, shadow limits, and account bans. One user request = one account action (one like, one follow). NEVER loop over lists ("like every video here", "follow all these creators") — refuse and explain the ban risk. No rapid bursts of clicks/navigations; stop the moment anything looks like a challenge (State Recognition).
+  7. Never press Ctrl-modified shortcuts — Chrome intercepts them before the page sees them. In-page keys that DO work: "ArrowDown"/"ArrowUp" = next/previous feed video [LIVE-VERIFY], "M" = mute/unmute [LIVE-VERIFY], "Escape" = close an open panel/overlay. Keys only reach the player when focus is NOT in a text field — after using the search box, press "Escape" first.
+
+  ### NOT SUPPORTED (refuse, say why, stop — do not improvise)
+  This template is for WATCHING, SEARCHING, and READING only. No posting of any kind:
+  - Uploading or posting videos, photo posts, or drafts — the entire creation/upload flow is out of scope.
+  - Posting comments, duets, stitches, or video replies.
+  - DMs / messages (inbox reading and sending both).
+  - LIVE gifts, coins, or anything involving money.
+  - Account, privacy, or creator-tools settings.
+  If asked, tell the user these need the app or manual action in the browser, and stop.
+
+  ### State Recognition
+  - **Logged out mostly works**: feed, watching, search, profiles, and hashtags work logged out, but TikTok nags constantly — a login modal ("Log in to TikTok") pops over the page at intervals. It has a close (X) button [LIVE-VERIFY] -> click it, snapshot, continue the read task. LOGIN IS REQUIRED for: like, follow, /following — if one of those surfaces the modal, tell the user: "This needs your TikTok login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **CAPTCHA / verification challenge**: a slider-puzzle ("Drag the slider to fit the puzzle"), rotate-the-image, or any "Verify to continue" box [LIVE-VERIFY] -> STOP IMMEDIATELY. NEVER attempt to solve, drag, or click through it — automated attempts escalate to harder challenges and account/IP flags. Tell the user to solve it manually in the browser, then re-ask.
+  - **Rate limited / blocked**: text meaning "You're tapping too fast", "Too many attempts", "Try again later" [LIVE-VERIFY] -> STOP and tell the user. No retries — continuing escalates.
+  - **Loading**: 0 interactive elements or only skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Ready**: feed video with caption/author in Page Text, or search results / profile grid links (href containing /video/) present [LIVE-VERIFY].
+  - **Region/app interstitials**: cookie-consent banners or "Get the app" / "Open TikTok?" prompts -> dismiss via the decline/close control [LIVE-VERIFY], then continue.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - For You feed: https://www.tiktok.com/  (also /foryou [LIVE-VERIFY])
+  - Profile: https://www.tiktok.com/@USERNAME  (keep the @)
+  - Video permalink: https://www.tiktok.com/@USERNAME/video/VIDEO_ID
+  - Search: https://www.tiktok.com/search?q=QUERY (URL-encode QUERY); videos-only tab /search/video?q=, creators tab /search/user?q= [LIVE-VERIFY]
+  - Hashtag: https://www.tiktok.com/tag/TAGNAME  (no #) [LIVE-VERIFY — on 404/redirect, use search instead]
+  - Following feed (login): https://www.tiktok.com/following
+  - Explore/categories: https://www.tiktok.com/explore [LIVE-VERIFY]
+
+  ### Element Reference (ALL [LIVE-VERIFY])
+  - **Feed video** (For You / Following): one full-screen video at a time. Caption, author @handle (profile link), and sound name are in Page Text. An action rail beside the video has buttons whose aria-labels mean Like (heart, count attached), Comments (count), Favorites/bookmark, Share. Counts are abbreviated ("1.2M") — report them as shown.
+  - **Player**: videos AUTOPLAY, often with sound. Mute with "M" or the player's volume/mute button. The seek bar needs dragging — treat seeking as unsupported.
+  - **Video permalink page**: caption + author + sound + like/comment/favorite/share counts in Page Text; the comment list renders in a panel beside the video.
+  - **Search box** (top of most pages): input with placeholder meaning "Search"; browser_type with submit: true runs the search.
+  - **Profile header**: @handle, display name, Following/Followers/Likes counts, bio in Page Text; Follow (or Following/Friends) button; below, a grid of video thumbnails — links containing /video/ with a view-count badge each. CAPTIONS ARE NOT IN THE GRID — open videos individually.
+
+  ---
+
+  ### TASK: Search videos or creators and read results  (budget: 5 calls)
+  1. browser_navigate https://www.tiktok.com/search?q=QUERY (creators: /search/user?q=QUERY) -> browser_snapshot. Login modal? Dismiss per State Recognition; search may itself demand login in some regions [LIVE-VERIFY] — if the wall won't dismiss, tell the user.
+  2. Read from Page Text: per result — caption, author @handle, view count, date [LIVE-VERIFY]. browser_scroll down + snapshot for more; 2-3 scrolls is plenty — report, don't keep scrolling.
+
+  ### TASK: Open and read a video  (budget: 5 calls)
+  1. browser_navigate the /@USERNAME/video/VIDEO_ID permalink (or click a result/grid link) -> browser_snapshot.
+  2. Read from Page Text: caption (hashtags included), author, sound name, like/comment/favorite/share counts. You cannot watch or listen — report the metadata and NEVER guess what happens in the video.
+  3. The video autoplays with sound: if the user only wants to read, browser_press_key("M") to mute (or click the mute button) [LIVE-VERIFY].
+
+  ### TASK: Browse the For You feed  (budget: 10 calls)
+  1. browser_navigate https://www.tiktok.com/ -> browser_snapshot; dismiss any login/consent nag (State Recognition).
+  2. Read the current video's caption/author/counts from Page Text. browser_press_key("ArrowDown") = next video [LIVE-VERIFY; if the page doesn't advance, browser_scroll down one screen instead] -> snapshot -> read. "ArrowUp" goes back.
+  3. Cover 3-5 videos, then report. The feed is infinite and personalized to the logged-in account — never keep scrolling past the budget (GO SLOW).
+
+  ### TASK: Read a video's comments  (budget: 6 calls)
+  1. Open the video permalink -> browser_snapshot — the comment panel is beside the video [LIVE-VERIFY]. In the feed instead, click the action-rail button meaning "Comments" to open the panel -> snapshot.
+  2. Comments (author, text, like count, replies) are in Page Text. browser_scroll down + snapshot for more [LIVE-VERIFY that page scroll advances the panel]; if Page Text stops changing, report what you have and SAY it was partial. 2-3 scrolls, then report.
+
+  ### TASK: View a creator's profile + recent videos  (budget: 5 calls)
+  1. browser_navigate https://www.tiktok.com/@USERNAME -> browser_snapshot. Bio + Following/Followers/Likes counts in Page Text.
+  2. The grid is newest-first with view-count badges but NO captions — to read captions, open videos one at a time via their /video/ links. browser_scroll + snapshot for older rows. "This account is private" -> nothing to read; tell the user.
+
+  ### TASK: Check a hashtag  (budget: 5 calls)
+  1. browser_navigate https://www.tiktok.com/tag/TAGNAME [LIVE-VERIFY] -> browser_snapshot — total views for the tag + a video grid [LIVE-VERIFY]. 404/redirect -> search the #TAGNAME via the search URL instead.
+  2. Same grid rules as profiles: thumbnails + view counts only; open individual videos for captions.
+
+  ### TASK: Report a video's stats  (budget: 4 calls)
+  1. Open the permalink -> browser_snapshot. Likes/comments/favorites/shares come from the action-rail labels and Page Text. View counts show on grid thumbnails but may be ABSENT on the permalink page itself [LIVE-VERIFY] — report exactly what's shown, note anything unavailable, and keep the abbreviated form ("1.2M").
+
+  ### TASK: Like a video (LOGIN required; toggle)  (budget: 6 calls)
+  1. Open the video's permalink (in the feed, first confirm via snapshot that the CURRENT video is the intended one — the feed moves).
+  2. browser_snapshot: find the action-rail button meaning "Like". If its state already reads liked (pressed/filled/label meaning "Unlike") [LIVE-VERIFY the state signal], the video is ALREADY liked — clicking would unlike it; leave it and tell the user.
+  3. browser_click -> browser_snapshot — the state flipped (or the count ticked up). Unconfirmed -> report, do NOT re-click (you might toggle it back). ONE like per user request — never batch.
+
+  ### TASK: Follow a creator (LOGIN required; explicit intent)  (budget: 6 calls)
+  1. browser_navigate the profile -> browser_snapshot. Button meaning "Follow" = not following; "Following"/"Friends" = already following — say so and click nothing.
+  2. Follow: click "Follow" -> snapshot — the label flipped [LIVE-VERIFY]. Unconfirmed -> report, never re-click.
+  3. Unfollow ONLY when the user explicitly asked to unfollow: click "Following" -> snapshot — a confirmation menu may appear; click the item meaning "Unfollow" [LIVE-VERIFY] -> verify the button is back to "Follow".
+
+  ---
+
+  ### Gotchas
+  - You cannot see or hear videos: snapshots give captions, sounds, counts, and comments — NOT the video content. Say so instead of guessing.
+  - The feed autoplays and advances state constantly — ids from a pre-scroll snapshot are ALWAYS stale; re-snapshot immediately before clicking anything in the feed.
+  - Page Text mixes in suggested accounts, ads ("Sponsored"), and LIVE tiles — don't report those as feed content or a profile's videos.
+  - A CAPTCHA/verification challenge can appear at ANY step mid-task, not just at login — the instant one shows, apply State Recognition: stop, never attempt it.
+  - Some videos are app-only or region-blocked in the web player ("Watch in the app" prompts) [LIVE-VERIFY] — report it; don't retry.
+  - The logged-in feed is personalized; logged out it's generic — mention which you're seeing if it matters.

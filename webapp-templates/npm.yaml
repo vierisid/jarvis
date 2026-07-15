@@ -1,0 +1,77 @@
+app_name: npm
+domains:
+  - npmjs.com
+# Keywords are intentionally EMPTY: "npm" is the trigger and it is the app name
+# (word-bounded app-name matching already fires on "npm package X", "look up X on npm",
+# "npmjs.com" links via the domain). "package"/"dependency"/"install" vocabulary is
+# hopelessly generic in a dev product and would hijack ordinary coding requests.
+keywords: []
+description: npm registry (npmjs.com) — look up a package by direct URL (latest version, weekly downloads, license, install command), read the README, check versions/release history, dependencies and dependents, search and compare candidate packages, browse an author's packages, and surface deprecation warnings. Strictly read-only; publishing and account actions are not supported.
+version: 1
+instructions: |
+  URL: https://www.npmjs.com
+
+  ### THE ONE THING TO KNOW
+  npm is a pure READ surface with one backbone URL: `https://www.npmjs.com/package/{name}` goes straight to the package page (scoped packages too: `/package/@org/name`). The page is server-rendered and stable; the first snapshot's Page Text already carries version, weekly downloads, license, last publish date, and the install command. Navigate by URL, read Page Text, answer — most tasks are 2–3 tool calls.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for npm. Never use desktop or sidecar tools.
+  2. URL-FIRST: package, version, tab, search, and author pages all have URL patterns (below). Build the URL; click only to open a search result or follow a link inside a README.
+  3. READ-ONLY, ANONYMOUS: reading the registry needs no account and no sign-in. Publishing, deprecating, starring, and every account/settings action are UNSUPPORTED — if asked, say so and stop (those belong to the npm CLI with the user's own auth).
+  4. Report versions and download counts VERBATIM as rendered — never guess a version from memory; the page is the source of truth.
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. If an element or package is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No sign-in, ever**: no login wall exists for reading. If a Sign In / Sign Up page appears you clicked a header link — navigate back to the package URL. Never enter credentials.
+  - **Ready**: page title is `{name} - npm` and Page Text starts with the package name, version line, and description.
+  - **Missing package**: Page Text says "not found" / "404" → wrong name or unpublished. Try TASK: Search once; if no exact match there either, report that the package does not exist on the registry.
+  - **Deprecation banner**: "This package has been deprecated" plus the author's message near the top of Page Text [LIVE-VERIFY: banner rendering]. If present, ALWAYS quote the message verbatim in your answer, even unasked — it usually names the replacement. A "security holding package" description means npm removed a malicious package — report that.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Package page**: `https://www.npmjs.com/package/{name}` — e.g. `/package/express`, scoped `/package/@types/node` (keep the `@` and `/` literal; do not URL-encode them).
+  - **Specific version**: `https://www.npmjs.com/package/{name}/v/{version}` — e.g. `/package/express/v/4.17.1`. Shows that version's README, its own dependency list, and publish date.
+  - **Tabs on the package page**: `?activeTab=versions` | `?activeTab=dependencies` | `?activeTab=dependents` | `?activeTab=readme` [LIVE-VERIFY: activeTab param values] — e.g. `/package/express?activeTab=versions`.
+  - **Search**: `https://www.npmjs.com/search?q={query}` — URL-encode the query. Sort variants: `&ranking=popularity` | `&ranking=quality` | `&ranking=maintenance` [LIVE-VERIFY: ranking param values; default is "optimal"].
+  - **Author/user**: `https://www.npmjs.com/~{username}` — lists the packages that user maintains.
+
+  ### READING A PACKAGE-PAGE SNAPSHOT
+  Page Text opens with the header line ("express 4.19.2 • Public • Published 3 months ago", description, "Install npm i express") followed by sidebar metadata as label–value pairs: Weekly Downloads, Version, License, Unpacked Size, Last publish [LIVE-VERIFY: exact sidebar labels]. Server-rendered, stable DOM — snapshots are reliable.
+
+  ### TASK: Look up a package (PRIMARY — do this first whenever the user names a package)
+  1. browser_navigate `/package/{name}` → browser_snapshot.
+  2. Check state: Missing package → TASK: Search. Deprecation banner → quote it (State Recognition).
+  3. Answer from Page Text: latest version, weekly downloads, last publish date, license, description, and the install command (`npm i {name}`) are all in the first snapshot. State the deprecation status when the user asks whether the package is safe/maintained.
+
+  ### TASK: Read the README
+  1. Open the package page (README is the default tab; its text follows the metadata in Page Text).
+  2. Page Text shows roughly the first 2000 characters per snapshot — long READMEs need: browser_scroll down ~1500 px → browser_snapshot → read → repeat. Stop the moment you have what the user asked for (usage example, config option, API name); never walk the whole README "to be thorough".
+
+  ### TASK: Check versions / release history
+  1. browser_navigate `/package/{name}?activeTab=versions` → browser_snapshot.
+  2. Page Text lists Current Tags (latest, next, beta …) then Version History rows: version, downloads, published date [LIVE-VERIFY: row rendering in Page Text]. Scroll for older versions.
+  3. For "what changed in version X" open `/package/{name}/v/{version}` — but npm hosts no changelog; if that README doesn't cover it, point the user to the sidebar repository link instead of guessing.
+
+  ### TASK: Check dependencies and dependents
+  1. Dependencies: browser_navigate `/package/{name}?activeTab=dependencies` → snapshot → the tab label carries the count ("Dependencies (31)") and each dependency renders as a link — report the count and notable names. "0 Dependencies" is itself a useful answer.
+  2. Dependents: `/package/{name}?activeTab=dependents` → snapshot → the count in the tab label ("Dependents (78,123)") is the headline number; the page lists only a sample.
+
+  ### TASK: Search packages and compare candidates
+  1. browser_navigate `/search?q={query}` → browser_snapshot. Results show name, description, version, publish age [LIVE-VERIFY: which quality signals render as text]. Re-run with `&ranking=popularity` when the user wants "the most used" one.
+  2. To COMPARE (e.g. "which date library should I use") pick the top 2–3 candidates and open each `/package/{name}` in turn (one navigate + one snapshot each), collecting the same axes for all: weekly downloads, last publish date, license, deprecation status.
+  3. Report a compact side-by-side grounded ONLY in those numbers (downloads = adoption, recent publish = maintenance); name the trade-off rather than overselling one option. Budget ≤ 8 tool calls total.
+
+  ### TASK: Check an author's packages
+  1. browser_navigate `/~{username}` → browser_snapshot. The profile lists their packages with descriptions; scroll for more.
+  2. If the user only knows a package, open it first — maintainers render as `/~name` links in the sidebar [LIVE-VERIFY: Maintainers section]; click one.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Publishing, unpublishing, deprecating, or transferring packages.
+  - Account actions: sign-in, registration, access tokens, orgs/teams, billing.
+  - Installing packages on the user's machine (a terminal task — offer the install command instead).
+  - Full vulnerability/audit reports — the site shows deprecation banners only; report what the page shows and suggest a local audit for depth.
+
+  ### Gotchas
+  - Package names are lowercase and exact; scoped names need the full `@org/name`. If a reasonable URL 404s, go straight to Search — never brute-force name variants.
+  - `registry.npmjs.org` URLs return raw JSON, not the website — always use `www.npmjs.com` pages.
+  - The GitHub/Repository sidebar link leaves npmjs.com — only follow it if the user explicitly asks (issues, changelog, source).
