@@ -1,6 +1,10 @@
-# Webapp Templates Audit — 2026-07-13
+# App Templates Roadmap (Webapp Audit + Library + Desktop Plan)
 
-Full audit of the 9 templates in `webapp-templates/` ahead of the library expansion for launch.
+> Scope broadened 2026-07-15: originally the webapp-templates audit; now the roadmap for the whole
+> app-template system — the shipped 61-template WEB library (P0–P3.4 below) plus the planned
+> DESKTOP template library (P4 at the bottom). Filename kept as `WEBAPP_TEMPLATES_AUDIT.md` so
+> existing references from other sessions/memory stay valid.
+
 Branch: `worktree-webapp-templates` (worktree at `.claude/worktrees/webapp-templates`, branched from `6fa5cfb`).
 
 Audited against the **real runtime**, not the templates' own assumptions. Key source files:
@@ -200,6 +204,119 @@ Batch-2 note: the launch hit a session usage limit twice — 11 files were writt
 | huggingface v1 | 9.9KB | 5 | model cards + safetensors size-summing; gated-model wall = first-class state, never auto-request access |
 | ganalytics v1 | 10.2KB | 4 | tables-not-charts honesty; /admin off-limits; property+range mandatory in every report; kw ga4/pageviews/… |
 | gcontacts v1 | 9.0KB | 4 | "what's X's email" backbone; edits report old→new; deletes gated with 30-day trash note |
+
+---
+
+## P4 — DESKTOP app templates (planned; GATED on Structural Runtime)
+
+The web library is one instance of a general pattern: **inject an app-specific playbook when the
+user's request (or focus) involves a known app, written against a verified snapshot→act→verify
+tool contract.** Desktop apps expose the same substrate the DOM gave us — the accessibility tree
+(UIAutomation on Windows, AX on macOS, AT-SPI on Linux). Everything in this document's method
+transfers: the YAML format, the scored matcher, the lint harness, the ≤12KB budget, [LIVE-VERIFY],
+the safety-gate conventions, and the parallel batch pipeline that produced 61 web templates.
+
+### 4.0 HARD GATE — do not write desktop templates before this
+The current desktop stack is pre-P0 (evidence: `CONTROL_STACK_AUDIT.md`, plan:
+`STRUCTURAL_RUNTIME_ROADMAP.md`, owned by the **control-plane-v2 worktree** — a parallel session):
+no effect verification (clicks can't fail, launch success ≠ window visible), launch→act race
+unhandled, per-call PowerShell recompiles (~1s/call), ephemeral element ids with no stable refs.
+Writing templates against this repeats the original webapp mistake (templates for an imagined API).
+**Precondition:** the structural runtime's snapshot/act/verify contract is merged and stable —
+either the native rewrite or cua-driver adoption (the roadmap's adopt-vs-build gate). The template
+work below assumes ONLY the contract shape (numbered-element snapshot text + typed actions +
+postconditioned results), not its implementation.
+
+### 4.1 Concept map (what transfers)
+| Web | Desktop |
+|---|---|
+| DOM / browser_snapshot | Accessibility tree / desktop snapshot (numbered elements, same "--- Key Elements ---" style formatter — PARITY REQUIRED, it's what templates are written against) |
+| URL deep links (backbone) | Launch args (`code -g file:line`, `explorer.exe C:\path`, `notepad file.txt`), command palettes (Ctrl+Shift+P, Alt+/), menu paths |
+| domains: | processes: (exe names) + window_titles: (patterns) |
+| Login-wall state recognition | not-installed / not-running / wrong-window / modal-dialog-blocking states |
+| CDP trusted input | SendInput / UIA patterns / (cua-driver: PostMessage background input) |
+| Keyword triggers on the message | Same, PLUS foreground-app triggering via the awareness system (better signal than keywords) |
+| browser_evaluate ban | script/macro-engine ban (per-app scripting like VBA/ExtendScript stays out of templates) |
+
+### 4.2 Schema extension (template YAML)
+New optional fields, additive so web templates keep working unchanged:
+```yaml
+kind: desktop            # default "web" when absent
+processes:               # analog of domains; matched against the foreground process + message
+  - Code.exe
+  - code
+window_titles:           # optional regex-ish patterns for disambiguation (e.g. " - Visual Studio Code")
+  - " - Visual Studio Code"
+platforms: [windows]     # windows|macos|linux; seeder skips templates that don't match the sidecar's OS
+launch:                  # the URL-analog block, shown to the model as the preferred entry
+  command: "code"
+  examples: ["code -g src/app.ts:42", "code --diff a.ts b.ts"]
+```
+Storage: same `webapp_templates` table + seeds loader (new columns `kind`, `processes`,
+`window_titles`, `platforms`, `launch` — JSON like domains). Same user-override dir.
+
+### 4.3 Matcher extension (`src/vault/webapp-templates.ts`)
+- `matchWebappTemplatesScored(message, context?)` gains an optional context param:
+  `{ foregroundProcess?, foregroundTitle? }` fed from the awareness system's context tracker.
+- Scoring: foreground-process match = explicit (+100, like app name) — if the user is IN VS Code
+  and says "split the editor", the vscode template injects without naming it. Window-title match
+  +50. Process names in the MESSAGE ("open it in vscode") match word-bounded like app names.
+- Explicit-beats-keyword, single-best-keyword, and the injection byte cap all apply unchanged.
+- kind:desktop templates only match when a desktop-capable sidecar is connected (else skipped, so
+  the model never gets instructions it can't execute).
+
+### 4.4 Lint extension (`scripts/lint-webapp-templates.ts`)
+New rules for kind:desktop:
+- **focus-discipline**: any type/keypress step not preceded (in the same task) by a focus-verified
+  step (focus window → verify foreground) → error. This is the #1 desktop hazard (keys land in the
+  wrong app) — the webapp library's desktop_press_keys lesson, now enforced.
+- **launch-race**: `launch` usage without a subsequent wait-for-window/ready-marker step → error.
+- **destructive-file gate**: delete/overwrite/move on files must be gated on the file being named
+  in the current request + verification; permanent-delete (Shift+Delete) banned outright.
+- **no-script-engines**: references to VBA/AppleScript/ExtendScript/macro recorders → error.
+- **unknown-tool**: same whitelist mechanism, against the structural runtime's final tool names.
+- Existing rules (size, keywords, positional-destructive, state recognition) apply as-is.
+
+### 4.5 Desktop template conventions (deltas from the web style contract)
+1. **CLI/launch-args-first** where the app has them (the URL-first analog): VS Code templates lead
+   with `code` CLI; Explorer with path launches. UI automation is the fallback, not the lead.
+2. **Command-palette-second**: apps with palettes (VS Code, Office ribbon search Alt+Q) use them as
+   the universal action path — type the action name, snapshot, CLICK the entry (linear.yaml model).
+3. **Focus discipline**: every task opens with "focus the window, verify it's foreground" and the
+   template states that ALL keys/typing go to the focused window.
+4. **Modal-dialog state recognition**: unsaved-changes prompts, save dialogs (native file pickers:
+   type the full path into the filename field — the one place typing a path beats clicking), UAC
+   elevation (→ STOP, tell the user — never attempt).
+5. **Data-loss gates**: closing without saving, overwriting files, "don't save" buttons — all
+   require the state to be reported and explicit intent. Editors: never discard unsaved work.
+6. **Canvas honesty** (figma model): Photoshop/Premiere/DAW canvases and timelines are not in the
+   a11y tree — menus/panels/dialogs are the scope; say so in a CENTRAL CAUTION.
+7. **Windows-first, platform-tagged**: sidecar is Windows-first; macOS/AX and Linux/AT-SPI variants
+   come later as separate platform-tagged templates or platform sections.
+
+### 4.6 Candidate batches (ICP-ordered, ~12 per batch like the web library)
+- **Batch D1 (validation set — simple, high-value)**: notepad (hello-world + launch-race test),
+  explorer (file ops with gates), vscode (CLI-first + palette; Electron a11y is rich), terminal
+  (Windows Terminal — but prefer run_command for actual shell work; template covers tabs/panes/copy),
+  calculator (trivial smoke test), settings (Windows Settings — read + gated toggles), task manager
+  (read-only triage), paint, snipping tool, word/excel/powerpoint (ribbon Alt+Q as palette).
+- **Batch D2**: outlook desktop, teams desktop, slack desktop, discord desktop, spotify desktop
+  (each mirrors its web template's task list — REUSE the web template's tasks/safety, swap the
+  navigation layer), photoshop (canvas-honesty), obs (streaming — presence/recording gates!),
+  vlc, 7-zip/winrar, notion desktop, obsidian (local files!), zoom desktop.
+- Rule of thumb: Electron apps (vscode, slack, discord, notion, obsidian) have the richest trees;
+  pure Win32 (explorer, notepad) is excellent; Qt/custom GUIs vary — LIVE-VERIFY heavily.
+
+### 4.7 Work items
+- ☐ **P4.0** Structural runtime contract merged + stable (control-plane-v2 worktree — NOT this one)
+- ☐ **P4.1** Schema + seeder + matcher extension (4.2/4.3) with tests — ~a day, this worktree
+- ☐ **P4.2** Lint extension (4.4) with tests
+- ☐ **P4.3** Batch D1 via the standard pipeline (12 agents, lint-clean, [LIVE-VERIFY])
+- ☐ **P4.4** Desktop live-capture pass (real UIA snapshots on the user's Windows machine — same
+  session as the web live-capture pass if timing works out)
+- ☐ **P4.5** Batch D2
+- ☐ Coordinate: before P4.1, re-read `STRUCTURAL_RUNTIME_ROADMAP.md` for the final tool names and
+  snapshot format — do not guess them from this plan.
 
 ### Template style contract (for all new/rewritten templates, distilled from what works)
 1. Tool whitelist that matches the REAL surface; never ban a tool a task needs.
