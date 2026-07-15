@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
 import type { ConnectionState } from "./Header";
@@ -84,6 +84,146 @@ function taskRows(live: LiveData) {
   return [...seen.values()].slice(0, 4);
 }
 
+/* ── async room-data widgets ──
+   The rooms below aren't in the live stream, so each widget fetches its room's
+   API directly and polls. Every one degrades to its honest empty state on a
+   fresh install (no data) or a failed request — nothing fake ever renders. */
+function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded: boolean } {
+  const [data, setData] = useState<T | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled) { setData((d ?? null) as T | null); setLoaded(true); } })
+        .catch(() => { if (!cancelled) setLoaded(true); });
+    };
+    load();
+    const t = window.setInterval(load, pollMs);
+    return () => { cancelled = true; window.clearInterval(t); };
+  }, [url, pollMs]);
+  return { data, loaded };
+}
+
+function relPast(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+function relSoon(ts: number): string {
+  const s = Math.round((ts - Date.now()) / 1000);
+  if (s < 60) return "now";
+  const m = Math.round(s / 60); if (m < 60) return `in ${m}m`;
+  const h = Math.round(m / 60); if (h < 24) return `in ${h}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+const deslug = (s: string) => s.replace(/[_-]+/g, " ").trim();
+
+function Stat({ n, unit, sub }: { n: React.ReactNode; unit?: string; sub?: React.ReactNode }) {
+  return (
+    <div className="rs-wstat">
+      <div className="rs-wstat-n">{n}{unit != null && <span> {unit}</span>}</div>
+      {sub != null && <div className="rs-wstat-s">{sub}</div>}
+    </div>
+  );
+}
+function Loading() { return <Empty><span className="dim">Loading…</span></Empty>; }
+
+function CalendarWidget() {
+  const now = Date.now();
+  const { data, loaded } = useWidgetData<Array<{ title: string; timestamp: number }>>(
+    `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`);
+  const up = Array.isArray(data) ? data.filter((e) => e.timestamp >= now).sort((a, b) => a.timestamp - b.timestamp) : [];
+  const next = up[0];
+  return (<><WHeader label="calendar · next" room="calendar" />
+    {next ? <Stat n={up.length} unit={up.length === 1 ? "commitment" : "commitments"} sub={<>Next: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
+      : loaded ? <Empty>No commitments this week. <span className="dim">Connect a calendar in Settings.</span></Empty> : <Loading />}</>);
+}
+
+function MemoryWidget() {
+  const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number }>>("/api/vault/facts");
+  const facts = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
+  const newest = facts[0];
+  return (<><WHeader label="memory · new" room="memory" />
+    {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
+      : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</>);
+}
+
+function GoalsWidget() {
+  const { data, loaded } = useWidgetData<Array<{ status: string; health: string }>>("/api/goals");
+  const goals = Array.isArray(data) ? data : [];
+  const active = goals.filter((g) => g.status === "active");
+  const onTrack = active.filter((g) => g.health === "on_track").length;
+  return (<><WHeader label="goals · health" room="goals" />
+    {goals.length ? <Stat n={active.length} unit={active.length === 1 ? "active goal" : "active goals"} sub={active.length ? <>{onTrack} on track · {active.length - onTrack} need attention</> : "None active"} />
+      : loaded ? <Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty> : <Loading />}</>);
+}
+
+function WorkflowsWidget() {
+  const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/workflows");
+  const flows = Array.isArray(data) ? data : [];
+  const live = flows.filter((f) => f.enabled === true || f.published === true || f.status === "published").length;
+  return (<><WHeader label="workflows" room="workflows" />
+    {flows.length ? <Stat n={flows.length} unit={flows.length === 1 ? "workflow" : "workflows"} sub={live ? `${live} enabled` : "None enabled yet"} />
+      : loaded ? <Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty> : <Loading />}</>);
+}
+
+function AuthorityAuditWidget() {
+  const { data, loaded } = useWidgetData<Array<{ tool_name: string; authority_decision: string; created_at: number }>>("/api/authority/audit?limit=20");
+  const rows = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
+  const latest = rows[0];
+  return (<><WHeader label="authority · audit" room="authority" />
+    {latest ? <Stat n={rows.length} unit="recent" sub={<>Latest: <b>{deslug(latest.tool_name)}</b> · {relPast(latest.created_at)}</>} />
+      : loaded ? <Empty>The audit trail of approved actions lands here. <span className="dim">Open Authority for the full log.</span></Empty> : <Loading />}</>);
+}
+
+function UsageWidget() {
+  const now = Date.now();
+  const { data, loaded } = useWidgetData<Record<string, unknown>>(
+    `/api/usage?range_start=${now - 7 * 86400000}&range_end=${now}`);
+  // Shape varies; defensively pull a token total from the likely fields.
+  const d = (data ?? {}) as Record<string, any>;
+  const tokens: number | null =
+    typeof d.totalTokens === "number" ? d.totalTokens :
+    typeof d.total?.tokens === "number" ? d.total.tokens :
+    typeof d.tokens === "number" ? d.tokens :
+    Array.isArray(d.rows) ? d.rows.reduce((s: number, r: any) => s + (Number(r?.tokens) || 0), 0) : null;
+  const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n);
+  return (<><WHeader label="usage · week" room="usage" />
+    {tokens != null && tokens > 0 ? <Stat n={fmt(tokens)} unit="tokens" sub="Last 7 days · all models" />
+      : loaded ? <Empty>Weekly token spend by model appears here. <span className="dim">See the full meter in Usage.</span></Empty> : <Loading />}</>);
+}
+
+function WorkspacesWidget() {
+  const { data, loaded } = useWidgetData<Array<{ status: string; gitDirty?: boolean }>>("/api/sites/projects");
+  const projects = Array.isArray(data) ? data : [];
+  const running = projects.filter((p) => p.status === "running").length;
+  const dirty = projects.filter((p) => p.gitDirty).length;
+  return (<><WHeader label="workspaces" room="workspaces" />
+    {projects.length ? <Stat n={projects.length} unit={projects.length === 1 ? "project" : "projects"} sub={<>{running} running{dirty ? ` · ${dirty} with changes` : ""}</>} />
+      : loaded ? <Empty>Project dev servers and git status show here. <span className="dim">Open Workspaces.</span></Empty> : <Loading />}</>);
+}
+
+function ToolsWidget() {
+  const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/tools");
+  const tools = Array.isArray(data) ? data : [];
+  const enabled = tools.filter((t) => t.enabled !== false).length;
+  return (<><WHeader label="tools" room="tools" />
+    {tools.length ? <Stat n={tools.length} unit={tools.length === 1 ? "capability" : "capabilities"} sub={`${enabled} enabled`} />
+      : loaded ? <Empty>The capability catalogue lives in Tools. <span className="dim">Open it to manage flags.</span></Empty> : <Loading />}</>);
+}
+
+function SettingsWidget() {
+  const { data, loaded } = useWidgetData<{ status?: string }>("/api/auth/google/status");
+  const connected = data?.status === "connected";
+  return (<><WHeader label="settings" room="settings" />
+    {loaded ? <Stat n={connected ? "Connected" : "Set up"} sub={connected ? "Google · providers, voice, channels" : "Connect Google, providers, voice & channels"} />
+      : <Loading />}</>);
+}
+
 /* ── the widget catalog — one+ per room, broadly composable ── */
 const WIDGETS: Record<string, WidgetDef> = {
   "right-now": {
@@ -117,7 +257,7 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   calendar: {
     id: "calendar", group: "know", dot: "var(--faint)", desc: "The next two commitments, holds, or focus blocks.", defaultSize: 1,
-    render: () => (<><WHeader label="calendar · next" room="calendar" /><Empty>No commitments tracked yet. <span className="dim">Connect a calendar in Settings.</span></Empty></>),
+    render: () => <CalendarWidget />,
   },
   vitals: {
     id: "vitals", group: "system", dot: "var(--faint)", desc: "Agents active, approvals waiting, events today.", defaultSize: 1,
@@ -150,7 +290,7 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   goals: {
     id: "goals", group: "know", dot: "var(--ok)", desc: "Objectives with their health tones; amber earns a place.", defaultSize: 1,
-    render: () => (<><WHeader label="goals · health" room="goals" /><Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty></>),
+    render: () => <GoalsWidget />,
   },
   pipeline: {
     id: "pipeline", group: "know", dot: "var(--faint)", desc: "Cards in review and scheduled; your editorial gate.", defaultSize: 1,
@@ -163,31 +303,31 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   workflows: {
     id: "workflows", group: "run", dot: "var(--speak)", desc: "Saved automations and their last run.", defaultSize: 1,
-    render: () => (<><WHeader label="workflows" room="workflows" /><Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty></>),
+    render: () => <WorkflowsWidget />,
   },
   memory: {
     id: "memory", group: "know", dot: "var(--faint)", desc: "Recently learned facts and entities.", defaultSize: 1,
-    render: () => (<><WHeader label="memory · new" room="memory" /><Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty></>),
+    render: () => <MemoryWidget />,
   },
   "authority-audit": {
     id: "authority-audit", group: "guard", dot: "var(--faint)", desc: "Recent grants and audited actions.", defaultSize: 1,
-    render: () => (<><WHeader label="authority · audit" room="authority" /><Empty>The audit trail of approved actions lands here. <span className="dim">Open Authority for the full log.</span></Empty></>),
+    render: () => <AuthorityAuditWidget />,
   },
   "usage-week": {
     id: "usage-week", group: "guard", dot: "var(--faint)", desc: "Token spend by model — the privacy story as numbers.", defaultSize: 1,
-    render: () => (<><WHeader label="usage · week" room="usage" /><Empty>Weekly token spend by model appears here. <span className="dim">See the full meter in Usage.</span></Empty></>),
+    render: () => <UsageWidget />,
   },
   workspaces: {
     id: "workspaces", group: "build", dot: "var(--faint)", desc: "Dev projects, git status, running servers.", defaultSize: 1,
-    render: () => (<><WHeader label="workspaces" room="workspaces" /><Empty>Project dev servers and git status show here. <span className="dim">Open Workspaces.</span></Empty></>),
+    render: () => <WorkspacesWidget />,
   },
   tools: {
     id: "tools", group: "build", dot: "var(--faint)", desc: "Capability catalogue and recent calls.", defaultSize: 1,
-    render: () => (<><WHeader label="tools" room="tools" /><Empty>The capability catalogue lives in Tools. <span className="dim">Open it to manage flags.</span></Empty></>),
+    render: () => <ToolsWidget />,
   },
   settings: {
     id: "settings", group: "system", dot: "var(--faint)", desc: "Providers, voice, channels — jump straight in.", defaultSize: 1,
-    render: () => (<><WHeader label="settings" room="settings" /><Empty>Providers, voice, and channels. <span className="dim">Open Settings to configure Jarvis.</span></Empty></>),
+    render: () => <SettingsWidget />,
   },
 };
 
