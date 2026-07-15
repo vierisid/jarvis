@@ -18,6 +18,7 @@ import {
   type UiaSemanticElement,
   type CdpAxElement,
 } from './types.ts';
+import { getSurfaceCache, cacheKey } from './surface-cache.ts';
 
 export type CaptureKind = 'desktop' | 'browser';
 
@@ -31,6 +32,13 @@ export type CaptureOptions = {
   depth?: number;
   /** Return the full tree instead of the salience-filtered view. */
   full?: boolean;
+  /**
+   * Speculative-perception cache policy. 'use' (default) reads a hot surface
+   * if one is fresh and writes on miss. 'bypass' always captures live — used
+   * for verification re-snapshots, which must see ground truth. 'prewarm'
+   * captures live and only writes the cache (no read).
+   */
+  cache?: 'use' | 'bypass' | 'prewarm';
 };
 
 export type CaptureResult = {
@@ -131,6 +139,19 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
   const sidecar = manager.listSidecars().find((s) => s.id === target || s.name === target);
   const sidecarId = sidecar?.id ?? target;
 
+  const cachePolicy = opts.cache ?? 'use';
+  const key = cacheKey(opts.kind, opts.pid);
+  const cache = getSurfaceCache();
+
+  // Hot path: a fresh cached surface (never for the full tree, which callers
+  // ask for precisely because the filtered view was insufficient).
+  if (cachePolicy === 'use' && !opts.full) {
+    const hot = cache.get(key);
+    if (hot) {
+      return { surface: hot, salient: hot.nodes, meta: { provider: hot.provider, target: sidecar?.name ?? target } };
+    }
+  }
+
   let surface: SemanticSurface;
   if (opts.kind === 'browser') {
     const raw = (await manager.dispatchRPC(sidecarId, 'browser_ax_snapshot', {}, DESKTOP_RPC_TIMEOUT)) as {
@@ -157,9 +178,28 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
   surface.coverage = computeCoverage(surface.nodes);
   if (!opts.full) surface.nodes = salient;
 
+  // Warm the cache with the salience-filtered surface (what the hot path
+  // serves). Never cache a full-tree capture.
+  if (cachePolicy !== 'bypass' && !opts.full) {
+    cache.put(key, surface);
+  }
+
   return {
     surface,
     salient,
     meta: { provider: surface.provider, target: sidecar?.name ?? target },
   };
+}
+
+/**
+ * Pre-warm the cache for a foreground app/page (called by the awareness
+ * subsystem on a context change). Best-effort; swallows errors so a warm
+ * failure never disrupts the awareness loop.
+ */
+export async function prewarmSurface(opts: Omit<CaptureOptions, 'cache' | 'full'>): Promise<void> {
+  try {
+    await captureSurface({ ...opts, cache: 'prewarm' });
+  } catch {
+    /* pre-warm is optional */
+  }
 }

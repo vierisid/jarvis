@@ -11,6 +11,7 @@
 import type { ToolDefinition } from './registry.ts';
 import { getSidecarManager, autoTargetForCapability } from './sidecar-route.ts';
 import { captureSurface, type CaptureKind } from '../../structural/surface.ts';
+import { getSurfaceCache, cacheKey } from '../../structural/surface-cache.ts';
 import { verifyPostcondition, nextHealRung, type Postcondition, type HealRung } from '../../structural/verifier.ts';
 import { resolveRef } from '../../structural/resolver.ts';
 import { recordPerception } from '../../structural/telemetry.ts';
@@ -175,6 +176,10 @@ export const uiActTool: ToolDefinition = {
       return `${action} → ${JSON.stringify(actResult)}`;
     }
 
+    // A mutating action just changed this surface — drop any speculative
+    // cache entry so the next snapshot re-captures.
+    getSurfaceCache().invalidate(cacheKey(kind, params.pid as number | undefined));
+
     const pc = parsePostcondition(params.verify, actedRef);
     const lines: string[] = [`Acted: ${action}${value !== undefined ? ` "${truncate(value, 40)}"` : ''} on [${sessionId}]`];
 
@@ -186,7 +191,9 @@ export const uiActTool: ToolDefinition = {
 
     for (let pass = 0; pass < 3; pass++) {
       try {
-        const post = await captureSurface({ kind, target, full: false });
+        // Verification must see ground truth — the action just changed the
+        // surface, so bypass the speculative cache.
+        const post = await captureSurface({ kind, target, full: false, cache: 'bypass' });
         after = post.surface.nodes;
         afterTitle = post.surface.root.title;
       } catch {

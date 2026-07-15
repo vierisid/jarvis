@@ -19,6 +19,7 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { getRecorder } from "../skills/recorder.ts";
+import { prewarmSurface } from "../structural/surface.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -1433,6 +1434,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         } catch (err) {
           console.warn('[ambient-ui] blind_toggle failed:', err);
         }
+      });
+
+      // Speculative perception — when the foreground app changes, pre-warm the
+      // structural surface cache so the agent's next ui_snapshot/ui_act on that
+      // app starts hot. Throttled (the cache TTL is a few seconds) and
+      // best-effort (prewarmSurface swallows errors).
+      let lastPrewarm = 0;
+      sidecarManager.onEvent(async (_sidecarId, event) => {
+        if (event.event_type !== 'context_changed') return;
+        const now = Date.now();
+        if (now - lastPrewarm < 2000) return;
+        lastPrewarm = now;
+        void prewarmSurface({ kind: 'desktop' });
       });
 
       // Skill recorder — while a record_skill session is live, the sidecar
