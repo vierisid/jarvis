@@ -405,6 +405,27 @@ async function main() {
   console.log(`Driving sidecar "${chosen.name}" [caps: ${(chosen.capabilities ?? []).join(', ')}]`);
   const caps = new Set(chosen.capabilities ?? []);
 
+  // Build check — refuse to run against an OLD sidecar. recorder_stop is a
+  // no-op RPC that only exists in this branch's build; the old binary rejects
+  // it as an unknown method. This prevents a confusing all-fail run when a
+  // stale auto-started sidecar has reconnected instead of the new one.
+  const probe = await d.rpc('recorder_stop', {});
+  const probeErr = (probe.error ?? '').toUpperCase();
+  if (probeErr.includes('METHOD_NOT_FOUND') || probeErr.includes('UNKNOWN METHOD') || probeErr.includes('NOT AVAILABLE') || probeErr.includes('NOT FOUND')) {
+    console.error(
+      `\n✗ WRONG SIDECAR BUILD CONNECTED.\n` +
+      `  The connected "${chosen.name}" is an OLD sidecar — it doesn't have this branch's handlers\n` +
+      `  (recorder_stop probe → ${probe.error}).\n` +
+      `  A stale/auto-started sidecar likely reconnected. Do this on Windows:\n` +
+      `   1. Close ALL running jarvis sidecars (Task Manager → end every jarvis-sidecar.exe;\n` +
+      `      check the system tray and Windows Startup apps for an auto-started one).\n` +
+      `   2. Run ONLY the freshly-built binary:\n` +
+      `      ...\\control-plane-v2\\sidecar\\jarvis-sidecar.exe\n` +
+      `   3. Confirm it's connected, then re-run this script.\n`,
+    );
+    process.exit(3);
+  }
+
   const suite = opts.suite;
   if (suite === 'all' || suite === 'phase0') {
     if (caps.has('desktop')) await suitePhase0(d, opts);
