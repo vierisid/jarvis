@@ -143,7 +143,12 @@ func buildAXElements(nodes []axNode) []map[string]any {
 		return ord
 	}
 
-	var out []map[string]any
+	// Collect all emittable elements first, then cap. The cap must NOT be applied
+	// in raw tree order — on a big page (Gmail inbox + open compose dialog) the
+	// actionable fields can sit past the first N nodes and get truncated, so the
+	// agent "opens compose but can't find the To field". Keep every interactive
+	// element; cap only the static-text context.
+	var interactiveEls, contextEls []map[string]any
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Ignored {
@@ -167,9 +172,6 @@ func buildAXElements(nodes []axNode) []map[string]any {
 			continue
 		}
 		ord := ordinalOf(n)
-		if len(out) >= axMaxElements {
-			continue // keep counting ordinals, stop emitting
-		}
 
 		if len(name) > 100 {
 			name = name[:100]
@@ -196,7 +198,20 @@ func buildAXElements(nodes []axNode) []map[string]any {
 				el[p.Name] = json.RawMessage(p.Value.Value)
 			}
 		}
-		out = append(out, el)
+		if interactive {
+			interactiveEls = append(interactiveEls, el)
+		} else {
+			contextEls = append(contextEls, el)
+		}
+	}
+
+	// All interactive elements, plus as much named-text context as fits.
+	out := interactiveEls
+	if budget := axMaxElements - len(out); budget > 0 {
+		if budget > len(contextEls) {
+			budget = len(contextEls)
+		}
+		out = append(out, contextEls[:budget]...)
 	}
 	return out
 }
