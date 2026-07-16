@@ -149,6 +149,14 @@ func buildAXElements(nodes []axNode) []map[string]any {
 		if n.Ignored {
 			continue
 		}
+		// Skip nodes with no backing DOM node: they cannot be clicked,
+		// set_value'd, or box-modeled (DOM.resolveNode/getBoxModel fail with
+		// "No node with given id found"), so emitting them only creates
+		// un-actionable targets. Gmail's compose exposes such AX-only wrapper
+		// nodes named "To"/"Subject" alongside the real editable fields.
+		if n.BackendDOMNodeID == 0 {
+			continue
+		}
 		role := n.Role.str()
 		name := n.Name.str()
 		interactive := axInteractiveRoles[role]

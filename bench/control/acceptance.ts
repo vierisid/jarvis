@@ -307,11 +307,19 @@ async function suiteBrowser(d: Driver, opts: Opts) {
     record('AX-click Compose by backend_node_id', !click.error, click.error ?? 'clicked', click.elapsed_ms);
     await sleep(1200);
 
-    // Re-snapshot; find the To / Subject / body fields and set values.
+    // Re-snapshot; find the To / Subject fields. Require an EDITABLE, real
+    // (backend>0) element — Gmail exposes non-editable "To"/"Subject" labels
+    // and AX wrappers with the same name, which aren't settable.
+    await sleep(500); // let the compose fields render
     const s2 = await d.rpc('browser_ax_snapshot', {});
     const e2 = (asObj(s2.result).elements as Array<Record<string, unknown>>) ?? [];
-    const field = (re: RegExp) =>
-      e2.find((e) => typeof e.name === 'string' && re.test(e.name as string));
+    const editableRoles = new Set(['textbox', 'combobox', 'searchbox', 'textfield']);
+    const field = (re: RegExp) => {
+      const matches = e2.filter((e) =>
+        typeof e.name === 'string' && re.test(e.name as string) &&
+        e.interactive === true && typeof e.backend_node_id === 'number' && (e.backend_node_id as number) > 0);
+      return matches.find((e) => editableRoles.has(e.role as string)) ?? matches[0];
+    };
     const to = field(/^to\b|recipients/i);
     const subj = field(/^subject/i);
     if (to) {
