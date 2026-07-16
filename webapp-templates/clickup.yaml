@@ -1,0 +1,96 @@
+# No keywords on purpose: ClickUp vocabulary ("task", "list", "space", "sprint",
+# "my tasks", "status") is generic project-management/coding language and would
+# hijack unrelated requests. The app name (a distinctive coined word) and the
+# domains carry the trigger alone.
+app_name: ClickUp
+domains:
+  - app.clickup.com
+  - clickup.com
+keywords: []
+description: ClickUp (app.clickup.com) — open tasks by permalink, read a task (status/assignee/due/description/comments/subtasks), Home/My Tasks, read list and board views, create tasks in a list, comment, change status via the status dropdown (no drag), assign, set due dates, search via the command center.
+version: 1
+instructions: |
+  URL: https://app.clickup.com — one shared domain for every customer; the workspace is chosen in-app, not by subdomain. HIERARCHY (top→down): Workspace → Space → Folder (optional) → List → Task (→ subtasks). Tasks live in Lists; the left sidebar is a collapsible tree of Spaces/Folders/Lists. ClickUp is a heavy single-page app with a dense, custom DOM — trust live snapshots over this template's layout notes.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for ClickUp. Never use desktop or sidecar tools.
+  2. URL-FIRST: the task permalink `https://app.clickup.com/t/{taskId}` is the single most reliable operation in ClickUp — prefer it whenever you have or can recover a task id/URL. List/view URLs are opaque (see URL PATTERNS) — reuse ones you have seen, never construct them.
+  3. **There is NO drag tool. Dragging cards between board columns, reordering rows, or moving tasks in the sidebar tree is IMPOSSIBLE.** Every status change goes through the task's status dropdown (see TASK: Change status); every move is a field/menu change. Never attempt or promise a drag.
+  4. browser_type REPLACES a field's content by default. When ADDING to a field that already has text (an existing description, a partially written comment), pass append: true — plain typing silently erases what was there.
+  5. Snapshot at checkpoints (after navigate, after a task view/menu/picker opens, after a submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed, never guess ids.
+  6. Match elements by role / aria-label / placeholder MEANING, never by position on destructive or irreversible actions. Statuses, fields, and views are workspace-customized — user-set task/list/status names are the anchors, not this template's examples.
+  7. browser_press_key("Escape") closes menus, pickers, and the task view overlay. Do NOT use ClickUp's other single-letter shortcuts: they type literal text whenever an input is focused and shortcut availability varies per user settings.
+  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  9. If a create/comment/save seems to have failed, re-snapshot and CHECK for the change before any retry — blind retries create duplicate tasks and comments.
+
+  ### STATE RECOGNITION (check after every navigate)
+  - **Logged out**: a login form (email/password inputs, "Log in", Google/SSO buttons) or the clickup.com marketing site → tell the user: "ClickUp requires sign-in. Please log in to ClickUp in this browser, then ask me again." Stop. NEVER type credentials or verification codes.
+  - **Workspace picker / wrong workspace**: a screen listing multiple Workspaces to choose from [LIVE-VERIFY: shown after login; also via the workspace avatar in the sidebar corner] → if the request names a workspace, click it; otherwise ASK the user which workspace and stop.
+  - **Loading**: ClickUp shows skeleton placeholders and can take several seconds; a snapshot with almost no interactive elements, or a task/list URL without its content, means it is still rendering → wait 2–3s, re-snapshot. Max 2 retries, then tell the user.
+  - **Ready markers** — task view: the task name plus a status control and an Activity/comments area [LIVE-VERIFY]; list view: the list name heading with task rows grouped under status headings; board view: status-named columns holding task cards.
+  - **No access / not found**: page text like "You don't have access" or a task-not-found notice [LIVE-VERIFY: exact wording] → report exactly that and stop; don't retry.
+
+  ### URL PATTERNS
+  - Task permalink: `https://app.clickup.com/t/{taskId}` — taskId is opaque (e.g. `86czkq9pj`). This is the backbone: it opens the task view directly and is stable. Workspaces with custom task IDs also use `https://app.clickup.com/t/{teamId}/{CUSTOM-123}` [LIVE-VERIFY]. Only reuse ids/URLs seen in a snapshot, the user's message, or earlier context — NEVER invent one.
+  - List/view URLs look like `https://app.clickup.com/{teamId}/v/l/{listId}` (board/other views use different letters after /v/) [LIVE-VERIFY: exact shapes]. Both ids are opaque — reach lists via the sidebar or search the first time, then REMEMBER the resulting URL for direct re-navigation in this session.
+  - Home: reached via the sidebar "Home" entry; its URL contains the numeric {teamId} [LIVE-VERIFY: shape] — remember it once seen.
+
+  ### TASK: Open a task by permalink
+  1. browser_navigate("https://app.clickup.com/t/{taskId}") → browser_snapshot (state check).
+  2. Verify: the task name is in the Page Text with its status control. The task view usually renders as an overlay above the list [LIVE-VERIFY] — expect both element sets; Escape closes the overlay. Budget: 2 calls.
+
+  ### TASK: Read a task
+  1. Open the task (permalink preferred) → snapshot. Read from Page Text: task name (main heading), status (the colored status control near the name), assignee(s), due date, priority, and the description below the fields [LIVE-VERIFY: field layout in the task header].
+  2. Subtasks: a "Subtasks" section under the description lists child tasks with their own statuses [LIVE-VERIFY] — read names/statuses from Page Text; click a subtask's name to open it.
+  3. Comments: the Activity pane (right side of the task view [LIVE-VERIFY]) holds comments newest-last; browser_scroll within the pane + re-snapshot for history. Answer read questions straight from this text.
+
+  ### TASK: Home / My Tasks
+  1. browser_navigate("https://app.clickup.com") → snapshot → click "Home" in the left sidebar [LIVE-VERIFY: entry label/icon].
+  2. Snapshot → Home shows work widgets ("My Work" / "To Do" with due-date groupings like Today/Overdue/Next) [LIVE-VERIFY: widget names]. Read task names + due dates from Page Text; browser_scroll + re-snapshot for more.
+  3. To act on a listed task, click its name → the task view opens → remember its /t/ URL for later.
+
+  ### TASK: Open a list (sidebar tree)
+  1. Snapshot → in the left sidebar, click the Space name to expand it, then the Folder (if any), then the List [LIVE-VERIFY: chevron vs name click may differ]. One snapshot per expansion — the tree renders lazily.
+  2. Can't find it? Use TASK: Search with the list name and click the list result.
+  3. Verify: the list name is the page heading. Remember the URL (Rule 2).
+
+  ### TASK: Read a list / board view
+  1. Open the list → snapshot. LIST VIEW: rows grouped under status headings (e.g. "TO DO", "IN PROGRESS" — workspace-defined); each row = task name + assignee/due/priority chips [LIVE-VERIFY: row text shape]. BOARD VIEW: the same statuses as columns of cards — read identically from Page Text.
+  2. browser_scroll down + re-snapshot for long lists; collapsed status groups expand on click [LIVE-VERIFY].
+  3. ALL mutations still go through the task view — no drag (Rule 3), no inline edits from the row.
+
+  ### TASK: Create a task in a list
+  1. Open the target list in list view → snapshot → click the "+ New task" / "Add Task" row control (at the bottom of a status group, or the button near the top) [LIVE-VERIFY: exact label and placement].
+  2. Snapshot → an inline composer row with a task-name input appears [LIVE-VERIFY].
+  3. browser_type(name input id, the title, submit: true) — Enter CREATES the task, so only press it when the title is final.
+  4. browser_press_key("Escape") → snapshot → VERIFY the title appears as a row in the list. Missing after 2 re-snapshots → tell the user; do NOT retype (duplicate risk, Rule 9).
+  5. Assignee / due date / description / status: open the new task (click its name) and set fields in the task view. Setting fields in the composer is unreliable — don't.
+
+  ### TASK: Comment on a task
+  1. Open the task → snapshot → click the comment box in the Activity pane (placeholder ≈ "Write a comment" [LIVE-VERIFY]).
+  2. browser_type(editor id, the comment text) — NO submit: Enter may send prematurely or just newline [LIVE-VERIFY which]. Keep text plain: inserted text may not trigger @mention or /command pop-ups.
+  3. Snapshot → VERIFY the draft text is in the box → click the "Send" / "Comment" button [LIVE-VERIFY: label, bottom-right of the composer].
+  4. Snapshot → the comment appears in the Activity feed. Not there after 2 re-snapshots → tell the user; never re-click send (duplicate risk).
+
+  ### TASK: Change status (dropdown — never board drag)
+  1. Open the task → snapshot → click the status control next to the task name (a colored element showing the current status, e.g. "IN PROGRESS") [LIVE-VERIFY: role/label].
+  2. Snapshot → a menu lists the list's statuses (workspace-defined; often TO DO / IN PROGRESS / COMPLETE plus custom ones) [LIVE-VERIFY: menu structure] → click the target status by its NAME.
+  3. Snapshot → the status control shows the new status = done. Target status not offered → Escape, tell the user which statuses you saw instead of improvising. ("Mark complete" = pick the done/closed status from this same menu.)
+
+  ### TASK: Assign a task
+  1. Open the task → snapshot → click the assignee control in the task header (avatar or "Assign" / person icon [LIVE-VERIFY]).
+  2. Snapshot → a searchable people picker appears → browser_type(search id, the person's name) → snapshot → click the matching person (name + email in the row [LIVE-VERIFY]).
+  3. Escape to close the picker → snapshot → VERIFY the assignee shows that person. No match → Escape, tell the user who you searched for.
+
+  ### TASK: Set a due date (FRAGILE — flag any doubt)
+  1. Open the task → snapshot → click the due-date control in the task header [LIVE-VERIFY: shows a date or a calendar icon] → snapshot → a calendar popover appears [LIVE-VERIFY: month-arrow controls, optional time field, quick options like "Today"/"Tomorrow"].
+  2. Prefer CLICKING the day cell (month arrows to navigate) over typing into any date input: typed dates parse locale-dependently and silently mis-set.
+  3. Escape to close → snapshot → VERIFY the due-date control shows the INTENDED date. Wrong or ambiguous → tell the user rather than guessing again.
+
+  ### TASK: Search (command center)
+  1. browser_press_key("Ctrl+K") [LIVE-VERIFY: ClickUp's command-center shortcut — if no palette opens, click the "Search" control in the sidebar/top bar instead] → snapshot → a search overlay with one text input appears [LIVE-VERIFY: structure].
+  2. browser_type(input id, the search terms) → snapshot → results list tasks/lists/docs with their locations [LIVE-VERIFY: result row shape].
+  3. CLICK the matching result — NEVER blind-press Enter (the highlighted row may not be your target). Opening a task result lands on its /t/ permalink; reuse that URL from then on. Escape abandons the search.
+
+  ### Budgets (stop and reconsider at ~2x)
+  Open by permalink ≈ 2 calls · read task ≈ 4 · Home ≈ 4 · open list ≈ 4 · read list ≈ 3 · create task ≈ 7 · comment ≈ 6 · change status ≈ 5 · assign ≈ 6 · due date ≈ 6 · search ≈ 5.

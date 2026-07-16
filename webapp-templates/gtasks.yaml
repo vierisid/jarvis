@@ -1,0 +1,59 @@
+# No keywords on purpose: todo vocabulary ("add a task", "my tasks", "mark it
+# done", "to-do list", "remind me") is exactly the local-productivity language
+# a desktop agent hears all day — any of it would hijack unrelated requests
+# (the Todoist lesson). The app name and domain carry the trigger alone.
+app_name: Google Tasks
+domains:
+  - tasks.google.com
+keywords: []
+description: Google Tasks — read a list's tasks, add tasks with a due date/time, add subtasks, complete and un-complete tasks, switch or create task lists, set/change due dates, and (gated) delete tasks. Targets the standalone tasks.google.com app.
+version: 1
+instructions: |
+  URL: https://tasks.google.com — the STANDALONE Google Tasks web app [LIVE-VERIFY: it renders full-page; Tasks historically lived only in the Gmail/Calendar side panels]. This template targets the standalone app only — if you land inside Gmail/Calendar, navigate to tasks.google.com instead of driving the side panel.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Tasks. Never use desktop or sidecar tools.
+  2. UI labels are localized — quoted labels below are one locale's documentation, not selectors. Match by role + structure; the user's own task/list names are the stable anchors.
+  3. Snapshot [id]s are 1-based and CHANGE with every snapshot — never reuse or guess ids.
+  4. browser_type REPLACES a field's content by default. When editing an EXISTING task's title or details, use append:true unless the user asked for a full rewrite (and say so).
+  5. COMPLETING a task is reversible — it moves to the Completed section and can be unchecked; say so when you complete one. DELETING is NOT that: only delete when the user named that exact task in THIS request and said delete; never delete as a substitute for completing.
+  6. If an add/edit seems to have failed, re-snapshot and look for the change FIRST — blind retries create duplicate tasks.
+  7. After 2 failed attempts to find an element, STOP and tell the user what you saw. No workarounds.
+
+  ### STATE RECOGNITION (check after every navigate)
+  - Signed out: URL on accounts.google.com or the page offers a "Sign in" button → tell the user "Google Tasks needs you to sign in in this browser" and STOP. NEVER type credentials.
+  - Ready: a Tasks header with list name(s), an "Add a task" control, and task rows [LIVE-VERIFY: whether lists render side-by-side as columns or one at a time behind a switcher].
+  - A collapsed "Completed (n)" section sits at the bottom of a list — click it to expand [LIVE-VERIFY].
+  - Empty list: an empty-state message with "Add a task" still present — a VALID ready state, not loading. Loading (no header, no controls) → re-snapshot after a moment, max 2 retries.
+
+  ### ELEMENT REFERENCE ([LIVE-VERIFY] = not yet captured from a real snapshot)
+  - Task row: a circle checkbox, then the title (+ a date chip when a due date is set). Clicking the TITLE opens the task's edit/detail surface; clicking the CIRCLE completes it — never confuse the two. Hover may reveal extra per-row actions [LIVE-VERIFY: hover, THEN snapshot — they appear in the NEXT snapshot].
+  - Detail/edit surface: title + details fields, a date/time row, the owning list, an add-subtask control, and a delete (trash) control [LIVE-VERIFY: layout and labels].
+  - List tabs or a list switcher, with a "Create new list" entry [LIVE-VERIFY].
+
+  ### TASK: read tasks in a list (≤4 calls)
+  1. browser_navigate https://tasks.google.com → snapshot (state check). 2. If the requested list isn't shown, switch to it (see the lists task). 3. Report rows from Page Text: titles + date chips + details. browser_scroll + re-snapshot for long lists. "Today's tasks" = rows whose date chip is today — there is no separate Today view [LIVE-VERIFY]; filter by chip yourself.
+
+  ### TASK: add a task (≤7 calls)
+  1. Navigate + snapshot; switch to the target list first if one was named. 2. click "Add a task". 3. snapshot → browser_type(title) into the new title field. 4. Due date/time requested: click the date/time control on the task being edited [LIVE-VERIFY: label ≈ "Date/time"] → snapshot → calendar picker: click the day cell (month arrows to move); time via its slot menu [LIVE-VERIFY: picker layout]; OK/Done if present. 5. browser_press_key("Enter") (or click outside the row) to commit [LIVE-VERIFY: what commits]. 6. snapshot → VERIFY the row exists with the intended date chip. Missing → rule 6, not a blind retype.
+
+  ### TASK: add a subtask [LIVE-VERIFY: whole flow]
+  1. Click the parent task's TITLE → snapshot → its detail surface. 2. click the add-subtask control → browser_type(subtask title) → browser_press_key("Enter"). 3. snapshot → the subtask appears indented under the parent. If the detail surface shows no subtask control, hover the parent row → snapshot → look for a more/options menu with a subtask entry [LIVE-VERIFY]. 2 failures → stop and report (rule 7).
+
+  ### TASK: complete / un-complete a task
+  Complete: 1. find the row by its title text → click its circle checkbox (NOT the title). 2. snapshot → VERIFY the task left the active rows and now sits under "Completed" (expand if needed) — strikethrough styling may not survive into snapshot text; moved-to-Completed is the authoritative check [LIVE-VERIFY]. Tell the user it's reversible. An Undo toast may appear briefly [LIVE-VERIFY] — if you completed the WRONG task, click Undo immediately.
+  Un-complete: expand "Completed (n)" → snapshot → click the checked circle of the named task → snapshot → it is back among the active rows.
+
+  ### TASK: switch to / create a list
+  Switch: snapshot → click the list's tab or pick it in the switcher [LIVE-VERIFY] → snapshot → the list's name and rows are shown.
+  Create (only when asked): open the switcher → click "Create new list" → snapshot → browser_type(name) into the name field → click its Done/Create button [LIVE-VERIFY: labels] → snapshot → the new list is shown.
+
+  ### TASK: set / change a due date
+  1. Open the task (click its TITLE) → snapshot. 2. click the date/time row (shows the current date when one is set). 3. snapshot → the same calendar picker as in add-a-task: pick day/time; a remove/clear-date option clears it [LIVE-VERIFY]. 4. commit/close → snapshot → VERIFY the date chip shows the INTENDED date. Wrong → tell the user; do not keep guessing clicks.
+
+  ### TASK: delete a task (GATED by rule 5)
+  1. Open the named task (click its TITLE) → snapshot → confirm the title matches the user's request EXACTLY. 2. click the delete (trash) control in the detail surface [LIVE-VERIFY: label ≈ "Delete"]. 3. snapshot → the row is gone. An Undo toast may appear [LIVE-VERIFY] — mention it; otherwise deleted tasks are not recoverable in-app. Never bulk-delete: "clear my list" → list the candidates and ask. A list-level "Delete all completed" action exists [LIVE-VERIFY] — use ONLY when explicitly asked for exactly that.
+
+  ### GOTCHAS
+  - A half-typed new task may autosave when focus moves [LIVE-VERIFY] — after any interrupted add, snapshot and reconcile (finish or remove the stub per the user's intent).
+  - Tasks created from the Gmail/Calendar side panels live in these same lists and appear here too; some link back to their source email/event [LIVE-VERIFY].

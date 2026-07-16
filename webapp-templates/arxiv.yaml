@@ -1,0 +1,91 @@
+app_name: arXiv
+domains:
+  - arxiv.org
+keywords:
+  - preprint
+  - preprints
+  - abstract of
+  - research paper on
+description: arXiv — look up papers by id, search by title/author/keyword, read full text via the HTML version, browse recent papers in a category (cs.AI etc.), track version history, follow citation links, and copy BibTeX. Strictly read-only; submitting and accounts are not supported.
+version: 1
+instructions: |
+  URL: https://arxiv.org
+
+  ### THE ONE THING TO KNOW
+  arXiv is a pure READ surface with rock-stable, server-rendered URLs. The abstract page `https://arxiv.org/abs/{id}` is the backbone — title, authors, abstract, subjects, version history, and every export/citation link. Navigate by URL, read Page Text, answer; most tasks are 2–3 tool calls. PDFs are NOT readable through snapshots — the HTML version (`/html/{id}`, newer papers only) is the only readable full-text path.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for arXiv. Never use desktop or sidecar tools.
+  2. URL-FIRST: abstract, search, listing, and full-text pages all have URL patterns (below). Click only to follow links a snapshot actually shows (search results, listing entries, citation/export links).
+  3. READ-ONLY: never submit, replace, withdraw, endorse, claim authorship, or touch account/login/registration links — even if asked. Say it's unsupported and stop.
+  4. Page Text shows only about the first 2000 characters per snapshot. Long pages need: browser_scroll down (~1500 px) → browser_snapshot → read → repeat. Abstract pages fit in one window; stop scrolling the moment you have the answer.
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No sign-in, ever**: reading arXiv needs no account. If a login/registration page appears you clicked the wrong thing — navigate back to the paper URL. Never enter credentials.
+  - **Ready (abstract page)**: page title starts with the arXiv id and paper title; Page Text has the title, author list, and abstract.
+  - **Bad id**: Page Text says the article identifier is not recognized / not found → the id is wrong or malformed; re-check the format (below) or run TASK: Search instead of guessing.
+  - **No HTML version**: `/html/{id}` returns an unavailable/not-found notice for older papers → fall back per TASK: Read full text, step 3.
+
+  ### PAPER IDS
+  - New style (2007+): `YYMM.NNNNN`, e.g. `2403.12345`. Old style: `archive/YYMMNNN`, e.g. `cs/0112017`. Both work in every URL pattern. A `v` suffix pins a version (`/abs/2403.12345v1`); the bare id = LATEST version.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Abstract page**: `https://arxiv.org/abs/{id}` — the default destination for any named paper.
+  - **HTML full text**: `https://arxiv.org/html/{id}` [LIVE-VERIFY: available only for newer papers, roughly 2024 onward with LaTeX source; the abs page shows an "HTML" link when it exists].
+  - **Search**: `https://arxiv.org/search/?query={q}&searchtype=all` — URL-encode, spaces as `+`. `searchtype` can be `title`, `author`, or `abstract` to scope the whole query [LIVE-VERIFY: current param shape]. Field-scoped syntax inside the query also works: `ti:"attention is all you need"`, `au:sutskever`, `abs:"world model"`, combinable with `AND`/`OR` [LIVE-VERIFY].
+  - **Recent listing**: `https://arxiv.org/list/{category}/recent` — the last few days' submissions in a category. AI-relevant category codes: `cs.AI` (artificial intelligence), `cs.LG` (machine learning), `cs.CL` (NLP/language), `cs.CV` (vision), `cs.RO` (robotics), `cs.NE` (neural/evolutionary), `stat.ML` (ML theory/stats), `cs.MA` (multi-agent), `eess.AS` (audio/speech).
+  - **Author page**: `https://arxiv.org/a/{author_id}` [LIVE-VERIFY: only exists for authors with a claimed arXiv author identifier — often 404s; the reliable path is an author search, TASK: Search step 1].
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: [2403.12345] Paper Title Here
+  --- Page Text ---
+  Paper Title Here  Jane Doe, John Smith  Abstract: We propose …  Subjects: Machine Learning (cs.LG); Artificial Intelligence (cs.AI)  Submission history … [v1] Tue, 19 Mar 2024 … [v2] …
+  --- Interactive Elements ---
+  [4] link "HTML (experimental)"
+  [9] link "Export BibTeX"
+  ```
+
+  ### TASK: Look up a paper by id (PRIMARY)
+  1. browser_navigate `/abs/{id}` → browser_snapshot.
+  2. Ready → answer from Page Text: title, authors, abstract, Subjects line, Comments line (page count, venue notes), Submission history (dates per version).
+  3. Bad-id state → fix the format or search by title instead.
+
+  ### TASK: Search by title / author / keyword
+  1. Build the search URL: known exact title → `query=ti:"{title}"`; author → `query={name}&searchtype=author`; topic → plain keywords with `searchtype=all`. Navigate → snapshot.
+  2. Results in Page Text: arXiv id, title, authors, snippet per hit. Navigate `/abs/{id}` of the best hit (or click its link). Nothing clearly matching → report the top hits and ask.
+
+  ### TASK: Read a paper's full text (the readable path is HTML)
+  1. Navigate `/html/{id}` (or click the abs page's "HTML" link [LIVE-VERIFY: label may read "HTML (experimental)"]) → snapshot.
+  2. Read progressively: Page Text window → browser_scroll down ~1500 px → snapshot → repeat; section headings track where you are. Stop when you have what was asked — for "summarize", abstract + intro + conclusion beat a full walk.
+  3. No HTML version: be honest — report the abstract (and section names if listed) from the abs page and say the full text is only a PDF, which this browser surface cannot read. Never navigate to `/pdf/{id}`.
+
+  ### TASK: Browse recent papers in a category (e.g. weekly cs.AI scan)
+  1. browser_navigate `/list/{category}/recent` → snapshot.
+  2. Entries are date-grouped: `arXiv:{id}` link, title, authors, subjects. Scroll → snapshot to cover more; listings paginate [LIVE-VERIFY: "next"/skip links]. Report id + title + one-line topic per paper; open `/abs/{id}` only for ones worth detail.
+
+  ### TASK: Track a paper's versions
+  1. Open `/abs/{id}` (bare id = latest). Submission history lists every version with its date: `[v1] Tue, 19 Mar 2024 … [v2] …`.
+  2. Report version count and dates. To compare content, open a pinned version (`/abs/{id}v1`, `/html/{id}v1` when available) — the `[vN]` entries are links to the pinned abstract pages [LIVE-VERIFY].
+
+  ### TASK: Find related work / citations
+  1. On the abs page, the "References & Citations" block links to external indexes — NASA ADS, Semantic Scholar, Google Scholar [LIVE-VERIFY: exact set; some render only after expanding a "Bibliographic Tools" toggle]. These leave arxiv.org — follow one only if the user wants actual citing/cited lists, and say you're on an external site.
+  2. Staying on arXiv: search key terms from the abstract, or browse the paper's categories — offer these as the on-site alternative.
+
+  ### TASK: Report the BibTeX
+  1. On the abs page, click "Export BibTeX" [LIVE-VERIFY: link label; renders the record at `/bibtex/{id}`] → snapshot.
+  2. The BibTeX record (`@misc{…}` with title, author, year, eprint) is in Page Text — quote it verbatim in a code block, character for character.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Submitting/replacing/withdrawing papers, endorsements, claiming authorship.
+  - Account actions: login, registration, email alerts.
+  - Reading PDFs (any `/pdf/` URL) — snapshots cannot see PDF content; HTML version or abstract only.
+  - Citation-graph analysis on arXiv itself — citation data lives on the external indexes above.
+
+  ### Gotchas
+  - "arXiv:2403.12345" in running text is the id `2403.12345` — strip the prefix before building URLs.
+  - Cross-listed papers appear in several categories; the FIRST subject on the Subjects line is the primary.
+  - Listing/search snippets truncate abstracts — quote abstracts from the abs page, not from a list.
+  - `{id}v3` when only v2 exists → bad-id state; check Submission history before pinning versions.

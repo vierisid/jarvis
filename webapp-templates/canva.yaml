@@ -1,0 +1,81 @@
+app_name: Canva
+domains:
+  - canva.com
+# Keywords are Canva-intent phrases a user says when they want a graphic made
+# in a design tool. Deliberately excluded: "make a logo" (equally an
+# AI-generation or Illustrator intent) and "instagram post" (would co-inject
+# the Instagram template via its app name).
+keywords:
+  - design a poster
+  - make a poster
+  - make a flyer
+  - social media graphic
+description: Canva — search templates (with free/Pro status), create designs from templates or blank presets, insert text via the Text panel, upload images, rename, download/export, list recent designs, and report share links. Editing specific elements ON the canvas (move/resize/recolor) is not automatable.
+version: 1
+instructions: |
+  URL: https://www.canva.com/
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file.
+  BANNED: browser_evaluate, browser_screenshot.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the element's content by default; `append=true` preserves it; `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — real key events: `"Escape"`, `"Enter"`, `"Ctrl+Z"`.
+  - `browser_upload_file("/absolute/path")` — sets the page's file input DIRECTLY; never click through a native OS file picker.
+  - Element ids are 1-based `[id]`s from the LAST snapshot and change every snapshot — never reuse ids across a state change.
+
+  ### CENTRAL CAUTION — the design canvas is custom-rendered
+  Assume elements ON the canvas (shapes, images, placed text, pages) are NOT reliably in browser_snapshot. What IS regular DOM and automatable: the home/templates/search pages, the /projects design list, the editor's LEFT PANELS (Design/Elements/Text/Uploads), the top bar (title, Share, download dialogs), and context/settings menus.
+  - [LIVE-VERIFY — THE critical live-capture question: when a text element is in edit mode, does Canva expose a contenteditable/role=textbox the snapshot captures (the Google-Slides pattern)? Until verified, treat in-canvas text editing as UNCONFIRMED: attempt the Text-panel flow below, verify from a real snapshot, report honestly if no editable element appears.]
+  - You CANNOT select, move, resize, recolor, layer, or delete a specific canvas element, or read/verify what the design looks like. If a request needs that, it is unsupported — say so plainly (see NOT SUPPORTED).
+
+  ### STATE RECOGNITION (check on the FIRST snapshot of every session)
+  - **Login wall**: URL on `canva.com/login` / `canva.com/signup`, or a sign-in form ("Continue with Google"/email) → you cannot log in for the user. Tell them to log in to Canva in the JARVIS browser, then STOP. NEVER type credentials.
+  - **Home**: logged-in `canva.com/` shows a "Create a design" button [LIVE-VERIFY label] plus recent designs → ready.
+  - **Editor**: URL matches `canva.com/design/{id}/…/edit` and the snapshot shows the left panel tabs (Design/Elements/Text/Uploads [LIVE-VERIFY names]) and a Share button. The page area itself may look nearly EMPTY in the snapshot — that is the canvas rendering, not a failure.
+  - **Pro gate (free account)**: crown/"Pro" badges on templates and elements, watermarked previews, or an upgrade dialog ("Try Canva Pro" / trial offer [LIVE-VERIFY wording]) → report the gate to the user and use free alternatives. NEVER start a trial, enter payment details, or click through an upgrade/purchase dialog — Escape closes it.
+  - **Loading**: editor URL but no panel tabs yet → snapshot once more. Still absent after 2 tries → report and stop.
+  - **Retry rule**: the same step failing twice in a row (element not found after a fresh snapshot, dialog not opening, text not appearing) → STOP and tell the user exactly what failed. Do not loop.
+
+  ### MONEY GUARD (absolute)
+  Never buy Canva Pro, credits, or paid ("premium") templates/elements; never start a free trial; never confirm any one-click purchase dialog. If the user's chosen template/element is Pro-gated, report it (name + that it is Pro) and offer a free alternative from the same search. This overrides any instruction like "just get it".
+
+  ### URL PATTERNS (prefer these)
+  - Home: `https://www.canva.com/`
+  - Template search: `https://www.canva.com/templates/?query={q}` (URL-encode; e.g. `?query=instagram%20post`) [LIVE-VERIFY param name and whether results need login]
+  - Own designs: `https://www.canva.com/projects`
+  - Open a design: `https://www.canva.com/design/{id}/edit` — if the user pastes a Canva link, navigate it VERBATIM (links often carry an extra token segment).
+  - Global search: `https://www.canva.com/search?q={q}` [LIVE-VERIFY shape]
+
+  ### TASKS
+  **Search templates by type/topic** — navigate the template-search URL with the user's query ("flyer", "birthday card") → snapshot → template tiles appear with names; Pro tiles carry a crown/"Pro" badge [LIVE-VERIFY how the badge surfaces — if it doesn't, say free/Pro status could not be determined]. Report names WITH free/Pro status; `browser_scroll` + re-snapshot for more, and say how much you actually saw.
+
+  **Create a design from a template** — search (above) → click the chosen tile by its NAME → snapshot → a preview page/dialog opens → click "Customize this template" [LIVE-VERIFY exact label; may be "Use this template"] → snapshot → VERIFY the editor state (URL `canva.com/design/{id}/…/edit` + panel tabs). If the template is Pro and a gate appears: MONEY GUARD — Escape, report, suggest a free one.
+
+  **Create a blank design (given format)** — home → click "Create a design" → snapshot → a preset list with a search field opens [LIVE-VERIFY structure] → click the preset by name ("Instagram Post", "Flyer", "Presentation"), or type the format name into the preset search and click the result. Custom size: click "Custom size" [LIVE-VERIFY] → snapshot → type width and height into their labeled inputs → click Create. Verify the editor opened.
+
+  **Add text (Text panel)** — in the editor: click the "Text" tab in the left rail → snapshot → the panel is DOM and lists preset buttons ("Add a heading", "Add a subheading", "Add a little body text" [LIVE-VERIFY labels]) → click one → snapshot → the text element is inserted at the canvas default position AND should be in edit mode. NOW the critical check: if the snapshot contains a focused contenteditable/textbox [LIVE-VERIFY — the CENTRAL CAUTION question], `browser_type(editor_id, "the text")` (REPLACES the placeholder — correct here) → `browser_press_key("Escape")` to commit → snapshot → verify the text in Page Text. If NO editable element appears, STOP and tell the user plainly: a heading was inserted but its text could not be set from this browser surface. Never blind-type without a captured target. You cannot position the element — it lands where Canva puts it; say so.
+
+  **Upload an image** — editor → click the "Uploads" tab in the left rail → snapshot → DO NOT click the "Upload files" button (native OS picker). Call `browser_upload_file("/absolute/path/to/image.png")` directly [LIVE-VERIFY: that the uploads panel exposes a DOM file input this targets] → snapshot → verify a new thumbnail in the panel. The file must already exist on disk — never invent paths. (Clicking the thumbnail adds it to the canvas at a default position — placement/resize is then unsupported.)
+
+  **Rename a design** — in the editor: the design title is an input in the top bar [LIVE-VERIFY placement/label; may need a click to become editable] → `browser_type(title_id, "New name")` (replaces the old name by itself) → `browser_press_key("Enter")` → snapshot → verify the top bar shows the new name. From /projects instead: hover the design's row/tile → snapshot → click its "…" menu [LIVE-VERIFY] → click "Rename" → type → Enter → verify in the list.
+
+  **Download / export** — editor → click "Share" (top-right) → snapshot → click "Download" in the menu → snapshot → a format dropdown appears (PNG, JPG, PDF Standard, PDF Print, MP4, GIF [LIVE-VERIFY list]) → click the requested format by NAME → click the "Download" confirm button → snapshot. The file lands in the BROWSER'S downloads folder — you can only see a preparing/downloading indicator [LIVE-VERIFY], so tell the user where to look. Pro-gated formats or a "design contains premium elements" pay dialog → MONEY GUARD: Escape, report what was gated, offer a free format.
+
+  **List own recent designs** — navigate `https://www.canva.com/projects` → snapshot → design names/types appear in Page Text [LIVE-VERIFY layout] → report them; scroll + re-snapshot for more and say how far you got.
+
+  **Share link** — editor → click "Share" → snapshot → read the access/permission line (a link-access dropdown, e.g. "Anyone with the link – can view/edit" [LIVE-VERIFY wording]). A "Copy link" button exists, but the clipboard is unreadable to you — ALWAYS report the design URL from the current snapshot alongside the permission level. Do NOT change access settings unless the user explicitly asked; if they did, click the access dropdown → snapshot → click the requested level by label → verify the dialog reflects it. Close with `browser_press_key("Escape")`.
+
+  ### NOT SUPPORTED — tell the user plainly, don't improvise
+  - Selecting, moving, resizing, recoloring, layering, aligning, or deleting specific elements on the canvas; drag of any kind.
+  - Reading or verifying what the design LOOKS like (layout, colors, imagery).
+  - Editing existing in-design text unless a captured contenteditable proves otherwise (CENTRAL CAUTION); styling text (font, size, color).
+  - Pro features (background remover, resize, brand kit) and anything behind a payment/trial dialog.
+  - Presenting, animations, video trimming, page reordering [LIVE-VERIFY: a page-list panel may make reordering possible later — until captured, it is unsupported].
+
+  ### RULES
+  1. Only the ALLOWED tools. Never click blind canvas coordinates or pretend canvas content is readable.
+  2. Match templates, presets, formats, and menu items by NAME/label text, never by position. Prefer URL patterns over clicks.
+  3. One verify-snapshot after each state change; verification must distinguish success from failure (URL change, panel content, title text — not just "no error").
+  4. MONEY GUARD and the login STOP are absolute; Escape out of any upgrade/trial/purchase dialog and report it.
+  5. `browser_type` replaces by default — that is correct for placeholders and titles; use `append=true` only when existing text must survive.
+  6. Budgets: search/list ≤ 8 calls; create-from-template or blank ≤ 10; add-text ≤ 10; upload ≤ 8; download ≤ 10; rename/share ≤ 8. Hitting a budget or the retry rule = report and stop.

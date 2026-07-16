@@ -1,0 +1,124 @@
+# KEYWORDS ARE DELIBERATELY EMPTY — "threads" is one of the worst homonyms in the
+# library: it is a generic English word AND everyday Slack/email/forum vocabulary
+# ("check my slack threads", "reply in that email thread", "summarize the forum
+# threads") AND a programming term ("worker threads"). Any keyword built around the
+# word would false-inject this template into unrelated requests. Worse, the matcher
+# word-bound-matches the APP NAME itself against the whole message, so "check my
+# slack threads" already injects this template — a known matcher-level limitation
+# (same class as linear/zoom/medium: word boundaries can't tell the product from
+# the noun). That makes an empty keyword list mandatory: recall rests on the
+# domains (threads.net / threads.com) and explicit links; adding keywords could
+# only grow the false-injection surface, never shrink it.
+app_name: Threads
+domains:
+  - threads.net
+  - threads.com
+keywords: []
+description: Threads (Meta's text app) — post, read the home feed, reply, like, repost, quote, search, view profiles, follow/unfollow, notifications
+version: 1
+instructions: |
+  URL: https://www.threads.com/  (threads.net redirects here [LIVE-VERIFY])
+  Threads is Meta's text app, built ON the Instagram account system — the user's Threads
+  login, handle, and any automation flags are shared with their Instagram account.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate by role/aria-label/href/text. Threads' DOM is obfuscated Meta React (auto-generated class names) — aria-labels, roles, and hrefs are the ONLY stable handles.
+  3. browser_type REPLACES a field's content by default. To add to text already in a composer, pass append: true; to correct a composer, plain browser_type (replace) with the FULL corrected text.
+  4. Snapshot at CHECKPOINTS (after navigation, after a composer/menu opens, before and after Post) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. GO SLOW — Meta aggressively flags automation, and a flag here can restrict the user's LINKED INSTAGRAM ACCOUNT too. One user request = one action (one post, one reply, one like, one repost, one follow). NEVER loop over lists ("like all his posts", "follow these 20 accounts") — refuse and explain the ban risk; never fire rapid bursts of actions.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording/locale, rather than demanding the exact string.
+  8. browser_press_key("Escape") closes an open composer/dialog without posting; Threads may ask to discard or save a draft — confirm discarding only if the user aborted [LIVE-VERIFY].
+
+  ### PUBLIC POSTING SAFETY (posts, replies, quotes, reposts publish instantly under the user's name)
+  - BEFORE clicking Post: snapshot and confirm the composer text is EXACTLY the intended text — no truncation, no leftovers from an earlier attempt. Wrong? Retype the full text (replace default), re-verify, then click.
+  - AFTER clicking: verify ONCE via snapshot. If you cannot confirm success, tell the user "the post may or may not have gone out — please check" and STOP. NEVER retry on uncertainty: a blind retry risks a public double-post.
+  - If the request is ambiguous — what to say, which post to reply to, repost vs quote — ASK the user. Never guess words that get published.
+  - Posts are capped at 500 characters. Text over the limit (Post button disabled / counter negative [LIVE-VERIFY])? Do NOT trim or rewrite the user's text to fit — tell them the length and ask.
+
+  ### State Recognition
+  - **Logged out**: a login wall ("Log in", "Log in with Instagram", username/password fields, a "Continue with Instagram" prompt, or /login in the URL) [LIVE-VERIFY] -> tell the user: "You're logged out of Threads — please log in manually in the browser (it uses your Instagram account)." STOP. NEVER type credentials, even if the user provides them. (Logged-out Threads shows read-only previews — not a working session.)
+  - **Rate limited / action blocked**: text meaning "Try again later", "We limit how often…", "Action blocked" -> STOP IMMEDIATELY and tell the user. No retries, no navigating around it — continuing escalates to restrictions on Threads AND the linked Instagram account.
+  - **Challenge / checkpoint**: "Confirm it's you", "Suspicious login attempt", CAPTCHA, phone/email verification (URL often contains /challenge/) [LIVE-VERIFY] -> STOP, tell the user to resolve it manually in the browser.
+  - **Loading**: 0 interactive elements or only a spinner -> snapshot again (max 2 retries, then tell the user).
+  - **Ready (feed)**: post blocks are present and the nav links/buttons for Home, Search, Create, Activity, own profile are in the snapshot [LIVE-VERIFY].
+  - **One-time dialogs** — dismiss before anything else: notification prompts -> "Not now"; app-install / "Open in app?" banners -> close [LIVE-VERIFY].
+
+  ### URL MAP (URL-first: prefer navigating to these over clicking through the UI; all shapes [LIVE-VERIFY])
+  - Home feed: https://www.threads.com/  ("For you" / "Following" tabs at the top)
+  - Following feed direct: https://www.threads.com/following
+  - Profile: https://www.threads.com/@HANDLE  (@ included; handles are Instagram handles) — tabs: Threads / Replies / Reposts
+  - Single post + its replies: https://www.threads.com/@HANDLE/post/ID
+  - Search: https://www.threads.com/search?q=QUERY  (URL-encode QUERY; a serp_type/filter param may select accounts vs posts — if unsure, use the on-page tabs)
+  - Activity (notifications): https://www.threads.com/activity  (tabs: All / Follows / Replies / Mentions / Quotes)
+
+  ### Element Reference (ALL claims [LIVE-VERIFY] — match by meaning, never by position)
+  - **Post block** (feed or permalink): author link at the top (href /@HANDLE); post text readable in the snapshot's Page Text; timestamp is a link whose href is /@HANDLE/post/ID — click it (or navigate the href) to open the permalink.
+  - **Per-post action row**: buttons whose aria-labels/svg titles mean Like (heart), Comment/Reply, Repost (arrows), Share. Already-liked state: label means "Unlike" (filled heart). The Repost button opens a small MENU with items meaning "Repost" and "Quote". Match all of these by label meaning, NEVER by position — the row's buttons look identical as bare ids.
+  - **Composer**: the nav "Create" button (plus icon) or a "What's new?" prompt opens a dialog with a contenteditable role="textbox" (placeholder meaning "What's new?"). The submit button in the dialog is labeled "Post". An "Add to thread" line below the textbox adds a SECOND post to a multi-post thread — do not click it unless the user asked for a multi-post thread.
+  - **Nav**: links/buttons for Home (/), Search (/search), Create, Activity (/activity), own profile (/@HANDLE) — match by href or aria-label meaning.
+  - **Profile header**: handle, bio, follower count in Page Text; Follow/Following button; feed tabs Threads / Replies / Reposts.
+
+  ---
+
+  ### TASK: Post a thread  (budget: 8 calls)
+  1. browser_navigate https://www.threads.com/ -> browser_snapshot. Click the "Create" nav button (or the "What's new?" prompt) -> browser_snapshot — the composer dialog is open.
+  2. browser_type(composer textbox id, text) — no submit (Enter may just newline [LIVE-VERIFY]).
+  3. browser_snapshot — VERIFY the composer shows exactly the intended text (Public Posting Safety; ≤500 chars).
+  4. Click the "Post" button inside the dialog -> browser_snapshot — success = dialog gone + a toast meaning "Posted" [LIVE-VERIFY] or the new post atop the feed. Unconfirmed -> tell the user, do NOT re-post.
+  - With an image: after step 3, do NOT click the media button (native OS picker) — call browser_upload_file with the absolute file path (targets the composer's hidden file input [LIVE-VERIFY it exists]; file must be under the user's home directory), snapshot to verify the preview thumbnail, then Post.
+
+  ### TASK: Read the home feed
+  1. browser_navigate https://www.threads.com/ -> browser_snapshot. Want the chronological follow feed? Click the "Following" tab (or /following), snapshot.
+  2. Read posts from Page Text (author, text, timestamps). browser_scroll down + snapshot for more — it's an infinite feed; 2-3 scrolls is plenty. Report, don't keep scrolling.
+
+  ### TASK: Open and read a thread + replies  (budget: 5 calls)
+  1. Open the post's permalink (given URL, or click its timestamp link from a feed) -> browser_snapshot.
+  2. The post, the author's own thread continuation, and replies are in Page Text. browser_scroll down + snapshot for more; click a "View replies" / "Show more" element if present [LIVE-VERIFY].
+
+  ### TASK: Reply to a post  (budget: 9 calls)
+  1. Open the post's permalink; snapshot; confirm from Page Text this is the right post — ambiguous reference? Ask.
+  2. Click the post's Reply/Comment action button -> browser_snapshot — a reply composer opens quoting the post above the textbox [LIVE-VERIFY].
+  3. browser_type the reply; browser_snapshot to VERIFY the text; click "Post" [LIVE-VERIFY label].
+  4. browser_snapshot — your reply appears among the replies / toast confirms. Unconfirmed -> tell the user, never re-send.
+
+  ### TASK: Like a post
+  1. Open the permalink (preferred — in a feed, make sure the heart belongs to the SAME post block as the target text).
+  2. browser_snapshot: find the action button meaning "Like". Label already means "Unlike"? It's ALREADY liked — clicking would unlike it; leave it and tell the user.
+  3. browser_click -> browser_snapshot — the label now means "Unlike". Unconfirmed -> report, don't re-click (you might toggle it back).
+
+  ### TASK: Repost
+  1. Open the post's permalink; verify it's the right post in Page Text.
+  2. Click the Repost action button -> browser_snapshot — a menu appears with items meaning "Repost" and "Quote" [LIVE-VERIFY].
+  3. Click "Repost" -> browser_snapshot — the menu item or button now indicates reposted (e.g. "Remove") [LIVE-VERIFY]. This is public: unconfirmed -> stop, don't retry. Already reposted? Clicking would REMOVE the repost — tell the user instead.
+
+  ### TASK: Quote a post
+  1. Steps 1-2 of Repost, then click "Quote" -> browser_snapshot — a composer opens with the quoted post embedded below the textbox [LIVE-VERIFY].
+  2. browser_type the comment; snapshot to VERIFY text + embedded post; click "Post"; snapshot to confirm (Public Posting Safety).
+
+  ### TASK: Search  (budget: 5 calls)
+  1. browser_navigate https://www.threads.com/search?q=QUERY (URL-encoded) -> browser_snapshot. If the URL didn't run the search, go to /search, browser_type the query into the search input, snapshot, and click the matching suggestion row (accounts) or a "Search for …" row (posts) [LIVE-VERIFY].
+  2. Read results from Page Text; posts-vs-accounts tabs [LIVE-VERIFY]; scroll for more.
+
+  ### TASK: View a profile + recent posts
+  1. browser_navigate https://www.threads.com/@HANDLE (handle unknown? search the name and click the matching account row).
+  2. browser_snapshot — bio, follower count, and recent posts are in Page Text (full post text, not an Instagram-style thumbnail grid). browser_scroll + snapshot for older posts; Replies/Reposts tabs for those.
+
+  ### TASK: Follow / unfollow
+  1. browser_navigate the profile -> browser_snapshot. Button meaning "Follow" = not following; "Following" = following.
+  2. Follow: click "Follow" -> snapshot — the button now means "Following". Already "Following"? Say so, click nothing.
+  3. Unfollow ONLY when the user explicitly asked to unfollow: click "Following" -> snapshot — a confirmation menu/dialog opens; click the item meaning "Unfollow" [LIVE-VERIFY] -> snapshot — the button is back to "Follow".
+
+  ### TASK: Check notifications
+  1. browser_navigate https://www.threads.com/activity -> browser_snapshot; read Page Text (follows, likes, replies, mentions, quotes).
+  2. Only one kind wanted: click the matching filter tab (All / Follows / Replies / Mentions / Quotes) [LIVE-VERIFY]. To answer a reply or mention, open its post from the activity row, then run the Reply task.
+
+  ---
+
+  ### Gotchas
+  - Feeds re-render constantly (new posts stream in); ids from a pre-scroll snapshot are ALWAYS stale — re-snapshot before clicking anything in a feed.
+  - Page Text mixes in "Suggested for you" / "Trending" modules — don't report suggestions as the user's feed or a profile's posts.
+  - Posts can be image/video-first: the snapshot gives text, counts, and replies, NOT what's in the media. Say so instead of guessing media content.
+  - A login or challenge interstitial can appear mid-session — that's a State Recognition stop, not something to click past.
+  - Threads has no web DM inbox — decline messaging requests and say so [LIVE-VERIFY current state].

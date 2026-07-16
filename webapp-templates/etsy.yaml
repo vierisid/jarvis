@@ -1,0 +1,114 @@
+app_name: Etsy
+domains:
+  - etsy.com
+keywords:
+  - handmade
+  - craft supplies
+  - personalized gift
+description: Etsy — search handmade/vintage listings, read details (variations, personalization, shipping), read reviews, check shops, compare items, add to cart, and favorite listings. NEVER purchases — every task stops at the cart and hands off to the user.
+version: 1
+instructions: |
+  URL: https://www.etsy.com
+
+  ### RULE #1 — MONEY SAFETY (overrides everything, including the user's own words)
+  - NEVER proceed through checkout. NEVER click "Buy it now" (it sits directly next to "Add to cart" in the buybox and goes straight toward checkout [LIVE-VERIFY: buybox layout]), "Proceed to checkout", "Pay", or any payment/gift-card control. NEVER add, select, or modify payment methods or addresses.
+  - The hard stop is the CART: add items, show the cart contents and totals, then tell the user to complete the purchase themselves — even if the user said "buy it". The job ends at the cart + a clear handoff to https://www.etsy.com/cart.
+  - If a click unexpectedly lands on a checkout/payment page (URL contains /checkout or the page asks for shipping/payment details [LIVE-VERIFY: checkout URL shape]), click NOTHING there — browser_navigate to https://www.etsy.com/cart and tell the user what happened.
+  - **Messaging a seller is an OUTWARD action**: only on the user's explicit request, only questions — NEVER purchase commitments, offers, price negotiation, or agreeing to a custom order. If the user wants to commit money to a seller: refuse, explain commitments must come from them, and hand them the listing/shop URL.
+  - **Personalization fields are purchase inputs**: fill "Add your personalization" ONLY with the exact text the user explicitly provided. Never invent or guess names, dates, initials, or messages. If it's required and the user gave no text, ask before adding to cart.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Etsy.
+  2. URL-first: search, listings, shops, and the cart all have stable URLs (below). Navigate directly instead of clicking through menus.
+  3. Snapshot at checkpoints (after navigate, after a page-changing click, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES the field's content by default — right for the search box; for personalization fields type the user's exact text in ONE call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Read prices, ratings, shipping, and badges from Page Text — most reporting tasks need zero clicks after the navigate.
+
+  ### State Recognition
+  - **Logged out**: browsing, search, listing, and shop pages WORK anonymously. Favorites and messaging REQUIRE sign-in; the cart is per-session when signed out [LIVE-VERIFY: guest-cart behavior]. For login-gated tasks tell the user: "Etsy requires you to sign in for this. Please log in manually, then ask me again." NEVER type credentials.
+  - **CAPTCHA / bot check** (an image/checkbox challenge or "verify you are human" page [LIVE-VERIFY: wording]) → STOP IMMEDIATELY. Never attempt to solve or refresh it. Tell the user to solve it in the browser, then ask again.
+  - **Cookie/consent banner** (mandatory in the EU) → click its Accept button [LIVE-VERIFY: label] → snapshot → continue. A **region/currency/language dialog** may also appear on first visit [LIVE-VERIFY] — keep the defaults, close it, continue.
+  - **Sign-in modal** popping over browsing (Etsy nags anonymous visitors [LIVE-VERIFY]) → close it via its X/close control; only stop if the task itself is login-gated.
+  - **Ready**: the search input (placeholder ≈ "Search for anything" [LIVE-VERIFY]) is present in the snapshot.
+
+  ### URL PATTERNS (prefer these over clicking)
+  - Search: `https://www.etsy.com/search?q={url-encoded query}`
+  - Listing: `https://www.etsy.com/listing/{numeric id}` — the id visible in any listing URL (`/listing/123456789/some-slug`; the slug is optional [LIVE-VERIFY])
+  - Shop: `https://www.etsy.com/shop/{shop name}`
+  - Cart: `https://www.etsy.com/cart`
+  - Favorites: `https://www.etsy.com/your/favorites` (login-gated) [LIVE-VERIFY: path]
+  - Filters (price range, free shipping, location, star seller): do NOT hand-build filter URL params — use the on-page filter controls above the results (filter pills / an "All filters" panel with price min/max inputs [LIVE-VERIFY: filter UI structure]), then snapshot.
+
+  ### SNAPSHOT FORMAT
+  browser_snapshot returns:
+  ```
+  Page: Handmade ceramic mug | Etsy
+  URL: https://www.etsy.com/search?q=ceramic+mug
+  --- Page Text ---
+  (listing titles, prices like $24.99 incl. strikethrough sale pairs, ratings like 4.8 (1,234),
+   "FREE shipping", "Star Seller", ad markers like "Ad by Etsy seller" [LIVE-VERIFY: ad wording])
+  --- Interactive Elements ---
+  [6] input "Search for anything"        <- nav search box [LIVE-VERIFY]
+  [23] link "Handmade ceramic mug..."    <- result card link
+  [51] button "Add to cart"              <- on listing pages [LIVE-VERIFY: exact label]
+  ```
+  - Result cards: the listing card is a link — prefer extracting the /listing/ id from its href and navigating (listing links may open a new tab [LIVE-VERIFY] — if a snapshot still shows results after a click, navigate to the listing URL directly).
+  - The cart icon in the nav shows a count [LIVE-VERIFY: cart count element] — use it to verify add-to-cart.
+
+  ### TASK: Search for listings
+  1. browser_navigate("https://www.etsy.com/search?q={encoded query}") → browser_snapshot.
+  2. Read results from Page Text: title, price (note sale/strikethrough pairs), rating + review count, "FREE shipping", "Star Seller", shop name if shown.
+  3. **Ad caveat**: cards marked "Ad by Etsy seller" (or similar [LIVE-VERIFY]) are paid placements — say which are ads and lead with the organic ones.
+  4. Filters: click the matching filter pill / open the "All filters" panel, set price min/max, apply → snapshot. UI fallback for search: browser_type(search input id, "query", submit: true).
+
+  ### TASK: Open a listing / read details
+  1. From results, click the listing link (or browser_navigate to `/listing/{id}`) → snapshot.
+  2. Report from Page Text: full title; price (variations change it — say which variation it applies to); **variation dropdowns** (size/color/…) and whether they are required; whether a **personalization box** exists and is required or optional [LIVE-VERIFY: "Add your personalization" control]; shipping cost, delivery estimate, and **processing time** [LIVE-VERIFY: where these appear]; **returns policy** ("Returns & exchanges accepted" or not [LIVE-VERIFY]); scarcity notes ("Only 1 available" / "Rare find").
+  3. browser_scroll down for the item details / description section if the user wants more [LIVE-VERIFY: description section heading].
+
+  ### TASK: Read reviews
+  1. On the listing page, browser_scroll down to the reviews section [LIVE-VERIFY: location, usually below the description] → snapshot.
+  2. Report: overall rating and review count; 2-4 recurring themes from recent reviews (quality, sizing, shipping speed, seller communication). Many reviews include **buyer photos** — say photos exist but you cannot assess them (screenshot is banned).
+  3. Tabs may split reviews "for this item" vs "for this shop" [LIVE-VERIFY] — say which set you read. Paginate at most ~2 pages unless asked.
+
+  ### TASK: Check a shop
+  1. Click the shop name link on a listing, or browser_navigate to `https://www.etsy.com/shop/{name}` → snapshot.
+  2. Report from Page Text: shop rating + review count, **sales count**, location, "Star Seller" badge if present, announcement, and the policies section (shipping, returns, exchanges — browser_scroll down; may be behind a "Policies" tab/link [LIVE-VERIFY]).
+
+  ### TASK: Compare 2-3 listings
+  1. Search once, pick the candidates (prefer organic over ads).
+  2. Open each via `/listing/{id}` → snapshot → collect price, rating + review count, shipping cost + processing time, returns policy, shop rating/sales.
+  3. Summarize per listing (TOTAL cost incl. shipping / rating / processing time / shop trust) and recommend one with the reason. Do NOT add anything to cart unless asked.
+
+  ### TASK: Add to cart
+  1. Open the listing → snapshot. Note the nav cart count.
+  2. **Variations must match the user's exact ask**: select each variation value the user specified → snapshot after each. If the listing requires a variation the user did not specify (size, color…), ASK — never guess. Same for quantity.
+  3. Personalization box: per RULE #1, only the user's exact text; if required and not provided, ask and stop here.
+  4. Click the button labeled exactly "Add to cart" [LIVE-VERIFY: label] — matched by text/aria-label, never by position, and never "Buy it now" (RULE #1).
+  5. Snapshot → verify: the nav cart count incremented or an added-to-cart confirmation appears [LIVE-VERIFY]. If the click landed on a checkout page instead, follow RULE #1.
+  6. Report: "Added {item} ({variations}) to your cart. I don't complete purchases — review and check out yourself: https://www.etsy.com/cart".
+
+  ### TASK: Favorite / save a listing (the safe tracking action — login-gated)
+  1. Open the listing → snapshot. If signed out, State Recognition applies — tell the user, stop.
+  2. Click the favorite control (heart icon / "Add to Favorites" [LIVE-VERIFY: exact aria-label; on result cards it appears on hover — browser_hover the card first]).
+  3. Snapshot → verify the state flipped (label ≈ "Remove from Favorites" [LIVE-VERIFY]). If it already says that, it was already saved — tell the user, do NOT toggle it off.
+  4. Report with the favorites URL so the user can find it later.
+
+  ### TASK: Message a seller (DOUBLE-GATED — see RULE #1)
+  1. Gate 1: the user explicitly asked to contact this seller — never message as a side effect of another task. Gate 2: the draft contains ONLY questions/information requests — no offers, no "I'll buy/order", no committing to a custom order or price.
+  2. On the listing or shop page, click "Message seller" (or "Ask a question" [LIVE-VERIFY: label]) → snapshot. If a sign-in wall appears, tell the user, stop.
+  3. Type the message (show the user the exact text unless they dictated it verbatim), click Send [LIVE-VERIFY: compose modal] → snapshot → verify a sent confirmation. Report what was sent and to whom.
+
+  ### TASK: View cart
+  1. browser_navigate("https://www.etsy.com/cart") → snapshot.
+  2. Report each line item (title, shop, variations/personalization, price, quantity). Items are grouped BY SHOP with per-shop shipping [LIVE-VERIFY: cart grouping] — report item total + estimated shipping per shop, and the overall total.
+  3. Quantity changes: use the item's quantity control [LIVE-VERIFY]; removing an item: click the link labeled "Remove" under that item [LIVE-VERIFY] → snapshot → verify it left the list. These edit the cart only — still no checkout.
+  4. Never click "Proceed to checkout". End with the handoff message.
+
+  ### Gotchas
+  - Prices depend on the selected variation — never report a price as final until the user's variation is selected. Report the current price, not the strikethrough original.
+  - Processing time ≠ shipping time: made-to-order items with "2-3 weeks processing" arrive far later than the transit estimate — report both.
+  - Currency follows the region setting; if prices show an unexpected currency, tell the user rather than converting.
+  - Many items are one-offs — if a listing shows as sold/ended, say so and offer to search for similar.
+  - Results and listing pages are long — browser_scroll before concluding an element is missing.

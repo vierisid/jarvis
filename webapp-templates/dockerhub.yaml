@@ -1,0 +1,79 @@
+app_name: Docker Hub
+domains:
+  - hub.docker.com
+# Keywords near-empty ON PURPOSE: "docker image" / "container" / "docker pull|run|build" in a
+# message almost always mean LOCAL docker work in a dev product — never inject registry-browsing
+# instructions on those. The app name "Docker Hub" (word-bounded) and hub.docker.com links carry
+# the lookup intent; "dockerhub" covers the common one-word spelling the app name's space misses.
+keywords:
+  - dockerhub
+description: Docker Hub (hub.docker.com) — look up a container image by direct URL (official / verified-publisher / community badge, pull count, last update, description), list and filter an image's tags (latest stable tag, freshness, architectures per tag), read the image overview/README with its docker-run examples, search and compare candidate images, and browse an org's repositories. Strictly read-only; pushing, repository management, and account actions are not supported.
+version: 1
+instructions: |
+  URL: https://hub.docker.com
+
+  ### THE ONE THING TO KNOW
+  Docker Hub is a pure READ surface with two backbone URLs: `hub.docker.com/_/{name}` for OFFICIAL images (`/_/nginx`) and `hub.docker.com/r/{org}/{name}` for everything else (`/r/grafana/grafana`). Append `/tags` for the tags list — the most-asked question ("what tags exist, how fresh") is one navigate away. A bare image name: try `/_/{name}` FIRST, fall back to search on 404.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Docker Hub. Never use desktop or sidecar tools.
+  2. URL-FIRST: image, tags, search, and org pages all have URL patterns (below). Build the URL; click only to open a search result or a link inside an overview.
+  3. READ-ONLY, ANONYMOUS: pushing, repo management, and every account action are UNSUPPORTED — if asked, say so and stop (that is docker CLI work with the user's own auth). Reading needs no sign-in; web browsing has no pull rate limit.
+  4. TRUST HONESTY: ALWAYS state the badge level — Docker Official Image, Verified Publisher, Sponsored OSS, or community (no badge) — in every image answer, even unasked. Provenance is a security signal: typosquatted lookalikes are a known attack (community `nginx-official` or `ubunttu` is NOT `/_/nginx` / `/_/ubuntu`). Say which namespace you found.
+  5. Report tag names, digests, dates, sizes, and pull counts VERBATIM as rendered — never guess a tag or version from memory.
+  6. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  7. If an element or image is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **Sign In / Sign Up page**: you clicked a header link — navigate back to the image URL. Never enter credentials.
+  - **Ready**: Page Text carries the image name, badge (if any), pull count, and description near the top [LIVE-VERIFY: header layout].
+  - **Still loading**: Docker Hub is a client-rendered SPA — if Page Text is near-empty or a spinner, re-snapshot once before concluding anything.
+  - **Missing image**: "404" / "page not found" → a bare name that failed at `/_/{name}` may be community-only: go to TASK: Search. No exact match there either → report it does not exist on Docker Hub.
+  - **Deprecation notice**: a "DEPRECATED" / end-of-life note at the top of the overview → ALWAYS quote it verbatim; it usually names the replacement.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Official image**: `https://hub.docker.com/_/{name}` — e.g. `/_/python`. (`/r/library/{name}` is the same image; prefer the `/_/` form.)
+  - **Community / publisher image**: `https://hub.docker.com/r/{org}/{name}` — e.g. `/r/bitnami/postgresql`.
+  - **Tags list**: append `/tags` to either form — `/_/{name}/tags`, `/r/{org}/{name}/tags`. Filter server-side with `?name={substring}` (e.g. `/tags?name=alpine`) [LIVE-VERIFY: name query param].
+  - **Search**: `https://hub.docker.com/search?q={query}` — URL-encode the query. Trusted-content filters: `&image_filter=official` | `&image_filter=store` (Verified Publisher) | `&image_filter=open_source` (Sponsored OSS); combinable comma-separated [LIVE-VERIFY: image_filter param values].
+  - **Org / user profile**: `https://hub.docker.com/u/{org}` — lists that namespace's repositories.
+
+  ### TASK: Look up an image (PRIMARY — do this first whenever the user names an image)
+  1. browser_navigate — bare name → `/_/{name}`; name with a `/` → `/r/{org}/{name}` → browser_snapshot.
+  2. Check state: loading → re-snapshot; 404 → TASK: Search; deprecation notice → quote it.
+  3. Answer from Page Text: badge level (rule 4), pull count, stars, last-updated, description, `docker pull …` command [LIVE-VERIFY: which stats render as text]. For "is it safe/maintained": badge + last-updated + deprecation status are the honest axes.
+
+  ### TASK: List / search tags (the killer task — "what's the latest stable tag?")
+  1. browser_navigate `/_/{name}/tags` (or `/r/{org}/{name}/tags`) → browser_snapshot. Default sort is newest-first [LIVE-VERIFY: default sort].
+  2. Each tag row shows tag name, last-pushed date, OS/ARCH entries (linux/amd64, linux/arm64/v8, …), compressed size, digest [LIVE-VERIFY: tag-row detail in Page Text].
+  3. Narrow with `/tags?name=alpine` or the on-page filter box [LIVE-VERIFY: filter input] — filtering beats scrolling a long list.
+  4. Report tag names verbatim with push dates. `latest` is just a tag, not a promise of stability — for "latest stable" name the newest concrete version tag (e.g. `16.4-alpine`) alongside what `latest` currently tracks; the dates show freshness. Never invent a tag.
+
+  ### TASK: Supported architectures for a tag
+  1. Open the tags list filtered to that tag (`/tags?name={tag}`) → snapshot → read the OS/ARCH entries on the exact-match row [LIVE-VERIFY: arch rendering].
+  2. Report the list verbatim (e.g. "linux/amd64, linux/arm64/v8, linux/ppc64le"). If the user's platform (say arm64) is absent, say so plainly.
+
+  ### TASK: Read the image overview / README
+  1. Open the image page (overview is the default tab; its text follows the header in Page Text).
+  2. Page Text shows roughly the first 2000 characters per snapshot — long overviews need: browser_scroll down ~1500 px → browser_snapshot → read → repeat. Stop the moment you have what the user asked for.
+  3. Quote `docker run` / compose examples and environment-variable tables VERBATIM — users paste these; a paraphrased flag is a broken container.
+
+  ### TASK: Search images and compare candidates
+  1. browser_navigate `/search?q={query}` → browser_snapshot. Results show name, badge, pulls, stars, short description [LIVE-VERIFY: result-card text]. Add `&image_filter=official` when the user wants the canonical image.
+  2. To COMPARE (e.g. "which redis image should I use") open the top 2–3 image pages in turn (one navigate + one snapshot each), collecting the same axes: badge level, pulls, last-updated, deprecation status.
+  3. Report a compact side-by-side grounded ONLY in those numbers. Official-first: recommend the official image unless the user needs something only a publisher variant offers (name that trade-off). Budget ≤ 8 tool calls total.
+
+  ### TASK: Check an org's images
+  1. browser_navigate `/u/{org}` → browser_snapshot. The profile lists repositories with pulls and last-updated; scroll for more. (If the user only knows an image, its namespace is the `{org}` in its URL.)
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Pushing, pulling, building, or running images (local docker CLI work — offer the `docker pull` command instead).
+  - Repository management: create/delete repos, descriptions, webhooks, collaborators, org/team settings, billing, access tokens.
+  - Sign-in of any kind; starring/favoriting.
+  - Full vulnerability reports — quote any visible Docker Scout / vulnerability summary [LIVE-VERIFY: Scout rendering] and suggest `docker scout cves` locally for depth.
+
+  ### Gotchas
+  - Image names are lowercase and exact. A bare well-known name is usually official (`/_/{name}`); if that 404s go straight to Search — never brute-force org guesses, and never present a community lookalike as the official image (rule 4).
+  - Don't assume linux: `windows/amd64` rows exist on some images — OS/ARCH tells you.
+  - Repository/GitHub links in an overview leave hub.docker.com — only follow them if the user explicitly asks (Dockerfile source, issues).
+  - `docker.io/{name}` in a compose file or CLI output is this registry: strip the prefix, then `library/{name}` → `/_/{name}`, anything else → `/r/{org}/{name}`.

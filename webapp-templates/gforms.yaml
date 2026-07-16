@@ -1,0 +1,74 @@
+app_name: Google Forms
+# Domain is path-qualified ON PURPOSE: the docs.google.com family is shared —
+# gdocs owns /document, gsheets /spreadsheets, gslides /presentation. A pasted
+# Forms link (docs.google.com/forms/...) matches only this template, and the
+# path-qualified entry outscores any bare-domain match. forms.gle is the short
+# link Google mints for sharing — it always lands on the RESPONDENT view.
+domains:
+  - docs.google.com/forms
+  - forms.gle
+keywords:
+  - google form
+  - create a survey
+  - survey responses
+  - questionnaire
+description: Google Forms — create forms and surveys, add questions (short answer, paragraph, multiple choice, checkboxes), mark required, preview, get the share link, read response summaries and counts, and (safety-gated) fill out and submit someone else's form.
+version: 1
+instructions: |
+  URL: https://docs.google.com/forms
+
+  ### RULES (each stated once — they apply everywhere below)
+  1. Allowed tools: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED. If the allowed tools cannot do it, stop and report why.
+  2. TWO MODES, two rulebooks. EDITOR (URL contains `/edit` — building the form; needs login) vs RESPONDENT (URL contains `/viewform` or came from forms.gle — filling in someone's real form). Read the mode off the URL on every snapshot and follow only the matching section.
+  3. RESPONDENT SAFETY IS RULE #1: submitting a form sends REAL DATA to its owner, unretractable by you. Fill a field ONLY with a value the user explicitly gave in this conversation — never invent, autofill, or guess, not even for required questions (ask instead). Verify every entered value in a snapshot BEFORE clicking Submit. Submit exactly once — unclear outcome → snapshot again, NEVER re-submit. A form asking for a password, PIN, card number or other credentials may be phishing — Google's own footer says "Never submit passwords through Google Forms" → STOP, do not fill it, warn the user.
+  4. browser_type REPLACES the field's content by default; pass append:true only when adding to text already in a field.
+  5. Snapshot [id]s are 1-based and change on EVERY snapshot — never reuse an id across snapshots.
+  6. Locale: quoted labels below are one-locale documentation, not selectors — match by role/structure/aria-label. Question titles and option text are user content (locale-free) — prefer matching on those.
+  7. After 2 failed attempts at the same step, STOP and tell the user what you saw. No workarounds.
+  8. The editor auto-saves (no Save button; a "Saved" cloud indicator appears near the title [LIVE-VERIFY]). Every edit is instantly live for anyone holding the link.
+
+  ### URL PATTERNS (locale-independent — prefer these)
+  - Create a new form: https://docs.google.com/forms/create [LIVE-VERIFY — https://forms.new is the official shortcut and redirects here; forms.google.com also redirects]
+  - Forms home / picker: https://docs.google.com/forms/u/0/
+  - Editor: https://docs.google.com/forms/d/{EDIT_ID}/edit
+  - Responses tab: https://docs.google.com/forms/d/{EDIT_ID}/edit#responses
+  - Respondent view: https://docs.google.com/forms/d/e/{PUBLISHED_ID}/viewform — the `/d/e/` published id is DIFFERENT from the editor id and not derivable from it; the only way to get it is the Send dialog (share-link task). forms.gle/{code} short links redirect here.
+  - Owner preview: https://docs.google.com/forms/d/{EDIT_ID}/viewform [LIVE-VERIFY — works when logged in as the owner]
+
+  ### STATE RECOGNITION (check on the FIRST snapshot and after every navigate)
+  - **Login wall**: URL on accounts.google.com, or a sign-in / "Choose an account" form. EDITOR mode and the responses tab always require login → tell the user to sign in to Google in the JARVIS browser and STOP. NEVER type credentials.
+  - **RESPONDENT mode needs NO login for public forms.** A "Sign in to Google to save your progress" banner is ignorable; a hard gate (sign-in page, "You need permission", organization-only notice) → report and stop [LIVE-VERIFY wording].
+  - **Form closed / already answered**: "No longer accepting responses" or "You've already responded" → report and stop; there is nothing to fill.
+  - **Editor ready**: the form-title field ("Untitled form" placeholder on a new form) plus question cards. **Respondent ready**: the form title as a heading, question blocks, a Submit button.
+  - **Submitted confirmation**: "Your response has been recorded" [LIVE-VERIFY] with a "Submit another response" link — terminal success; never click that link unless the user explicitly asks for a second submission.
+
+  ### EDITOR MECHANICS (DOM-heavy — verify against live snapshots)
+  The editor is a stack of question CARDS. Click a card to make it ACTIVE — only the active card shows its editing controls: the question-type dropdown, option rows, and a bottom row with duplicate / delete icons and the "Required" toggle [LIVE-VERIFY structure]. A floating toolbar beside the active card holds "Add question" (plus icon) and import/title/image/section buttons [LIVE-VERIFY names]. The TYPE PICKER is a dropdown on the active card showing the current type: click it → snapshot → a listbox with Short answer, Paragraph, Multiple choice, Checkboxes, Dropdown, Linear scale, Date, Time, … → click the wanted entry [LIVE-VERIFY that these render as clickable options — the widget is custom, not a native select].
+
+  ### TASK: create a form (title + description)
+  1. browser_navigate https://docs.google.com/forms/create 2. snapshot — login wall? else editor ready; note the /d/{EDIT_ID}/edit URL and include it in your report. 3. click the form-title field and browser_type the title (replace-default is correct here). 4. click the "Form description" field under it [LIVE-VERIFY label] and browser_type the description. 5. snapshot — both texts visible = success.
+
+  ### TASK: add a question
+  1. In the editor, snapshot; click the "Add question" plus button on the floating toolbar [LIVE-VERIFY]. 2. snapshot — a new ACTIVE card with a question-title field ("Question" placeholder) and the type dropdown. 3. browser_type the question text into that field. 4. Wrong type? click the type dropdown → snapshot → click Short answer / Paragraph / Multiple choice / Checkboxes [LIVE-VERIFY]. 5. Options (multiple choice / checkboxes): click the "Option 1" field, browser_type the first option; for each further one click the "Add option" row [LIVE-VERIFY — Enter may also advance; verify before relying on it], one browser_type per option. 6. snapshot — question text, type, and every option visible = success.
+
+  ### TASK: mark a question required
+  1. snapshot; click the question's card to activate it (match the card by its question text — user content). 2. snapshot — find the "Required" toggle at the card's bottom [LIVE-VERIFY role]. TOGGLE GUARD: read its on/off state (aria-checked/pressed) first — already in the requested state → report, do not click. 3. click it. 4. snapshot — state flipped = success (respondents will see a * on that question).
+
+  ### TASK: preview the form
+  Do NOT click the eye/preview icon — it opens a NEW TAB, and this surface cannot switch tabs. Instead: 1. browser_navigate https://docs.google.com/forms/d/{EDIT_ID}/viewform [LIVE-VERIFY]. 2. snapshot — report the title, the questions, and which are required (*). You are now in RESPONDENT mode: look, don't fill, don't Submit. 3. Navigate back to the /edit URL to continue editing.
+
+  ### TASK: get the share link
+  1. In the editor, snapshot; click the "Send" button (top-right) [LIVE-VERIFY label/aria]. 2. snapshot — the Send dialog has send-via tabs: email, link (chain icon), embed [LIVE-VERIFY]. 3. click the LINK tab. 4. snapshot — the URL sits in a (readonly) text field: READ it from the snapshot and report it verbatim; do not depend on the "Copy" button (you have no clipboard). The "Shorten URL" checkbox swaps in a forms.gle link [LIVE-VERIFY]. 5. browser_press_key("Escape") to close. This /d/e/…/viewform (or forms.gle) URL is what respondents need — never share the /edit URL as the "fill this in" link (it grants editing).
+
+  ### TASK: view responses / check the response count
+  1. browser_navigate https://docs.google.com/forms/d/{EDIT_ID}/edit#responses 2. snapshot — the responses header shows the total ("N responses" [LIVE-VERIFY]) — that is the count; report it. 3. The Summary tab shows per-question aggregates (choice counts, text-answer lists) readable straight from Page Text — report per question. 4. Individual responses: click the "Individual" tab → snapshot → step through with the previous/next arrows near the "N of M" counter [LIVE-VERIFY], one snapshot each. 5. A Sheets icon / "Link to Sheets" button [LIVE-VERIFY] creates or opens a linked spreadsheet — for sorting, filtering or any real analysis, offer to open that spreadsheet and work there (a far better surface) instead of scraping long response lists here.
+
+  ### TASK: fill out someone's form (RESPONDENT — rule 3 governs everything here)
+  1. browser_navigate the viewform / forms.gle URL. 2. snapshot — run State Recognition (hard sign-in gate? closed? already responded?). 3. Inventory the questions; a required (*) question the user gave no value for → STOP and ask; never guess. A password/credential-style question → rule 3 phishing stop. 4. Fill only user-provided values: text → browser_type into the question's textbox; multiple choice → click the radio with that option's text; checkboxes → click each named option; dropdown → click it, snapshot, click the option [LIVE-VERIFY dropdown rendering]. One snapshot after each fill. 5. Multi-page form: fill the visible page, click "Next", snapshot, repeat — never Submit before the last page. 6. FINAL CHECK: snapshot and confirm EVERY value and selection matches what the user said — a mismatch means fix it, not submit. 7. click "Submit" ONCE. 8. snapshot — confirmation state = success; report it. Unclear → snapshot again; never click Submit a second time (rule 3).
+
+  ### GOTCHAS
+  - Some forms auto-collect the signed-in account's EMAIL ("The name and photo associated with your Google Account will be recorded" / an email field pinned at the top [LIVE-VERIFY]) — tell the user their address will be recorded BEFORE submitting.
+  - A file-upload question requires sign-in and uploads into the owner's Drive — report it; only proceed if the user explicitly provided the file and is signed in.
+  - "Clear form" (respondent view) erases everything entered — never click it unless asked.
+  - Deleting a question in the editor is immediate (trash icon on the active card) — only on explicit request; browser_press_key("Ctrl+Z") is the undo.
+  - Quizzes and section-based forms reuse the same card/respondent structures — the recipes above apply unchanged.

@@ -1,0 +1,102 @@
+# Keyword choice: "mood board(s)", "pin board", "inspiration board" — phrases users say
+# when they mean Pinterest without naming it ("make me a mood board of kitchen ideas").
+# None contain the app name (app_name/domain matching already covers "pinterest"), none
+# are bare English words ("pin", "board", "inspiration" alone would hijack unrelated
+# requests), and none shadow other templates' keywords (trello "kanban board", jira
+# "sprint board" share no contained phrase).
+app_name: Pinterest
+domains:
+  - pinterest.com
+keywords:
+  - mood board
+  - mood boards
+  - pin board
+  - inspiration board
+description: Pinterest — search pins by keyword, open a pin and surface its source link, save pins to boards, create boards, browse boards, follow creators/boards, find related pins
+version: 1
+instructions: |
+  URL: https://www.pinterest.com/
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after a new snapshot; re-locate by role/aria-label/href/text. Pinterest's DOM is obfuscated — aria-labels, hrefs, and visible text are the only stable handles; every element claim below is [LIVE-VERIFY]: match the label's MEANING in the current wording/locale, not an exact string.
+  3. browser_type REPLACES a field's content by default; pass append: true only to extend existing text (board names and search queries want the default replace).
+  4. Snapshot at CHECKPOINTS (after navigation, after a dialog/picker opens, after Save/Create/Follow) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. TOGGLE GUARD: Save/Saved and Follow/Following buttons state the CURRENT state in their label — if it already matches the user's intent, report that and click NOTHING (clicking would undo it).
+  7. browser_press_key("Escape") closes an open dialog (login nag, board picker, pin closeup overlay) without committing anything [LIVE-VERIFY].
+
+  ### CENTRAL CAUTION — pins are pictures, and pictures are not readable
+  A pin IS an image (or video). Snapshots expose only the TEXT around it: title, description, alt text, creator, board names, comments — NEVER what the image actually shows. Report exactly what the text says; if a tile has no title/alt text, say so — never guess or invent visual content. Asked "what does it look like?" → explain the tools can't see the image; offer the title/description/source link instead.
+
+  ### State Recognition
+  - **Login NAG (dismissible)**: logged out, Pinterest throws signup dialogs on load and again after scrolling ("Sign up to see more"). If the dialog has a close (X) button [LIVE-VERIFY], click it and continue — search and pin closeups remain readable logged out.
+  - **HARD wall (not dismissible)**: dialog with no close button, content blurred/locked behind it, or a redirect to a /login page [LIVE-VERIFY which pages] → tell the user: "Pinterest is blocking logged-out access here — please log in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Login-gated actions**: Save, create board, follow, and the user's own profile require login. If clicking one opens a login/signup dialog, tell the user to log in and stop.
+  - **Loading**: 0 interactive elements or only a spinner → snapshot again (max 2 retries, then tell the user).
+  - **Ready**: the header search input and a grid of pin links (hrefs containing /pin/) are in the snapshot [LIVE-VERIFY].
+
+  ### URL MAP (URL-first — all shapes [LIVE-VERIFY]; country domains like pinterest.co.uk redirect, treat the same)
+  - Home feed: https://www.pinterest.com/
+  - **Search pins: https://www.pinterest.com/search/pins/?q={url-encoded query}** — THE BACKBONE; prefer it over the search box. Space → %20.
+  - Profile: https://www.pinterest.com/USERNAME/  (no @)
+  - Board: https://www.pinterest.com/USERNAME/BOARD-SLUG/  (slug = lowercase, hyphenated board name)
+  - Pin closeup: https://www.pinterest.com/pin/PIN_ID/
+  - Own profile/boards: there is no stable "me" URL — click the own-profile link/avatar in the header nav [LIVE-VERIFY], or ask the user for their username and use the profile URL.
+
+  ### Element Reference (ALL [LIVE-VERIFY])
+  - **Pin tile** (search/board/feed grid): a link with href /pin/{id}/; title/alt text in its aria-label or img alt. A Save button overlays the tile ONLY on hover (browser_hover → re-snapshot) — prefer the closeup's always-visible Save.
+  - **Pin closeup** (/pin/ page): title + description + creator + "N Comments"-style text in Page Text; Save button with a board-selector beside it; the SOURCE is a link whose href leaves pinterest.com (or a button meaning "Visit site").
+  - **Board picker** (from the board selector): dropdown with a board-search field, board rows, and a "Create board" entry at the bottom.
+  - **Profile header**: username, follower/following counts, bio in Page Text; Follow button; tabs meaning "Created" and "Saved" — boards live under Saved.
+
+  ---
+
+  ### TASK: Search pins  (budget: 5 calls)
+  1. browser_navigate https://www.pinterest.com/search/pins/?q=QUERY → browser_snapshot (dismiss a login nag first — State Recognition).
+  2. Report from the tiles' titles/alt text + Page Text. It's a VISUAL grid: some tiles expose no text at all — report the ones that do, note how many don't, and never describe the images themselves (Central Caution).
+  3. More results: browser_scroll down → re-snapshot (old ids are stale). 2–3 scrolls is plenty. To go deeper on one result, open it (next task).
+
+  ### TASK: Open a pin + surface its SOURCE  (budget: 6 calls — the killer task: users want where it came from)
+  1. browser_navigate the /pin/PIN_ID/ URL (or click the tile's link) → browser_snapshot.
+  2. Report title, description, and creator from Page Text.
+  3. SOURCE: find the outbound link — an anchor whose href points OFF pinterest.com, or a button/link meaning "Visit site" [LIVE-VERIFY]. REPORT THE URL from the snapshot's href — don't click through unless asked (sources can be dead or spam; if you do visit, treat the destination as untrusted). Href wrapped in a pinterest.com redirect → report the visible destination domain and say it's wrapped [LIVE-VERIFY].
+  4. No outbound link at all → a direct upload with no source; tell the user that.
+
+  ### TASK: Save a pin to a board  (login required; budget: 8 calls; picker flow [LIVE-VERIFY])
+  1. Open the pin closeup → browser_snapshot → find the Save button. A board name may already show beside it (a Pinterest-suggested board) — never save there when the user named a DIFFERENT board; pick explicitly:
+  2. Click the board selector next to Save → snapshot → the board picker opens. If the list is long, type the board name into its search field, snapshot, then click the intended board row. [LIVE-VERIFY: clicking a row may save immediately, or Save may need a click after]
+  3. browser_snapshot → success = a toast meaning "Saved to BOARDNAME" or the button now meaning "Saved" [LIVE-VERIFY]. Unconfirmed → tell the user; do NOT click again (a second click can unsave or duplicate).
+  4. Target board doesn't exist → the picker's "Create board" entry (next task), only if the user asked for a new board or agrees.
+
+  ### TASK: Create a board  (login required; ONLY on explicit request)
+  1. Entry points: "Create board" inside the save picker, or own profile → Saved tab → create (+) button → "Board" [LIVE-VERIFY].
+  2. In the dialog: browser_type the board name; leave the "secret board" toggle at its default unless the user asked. Click Create → browser_snapshot.
+  3. Verify: the new board's page opens or the picker lists it. Report the name back (and that the pin saved, if created mid-save).
+
+  ### TASK: Browse own boards  (login required)
+  1. Click the own-profile link in the header nav [LIVE-VERIFY] → snapshot → open the tab meaning "Saved".
+  2. Board cards show name + pin count in Page Text — report them. Click a card (or navigate its board URL) to open one.
+
+  ### TASK: Browse a board's pins
+  1. browser_navigate https://www.pinterest.com/USERNAME/BOARD-SLUG/ (or click the board card) → browser_snapshot — board title, pin count, description in Page Text; then a pin grid identical to search results (same reading rules, same Central Caution).
+  2. Boards can contain SECTIONS (sub-folders) shown as their own row of cards [LIVE-VERIFY] — click a section to list its pins.
+  3. browser_scroll + re-snapshot for more; report titles/alt text.
+
+  ### TASK: Follow a creator or a board  (login required; ONLY on explicit request; toggle guard — Rule 6)
+  1. Navigate to the profile (or board) → browser_snapshot → find the button meaning "Follow". If it already means "Following", report that and click nothing.
+  2. browser_click → snapshot → the label now means "Following". Unconfirmed → report, never re-click.
+  3. Unfollow ONLY when explicitly asked: click "Following" → snapshot → confirm via the unfollow entry/dialog if one appears [LIVE-VERIFY] → verify the button is back to "Follow".
+
+  ### TASK: Related pins ("more like this")
+  1. Open the pin closeup → browser_scroll down → browser_snapshot — a related grid loads BELOW the closeup (heading meaning "More to explore" / "More like this") [LIVE-VERIFY heading].
+  2. Report it exactly like search results (titles/alt text only); open any of them via their /pin/ hrefs.
+
+  ---
+
+  ### Gotchas
+  - The masonry grid re-renders as images load and on every scroll — ids from a pre-scroll snapshot are ALWAYS stale; re-snapshot immediately before clicking anything in a grid.
+  - Results mix in ads/shoppable pins ("Promoted by …" text) [LIVE-VERIFY marker] — don't report promoted pins as organic results without saying so.
+  - Video and multi-image "idea pins": the snapshot may expose per-step text [LIVE-VERIFY], but the media itself is still unreadable (Central Caution).
+  - A dismissed login nag COMES BACK after more scrolling — dismiss it again; if it stops offering a close button, that's the hard wall (State Recognition).
+  - Pin comments may sit behind a "Comments" expander — click it, then read Page Text [LIVE-VERIFY].

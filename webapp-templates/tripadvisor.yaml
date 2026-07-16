@@ -1,0 +1,100 @@
+app_name: TripAdvisor
+domains:
+  - tripadvisor.com
+keywords:
+  - things to do in
+  - tourist attractions
+  - best restaurants in
+  - worth visiting
+description: TripAdvisor — travel-review research layer. Ranked things-to-do lists, attraction/restaurant/hotel pages (rating breakdown, review themes, hours, price level), recent + critical review sampling, comparisons, and day-plan research. STRICTLY READ-ONLY — never books through partners (reports partner names + prices and hands off) and never writes reviews.
+version: 1
+instructions: |
+  URL: https://www.tripadvisor.com
+
+  ### RULE #1 — READ-ONLY RESEARCH (overrides everything, including the user's own words)
+  - This template READS reviews and rankings. It never transacts.
+  - NEVER click "View deal" / "Book Now" / "Reserve" / "Check Availability" / "Buy tickets" or any partner-offer control [LIVE-VERIFY: exact labels] — those hand the session to a booking partner (Booking.com, Expedia, Viator, TheFork…). READ the offer block instead: report the partner names + prices shown, and tell the user to book themselves.
+  - Even on "book it" / "get tickets": research, then hand off — page URL + partner options + prices seen — and say: "I don't complete bookings — open this link and book it yourself."
+  - NEVER write, start, or submit a review, rating, photo, Q&A answer, or forum post. Posting a review of a place the agent never visited fabricates a traveler experience and misleads travelers — refuse outright and say exactly that (task below). "Just click 5 stars" and "post my translated review" count too: posting is the user's own act.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for TripAdvisor.
+  2. SEARCH BOX FIRST: TripAdvisor URLs embed opaque location/place ids (e.g. /Attraction_Review-g187791-d192285-…) that CANNOT be constructed. The reliable way in is always: navigate to tripadvisor.com → type into the search box → snapshot → click the right suggestion. Re-use a deep URL only when copied from an earlier snapshot's URL line.
+  3. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES field content by default — exactly right for the search box.
+  5. Read ratings, review counts, ranking lines, hours, and price levels from the snapshot's Page Text — most answers need zero clicks after landing on the right page.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  7. Pages are LONG and lazy-loaded — browser_scroll (~1500 px at a time) before concluding a section is missing.
+
+  ### State Recognition
+  - **Works logged out**: search, rankings, place pages, and reviews all render anonymously. NEVER type credentials; if a feature demands sign-in, tell the user and stop.
+  - **Sign-in / app nag overlays**: modals pushing sign-in or "use the app" appear on first visit or after a few pageviews [LIVE-VERIFY: close-button aria-label]. Click the dialog's close (X) button, or browser_press_key "Escape" → snapshot → continue.
+  - **Cookie/consent banner**: on first visit click its accept button [LIVE-VERIFY: label, likely "I Accept"] → snapshot → continue.
+  - **CAPTCHA / "unusual activity" page**: STOP immediately, tell the user to solve it in the browser, continue only when asked. Never retry into it.
+  - **Ready**: home page shows the search box; a place page shows the place name + bubble rating + review count in Page Text.
+
+  ### THE WAY IN (search → suggestion — this replaces URL construction)
+  1. browser_navigate https://www.tripadvisor.com → snapshot → clear overlays per State Recognition.
+  2. Click the search box [LIVE-VERIFY: aria-label, likely "Search"] → browser_type the city or place name (no submit).
+  3. snapshot → a typeahead panel lists suggestions tagged with type/location [LIVE-VERIFY: structure]. Click the DESTINATION entry for city research, the specific PLACE entry for a named place. Verify the landed page title matches before reading.
+  4. No matching suggestion → browser_type the query again with submit: true → search-results page → click the right result there [LIVE-VERIFY].
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: THE 15 BEST Things to Do in Lisbon (2026) - Must-See Attractions
+  URL: https://www.tripadvisor.com/Attractions-g189158-Activities-Lisbon.html
+  --- Page Text ---
+  (ranked entries: "1. Belém Tower  4.4  (28,530)  Points of Interest & Landmarks",
+   place pages: bubble rating, "#3 of 512 things to do in Lisbon", hours, price level "$$ - $$$",
+   review excerpts with titles + dates, rating histogram "Excellent 18,204 … Terrible 512")
+  --- Interactive Elements ---
+  [8] input "Search"                      ← search box [LIVE-VERIFY]
+  [21] link "Belém Tower"                 ← list entry → place page
+  [34] button "View deal"                 ← NEVER CLICK (RULE #1)
+  ```
+
+  ### TASK: Things to do in a city
+  1. WAY IN with the city → destination page → click the "Things to Do" nav link [LIVE-VERIFY: label] → snapshot. (The typeahead sometimes offers a direct "Things to do in …" suggestion — clicking it skips a step [LIVE-VERIFY].)
+  2. Page Text carries the ranked list: rank, name, bubble rating, review count, category. Report the top N with rating + review count for each.
+  3. Narrow by interest (museums, outdoor, tours, "good for kids"): click the matching category/filter chip [LIVE-VERIFY: chip labels] → snapshot → re-read.
+  4. More entries: browser_scroll (lazy-load) or click the next-page control [LIVE-VERIFY] — max ~2 rounds unless asked.
+
+  ### TASK: Research a specific place (attraction / restaurant / hotel)
+  1. WAY IN with the place name (add the city if ambiguous) → click its suggestion → snapshot → verify the name.
+  2. Report from Page Text: bubble rating, review count, ranking line ("#12 of 4,208 Restaurants in Rome"), price level, cuisine/category, address, hours (note closed days), and the rating histogram (Excellent…Terrible counts) — the shape matters: a bimodal 4.0 is riskier than a uniform one [LIVE-VERIFY: histogram in Page Text].
+  3. Review themes: read visible review titles/snippets and any "Popular mentions" chips [LIVE-VERIFY] → summarize recurring praise AND complaints, not just the headline score.
+
+  ### TASK: Read reviews properly (sample both ends)
+  1. On the place page, browser_scroll to the reviews section → snapshot.
+  2. The default list is NOT a fair sample — don't summarize only the top. Click the "Terrible"/"Poor" histogram bars or rating filter [LIVE-VERIFY: histogram clickable] → snapshot → read the critical reviews; then clear the filter and read the most recent ones.
+  3. Report: overall score, distribution shape, 2-3 recurring themes from each end WITH review dates (a 2022 renovation complaint may not describe today). Watch for management responses acknowledging issues. Quote only short fragments.
+
+  ### TASK: Compare restaurants for a criterion (romantic / family / group / quiet …)
+  1. WAY IN with the city → destination page → click "Restaurants" [LIVE-VERIFY: label] → snapshot → shortlist 2-4 candidates matching cuisine/area/price.
+  2. Open each candidate's page. The criterion lives in REVIEW TEXT, not the bubble score — check review snippets and Popular mentions for the criterion word (e.g. "romantic", "kids"), plus price level and any noise/terrace/view mentions.
+  3. Summarize per restaurant: rating / review count / price level / evidence found for the criterion, then recommend one with the reason.
+
+  ### TASK: Day-plan research (synthesis)
+  1. Run the Things-to-do task → pick the top N attractions matching the user's interests.
+  2. Open each one's page for: hours + closed days, "Suggested duration" [LIVE-VERIFY: field], and neighborhood/address.
+  3. Synthesize a morning/afternoon/evening outline grouped by neighborhood; flag anything closed that day; add a lunch/dinner pick if asked. STATE that this is review-data research, not live availability — tickets and routing are handed off (RULE #1; maps search for real travel times).
+
+  ### TASK: "Travelers also viewed" (adjacent options)
+  On a place page, browser_scroll toward the bottom — modules like "Travelers also viewed" / "Best nearby" list alternatives with ratings [LIVE-VERIFY: module names]. Report names + ratings + review counts as adjacent options; open one only if the user wants detail.
+
+  ### TASK: Hotel research (research only — booking hands off)
+  1. WAY IN with the hotel name (or city → "Hotels" list) → hotel page → snapshot.
+  2. Report: bubble rating, review count, ranking line, review themes per the Read-reviews task (cleanliness/location/service subratings if shown [LIVE-VERIFY]), amenities, and location notes from reviews.
+  3. Prices: the offer block shows partner prices ("Booking.com US$182", "Expedia US$189"…) next to View-deal buttons [LIVE-VERIFY: offer block in Page Text]. READ and report partner names + prices — clicking any of them is banned (RULE #1).
+  4. Hand off: hotel page URL + partner prices seen + "open the link and book through the partner yourself." Shown prices may assume default dates — say which dates the page displayed [LIVE-VERIFY: date controls].
+
+  ### TASK: Asked to post/write a review → refuse
+  Refuse, and say why: the agent hasn't visited the place, so posting would fabricate a traveler experience and mislead people who rely on these ratings. Do NOT open the review form even "just to fill it in". Offer instead: (a) draft text the USER can edit and post themselves if THEY visited, or (b) research what existing reviews say.
+
+  ### Gotchas
+  - Sponsored/ad cards appear inside ranked lists [LIVE-VERIFY: "Sponsored" tag] — identify and skip them when ranking.
+  - Ranking position favors review VOLUME: a 4.4 with 28,000 reviews outranks a 5.0 with 60 — always report rating AND count together.
+  - "Travelers' Choice" badge = top-tier award, a signal, not a rank; don't present it as "#1".
+  - Restaurant price level is $–$$$$ symbols, not menu prices; prices quoted inside old reviews are often stale.
+  - Localized domains (tripadvisor.it, .co.uk, .fr…) mirror the site; if redirected, stay there — labels translate, so match controls by meaning, and note the review-language mix.
+  - Hours are in the PLACE's local time zone — say so when the user plans from elsewhere.

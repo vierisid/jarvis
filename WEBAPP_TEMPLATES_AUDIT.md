@@ -205,6 +205,26 @@ Batch-2 note: the launch hit a session usage limit twice — 11 files were writt
 | ganalytics v1 | 10.2KB | 4 | tables-not-charts honesty; /admin off-limits; property+range mandatory in every report; kw ga4/pageviews/… |
 | gcontacts v1 | 9.0KB | 4 | "what's X's email" backbone; edits report old→new; deletes gated with 30-day trash note |
 
+### P3.5 — expansion batch 5 (61 → 74 templates)
+☑ DONE 2026-07-16: all 13 written, no interruptions. **Library is now 74 templates, 0 lint errors / 0 warnings, 725KB instructions, zero cross-template collisions, 1428 [LIVE-VERIFY] markers.**
+DELIBERATELY EXCLUDED (permanent): password managers, PayPal, banking (credential/money infrastructure). DEFERRED: cloudflare + supabase dashboards (DNS edits / SQL editors need dedicated safety design).
+
+| new template | size | kw | notes |
+|---|---|---|---|
+| threads v1 | 12.0KB | 0 | Meta GO-SLOW + Instagram-account-linkage flag warning; "threads" homonym documented |
+| pinterest v1 | 9.6KB | 4 | pin SOURCE-URL surfacing is the killer task; images-not-readable honesty |
+| etsy v1 | 11.1KB | 3 | cart-stop; personalization fields = purchase inputs (user-provided text only); seller messaging double-gated |
+| tripadvisor v1 | 9.7KB | 4 | read-only research; review WRITING refused as fabrication; both-ends review sampling |
+| clickup v1 | 11.0KB | 0 | /t/{id} permalink backbone; hierarchy stated; no-drag; Ctrl+K command center (linear model) |
+| canva v1 | 9.9KB | 4 | figma-model canvas caution (gslides-relaxed: in-edit contenteditable = THE live-capture question); Pro money guard; "instagram post" kw rejected (co-injection) |
+| gforms v1 | 9.9KB | 4 | domain docs.google.com/forms + forms.gle; respondent safety rule #1 incl. password-question phishing STOP; published-ID ≠ editor-ID trap |
+| gtasks v1 | 6.7KB | 0 | translate-class lean; todo-vocab keywords banned (todoist lesson) |
+| pypi v1 | 9.1KB | 0 | npm mirror; yank banners verbatim; wheel-tag decoding; no invented download counts |
+| dockerhub v1 | 8.1KB | 1 | badge-level (official/verified/community) mandatory in every answer; typosquatting warning; kw "dockerhub" catches the one-word spelling |
+| arxiv v1 | 7.6KB | 4 | /html/{id} full-text path (PDF unreadable, stated); AI category-code table; kw preprint(s) |
+| gnews v1 | 7.6KB | 4 | morning-brief headlines; source attribution in CENTRAL CAUTION (non-negotiable); paywalls reported never bypassed |
+| archive v1 | 7.4KB | 3 | Wayback timestamp-URL-is-the-API; no typing anywhere; /save/{url} the one gated write |
+
 ---
 
 ## P4 — DESKTOP app templates (planned; GATED on Structural Runtime)
