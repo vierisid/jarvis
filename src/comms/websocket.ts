@@ -97,6 +97,11 @@ function isPublicRoute(pathname: string, method: string): boolean {
     pathname === '/sidecar/connect' ||
     pathname === '/api/sidecars/.well-known/jwks.json' ||
     pathname.startsWith('/api/webhooks/') ||
+    // The control-plane bench endpoint bypasses the dashboard access-token gate
+    // ONLY when the daemon was started with JARVIS_DEBUG_RPC set — and it is
+    // still independently protected by that secret echoed as a header (see
+    // api-routes.ts). Without the env var the route does not exist at all.
+    (pathname === '/api/debug/rpc' && !!process.env.JARVIS_DEBUG_RPC) ||
     method === 'OPTIONS'
   );
 }

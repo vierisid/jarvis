@@ -97,6 +97,23 @@ type Row = {
 async function main() {
   const opts = parseArgs(Bun.argv.slice(2));
 
+  // Preflight: confirm the debug endpoint is reachable (fail fast + clearly).
+  {
+    const res = await fetch(`${opts.base}/api/debug/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-debug-rpc-token': opts.token },
+      body: JSON.stringify({ method: '__list_sidecars' }),
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => null);
+    if (!res) { console.error(`Cannot reach daemon at ${opts.base}`); process.exit(2); }
+    if (res.status === 404) { console.error('debug endpoint 404 — start the branch daemon with a matching JARVIS_DEBUG_RPC'); process.exit(2); }
+    const list = (await res.json()) as Array<{ connected: boolean }>;
+    if (!Array.isArray(list) || !list.some((s) => s.connected)) {
+      console.error('No connected sidecar — start jarvis-sidecar.exe and confirm it connects, then retry.');
+      process.exit(2);
+    }
+  }
+
   // One screenshot per kind for the token-cost proxy.
   const shotBytes: Record<string, number> = {};
   for (const kind of ['desktop', 'browser']) {

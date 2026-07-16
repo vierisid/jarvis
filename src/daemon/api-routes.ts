@@ -3603,6 +3603,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             method?: string;
             params?: Record<string, unknown>;
           };
+
+          // The bench harness lists sidecars THROUGH this endpoint (which is
+          // reachable with just the debug secret) so it never needs the
+          // access-token-gated /api/sidecars.
+          if (body.method === '__list_sidecars') {
+            return json(ctx.sidecarManager.listSidecars().map((s) => ({
+              id: s.id, name: s.name, connected: s.connected, capabilities: s.capabilities,
+            })));
+          }
+
           if (!body.method) return error('Missing "method" field');
 
           const sidecars = ctx.sidecarManager.listSidecars();
