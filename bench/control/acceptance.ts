@@ -327,7 +327,14 @@ async function suiteBrowser(d: Driver, opts: Opts) {
       record('AX-set To field (read-back verified)', !r.error && asObj(asObj(r.result).readback).value === 'nobody@example.com',
         r.error ?? `readback=${JSON.stringify(asObj(r.result).readback)}`);
     } else {
-      record('AX-set To field', false, 'To field not found in AX snapshot (Gmail layout/login?)');
+      // Dump the editable fields in the compose window so we can see the real
+      // accessible names/roles (Gmail's To/Subject naming isn't standardized).
+      const editable = e2
+        .filter((e) => e.interactive === true && editableRoles.has(e.role as string))
+        .map((e) => `${e.role} "${e.name}"`)
+        .slice(0, 30);
+      record('AX-set To field', false,
+        `no editable field matching /to|recipients/. Editable fields in compose: ${editable.join(' | ') || '(none — compose may not have rendered; ' + e2.length + ' total elements)'}`);
     }
     if (subj) {
       const r = await d.rpc('browser_ax_set_value', { backend_node_id: subj.backend_node_id, value: 'JARVIS acceptance test' });
