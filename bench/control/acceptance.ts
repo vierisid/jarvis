@@ -124,6 +124,19 @@ function record(name: string, pass: boolean, detail: string, ms?: number): Check
 const asObj = (r: unknown): Record<string, unknown> =>
   r && typeof r === 'object' ? (r as Record<string, unknown>) : {};
 
+/**
+ * The PID to address a launched app's window. Packaged apps (Win11 Notepad,
+ * Calculator, Store apps) hand their window to a broker process, so the
+ * launcher PID has no window — launch_app returns window_pid in that case.
+ * Prefer it.
+ */
+function windowPidOf(launchResult: unknown): number | undefined {
+  const r = asObj(launchResult);
+  if (typeof r.window_pid === 'number') return r.window_pid;
+  if (typeof r.pid === 'number') return r.pid;
+  return undefined;
+}
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -185,15 +198,20 @@ async function suitePhase0(d: Driver, opts: Opts) {
 
   // 5. find_element miss → near-miss candidates ("Save" should surface "Save As…").
   {
-    // Requires a foreground app with a Save/Save As menu; best-effort on Notepad.
+    // Requires a foreground app; best-effort on Notepad. Use the WINDOW pid
+    // (packaged Notepad's launcher pid has no window).
     const launch = await d.rpc('launch_app', { executable: opts.app });
-    const pid = asObj(launch.result).pid;
+    const pid = windowPidOf(launch.result);
     await sleep(400);
     const r = await d.rpc('find_element', { pid, name: 'Save', control_type: 'MenuItem' });
-    const res = asObj(r.result);
-    const hasHint = typeof res.hint === 'string' || Array.isArray(res.similar);
-    record('find_element miss returns hint/similar', hasHint,
-      Array.isArray(res.similar) ? `${(res.similar as unknown[]).length} similar` : String(res.hint ?? 'none'));
+    if (r.error) {
+      record('find_element miss returns hint/similar', false, `RPC error (pid ${pid}): ${r.error.slice(0, 120)}`);
+    } else {
+      const res = asObj(r.result);
+      const hasHint = typeof res.hint === 'string' || Array.isArray(res.similar);
+      record('find_element miss returns hint/similar', hasHint,
+        Array.isArray(res.similar) ? `${(res.similar as unknown[]).length} similar` : String(res.hint ?? `match_count=${res.match_count ?? '?'}`));
+    }
   }
 
   // 6. press_keys win chord (real Windows key). Opens Run dialog; we just
@@ -273,7 +291,14 @@ async function suiteBrowser(d: Driver, opts: Opts) {
     // Deliberately do NOT send — leave the draft for manual inspection.
     record('compose reached (draft left unsent)', true, 'draft prepared; not sent');
   } else {
-    record('locate Compose in AX tree', false, 'no interactive element named "Compose" — Gmail not logged in, or different locale');
+    // Show what the AX tree actually contains so we can tell "not logged in"
+    // from "the button has a different accessible name".
+    const interactiveNames = elems
+      .filter((e) => e.interactive === true && typeof e.name === 'string' && (e.name as string).trim())
+      .map((e) => `"${e.name}"`)
+      .slice(0, 25);
+    record('locate Compose in AX tree', false,
+      `no interactive element matching /compose/. Interactive elements present: ${interactiveNames.join(', ') || '(none — Gmail likely not logged in, or still loading)'}`);
   }
 
   // Rot-proofing: same-page re-snapshot should re-resolve a stored sig at
@@ -293,16 +318,21 @@ async function suiteBrowser(d: Driver, opts: Opts) {
 async function suiteDesktop(d: Driver, opts: Opts) {
   console.log('\n=== Phase 1 — desktop UIA semantic snapshot ===');
   const launch = await d.rpc('launch_app', { executable: opts.app });
-  const pid = asObj(launch.result).pid ?? asObj(launch.result).window_pid;
+  const pid = windowPidOf(launch.result); // window pid — packaged apps differ from launcher pid
   await sleep(600);
 
   const snap = await d.rpc('get_window_tree', { pid, semantic: true, depth: 8 });
+  if (snap.error) {
+    record('semantic snapshot emits sig/path/ordinal', false, `RPC error (pid ${pid}): ${snap.error.slice(0, 140)}`, snap.elapsed_ms);
+  }
   const res = asObj(snap.result);
   const els = Array.isArray(res.elements) ? (res.elements as Array<Record<string, unknown>>) : [];
   const withSig = els.filter((e) => typeof e.sig === 'string' && e.sig !== '').length;
-  record('semantic snapshot emits sig/path/ordinal',
-    els.length > 0 && withSig === els.length,
-    `${withSig}/${els.length} elements carry a sig`, snap.elapsed_ms);
+  if (!snap.error) {
+    record('semantic snapshot emits sig/path/ordinal',
+      els.length > 0 && withSig === els.length,
+      els.length === 0 ? `0 elements for pid ${pid} (window under a different pid? launch returned pid=${asObj(launch.result).pid}, window_pid=${asObj(launch.result).window_pid})` : `${withSig}/${els.length} elements carry a sig`, snap.elapsed_ms);
+  }
 
   // Re-snapshot and confirm sigs are stable for an unchanged window.
   const snap2 = await d.rpc('get_window_tree', { pid, semantic: true, depth: 8 });
