@@ -15,7 +15,7 @@ instructions: |
   - NEVER proceed through checkout. NEVER click "Buy Now", "Proceed to checkout", "Place your order", or ANY 1-Click purchase control. NEVER add, select, or modify payment methods or addresses.
   - The hard stop is the CART: add items, show the cart contents and total, then tell the user to complete the purchase themselves. This applies even if the user said "buy it" — the job ends at the cart + a clear handoff message.
   - If a click unexpectedly lands on a checkout/payment page (URL contains /checkout/ or /buy/ or the page asks for shipping/payment), browser_navigate back to https://www.amazon.com/gp/cart/view.html immediately and tell the user what happened. Click NOTHING on a checkout page.
-  - On product pages, "Buy Now" sits directly below "Add to Cart" [LIVE-VERIFY: buybox layout] — match the Add to Cart button by its exact text/aria-label, never by position, before clicking.
+  - On product pages, "Buy Now" (id buy-now-button) sits directly below "Add to cart" (id add-to-cart-button) — match the Add to cart button by its exact text/id, never by position, before clicking.
 
   ### RULES
   1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Amazon.
@@ -26,19 +26,19 @@ instructions: |
   6. Read prices, ratings, and availability from the snapshot's Page Text — most reporting tasks need zero clicks after the navigate.
 
   ### State Recognition
-  - **Logged out**: the nav shows "Hello, sign in" [LIVE-VERIFY: nav account text]. Browsing, search, and product pages WORK logged out; the cart usually works too but is per-session, and Orders/wishlist REQUIRE login. For login-gated tasks tell the user: "Amazon requires you to sign in. Please log in manually, then ask me again." NEVER type credentials.
+  - **Logged out**: the nav shows "Hello, sign in Account & Lists". Browsing, search, and product pages WORK logged out; the cart usually works too but is per-session, and Orders/wishlist REQUIRE login. For login-gated tasks tell the user: "Amazon requires you to sign in. Please log in manually, then ask me again." NEVER type credentials.
   - **CAPTCHA / robot check**: a page asking to "Type the characters you see" or titled something like "Robot Check" [LIVE-VERIFY: exact wording] → STOP IMMEDIATELY. Never attempt to solve or refresh it. Tell the user: "Amazon is showing a robot check — please solve it in the browser, then ask me again."
-  - **Cookie/consent interstitial**: a banner or full-page dialog about cookies (common on first visit) → click its Accept button [LIVE-VERIFY: presence and label on amazon.com], snapshot, continue.
-  - **Error/dog page** ("Sorry, something went wrong"): navigate to the URL again once; if it repeats, tell the user.
-  - **Ready**: the search input (aria-label ≈ "Search Amazon" [LIVE-VERIFY]) is present in the snapshot.
+  - **Cookie/consent interstitial**: amazon.com usually loads with none (live captures showed no banner even from the EU) — if one appears, click its Accept button, snapshot, continue.
+  - **Error/dog page** (title "Sorry! Something went wrong!", a small search box + dog-photo link): intermittent, served even on valid URLs — navigate to the URL again once; if it repeats, tell the user.
+  - **Ready**: the search input (aria-label and placeholder "Search Amazon", id twotabsearchtextbox) is present in the snapshot.
 
   ### URL PATTERNS (prefer these over clicking)
   - Search: `https://www.amazon.com/s?k={url-encoded query}` (space → +or %20)
   - Product page: `https://www.amazon.com/dp/{ASIN}` — ASIN is the 10-char id visible in any product URL (`/dp/B0XXXXXXXX`)
   - Cart: `https://www.amazon.com/gp/cart/view.html`
   - Order history: `https://www.amazon.com/gp/css/order-history` (login-gated)
-  - Filters: do NOT hand-build `&rh=p_72%3A...` filter URLs — the codes are fragile. Instead click the sidebar filter checkboxes/links on the results page (Prime, brand, price range, avg. review) [LIVE-VERIFY: sidebar structure], then snapshot.
-  - Sort: use the "Sort by" dropdown at the top of results [LIVE-VERIFY: label] — click it, snapshot, click the option (Price: Low to High, Avg. Customer Review, Newest, …).
+  - Filters: do NOT hand-build `&rh=p_72%3A...` filter URLs — the codes are fragile. Instead click the left-sidebar filter links/checkboxes on the results page — they carry aria-label "Apply {filter} filter to narrow results"; which facets appear (Prime, brand, price, avg. review) varies by session/region — then snapshot.
+  - Sort: the sort control is a native select (aria-label "Sort by:", id s-result-sort-select) at the top of results with options Featured / Price: Low to High / Price: High to Low / Avg. Customer Review / Newest Arrivals / Best Sellers.
 
   ### SNAPSHOT FORMAT
   browser_snapshot returns:
@@ -48,12 +48,12 @@ instructions: |
   --- Page Text ---
   (product titles, prices like $24.99, ratings like 4.5 out of 5 stars, "Sponsored" tags, Prime badges, delivery dates)
   --- Interactive Elements ---
-  [8] input "Search Amazon"          ← nav search box [LIVE-VERIFY]
+  [8] input "Search Amazon"          ← nav search box
   [15] link "Logitech M510 Wireless…" ← result title link
-  [42] button "Add to Cart"           ← on product pages / some result cards
+  [42] button "Add to cart"           ← on product pages / some result cards
   ```
   - Result cards: the product TITLE is a link — click it (or extract the /dp/ ASIN from its href and navigate) to open the product.
-  - The cart icon in the nav shows a count number [LIVE-VERIFY: cart count element] — use it to verify add-to-cart.
+  - The nav cart link reads "N Cart" (aria-label "N items in cart", id nav-cart) — use it to verify add-to-cart.
 
   ### TASK: Search for products
   1. browser_navigate("https://www.amazon.com/s?k={encoded query}") → browser_snapshot.
@@ -64,13 +64,13 @@ instructions: |
 
   ### TASK: Open a product / read details
   1. From results, click the product title link (or browser_navigate to `/dp/{ASIN}` if you have the ASIN) → snapshot.
-  2. Report from Page Text: full title, current price (note "List Price"/strikethrough vs actual), rating + review count, availability ("In Stock", "Only N left", "Currently unavailable"), the "About this item" description bullets [LIVE-VERIFY: section heading], and seller/ships-from if shown.
-  3. Variants (size/color) change the price — if the user asked about a specific variant, click its swatch/option first [LIVE-VERIFY: variant controls], snapshot, then read the updated price.
+  2. Report from Page Text: full title, current price (note "List Price"/strikethrough vs actual), rating + review count, availability ("In Stock", "Only N left", "Currently unavailable"), the "About this item" description bullets, and seller/ships-from if shown.
+  3. Variants (size/color) change the price — but variant swatches render as UNLABELED radio inputs in the snapshot (the "Color:"/"Size:" names appear only in Page Text), so clicking the right one is unreliable. If the user asked about a specific variant, prefer navigating to that variant's own /dp/ ASIN if known; otherwise click the radio cautiously, snapshot, and verify the "Color:"/"Size:" line changed before reading the price.
 
   ### TASK: Read reviews
-  1. On the product page, browser_scroll down toward the reviews section (or click the "ratings" link near the stars at the top [LIVE-VERIFY: link text]) → snapshot.
-  2. Report: overall rating, the star-distribution percentages (5-star %, 4-star %, …) [LIVE-VERIFY: histogram text in Page Text], and 2-4 representative points from top reviews (recurring praise/complaints).
-  3. For more, click "See more reviews" near the bottom of the reviews section [LIVE-VERIFY: exact text] → snapshot → read further pages. Don't paginate more than ~2 pages unless asked.
+  1. On the product page, browser_scroll down toward the reviews section (or click the review-count link next to the stars at the top — it reads like "(32,003)", id acrCustomerReviewLink, and jumps to #averageCustomerReviewsAnchor) → snapshot.
+  2. Report: overall rating and the star distribution — it appears as links like "5 star 88%" (aria-label "88 percent of reviews have 5 stars") in Interactive Elements; Page Text is capped, so read the histogram from the element labels.
+  3. Logged out, the page may show only the "Customers say" AI summary plus aspect buttons ("Quality(1.7K)", "Durability(1.1K)", …) with NO inline review list or "See more reviews" control (live capture showed none) — report what is visible and tell the user that reading full individual reviews may require signing in.
 
   ### TASK: Compare a few products
   1. Search once, pick the 2-4 candidates (prefer organic over sponsored).
@@ -79,8 +79,8 @@ instructions: |
 
   ### TASK: Add to cart
   1. Open the product page (/dp/{ASIN}) → snapshot. Note the nav cart count.
-  2. If the user wants a specific variant or quantity, set those FIRST (variant swatch; quantity dropdown near the buybox [LIVE-VERIFY]) → snapshot.
-  3. Find the button whose text/aria-label is exactly "Add to Cart" [LIVE-VERIFY: id add-to-cart-button, label text] — per RULE #1, never a button matched by position, and never "Buy Now". browser_click it.
+  2. If the user wants a specific variant or quantity, set those FIRST (variant radios — see Open a product task; quantity is a select named "quantity", id quantity, next to the buybox) → snapshot.
+  3. Find the control whose text/value is exactly "Add to cart" with id add-to-cart-button — per RULE #1, never a button matched by position, and never "Buy Now" (id buy-now-button, directly below it). browser_click it.
   4. browser_snapshot → verify: the "Added to cart" confirmation panel/page appears [LIVE-VERIFY] or the nav cart count incremented. An "Add a protection plan?" upsell may appear — click its No thanks / close control [LIVE-VERIFY], never the coverage options.
   5. If the click landed on a checkout page instead (some listings have cart-bypass flows): follow RULE #1 — navigate to the cart URL, tell the user.
   6. Report: "Added {item} to your cart (cart total now $X). I don't complete purchases — please review the cart and check out yourself: https://www.amazon.com/gp/cart/view.html".
@@ -99,7 +99,7 @@ instructions: |
   5. If the user named a specific order, find it by item name in Page Text; use the order-history search box [LIVE-VERIFY] or time-period filter if it's not on page 1.
 
   ### TASK: Add to wishlist (optional, login-gated)
-  1. On the product page, click "Add to List" near the buybox [LIVE-VERIFY: may be a split button with a dropdown for choosing a list].
+  1. On the product page, click "Add to List" below the buybox buttons (logged out it is a plain link that redirects to sign-in — State Recognition applies).
   2. Snapshot → verify the "Added to your list" confirmation [LIVE-VERIFY]. If a list-picker appears, click the list the user named (or the default).
 
   ### Gotchas

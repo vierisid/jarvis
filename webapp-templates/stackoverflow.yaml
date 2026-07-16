@@ -21,9 +21,10 @@ instructions: |
 
   ### State Recognition
   - **Anonymous reading is normal**: browsing, searching, and reading questions/answers need NO login — don't check login state before read tasks.
-  - **Login-gated**: asking, answering, commenting, and voting require an account (voting also needs reputation: 15 to upvote, 125 to downvote). Detect logged-out by "Log in"/"Sign up" links in the top bar [LIVE-VERIFY: top-bar structure]. If a write action is requested while logged out, or an action redirects to /users/login, tell the user: "This needs your Stack Overflow login — please sign in in the browser first." STOP at the login page. NEVER type credentials.
-  - **CAPTCHA / human-verification page** (Cloudflare challenge or a "prove you're human" step — can appear on posting or on heavy anonymous searching): STOP immediately and tell the user. Never attempt to solve it.
-  - **Cookie/consent banner** on first visit: click the decline/"necessary only" option if present, else accept — snapshot, continue.
+  - **Login-gated**: asking, answering, commenting, and voting require an account (voting also needs reputation: 15 to upvote, 125 to downvote). Detect logged-out by the "Log in" and "Sign up" links in the top bar (hrefs under /users/login and /users/signup). If a write action is requested while logged out, or an action redirects to /users/login, tell the user: "This needs your Stack Overflow login — please sign in in the browser first." STOP at the login page. NEVER type credentials.
+  - **Cloudflare interstitial** — title "Just a moment...", text "Performing security verification", ~2 interactive elements: appears routinely on the FIRST load in an automated browser and usually clears by itself in 5–20s. Wait a few seconds and snapshot again (up to 3 rounds) — do NOT give up or re-navigate while it is showing.
+  - **Real CAPTCHA**: landing on stackoverflow.com/nocaptcha ("Human verification — Are you a human being? … Check the CAPTCHA box") means SO flagged the traffic — anonymous /search does this even on a first request. STOP immediately and tell the user. Never attempt to solve it.
+  - **Cookie/consent banner** (OneTrust, first visit): buttons "Accept all" / "Necessary cookies only" / "Customize settings" — click "Necessary cookies only", snapshot, continue.
   - **Ready markers**: question page = title + "Asked / Modified / Viewed" line + "N Answers" in Page Text; search results = a results-count line + question list; tag page = tag name + question list. Near-empty Page Text with 0 interactive elements → wait 2–3s, snapshot again, max 2 retries.
   - **Rate-limited / "too many requests"** page: tell the user, stop.
 
@@ -32,15 +33,15 @@ instructions: |
     OPERATORS (inside q): `[tag]` scopes to a tag; `"quoted phrase"` exact match (best for error messages); `isaccepted:yes` has an accepted answer; `answers:0` unanswered; `score:3` min score; `is:question` / `is:answer`; `user:me` the signed-in user's posts (login), `user:{id}` anyone's; `closed:no`. Combine freely: `[django] "CSRF verification failed" isaccepted:yes`
   - Question: `https://stackoverflow.com/questions/{id}/{slug}` (slug optional; `/q/{id}` is a shorthand). Any stackoverflow.com/questions/... link the user pastes — navigate it directly.
   - Specific answer: `https://stackoverflow.com/a/{answer_id}` — redirects to the question, scrolled to that answer (share links use this form; treat it like a question page).
-  - Tag feed: `https://stackoverflow.com/questions/tagged/{tag}?tab=Newest` (tab = Newest|Active|Votes|Frequent|Unanswered [LIVE-VERIFY: tab values]); multiple tags: `tagged/{tag1}+{tag2}`
-  - User profile: `https://stackoverflow.com/users/{id}` — their answers: `?tab=answers`; the signed-in user's own: `/users/current` [LIVE-VERIFY]
+  - Tag feed: `https://stackoverflow.com/questions/tagged/{tag}?tab=Newest` (tab = Newest|Active|Votes|Unanswered|Bounties; ?tab=Votes titles the page "Highest scored"); multiple tags: `tagged/{tag1}+{tag2}`; page 2+: `&page=2`
+  - User profile: `https://stackoverflow.com/users/{id}` (redirects to /users/{id}/{slug}) — their answers: `?tab=answers`; the signed-in user's own: `/users/current` [LIVE-VERIFY: login-gated]
   - Ask: `https://stackoverflow.com/questions/ask` (login-gated)
 
   ### TASK: Open a question link and extract the fix  ← the canonical flow
   Users usually arrive with a URL (a web search for an error very often lands directly on a Stack Overflow question).
   1. browser_navigate the URL → browser_snapshot.
-  2. Page Text carries, in order: question title, question body (with code), then the answers. The ACCEPTED answer is pinned first when one exists (marked by a green checkmark / "Accepted" indicator [LIVE-VERIFY: how the marker renders in text]); otherwise answers run in score order.
-  3. Extract the fix: prefer the accepted answer; if none, the highest-scored. Quote its code verbatim (Rule 4).
+  2. Page Text carries, in order: question title, the "Asked / Modified / Viewed" line, question body (with code), then the answers under "N Answers". Default order is "Highest score" (a sort dropdown, select id="answer-sort-dropdown-select-menu") — the ACCEPTED answer is NOT pinned first, and its checkmark does NOT appear in Page Text. Find it in Interactive Elements: a `div aria-label="Accepted" role="note"` sits among that answer's controls, right after its `button id="upvote-btn-{answer_id}"` — that id tells you which answer is the accepted one.
+  3. Extract the fix: prefer the accepted answer; if none, the highest-scored (the first one under the default sort). Quote its code verbatim (Rule 4).
   4. Long threads: scroll + snapshot (Rule 9). Comments under the question and answers often carry corrections ("this broke in v3…") — relay them when they contradict the answer you're quoting.
 
   ### TASK: Search for a question (user has an error/topic, not a link)
@@ -48,7 +49,7 @@ instructions: |
   2. browser_navigate → snapshot → results (title, excerpt, votes, answer count, accepted marker) are in Page Text.
   3. Open the best result via its /questions/{id} link → run the extract-the-fix task above.
   4. If nothing useful after ONE reformulation (e.g. drop the tag, shorten the quote), say so and suggest a broader web search — do not loop on query variants.
-  - Heavy anonymous searching occasionally bounces to a login or human-check page [LIVE-VERIFY: how often] — State Recognition applies.
+  - Anonymous /search is the most bot-gated path on the site: even the FIRST search of a fresh session can bounce to the /nocaptcha human-verification page (State Recognition). If it does, STOP retrying /search — fall back to a tag page (`/questions/tagged/{tag}?tab=Votes`) or ask the user to search in their own browser.
 
   ### TASK: Browse a tag
   1. browser_navigate `/questions/tagged/{tag}?tab=Votes` (or Newest/Unanswered per the user's ask) → snapshot.
@@ -64,13 +65,13 @@ instructions: |
   7. Click the "Post your question" button → snapshot → success = you land on the new question's /questions/{id} URL. Validation or quality-gate errors (title rules, new-account rate limits) → report verbatim, do not retry.
 
   ### TASK: Answer a question (login-gated)
-  1. Confirm logged in. Open the question → scroll to the "Your Answer" section below the existing answers [LIVE-VERIFY: markdown textarea] → snapshot.
+  1. Confirm logged in — an anonymous question page has NO answer editor at all (zero textareas), so a missing form means you are logged out, not a rendering failure. Open the question → scroll to the "Your Answer" section below the existing answers [LIVE-VERIFY: logged-in markdown textarea] → snapshot.
   2. browser_type(answer textarea, text) → snapshot → VERIFY the text (Rule 6).
   3. Click "Post Your Answer" → snapshot → your answer now appears in the thread under the user's name. No blind retries (Rule 6). If the page says the question is protected/closed to new answers, report that and stop.
 
   ### TASK: Upvote an answer or question (login-gated + reputation-gated)
-  1. Find the vote arrows beside the post — match by aria-label ≈ "Up vote"/"Down vote" [LIVE-VERIFY: labels]. Make sure it's the arrows of the RIGHT answer (each answer has its own pair).
-  2. Click once → snapshot → the arrow's pressed state / the score changes [LIVE-VERIFY]. Clicking again UNDOES the vote — never click twice. A "requires 15 reputation" popup → report it and stop.
+  1. Find the vote buttons beside the post: `button aria-label="Up vote" id="upvote-btn-{post_id}"` / `aria-label="Down vote" id="downvote-btn-{post_id}"` (they render even logged out). The {post_id} in the id ties the pair to the RIGHT question/answer — match it before clicking.
+  2. Click once → snapshot → the button's pressed state / the score changes [LIVE-VERIFY: post-vote state — needs a logged-in session]. Clicking again UNDOES the vote — never click twice. A "requires 15 reputation" popup → report it and stop.
 
   ### TASK: Check a user profile / reputation
   1. browser_navigate `/users/{id}` (get the id from the name link on any of their posts, or search `user:{id}`) → snapshot.

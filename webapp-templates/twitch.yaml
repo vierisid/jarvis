@@ -36,27 +36,27 @@ instructions: |
   ### State Recognition
   - **Watching is anonymous**: opening channels, browsing categories, search, VODs, schedules and READING chat all work logged out. LOGIN IS REQUIRED for: sending chat, follow/unfollow, /directory/following. If such a task surfaces a "Log In" prompt or dialog [LIVE-VERIFY], tell the user: "This needs your Twitch login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
   - **Mature-content gate**: an interstitial covering the player meaning "intended for certain audiences" with a Start Watching button [LIVE-VERIFY] -> do NOT click through on your own; ask the user first. If they confirm, click it, snapshot, continue.
-  - **Channel OFFLINE**: no LIVE badge; the page shows an offline banner and/or recent videos, often text meaning "offline" [LIVE-VERIFY]. Report offline — don't retry hoping it goes live.
+  - **Channel OFFLINE**: no LIVE badge and no viewer count/uptime for THIS channel; the page lands on the channel Home tab (tabs: Home / About / Clips / Videos / Schedule / Chat) and may autoplay featured clips/VODs with a "Go to Next Video" button. Report offline — don't retry hoping it goes live.
   - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
-  - **Channel live & ready**: URL is /{channel}, a LIVE badge near the player/avatar [LIVE-VERIFY], and stream title + category + viewer count in Page Text.
+  - **Channel live & ready**: URL is /{channel}, a LIVE badge near the channel name, and stream title, category, tags, viewer count ("92,947 viewers") and uptime ("4:37:54 since live stream started") in Page Text.
   - **Unknown channel**: a page meaning "content is unavailable" / "time machine" 404 [LIVE-VERIFY] -> the name is wrong or it's a display name; search it instead.
-  - **Consent/cookies banner** (fresh sessions) [LIVE-VERIFY] -> click the option meaning reject/essential-only, then continue the task.
+  - **Cookies banner** (fresh sessions): "Cookies and Advertising Choices" text with Accept / Customize / Reject buttons at the top of Page Text. It does NOT hide the page content — click "Reject", or just continue a read-only task.
 
   ### URL MAP (URL-first: deep links beat clicking through the UI)
   - Channel (live player + chat): https://www.twitch.tv/CHANNEL — CHANNEL is the login name (lowercase, no spaces); display names can differ, so search when unsure
-  - Category directory (live channels for a game): https://www.twitch.tv/directory/category/SLUG — slug is the lowercased hyphenated name, e.g. just-chatting [LIVE-VERIFY slug shape; when unsure, use search and click the category card instead]
+  - Category directory (live channels for a game): https://www.twitch.tv/directory/category/SLUG — slug is the lowercased hyphenated name, e.g. just-chatting; when unsure, use search and click the category card instead
   - Search: https://www.twitch.tv/search?term=QUERY (URL-encode QUERY)
   - Channel VODs: https://www.twitch.tv/CHANNEL/videos — a VOD plays at https://www.twitch.tv/videos/VIDEO_ID
   - Channel schedule: https://www.twitch.tv/CHANNEL/schedule
   - Followed channels, live now (login): https://www.twitch.tv/directory/following
   - All categories: https://www.twitch.tv/directory
 
-  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
-  - **Search box** (top nav): input with placeholder/aria-label meaning "Search" [LIVE-VERIFY]; browser_type with submit: true runs it — but the /search?term= URL is more reliable.
-  - **Player** (center of a channel page): controls are HIDDEN until you browser_hover the player area — hover, THEN snapshot [LIVE-VERIFY]. Controls: mute/unmute button whose aria-label states the current state [LIVE-VERIFY], volume slider (never drag it), settings gear, Theatre mode, Fullscreen [LIVE-VERIFY]. Pause exists, but a paused live stream just falls behind the live edge — prefer mute.
-  - **Stream info** (below the player): stream title, category link (href contains /directory/category/), tags, viewer count and uptime — all in Page Text [LIVE-VERIFY placement].
-  - **Follow button** (near the channel name): label meaning "Follow"; while following it becomes a heart/"Unfollow" control [LIVE-VERIFY]. "Subscribe" is a SEPARATE PAID button — never click it unless explicitly asked, and hard-stop at any payment screen.
-  - **Chat column** (right side): recent messages appear in Page Text as "username: message" lines [LIVE-VERIFY format]. Input: textbox meaning "Send a message" [LIVE-VERIFY] with a send ("Chat") button beside it [LIVE-VERIFY]. Room-mode notices (slow mode, followers-only, sub-only, emote-only) appear near the input [LIVE-VERIFY].
+  ### Element Reference (live-verified July 2026 except items still marked [LIVE-VERIFY])
+  - **Search box** (top nav): input type="search" placeholder="Search" aria-label="Search Input"; browser_type with submit: true runs it — but the /search?term= URL is more reliable.
+  - **Player** (center of a channel page): controls are usually already in the snapshot — if missing, browser_hover the player area, THEN snapshot. Controls: "Pause (space/k)", mute button whose aria-label states the ACTION ("Unmute (m)" while muted), a volume input type="range" (never drag it), "Settings", "Fullscreen (f)". Pause exists, but a paused live stream just falls behind the live edge — prefer mute.
+  - **Stream info** (below the player): stream title, category link (href contains /directory/category/), tags, viewer count and uptime — all in Page Text.
+  - **Follow button** (near the channel name): button "Follow", aria-label "Follow {Channel}"; while following it becomes a heart/"Unfollow" control [LIVE-VERIFY]. "Subscribe" and "Gift a Sub" are SEPARATE PAID buttons beside it — never click them unless explicitly asked, and hard-stop at any payment screen.
+  - **Chat column** (right side): recent messages appear as "username: message" lines (in Page Text and as element aria-labels). Input: contenteditable textbox aria-label "Send a message" with a "Chat" button (aria-label "Send Chat") beside it — both render even when logged out; SENDING is what requires login. Room-mode notices (e.g. "Emote Only Chat"; slow/followers-only/sub-only) appear near the input.
   - **Directory/search cards**: each live channel is a link to /{channel}; stream title, streamer name, category and viewer count sit nearby in Page Text.
 
   ---
@@ -69,23 +69,23 @@ instructions: |
 
   ### TASK: Browse a category's live channels  (budget: 6 calls)
   1. Slug known -> browser_navigate the category URL. Unsure -> /search?term=CATEGORY -> snapshot -> click the category card [LIVE-VERIFY].
-  2. snapshot — cards are ordered by viewers, highest first [LIVE-VERIFY]. Read streamer/title/viewers from Page Text; browser_scroll down + snapshot for more. Report after 2-3 scrolls — the grid is effectively infinite.
+  2. snapshot — default sort is "Recommended For You" (a "Sort by" control sits above the grid), NOT viewer count. Cards show title, streamer, tags, LIVE badge and viewer count in Page Text; a "May Contain Labeled Content" notice may appear above the grid (informational — ignore it). browser_scroll down + snapshot for more. Report after 2-3 scrolls — the grid is effectively infinite.
 
   ### TASK: Search channels  (budget: 4 calls)
   1. browser_navigate https://www.twitch.tv/search?term=QUERY -> browser_snapshot.
-  2. Results group into Channels / Categories and live results [LIVE-VERIFY grouping]. Report matches with live status; click a /{channel} link to open one.
+  2. Results group into sections that vary by term — e.g. "Live channels tagged {term}", "Channels" — plus "People searching for ... also watch" recommendations (never report those as matches). Report matches with live status; click a /{channel} link to open one.
 
   ### TASK: Watch — mute/unmute, fullscreen  (budget: 6 calls)
-  1. Navigate to the channel: a live stream AUTOPLAYS (fresh sessions may start muted [LIVE-VERIFY]).
+  1. Navigate to the channel: a live stream AUTOPLAYS; fresh sessions start MUTED (mute button reads "Unmute (m)").
   2. browser_hover the player -> snapshot -> click the needed control (mute/unmute, Fullscreen).
   3. Verify: hover again + snapshot — the control's label flipped to the opposite state [LIVE-VERIFY].
 
   ### TASK: Read chat  (budget: 5 calls)
-  1. Open the channel -> snapshot. Recent messages are in Page Text as "username: message" lines [LIVE-VERIFY].
+  1. Open the channel -> snapshot. Recent messages are in Page Text as "username: message" lines.
   2. FIREHOSE caveat: fast chats churn completely between snapshots — each snapshot is a few-second SAMPLE, not a log. Take 2-3 snapshots a moment apart and report it as a sample. Don't scroll chat upward for history — it re-pins to live [LIVE-VERIFY].
 
   ### TASK: Send a chat message (LOGIN; PUBLIC)  (budget: 8 calls)
-  1. Open the channel -> snapshot. Logged out shows a prompt meaning "Log in to chat" instead of the input [LIVE-VERIFY] -> State Recognition; stop.
+  1. Open the channel -> snapshot. NOTE: the chat input renders even when logged out — a "Log In" button in the top nav means logged OUT; sending then surfaces a login dialog [LIVE-VERIFY] -> State Recognition; stop BEFORE typing into chat.
   2. Check room-mode notices first: followers-only (and the user doesn't follow), sub-only, or emote-only -> report the restriction honestly and stop. Slow mode -> proceed, but mention the cooldown.
   3. Click the chat input -> browser_type the text WITHOUT submit -> snapshot -> VERIFY the input shows exactly the intended text (Public Chat Safety).
   4. browser_press_key("Enter") (or click the send button) -> snapshot ONCE. If a notice replaced the send (slow-mode cooldown, banned phrase, AutoMod held it [LIVE-VERIFY]) -> report it verbatim; do NOT re-send.
@@ -109,7 +109,7 @@ instructions: |
   ---
 
   ### Gotchas
-  - Page Text mixes chat lines with stream info and sidebar/recommended channels — attribute carefully; never report a sidebar recommendation as the current stream.
+  - The left side-nav's recommended "Live Channels" (each with its own category + viewer count) fill the TOP of Page Text BEFORE the opened channel's own info — never report them as the current stream. Chat lines mix in below; attribute carefully.
   - Viewer counts and uptime change constantly; report them as "as of this check".
   - Pre-roll ads may run when a stream opens (unskippable) [LIVE-VERIFY]; the stream appears when the ad ends — re-snapshot once rather than clicking around.
   - Raids/hosts can land the player on a DIFFERENT channel than the URL you opened [LIVE-VERIFY] — check the channel name in the snapshot before reporting who is streaming.

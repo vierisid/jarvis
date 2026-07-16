@@ -28,11 +28,11 @@ instructions: |
   6. Read prices, bid counts, time left, shipping, and condition from the snapshot's Page Text — most reporting tasks need zero clicks after the navigate.
 
   ### State Recognition
-  - **Logged out**: browsing, search, and listing pages WORK anonymously. Watchlist, offers, bidding, purchase history, and usually the cart REQUIRE sign-in [LIVE-VERIFY: whether a guest cart exists]. For login-gated tasks tell the user: "eBay requires you to sign in for this. Please log in manually, then ask me again." NEVER type credentials.
-  - **CAPTCHA / bot check** (a page like "Pardon our interruption" or a checkbox/image challenge [LIVE-VERIFY: exact wording]) → STOP IMMEDIATELY. Never attempt to solve or refresh it. Tell the user to solve it in the browser, then ask again.
-  - **Cookie/consent banner** (common on first visit, mandatory in the EU) → click its Accept button [LIVE-VERIFY: presence and label on ebay.com] → snapshot → continue.
-  - **Error page** ("Sorry, something went wrong" / listing ended-or-removed notice [LIVE-VERIFY: wording]) → navigate the URL again once; if it repeats, tell the user.
-  - **Ready**: the search input (placeholder ≈ "Search for anything" [LIVE-VERIFY]) is present in the snapshot.
+  - **Logged out**: browsing, search, and listing pages WORK anonymously, and the cart page itself loads logged out (empty it shows "You don't have any items in your cart."). Watchlist, offers, bidding, and purchase history REQUIRE sign-in. For login-gated tasks tell the user: "eBay requires you to sign in for this. Please log in manually, then ask me again." NEVER type credentials.
+  - **CAPTCHA / bot check**: page titled "Security Measure | eBay" (URL contains /splashui/captcha), text "Please verify yourself" with an hCaptcha checkbox → STOP IMMEDIATELY. Never attempt to solve or refresh it. Tell the user to solve it in the browser, then ask again.
+  - **Cookie/consent banner** (EU sessions): buttons "Accept All" (id gdpr-banner-accept), "Decline All", "Customise my choices" → click "Accept All" → snapshot → continue.
+  - **Error page**: title "Error Page | eBay", text "SORRY — Something went wrong on our end … Please go back and try again or go to eBay Homepage" → navigate the URL again once; if it REPEATS on search/listing URLs while the homepage still loads, eBay is soft-blocking the automated session (live headless captures hit this wall persistently on every /sch/ and /itm/ URL) — treat it like the CAPTCHA state and tell the user.
+  - **Ready**: the search input (placeholder and aria-label "Search for anything", id gh-ac) is present in the snapshot.
 
   ### URL PATTERNS (prefer these over clicking)
   - Search: `https://www.ebay.com/sch/i.html?_nkw={url-encoded query}`
@@ -53,7 +53,7 @@ instructions: |
   (listing titles, prices like $24.99, "12 bids", "2d 4h left", "Buy It Now", "+$5.99 shipping" or "Free shipping",
    condition like "Pre-Owned"/"Brand New", seller lines like "sellername (1,234) 99.1%", "Sponsored" tags)
   --- Interactive Elements ---
-  [7] input "Search for anything"        <- nav search box [LIVE-VERIFY]
+  [7] input "Search for anything"        <- nav search box (id gh-ac)
   [21] link "Logitech M510 Wireless..."  <- result title link
   [48] button "Add to Watchlist"         <- on listing pages [LIVE-VERIFY: exact label]
   ```

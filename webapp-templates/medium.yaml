@@ -31,19 +31,20 @@ instructions: |
 
   ### State Recognition
   - **Reading is mostly anonymous** — browsing, search, tags, profiles, and free articles work logged out, subject to the metered paywall.
-  - **Member-only paywall**: Medium meters free reads; member-only stories show a "Member-only story" marker and/or truncate the body under an upgrade overlay ("Read this story with a free account…" / "Upgrade" / "Get unlimited access") [LIVE-VERIFY wording]. Detect it, report honestly: summarize ONLY the visible portion and tell the user the rest is behind Medium's paywall. NEVER attempt to bypass (no mirror/cache/reader tricks, no dismissing the wall to scrape hidden text).
-  - **Logged out + write action requested** (clap, respond, draft, publish, drafts list): a sign-in wall or /m/signin redirect appears → tell the user: "This needs your Medium login — please sign in in the browser first." STOP. NEVER type credentials, even if the user provides them.
+  - **Member-only paywall** (wording verified live): a "Member-only story" label above the title; the body cuts off after the opening paragraphs at a wall reading "Create an account to read the full story." / "The author made this story available to Medium members only." with Sign up buttons. Report honestly: summarize ONLY the visible portion and tell the user the rest is behind Medium's paywall. NEVER attempt to bypass (no mirror/cache/reader tricks, no dismissing the wall to scrape hidden text).
+  - **Logged out**: header shows "Sign in"/"Get started"; /new-story redirects to an /m/signin "Welcome back." page and clap/bookmark controls are themselves /m/signin links (verified). For any write action (clap, respond, draft, publish), tell the user: "This needs your Medium login — please sign in in the browser first." STOP. NEVER type credentials, even if the user provides them.
   - **Ready (logged in)**: avatar/profile menu and a "Write" link in the top bar [LIVE-VERIFY].
+  - **Cloudflare challenge** (verified live): first navigation may show "Just a moment…" / "Performing security verification … Performance and Security by Cloudflare". It usually clears by itself: wait ~3s and re-snapshot, up to 5 rounds — but some sessions never clear. Then tell the user Medium is blocking automated access and STOP; NEVER attempt to solve or bypass the challenge.
   - **Loading**: near-empty snapshot → wait, re-snapshot (max 2 retries), then tell the user.
   - **Cookie/consent banner**: if it blocks interaction, click reject/"necessary only" if present, else accept → continue.
 
   ### URL MAP (prefer these over clicking)
-  - Home feed: https://medium.com/
-  - Search stories: https://medium.com/search?q={query} (URL-encode; space → %20)
-  - Search people: https://medium.com/search/people?q={query} [LIVE-VERIFY path]
-  - Tag feed: https://medium.com/tag/{tag} (tag is lowercase, hyphenated: "machine-learning")
-  - Author profile: https://medium.com/@{username} — their about page: /@{username}/about
-  - Own drafts: https://medium.com/me/stories/drafts (login-gated [LIVE-VERIFY: redirects to sign-in when logged out])
+  - Home https://medium.com/ — logged OUT this is a marketing landing page with NO stories (verified); use tag feeds or search instead
+  - Search stories: https://medium.com/search?q={query} (URL-encode; space → %20). Gotcha (verified): logged out this URL served a "500 / something went wrong" error page — then type the query into the header search box (placeholder "Search", on every page) + Enter, or use /tag/{tag}
+  - Search people: no URL — /search/people?q= 404s (verified); header search box, then the people/authors results section
+  - Tag feed: https://medium.com/tag/{tag} (lowercase, hyphenated: "machine-learning") — works logged out (verified)
+  - Author profile: https://medium.com/@{username} (works logged out; tabs Home/Reposts/Activity/About) — full bio: /@{username}/about
+  - Own drafts: https://medium.com/me/stories/drafts → redirects to /me/stories, Drafts tab. TRAP (verified): logged OUT this shows NO sign-in wall, just an empty "No stories in draft." page. Header has a Sign in button → report "you're not signed in", never "you have no drafts".
   - New story editor: https://medium.com/new-story (login-gated)
   - Any pasted medium.com article link (including custom-domain publications on medium.com paths): navigate to it directly.
 
@@ -56,13 +57,13 @@ instructions: |
 
   ### TASK: Read an article  ← strongest use case
   1. browser_navigate the article URL (from the user, or found via search) → browser_snapshot.
-  2. Page Text carries the title, author, claps, and body — summarize from it directly. Long article: browser_scroll down → snapshot (Rule 8 budget).
+  2. Page Text carries the title, author, read time, date, and full body (verified). Summarize from it directly. Long article: browser_scroll down → snapshot (Rule 8 budget).
   3. Paywall check FIRST: if the member-only wall is present (State Recognition), report it and summarize only what is visible.
 
   ### TASK: Search stories or authors
   1. Build the search URL (map above) → browser_navigate → browser_snapshot.
   2. Results (titles, authors, subtitles, dates) are in Page Text. Open a result by clicking its title link; scroll for more.
-  3. Author search: the People tab/URL; open the right profile from the results.
+  3. Author search: header search box (see URL MAP), then the people/authors results; open the right profile.
 
   ### TASK: Browse a tag
   1. browser_navigate https://medium.com/tag/{tag} → browser_snapshot.
@@ -74,11 +75,11 @@ instructions: |
   3. Username unknown? Search-people task first, then click the matching profile.
 
   ### TASK: Clap for an article (login-gated)
-  1. Open the article → snapshot → find the clap button, aria-label meaning "clap" (hands icon, shows the count) [LIVE-VERIFY].
-  2. Click ONCE → snapshot → the count incremented / button state changed [LIVE-VERIFY]. Medium allows up to 50 claps per reader, but perform exactly ONE clap action per user request — never loop clicks to inflate claps. If a sign-in prompt appears instead, State Recognition applies.
+  1. Open the article → snapshot → find the clap control: data-testid "headerClapButton" (or "footerClapButton"), count beside it (verified). Logged OUT it is a /m/signin link — State Recognition applies.
+  2. Click ONCE → snapshot → the count incremented / button state changed [LIVE-VERIFY: logged-in behavior]. Medium allows up to 50 claps per reader, but perform exactly ONE clap action per user request — never loop clicks to inflate claps.
 
   ### TASK: Respond to an article (login-gated, public)
-  1. Open the article → snapshot → click the respond/comment control (speech-bubble icon, aria-label meaning "responses") [LIVE-VERIFY: opens a responses side panel with a composer].
+  1. Open the article → snapshot → click the responses control: button aria-label="responses", shows the count (verified) [LIVE-VERIFY: opens a responses side panel with a composer].
   2. snapshot → browser_type the response into the composer textbox.
   3. snapshot → VERIFY the text reads exactly as intended (Publishing Gate).
   4. Click the "Respond" submit button [LIVE-VERIFY] → snapshot → your response appears in the panel. Unconfirmed → tell the user, never re-submit.
@@ -97,11 +98,11 @@ instructions: |
   4. Click the final "Publish now" button [LIVE-VERIFY label] → snapshot → success = the live story page / a "published" confirmation. Unconfirmed → tell the user to check medium.com/me/stories/public; NEVER click Publish again blind.
 
   ### TASK: List own drafts (login-gated)
-  1. browser_navigate https://medium.com/me/stories/drafts → snapshot. Sign-in redirect → State Recognition, stop.
-  2. Report draft titles + last-edited times from Page Text [LIVE-VERIFY layout]. Open one by clicking its title (lands in the editor).
+  1. browser_navigate https://medium.com/me/stories/drafts → snapshot. Header shows Sign in → you're logged out (URL-map TRAP), State Recognition, stop.
+  2. Report draft titles + last-edited times from Page Text [LIVE-VERIFY: row format] (empty state reads "No stories in draft."). Open one by clicking its title (lands in the editor).
 
   ### Gotchas
-  - Many "Medium" articles live on publication custom domains; if a pasted non-medium.com URL renders the same Medium UI, these instructions still apply — but this template only auto-triggers on medium.com.
+  - Many "Medium" articles live on publication custom domains — a medium.com link may itself redirect there (verified: medium.com/gitconnected/… → levelup.gitconnected.com, identical UI). These instructions still apply there — the template just only auto-triggers on medium.com.
   - Page Text mixes in "Recommended from Medium" / "More from author" rails at the bottom of articles — don't report those as part of the article body.
   - Read time and clap counts are approximate ("5 min read", "1.2K") — report them as shown.
   - An article behind the METERED wall (free-article limit, not member-only) shows a similar overlay — same honest handling: report it, never bypass.

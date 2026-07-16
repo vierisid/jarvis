@@ -108,8 +108,11 @@ const SNAPSHOT_SCRIPT = `(() => {
   window.__jarvis_elements = els.map(e => e._el);
   els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
-  // Get visible text (top document first, then same-origin frames), clean up whitespace
-  let bodyText = document.body.innerText || '';
+  // Get visible text (top document first, then same-origin frames), clean up whitespace.
+  // document.body can be null on challenge/error pages (WAF "checking your browser"
+  // interstitials) — guard so the snapshot returns empty text instead of throwing,
+  // which lets callers detect the bot-wall rather than seeing an opaque error.
+  let bodyText = (document.body && document.body.innerText) || '';
   for (const frame of frames) {
     if (frame.doc === document) continue;
     const t = frame.doc.body && frame.doc.body.innerText;

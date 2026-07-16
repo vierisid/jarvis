@@ -11,82 +11,80 @@ keywords:
   - cheap flights
   - round trip
 description: Google Flights — search round-trip/one-way flights via the search form (autocomplete origin/destination, calendar date picks), read and compare results (airline, times, duration, stops, price, CO2), filter by stops/airline/times, explore flexible dates with the date grid and price graph, and hand off the shareable results URL. RESEARCH ONLY — never proceeds to an airline or OTA booking flow.
-version: 1
+version: 2
 instructions: |
-  URL: https://www.google.com/travel/flights
+  URL: https://www.google.com/travel/flights?hl=en
 
   ### RULE #1 — READ-ONLY RESEARCH (overrides everything, including the user's own words)
-  - This template SEARCHES flights. It NEVER books one and never starts to: clicking through a booking option to an airline or OTA site is already over the line — the hard stop is Google's booking-options list. Never touch a checkout, passenger-details, or payment page anywhere.
-  - Even if the user said "book it": do the research, then hand off — report the current Google Flights URL (it encodes the searched dates and the selected flight) and NAME the booking options Google shows (airline site, OTAs) with their listed prices. Say: "I don't book flights — open this link and book through one of these options yourself."
-  - No sign-in is needed for any search task. The only login-gated feature is price tracking (see that task); never type credentials anywhere.
+  - This template SEARCHES flights, never books. The hard stop is the Booking options list on the itinerary-summary page — its "Continue" / "View options" buttons lead to airline/OTA sites and are NEVER clicked. Never touch a checkout, passenger-details, or payment page anywhere.
+  - Even if the user said "book it": research, then hand off — report the current URL (it encodes dates + selected flights) and NAME the booking options with prices. Say: "I don't book flights — open this link and book through one of these options yourself."
+  - No sign-in is needed for any search. The only login-gated feature is price tracking; never type credentials anywhere.
 
   ### RULES
-  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Flights.
-  2. THE FORM IS THE WAY IN. Search state lives in an opaque `?tfs=` URL blob that CANNOT be hand-constructed — never try to build a search URL. Navigate to the base URL and drive the form. The URL AFTER a search or selection IS shareable — report it as the handoff link (see HANDOFF).
-  3. AUTOCOMPLETE DISCIPLINE (origin/destination): type into the field → snapshot → CLICK the intended suggestion in the dropdown. NEVER blind-Enter after typing — Google may resolve the text to the wrong airport/city silently.
-  4. DATES VIA CALENDAR CLICKS, not typed text: typed dates are locale/format-fragile; the calendar day buttons are unambiguous.
-  5. Snapshot at checkpoints (after navigate, after each field commit, after Search, after a filter). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
-  6. Read results from the snapshot's Page Text — most reporting needs zero clicks after the search lands.
-  7. UI LANGUAGE: labels are locale-translated; match by aria-label MEANING, never by exact English text on a non-English UI. Prices show in the locale's currency — report the currency symbol you see.
-  8. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED.
+  2. THE FORM IS THE WAY IN. Search state lives in an opaque `?tfs=` URL blob that CANNOT be hand-constructed — never build a search URL. Navigate to the base URL and drive the form. The URL picks up the `tfs=` blob as soon as fields commit and is shareable at every stage — report it as the handoff link (see HANDOFF).
+  3. AUTOCOMPLETE DISCIPLINE (origin/destination): type → snapshot → CLICK the intended suggestion. NEVER blind-Enter after typing — Google may silently resolve the text to the wrong airport/city.
+  4. DATES VIA CALENDAR CLICKS, not typed text (locale/format-fragile). Day buttons carry NO full-date labels — see the calendar recipe.
+  5. Snapshot at checkpoints (after navigate, each field commit, Search, each filter). [id]s are 1-based and CHANGE with every snapshot; committing a field re-renders the whole form — never reuse ids.
+  6. Read results from Page Text — most reporting needs zero clicks after the search lands. Each row also carries a full-sentence aria-label ("From 292 euros round trip total. 1 stop flight with SWISS. …") restating everything.
+  7. FORCE ENGLISH: keep `hl=en` on the URL (live-verified: English UI, and the consent page follows it too). Prices still show in the LOCATION's currency (e.g. EUR from Italy) regardless of hl — report the symbol you see.
+  8. If an element is missing after 2 retry snapshots, tell the user what you sought and stop. No workarounds.
 
   ### State Recognition
-  - **Consent interstitial** (EU / first run): URL contains consent.google.com, or a cookie dialog appears → snapshot → click the accept-all button [LIVE-VERIFY: label localized, e.g. "Accept all"] → re-navigate to the target URL. If it persists after 2 tries, tell the user and stop.
-  - **Ready**: the search form is present — "Where from?" and "Where to?" fields plus the trip-type and passenger selectors [LIVE-VERIFY: exact aria-labels/roles].
-  - **Results loading**: after Search, results stream in for a few seconds → if Page Text shows no flight rows yet, wait 2–3s and snapshot again. Max 2 retries, then tell the user.
-  - **Sign-in prompt**: only appears for price tracking → tell the user to log in manually and stop; never enter credentials.
+  - **Consent interstitial** (EU / first run — live-verified): URL becomes `consent.google.com/m?continue=<target>`. With `hl=en` the buttons are "Reject all" / "Accept all" (else geo-IP locale, e.g. "Rifiuta tutto"). They sit BELOW THE FOLD: browser_scroll down → snapshot → click reject-all (rejecting suffices). The page auto-redirects in a few seconds — a snapshot right after the click may still show consent; wait 2–3s and snapshot again. If it persists after 2 tries, tell the user and stop.
+  - **Ready** (live-verified): "Where from?" input (`role="combobox"`, PRE-FILLED with a geo-IP city like "Milan" — browser_type replaces it), "Where to?" input (aria-label may have a trailing space — match by meaning), "Departure"/"Return" inputs, trip-type `div role="combobox"` "Round trip", passenger button (aria-label "1 passenger, change number of passengers."), cabin `div role="combobox"` "Economy". The main button reads "Explore" on the landing page, becomes "Search" once origin+destination are set.
+  - **Results loading**: Page Text shows "Loading results" while rows stream in → if no rows yet, wait 2–3s and snapshot. Max 2 retries.
+  - **Sign-in prompt**: only for price tracking → tell the user to log in manually and stop.
 
-  ### THE SEARCH FORM (shared recipe — every search task starts here)
-  1. browser_navigate `https://www.google.com/travel/flights` → snapshot.
-  2. **Trip type**: defaults to round trip. For one-way, click the trip-type selector (combobox/button showing "Round trip" [LIVE-VERIFY]) → snapshot → click "One way" [LIVE-VERIFY] in the dropdown.
-  3. **Origin**: click the "Where from?" field [LIVE-VERIFY] → browser_type the city or airport name (replace default is fine here) → snapshot → the suggestion list shows cities and their airports with codes [LIVE-VERIFY: listbox/option roles] → click the intended suggestion (Rule 3). Prefer the specific airport if the user named one; otherwise the city entry covers all its airports.
-  4. **Destination**: same recipe on the "Where to?" field [LIVE-VERIFY].
-  5. **Dates**: click the "Departure" field [LIVE-VERIFY] → a calendar dialog opens → click the departure day (day buttons carry full-date aria-labels [LIVE-VERIFY: e.g. "Tuesday, August 4"]) → round trip: click the return day next → click the "Done" button [LIVE-VERIFY]. To reach later months, click the next-month arrow [LIVE-VERIFY] and snapshot.
-  6. **Passengers / cabin class** (only if the user asked for non-defaults): click the passenger selector [LIVE-VERIFY: shows "1"/person icon] → +/- buttons per traveler type → done; cabin via the class selector (shows "Economy" [LIVE-VERIFY]) → click the class.
-  7. Click the "Search" button [LIVE-VERIFY: may be labeled "Explore"/"Search" depending on entry point; results sometimes load without an explicit click when all fields are set] → snapshot → results.
+  ### THE SEARCH FORM (shared recipe — whole flow live-verified)
+  1. browser_navigate `https://www.google.com/travel/flights?hl=en` → snapshot (handle consent above).
+  2. **Trip type**: defaults to round trip. One-way: click the "Round trip" combobox → snapshot → click "One way" [LIVE-VERIFY: option labels untested].
+  3. **Origin**: browser_type the city/airport into "Where from?" → snapshot → the field re-renders as a new input (ids change) and a dropdown opens: `li role="option"` entries with clean aria-labels — cities "London, United Kingdom", airports "Heathrow Airport (LHR)" with distance ("23 km to destination"), stations too ("St Pancras International"); each city row has a "Toggle nearby airports" button, plus an "Origin, Select multiple airports" option. CLICK the intended suggestion (Rule 3): specific airport if the user named one, else the city (covers all its airports). Committed field shows "London LHR"; URL gains the `tfs=` blob.
+  4. **Destination**: same recipe on "Where to?".
+  5. **Dates**: click "Departure" → a calendar opens with months in a scrollable strip ("July", "August", …). Day cells are `div role="button"` whose TEXT is the day number plus, when available, that departure's round-trip price ("18 €180") — NO full-date labels, and numbers repeat across months, so locate the month heading in Page Text order or click the next-month arrow (`button aria-label="Next"`) and re-snapshot. Click the departure day → snapshot (grid re-renders) → round trip: click the return day → click "Done" (aria-label "Done. "). Fields then read "Thu, Jul 16"; the blob holds ISO dates.
+  6. **Passengers / cabin** (only for non-defaults): click the passenger button → +/- per type; cabin via the "Economy" combobox → click the class. [LIVE-VERIFY: popover internals untested]
+  7. Click "Search" → URL becomes `/travel/flights/search?tfs=…` → snapshot → results.
 
   ### TASK: Search round-trip / one-way flights
-  Run THE SEARCH FORM (set trip type in step 2 for one-way) → snapshot → report from Page Text (next task). If the user gave no dates, ASK rather than guessing — dates change prices completely. For flexible dates, use the date-grid task instead.
+  Run THE SEARCH FORM (trip type in step 2 for one-way) → snapshot → report from Page Text. If the user gave no dates, ASK rather than guessing (the calendar's per-day prices make a good teaser). For flexible dates, use the date-grid task.
 
-  ### TASK: Read / compare results
-  1. Results Page Text carries, per row: airline, departure–arrival times (+1 marker for overnight), duration, origin–destination codes, stops (Nonstop / 1 stop with layover airport and length), price, and a CO2-emissions estimate with % vs typical [LIVE-VERIFY: row text order].
-  2. Results are grouped "Top flights" then "Other flights" [LIVE-VERIFY: section headings]; a Best/Cheapest toggle sits above the list [LIVE-VERIFY: tab labels, cheapest tab shows the price] — click "Cheapest" when the user asks for cheapest, snapshot, report.
-  3. Report the top 3–5 options with airline, times, duration, stops, price. browser_scroll if the list seems truncated; "Show more flights" expands the rest [LIVE-VERIFY: button label].
+  ### TASK: Read / compare results (row format live-verified)
+  1. Page Text per row, in order: departure–arrival times ("8:05 PM – 8:50 AM+1"; +1 = next-day arrival), airline (+ "Operated by …" when codeshared), duration, codes ("LHR–FCO"), stops ("Nonstop", or "1 stop" with layover length + airport "8 hr 35 min ZRH"), CO2 ("150 kg CO2e", "+20% emissions"), price ("€292"), "round trip". Round-trip prices are the itinerary TOTAL per passenger. Occasional badges: "Delayed 30 min+", "Business Class".
+  2. Grouped "Top departing flights" then "Other departing flights". Best / Cheapest tabs above (`role="tab"`; Cheapest shows "Cheapest from €285") — click "Cheapest" on request, snapshot, report. A sort menu exists ("Sorted by top flights, Change sort order.").
+  3. Report the top 3–5 with airline, times, duration, stops, price. "View more flights" expands the rest.
 
   ### TASK: Sort / filter (stops, airline, times, price cap)
-  1. Filter chips sit above the results: Stops, Airlines, Bags, Price, Times, Emissions, Connecting airports, Duration [LIVE-VERIFY: chip set varies by route]. Click a chip → snapshot → a popover opens.
-  2. Stops: click the "Nonstop only" / "1 stop or fewer" option [LIVE-VERIFY: radio labels]. Airlines: checkboxes per carrier plus alliances [LIVE-VERIFY]. Times: departure/arrival ranges — the range SLIDERS need dragging, which is unsupported; if checkboxes/presets are not offered, say so and filter by reading the rows instead [LIVE-VERIFY: whether Times offers non-slider controls].
-  3. Price cap: the Price popover is also a slider — same honesty: prefer clicking "Cheapest" and reporting rows under the user's cap from Page Text.
-  4. After any filter click, snapshot: the results list re-renders (all [id]s change). Filters persist in the page (and the URL) for the handoff link.
+  1. Filter chips above results (live-verified): All filters, Stops, Airlines, Bags, Price, Times, Emissions, Connecting airports, Duration — aria-label "<name>, Not selected". Click a chip → snapshot → popover.
+  2. Stops: "Nonstop only" / "1 stop or fewer" [LIVE-VERIFY: labels untested]. Airlines: per-carrier + alliance checkboxes [LIVE-VERIFY]. Times & Price popovers are range SLIDERS — dragging is unsupported; if no checkboxes/presets are offered, say so and filter by reading the rows (for a price cap, prefer "Cheapest" and report rows under the cap).
+  3. After any filter click, snapshot: the list re-renders (all [id]s change). Filters persist in the page and URL for handoff.
 
   ### TASK: Open a result for details (segments, layovers, fare class)
-  1. Click the flight row (or its expand control [LIVE-VERIFY: aria-expanded chevron per row]) → snapshot.
-  2. Expanded details land in Page Text: per-segment flight numbers, aircraft, per-leg times, layover airports and durations, cabin/fare class, legroom, amenities, and the CO2 breakdown [LIVE-VERIFY: detail fields].
-  3. ROUND TRIP is two picks: choosing a departing flight loads the RETURNING flights list (heading changes to "Returning flights" [LIVE-VERIFY]) → pick the return the same way → a trip summary with booking options appears. This summary page is the HANDOFF point — go no further (Rule #1).
+  1. Each row is a `div role="link"` (clicking SELECTS the flight and advances) with a separate "Flight details" expand button — for details WITHOUT selecting, click "Flight details" → snapshot.
+  2. Expanded details land in Page Text: per-segment flight numbers, aircraft, per-leg times, layovers, cabin/fare class, legroom, amenities, CO2 breakdown [LIVE-VERIFY: exact fields untested].
+  3. ROUND TRIP is two picks (live-verified): clicking a departing row loads the RETURN list — heading becomes "Choose return to <origin>" / "Top returning flights", title flips ("Rome to London"). Pick the return likewise → the itinerary summary loads at `/travel/flights/booking?tfs=…` (selected flights, baggage, Booking options). This is the HANDOFF point — go no further (Rule #1).
 
   ### TASK: Flexible dates — date grid / price graph
-  1. On a results page, click "Date grid" [LIVE-VERIFY: button above results] → snapshot → a matrix of departure × return dates with a price per cell lands in Page Text [LIVE-VERIFY: cell format] → report the cheapest date pairs.
-  2. "Price graph" [LIVE-VERIFY] shows price-over-time; its bars are graphical and may contribute little to Page Text — prefer the date grid for concrete numbers, and say so if the graph is unreadable.
-  3. Click the chosen cell/date to load that search [LIVE-VERIFY: cells clickable], or re-run THE SEARCH FORM with the winning dates.
+  1. On results, click "Date grid" (label live-verified) → snapshot → a departure × return matrix with a price per cell → report the cheapest pairs [LIVE-VERIFY: cell format untested].
+  2. "Price graph" (label live-verified) is graphical and may contribute little to Page Text — prefer the date grid, and say so if unreadable. (Results also surface hints like "Travel Jul 18 – 26 for €195" — report those for free.)
+  3. Click a cell/date to load that search, or re-run THE SEARCH FORM with the winning dates.
 
   ### TASK: Track prices (login-gated — ONLY on explicit request)
-  1. Only when the user explicitly asks to track/watch prices: on the results or trip-summary page, click the "Track prices" toggle [LIVE-VERIFY: switch role + label] → snapshot.
-  2. If a sign-in prompt appears, tell the user tracking needs their Google login and stop (State Recognition). If the toggle flips to on, confirm: alerts go to their Google account email.
+  1. On results or the itinerary summary, click the "Track prices" toggle (live-verified: `role="switch"`, aria-label "Track prices from <origin> to <destination> departing <date> and returning <date>") → snapshot.
+  2. If a sign-in prompt appears, tell the user tracking needs their Google login and stop. If it flips on, confirm alerts go to their Google account email.
 
   ### HANDOFF (how every search ends)
-  - Report the CURRENT URL from the snapshot — after a search or flight selection it encodes the whole state (route, dates, filters, selected flights) even though it is unreadable to humans; the user can open it and see exactly what you found.
-  - On the trip summary, list the booking options by NAME and price exactly as shown ("Book with <airline>", OTA names [LIVE-VERIFY: options list format]) — never click them (Rule #1).
+  - Report the CURRENT URL — it encodes the whole state (route, dates, filters, selected flights) though unreadable to humans; the user opens it to see exactly what you found.
+  - On the itinerary summary, list booking options by NAME + price exactly as shown (live-verified: "Book with SWISS — Airline — €389", "Book with Booking.com — €471", OTAs like Gotogate/martiGO; each has "Continue"/"View options" you NEVER click — Rule #1). A "price has changed" notice may appear — report the summary's price as current.
   - Always include: airline, times, duration, stops, total price + currency, and the dates searched.
 
   ### UNSUPPORTED — tell the user, do not attempt
-  - Booking, checkout, seat/fare upsell selection, or ANY step on an airline/OTA site (Rule #1).
-  - Hand-constructing `?tfs=` search URLs (opaque blob — Rule 2).
-  - Dragging sliders (price/time filters) — use the non-slider paths above.
-  - The Explore map (canvas-driven) and multi-city itineraries — offer separate one-way searches instead.
+  - Booking, checkout, seat/fare upsell, or ANY step on an airline/OTA site (Rule #1).
+  - Hand-constructing `?tfs=` URLs (Rule 2). Dragging price/time sliders. The Explore map (canvas) and multi-city — offer separate one-way searches instead.
 
   ### Gotchas
-  - Prices are PER PERSON in the locale currency, and they CHANGE between loads — timestamp your report ("as of now") and expect the handoff link to differ slightly.
-  - "Separate tickets" itineraries [LIVE-VERIFY: row badge] mean two bookings and no missed-connection protection — flag them when reporting cheap options.
-  - A +1 next to the arrival time means next-day arrival — say it explicitly when reporting.
-  - The Best/Cheapest tabs and "top flights" ranking mix price with convenience — when the user asks strictly for cheapest, use the Cheapest tab, not the default order.
-  - Airport vs city codes: city suggestions (e.g. "London") search all area airports; the user saying "Heathrow" means pick the LHR suggestion specifically.
+  - Prices CHANGE between loads — live-verified: the summary itself warned "the price you saw on the previous page has changed". Timestamp your report ("as of now") and expect the handoff link to differ slightly. Currency follows Google's Location setting, not the UI language.
+  - "Separate tickets" itineraries [LIVE-VERIFY: badge untested] mean two bookings, no missed-connection protection — flag them among cheap options.
+  - A +1 by the arrival time = next-day arrival — say it explicitly.
+  - Best/Cheapest tabs and "Top departing flights" mix price with convenience — for strictly cheapest, use the Cheapest tab.
+  - City suggestions ("London") search all area airports; "Heathrow" means pick the "Heathrow Airport (LHR)" suggestion specifically.
+  - The origin field is PRE-FILLED with a geo-IP guess — always type over it. Ignore the "Explore deals with AI" promo; the form is the way in.

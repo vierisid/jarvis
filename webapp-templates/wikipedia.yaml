@@ -4,88 +4,89 @@ domains:
 keywords:
   - encyclopedia
   - wiki article
-description: Wikipedia — open articles by direct /wiki/ URL, search when the title is unknown, read long articles progressively, jump to sections, pull facts from the infobox, check references, and switch article language. Strictly read-only; editing is not supported.
-version: 1
+description: Wikipedia — open articles by direct /wiki/ URL, search when the title is unknown, answer from the infobox + lead section, dig deeper facts out via search snippets, and switch article language. Strictly read-only; editing is not supported.
+version: 2
 instructions: |
   URL: https://en.wikipedia.org
 
   ### THE ONE THING TO KNOW
-  Wikipedia is a pure READ surface with the most stable URLs on the web: `https://en.wikipedia.org/wiki/{Article_Title}` (spaces as underscores) goes straight to the article, and the server redirects close-enough titles for you. Navigate by URL, read Page Text, answer — most tasks are 2–3 tool calls. This template does NOT support editing articles, full stop (see UNSUPPORTED).
+  Wikipedia is a pure READ surface with the most stable URLs on the web: `https://en.wikipedia.org/wiki/{Article_Title}` (spaces as underscores) goes straight to the article, and the server redirects close-enough titles for you. Navigate by URL, answer from the infobox + lead — most tasks are 2–3 tool calls. This template does NOT support editing articles, full stop (see UNSUPPORTED).
 
   ### RULES (each stated once — follow exactly)
-  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Wikipedia. Never use desktop or sidecar tools.
-  2. URL-FIRST: article, search, section, and language all have URL patterns (below). Build the URL; click only to pick a disambiguation entry, follow a table-of-contents link, open a reference marker, or use the language selector.
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type. browser_evaluate and browser_screenshot are BANNED for Wikipedia. Never use desktop or sidecar tools.
+  2. URL-FIRST: articles, search, and languages all have URL patterns (below). Build the URL; click only to pick a disambiguation entry or a search result.
   3. READ-ONLY: never click Edit / "Edit source" / "View history" actions, talk-page tabs, or account links — even if the user asks. Editing, discussing, and account actions are unsupported; say so and stop.
-  4. Page Text shows only about the first 2000 characters of visible text per snapshot. Long articles need: browser_scroll down (~1500 px) → browser_snapshot → read → repeat. But the LEAD SECTION and INFOBOX come first and answer most questions — stop the moment you have the answer; never walk a whole article "to be thorough".
+  4. THE READABLE WINDOW: Page Text is the first ~2000 characters of the page counted from the very TOP of the document, and it never moves — scrolling, `#Section` anchors, and in-page clicks (TOC entries, reference markers) all leave Page Text unchanged (live-verified). On an article that window = a few lines of menu chrome, the Contents list (every section name), the infobox, and the first lead paragraphs. That answers most questions; anything deeper in the article is reached ONLY via the search-snippet technique (TASK: Extract specific facts), never by scrolling.
   5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
   6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
 
   ### State Recognition
   - **No sign-in, ever**: reading Wikipedia needs no account, no login. If a sign-in or "Create account" page appears you clicked the wrong thing — navigate back to the article URL. Never enter credentials.
-  - **Ready**: page title is `{Article} - Wikipedia` and Page Text starts with the infobox / lead section.
-  - **Missing article**: Page Text says "Wikipedia does not have an article with this exact name" → your title guess was off; run TASK: Search instead of guessing more spellings.
-  - **Disambiguation page**: the lead reads "{Term} may refer to:" followed by a list of links → see TASK: Open an article, step 3.
+  - **Ready**: page title is `{Article} - Wikipedia`; Page Text runs: "Jump to content / Main menu …" chrome → the Contents list of section names → article title, "NN languages", the Article/Talk/Read/Edit tab row → "From Wikipedia, the free encyclopedia" → infobox label–value lines → lead paragraphs.
+  - **Missing article**: Page Text says "Wikipedia does not have an article with this exact name." (exact wording) → your title guess was off; run TASK: Search instead of guessing more spellings.
+  - **Disambiguation page**: the lead reads "{Term} most commonly refers to:" and/or "{Term} may (also) refer to:" followed by one-line entries grouped by category → see TASK: Open an article, step 3.
   - A small cookie/donation banner may appear in Page Text — ignore it; it never blocks reading.
 
   ### URL PATTERNS (the backbone — prefer these over any clicking)
   - **Article**: `https://en.wikipedia.org/wiki/{Article_Title}` — spaces as underscores: `/wiki/Marie_Curie`, `/wiki/Mercury_(planet)`. Close-enough titles (casing variants, common alternate names) usually redirect to the right article — a "Redirected from …" note under the heading is success, not an error.
-  - **Search**: `https://en.wikipedia.org/wiki/Special:Search?search={query}` — URL-encode, spaces as `+`. An unambiguous query jumps straight to the article; otherwise you get a results list.
-  - **Section jump**: `https://en.wikipedia.org/wiki/{Article}#{Section_Title}` — the heading text with spaces as underscores, case-sensitive: `/wiki/Python_(programming_language)#Libraries`.
+  - **Search**: `https://en.wikipedia.org/wiki/Special:Search?search={query}` — URL-encode, spaces as `+`. A query matching a title exactly jumps straight to the article (verified: `?search=marie+curie` lands on the article); anything else returns a results list.
   - **Language**: `https://{lang}.wikipedia.org/wiki/{Title}` — ISO code subdomain (`de.`, `fr.`, `ja.`, …). See TASK: Switch language for the title caveat.
+  - `#Section` anchors are legal in URLs but USELESS here — they scroll the browser without changing Page Text (Rule 4). Never navigate to one expecting to read that section; only hand them to the user as links.
 
-  ### SNAPSHOT FORMAT
+  ### SNAPSHOT FORMAT (live-captured)
   ```
-  Page: Marie Curie - Wikipedia
-  URL: https://en.wikipedia.org/wiki/Marie_Curie
+  Page: Rust (programming language) - Wikipedia
+  URL: https://en.wikipedia.org/wiki/Rust_(programming_language)
   --- Page Text ---
-  Marie Curie  Born Maria Salomea Skłodowska 7 November 1867 Warsaw, Congress Poland …
-  --- Interactive Elements ---
-  [4] input "Search Wikipedia"
-  [12] link "Physics"
-  [31] link "[1]"          ← reference marker
+  Jump to content Main menu … Contents (Top) History Syntax and features … External links
+  Rust (programming language) 54 languages Article Talk Read Edit View history …
+  From Wikipedia, the free encyclopedia
+  Paradigms Multi-paradigm: concurrent functional …      ← infobox
+  Rust is a general-purpose programming language which …  ← lead
+  ... (6000 chars truncated)
+  --- Key Elements ---
+  [2] INPUT: Search Wikipedia
+  --- Interactive Elements (80/1727) ---
+  [2] input placeholder="Search Wikipedia" type="search"
+  [9] a "History" href="#History"        ← TOC entry — clicking it changes nothing (Rule 4)
+  [29] a "Edit" href="/w/index.php?…&action=edit"        ← never click (Rule 3)
   ```
-  Wikipedia is server-rendered, stable DOM — snapshots are reliable and links carry real article names.
+  Only ~80 of an article's 1500+ links are shown — the EARLIEST in the page (TOC, tabs, infobox links). Links deep in the article body never appear in the element list.
 
   ### TASK: Open an article by title (PRIMARY — do this first whenever the user names a topic)
   1. browser_navigate `/wiki/{Title}` (underscores for spaces) → browser_snapshot.
-  2. Check state: Ready → read and answer. Missing article → TASK: Search.
-  3. Disambiguation page ("may refer to"): if the user's intent makes one entry the obvious match, click that link → snapshot. Otherwise report the top options and ask which one they mean — do not guess between people/places with the same name.
+  2. Check state: Ready → answer from infobox + lead. Missing article → TASK: Search.
+  3. Disambiguation page: if the user's intent makes one entry the obvious match, click that entry's link (they are in the element list, e.g. `a "Mercury (planet)"`) → snapshot. Otherwise report the top options and ask which one they mean — do not guess between people/places with the same name.
 
   ### TASK: Search (when the exact title is unknown)
   1. browser_navigate the Special:Search URL → browser_snapshot.
-  2. Landed on an article (URL is `/wiki/{Title}`)? Done. Otherwise the results list is in Page Text: titles with snippets. Click the best-matching result link → snapshot; if none clearly matches, report the top results and ask.
+  2. Landed on an article (URL is `/wiki/{Title}`)? Done. Otherwise the page title is `{query} - Search results - Wikipedia` and Page Text shows "Results 1 – 20 of {N}" then result titles each with a ~2-line snippet. Click the best-matching result link → snapshot; if none clearly matches, report the top results and ask.
 
-  ### TASK: Read an article / summarize (progressive reading)
-  1. Open the article. The first snapshot carries the infobox + lead — a compressed summary of the whole article. For "what is X" / "tell me about X", this usually suffices; answer from it.
-  2. Need more depth: browser_scroll down ~1500 px → snapshot → read the next Page Text window → repeat. Section headings in Page Text tell you where you are. Stop when you have what the user asked for (Rule 4).
+  ### TASK: Read an article / summarize
+  1. Open the article. The infobox + lead inside the readable window are a compressed summary of the whole article — answer "what is X" / "tell me about X" from them.
+  2. For "what does the article cover": the Contents list at the top of Page Text is the complete section map — report it.
+  3. The article BODY sits beyond the readable window and cannot be scrolled into view (Rule 4). For one specific fact use TASK: Extract specific facts; for "summarize the History section" say the section text is not extractable here and give the user the direct link (`/wiki/{Article}#History`).
 
-  ### TASK: Jump to a specific section
-  1. If you know the heading: navigate `/wiki/{Article}#{Section_Title}` → snapshot → the section is at the top of the Page Text window.
-  2. If not: open the article → snapshot → the table of contents ("Contents" sidebar) appears as links [LIVE-VERIFY: TOC entries as `link "Section name"` in Interactive Elements] → click the entry → snapshot. If the anchor missed (heading guess wrong), read the TOC link texts and use the exact one.
-
-  ### TASK: Extract specific facts (dates, numbers, people)
-  1. Open the article. The INFOBOX renders early in Page Text as label–value lines (Born, Died, Population, Founded, Height, Spouse, …). Quote the value exactly.
-  2. Fact not in the infobox: jump to the relevant section (above) rather than scrolling the whole article. Attribute clearly: "According to the article's infobox, …".
-
-  ### TASK: Check references for a claim
-  1. Find the claim in Page Text; the superscript `[n]` right after it is a link (e.g. `link "[3]"`).
-  2. Click it → snapshot → the page jumps to that numbered citation in the References section; the citation (author, title, publisher, date, often a URL) is in Page Text. Report the source.
-  3. A literal "[citation needed]" after a claim means it is UNSOURCED — tell the user that instead of hunting for a reference.
+  ### TASK: Extract specific facts (dates, numbers, people — including facts deep in the article)
+  1. Open the article. The INFOBOX is inside the readable window as label–value lines (Born, Died, Population, Founded, Stable release, Spouse, …). Quote the value exactly: "According to the article's infobox, …".
+  2. Fact not in the infobox → SEARCH-SNIPPET TECHNIQUE: navigate `Special:Search?search={article title}+{fact keywords}` → snapshot. Each result carries a ~2-line snippet from INSIDE the article body — deep text the article page itself can never show you. Quote the fact from the snippet, attributed to the article.
+  3. If the snippet doesn't surface it either, say the fact sits beyond the readable window and give the user the article URL (with a `#Section` anchor if the Contents list names an obvious section).
 
   ### TASK: Switch article language
   1. PREFER THE URL: navigate `https://{lang}.wikipedia.org/wiki/{Title}`. Proper nouns (people, places, works) usually resolve via redirects even with the English title.
-  2. If that lands on "does not have an article": titles are translated per language. Open the ENGLISH article → click the language selector (button labelled "NN languages", top right of the title [LIVE-VERIFY: exact label/role]) → snapshot → click the target language link (it carries the correctly translated title) → snapshot.
+  2. If that lands on the missing-article page: titles are translated per language. Navigate `https://{lang}.wikipedia.org/wiki/Special:Search?search={title}` — the canonical English `Special:` namespace works on every edition (verified on de., which redirects it to `Spezial:Suche`). The top result carries the correctly translated title — click it.
   3. The article will be IN that language — Page Text included. Say so if the user asked for content you'd then have to translate.
+  4. The "NN languages" selector button next to the article title does NOT appear in the element list (live-verified) — never hunt for it; use step 2.
 
   ### UNSUPPORTED — tell the user, do not attempt
   - Editing articles in any way (edit, revert, undo, move, create) — read-only, full stop.
   - Talk/discussion pages, posting or replying anywhere.
   - Account actions: sign-in, registration, watchlists, preferences, notifications.
   - Uploading files or images.
+  - Looking up which source backs a claim: reference markers like `a "[1]"` are clickable, but the click changes nothing readable — the citation list lives beyond the readable window (Rule 4, live-verified). Offer the user the article's `#References` URL instead. (A literal "[citation needed]" visible in the lead DOES mean the claim is unsourced — report that.)
 
   ### Gotchas
   - Titles are case-sensitive after the first letter, but redirects absorb common variants. If one reasonable URL misses, go straight to Search — never brute-force spellings.
   - Parenthetical disambiguators are part of the title: `/wiki/Mercury_(planet)` vs `/wiki/Mercury_(element)`.
   - `{lang}.m.wikipedia.org` (mobile) URLs work but always use the canonical non-`m.` form.
-  - `Special:` URLs work on every language edition (MediaWiki accepts the canonical English namespace and redirects to the local one).
   - Links in the References/External-links sections leave wikipedia.org — only follow one if the user explicitly asks you to open the source itself.

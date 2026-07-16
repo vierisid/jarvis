@@ -89,7 +89,7 @@ const browserSnapshotScript = `(() => {
   window.__jarvis_elements = els.map(e => e._el);
   els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
-  let bodyText = document.body.innerText || '';
+  let bodyText = (document.body && document.body.innerText) || '';
   for (const frame of frames) {
     if (frame.doc === document) continue;
     const t = frame.doc.body && frame.doc.body.innerText;

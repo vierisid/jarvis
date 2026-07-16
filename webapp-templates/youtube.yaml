@@ -36,7 +36,7 @@ instructions: |
   - Like/subscribe/save are visible account actions and all TOGGLE: never click one already in the desired state (you would undo it).
 
   ### State Recognition
-  - **Consent interstitial** (fresh sessions, mainly EU): URL contains consent.youtube.com, or the page says "Before you continue to YouTube" with Accept all / Reject all buttons [LIVE-VERIFY] -> click the button meaning "Reject all" (privacy-safe default), snapshot, then continue the task.
+  - **Consent interstitial** (fresh sessions, mainly EU) — two forms, both titled "Before you continue to YouTube" with "Reject all" / "Accept all" buttons: (a) full-page redirect to consent.youtube.com (channel /@HANDLE URLs often trigger this), (b) an in-page banner appended at the BOTTOM of Page Text while the actual page content above stays fully readable — with form (b) a read-only task can usually just continue. To clear: click "Reject all" (privacy-safe default), snapshot; if the consent page persists, click it once more before reporting the block.
   - **Logged out is fine for reading**: search, watching, transcripts, descriptions, and reading comments all work logged out. LOGIN IS REQUIRED for: like, subscribe, posting comments, Watch Later, /feed/subscriptions, /feed/history. If such a task surfaces a "Sign in" prompt/dialog [LIVE-VERIFY], tell the user: "This needs your YouTube login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
   - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
   - **Home/results ready**: links with href="/watch?v=..." present.
@@ -51,13 +51,13 @@ instructions: |
   - Playlist: https://www.youtube.com/playlist?list=ID | Watch Later (login): /playlist?list=WL
   - Subscriptions feed (login): /feed/subscriptions | Watch history (login): /feed/history
 
-  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
-  - **Search box** (top of every page): input with name="search_query" / placeholder meaning "Search" [LIVE-VERIFY]; browser_type with submit: true runs the search.
+  ### Element Reference (live-verified July 2026 except items still marked [LIVE-VERIFY])
+  - **Search box** (top of every page): input name="search_query" placeholder="Search" role="combobox"; browser_type with submit: true runs the search.
   - **Result/feed items**: each video is an `<a href="/watch?v=...">`; title, channel, duration ("12:34" badge), views and age are in Page Text near it.
-  - **Player controls** (bottom edge of the player; may be HIDDEN until you browser_hover the player area — hover, then snapshot) [LIVE-VERIFY]:
-    play/pause button aria-label "Play (k)" when paused / "Pause (k)" when playing — read it to KNOW the playback state [LIVE-VERIFY]; mute button "Mute (m)"/"Unmute (m)" [LIVE-VERIFY]; settings gear; fullscreen.
-  - **Below the player**: video title; channel link + Subscribe button (label meaning "Subscribe", flips to "Subscribed") [LIVE-VERIFY]; like button whose aria-label contains "like this video" and carries a pressed/active state [LIVE-VERIFY]; Share; a Save action that may sit inside a "...more"/three-dot overflow menu [LIVE-VERIFY].
-  - **Description box**: collapsed by default with an expander meaning "...more" [LIVE-VERIFY]; expanded, it ends with a "Show transcript" button when the video has captions [LIVE-VERIFY].
+  - **Player controls** (bottom edge of the player; usually already in the snapshot — if missing, browser_hover the player area, then snapshot):
+    play/pause button aria-label "Play (k)"/"Pause (k)" — read it to KNOW the playback state; mute button "Mute (m)"/"Unmute (m)"; captions button ("Subtitles/closed captions ..." — reads "unavailable" when the video has no captions); "Settings"; "Theater mode (t)"; "Full screen (f)".
+  - **Below the player**: video title; channel link + Subscribe button (aria-label "Subscribe to {channel}."; flips to "Subscribed" once subscribed [LIVE-VERIFY the flip]); like button — its aria-label contains "like this video" and the like count; Dislike; "Share"; a direct "Save" button (aria-label "Save to playlist" — on narrow layouts it may fold into the "More actions" overflow); a "More actions" overflow button.
+  - **Description box**: collapsed by default with a "...more" expander button (id="expand"); expanded, it ends with a "Show transcript" button when the video has captions [LIVE-VERIFY]. Some sessions serve NO captions at all (the player captions button reads "unavailable") — then no transcript exists to show.
   - **Transcript panel**: opens beside/below the player; timestamped lines are plain DOM text readable in Page Text [LIVE-VERIFY].
   - **Comments**: below the description, lazy-loaded on scroll. Comment box: contenteditable with placeholder meaning "Add a comment..." [LIVE-VERIFY]; clicking it reveals Comment/Cancel buttons [LIVE-VERIFY].
 
@@ -69,7 +69,7 @@ instructions: |
 
   ### TASK: Play a video  (budget: 6 calls)
   1. Given a URL or ID: browser_navigate to the watch URL. Given a title/topic: search, snapshot, click the matching /watch?v= link.
-  2. browser_snapshot — watch pages usually AUTOPLAY. To confirm state: browser_hover the player, snapshot, read the play/pause button's aria-label ("Pause (k)" = playing) [LIVE-VERIFY]. Paused -> browser_press_key("k").
+  2. browser_snapshot — watch pages usually AUTOPLAY. To confirm state: read the play/pause button's aria-label in the snapshot ("Pause (k)" = playing; hover the player first if controls are missing). Paused -> browser_press_key("k").
   3. If an ad runs first, see State Recognition.
 
   ### TASK: Pause / resume — browser_press_key("k") (ensure focus isn't in a text field); verify by hovering the player + snapshot: the button label flipped [LIVE-VERIFY].
@@ -80,7 +80,7 @@ instructions: |
   ### TASK: Get the transcript (THE way to summarize a video)  (budget: 8 calls)
   You cannot watch or listen to video. The transcript is the ONLY reliable source of a video's spoken content — never pass off a summary built from title/description/comments without saying so.
   1. browser_navigate to the watch URL -> browser_snapshot.
-  2. In the description box below the title, click the expander meaning "...more" [LIVE-VERIFY] -> snapshot.
+  2. In the description box below the title, click the "...more" expander button -> snapshot.
   3. Click the "Show transcript" button at the bottom of the expanded description [LIVE-VERIFY]. Not found after 2 retry snapshots -> the video has no captions; tell the user a transcript isn't available.
   4. browser_snapshot — the transcript panel's timestamped lines are in Page Text.
   5. Page Text is capped (~8000 chars): long transcripts get TRUNCATED. browser_scroll down + snapshot to read further chunks [LIVE-VERIFY whether page scroll advances the panel]; if the rest is unreachable, summarize what you have and SAY the transcript was partial.
@@ -111,7 +111,7 @@ instructions: |
   3. snapshot — checkbox checked = saved; browser_press_key("Escape") closes the dialog. Optional confirm: /playlist?list=WL lists the video.
 
   ### TASK: Open a channel and list its recent videos  (budget: 5 calls)
-  1. browser_navigate https://www.youtube.com/@HANDLE/videos (handle unknown -> search the channel name and click the channel result [LIVE-VERIFY]) -> browser_snapshot.
+  1. browser_navigate https://www.youtube.com/@HANDLE/videos (handle unknown -> search the channel name and click the channel result [LIVE-VERIFY]) -> browser_snapshot. Fresh sessions often hard-redirect channel URLs to the consent page — see State Recognition.
   2. The grid is newest-first: titles/dates/views in Page Text. Scroll for more. Other tabs: Videos / Shorts / Live / Playlists [LIVE-VERIFY].
 
   ---

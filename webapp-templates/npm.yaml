@@ -12,7 +12,7 @@ instructions: |
   URL: https://www.npmjs.com
 
   ### THE ONE THING TO KNOW
-  npm is a pure READ surface with one backbone URL: `https://www.npmjs.com/package/{name}` goes straight to the package page (scoped packages too: `/package/@org/name`). The page is server-rendered and stable; the first snapshot's Page Text already carries version, weekly downloads, license, last publish date, and the install command. Navigate by URL, read Page Text, answer — most tasks are 2–3 tool calls.
+  npm is a pure READ surface with one backbone URL: `https://www.npmjs.com/package/{name}` goes straight to the package page (scoped packages too: `/package/@org/name`). The page is server-rendered and stable; one snapshot's Page Text carries version, weekly downloads, license, last publish date, and the install command — though a Cloudflare check can delay the first snapshot (State Recognition). Navigate by URL, read Page Text, answer — most tasks are 2–3 tool calls.
 
   ### RULES (each stated once — follow exactly)
   1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for npm. Never use desktop or sidecar tools.
@@ -24,24 +24,25 @@ instructions: |
 
   ### State Recognition
   - **No sign-in, ever**: no login wall exists for reading. If a Sign In / Sign Up page appears you clicked a header link — navigate back to the package URL. Never enter credentials.
+  - **Cloudflare check**: title "Just a moment..." / Page Text "Performing security verification" → npm fronts the site with Cloudflare and this interstitial clears by itself. Wait a few seconds and re-snapshot (up to ~3 times); never try to solve or bypass it. If it never clears, report that npm is currently blocking automated access.
   - **Ready**: page title is `{name} - npm` and Page Text starts with the package name, version line, and description.
   - **Missing package**: Page Text says "not found" / "404" → wrong name or unpublished. Try TASK: Search once; if no exact match there either, report that the package does not exist on the registry.
-  - **Deprecation banner**: "This package has been deprecated" plus the author's message near the top of Page Text [LIVE-VERIFY: banner rendering]. If present, ALWAYS quote the message verbatim in your answer, even unasked — it usually names the replacement. A "security holding package" description means npm removed a malicious package — report that.
+  - **Deprecation banner**: "This package has been deprecated" then "Author message:" and the maintainer's text, near the top of Page Text (e.g. request: "request has been deprecated, see https://github.com/request/request/issues/3142"). If present, ALWAYS quote the message verbatim in your answer, even unasked — it usually names the replacement. A "security holding package" description means npm removed a malicious package — report that.
 
   ### URL PATTERNS (the backbone — prefer these over any clicking)
   - **Package page**: `https://www.npmjs.com/package/{name}` — e.g. `/package/express`, scoped `/package/@types/node` (keep the `@` and `/` literal; do not URL-encode them).
   - **Specific version**: `https://www.npmjs.com/package/{name}/v/{version}` — e.g. `/package/express/v/4.17.1`. Shows that version's README, its own dependency list, and publish date.
-  - **Tabs on the package page**: `?activeTab=versions` | `?activeTab=dependencies` | `?activeTab=dependents` | `?activeTab=readme` [LIVE-VERIFY: activeTab param values] — e.g. `/package/express?activeTab=versions`.
-  - **Search**: `https://www.npmjs.com/search?q={query}` — URL-encode the query. Sort variants: `&ranking=popularity` | `&ranking=quality` | `&ranking=maintenance` [LIVE-VERIFY: ranking param values; default is "optimal"].
+  - **Tabs on the package page**: `?activeTab=versions` | `?activeTab=dependencies` | `?activeTab=dependents` | `?activeTab=readme` — e.g. `/package/express?activeTab=versions`.
+  - **Search**: `https://www.npmjs.com/search?q={query}` — URL-encode the query. Sort by URL param: `&sortBy=downloads_weekly` (most downloaded this week) | `&sortBy=downloads_monthly` | `&sortBy=dependent_count` | `&sortBy=published_at` (recently published); omit for the default relevance sort. The old `&ranking=` params are IGNORED. Each result already shows a weekly-downloads figure, so popularity is usually readable without re-sorting.
   - **Author/user**: `https://www.npmjs.com/~{username}` — lists the packages that user maintains.
 
   ### READING A PACKAGE-PAGE SNAPSHOT
-  Page Text opens with the header line ("express 4.19.2 • Public • Published 3 months ago", description, "Install npm i express") followed by sidebar metadata as label–value pairs: Weekly Downloads, Version, License, Unpacked Size, Last publish [LIVE-VERIFY: exact sidebar labels]. Server-rendered, stable DOM — snapshots are reliable.
+  Page Text opens with the header line ("react 19.2.7 • Public • Published a month ago", description) and the tab row — the counts live in the tab labels ("Readme | Code Beta | 0 Dependencies | 213515 Dependents | 2,869 Versions"). The "Package Sidebar" block follows the readme in Page Text with label–value pairs: Install ("npm i react"), Repository, Homepage, Weekly Downloads, Version, License, Last publish, Collaborators. Server-rendered, stable DOM — snapshots are reliable.
 
   ### TASK: Look up a package (PRIMARY — do this first whenever the user names a package)
   1. browser_navigate `/package/{name}` → browser_snapshot.
   2. Check state: Missing package → TASK: Search. Deprecation banner → quote it (State Recognition).
-  3. Answer from Page Text: latest version, weekly downloads, last publish date, license, description, and the install command (`npm i {name}`) are all in the first snapshot. State the deprecation status when the user asks whether the package is safe/maintained.
+  3. Answer: latest version, publish age, description, and the tab counts are at the top of Page Text; weekly downloads is ALWAYS in the first snapshot's element list (`div "Weekly Downloads 107,311,530"`). License, last publish, and the install command (`npm i {name}`) sit in the sidebar text after the readme — in the first snapshot for short readmes, one or two scrolls down for long ones (express). State the deprecation status when the user asks whether the package is safe/maintained.
 
   ### TASK: Read the README
   1. Open the package page (README is the default tab; its text follows the metadata in Page Text).
@@ -49,21 +50,21 @@ instructions: |
 
   ### TASK: Check versions / release history
   1. browser_navigate `/package/{name}?activeTab=versions` → browser_snapshot.
-  2. Page Text lists Current Tags (latest, next, beta …) then Version History rows: version, downloads, published date [LIVE-VERIFY: row rendering in Page Text]. Scroll for older versions.
+  2. Page Text lists a Current Tags table (Version / Downloads (Last 7 Days) / Tag: latest, next, beta …) then Version History rows (Version / Downloads (Last 7 Days) / Published). Deprecated versions hide behind a "show deprecated versions" toggle. Scroll for older versions.
   3. For "what changed in version X" open `/package/{name}/v/{version}` — but npm hosts no changelog; if that README doesn't cover it, point the user to the sidebar repository link instead of guessing.
 
   ### TASK: Check dependencies and dependents
-  1. Dependencies: browser_navigate `/package/{name}?activeTab=dependencies` → snapshot → the tab label carries the count ("Dependencies (31)") and each dependency renders as a link — report the count and notable names. "0 Dependencies" is itself a useful answer.
-  2. Dependents: `/package/{name}?activeTab=dependents` → snapshot → the count in the tab label ("Dependents (78,123)") is the headline number; the page lists only a sample.
+  1. Dependencies: browser_navigate `/package/{name}?activeTab=dependencies` → snapshot → the tab label carries the count, count first ("20 Dependencies"), and the tab body repeats it as "Dependencies (N)" / "Dev Dependencies (N)" headings with each dependency as a link — report the count and notable names. "0 Dependencies" is itself a useful answer.
+  2. Dependents: `/package/{name}?activeTab=dependents` → snapshot → the count in the tab label ("53660 Dependents") is the headline number; the page lists only a sample.
 
   ### TASK: Search packages and compare candidates
-  1. browser_navigate `/search?q={query}` → browser_snapshot. Results show name, description, version, publish age [LIVE-VERIFY: which quality signals render as text]. Re-run with `&ranking=popularity` when the user wants "the most used" one.
+  1. browser_navigate `/search?q={query}` → browser_snapshot. Each result renders name, description, keywords, publisher, version, publish age, dependents count, license, and a weekly-downloads figure. For "the most used" compare those download figures directly (or re-navigate with `&sortBy=downloads_weekly`).
   2. To COMPARE (e.g. "which date library should I use") pick the top 2–3 candidates and open each `/package/{name}` in turn (one navigate + one snapshot each), collecting the same axes for all: weekly downloads, last publish date, license, deprecation status.
   3. Report a compact side-by-side grounded ONLY in those numbers (downloads = adoption, recent publish = maintenance); name the trade-off rather than overselling one option. Budget ≤ 8 tool calls total.
 
   ### TASK: Check an author's packages
   1. browser_navigate `/~{username}` → browser_snapshot. The profile lists their packages with descriptions; scroll for more.
-  2. If the user only knows a package, open it first — maintainers render as `/~name` links in the sidebar [LIVE-VERIFY: Maintainers section]; click one.
+  2. If the user only knows a package, open it first — the sidebar "Collaborators" block renders maintainers as `/~name` links; click one.
 
   ### UNSUPPORTED — tell the user, do not attempt
   - Publishing, unpublishing, deprecating, or transferring packages.

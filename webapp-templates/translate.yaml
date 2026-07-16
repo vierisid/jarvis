@@ -32,13 +32,13 @@ instructions: |
 
   ### State Recognition
   - **No sign-in needed** — translation works fully logged out. Never enter credentials; if a Google login page appears you navigated wrong — go back to the translate URL.
-  - **Consent interstitial**: on a fresh browser (esp. EU) a consent.google.com page ("Before you continue" with Accept all / Reject all buttons [LIVE-VERIFY: exact labels/roles]) may appear instead of the translator. Click "Reject all" (or "Accept all" if no reject option) → snapshot → the translator loads with your URL params intact [LIVE-VERIFY: params survive the consent redirect — if the source box is empty, re-navigate the translate URL once].
-  - **Ready**: page title contains "Google Translate", the source box shows your text, and the output panel carries the translation [LIVE-VERIFY: which snapshot element carries the result — Page Text, an output textarea, or the region near the "Copy translation" button].
+  - **Consent interstitial**: on a fresh browser (esp. EU) a consent.google.com page titled "Before you continue" ("Before you continue to Google") appears instead of the translator, with `button "Reject all"` and `button "Accept all"` (plus a "More options" link — ignore it). Click "Reject all" → snapshot → the translator loads with your URL params fully intact (they ride the consent page's `continue=` param; the source box arrives filled and the translation rendered — no re-navigate needed). GOTCHA: the buttons sit at the very BOTTOM of a long consent page; if the snapshot after clicking still shows "Before you continue", the click landed below the viewport — browser_scroll down, re-snapshot, and click the fresh "Reject all" [id].
+  - **Ready**: page title is "Google Translate", the source box is `textarea aria-label="Source text"` with your text as its value, and the translation is carried in PAGE TEXT — the line(s) right after "Translation results" / "Translation result" (it is NOT an interactive element; the nearby `button aria-label="Copy translation"` marks the output panel).
 
   ### TASK: Translate a text snippet (PRIMARY)
   1. Build the URL: `sl=auto` (or the stated source), the requested `tl`, the encoded text → browser_navigate → browser_snapshot.
-  2. Read the translation from the output panel [LIVE-VERIFY element, see Ready]. It must differ from your input and be non-empty; if empty, re-snapshot once (the result can render a beat after page load).
-  3. If `sl=auto` was used, also report the detected source language — the source-language tab reads "{Language} - Detected" [LIVE-VERIFY: exact label text/casing]. Quote the translation verbatim; do not "improve" it.
+  2. Read the translation from Page Text — the line(s) after "Translation result" (see Ready). It must differ from your input and be non-empty; if empty, re-snapshot once (the result can render a beat after page load).
+  3. If `sl=auto` was used, also report the detected source language — the selected source tab reads exactly "{Language} - Detected" (e.g. `button "English - Detected"`; the suffix appears ONLY with `sl=auto`). Quote the translation verbatim; do not "improve" it.
 
   ### TASK: Translate into multiple target languages
   Repeat the primary task once per target: identical `sl` and `text`, a different `tl` per navigate (one navigate + one snapshot each). Collect the results and present them together, labeled by language.
@@ -47,7 +47,7 @@ instructions: |
   Navigate with `sl=auto&tl=en` → snapshot → report the detected language from the "- Detected" tab label, and include the English translation as a bonus. The page's detector beats your guess — report what it says, not what you think.
 
   ### TASK: Long texts (over the input limit)
-  The input caps at 5,000 characters [LIVE-VERIFY: current limit — a counter like "4,988 / 5,000" sits under the source box]. Long texts also make unwieldy URLs, so stay well under it: split at paragraph (preferred) or sentence boundaries into chunks of at most ~2,500 characters, run the primary task per chunk, and join the outputs in order. Tell the user it was translated in N chunks. Never split mid-sentence — it wrecks both sides of the cut.
+  The input caps at 5,000 characters (a counter under the source box shows "25 / 5,000" — sometimes just the bare count). Long texts also make unwieldy URLs, so stay well under it: split at paragraph (preferred) or sentence boundaries into chunks of at most ~2,500 characters, run the primary task per chunk, and join the outputs in order. Tell the user it was translated in N chunks. Never split mid-sentence — it wrecks both sides of the cut.
 
   ### UNSUPPORTED — tell the user, do not attempt
   - Listen / pronunciation / text-to-speech: audio cannot travel through snapshots.

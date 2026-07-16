@@ -6,8 +6,8 @@ keywords:
   - wayback
   - wayback machine
   - archived version
-description: Internet Archive / Wayback Machine — fetch the latest archived copy of a URL, fetch a page as it looked on a specific date, list a URL's capture history, compare two dates' versions, save a live page on explicit request, and search the archive.org collections. Read-only except the explicitly requested save.
-version: 1
+description: Internet Archive / Wayback Machine — fetch the latest archived copy of a URL, fetch a page as it looked on a specific date, estimate a URL's capture history, compare two dates' versions, and save a live page on explicit request. Read-only except the explicitly requested save; archive.org collections search is not supported.
+version: 2
 instructions: |
   URL: https://web.archive.org
 
@@ -15,61 +15,58 @@ instructions: |
   The URL is the API: `https://web.archive.org/web/{timestamp}/{target-url}`. Prefix any URL with a timestamp path and you get the archived copy — no search box, no clicking. The target URL goes in RAW, scheme included (`/web/2023/https://example.com/pricing`). Nearly every task is 2 tool calls: browser_navigate → browser_snapshot.
 
   ### RULES (each stated once — follow exactly)
-  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_scroll. browser_evaluate and browser_screenshot are BANNED for the Internet Archive. Never use desktop or sidecar tools.
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click. browser_evaluate and browser_screenshot are BANNED for the Internet Archive. Never use desktop or sidecar tools.
   2. READ-ONLY with ONE exception: TASK "Save a page now", and only when the user explicitly asks to save/capture a URL. Never save pages as a side effect of reading; never touch account, upload, or metadata-edit features.
   3. [id]s are 1-based and CHANGE with every snapshot. If something is not readable after 2 retry snapshots, tell the user what you tried and stop — no workarounds.
-  4. Always report WHICH capture you read: the timestamp in the final URL after redirects is the actual capture moment (UTC), not what you requested.
+  4. The timestamp in the FINAL URL after redirects is the ONLY visible record of which capture you are reading (UTC, `YYYYMMDDhhmmss`) — the Wayback toolbar never reaches the snapshot (see State Recognition). Always report that timestamp ("archived 31 Dec 2023"), never the date you requested.
+  5. Page Text is the first ~2000 characters of the archived page's own text, counted from the top of the document — scrolling does NOT reveal more (live-verified). If the answer is not in that window, say so and give the user the capture URL; don't loop snapshots.
 
   ### URL PATTERNS (the backbone — timestamps are YYYYMMDDhhmmss, UTC, truncation allowed)
-  - Latest capture: `https://web.archive.org/web/{url}` → redirects to the newest snapshot; the final URL gains the real timestamp.
-  - At a moment: `https://web.archive.org/web/{YYYYMMDDhhmmss}/{url}` → redirects to the NEAREST capture to that time. Truncation works: `/web/2023/{url}` ≈ nearest to 2023, `/web/20230615/{url}` ≈ nearest to 15 June 2023.
-  - One year's captures: `https://web.archive.org/web/2024*/{url}` — lists 2024 snapshots.
-  - Full history: `https://web.archive.org/web/*/{url}` — the calendar view.
+  - Latest capture: `https://web.archive.org/web/{url}` → redirects to the newest snapshot; the final URL gains the real timestamp (verified: `/web/https://example.com` → `/web/20260716011432/https://example.com/`).
+  - At a moment: `https://web.archive.org/web/{YYYYMMDDhhmmss}/{url}` → redirects to the NEAREST capture to that time. Truncation works: `/web/2023/{url}` ≈ nearest to 2023 (verified: landed on `20231231235809`), `/web/20230615/{url}` ≈ nearest to 15 June 2023.
+  - Earliest capture: `/web/1996/{url}` — nothing predates the archive's first crawls, so "nearest to 1996" is the FIRST capture (verified: example.com → `20020120142510`).
   - Save now: `https://web.archive.org/save/{url}` — the ONE write action (see task).
-  - Collections search (texts/audio/video): `https://archive.org/search?query={URL-encoded terms}`.
   - The `{url}` needs no encoding: paste it whole with its scheme, `?` and `&` intact (they belong to the target). If the user gave no scheme, use `https://`.
+  - Calendar views (`/web/*/{url}`, `/web/2024*/{url}`) exist but are script-rendered and expose NOTHING readable (live-verified) — never use them; see TASK: Estimate capture history.
 
   ### State Recognition
-  - **No sign-in needed** — reading works fully logged out, and saving normally does too [LIVE-VERIFY: /save while logged out — if it demands an account, report that and stop]. Never enter credentials; if a login page appears you navigated wrong.
-  - **Archived page ready**: URL is `/web/{timestamp}/...` and Page Text opens with the Wayback toolbar (capture date, "About this capture") followed by the page's own content [LIVE-VERIFY: toolbar text as it appears in Page Text].
-  - **Never archived**: Page Text says the Wayback Machine has not archived that URL [LIVE-VERIFY exact wording — historically "Hrm. Wayback Machine has not archived that URL."] → report it plainly and offer to save the live page (only do it if they say yes).
-  - Archived pages are frozen copies: assets and scripts are often missing, so rendering can be partial. Read what Page Text gives; if a capture is script-rendered and Page Text is near-empty, say the capture exists but its text is not extractable — don't retry endlessly (Rule 3).
+  - **No sign-in needed** — reading works fully logged out, and saving normally does too [LIVE-VERIFY: /save while logged out — if it demands an account, report that and stop (write action — pending controlled test)]. Never enter credentials; if a login page appears you navigated wrong.
+  - **Archived page ready**: URL is `/web/{timestamp}/...` and Page Text is the archived page's OWN text from its top — the Wayback toolbar (capture date, "About this capture") never appears in Page Text or the element list (live-verified), so the URL is your only date source (Rule 4).
+  - **Never archived**: no redirect happens; the page is titled "Wayback Machine" and Page Text says "The Wayback Machine has not archived that URL." (exact wording) plus a "Click here to search for all archived pages under {url}" link → report it plainly and offer to save the live page (only do it if they say yes).
+  - Archived pages are frozen copies: assets and scripts are often missing, so rendering can be partial. If a capture is script-rendered its Page Text can be near-empty — say the capture exists but its text is not extractable; don't retry endlessly (Rule 3).
 
   ### TASK: Fetch the latest archived version (PRIMARY — dead links, changed pages, pages now behind a wall)
   1. browser_navigate `https://web.archive.org/web/{url}` → browser_snapshot.
-  2. Check state: Never archived → report + offer save. Ready → read the content below the toolbar and answer; for long pages browser_scroll down ~1500 px → snapshot → repeat, stopping the moment you have the answer.
+  2. Check state: Never archived → report + offer save. Ready → answer from Page Text, remembering it is only the top ~2000 chars of the capture (Rule 5).
   3. Report the capture date from the final URL ("archived {date}") so the user knows how stale the copy is.
 
   ### TASK: Fetch a page as of a specific date ("what did their pricing page say in 2023?")
   1. Build the timestamp from the user's date — a bare year or year+month is fine → navigate `/web/{timestamp}/{url}` → snapshot.
-  2. The redirect picks the NEAREST capture: read the actual timestamp from the final URL and lead with it ("nearest capture: 12 Mar 2023"). If it is far from the requested date (a different year), say so before answering from it.
+  2. The redirect picks the NEAREST capture: read the actual timestamp from the final URL and lead with it ("nearest capture: 31 Dec 2023"). If it is far from the requested date (a different year), say so before answering from it.
+  3. The final URL may also normalize the target (verified: requested `https://example.com`, landed on `http://example.com/`) — that is the same page's capture under a scheme variant, not an error.
 
-  ### TASK: List capture history for a URL
-  1. Navigate `/web/*/{url}` (or `/web/{YYYY}*/{url}` for one year) → snapshot [LIVE-VERIFY: the calendar view is script-rendered — check what Page Text exposes; the year bar with capture counts and calendar dates may appear as links].
-  2. Report the SHAPE, not an enumeration: first capture, latest capture, rough count, notable gaps or dense periods.
-  3. If the calendar exposes nothing readable, approximate the range instead: `/web/1996/{url}` redirects near the earliest capture and `/web/{url}` gives the latest — report the span from those two [LIVE-VERIFY the earliest-capture trick].
+  ### TASK: Estimate capture history for a URL
+  1. The calendar (`/web/*/{url}`) exposes no dates, counts, or capture links to snapshots (live-verified: only site chrome plus a "this calendar view maps the number of times … was crawled" note). Use two probes instead:
+  2. Navigate `/web/1996/{url}` → the final URL's timestamp is the FIRST capture. Then navigate `/web/{url}` → the LATEST capture.
+  3. Report the span ("captured from Jan 2002 to Jul 2026"). Capture counts and per-year density are not extractable — if the user needs those, give them the calendar URL to open in their own browser.
 
   ### TASK: Compare two dates' versions of a page
-  1. Run "as of a specific date" for date A and extract the text relevant to the user's question (scroll as needed). Repeat for date B.
-  2. Report a focused diff — what changed between the captures on the axis the user cares about (prices, wording, claims, features) — citing both ACTUAL capture dates. Don't dump both full texts.
+  1. Run "as of a specific date" for date A and extract the text relevant to the user's question. Repeat for date B.
+  2. Report a focused diff — what changed between the captures on the axis the user cares about (prices, wording, claims, features) — citing both ACTUAL capture dates. Don't dump both full texts. Rule 5 applies: only the top ~2000 chars of each capture are comparable.
 
   ### TASK: Save a page now (the ONE write action — explicit request only)
   1. Only on an explicit "save this page" style request. It captures the CURRENT public page into the Wayback Machine — non-destructive, but never do it unprompted.
-  2. browser_navigate `https://web.archive.org/save/{url}` → snapshot [LIVE-VERIFY the flow: direct navigation may start the capture immediately with a progress page, or land on a form with the URL prefilled and a "Save Page" button — click it, then snapshot].
-  3. Capturing takes a while. Re-snapshot after the progress page settles; success ends on a fresh `/web/{new-timestamp}/{url}` page [LIVE-VERIFY]. Report that new snapshot URL. On an error (rate limit, host blocks the crawler), quote the message and stop — never loop retries on save.
-
-  ### TASK: Search the collections (books, audio, video, software — minimal support)
-  1. Navigate `https://archive.org/search?query={terms}` → snapshot [LIVE-VERIFY: results are script-rendered tiles — check what Page Text exposes].
-  2. Report the top matching items by title; click an item link → snapshot to read its details page. Downloading files, borrowing books, and account features are out of scope — give the user the item page URL instead.
+  2. browser_navigate `https://web.archive.org/save/{url}` → snapshot [LIVE-VERIFY the flow: direct navigation may start the capture immediately with a progress page, or land on a form with the URL prefilled and a "Save Page" button — click it, then snapshot (write action — pending controlled test)].
+  3. Capturing takes a while. Re-snapshot after the progress page settles; success ends on a fresh `/web/{new-timestamp}/{url}` page [LIVE-VERIFY (write action — pending controlled test)]. Report that new snapshot URL. On an error (rate limit, host blocks the crawler), quote the message and stop — never loop retries on save.
 
   ### UNSUPPORTED — tell the user, do not attempt
+  - Searching the archive.org collections (books, audio, video, software): `https://archive.org/search?query=…` and item `/details/` pages are fully script-rendered — snapshots return ZERO Page Text and ZERO elements (live-verified, even after long waits). Give the user the search URL to open themselves.
   - Accounts: sign-in, registration, favorites, web-archive collections of your own.
   - Uploading files to archive.org or editing item metadata.
   - Borrowing/returning library books, downloading collection files.
   - Bulk work: saving or fetching lists of URLs — one URL per explicit request.
 
   ### Gotchas
-  - `www.example.com` and `example.com` (and trailing-slash variants) are archived SEPARATELY — if one says "never archived", try the other variant once before reporting.
-  - Links inside an archived page are rewritten to stay inside the archive (`/web/{timestamp}/...`) — clicking them is safe and stays time-locked near the same date.
-  - The Wayback toolbar text (dates, capture counts, "About this capture") tops Page Text on every archived page — don't mistake it for the page's own content.
+  - The nearest-capture redirect coalesces scheme variants by itself (https→http observed live), but `www.example.com` vs `example.com` (and trailing-slash variants) can still resolve differently — if one says "never archived", try the other variant once before reporting.
+  - Links inside an archived page are rewritten to stay inside the archive: immediately after load a raw `href` may still show the original URL, but a re-snapshot shows the `/web/{timestamp}/...` form and clicking stays time-locked near the same date (live-verified) — clicking them is safe.
   - A capture reflects what the crawler saw AT THAT TIME: cookie walls or geo-blocks at capture time are baked in. Conversely, a page paywalled today may have public captures from before the wall — that's often exactly why the user is here.

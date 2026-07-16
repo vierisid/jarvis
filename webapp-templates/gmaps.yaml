@@ -10,7 +10,7 @@ keywords:
   - how far is
   - how long to drive
 description: Google Maps — search for places, read place details (address, hours, phone, rating, reviews), and get directions with per-route durations, all via URLs and the sidebar panel. No map-canvas interaction.
-version: 1
+version: 2
 instructions: |
   URL: https://www.google.com/maps
 
@@ -19,66 +19,68 @@ instructions: |
 
   ### RULES (each stated once — follow exactly)
   1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Maps. Never use desktop or sidecar tools.
-  2. URL-FIRST: search, directions, and place lookups all have stable URLs (below). Always build the URL instead of typing into the search box; type only to refine an already-open panel.
-  3. READ, don't click, wherever possible: names, ratings, review counts, hours, addresses, phone numbers, and route durations all appear in Page Text. Answer from Page Text; click a result only when the user needs details the list view doesn't show.
-  4. UI LANGUAGE: labels are locale-translated. Match buttons/tabs by aria-label MEANING, never by exact English text on a non-English UI.
+  2. URL-FIRST: search, directions, and place lookups all have stable URLs (below). Always build the URL instead of typing into the search box; type only to refine an already-open panel. URL navigation is RELIABLE; in-sidebar clicks are the flaky path (see the results-click gotcha) — prefer a refined URL over a click whenever both would work.
+  3. READ, don't click, wherever possible: names, ratings, hours, addresses, phone numbers, and route durations all appear in Page Text. Answer from Page Text; open a place panel only when the user needs details the list view doesn't show (review counts, price level, phone, and review text live on the place panel, NOT in the results list).
+  4. FORCE ENGLISH: append `?hl=en` (or `&hl=en` after other params) to every Maps URL you build — live-verified to work and to survive Maps' URL rewrite. Google otherwise localizes by server-side geo-IP even when the browser asks for English. If labels still come back localized, match buttons/tabs by aria-label MEANING, never by exact English text.
   5. browser_type REPLACES field content by default — that is what the search box wants.
-  6. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed. Maps re-renders the results feed as sponsored entries stream in, so snapshot IMMEDIATELY before any click.
   7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
   8. NO GPS: the browser has no location, so "near me" means nothing to Maps here. If the user gives no area, ASK for one (city / neighborhood / address) before searching. Never guess a location.
 
   ### State Recognition
-  - **Consent interstitial** (EU / first run): URL contains consent.google.com, or a dialog asks to accept cookies → snapshot → click the accept-all button [LIVE-VERIFY: label localized, e.g. "Accept all"] → re-navigate to your target URL. If it persists after 2 tries, tell the user and stop.
-  - **No sign-in needed** for search, place details, or directions. Sign-in is only required for saving places and posting reviews — if a sign-in prompt appears there, tell the user to log in manually and stop.
-  - **Ready**: the search box is present (combobox/input with aria-label ≈ "Search Google Maps" [LIVE-VERIFY]).
+  - **Consent interstitial** (EU / first run — live-verified): URL becomes `consent.google.com/m?continue=<your target>`. Full-page dialog, language follows your target URL's `hl` (with `hl=en`: buttons "Reject all" / "Accept all"; without it, geo-IP locale, e.g. Italian "Rifiuta tutto" / "Accetta tutto"). The buttons sit BELOW THE FOLD at common window sizes: browser_scroll down → snapshot → click the reject-all button (rejecting is sufficient for all Maps reading; no need to accept). After the click the page auto-redirects to your target URL in a few seconds — the first snapshot after clicking may STILL show the consent page (redirect in flight): wait 2–3s and snapshot again before assuming failure. If it persists after 2 tries, re-navigate to the target once, then tell the user and stop.
+  - **No sign-in needed** for search, place details, or directions. Signed-out Maps shows a "You're seeing a limited view of Google Maps" banner — that is normal, everything below still works. Sign-in is only required for saving places and posting reviews — if a sign-in prompt appears there, tell the user to log in manually and stop.
+  - **Ready**: the search box is present — `input name="q" role="combobox"` holding the current query (it carries no reliable aria-label; recognize it by name="q").
   - **Loading**: sidebar empty, no results text → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
 
   ### URL PATTERNS (the backbone — prefer these over any clicking)
-  - **Search**: `https://www.google.com/maps/search/{query}` — URL-encode, spaces as `+`, and include the AREA in the query: `https://www.google.com/maps/search/coffee+near+duomo+milan`.
-  - **Directions**: `https://www.google.com/maps/dir/{origin}/{destination}` — e.g. `/maps/dir/Milan+Central+Station/Duomo+di+Milano`. Extra waypoints = extra `/segments`: `/maps/dir/A/B/C`. Leaving origin empty (`/maps/dir//Duomo+di+Milano`) opens the panel with only the destination filled.
-    - Travel mode: the `data=` URL parameter is fragile — do NOT construct it. Load the dir URL, then click the mode tab (aria-labels ≈ "Driving", "Transit", "Walking", "Cycling" [LIVE-VERIFY]) and re-snapshot.
-  - **Place**: `https://www.google.com/maps/place/{name}` resolves straight to the place panel: `/maps/place/Eiffel+Tower`. An ambiguous name falls back to a results list — then click the intended result.
-  - **The current URL IS the shareable link**: after any search/place/directions load, the snapshot's URL field encodes the exact view (`/@lat,lng,zoom` plus panel state). When the user asks for a link, report THAT URL — never open the Share dialog.
+  - **Search**: `https://www.google.com/maps/search/{query}?hl=en` — URL-encode, spaces as `+`, and include the AREA in the query: `/maps/search/coffee+near+duomo+milan?hl=en`.
+  - **Place details**: use the SEARCH pattern with a specific place name: `/maps/search/Duomo+di+Milano?hl=en`. A confidently-resolved query rewrites the URL to the canonical `/maps/place/...` form and opens the place panel directly (live-verified); an ambiguous one shows the results list — refine the query (add street/area) rather than clicking.
+    - Do NOT navigate bare `/maps/place/{name}` — live-verified BROKEN when signed out: the name is dropped and an empty panel loads at `/maps/place//@...`. Only full `/maps/place/...` URLs that Maps itself produced (with their `data=` blob) are safe to re-navigate.
+  - **Directions**: `https://www.google.com/maps/dir/{origin}/{destination}?hl=en` — e.g. `/maps/dir/Milan+Central+Station/Duomo+di+Milano?hl=en`. Extra waypoints = extra `/segments`: `/maps/dir/A/B/C`. Leaving origin empty (`/maps/dir//Duomo+di+Milano`) opens the panel with only the destination filled.
+    - Travel mode: the `data=` URL parameter is fragile — do NOT construct it. Load the dir URL, then click the mode tab and re-snapshot (see the Directions task for how mode tabs really look).
+  - **The current URL IS the shareable link**: after any search/place/directions load, the snapshot's URL field encodes the exact view (`/@lat,lng,zoom` plus panel state). When the user asks for a link, report THAT URL — never open the Share dialog (a "Copy link" button exists in the directions panel; ignore it, the URL is equivalent).
 
-  ### SNAPSHOT FORMAT
+  ### SNAPSHOT FORMAT (from a live capture)
   ```
-  Page: coffee near duomo milan - Google Maps
-  URL: https://www.google.com/maps/search/coffee+near+duomo+milan/@45.4641,9.1919,15z
+  Page: coffee milan - Google Maps
+  URL: https://www.google.com/maps/search/coffee+milan/@45.4711,9.1974,15z/data=!3m1!4b1?hl=en&entry=ttu
   --- Page Text ---
-  Results  Caffè Vergnano 1882  4.2 (1,824)  Coffee shop  Open ⋅ Closes 21:00 …
+  Price  Rating  Hours  All filters … Results … Sweet Coffee  4.2  Bar · Via Alessandro Manzoni, 42  Open · Closes 9 pm …
   --- Interactive Elements ---
-  [3] combobox "Search Google Maps"
-  [15] link "Caffè Vergnano 1882"       ← result entry [LIVE-VERIFY: exact role]
-  [16] button "Directions"
+  [2] input name="q" role="combobox" value="coffee milan"
+  [20] a "Sweet Coffee" href="https://www.google.com/maps/place/Sweet+Coffee/data=…" aria-label="Sweet Coffee"    ← result entry (link role, verified)
   ```
   The map canvas contributes NOTHING to the snapshot — that is expected, not an error.
 
   ### TASK: Search places / "best X in Y"
-  1. browser_navigate the search URL (area included — Rule 8) → browser_snapshot.
-  2. Page Text carries the ranked list: name, rating, review count, category, price level, open/closed status with hours. Answer directly from it.
-  3. Detail on one result → click its entry (the link whose text is the place name [LIVE-VERIFY]) → snapshot → place panel.
-  4. More results: browser_scroll moves the WINDOW, but the results feed is a nested scrollable pane — it may not move [LIVE-VERIFY]. If Page Text is unchanged after one scroll attempt, refine the query (narrower area or category) instead of fighting the pane.
+  1. browser_navigate the search URL (area included — Rule 8; hl=en — Rule 4) → browser_snapshot.
+  2. Page Text carries the ranked list, per result: name, rating (decimal separator follows locale: 4.2 / 4,2), category, address, open/closed status with next open/close time, sometimes a one-line description and action links ("Reserve a table", "Order online"). Review counts and price level are NOT in the signed-out list view — they are on the place panel. Filter chips (Price / Rating / Hours / All filters) sit above the list. Answer directly from Page Text.
+  3. Detail on one result → prefer navigating `/maps/search/{exact place name + area}?hl=en` (Rule 2). Clicking the result link (the `a` whose text and aria-label are the place name) also works but is timing-fragile: the feed re-renders as sponsored entries stream in, and a stale click falls through to the map canvas (the map zooms, no panel opens — live-observed). If that happens, do NOT retry the click; use the URL.
+  4. More results: browser_scroll moves the WINDOW, but the results feed is a nested scrollable pane — it may not move. If Page Text is unchanged after one scroll attempt, refine the query (narrower area or category) instead of fighting the pane.
 
   ### TASK: Place details (address, hours, phone, rating)
-  1. browser_navigate `/maps/place/{name}` → snapshot. (Or click a search result.)
-  2. Everything is in Page Text: full address, opening hours (click the hours row to expand the weekly table [LIVE-VERIFY]), phone, website, rating, review snippets, popular times. Report from Page Text.
+  1. browser_navigate `/maps/search/{place name + area}?hl=en` → snapshot → place panel (see URL PATTERNS).
+  2. Everything lands in Page Text (live-verified): name, rating + review count ("4.7 (2655)"), price range ("€1–10"), category, full address (button aria-label "Address: …"), open/closed hours row (a `div role="button"` like "Open · Closes 5 pm" — click it to expand the weekly table [LIVE-VERIFY: expansion itself untested]), website, phone (aria-label "Phone: …"), Plus Code, owner posts, popular times, review summary histogram AND full review texts with dates — all on the default Overview tab. Report from Page Text.
+  3. Panel tabs are `role="tab"` and the set varies by place type: Overview / Menu / Reviews / About for a cafe, Overview / Tickets / Reviews / About for an attraction. Action buttons: Directions, Save, Nearby, Send to phone, Share.
 
   ### TASK: Directions A→B
-  1. browser_navigate `/maps/dir/{origin}/{destination}` → snapshot.
-  2. Route options are in the sidebar: per-route duration, distance, and summary ("via A1") in Page Text. The FIRST listed route is Maps' recommended one.
-  3. Travel mode: click the mode tab (see URL PATTERNS) → snapshot → durations update per mode.
-  4. Step-by-step: click a route option → snapshot → the step list ("Details" [LIVE-VERIFY]) lands in Page Text.
+  1. browser_navigate `/maps/dir/{origin}/{destination}?hl=en` → snapshot.
+  2. **Mode tabs (live-verified — not what you'd expect)**: a row of `role="radio"` buttons whose visible TEXT is each mode's DURATION, not its name — e.g. "Best", "6h 24m", "3h 15m", "6 days", "2 days", "1h 10m" — with NO mode-name aria-labels. Identify them by ORDER: Best, Driving, Transit, Walking, Cycling, (Flights, when offered). The durations shown ARE the per-mode summary — often you can answer without switching.
+  3. Default for intercity routes is "Best", which mixes trains (with operator + € prices, e.g. "15:00 from Milano Centrale €102") and flights. For driving, click the second radio → snapshot → per-route rows show duration, distance, summary ("via A1/E35"), toll warnings ("This route has tolls"), and a per-route "Details" button. The FIRST listed route is Maps' recommended one ("Fastest route now").
+  4. Step-by-step: click the route's "Details" button → snapshot → the step list lands in Page Text.
   5. Transit mode lists line names and departure/arrival times per route in Page Text.
+  6. Origin/destination fields carry aria-labels "Starting point …" / "Destination …" plus a swap button ("Swap starting point and destination").
 
   ### TASK: "How far is X" / "how long to drive"
   Run the Directions task and report the top route's distance and duration. If the origin is unknown, ASK the user (Rule 8) — never assume where they are.
 
   ### TASK: Read reviews
-  1. Open the place panel → snapshot → click the Reviews tab [LIVE-VERIFY: tab label localized] → snapshot.
-  2. Review text, star ratings, and dates land in Page Text. Same nested-pane scroll caveat as search results — report what is visible rather than fighting for more.
+  1. Open the place panel → snapshot. Full review texts, star ratings, relative dates ("3 months ago"), and reviewer info are ALREADY in Page Text on the Overview tab (live-verified) — report from there; usually zero extra clicks.
+  2. For more, click the Reviews tab (`role="tab"`, label localized) → snapshot → more reviews plus a sort control and topic chips ("specialty coffee 165"). Same nested-pane scroll caveat as search results — report what is visible rather than fighting for more.
 
   ### TASK: Save a place (requires sign-in — optional)
-  1. Place panel → click the Save button [LIVE-VERIFY] → snapshot → a list picker appears (Favorites, Want to go, …) → click a list → snapshot to verify.
+  1. Place panel → click the Save button (verified present in the action row) → snapshot → a list picker should appear (Favorites, Want to go, …) [LIVE-VERIFY: picker untested signed-out] → click a list → snapshot to verify.
   2. If a sign-in prompt appears instead, tell the user to log in manually and stop.
 
   ### TASK: Share / link to a view
@@ -91,7 +93,7 @@ instructions: |
   - Anything else requiring canvas interaction — the map is WebGL and invisible to snapshots.
 
   ### Gotchas
-  - Maps rewrites the URL after load (adds `/@lat,lng,zoom` and `data=`) — the rewritten URL is fine to report and to re-navigate to.
+  - Maps rewrites the URL after load (adds `/@lat,lng,zoom` and `data=`; keeps your `hl=en`) — the rewritten URL is fine to report and to re-navigate to.
   - Hours in Page Text are in the PLACE's local time zone — say so when answering "is it open now" for far-away places.
-  - Sponsored results can appear first, marked "Sponsored" in Page Text [LIVE-VERIFY] — skip them when ranking by rating.
-  - A confidently-resolved search may skip the list and land directly on the place panel — both outcomes are success; check the URL (`/place/` vs `/search/`).
+  - Sponsored results appear first, marked "Sponsored" in Page Text (live-verified; localized without hl=en, e.g. "Sponsorizzato") with a "Why this ad?" button, and plain text-ad links can be interleaved — skip both when ranking by rating.
+  - A confidently-resolved search skips the list and lands directly on the place panel — both outcomes are success; check the URL (`/place/` vs `/search/`).

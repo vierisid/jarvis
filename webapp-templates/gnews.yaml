@@ -25,30 +25,30 @@ instructions: |
   8. NEVER bypass a paywall or cookie wall on a publisher's site — no dismiss-hunting beyond one obvious consent button, no reader-mode tricks. Report what Page Text gives and say honestly that the rest is paywalled.
 
   ### State Recognition
-  - **Consent interstitial** (EU / first run): URL contains consent.google.com, or a dialog asks to accept cookies → snapshot → click the accept-all button [LIVE-VERIFY: label localized, e.g. "Accept all"] → re-navigate to your target URL. Persists after 2 tries → tell the user and stop.
+  - **Consent interstitial** (EU / first run): a consent.google.com page titled "Before you continue" ("Before you continue to Google") with `button "Reject all"` and `button "Accept all"` (plus a "More options" link — ignore it). Click "Reject all" → snapshot → Google News loads your ORIGINAL target URL automatically (it rides the consent page's `continue=` param; a `/search?q=…` target arrives with the query intact — no re-navigation needed). GOTCHA: the buttons sit at the very BOTTOM of a long page; if the post-click snapshot still shows "Before you continue", the click landed below the viewport — browser_scroll down, re-snapshot, click the fresh "Reject all" [id]. Persists after 2 tries → tell the user and stop.
   - **No sign-in needed** for reading: Top stories, search, topic sections, and Full coverage all work logged-out. Sign-in is ONLY for personalization (Following, saved searches, "For you"). If such a task hits a sign-in prompt, tell the user to log in manually in the browser and stop — NEVER type credentials.
-  - **Ready**: header nav chips are present (links meaning Home / For you / Following plus topic chips like Business, Technology [LIVE-VERIFY: rendered roles]).
+  - **Ready**: header nav chips are present — they render as `a role="tab"` links: Home, For you, Following, News Showcase, then topic chips (U.S., World, Local, Business, Technology, Entertainment, Sports, Science, Health).
   - **Loading**: page nearly empty, no story text → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
 
   ### URL PATTERNS (the backbone)
   - **Top stories (front page)**: `https://news.google.com` — the Top stories block plus topic teasers.
-  - **Search**: `https://news.google.com/search?q={query}` — URL-encode, spaces as `+`. Recency scoping: append a `when:` term to the QUERY itself, e.g. `?q=nvidia+when:24h` or `when:7d` [LIVE-VERIFY: when: operator honored]. Also supports quoted phrases and `-exclusions` like web search.
+  - **Search**: `https://news.google.com/search?q={query}` — URL-encode, spaces as `+`. Recency scoping WORKS: append a `when:` term to the QUERY itself, e.g. `?q=artificial+intelligence+when:24h` returns only stories ≤24h old (`when:7d` for a week). Also supports quoted phrases and `-exclusions` like web search. The results page title is "Google News - Search".
   - **Topic sections**: `/topics/{id}` URLs use OPAQUE ids that cannot be constructed. Reach sections by CLICKING the nav chip (Business / Technology / Sports / …) from the front page instead. Once open, the URL in the snapshot is reusable for this session.
   - **Language/region**: append `?hl={lang}&gl={country}` (e.g. `?hl=it&gl=IT`, on /search use `&`). Use when the user wants another edition; otherwise leave defaults.
 
   ### SNAPSHOT FORMAT
   ```
   Page: Google News
-  URL: https://news.google.com/home?hl=en-US&gl=US
+  URL: https://news.google.com/home?hl=en-US&gl=US&ceid=US:en
   --- Page Text ---
-  Top stories  Fed holds rates steady …  Reuters  2 hours ago  More coverage …
+  Top stories  BBC  More  Protests in Ukraine's cities against …  3 hours ago  By Laura Gozzi …
   --- Interactive Elements ---
-  [4] input "Search for topics, locations & sources"   [LIVE-VERIFY: exact label]
-  [12] link "Technology"                                ← nav chip
-  [31] link "Fed holds rates steady"                    ← story link (leaves to publisher)
-  [33] link "Full coverage"                             [LIVE-VERIFY: may be icon-only, aria-label "Full coverage of this story"]
+  [3] input placeholder="Search for topics, locations & sources" role="combobox"
+  [27] a "Technology" role="tab" href="./topics/CAAqJg…"      ← nav chip (opaque topic URL)
+  [46] a "Protests in Ukraine's cities against…" href="./read/CBMiWk…" aria-label="Protests in … - BBC "
+  [56] a "See more headlines & perspectives" href="./stories/CAAqNg…"   ← the multi-outlet cluster view
   ```
-  Story cards read as clusters in Page Text: headline, then source name, then age ("2 hours ago"). Keep the triple together when reporting.
+  Story cards read as clusters in Page Text: SOURCE first, then a "More" line, then the headline, then age ("3 hours ago"), then "By {author}". Keep source+headline+age together when reporting; a story link's aria-label conveniently bundles "headline - source - age".
 
   ### TASK: Headlines briefing (Top stories)
   1. browser_navigate `https://news.google.com` → browser_snapshot.
@@ -60,12 +60,12 @@ instructions: |
   2. Results are story cards in Page Text: report headline + source + age. Nothing relevant → say so and suggest a broader query; do not loop rewording more than once.
 
   ### TASK: Topic-section scan (Technology / Business / …)
-  1. Front page → snapshot → click the nav chip whose meaning matches the section (Rule 4) → snapshot.
-  2. Report the section's top stories (source-attributed), keeping any sub-groupings ("Latest", highlighted clusters) visible in Page Text.
+  1. Front page → snapshot → click the nav chip (`a role="tab"`) whose meaning matches the section (Rule 4) → snapshot. The landed page is titled like "Google News - Technology - Latest".
+  2. Report the section's top stories (source-attributed), keeping any sub-groupings visible in Page Text (topic pages have sub-tabs, e.g. Technology: Latest / Mobile / Gadgets / Internet / Artificial intelligence / …).
 
   ### TASK: Full coverage of a story (best balanced view)
-  1. Find the story (front page or search) → snapshot → click its "Full coverage" link/button [LIVE-VERIFY: often an icon next to the cluster, aria-label ≈ "Full coverage of this story"; also reachable via the story card's ⋮ menu] → snapshot.
-  2. The page groups MANY outlets on one story: main coverage, opinion, explainers, timelines. Report how different sources frame it — headline + source per entry. This is THE task for "give me a balanced view of X".
+  1. There is NO "Full coverage" label — the multi-outlet view is the link "See more headlines & perspectives" (sometimes truncated to "See more") under a story cluster; the cluster's bold headline links to the same `./stories/…` URL. Find the story (front page or search) → snapshot → click that link → snapshot.
+  2. The stories page is titled "Google News - {headline} - Overview" and groups sections "Top news", sometimes "Posts on X", then "All coverage" — each entry is source + headline + age. Report how different sources frame it. This is THE task for "give me a balanced view of X".
 
   ### TASK: Open a story (publisher handoff)
   1. Click the story link → snapshot. You are now on the PUBLISHER'S site — expect cookie dialogs, subscription walls, sign-up nags.
@@ -77,10 +77,10 @@ instructions: |
   2. Local outlet names may be unfamiliar — still name them; never launder a local story as generic "news reports".
 
   ### TASK: Follow a topic / personalization (requires sign-in — low priority)
-  Only on explicit request: open the topic → click the button meaning "Follow" (star) [LIVE-VERIFY] → snapshot to verify state change. If a sign-in prompt appears, tell the user to log in manually and stop.
+  Only on explicit request: open the topic → click the `button "Follow"` ("Follow this topic", top of the topic page next to Share) → snapshot to verify state change. If a sign-in prompt appears, tell the user to log in manually and stop.
 
   ### Gotchas
-  - Story links are google-redirect hrefs (`./read/…` or `./articles/…`), not the publisher URL — for "give me the link", click through and report the landed URL from the snapshot.
+  - Story links are google-redirect hrefs (`./read/…`; cluster views are `./stories/…`), not the publisher URL — for "give me the link", click through and report the landed URL from the snapshot.
   - Ages ("2 hours ago") are relative to NOW in the edition's locale; convert to absolute dates when the user asks "when did this happen".
   - The same story repeats across sections; deduplicate by headline when compiling a briefing.
   - "For you"/"Following" tabs are personalized and need sign-in — for a neutral brief, stay on Top stories.

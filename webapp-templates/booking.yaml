@@ -33,6 +33,7 @@ instructions: |
   - **Cookie/consent banner**: on first visit, click its Accept button [LIVE-VERIFY: label, likely "Accept"] → snapshot → continue.
   - **Currency/language**: read prices in whatever currency the page shows and NAME it in reports. To force a currency/language, add `&selected_currency=USD` / `&lang=en-us` to the URL [LIVE-VERIFY: params respected] rather than using the header pickers.
   - **CAPTCHA / "verify you are human"**: STOP immediately, tell the user to solve it in the browser, then continue when asked.
+  - **Bot-wall (verified live)**: booking.com fronts an AWS WAF JavaScript challenge that can block automated/headless browsers outright — every headless capture attempt got the challenge (HTTP 202 "awswaf" page) and rendered blank or failed to load, on the homepage and search URLs alike. If the first snapshot is empty/near-empty or navigation errors, that IS this wall: STOP, tell the user booking.com is blocking the automated browser, and ask them to open it manually.
   - **Ready**: results page shows "N properties found" [LIVE-VERIFY: exact phrasing] and property cards in Page Text; property page shows the property name + a room/rate table.
 
   ### THE SEARCH URL (the backbone — carries everything)

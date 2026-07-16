@@ -26,20 +26,20 @@ instructions: |
   ### State Recognition
   - **No sign-in, ever**: no login wall exists for reading. If a Log in / Register page appears you clicked a header link — navigate back to the project URL. Never enter credentials.
   - **Ready**: page title is `{name} · PyPI` and Page Text starts with the package name, version, and `pip install {name}`.
-  - **Missing package**: "404" / "we couldn't find this page" in Page Text → wrong name or never published. Try TASK: Search once; if no exact match there either, report that the package does not exist on the index.
-  - **Yanked release banner**: a yanked version's page warns that the release "has been yanked" plus the maintainer's reason [LIVE-VERIFY: yank banner rendering]. ALWAYS quote the reason verbatim, even unasked — it usually names the fix or replacement.
-  - **Old-version notice**: non-latest version pages show a "newer version available" banner naming the latest [LIVE-VERIFY: banner text] — mention it when reporting on a pinned version.
+  - **Missing package**: "404" / "we couldn't find this page" in Page Text → wrong name or never published. Try TASK: Search once (it may be CAPTCHA-walled — see that task's fallback); if no exact match is findable, report that the package does not exist on the index.
+  - **Yanked release banner**: a yanked version's page shows "This release has been yanked" under the pip command, with the maintainer's "Reason this release was yanked: …" further down, just above "Project description" (requests 2.32.0: "Yanked due to conflicts with CVE-2024-35195 mitigation"). The same YANKED label + reason also render inline in the release-history list. ALWAYS quote the reason verbatim, even unasked; it usually names the fix or replacement.
+  - **Old-version notice**: non-latest version pages show a "Newer version available (X.Y.Z)" banner naming the latest — mention it when reporting on a pinned version.
   - **Deprecation/security notices**: PyPI has no formal deprecation flag; maintainers announce it in the description ("DEPRECATED, use X instead") or the description is a stub for a removed/malicious package. Quote any deprecation or security wording verbatim in your answer.
 
   ### URL PATTERNS (the backbone — prefer these over any clicking)
   - **Package page**: `https://pypi.org/project/{name}/` — e.g. `/project/requests/`. Names are case-insensitive and `-`/`_` are interchangeable (PyPI redirects to the canonical form).
   - **Specific version**: `https://pypi.org/project/{name}/{version}/` — e.g. `/project/requests/2.31.0/`. Shows that version's own description, release date, and files.
-  - **Tabs are ANCHORS on the package page** [LIVE-VERIFY: anchor ids]: `#description` | `#history` (release history) | `#files` (download files) | `#data` (project details) — e.g. `/project/requests/#history`. After navigating to an anchor, snapshot; if the section text isn't visible, click the matching sidebar Navigation link ("Release history", "Download files").
-  - **Search**: `https://pypi.org/search/?q={query}` — URL-encode the query. Classifier filters (Framework / Topic / Development Status …) are checkboxes in the left Filter panel — click one, then snapshot; they appear as `&c=` params in the URL [LIVE-VERIFY: filter panel].
+  - **Tabs are ANCHORS on the package page**: `#description` | `#history` (release history) | `#files` (download files) — e.g. `/project/requests/#history`; the section content is in that snapshot's Page Text. If a section isn't visible, click the matching sidebar Navigation link ("Release history", "Download files").
+  - **Search**: `https://pypi.org/search/?q={query}` — URL-encode the query. WARNING: PyPI fronts /search/ with an anti-bot wall — automated browsers persistently get a "Client Challenge" CAPTCHA page ("Enter the characters seen in the image below") instead of results. Never try to solve it; prefer direct `/project/{name}/` URLs (see TASK: Search for the fallback).
   - **User**: `https://pypi.org/user/{name}/` — lists the projects that user maintains.
 
   ### READING A PACKAGE-PAGE SNAPSHOT
-  Page Text opens with the header ("requests 2.32.3", `pip install requests`, "Released:" date, one-line summary) then the sidebar blocks: Navigation, Project links (Homepage, Documentation, Source …), Meta (License, Author, Maintainers, "Requires: Python >=3.8"), Classifiers [LIVE-VERIFY: exact sidebar labels].
+  Page Text opens with the header ("requests 2.34.2", `pip install requests`, "Released:" date, one-line summary) then the sidebar blocks: Navigation (Project description / Release history / Download files); "Verified details" — Project links, GitHub Statistics (Stars / Forks / Open issues / Open PRs), Maintainers; "Unverified details" — more Project links (Homepage, Documentation …), Meta ("License:", "Author:", "Maintainer:", "Requires: Python >=3.10"); Classifiers.
 
   ### TASK: Look up a package (PRIMARY — do this first whenever the user names a package)
   1. browser_navigate `/project/{name}/` → browser_snapshot.
@@ -52,21 +52,21 @@ instructions: |
 
   ### TASK: Check release history
   1. browser_navigate `/project/{name}/#history` → browser_snapshot (click "Release history" if the section isn't in Page Text).
-  2. Rows show version + release date, newest first; yanked releases are labeled "yanked" [LIVE-VERIFY: yanked label in the list]. Scroll for older releases. Quote any yank reason verbatim (open that version's page to read it).
+  2. Rows show version + release date, newest first; yanked releases are labeled "YANKED" with "Reason this release was yanked: …" right in the list (e.g. requests 2.32.0: "Yanked due to conflicts with CVE-2024-35195 mitigation"). Scroll for older releases; quote any yank reason verbatim.
   3. For "what changed in version X": PyPI hosts no changelog — open `/project/{name}/{version}/`; if its description doesn't cover it, point the user to the sidebar Repository/Changelog link instead of guessing.
 
   ### TASK: Check maintainers and project URLs
-  1. Open the package page → snapshot. Maintainers render as user links in the sidebar [LIVE-VERIFY: Maintainers section]; each links to `/user/{name}/`.
+  1. Open the package page → snapshot. Maintainers render as user links in the sidebar's "Verified details" block; each links to `/user/{name}/`.
   2. Report the Project links (Homepage, Documentation, Repository) — the homepage/repo is usually the better docs source than the PyPI description; give the user those URLs. Only follow them off pypi.org if the user explicitly asks.
 
   ### TASK: Search packages and compare candidates
-  1. browser_navigate `/search/?q={query}` → browser_snapshot. Results show name, version, release date, one-line summary [LIVE-VERIFY: result rendering]. PyPI search is famously weak — exact-name matches can rank below noise, and there is no popularity sort. If the user named a package, prefer the direct `/project/{name}/` URL over search.
-  2. To COMPARE (e.g. "which HTTP client should I use") pick the top 2–3 plausible candidates and open each `/project/{name}/` in turn (one navigate + one snapshot each), collecting the same axes for all: latest version + release date, Requires: Python, license, deprecation/yank status, repository link.
-  3. Report a compact side-by-side grounded ONLY in what the pages show, and be honest about the limits: PyPI exposes no download or star counts, so recency + Python-version support is the whole on-site signal — GitHub stars/activity on the linked repos usually matter more. Name the repo links and the trade-off rather than overselling one option. Budget ≤ 8 tool calls total.
+  1. browser_navigate `/search/?q={query}` → browser_snapshot. EXPECT the "Client Challenge" CAPTCHA (URL PATTERNS) — if it appears, do NOT attempt it: fall back to direct `/project/{name}/` lookups of the likely names and tell the user on-site search was blocked. If results do render they show name, version, release date, one-line summary — but PyPI search is famously weak with no popularity sort; prefer the direct URL whenever the user named a package.
+  2. To COMPARE (e.g. "which HTTP client should I use") pick 2–3 plausible candidates (the user's shortlist or well-known names, since search may be walled) and open each `/project/{name}/` in turn (one navigate + one snapshot each), collecting the same axes for all: latest version + release date, Requires: Python, license, deprecation/yank status, repository link.
+  3. Report a compact side-by-side grounded ONLY in what the pages show, and be honest about the limits: PyPI exposes no download counts (GitHub stars/forks render in the sidebar's verified GitHub Statistics only when a repo is linked), so recency + Python-version support is most of the on-site signal — activity on the linked repos usually matters more. Name the repo links and the trade-off rather than overselling one option. Budget ≤ 8 tool calls total.
 
   ### TASK: Check wheel availability / supported platforms
   1. browser_navigate `/project/{name}/#files` → browser_snapshot (click "Download files" if needed).
-  2. Read the filenames: `*.whl` wheels encode support — `py3-none-any` = pure Python, runs everywhere; `cp312-...-win_amd64` / `manylinux` / `macosx` = compiled per-platform/per-Python-version wheels; a lone `.tar.gz` sdist with no wheels = build-from-source (compiler needed) [LIVE-VERIFY: files list rendering].
+  2. The section lists "Source Distribution" (the `.tar.gz` sdist with size and "Uploaded" date) and "Built Distribution" wheels — projects with many wheels get a filter row (interpreter / ABI / platform) and a "Showing N of M files" count, so the visible list may be a subset. Read the filenames: `*.whl` wheels encode support — `py3-none-any` = pure Python, runs everywhere; `cp312-...-win_amd64` / `manylinux` / `macosx` = compiled per-platform/per-Python-version wheels; a lone `.tar.gz` sdist with no wheels = build-from-source (compiler needed).
   3. Report which platforms/Python versions have wheels and whether an sdist exists; flag source-only packages as a likely install pain point on Windows.
 
   ### UNSUPPORTED — tell the user, do not attempt

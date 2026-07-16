@@ -14,7 +14,7 @@ instructions: |
   ### RULES (each stated once — follow exactly)
   1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED for Hacker News. Never use desktop or sidecar tools.
   2. FRIENDLIEST SITE IN THE LIBRARY: HN is server-rendered plain HTML — no shadow DOM, no canvas, no infinite scroll. Snapshots capture everything: titles, points, authors, comment counts, and comment text land in Page Text, and every link/textarea/button lands in Interactive Elements. If something seems missing it is pagination (Rule 3), not rendering.
-  3. URL-FIRST: every view is addressable by URL (patterns below). Pagination is a "More" link at the bottom of lists and very long comment pages — click it (or navigate with &p=2) instead of scrolling; scrolling loads nothing new on a static page.
+  3. URL-FIRST: every view is addressable by URL (patterns below). List pagination is a "More" link at the bottom — click it (or navigate with &p=2) instead of scrolling; scrolling loads nothing new on a static page. Comment pages don't paginate (see the thread task).
   4. **browser_type REPLACES the field's content by default.** That is what you want for search boxes and fresh forms; pass append: true only when adding to text already in a field.
   5. PUBLIC SAFETY: comments and submissions are PUBLIC under the user's account. Before clicking a submit button, the composed text MUST be visible in the latest snapshot exactly as intended. After submitting, verify on the page (your comment appears in the thread / you land on the new item page). NEVER blind-retry a submit — if you cannot tell whether it went through, check the thread or the user's /threads or /submitted page BEFORE any second attempt; a blind retry risks a public double-post.
   6. Snapshot at checkpoints: after navigate, after typing into a form, after submit. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
@@ -22,8 +22,8 @@ instructions: |
   8. Budget: a read/summarize task ≤6 tool calls (navigate + snapshot + up to 2 more pages); a write task ≤10. Never page past 3 pages of anything — summarize what you have.
 
   ### State Recognition
-  - **Logged out**: reading NEVER needs login (front page, comments, search, profiles). Upvoting, commenting, and submitting REQUIRE it. Logged-out marker: a "login" link in the top bar; logged-in shows the username and a "logout" link instead [LIVE-VERIFY: exact top-bar text]. A login-gated action while logged out lands on news.ycombinator.com/login — when you see the login form (username/password fields), tell the user: "This needs your HN login — please sign in in the browser first" and STOP. NEVER type credentials.
-  - **Ready markers**: list pages show numbered story rows ("1. Title (domain.com)" with "N points by user N hours ago | N comments"); an item page shows the story title plus the comment tree in Page Text.
+  - **Logged out**: reading NEVER needs login (front page, comments, search, profiles). Upvoting, commenting, and submitting REQUIRE it. Logged-out marker: a "login" link at the far right of the top bar (href login?goto=…); logged-in shows the username and a "logout" link instead [LIVE-VERIFY: logged-in top-bar text]. A login-gated action while logged out lands on news.ycombinator.com/login — and HN sometimes serves an automated browser a bare "Sorry." page (0 interactive elements) on /login or /submit instead of the form. On the login form OR the "Sorry." page, tell the user: "This needs your HN login — please sign in in the browser first" and STOP. NEVER type credentials.
+  - **Ready markers**: list pages show numbered story rows ("1. Title (domain.com)" with "N points by user N hours ago | hide | N comments" — zero-comment stories say "discuss" instead of "N comments"); an item page shows the story title plus the comment tree in Page Text.
   - **Rate-limited**: "Sorry, we're not able to serve your requests this quickly." → tell the user and stop; retrying makes it worse.
   - Search lives on a DIFFERENT domain (hn.algolia.com) — being there mid-task is normal; results link back to news.ycombinator.com item pages.
 
@@ -34,7 +34,7 @@ instructions: |
   - User profile: /user?id={username} · their submissions: /submitted?id={username} · their comments: /threads?id={username}
   - Past front pages: /front?day=YYYY-MM-DD (e.g. /front?day=2026-07-01)
   - Submit a story: /submit (login-gated)
-  - Search (Algolia, different domain): https://hn.algolia.com/?q={query} — URL-encode the query; newest-first via a date-sort parameter/tab [LIVE-VERIFY: Algolia's sort param and DOM]
+  - Search (Algolia, different domain): https://hn.algolia.com/?q={query} — URL-encode the query; newest-first: append &sort=byDate
 
   ### TASK: Read the front page (or newest/best/jobs)
   1. browser_navigate the list URL → browser_snapshot.
@@ -43,14 +43,14 @@ instructions: |
 
   ### TASK: Read a story's comment thread  ← strongest use case (summarize the discussion)
   1. browser_navigate /item?id={id} → browser_snapshot. Page Text carries the story (title, outbound URL, self-post text, points) and the comment tree with authors — nesting shows as indentation.
-  2. Long threads: Page Text is capped (~8KB), so browser_scroll down then snapshot for later portions, and click the "More" link at the bottom when a huge thread paginates [LIVE-VERIFY: More appears only on very long threads]. 2–3 rounds max, then summarize.
+  2. Long threads: Page Text is capped (~8KB), so browser_scroll down then snapshot for later portions — even 500+-comment threads render on a single page with no "More" link. Deep subthreads collapse behind "[N more]" links (text-less javascript toggles, e.g. a "[103 more]") — click one to expand that subthread in place, then snapshot. 2–3 rounds max, then summarize.
   3. User gave a topic, not a link? Run the Search task, then open the best result's item page.
   4. To read the linked ARTICLE rather than the discussion, navigate to the story's outbound URL (the title link).
 
   ### TASK: Search (via Algolia)
-  1. browser_navigate https://hn.algolia.com/?q={query} → browser_snapshot. Default ranking is relevance/popularity; switch to newest via the sort control or URL param [LIVE-VERIFY].
-  2. Results (title, points, author, age, comment count) are in Page Text. Each result carries a link to its news.ycombinator.com/item?id=… page — open that for the discussion [LIVE-VERIFY: which link on a result row is the item-page link].
-  3. UI fallback: browser_type(search box id, query) — Algolia searches as you type [LIVE-VERIFY: search input].
+  1. browser_navigate https://hn.algolia.com/?q={query} → browser_snapshot. Default ranking is Popularity; for newest-first add &sort=byDate (same as flipping the "Popularity" dropdown to "Date").
+  2. Results (title, points, author, age, comment count) are in Page Text. On a result row the title, "N points", age, and "N comments" links ALL go to the news.ycombinator.com/item?id=… page — open any of them for the discussion; only the parenthesized URL link goes to the article itself.
+  3. UI fallback: browser_type(search box id, query) — the input has placeholder "Search stories by title, url or author" and Algolia searches as you type.
 
   ### TASK: Read Ask HN / Show HN
   1. /ask or /show → snapshot → same row format as the front page. An individual Ask HN post is just an item page — the question text is the self-post body above the comments.
@@ -61,25 +61,25 @@ instructions: |
 
   ### TASK: Upvote a story or comment (login-gated)
   1. Must be logged in (State Recognition) — if not, tell the user and stop.
-  2. The upvote arrow is the small ▲ link just before the story title / comment author [LIVE-VERIFY: how it surfaces in Interactive Elements — it is a text-less anchor (id "up_{itemid}") around a triangle glyph].
-  3. Click it → snapshot → success check: that item's arrow disappears and an "unvote"/"undo" link appears in its subtext [LIVE-VERIFY]. Do NOT click again — a missing arrow means it worked.
+  2. The upvote arrow is the small ▲ link just before the story title / comment author — in Interactive Elements it is a text-less anchor with id "up_{itemid}" and href vote?id={itemid}&how=up….
+  3. Click it → snapshot → success check: that item's arrow disappears and an "unvote"/"undo" link appears in its subtext [LIVE-VERIFY: post-vote subtext — needs a logged-in session]. Do NOT click again — a missing arrow means it worked.
   4. If you cannot confidently bind an arrow to the intended story/comment, tell the user instead of guessing — a misclick upvotes the wrong item.
 
   ### TASK: Comment on a story (login-gated)
-  1. Open /item?id={id} → snapshot. The comment box is a plain textarea below the story with an "add comment" button [LIVE-VERIFY: button label].
+  1. Open /item?id={id} → snapshot. The comment box is a plain textarea (name "text") below the story with an "add comment" submit button (the form renders even logged out; submitting is what needs login).
   2. browser_type(textarea id, text) → browser_snapshot → VERIFY the text reads exactly as intended (Rule 5).
   3. Click "add comment" → snapshot → your comment appears in the thread under the user's name. No blind retries (Rule 5).
   - Reply to a specific comment: click its "reply" link → a reply page opens with its own textarea → same type → verify → submit flow.
 
   ### TASK: Submit a story (login-gated)
-  1. browser_navigate /submit → snapshot (logged out redirects to the login page → State Recognition).
+  1. browser_navigate /submit → snapshot (logged out this shows the login form or a bare "Sorry." page → State Recognition).
   2. The form: a "title" field plus EITHER "url" (link post) OR "text" (self/Ask HN post) — fill one of url/text, never both [LIVE-VERIFY: field labels]. browser_type each field.
   3. Snapshot → VERIFY title and url/text read exactly as intended (Rule 5) → click the submit button.
   4. Success = you land on the new item page or /newest with the story visible. If HN shows a message instead (duplicate URL, "submitting too fast", karma requirements), report it verbatim — do not retry.
 
   ### Gotchas
   - Points and comment counts change constantly — report the numbers exactly as shown in the snapshot.
-  - There is NO search on news.ycombinator.com itself — the small search box at the very bottom of pages submits to Algolia [LIVE-VERIFY]; prefer navigating to hn.algolia.com directly.
+  - There is NO search on news.ycombinator.com itself — the small search box (input name "q") at the very bottom of pages submits to hn.algolia.com; prefer navigating to hn.algolia.com directly.
   - Downvote arrows exist only on comments and only above a karma threshold — if asked to downvote and no down arrow is present, say so rather than improvising.
   - "[dead]" / "[flagged]" markers mean removed content — report that, don't dig for it.
   - Job posts (/jobs, or YC-company posts on the front page) have no vote arrows and no comment link — that is normal, not a rendering failure.

@@ -20,67 +20,68 @@ instructions: |
   2. URL-FIRST: search, title, person, charts, and every title sub-page have URL patterns (below). Click only to pick a search result or follow a link whose ID you don't yet know.
   3. READ-ONLY: never click rating stars, "Rate", "+ Watchlist", "Add to list", review forms, or Sign In — even if asked. Say those need an IMDb account and this template doesn't support writes, then stop.
   4. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
-  5. Page Text is capped (~2000 chars per snapshot). Title/person pages front-load the answer; long lists (fullcredits, charts, episodes) need browser_scroll down ~1500 px → snapshot → repeat. Stop the moment you have the answer.
+  5. Page Text is capped (~2000 chars) and ALWAYS shows the top of the page — scrolling does NOT move this window. Title/person pages front-load the answer. On long lists (charts, fullcredits, episodes) rows past the first window are reachable only through element captions (e.g. the per-row `Mark {title} as watched` buttons), never through more Page Text. Stop the moment you have the answer.
   6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
 
   ### State Recognition
   - **No login needed**: all reading works anonymously. If a sign-in page appears you clicked a write action — go back to the title/person URL. Never enter credentials.
-  - **Consent banner**: on first load a cookie-consent dialog may cover the page [LIVE-VERIFY: EU-region "Accept"/"Decline" buttons, likely `button "Accept"`]. Click the accept/agree button once, then re-snapshot; it does not return within the session.
-  - **Ready**: page title is `{Title} ({Year}) - IMDb` (or `{Name} - IMDb`) and Page Text opens with the rating/year/runtime (or the person's roles and Known for).
+  - **Blank first snapshot**: IMDb rebuilds the page during load, so the snapshot right after browser_navigate often comes back empty or errors. Take another browser_snapshot after a beat — the retry succeeds. A near-empty page titled "403 Forbidden" is IMDb's bot check (AWS WAF): same remedy — wait a few seconds and re-snapshot; if it persists, report that IMDb is blocking the browser and stop. (No cookie-consent dialog appeared in live EU captures; if one ever covers the page, click its accept button once and re-snapshot.)
+  - **Ready**: page title is `{Title} ({Year}) - IMDb` (or `{Name} - IMDb`). Page Text opens with header chrome (`Menu All Watchlist Sign in…`), then the title block: name, year, age rating, runtime, `IMDb RATING 9.3 /10 3.2M`, genres, plot, Director/Writers/Stars.
   - **No results**: the find page says "No results found for …" → loosen the query (drop the year/subtitle) once; if still nothing, report that and stop.
 
   ### URL PATTERNS (the backbone — prefer these over any clicking)
   - **Search**: `https://www.imdb.com/find/?q={query}` — URL-encode, spaces as `+`. Add `&s=tt` to restrict to titles, `&s=nm` to people.
-  - **Title**: `https://www.imdb.com/title/{tt-id}/` (e.g. `/title/tt0111161/`). Sub-pages: `/fullcredits` (all cast + crew), `/ratings` (rating breakdown [LIVE-VERIFY: page layout uncaptured]), `/parentalguide`, `/episodes/?season=N` [LIVE-VERIFY: season query param].
+  - **Title**: `https://www.imdb.com/title/{tt-id}/` (e.g. `/title/tt0111161/`). Sub-pages: `/fullcredits` (all cast + crew), `/ratings` (weighted rating + "Unweighted mean" + country filter; the headline number is on the main page), `/parentalguide`, `/episodes/?season=N` (param honored; the page also shows Seasons/Years/Top-rated selectors with season numbers as links).
   - **Person**: `https://www.imdb.com/name/{nm-id}/` (e.g. `/name/nm0000138/`).
   - **Charts**: `/chart/top` (Top 250 movies), `/chart/moviemeter` (most popular movies), `/chart/toptv` (top TV).
-  - **Upcoming**: `/calendar` (release calendar, grouped by date [LIVE-VERIFY: layout + region]).
+  - **Upcoming**: `/calendar` ("Upcoming releases", region-dependent, defaults to United States).
   Grab tt/nm IDs from link hrefs in the snapshot — search result and cast links contain them.
 
   ### SNAPSHOT FORMAT
   ```
-  Page: The Matrix (1999) - IMDb
-  URL: https://www.imdb.com/title/tt0133093/
+  Page: The Shawshank Redemption (1994) - IMDb
+  URL: https://www.imdb.com/title/tt0111161/
   --- Page Text ---
-  The Matrix 1999 15 2h 16m IMDb RATING 8.7/10 2.1M Action Sci-Fi When a computer hacker …
+  Menu All Watchlist Sign in EN … The Shawshank Redemption 1994 R 2h 22m IMDb RATING 9.3 /10 3.2M … Drama
+  After a banker is sentenced to life in Shawshank Prison, … Director Frank Darabont … Stars Tim RobbinsMorgan Freeman…
   --- Interactive Elements ---
-  [3] input "Search IMDb"
-  [18] link "Keanu Reeves"
-  [24] link "Full Cast & Crew"
+  [5] input name="q" placeholder="Search IMDb"
+  [32] a "R" href="/title/tt0111161/parentalguide/…"
+  [83] button aria-label="Mark The Shawshank Redemption as watched"
   ```
 
   ### TASK: Look up a movie or show (PRIMARY)
   1. browser_navigate `/find/?q={title}&s=tt` → browser_snapshot.
-  2. Results list in Page Text as "Title (Year) — actors" lines with links [LIVE-VERIFY: exact result format]. Click the match (right year/type); if several plausibly match (remakes, same-name shows), ask the user which one. → snapshot.
-  3. The title page's first Page Text window has rating + vote count, year, age rating, runtime, genres, plot summary, and the top-billed cast with roles. Answer from it — no scrolling needed for the basics.
+  2. Results list in Page Text under "Titles → Exact matches": each row is the title, then year/runtime/certificate run together, then rating with vote count (e.g. `Inception 20102h 28mPG-13… 8.8 (2.8M)`) — NO actor names in title rows; a "People" section follows. Click the title link that matches the year/type; if several plausibly match (remakes, same-name shows), ask the user which one. → snapshot.
+  3. The title page's first Page Text window has rating + vote count, year, age rating, runtime, genres, plot summary, director, writers, and top-billed stars. Answer from it — no scrolling needed for the basics.
 
   ### TASK: Full cast and crew
   1. Get the tt-id (search task above, or from a URL the user gave), then browser_navigate `/title/{tt-id}/fullcredits` → snapshot.
-  2. Sections in Page Text: Directors, Writers, Cast (actor — character), Producers, … Scroll ~1500 px per snapshot until you hit the section asked about. For "who plays {character}", find the character name in the Cast rows.
+  2. The first Page Text window carries a "Jump to" section index (Director, Writers, Producers, Cast (74), …) plus Director and Writers. Cast rows surface as element captions `li "{Actor} {Character}"` — but the element list is capped, so only the first dozen-or-so cast rows are reliably visible, and scrolling does not extend Page Text (Rule 5). For "who plays {character}", prefer the MAIN title page's Top Cast first; if the character isn't top-billed and doesn't appear in the fullcredits elements, say the deep cast list isn't reachable.
 
   ### TASK: Look up a person + filmography
   1. browser_navigate `/find/?q={name}&s=nm` → snapshot → click the matching person → snapshot.
-  2. First window: roles, Known for, and the Credits/Filmography section listing titles with years [LIVE-VERIFY: filmography grouped by role, possibly behind expandable sections]. Scroll for older credits.
-  3. For "have X and Y worked together": open X's filmography, then Y's — report overlapping titles.
+  2. First Page Text window: roles (Actor/Producer/Director), bio, and Born date. "Known for" carries title/rating/character/year (also readable as element captions like `div "Mystic River 7.9 Dave Boyle 2003"`). The full filmography is grouped by role behind accordion expanders with counts (`Actor 82`, `Producer 13`, button "Expand below") and is NOT reliably readable — the Page Text cap hides it even after expanding.
+  3. For "have X and Y worked together": compare the two "Known for" sets and say plainly the check covers their best-known titles, not full filmographies.
 
   ### TASK: Where to watch
-  1. Open the title page. Look for a watch-options box near the rating ("Watch options", streaming provider names, or "Rent/Buy") [LIVE-VERIFY: box name + whether it renders anonymously; it is region-dependent].
-  2. Report EXACTLY what it names (e.g. "IMDb shows: Netflix, rent on Apple TV") — availability is region-specific, say so. If no box appears, say IMDb shows no watch options for this region; do NOT click through to external stores.
+  1. Open the title page and look for a watch-options box near the rating (streaming provider names, "Rent/Buy"). In live anonymous EU capture NO watch box rendered at all — expect it to be missing for logged-out sessions in many regions.
+  2. If present, report EXACTLY what it names — availability is region-specific, say so. If no box appears (the common case), say IMDb shows no watch options for this session/region; do NOT click through to external stores.
 
   ### TASK: Browse Top 250 / popular charts
   1. browser_navigate `/chart/top` (or `/chart/moviemeter`, `/chart/toptv`) → snapshot.
-  2. Rows are "rank. Title (year) rating" in Page Text [LIVE-VERIFY: row format]. First window covers roughly the top 20–25; scroll for deeper ranks. For "is {title} in the Top 250", a full scan is ~10–12 scrolls — warn the user before doing one for a likely-low-ranked title.
+  2. Rows read `#1 {Title} {year}{runtime}{cert} 9.3 (3.2M)` in Page Text, but the first window only reaches about rank #5 and scrolling reveals no more (Rule 5). ALL 250 rows surface in rank order as element captions `button "Mark as watched" aria-label="Mark {Title} as watched" data-testid="inline-watched-button-{tt-id}"` — so "is {title} in the Top 250" is a single-snapshot scan of element labels (the tt-id comes free), NO scrolling. Do not click those buttons (write action, Rule 3). For a deep rank's rating, open its title page.
 
   ### TASK: Upcoming releases
-  1. browser_navigate `/calendar` → snapshot. Releases are grouped under date headings with title links [LIVE-VERIFY]. Dates/titles are region-dependent — mention that. Scroll for later months; report the next few relevant dates.
+  1. browser_navigate `/calendar` → snapshot. Releases group under date headings like `Jul 17, 2026`, but the page's region-selector country list floods the first Page Text window, so the dates usually fall past the text cap. Upcoming titles still surface as element links `a "{Title} ({Year})" href="/title/{tt-id}/…"` — report those, note the region default (United States) and that dates/titles are region-dependent; if the user needs the exact date and it isn't visible, say so rather than guessing.
 
   ### TASK: Parental guide
   1. browser_navigate `/title/{tt-id}/parentalguide` → snapshot.
-  2. Sections: Sex & Nudity, Violence & Gore, Profanity, Alcohol/Drugs/Smoking, Frightening scenes — each with a severity (None/Mild/Moderate/Severe) [LIVE-VERIFY: severity rendering]. Report the severities first; scroll into item details only on request. For "is it OK for kids", also report the age certification from the main title page.
+  2. The first Page Text window carries the content rating (e.g. "Rated R for language and prison violence") and a severity summary rendered as `{Section}: {Severity}` lines — Sex & Nudity / Violence & Gore / Profanity / Alcohol, Drugs & Smoking / Frightening & Intense Scenes, each None/Mild/Moderate/Severe. Report those; only the first section's item details fit in the window, so quote details just for what's visible. For "is it OK for kids", also report the age certification from the main title page.
 
   ### TASK: Episode guide for a show
-  1. browser_navigate `/title/{tt-id}/episodes/?season=N` → snapshot [LIVE-VERIFY: param + season selector as links/buttons if the param is ignored].
-  2. Episodes list as "S{N}.E{M} ∙ Title", airdate, rating, and a plot line each. Scroll for the rest of the season. For "best episode", compare the per-episode ratings you can see and say the comparison covers season N only.
+  1. browser_navigate `/title/{tt-id}/episodes/?season=N` → snapshot. The param is honored (page "Episode list" with the right season); season numbers also appear as links next to Seasons/Years/Top-rated selectors. CAUTION: two series-wide "TOP-RATED" episode cards (e.g. S5.E16 for a season-2 request) sit ABOVE the season list in the first window — they are NOT part of season N.
+  2. Season episodes list as `S{N}.E{M} ∙ {Title}`, airdate (`Sun, Mar 8, 2009`), a plot line, and rating `8.6/10 (51K)`. The first Page Text window covers only the first ~3–4 episodes and scrolling reveals no more (Rule 5) — for "best episode", compare what's visible, say the comparison is partial, and point at the page's Top-rated selector for a definitive answer.
 
   ### TASK: Compare ratings of a few titles
   1. For EACH title: search → open the title page → note rating + vote count from the first window. The headline number is on the main page — /ratings is only for breakdown questions.
@@ -94,6 +95,7 @@ instructions: |
   - Buying/renting through watch-option links (external checkout).
 
   ### Gotchas
+  - Clicks land at the coordinates captured in the LAST snapshot — an element far below the fold can be missed silently (the click "succeeds" but nothing changes). If a click did nothing, browser_scroll toward the element, re-snapshot, and click the fresh [id].
   - tt-ids and nm-ids are permanent — reuse them across sub-pages within the task instead of re-searching.
   - Same-name titles are common (remakes, TV vs film). Confirm the YEAR and type from the search result line before opening; if the user gave a year, match it.
   - Don't click video/trailer thumbnails — playback contributes nothing to a lookup and may autoplay with sound.

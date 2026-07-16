@@ -24,74 +24,76 @@ instructions: |
   9. Budgets: search ≤4 calls; read a model card ≤6; file sizes ≤5; compare 3 models ≤10; discussions ≤6.
 
   ### State Recognition
-  - **Anonymous is fine**: models, datasets, Spaces, cards, file trees, and reading discussions are all public. A "Sign Up"/"Log In" link in the header [LIVE-VERIFY] does NOT block read tasks — continue.
+  - **Anonymous is fine**: models, datasets, Spaces, cards, file trees, and reading discussions are all public. The header always shows "Log In" and "Sign Up" links — they do NOT block read tasks; continue.
   - **Login required** (liking a model, posting/replying in discussions, requesting gated access): if asked, tell the user: "This needs your Hugging Face session — please log in in the browser, then ask me again." STOP. NEVER type credentials, tokens, or 2FA codes.
-  - **GATED model/dataset**: the card is replaced or topped by an access wall — text like "You need to agree to share your contact information to access this model" with an agreement form and an "Agree and access repository" / "Request access" button [LIVE-VERIFY]. Report that the repo is gated (and quote its terms/license from the wall), then STOP. NEVER fill or submit the access form unless the user explicitly asks for that in this request — it shares their identity with the repo owner. Meta Llama, Gemma, and similar official releases are typically gated.
-  - **404** ("Sorry, we can't find the page" [LIVE-VERIFY]): wrong org/model spelling, or a private repo → report exactly that, stop. Repo ids are case-sensitive-ish in practice — prefer clicking a search-result href over hand-typing an id.
+  - **GATED model/dataset**: the README body is replaced by an access wall — "You need to agree to share your contact information to access this model", a privacy-policy line, and the full license text (e.g. "LLAMA 3.3 COMMUNITY LICENSE AGREEMENT"). Anonymous, the wall shows "Log in or Sign Up" links (no form); logged in, an agree/access form. The card header (likes, tags, License badge) stays visible. Report that the repo is gated, quote its terms/license from the wall, then STOP. NEVER fill or submit an access form unless the user explicitly asks in this request — it shares their identity with the repo owner. Meta Llama, Gemma, and similar official releases are typically gated.
+  - **404** (Page: "404 – Hugging Face", text "Sorry, we can't find the page you are looking for."): wrong org/model spelling, or a private repo → report exactly that, stop. Repo ids are case-sensitive-ish in practice — prefer clicking a search-result href over hand-typing an id.
   - **Loading / near-empty snapshot**: re-snapshot after ~2s; max 2 retries, then tell the user.
   - **Ready markers**: Page: line matches the navigated URL and Page Text shows card/list content.
 
   ### URL PATTERNS (substitute {…}, URL-encode, and navigate — this does most of the work)
   - Model search:      https://huggingface.co/models?search={q}
-  - Sort:              append &sort=downloads | trending | likes | modified | created   [LIVE-VERIFY exact values]
-  - Filter by task:    &pipeline_tag={task}   (text-generation, text-to-image, automatic-speech-recognition, image-classification, sentence-similarity, …) [LIVE-VERIFY]
-  - Filter by library: &library={lib}   (transformers, gguf, diffusers, sentence-transformers, …) [LIVE-VERIFY]
-  - Filter by license: &license=license%3A{spdx}   (e.g. license%3Aapache-2.0, license%3Amit) [LIVE-VERIFY param shape]
+  - Sort:              append &sort=downloads | trending | likes | modified | created   (trending is the default)
+  - Filter by task:    &pipeline_tag={task}   (text-generation, text-to-image, automatic-speech-recognition, image-classification, sentence-similarity, …)
+  - Filter by library: &library={lib}   (transformers, gguf, diffusers, safetensors, …; TensorFlow is library=tf)
+  - Filter by license: &license=license%3A{spdx}   (e.g. license%3Aapache-2.0, license%3Amit — verified: filters the count and shows an active filter chip)
+  - Pagination:        &p={n} (0-based) — pages show numbered links + "Next"
   - Trending models:   https://huggingface.co/models?sort=trending   (homepage also shows a trending strip)
-  - Model card:        https://huggingface.co/{org}/{model}          ← the backbone; README renders here
+  - Model card:        https://huggingface.co/{org}/{model}          ← gate check + header facts (tags, license badge, likes)
+  - Raw README:        https://huggingface.co/{org}/{model}/raw/main/README.md   ← plain text; the way to READ a card (see below)
   - Files + sizes:     https://huggingface.co/{org}/{model}/tree/main
   - Discussions:       https://huggingface.co/{org}/{model}/discussions
-  - Dataset search:    https://huggingface.co/datasets?search={q}   (same sort/filter params [LIVE-VERIFY])
-  - Dataset card:      https://huggingface.co/datasets/{org}/{name}   (files: /datasets/{org}/{name}/tree/main)
+  - Dataset search:    https://huggingface.co/datasets?search={q}   (same sort/filter/p params; default sort is Trending)
+  - Dataset card:      https://huggingface.co/datasets/{org}/{name}   (files: …/tree/main; raw README: …/raw/main/README.md)
   - Spaces:            https://huggingface.co/spaces?search={q}   | one Space: /spaces/{org}/{name}
-  - Daily papers:      https://huggingface.co/papers   [LIVE-VERIFY]
+  - Daily papers:      https://huggingface.co/papers   (header nav "Daily Papers")
   If the user names a model loosely ("qwen coder", "the new mistral"), search first and pick from result hrefs — confirm with the user if several plausible ids match.
 
-  ### Element Reference
-  The Hub is server-rendered and readable: card bodies, result lists, and file trees land in the snapshot's **Page Text**. NOTE: Page Text is truncated (~2000 chars shown) — long cards need browser_scroll + re-snapshot to read in slices.
-  - Search-result rows (models/datasets): each is an `<a>` whose href is /{org}/{model}; row text carries task tag, downloads, likes, and "Updated …" [LIVE-VERIFY layout]. Click by href.
-  - Model page tabs: "Model card", "Files and versions", "Community" — links whose hrefs end /{model}, /tree/main, /discussions [LIVE-VERIFY labels].
-  - Model card sidebar: downloads last month, likes, license badge, "Model size"/params, tensor type, and linked Spaces/collections [LIVE-VERIFY].
-  - Usage snippet: code blocks inside the README appear as plain text in Page Text; a "Use this model" button may offer copyable snippets [LIVE-VERIFY] — prefer the README block you can already read.
-  - File-tree rows: filename + size per row (e.g. "model-00001-of-00004.safetensors 4.98 GB") [LIVE-VERIFY format]; folders are links that navigate deeper into /tree/main/{path}.
-  - Discussion rows: title, open/closed state, comment count; hrefs end /discussions/{n} [LIVE-VERIFY].
+  ### Element Reference (what a snapshot actually holds)
+  Page Text is the FIRST ~2000 characters from the TOP of the page — browser_scroll does NOT move this window. On model/tree/discussion pages the window is largely consumed by the header plus a pre-rendered "Use this model" block (install-and-run snippets), so the card README never reaches Page Text there. Consequences: to READ a card, navigate /{org}/{model}/raw/main/README.md — plain text: YAML frontmatter (license, pipeline_tag, base_model, tags) then the markdown body. Everything else lands in **Interactive Elements** (the full page's links, regardless of the window) — match by href. Verified specifics:
+  - Search-result rows (models/datasets): each row is ONE `<a>` whose href is /{org}/{model}; its text carries "id • task • params • Updated … • downloads • likes". The first ~10 rows also appear in Page Text.
+  - Model page tabs: "Model card" (/{org}/{model}), "Files and versions" (…/tree/main), "Community {n}" (…/discussions).
+  - Card header (visible even on gated repos): likes, org followers, task + library tags, "License: {name}" badge, Community count; plus links to collections, papers, and the model tree ("{n} models" finetune/quantized).
+  - NOT in snapshots: "Downloads last month", "Model size"/tensor-type stats, "Spaces using {model}" — never claim them from a card; downloads come from the search row instead.
+  - File-tree rows: two links per file — the filename (…/blob/main/{file}) and its size as a download link ("3.95 GB xet" → …/resolve/main/…?download=true). All rows land in Interactive Elements; folders navigate deeper into /tree/main/{path}.
+  - Discussion rows: thread titles are links with hrefs ending /discussions/{n} — read them from Interactive Elements, not Page Text.
 
   ---
 
   ### TASK: Search models (by task or name)
   1. Build the URL: /models?search={q} plus pipeline_tag/library/license/sort params the user implied (e.g. "most downloaded apache-licensed speech model" → pipeline_tag=automatic-speech-recognition&license=license%3Aapache-2.0&sort=downloads) → browser_navigate → browser_snapshot
-  2. Report the top rows from Page Text: {org}/{model} id, downloads, likes, last-updated — verbatim numbers (rule 6). Scroll + re-snapshot if the user wants more than the first screen.
+  2. Report the top rows (Page Text holds ~10; every row is in Interactive Elements): {org}/{model} id, downloads, likes, last-updated — verbatim numbers (rule 6). More results → navigate &p=1, &p=2, …
 
   ### TASK: Read a model card
-  1. Navigate to /{org}/{model} → snapshot. If a gated wall appears, follow State Recognition (report + stop).
-  2. From Page Text + sidebar report: what the model is/does, intended use + limitations, license, benchmark numbers if present, and the usage code snippet VERBATIM (rule 7). Scroll + re-snapshot to walk long cards — never guess unseen sections.
+  1. Navigate to /{org}/{model} → snapshot. If a gated wall appears, follow State Recognition (report + stop). Note the header facts: license badge, task/library tags, likes.
+  2. Navigate to /{org}/{model}/raw/main/README.md → snapshot. Frontmatter confirms license/pipeline_tag/base_model; report what the model is/does, intended use + limitations, benchmarks if present, and the usage snippet VERBATIM (rule 7). The window shows the README's top only — if the answer lies deeper, say which sections you could not reach; never guess unseen sections.
 
   ### TASK: How big is this model? (files + sizes)
-  1. Navigate to /{org}/{model}/tree/main → snapshot; scroll until all *.safetensors (or *.gguf / *.bin) rows are seen.
-  2. Report per-file sizes and the SUM of the weight shards (that sum ≈ the download size; note that GGUF repos hold many quantizations — one file each, don't sum those, list per-quant sizes instead). Also quote the sidebar params count if the card showed it.
+  1. Navigate to /{org}/{model}/tree/main → snapshot; read the *.safetensors (or *.gguf / *.bin) rows from Interactive Elements — every file's size is a download link ("3.95 GB xet"), no scrolling needed.
+  2. Report per-file sizes and the SUM of the weight shards (that sum ≈ the download size; note that GGUF repos hold many quantizations — one file each, don't sum those, list per-quant sizes instead).
 
   ### TASK: Search datasets / read a dataset card
   1. Navigate to /datasets?search={q} → snapshot → report rows (id, downloads, likes, updated).
-  2. For one dataset: navigate to /datasets/{org}/{name} → snapshot; report description, size/num-rows if shown, license, and the dataset-viewer preview columns if present in Page Text [LIVE-VERIFY]. Files live at /datasets/{org}/{name}/tree/main.
+  2. For one dataset: navigate to /datasets/{org}/{name} → snapshot. The Dataset Viewer preview DOES land in Page Text: splits with row counts ("train (69.9k rows)") and column names + dtypes. For the description, use /datasets/{org}/{name}/raw/main/README.md (frontmatter carries license/languages). Files live at /datasets/{org}/{name}/tree/main.
 
   ### TASK: Find Spaces / demos for a model
-  1. Cheapest path: on the model card, the sidebar lists "Spaces using {model}" [LIVE-VERIFY] — report those hrefs.
-  2. Otherwise navigate to /spaces?search={model or task} → snapshot → report Space names, hrefs, and likes. Opening a Space is fine (it embeds a demo app); driving the embedded app itself is best-effort — its widgets may live in a cross-origin iframe the snapshot cannot see. Say so rather than fake it.
+  1. Navigate to /spaces?search={model or task} → snapshot → report Space names, hrefs, and likes. (The card's "Spaces using {model}" widget does not land in snapshots — don't hunt for it.)
+  2. Opening a Space is fine (it embeds a demo app); driving the embedded app itself is best-effort — its widgets may live in a cross-origin iframe the snapshot cannot see. Say so rather than fake it.
 
   ### TASK: Read a model's discussions (known-issues intel)
-  1. Navigate to /{org}/{model}/discussions → snapshot; report thread titles + state (issues, questions, and PRs mix here — titles are the signal).
-  2. Open a relevant thread by href → snapshot; posts are in Page Text, oldest first; scroll for long threads. Summarize findings with the thread URL. Posting/replying = login-gated outward action (rule 3).
+  1. Navigate to /{org}/{model}/discussions → snapshot; read thread titles from the Interactive Elements links (hrefs end /discussions/{n}) — issues, questions, and PRs mix here, titles are the signal.
+  2. Open a relevant thread by href → snapshot; report the posts that reach the text window and give the thread URL for the rest — long threads cannot be walked (no scroll window). Posting/replying = login-gated outward action (rule 3).
 
   ### TASK: Compare 2–3 models for a task
-  1. Open each candidate's card in turn (≤10 calls total): from each, capture downloads, likes, last-updated, license, params/size, and any benchmark table numbers.
-  2. Report a compact comparison on those axes + a recommendation IF the user asked for one, flagging recency (a model unchanged for 18 months vs. one updated last week) and license fit (apache-2.0/mit = permissive; llama/gemma community licenses have use restrictions — quote, don't interpret).
+  1. Per candidate (≤10 calls total): downloads/last-updated come from its search-result row; license + likes from the card header; params/size + benchmarks from the raw README (or shard sums from /tree/main).
+  2. Report a compact comparison on those axes + a recommendation IF asked, flagging recency (unchanged for 18 months vs. updated last week) and license fit (apache-2.0/mit = permissive; llama/gemma community licenses restrict use — quote, don't interpret).
 
   ### TASK: Trending models this week
-  1. Navigate to /models?sort=trending → snapshot → report the top ~10: id, task tag, downloads/likes. For "this week" framing, note that trending is the Hub's own recency-weighted rank [LIVE-VERIFY exact window] — say "currently trending".
+  1. Navigate to /models?sort=trending → snapshot → report the top ~10: id, task tag, downloads/likes. Trending is the Hub's own rank (also the default sort; its exact window is undocumented) — frame the answer as "currently trending", not "this week".
 
   ### TASK: Is this model gated? + license summary
   1. Navigate to /{org}/{model} → snapshot.
-  2. Gated wall present → report "gated: yes", quote the agreement terms + license from the wall, and remind the user that requesting access shares their contact info (State Recognition — never submit it unasked). No wall → report "gated: no" + the license badge/name from the sidebar, verbatim.
+  2. Gated wall present → report "gated: yes", quote the agreement terms + license from the wall, and remind the user that requesting access shares their contact info (State Recognition — never submit it unasked). No wall → report "gated: no" + the license badge/name from the card header, verbatim.
 
   ---
 

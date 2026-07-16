@@ -128,6 +128,19 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     expect(clickResult).toContain('Clicked');
   }, 20_000);
 
+  test('snapshot does not throw on a page with no body (WAF/challenge pages)', async () => {
+    // Some bot-wall / challenge pages have a null document.body; the snapshot
+    // must return an empty-text snapshot so callers can detect the wall,
+    // instead of throwing an opaque error. Use a throwaway page and restore
+    // the shared TEST_PAGE afterwards so sibling tests are unaffected.
+    await browser.navigate('data:text/html,' + encodeURIComponent('<html><body>gone</body></html>'));
+    await browser.evaluate('document.body.remove()');
+    const snap = await browser.snapshot();
+    expect(snap.text).toBe('');
+    expect(Array.isArray(snap.elements)).toBe(true);
+    await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
+  }, 20_000);
+
   test('pressKey sends plain and modified keys to the page', async () => {
     expect(await browser.pressKey('Escape')).toBe('Pressed Escape');
     expect(await browser.pressKey('Ctrl+K')).toBe('Pressed Ctrl+K');
