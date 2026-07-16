@@ -238,13 +238,33 @@ async function suiteBrowser(d: Driver, opts: Opts) {
 
   const nav = await d.rpc('browser_navigate', { url: opts.gmailUrl });
   record('navigate to Gmail', !nav.error, nav.error ?? String(asObj(nav.result).url ?? 'ok'), nav.elapsed_ms);
-  await sleep(1500);
+
+  // Gmail is a heavy SPA — the inbox (and the Compose button) render several
+  // seconds after navigation, well after the top-bar shell. Poll the AX tree
+  // until Compose appears (or the element count stops growing) so we snapshot
+  // a settled page, not the loading shell.
+  let axSnap = await d.rpc('browser_ax_snapshot', {});
+  let elems = (asObj(axSnap.result).elements as Array<Record<string, unknown>>) ?? [];
+  const hasCompose = (es: Array<Record<string, unknown>>) =>
+    es.some((e) => typeof e.name === 'string' && /compose/i.test(e.name) && e.interactive === true);
+  {
+    const deadline = Date.now() + 15_000;
+    let lastCount = -1, stableTicks = 0;
+    while (Date.now() < deadline) {
+      if (hasCompose(elems)) break;
+      // Also stop once the tree stops growing for two ticks (non-Gmail pages).
+      if (elems.length === lastCount) { if (++stableTicks >= 2) break; } else { stableTicks = 0; }
+      lastCount = elems.length;
+      await sleep(1200);
+      axSnap = await d.rpc('browser_ax_snapshot', {});
+      elems = (asObj(axSnap.result).elements as Array<Record<string, unknown>>) ?? [];
+    }
+    console.log(`  … waited for Gmail to render: ${elems.length} elements, compose ${hasCompose(elems) ? 'present' : 'absent'}`);
+  }
 
   // AX snapshot — the structural path. Measure element count + payload size,
   // and compare token cost against a screenshot baseline.
-  const axSnap = await d.rpc('browser_ax_snapshot', {});
   const axRes = asObj(axSnap.result);
-  const elems = Array.isArray(axRes.elements) ? (axRes.elements as Array<Record<string, unknown>>) : [];
   const axBytes = JSON.stringify(axRes).length;
   record('browser_ax_snapshot returns elements + refs',
     elems.length > 0 && elems.every((e) => typeof e.sig === 'string' && e.backend_node_id !== undefined),
@@ -260,6 +280,23 @@ async function suiteBrowser(d: Driver, opts: Opts) {
     const ratio = (shotBytes / Math.max(1, axBytes)).toFixed(1);
     record('AX snapshot ≥8× smaller than screenshot payload', shotBytes / Math.max(1, axBytes) >= 8,
       `screenshot ${shotBytes}B vs AX ${axBytes}B (${ratio}×)`);
+  }
+
+  // Rot-proofing: two back-to-back snapshots of the NOW-SETTLED page should
+  // share sigs at a high rate. Done before the compose flow, which legitimately
+  // mutates the page. Compare the two fresh snapshots to each other (not to any
+  // earlier load-stage snapshot).
+  {
+    const s1 = await d.rpc('browser_ax_snapshot', {});
+    await sleep(250);
+    const s2 = await d.rpc('browser_ax_snapshot', {});
+    const e1 = (asObj(s1.result).elements as Array<Record<string, unknown>>) ?? [];
+    const e2 = (asObj(s2.result).elements as Array<Record<string, unknown>>) ?? [];
+    const sigs1 = new Set(e1.map((e) => e.sig as string));
+    const stable = e2.filter((e) => sigs1.has(e.sig as string)).length;
+    const rate = e1.length ? stable / e1.length : 0;
+    record('sig re-resolution across re-snapshot ≥95%', rate >= 0.95,
+      `${Math.round(rate * 100)}% of ${e1.length} sigs stable (settled page)`);
   }
 
   // Find the Compose control and click it by ref.
@@ -299,18 +336,6 @@ async function suiteBrowser(d: Driver, opts: Opts) {
       .slice(0, 25);
     record('locate Compose in AX tree', false,
       `no interactive element matching /compose/. Interactive elements present: ${interactiveNames.join(', ') || '(none — Gmail likely not logged in, or still loading)'}`);
-  }
-
-  // Rot-proofing: same-page re-snapshot should re-resolve a stored sig at
-  // high rate (full mutate test needs a real relayout; this is the floor).
-  {
-    const again = await d.rpc('browser_ax_snapshot', {});
-    const e3 = (asObj(again.result).elements as Array<Record<string, unknown>>) ?? [];
-    const sigs2 = new Set(elems.map((e) => e.sig as string));
-    const stable = e3.filter((e) => sigs2.has(e.sig as string)).length;
-    const rate = elems.length ? stable / elems.length : 0;
-    record('sig re-resolution across re-snapshot ≥95%', rate >= 0.95,
-      `${Math.round(rate * 100)}% of ${elems.length} sigs stable`);
   }
 }
 
