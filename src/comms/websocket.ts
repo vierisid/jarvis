@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from 'bun';
+import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { isWithin } from '../util/path.ts';
@@ -98,6 +99,11 @@ function isPublicRoute(pathname: string, method: string): boolean {
     pathname === '/sidecar/connect' ||
     pathname === '/api/sidecars/.well-known/jwks.json' ||
     pathname.startsWith('/api/webhooks/') ||
+    // The control-plane bench endpoint bypasses the dashboard access-token gate
+    // ONLY when the daemon was started with a valid JARVIS_DEBUG_RPC secret —
+    // and it is still independently protected by that secret echoed as a
+    // header (see api-routes.ts). Without the gate the route does not exist.
+    (pathname === '/api/debug/rpc' && debugRpcGate() !== null) ||
     method === 'OPTIONS'
   );
 }

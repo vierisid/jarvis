@@ -19,6 +19,7 @@ import { resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
+import { debugRpcGate, debugRpcGateRejected } from "./debug-rpc-gate.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -658,6 +659,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
+
+    // The bench harness backdoor must never be on quietly. Say so at startup,
+    // every time, and say why a too-short secret did not enable it.
+    if (debugRpcGate()) {
+      console.warn('[Daemon] JARVIS_DEBUG_RPC is set: /api/debug/rpc is OPEN (secret-gated) and can drive the desktop of every connected sidecar. This exists for the control-plane acceptance harness only; unset it for normal use.');
+    } else if (debugRpcGateRejected()) {
+      console.warn('[Daemon] JARVIS_DEBUG_RPC is set but shorter than 16 characters; /api/debug/rpc stays disabled.');
+    }
     // Public-origin precedence: env > public_url > legacy brain_domain >
     // local fallback. Re-check env only to attribute the startup log source.
     const externalOrigin = resolveExternalOrigin(jarvisConfig);

@@ -91,7 +91,17 @@ class Driver {
   }
 
   async listSidecars(): Promise<Array<{ name: string; connected: boolean; capabilities?: string[] }>> {
-    const res = await fetch(`${this.opts.base}/api/sidecars`, { signal: AbortSignal.timeout(5_000) });
+    // Go through the debug endpoint (secret-gated, bypasses the dashboard
+    // access-token gate) rather than the authed /api/sidecars.
+    const res = await fetch(`${this.opts.base}/api/debug/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-debug-rpc-token': this.opts.token },
+      body: JSON.stringify({ method: '__list_sidecars' }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (res.status === 404) {
+      throw new Error('debug endpoint 404 — daemon not started with a matching JARVIS_DEBUG_RPC (or the token differs)');
+    }
     return (await res.json()) as Array<{ name: string; connected: boolean; capabilities?: string[] }>;
   }
 }

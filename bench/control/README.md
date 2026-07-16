@@ -12,12 +12,14 @@ choices.
    ```
    cd sidecar && make build      # on Windows, or use the CI artifact
    ```
-2. Start the daemon with the debug gate set to any secret string:
+2. Start the daemon with the debug gate set to a secret of at least 16
+   characters (shorter values leave the route disabled):
    ```
    JARVIS_DEBUG_RPC=some-long-secret jarvis start
    ```
    The `/api/debug/rpc` route does not exist unless this env var is set, and
-   every call must echo it back as `x-debug-rpc-token`.
+   every call must echo it back as `x-debug-rpc-token` (compared in constant
+   time). The daemon logs a warning at startup for as long as the gate is on.
 3. Pair + connect a sidecar with the `desktop` and `browser` capabilities.
 4. For the browser suite: be logged into Gmail in the sidecar's Chrome profile
    (the compose flow needs a real session), or pass `--gmail-url` to a page you

@@ -6,6 +6,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision } from './approval-decision.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
@@ -4273,14 +4274,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     // Raw sidecar RPC passthrough for the control-plane bench harness
     // (bench/control/acceptance.ts). Deliberately double-gated: the route
-    // does not exist unless the daemon was started with JARVIS_DEBUG_RPC set,
-    // and the caller must echo that value back as a shared secret — the HTTP
+    // does not exist unless the daemon was started with JARVIS_DEBUG_RPC set
+    // to a secret of at least 16 characters, and the caller must echo that
+    // value back as a shared secret (compared in constant time) — the HTTP
     // server may be bound beyond loopback, and this endpoint can drive the
-    // desktop.
+    // desktop. See debug-rpc-gate.ts.
     '/api/debug/rpc': {
       POST: async (req: Request) => {
-        const gate = process.env.JARVIS_DEBUG_RPC;
-        if (!gate || req.headers.get('x-debug-rpc-token') !== gate) {
+        const gate = debugRpcGate();
+        if (!gate || !debugRpcTokenMatches(req.headers.get(DEBUG_RPC_HEADER), gate)) {
           return error('Not found', 404);
         }
         try {
@@ -4290,6 +4292,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             method?: string;
             params?: Record<string, unknown>;
           };
+
+          // The bench harness lists sidecars THROUGH this endpoint (which is
+          // reachable with just the debug secret) so it never needs the
+          // access-token-gated /api/sidecars.
+          if (body.method === '__list_sidecars') {
+            return json(ctx.sidecarManager.listSidecars().map((s) => ({
+              id: s.id, name: s.name, connected: s.connected, capabilities: s.capabilities,
+            })));
+          }
+
           if (!body.method) return error('Missing "method" field');
 
           const sidecars = ctx.sidecarManager.listSidecars();
