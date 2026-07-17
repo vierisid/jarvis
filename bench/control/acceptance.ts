@@ -305,22 +305,27 @@ async function suiteBrowser(d: Driver, opts: Opts) {
   if (compose) {
     const click = await d.rpc('browser_ax_click', { backend_node_id: compose.backend_node_id });
     record('AX-click Compose by backend_node_id', !click.error, click.error ?? 'clicked', click.elapsed_ms);
-    await sleep(1200);
 
-    // Re-snapshot; find the To / Subject fields. Require an EDITABLE, real
-    // (backend>0) element — Gmail exposes non-editable "To"/"Subject" labels
-    // and AX wrappers with the same name, which aren't settable.
-    await sleep(500); // let the compose fields render
-    const s2 = await d.rpc('browser_ax_snapshot', {});
-    const e2 = (asObj(s2.result).elements as Array<Record<string, unknown>>) ?? [];
+    // Re-snapshot until the To / Subject fields render. Require an EDITABLE,
+    // real (backend>0) element — Gmail exposes non-editable "To"/"Subject"
+    // labels and AX wrappers with the same name, which aren't settable. The
+    // compose dialog renders asynchronously, so poll instead of a fixed sleep.
     const editableRoles = new Set(['textbox', 'combobox', 'searchbox', 'textfield']);
+    let e2: Array<Record<string, unknown>> = [];
     const field = (re: RegExp) => {
       const matches = e2.filter((e) =>
         typeof e.name === 'string' && re.test(e.name as string) &&
         e.interactive === true && typeof e.backend_node_id === 'number' && (e.backend_node_id as number) > 0);
       return matches.find((e) => editableRoles.has(e.role as string)) ?? matches[0];
     };
-    const to = field(/^to\b|recipients/i);
+    let to: Record<string, unknown> | undefined;
+    for (const deadline = Date.now() + 8_000; ; ) {
+      await sleep(700);
+      const s2 = await d.rpc('browser_ax_snapshot', {});
+      e2 = (asObj(s2.result).elements as Array<Record<string, unknown>>) ?? [];
+      to = field(/^to\b|recipients/i);
+      if (to || Date.now() >= deadline) break;
+    }
     const subj = field(/^subject/i);
     if (to) {
       const r = await d.rpc('browser_ax_set_value', { backend_node_id: to.backend_node_id, value: 'nobody@example.com' });
