@@ -1,0 +1,113 @@
+# NOTE on triggering: the app name "Substack" and the domain "substack.com" carry the
+# explicit match (every publication lives at {name}.substack.com, which substring-contains
+# "substack.com"). The keywords below add only "newsletter"/"newsletters" — strong intent
+# for this app category and corpus-clean. No keyword contains "substack" (it would be dead
+# weight — the app name already matches) and none names "paid subscribers" (too close to a
+# generic SaaS-metrics phrase).
+app_name: Substack
+domains:
+  - substack.com
+keywords:
+  - newsletter
+  - newsletters
+description: Substack — read posts (with honest paid-subscriber paywall detection), browse a publication's archive, search within a publication or site-wide, read comments, read your own feed/inbox, write auto-saved drafts, subscribe (gated, never enter payment), like/comment, and publish only with explicit confirmation.
+version: 1
+instructions: |
+  URL: https://substack.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. URL-FIRST: publications, posts, archives, search, your inbox, and the editor are addressable by URL (map below). Navigate directly; click the UI only when no URL exists.
+  3. Element [id]s are 1-based and CHANGE on EVERY snapshot. Never reuse an id after the page changed; re-locate by role/aria-label/text.
+  4. browser_type REPLACES the target's content by default. In the editor this is the #1 bug source — see EDITOR TYPING MODEL. Pass append: true to preserve existing text.
+  5. Snapshot at checkpoints (after navigate, after the editor opens, after each typed block, before/after any public submit) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop.
+  7. [LIVE-VERIFY] items were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the current UI, not the exact string.
+  8. Feeds, archives, and long posts load via infinite scroll: browser_scroll down → snapshot. Max ~4 rounds; summarize what you have.
+
+  ### PUBLISHING & OUTWARD-ACTION GATE (reading is safe; sending is not)
+  - Writing a DRAFT is allowed when the user explicitly asked for one — the editor auto-saves continuously (no Save button; a "Saved"/draft indicator appears near the top [LIVE-VERIFY]). Report the draft as saved; do NOT publish or send it.
+  - PUBLISHING emails the post to every subscriber AND puts it publicly on the web under the user's name — a public + email outward action, DOUBLE-GATED. Only proceed if the user explicitly said "publish"/"publish and send" THIS CONVERSATION ("write a post about X" means draft). Before the final click, verify in the latest snapshot: title, body, AND audience ("Everyone" vs "Paid subscribers" vs "Send to no one"). Anything unclear → stop and ask.
+  - Likes and comments are public and tied to the user's account: verify the target and (for comments) the exact text in-snapshot BEFORE submitting, verify ONCE after, NEVER blind-retry — an unconfirmed retry risks a public double-post.
+  - Subscribing is gated (see State Recognition + the Subscribe task): free-subscribe is an email action (verify-before); a paid tier involves PAYMENT — never enter card/payment details.
+
+  ### State Recognition
+  - **Reading is mostly anonymous** — posts, publication home pages, archives, and search work logged out (subject to the paid paywall and email gates below).
+  - **Paid-subscriber paywall**: a paid-only post shows the opening then cuts off at a wall reading "This post is for paid subscribers" (or "…paying subscribers") with a Subscribe/Upgrade button [LIVE-VERIFY: wording]. Summarize ONLY the visible portion and say the rest is for the publication's paid subscribers. NEVER bypass (no cache/reader/mirror tricks, no dismissing the wall to scrape hidden text).
+  - **Email/signup gate**: many free posts overlay a "Type your email… Subscribe" box or "Get the full experience" prompt part-way down [LIVE-VERIFY]. This is a soft gate, NOT the paid paywall — the body is usually still in Page Text; read what's there, don't enter the user's email to dismiss it.
+  - **Logged out**: header shows "Sign in"/"Subscribe"; dashboard, inbox, and editor URLs redirect to sign-in. For any write/outward action (subscribe, like, comment, draft, publish, read inbox), tell the user: "This needs your Substack login — please sign in in the browser first." STOP. NEVER type credentials, even if the user provides them.
+  - **Ready (logged in)**: an account avatar/menu in the top bar, and on your own publication a "Dashboard"/"New post" affordance [LIVE-VERIFY].
+  - **Loading**: near-empty snapshot → wait, re-snapshot (max 2 retries), then tell the user. **Cookie/consent banner** blocking interaction: click reject/"necessary only" if present, else accept → continue.
+
+  ### URL MAP (prefer these over clicking; {name} = the publication subdomain, e.g. bigtechnology.substack.com)
+  - Publication home: https://{name}.substack.com/
+  - A post: https://{name}.substack.com/p/{slug} — any pasted /p/… link: navigate directly. (Some publications map a custom domain; same UI + instructions apply, but the template only auto-triggers on substack.com.)
+  - Archive (all posts, newest first): https://{name}.substack.com/archive (add ?sort=top for most-read) [LIVE-VERIFY: sort param]
+  - Search a publication: https://{name}.substack.com/search/{query} — site-wide: https://substack.com/search/{query} (URL-encode; space → %20) [LIVE-VERIFY]
+  - Reading inbox/feed (login-gated): https://substack.com/inbox — Notes feed: https://substack.com/notes
+  - Publication dashboard (login-gated): https://{name}.substack.com/publish/home — new-post editor: https://{name}.substack.com/publish/post [LIVE-VERIFY: editor path]
+
+  ### EDITOR TYPING MODEL (block editor — Notion-class caution; all behavior [LIVE-VERIFY])
+  The editor is a contenteditable block editor: title, subtitle, and each paragraph are separate blocks. browser_type inserts paste-like (no per-key events) and CLEARS the target block by default.
+  - NEVER chain two plain browser_type calls into the same block — the second wipes the first.
+  - New paragraph = browser_press_key "Enter" (real keydown creates a fresh block below) → snapshot → type into the NEW block. Repeat per paragraph.
+  - Add to an existing block only with append: true.
+  - Markdown autoformat and the "+"/"/" insert menus depend on real keystrokes and may not fire on paste-like insertion — don't rely on them; plain paragraphs are the safe path.
+
+  ### TASK: Read a post  ← strongest use case
+  1. browser_navigate the post URL (from the user, or found via search) → browser_snapshot.
+  2. PAYWALL CHECK FIRST: if the paid-subscriber wall is present (State Recognition), report it and summarize only the visible portion — never bypass.
+  3. Otherwise Page Text carries title, author, publication, date, and body (past any email gate). Summarize from it directly. Long post: browser_scroll down → snapshot (Rule 8).
+
+  ### TASK: Browse a publication's archive / recent posts
+  1. browser_navigate https://{name}.substack.com/archive → snapshot. No archive? The home page https://{name}.substack.com/ lists recent posts.
+  2. Report post titles, dates, and any subtitles/counts from Page Text. Scroll for more (Rule 8).
+
+  ### TASK: Search (within a publication or site-wide)
+  1. Build the search URL (map above) → browser_navigate → snapshot → results (titles, publications, authors, snippets) are in Page Text. Open a result via its title link; scroll for more.
+  - UI fallback: click the search icon/box in the top bar, browser_type the query with submit: true [LIVE-VERIFY].
+
+  ### TASK: Read comments on a post
+  1. Open the post → snapshot. The comments control is a "Comments"/"{N} Comments" link or speech-bubble button near the byline or foot of the post [LIVE-VERIFY]; click it (or scroll to the comments section) → snapshot.
+  2. Comment authors, text, and like counts are in Page Text — summarize directly. More: browser_scroll down → snapshot; click "load more"/"show replies" when present [LIVE-VERIFY]. 2–3 rounds is enough.
+  - Comments may be subscriber-gated on some posts — if a "subscribe to comment"/paid gate blocks reading, report it (State Recognition), don't bypass.
+
+  ### TASK: Read your own feed / inbox (login-gated)
+  1. browser_navigate https://substack.com/inbox → snapshot. Redirected to sign-in? State Recognition, stop.
+  2. Report unread/recent items (publication, title, date) from Page Text. Open one via its title (lands on the post). Scroll for more (Rule 8).
+
+  ### TASK: Subscribe to a publication (GATED — never enter payment)
+  1. Confirm the user explicitly asked to subscribe and is logged in (State Recognition) — else tell the user and stop.
+  2. On the publication home/post → snapshot → find the "Subscribe" button [LIVE-VERIFY].
+  3. FREE subscribe (email action): click Subscribe → snapshot. Report a "Subscribed"/confirmation state. If it asks to confirm an email, that is the user's account email — verify it in-snapshot before confirming; never type a different address.
+  4. PAID tier: if the flow shows plans/prices or a PAYMENT form (card fields, "Add payment", Stripe checkout) → STOP. Tell the user it needs a paid plan + payment they should complete in the browser. NEVER enter card/payment details.
+
+  ### TASK: Like a post or comment (login-gated, public)
+  1. Open the post (or comment thread) → snapshot → find the like control: a heart/like button, often with a count [LIVE-VERIFY]. Logged out prompts sign-in — State Recognition applies.
+  2. Click ONCE → snapshot → the button state/count changes [LIVE-VERIFY]. Clicking again UNDOES the like — do not click twice.
+
+  ### TASK: Comment on a post (login-gated, public)
+  1. Open the post → snapshot → the composer may be a collapsed "Write a comment…" placeholder that needs one click to expand into the real textbox [LIVE-VERIFY] → click it, snapshot.
+  2. browser_type(comment textbox id, text) → snapshot → VERIFY the text reads exactly as intended (Outward-Action Gate).
+  3. Click the "Post"/submit button → snapshot → your comment appears in the thread under the user's name. Unconfirmed → tell the user, never re-submit.
+  - Reply to a specific comment: click that comment's "Reply" control [LIVE-VERIFY], then the same flow.
+
+  ### TASK: Write a DRAFT post (login-gated; only on explicit request)
+  1. browser_navigate https://{name}.substack.com/publish/post → snapshot. Sign-in redirect? State Recognition, stop.
+  2. The editor shows a title block ("Title"), a subtitle block, then a body block ("Start writing…") [LIVE-VERIFY].
+  3. browser_type(title block id, title) → browser_press_key "Enter"/Tab to the next block → snapshot. Add a subtitle the same way only if the user gave one.
+  4. Body paragraphs via the EDITOR TYPING MODEL: type into the current empty block → Enter → snapshot → type the next. One paragraph per block, never two plain types into one.
+  5. Final snapshot: verify title + body and the auto-save/"Saved" indicator [LIVE-VERIFY]. Report "Draft saved on Substack (auto-saved) — it's in your dashboard drafts." Do NOT click Publish/Continue.
+
+  ### TASK: Publish / send a post (THE DOUBLE GATE — explicit "publish and send" from the user this conversation)
+  1. Only enter this flow if the user explicitly said publish/send THIS conversation (Publishing & Outward-Action Gate). Open the draft (dashboard drafts, or the open editor) → snapshot → VERIFY title and body are exactly what the user approved.
+  2. Click the "Continue"/"Publish" button starting the send flow (top-right) [LIVE-VERIFY] → snapshot → a pre-send screen with the audience ("Everyone", "Paid subscribers", "Send to no one"/web-only) and a final publish button [LIVE-VERIFY: layout].
+  3. VERIFY the audience matches what the user wants — if unspecified, ask; do NOT guess the recipient set.
+  4. Click the final "Send to everyone now"/"Publish now" button [LIVE-VERIFY label] → snapshot → success = the live post page / a "published"/"sent" confirmation. Unconfirmed → tell the user to check the dashboard; NEVER click publish again blind.
+  - browser_press_key "Escape" (or a Back/Cancel control) leaves the flow without publishing [LIVE-VERIFY] — use it to abort if verification fails.
+
+  ### Gotchas
+  - Page Text on a post can mix in "Share"/"Subscribe" CTA rows and a recommendations rail — don't report those as post body. Counts show abbreviated ("1.2K") — report as shown.
+  - Newest post is on the publication home page; the full back-catalogue is /archive.
+  - Any wall (paid post, gated comments, gated archive) is handled the same way: report it, never bypass.
+  - "Notes" (substack.com/notes) is Substack's short-form social feed, separate from posts — if the user means a Note vs a post, confirm which.

@@ -1,0 +1,77 @@
+app_name: Wolfram Alpha
+domains:
+  - wolframalpha.com
+keywords:
+  - wolfram
+description: Wolfram Alpha — the computational answer engine driven by the URL API (input?i={query}). Compute expressions, convert units/currency, look up quantitative facts (populations, distances, constants), and solve/integrate/derive math. The Input-interpretation pod is text and confirms the query was understood; the Result pod often renders as an IMAGE that a snapshot cannot read — this template reports that honestly. Step-by-step is Pro-gated and never paid for. Read-only.
+version: 1
+instructions: |
+  URL: https://www.wolframalpha.com
+
+  ### THE ONE THING TO KNOW
+  The URL is the API. `https://www.wolframalpha.com/input?i={URL-encoded query}` loads the results page with the computation already run — no typing, no clicking a search button. Build the URL, wait for the compute pods, snapshot, read the pods. Most tasks are browser_navigate → (short wait) → browser_snapshot.
+
+  ### CRITICAL HONESTY — read before trusting a result [LIVE-VERIFY]
+  Wolfram Alpha historically renders its RESULT pods as IMAGES (rasterized math/plots), not selectable text. An image does NOT appear in a snapshot's Page Text — so the numeric answer is frequently NOT extractable.
+  - What IS usually plain text in Page Text: the **Input interpretation** pod (echoes how Wolfram parsed the query — confirms it understood you) and simple word/label pods.
+  - What is OFTEN image-only: the **Result** pod for math (integrals, solutions, derivatives), plots, and formatted expressions.
+  - So: report the Input interpretation (proof of understanding) plus any Result text that DID land in Page Text. If the Result is image-only, SAY SO plainly — "Wolfram computed an answer but rendered it as an image the snapshot can't read" — and hand the user the URL. Do not invent, guess, or "reconstruct" a number that wasn't in the text. This is the make-or-break rule.
+  - Confirm per query which pods came through as text vs image before you answer. [LIVE-VERIFY the text-vs-image split on live pages]
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_scroll. browser_click is normally needed only for a consent banner. browser_evaluate and browser_screenshot are BANNED for Wolfram Alpha (a screenshot could show an image answer, but reading pixels is out of scope — never use it). Never use desktop or sidecar tools.
+  2. URL-FIRST, always: never type into the on-page input box when the query fits in the URL. Encode the query exactly (below) — one unencoded `+`, `&`, or `#` changes the math or truncates the query, producing a confidently wrong result.
+  3. [id]s are 1-based and CHANGE with every snapshot. If pods are still not readable after 2 retry snapshots, report the Input interpretation + the URL and stop — no workarounds.
+  4. READ-ONLY & no pay: no login is needed for basic queries. Step-by-step solutions, extended computation time, and Pro-only pods are PAYWALLED — report the paywall and hand off; NEVER enter payment details or start a trial.
+
+  ### URL PATTERN (the whole API)
+  `https://www.wolframalpha.com/input?i={query}`
+  - `i` = the natural-language or math query, URL-encoded.
+  - Encoding: space → `+` (or `%20`), and CRITICALLY `+`→`%2B`, `&`→`%26`, `#`→`%23`, `?`→`%3F`, `%`→`%25`, `/`→`%2F`. The `+` rule matters most for math — `x^2+3x` must be `x^2%2B3x`, or the `+` reads as a space and the expression breaks.
+  - Examples:
+    - `https://www.wolframalpha.com/input?i=integral+of+x^2`
+    - `https://www.wolframalpha.com/input?i=population+of+France`
+    - `https://www.wolframalpha.com/input?i=distance+earth+to+moon`
+    - `https://www.wolframalpha.com/input?i=solve+x^2%2B3x-4%3D0`   (`+`→%2B, `=`→%3D)
+    - `https://www.wolframalpha.com/input?i=5+usd+in+eur`
+  - Wolfram is tolerant of phrasing — plain English ("how far is the moon") and math notation both work. If a query returns nothing useful, rephrase once; don't hammer the same URL.
+
+  ### State Recognition
+  - **No sign-in needed** for basic queries — never enter credentials. A "Sign in" link exists but plain queries work logged out; if a login page appears you navigated wrong — go back to the input URL.
+  - **Cookie/consent banner**: a fresh browser may show a cookie consent bar with an "Accept" / "Accept all cookies" button. Click it → snapshot → results are intact underneath (the URL query already ran). If the button isn't in the first snapshot, browser_scroll and re-snapshot.
+  - **Computing / loading**: results are computed asynchronously. Right after navigate the page may show a spinner or "Computing…" and only the input echo — the answer pods arrive a beat later. If Page Text lacks the Result pod, re-snapshot ONCE (Rule 3 cap) before deciding it's image-only or empty.
+  - **Ready**: page title includes the query; Page Text shows an "Input" / "Input interpretation" label with the parsed query, then pod headings ("Result", "Decimal approximation", "Number line", "Unit conversions", etc.). Pod content may be text OR image (see CRITICAL HONESTY).
+  - **No result**: Wolfram shows "Wolfram|Alpha doesn't understand your query" / "Wolfram|Alpha doesn't know how to interpret your input." → rephrase once, else tell the user Wolfram couldn't interpret it.
+
+  ### TASK: Compute / answer a query (PRIMARY)
+  1. Build `input?i={encoded query}` → browser_navigate → (results are async) → browser_snapshot.
+  2. Handle consent/computing states above. Read the **Input interpretation** first — quote it so the user sees Wolfram understood the question.
+  3. Read the **Result** pod. If its value is in Page Text, quote it exactly. If the Result is image-only (no numeric text in Page Text), say so honestly and give the user the URL — do NOT fabricate the answer.
+
+  ### TASK: Unit / currency conversion ("5 usd in eur", "10 km in miles")
+  1. Navigate `input?i=5+usd+in+eur` (or `10+km+in+miles`) → snapshot. Conversion results are often SIMPLE and tend to render as text ("Result" / "Currency conversion" pod), so this is one of the more reliably-readable task types [LIVE-VERIFY].
+  2. Quote the converted value and note the rate/date if shown. Currency rates are indicative, not a live trading rate — say so.
+
+  ### TASK: Factual / quantitative lookup (population, distance, constants)
+  1. Navigate the plain-English query (`population+of+France`, `distance+earth+to+moon`, `speed+of+light`) → snapshot.
+  2. These often surface a text "Result" or labeled value pod that DOES land in Page Text — quote it with Wolfram's stated units and any "as of {date}" note. If it came through only as an image, report that + the URL.
+
+  ### TASK: Math — solve / integrate / derivative
+  1. Encode carefully (Rule 2: `+`→%2B, `=`→%3D, `^` is usually fine): `solve+x^2%2B3x-4%3D0`, `integral+of+x^2`, `derivative+of+sin(x)`.
+  2. Snapshot. The Input interpretation confirms Wolfram parsed the expression — always report it. The **Result / roots / antiderivative pod for math is the MOST likely to be image-only** — if you can't read it from Page Text, say the computation succeeded but the answer rendered as an image, and hand over the URL. Never reconstruct the algebra yourself and present it as Wolfram's output.
+
+  ### TASK: Step-by-step solution (Pro-gated)
+  Step-by-step is a Wolfram Alpha **Pro** feature. The page shows a "Step-by-step solution" pod with a "Need a step-by-step solution?" / "Unlock Steps" button behind a paywall (or a trial prompt). Report to the user that step-by-step requires Wolfram Alpha Pro and you won't purchase it. Give the plain Result/URL instead. NEVER click into payment or start a trial (Rule 4).
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Reading image-rendered pods pixel-by-pixel (plots, formatted math, tables baked into images) — not extractable from a snapshot; hand over the URL.
+  - Interactive/dynamic pods (sliders, "More", extended-computation timeouts) and 3D/plot manipulation.
+  - Anything behind Pro: step-by-step, extra compute time, data downloads, personalized/account features, saved queries.
+  - Uploading data/files for analysis, or the Wolfram Notebook/Language products.
+
+  ### Gotchas
+  - `i=` runs the query on load — there is no submit step; never look for a search button.
+  - Prefer the `input?i=` path over the homepage search box; the URL is more reliable and encoding-safe.
+  - `+` in a math expression MUST be `%2B` — the single most common encoding mistake here.
+  - The Input-interpretation pod being present but the Result being blank in Page Text is the image-only signal, not a load failure — don't retry endlessly (Rule 3).
+  - `www.` prefix is standard; a bare `wolframalpha.com/input?i=…` redirects to it — either is fine.

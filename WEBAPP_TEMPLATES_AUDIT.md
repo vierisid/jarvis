@@ -232,6 +232,9 @@ DELIBERATELY EXCLUDED (permanent): password managers, PayPal, banking (credentia
 | gnews v1 | 7.6KB | 4 | morning-brief headlines; source attribution in CENTRAL CAUTION (non-negotiable); paywalls reported never bypassed |
 | archive v1 | 7.4KB | 3 | Wayback timestamp-URL-is-the-API; no typing anywhere; /save/{url} the one gated write |
 
+### P3.6 — expansion batch 6 (74 → 87 templates)
+◐ IN PROGRESS 2026-07-16: cloudflare (read-only zones/DNS view; edits + DNS changes hard-gated), supabase (read-only tables/logs; SQL editor never runs mutations), substack (read + gated publish), calcom (booking gate; keywords disjoint from calendly), loom (video library read + share; recording out of scope), goodreads (book lookup read-only; shelf edits gated), letterboxd (film logging; read + gated), strava (PRIVACY-sensitive: public read, own-data + kudos/post gated), yelp (local business research read-only; keywords disjoint from gmaps/tripadvisor), gscholar (research URL-first read-only), gtrends (read-only; charts=canvas, tables honesty like ganalytics), wolframalpha (compute/answer engine URL-first), rottentomatoes (film/TV read-only; keywords disjoint from imdb). Same conventions: lint-clean, ≤12KB, [LIVE-VERIFY], no credentials, money/DNS/SQL/publish gates.
+
 ---
 
 ## P4 — DESKTOP app templates (planned; GATED on Structural Runtime)

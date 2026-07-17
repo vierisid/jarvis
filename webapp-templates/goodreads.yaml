@@ -1,0 +1,96 @@
+app_name: Goodreads
+domains:
+  - goodreads.com
+keywords:
+  - book reviews
+  - book recommendations
+description: Goodreads — look up books (rating, publication year, page count, genres, synopsis, series info), search by title/author/ISBN, read reviews sampling both high and low ratings, browse an author and their books, compare ratings across books, browse themed Listopia lists, and find similar titles ("Readers also enjoyed"). Reading is anonymous; shelving, rating, and reviewing need login and are gated behind an explicit request with verify-before-act.
+version: 1
+instructions: |
+  URL: https://www.goodreads.com
+
+  ### THE ONE THING TO KNOW
+  Goodreads is mostly a READ surface with stable numeric IDs in its URLs: every book is `/book/show/{id}` and every author is `/author/show/{id}`. Find the ID once via search, then navigate by URL — never re-search. Reading (books, authors, reviews, lists) needs NO account. Anything that WRITES — adding to a shelf (want-to-read / currently-reading / read), rating, or posting a review — needs login and is GATED (see WRITE ACTIONS): do it only on an explicit request, and verify before committing.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Goodreads. Never use desktop or sidecar tools.
+  2. URL-FIRST: search, book, author, list, and shelf pages all have URL patterns (below). Click only to pick a search result or follow a link whose ID you don't yet know.
+  3. READ vs WRITE: reading is free and anonymous. Never click "Want to Read", rating stars, "Write a review", or Sign In on your own — even if it seems helpful. Writes are login-gated and are done ONLY when the user explicitly asks (WRITE ACTIONS).
+  4. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  5. Page Text is capped (~2000 chars) and ALWAYS shows the TOP of the page — scrolling does NOT move this window. Book/author pages front-load the answer. Content past the first window (deep review lists, long book lists) is reached only via element captions or a filtered URL, never through more Page Text. Stop the moment you have the answer.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No login needed for reading**: books, authors, reviews, Listopia lists, and shelf pages all read anonymously. If a sign-in / "Sign up" page appears you clicked a write action or a gated link — navigate back to the book/author URL. For a genuinely login-gated task tell the user: "Goodreads requires you to sign in for that — please log in manually in the browser, then ask me again." NEVER type credentials, even if the user provides them.
+  - **Bot-wall (Amazon-owned)**: Goodreads is an Amazon property and MAY block an automated/headless browser like amazon and imdb do — a near-empty page, a "Robot Check" / "Type the characters you see" CAPTCHA, an "Access Denied", or an intermittent error page [LIVE-VERIFY: exact wording]. On a CAPTCHA or block: STOP, do not solve or refresh it, and tell the user "Goodreads is showing a robot check — please open it in the browser, then ask me again." On a blank/error first snapshot: wait a beat and re-snapshot once (the page rebuilds during load); if it persists, report the block and stop.
+  - **Cookie/consent**: a cookie or consent banner may appear in Page Text [LIVE-VERIFY]; click its accept/reject button once and re-snapshot — it never blocks reading.
+  - **Ready**: page title is `{Book Title} by {Author} | Goodreads` (or `{Author} (Author of {Book})` for a person). A book page's first Page Text window carries the title, author, the average rating and ratings count (e.g. `4.28 avg rating — 2,145,332 ratings`), and the synopsis; page count, genres, and publication date follow.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Search**: `https://www.goodreads.com/search?q={query}` — URL-encode, spaces as `+`. Works for titles, authors, AND ISBNs (a valid ISBN usually jumps straight to the book).
+  - **Book**: `https://www.goodreads.com/book/show/{id}` (e.g. `/book/show/2767052`). The `{id}` may be `2767052` or `2767052-the-hunger-games`; the bare number works.
+  - **Reviews**: reviews render on the book page itself; a filtered view is `https://www.goodreads.com/book/show/{id}/reviews?rating=N` (N = 1–5) [LIVE-VERIFY: param name] — the fastest way to sample one rating tier.
+  - **Author**: `https://www.goodreads.com/author/show/{id}` (e.g. `/author/show/153394`). Lists the author's books, bio, and average rating across their work.
+  - **Listopia**: `https://www.goodreads.com/list/` (browse/search themed lists); a specific list is `/list/show/{id}`; genre tag pages live at `/shelf/show/{shelf}` (e.g. `/shelf/show/science-fiction`).
+  Grab numeric book/author IDs from link hrefs in the snapshot — search-result and "Readers also enjoyed" links contain them.
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: The Hunger Games by Suzanne Collins | Goodreads
+  URL: https://www.goodreads.com/book/show/2767052-the-hunger-games
+  --- Page Text ---
+  The Hunger Games (The Hunger Games, #1) Suzanne Collins 4.34 2,145,332 ratings 92,847 reviews …
+  Winning will make you famous… 374 pages, Paperback First published September 14, 2008 Genres Young Adult Dystopia …
+  --- Interactive Elements ---
+  [5] input name="q" placeholder="Search books"
+  [40] a "Suzanne Collins" href="/author/show/153394.Suzanne_Collins"
+  [88] button "Want to Read"        ← write action, never click unasked (Rule 3)
+  ```
+
+  ### TASK: Look up a book (PRIMARY)
+  1. browser_navigate `/search?q={title}` → browser_snapshot. (Given a URL/ID, skip to the book page.)
+  2. Results list each book with title, author, and an `{avg} avg rating — {N} ratings` line [LIVE-VERIFY: result-row shape]. Click the title matching the author/edition; if several editions or same-name books plausibly match, ask the user which → snapshot.
+  3. The book page's first Page Text window carries: title (with `(Series, #N)` if in a series), author, average rating + ratings count + reviews count, synopsis, page count, format, first-published date, and Genres. Answer from it — no scrolling for basics. For series info, read the `(Series, #N)` label and any "book N of the {Series}" line.
+
+  ### TASK: Search by title, author, or ISBN
+  1. browser_navigate `/search?q={query}` (title, author, or ISBN — one box) → snapshot.
+  2. An ISBN usually lands directly on the book (Ready) — done. A title/author lands on results (an author query's top hits are that author's books); click the intended one. No results → loosen the query once; if still nothing, report and stop.
+
+  ### TASK: Read reviews (sample both ends — high AND low)
+  1. Open the book page → browser_scroll to the reviews section → snapshot. The default list is NOT a fair sample — don't summarize only the top few.
+  2. Sample the critical end via `/book/show/{id}/reviews?rating=1` (and `?rating=2`); praise via `?rating=5` [LIVE-VERIFY: param name]. Or click the star-rating filter on the reviews section [LIVE-VERIFY: filter control] → snapshot each tier.
+  3. Report: overall average + ratings count, the distribution shape if visible (a bimodal 4.0 is riskier than a uniform one), and 2–3 recurring themes from EACH end with dates where shown. Quote only short fragments, as reader opinions not facts.
+
+  ### TASK: Look up an author + their books
+  1. browser_navigate `/search?q={name}` → snapshot → click the author link (hrefs read `/author/show/{id}…`), or navigate the author URL if known → snapshot.
+  2. First Page Text window: bio, average rating across their work, and their book list (each with its rating). The full bibliography sits past the readable window — books surface as links `a "{Title}" href="/book/show/{id}…"`; report the visible/best-known ones and say the list is partial if it runs longer.
+
+  ### TASK: Compare ratings of a few books
+  1. For EACH book: search → open the book page → note average rating + ratings count from the first window. Reuse a book ID instead of re-searching.
+  2. Report title, author, rating, and ratings count per book. Flag big count gaps — a 4.2 with 2M ratings is far more settled than a 4.2 with 300.
+
+  ### TASK: Browse a themed Listopia list
+  1. For a named list ("best sci-fi of 2024"), browser_navigate `/search?q={theme}` and pick a list result, or navigate `/list/` and search there [LIVE-VERIFY: list-search control]. A genre browse can also use `/shelf/show/{genre}` (e.g. `science-fiction`).
+  2. Ranked entries read `{rank}. {Title} by {Author} — {avg} avg rating` in Page Text and as links; report the top N with ratings. Deep ranks past the readable window come only as element captions or the next-page link (Rule 5).
+
+  ### TASK: Find similar / recommended books ("Readers also enjoyed")
+  1. Open the book page → browser_scroll toward the "Readers also enjoyed" section → snapshot.
+  2. Its titles surface as links `a "{Title}" href="/book/show/{id}…"` [LIVE-VERIFY: heading wording]. Report those as Goodreads' own similar-titles suggestions; open each ID if the user wants their ratings. If the section is absent (some editions/less-popular books lack it), say so rather than inventing recommendations.
+
+  ### WRITE ACTIONS (login-gated — only on an explicit request, verify before committing)
+  - **Preconditions**: the user must explicitly ask to shelve, rate, or review THIS book in THIS request, and the session must be logged in. If logged out, do not attempt — see State Recognition and STOP. Never enter credentials.
+  - **Add to a shelf** (want-to-read / currently-reading / read): the "Want to Read" control on the book page has a dropdown to pick the shelf [LIVE-VERIFY: control + shelf-menu]. Click it → snapshot → confirm the button now reads the chosen shelf. Report the shelf set.
+  - **Rate a book** (public): click the Nth star in the rating widget [LIVE-VERIFY: star widget] → snapshot → confirm "your rating" shows N stars. State the rating you set; never change an existing rating unless asked.
+  - **Write a review** (PUBLIC): draft only the text the user gave — never invent an opinion. Open the review form, type it with browser_type, and STOP before posting: show the user the exact text and ask for explicit confirmation. Post only after they confirm, then verify it appears.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Account actions: sign-in, registration, settings, friends, groups, messaging.
+  - Reading Challenge setup, importing/exporting a library, giveaways.
+  - Buying via any "Get a copy" / Amazon buy link (external checkout) — hand over the link instead.
+  - Deleting or editing another user's review; reporting reviews.
+
+  ### Gotchas
+  - Clicks land at the coordinates from the LAST snapshot — an element below the fold can be missed silently (the click "succeeds" but nothing changes). If a click did nothing, browser_scroll toward it, re-snapshot, click the fresh [id].
+  - Book/author IDs are permanent — reuse them across the task instead of re-searching.
+  - A book has MANY editions (different IDs, page counts, covers) but a shared work-level rating; if the user cares about a specific edition, confirm it from the page before quoting page count.
+  - "Readers also enjoyed" and genre shelves are algorithmic recommendations, not the user's own shelves — never report them as something the user saved.

@@ -1,0 +1,108 @@
+# Keywords deliberately EMPTY: the app name "Loom" (word-bound-matched) plus the
+# loom.com domain carry every real request. The tempting phrases are all wrong for
+# a substring matcher — "screen recording" means OS/native capture just as often,
+# and "video message" collides with messaging apps. Nothing here is Loom-specific
+# enough to add without hijacking unrelated conversations, so: none.
+app_name: Loom
+domains:
+  - loom.com
+keywords: []
+description: Loom — open a shared video and report its metadata, read the auto-transcript and AI summary/chapters, read comments, get the share link with its access level, and browse/search/rename/move/delete videos in your own library. Recording and editing are out of scope.
+version: 1
+instructions: |
+  URL: https://www.loom.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a panel/tab/dialog opens, before and after a mutation) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. [LIVE-VERIFY] lines were written without a live capture: treat the label as the element's MEANING — find the element whose role + current wording mean that, rather than demanding the exact string.
+  7. Loom localizes button text and aria-labels. Match labels by meaning; never press Ctrl-modified browser shortcuts (Chrome intercepts them before the page sees them).
+
+  ### NOT SUPPORTED — say this plainly, then stop
+  - **RECORDING a Loom** (screen / camera / mic capture) is a native desktop-app or browser-extension flow, NOT a web page these tools can drive. Asked to record → tell the user to use the Loom desktop app or browser extension, and stop.
+  - **EDITING the video** — trimming, cutting, splicing, stitching clips, adding CTAs/overlays/blur — happens in a canvas + timeline editor these tools cannot operate. Report it as unsupported.
+  - (Renaming / moving / deleting the video ENTRY in the library IS supported — see those tasks. What's out of scope is changing the video's actual footage.)
+
+  ### State Recognition
+  - **Shared video = no login needed**: a `loom.com/share/{id}` link usually plays and exposes title/author/transcript to anyone — reading a shared video rarely needs a session.
+  - **Library / workspace needs login**: loom.com/home, /looms/videos, folders/spaces, and any owner action (rename/move/delete, seeing private videos) require a signed-in session. If the page redirects to a login/sign-in screen or asks you to log in → tell the user: "This needs your Loom login — please sign in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Private / password / SSO-gated share**: some links show "This video is private" or a password prompt instead of the player [LIVE-VERIFY wording] → report it and stop; do not guess a password.
+  - **Loading**: 0 interactive elements or skeleton placeholders → snapshot again (max 2 retries, then tell the user).
+  - **Share page ready**: URL is /share/{id} and the video title + author are in Page Text.
+  - **Library ready**: video cards/rows with titles + dates + view counts are in Page Text.
+
+  ### URL MAP (URL-first — deep links beat clicking through the UI)
+  - A shared video: https://www.loom.com/share/{VIDEO_ID}
+  - Start at a timestamp: append ?t=95 (seconds) to the share URL [LIVE-VERIFY param name]
+  - Own library home (login): https://www.loom.com/home
+  - All your videos (login): https://www.loom.com/looms/videos
+  - A folder / space (login): https://www.loom.com/spaces/{SPACE_ID} [LIVE-VERIFY path shape]
+
+  ### Element Reference ([LIVE-VERIFY] — written without a live capture; match by meaning)
+  - **Share page**: the video title (heading), author/creator name, and record date are plain text in Page Text near the top; the duration shows on the player scrubber and often beside the title.
+  - **Player controls** (bottom edge of the player; if missing, browser_hover the player area then snapshot): a Play/Pause button whose aria-label reads the state ("Play"/"Pause"), a mute button, a scrubber, a fullscreen button. Read the Play/Pause label to KNOW the state before touching it.
+  - **Transcript**: Loom auto-transcribes — this is the flagship read. [LIVE-VERIFY whether the transcript is a right-side PANEL opened by a "Transcript" button beside the player, OR a "Transcript" TAB in a strip under the video (alongside "Summary" / "Comments")]. Once open, the timestamped lines are plain text in Page Text.
+  - **Summary / chapters**: an AI "Summary" (and sometimes auto "Chapters") tab/section may sit next to Transcript [LIVE-VERIFY] — present ONLY when the owner enabled AI features; absent on many videos.
+  - **Comments**: a "Comments" tab or section under the video [LIVE-VERIFY]; author + text + time are in Page Text.
+  - **Share control**: a "Share" or "Copy link" button near the top-right of the player [LIVE-VERIFY] opens a dialog showing the link and the current access level.
+  - **Library cards**: each video is a link to /share/{id}; title, date, view count and duration badge are in Page Text near it. A per-card "More" / ⋮ overflow button reveals Rename / Move / Delete [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Open a shared video and report its metadata  (budget: 4 calls)
+  1. browser_navigate to the /share/{id} URL (or the raw link the user pasted) → browser_snapshot.
+  2. Private / password / login wall instead of a player → State Recognition; stop.
+  3. Read from Page Text and report: title, author/creator, record date, and duration (duration also sits on the scrubber). Shared videos AUTOPLAY (muted) on some sessions — you never need to play one to read its metadata.
+
+  ### TASK: Read the transcript (THE way to summarize a Loom)  (budget: 8 calls)
+  You cannot watch or listen. The auto-transcript is the ONLY reliable source of what was said — never pass off a summary built from the title alone without saying so.
+  1. Open the /share/{id} page → snapshot.
+  2. Find and click the control meaning "Transcript" [LIVE-VERIFY: side-panel toggle vs a tab in the strip under the video] → snapshot.
+  3. The timestamped transcript lines are now in Page Text. Read them.
+  4. Page Text is capped (~8000 chars): long transcripts TRUNCATE. browser_scroll the transcript area + snapshot for more [LIVE-VERIFY the panel scrolls]; if the rest stays unreachable, summarize what you have and SAY it was partial.
+  5. No "Transcript" control after 2 retry snapshots → tell the user this video has no transcript available.
+
+  ### TASK: Read the AI summary / chapters  (budget: 5 calls)
+  1. On the /share/{id} page → snapshot → click the "Summary" (or "Chapters") tab/section if present [LIVE-VERIFY].
+  2. Read the summary / chapter list from Page Text. If there is no Summary control, tell the user this video has no AI summary (the owner didn't enable it) — do NOT invent one; fall back to the transcript task.
+
+  ### TASK: Read comments  (budget: 5 calls)
+  1. On the /share/{id} page → click the "Comments" tab, or scroll to the comments section [LIVE-VERIFY] → snapshot.
+  2. Comments (author, text, timestamp) are in Page Text. Scroll + snapshot for more. Report them; never post a comment unless the user explicitly asks.
+
+  ### TASK: Get / copy the share link  (budget: 5 calls)
+  1. On the /share/{id} page the canonical link IS the page URL — report it from the snapshot header verbatim.
+  2. For the access LEVEL: click the "Share" / "Copy link" button [LIVE-VERIFY] → snapshot → read the access setting shown in the dialog ("Anyone with the link", "People in your workspace", "Private", etc.) and report it alongside the URL.
+  3. You CANNOT read the clipboard — always report the URL TEXT, never "copied it".
+  4. Changing who can access the video is a permission change — do it only if the user explicitly asks, and report old → new.
+
+  ### TASK: Browse your own library  (login)  (budget: 5 calls)
+  1. browser_navigate https://www.loom.com/looms/videos (or /home) → snapshot. Login wall → State Recognition; stop.
+  2. Video cards list title + date + views + duration in Page Text. Report them. Scroll + snapshot for more, but stop after 2-3 scrolls rather than paging an endless list.
+
+  ### TASK: Search your library  (login)  (budget: 5 calls)
+  1. On /home or /looms/videos → snapshot → find the search input (aria-label/placeholder meaning "Search") [LIVE-VERIFY] → browser_type(input id, QUERY, submit: true) → snapshot.
+  2. Read matching titles/dates from Page Text. Nothing matches → report the empty result, don't retry.
+
+  ### TASK: Rename a video (library; login)  (budget: 7 calls)
+  1. Find the video's card by title → click its "More" / ⋮ overflow button [LIVE-VERIFY] → snapshot → click the entry meaning "Rename" → snapshot.
+  2. A pre-filled name input appears → browser_type(input id, "New title", submit: true) (default replace is what you want) → snapshot: the card shows the new title.
+
+  ### TASK: Move a video to a folder / space (library; login)  (budget: 7 calls)
+  1. Card → "More" / ⋮ → click the entry meaning "Move" [LIVE-VERIFY] → snapshot: a folder/space picker opens.
+  2. Click the destination → click the picker's "Move" confirm button → snapshot: verify the card left the current view or a confirmation toast appears.
+
+  ### TASK: Delete a video (library; login; GATED)  (budget: 7 calls)
+  DELETE ONLY when the user named THIS specific video to delete in this request. Never delete to "clean up", and never guess which one.
+  1. Confirm the right video: its title in Page Text matches what the user named. Ambiguous or multiple matches → ask the user which one, and stop.
+  2. Card → "More" / ⋮ → click the entry meaning "Delete" / "Move to trash" [LIVE-VERIFY] → snapshot.
+  3. A confirm dialog appears → click its confirm button → snapshot: the card is gone; report done. If no confirm dialog appeared and the card is still present, do NOT retry blindly — tell the user what you saw and stop.
+
+  ### Gotchas
+  - Loom localizes button/aria text — match by MEANING (role + wording), not exact English.
+  - Shared videos autoplay: you are reading, not watching — you never need to play a video to read its transcript, summary, or comments.
+  - A /share/{id} link is the durable identifier; a library card links to the same /share/{id} — prefer navigating that URL over clicking through /home.
+  - Never present a summary as "from the video" if you built it from the title/description — say it came from the transcript, or that no transcript was available.

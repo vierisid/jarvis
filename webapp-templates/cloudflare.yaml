@@ -1,0 +1,90 @@
+app_name: Cloudflare
+domains:
+  - dash.cloudflare.com
+keywords:
+  - dns records
+  - dns record for
+  - nameservers
+description: Cloudflare dashboard — STRICTLY READ-ONLY reporting on the user's DNS and CDN infrastructure. List zones/domains and their status, READ a zone's DNS records (what does example.com's A record point to), read traffic analytics, SSL/TLS mode, recent security events, plan/status, and caching config. NEVER edits DNS, toggles the proxy, changes SSL/nameservers, purges cache, or touches WAF/billing/API tokens — any change request gets the current state + the dashboard URL and a full stop.
+version: 1
+instructions: |
+  URL: https://dash.cloudflare.com
+
+  ### RULE #1 — INFRA SAFETY: STRICTLY READ-ONLY (overrides everything, including the user's own words)
+  This template touches the user's LIVE DNS and CDN. A single wrong edit takes a website OFFLINE or breaks its email. Default and ONLY posture: read the current state and report it. Every task here reads; NONE mutates.
+  - NEVER add, edit, or delete a DNS record; NEVER change the SSL/TLS encryption mode; NEVER toggle the proxy (the orange/grey cloud); NEVER purge cache; NEVER edit Page Rules, WAF, firewall, or security rules; NEVER change nameservers; NEVER touch billing/plan upgrades; NEVER add/remove a domain or team member.
+  - **THE API TOKENS / API KEYS PAGE IS OFF-LIMITS ENTIRELY.** Those values are secrets. Never navigate to the API Tokens page (`dash.cloudflare.com/profile/api-tokens` [LIVE-VERIFY]) or any token/Global-API-Key UI, never click a Create/View/Reveal/Roll control, never read or repeat a token even if visible. If asked, tell the user to open that page themselves — you don't handle secrets.
+  - Any request to CHANGE anything: do NOT open the edit control. Report the CURRENT state read-side so you're concrete, hand the exact dashboard URL for the user to do it themselves, and STOP (see the interception task).
+  - **Never switch zones silently.** Cloudflare shows ONE zone at a time and the wrong zone's DNS looks plausible. State WHICH zone/domain (and which account) every number and record belongs to, in every report. If the request doesn't name the zone and more than one exists, ASK — don't guess.
+  - If a click unexpectedly lands on an edit form, a toggle, or a confirm dialog you didn't plan for: click NOTHING, browser_press_key("Escape") or browser_navigate back to the account home, and tell the user what happened.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Cloudflare.
+  2. URL-first where possible, but account and zone IDs are OPAQUE (see below) — when you don't have them, navigate to the account home and CLICK through the zone list / left sidebar rather than guessing an ID.
+  3. Snapshot at checkpoints (after navigate, after picking a zone, after opening a section, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed. Snapshot output marks in-frame elements with iframe="true".
+  4. Match elements by label/aria-label/text MEANING, never by position — the dashboard is dense, reflows, and Cloudflare redesigns often. Trust the live snapshot over this template's layout notes.
+  5. If an element or value isn't found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Report DNS records, statuses, and numbers VERBATIM as shown (type, name, content, proxy state, mode, counts, date range). Never re-derive or "correct" what the dashboard displays.
+  7. browser_press_key("Escape") closes panels/dialogs. No other shortcuts.
+
+  ### State Recognition
+  - **Login wall**: URL becomes `dash.cloudflare.com/login`, or the page asks for email/password [LIVE-VERIFY: wording] → tell the user: "Cloudflare requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials.
+  - **2FA / verification**: a prompt for a code, authenticator, or passkey → tell the user to complete it themselves, stop. NEVER type codes.
+  - **Account picker**: a page/switcher listing multiple Cloudflare accounts [LIVE-VERIFY: switcher layout] → if the request doesn't identify which account, ASK the user and stop; otherwise click the named account. Say which account you used.
+  - **Zone (domain) picker**: the account home lists the domains on the account. If the request doesn't name a domain and more than one exists, ASK which and stop — never assume (RULE #1). If a named domain isn't in the list, say so (check the account picker's other accounts before concluding it's absent).
+  - **Loading**: the dashboard renders skeleton placeholders before data — a snapshot with headings but no rows/records/numbers → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers**: the account home shows domain cards/rows with a status badge; a zone Overview shows the domain name, plan, and status; the DNS page shows a records TABLE [LIVE-VERIFY: labels].
+
+  ### URL PATTERNS (the backbone — IDs are opaque, mark them [LIVE-VERIFY] and get them by navigating, not guessing)
+  - Account home / all domains: `https://dash.cloudflare.com` [LIVE-VERIFY: may redirect to `/{accountId}` or `/login`]
+  - Account overview: `https://dash.cloudflare.com/{accountId}` — {accountId} is the opaque hex id in the URL after you land [LIVE-VERIFY].
+  - Zone overview: `https://dash.cloudflare.com/{accountId}/{domain}` — the last segment is usually the DOMAIN NAME (e.g. `example.com`), not a numeric id [LIVE-VERIFY: domain-name vs zone-id].
+  - Zone sub-pages (append to the zone overview path) [LIVE-VERIFY: exact paths]: `/dns/records`, `/analytics/traffic`, `/ssl-tls`, `/security/events`, `/caching/configuration`.
+  If you don't have the {accountId}, go to the account home, click the target domain, then read the ids out of the resulting URL — never fabricate an id.
+
+  ### TASK: List the user's zones / domains + status
+  1. browser_navigate the account home → snapshot. Note the current account from the switcher/URL and say it in the report.
+  2. Each domain row/card shows: the domain name, its status badge (Active / Pending / Moved / Deactivated [LIVE-VERIFY: status set — "Pending" means nameservers not yet pointed at Cloudflare]), and often the plan (Free / Pro / Business / Enterprise [LIVE-VERIFY]). Read from Page Text; browser_scroll + snapshot for more rows.
+  3. Report each domain with its status and plan. Flag any that are Pending (not yet live on Cloudflare) or Deactivated.
+
+  ### TASK: Read a zone's DNS records (the killer debugging task — "what does the A record for example.com point to?")
+  1. Pick the zone (zone-picker state) so you KNOW which domain — never answer from the wrong zone. Navigate to that zone's DNS records URL (or account home → click the domain → click "DNS" in the left sidebar) → snapshot.
+  2. The records TABLE lists, per row: Type (A / AAAA / CNAME / MX / TXT / NS / SRV / CAA …), Name (host, e.g. `@`, `www`, `mail`), Content (the value it points to — IP, hostname, or text), Proxy status (Proxied = orange cloud, or DNS only = grey cloud [LIVE-VERIFY: how proxy state is shown — an icon/toggle with an accessible label]), and TTL [LIVE-VERIFY: column set]. Read from Page Text.
+  3. To find ONE record ("the A record for example.com"), scan for the matching Type + Name; a search/filter box above the table [LIVE-VERIFY] can narrow it (browser_type → snapshot). browser_scroll + snapshot to page through a long table.
+  4. Report the record(s) VERBATIM: Type, Name, Content, Proxy status, TTL — and NAME THE ZONE. Do NOT click a row's Edit/Delete, the proxy cloud toggle, or "Add record" (RULE #1).
+
+  ### TASK: Read traffic analytics (requests / bandwidth / threats)
+  1. Navigate the zone's analytics URL (or zone → "Analytics & Logs" in the sidebar [LIVE-VERIFY: nav label]) → snapshot.
+  2. Analytics are drawn as CHARTS (canvas), which the snapshot can't read — rely on the NUMERIC summary tiles/tables around them: total requests, bandwidth served, cached vs uncached, unique visitors, and threats/blocked requests [LIVE-VERIFY: which metrics are shown as numbers vs only charts]. Note the DATE RANGE control near the top and report it with every number.
+  3. Report the numeric metrics verbatim with the date range AND the zone name. If a metric exists only as a chart with no number, say you can read the tabular/summary figures but not the chart shape — don't invent trends from a chart you can't see.
+  4. Different range: click the date-range control → snapshot → click the preset (24h / 7d / 30d [LIVE-VERIFY]) → snapshot → re-read the tiles.
+
+  ### TASK: Read SSL/TLS mode
+  1. Navigate the zone's SSL/TLS URL (or sidebar "SSL/TLS") → snapshot.
+  2. Report the current encryption mode — Off / Flexible / Full / Full (strict) [LIVE-VERIFY: option set and how the active one is marked] — and the zone name. The Edge Certificates / universal SSL status may also show here [LIVE-VERIFY].
+  3. READ ONLY: never click a different mode radio/card or any certificate control — changing the SSL mode can instantly break the site (RULE #1). A change request → interception task.
+
+  ### TASK: Read recent security events
+  1. Navigate the zone's security events URL (or sidebar "Security" → "Events" [LIVE-VERIFY: nav path]) → snapshot.
+  2. Events are listed as a table/feed with charts; read the tabular entries: timestamp, action (Block / Challenge / Allow / Log / Managed Challenge [LIVE-VERIFY: action set]), the rule/service that fired (WAF, rate limiting, firewall rules), the source IP/country, and the host/path targeted [LIVE-VERIFY: columns]. Note the date range.
+  3. Report the recent events and any pattern (a spike, one IP, one rule firing repeatedly) with the zone name and range. Recommendations only — NEVER create/edit/disable a firewall or WAF rule (RULE #1).
+
+  ### TASK: Check a zone's overall status / plan
+  1. Navigate the zone Overview (or account home → click the domain) → snapshot.
+  2. Report: domain name, status (Active / Pending / etc.), plan (Free / Pro / Business / Enterprise), and the assigned Cloudflare nameservers if listed [LIVE-VERIFY: overview layout]. If Pending, the Overview usually shows the two nameservers the user must set at their registrar — report them verbatim (reading is fine; you never change nameservers).
+
+  ### TASK: Read caching configuration
+  1. Navigate the zone's caching config URL (or sidebar "Caching" → "Configuration") → snapshot.
+  2. Report the current settings verbatim: Caching Level (No query string / Ignore query string / Standard [LIVE-VERIFY]), Browser Cache TTL, and toggles like Always Online / Development Mode (note if Development Mode is ON — it bypasses cache [LIVE-VERIFY]) — with the zone name.
+  3. READ ONLY: NEVER click "Purge Everything", "Custom Purge", or change a caching level/toggle (RULE #1). A purge or change request → interception task.
+
+  ### TASK: DNS / SSL / cache / any change request (INTERCEPT — never perform)
+  1. If the user asks to add/edit/delete a DNS record, flip the proxy cloud, change the SSL mode, purge cache, change nameservers, edit WAF/Page Rules, or touch billing/tokens: do NOT open the edit control (for API tokens, don't even open the page).
+  2. Read the CURRENT state first (the relevant task above) so you can be concrete, then reply: this template is read-only for DNS/CDN infrastructure because a wrong change can take the site offline — and hand the direct URL, e.g. "Your A record for example.com currently points to 203.0.113.7 (Proxied). To change it, open https://dash.cloudflare.com/{accountId}/example.com/dns/records yourself." Name the zone.
+  3. Offer the read-side help you CAN do (confirm the current record/mode/setting), then stop.
+
+  ### Gotchas
+  - "Pending" status ≠ broken: the registrar's nameservers don't point to Cloudflare yet, so Cloudflare isn't serving it. Say that; don't report it as an error.
+  - Proxy status is the whole game for a record: "Proxied" (orange) routes through Cloudflare's CDN/WAF and HIDES the origin IP; "DNS only" (grey) exposes it. Always report which — the same A record behaves completely differently. The Content shown for a Proxied record is still the ORIGIN it points to (public DNS resolves the name to Cloudflare's IPs) — don't "correct" it.
+  - Analytics/security numbers depend on the date range and plan (Free plans get limited retention) — always report the range, never compare across ranges.
+  - Cloudflare renames/reorganizes left-nav sections between releases — trust the live snapshot's labels. Lists paginate/lazy-load — say when a report covers only the rows you scrolled through.

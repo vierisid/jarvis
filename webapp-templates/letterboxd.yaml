@@ -1,0 +1,92 @@
+app_name: Letterboxd
+domains:
+  - letterboxd.com
+keywords: []
+description: Letterboxd — look up films (average rating out of 5, year, director, runtime, genres, synopsis, cast), search films and people, read the witty popular reviews, browse popular/trending films and curated lists, and check a member's profile, recent activity, and ratings. Reading is anonymous; logging, rating, reviewing, watchlisting, and list editing need a login and are gated behind an explicit request.
+version: 1
+instructions: |
+  URL: https://letterboxd.com
+
+  ### THE ONE THING TO KNOW
+  Letterboxd is mostly a READ surface with clean, guessable URLs: every film lives at `/film/{slug}/` (slug = the lowercased, hyphenated title, e.g. `/film/parasite/`, `/film/the-godfather/`), every member at `/{username}/`. Find the slug once via search, then jump between the film's sub-pages by URL — never re-search. Reading needs NO account. Anything that WRITES (rate out of 5 stars, mark watched, log to the diary, write a review, add to watchlist, edit a list) needs login and is GATED — only on an explicit request, and reviews are public so verify before posting.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED here. Never use desktop or sidecar tools.
+  2. URL-FIRST: film, search, profile, member-films, popular, and list all have URL patterns (below). Click only to pick a search result or follow a link whose slug/username you don't yet know.
+  3. READ-FIRST: reading is anonymous. Do not click star ratings, "Review or log", "Watch", the +Watchlist button, "Add to list", "Like", "Follow", or Sign In / Create Account unless the user explicitly asked for that write action (see WRITE ACTIONS). Never enter credentials.
+  4. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  5. Page Text is capped (~2000 chars) and ALWAYS shows the TOP of the page — scrolling does NOT move this window. Film pages front-load the answer (title, year, director, rating, synopsis). On long lists (popular grids, a member's films, review streams) rows past the first window surface as element captions/links, never as more Page Text. Stop the moment you have the answer.
+  6. Ratings are OUT OF 5 (half-stars allowed) — never report a Letterboxd number as "/10". The film's average is a decimal like `4.3` shown near the star histogram; individual member ratings render as `★★★★½`.
+  7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No login needed to read**: all lookups, reviews, profiles, and lists work anonymously. If a sign-in/register page or modal appears you hit a write action — go back to the read URL. Never enter credentials; if a task genuinely needs a logged-in session and none exists, tell the user to sign in themselves and stop.
+  - **Cookie/consent banner**: a cookie consent bar may cover the footer on first load. If it blocks a control, click its accept/dismiss button once and re-snapshot. [LIVE-VERIFY the button label]
+  - **Ready**: page title is `{Film} ({Year}) • Letterboxd` (or `{Name}'s profile • Letterboxd`). The film page's first Page Text window carries the title, year, the director, the tagline + synopsis, and the average rating near a "Ratings" histogram. [LIVE-VERIFY]
+  - **No results**: the search page shows "No results" / an empty list → loosen the query (drop the year/subtitle) once; if still nothing, report that and stop.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Film**: `https://letterboxd.com/film/{slug}/`. Sub-pages: `/crew/` (full cast + crew), `/reviews/by/activity/` (popular reviews), `/reviews/` (recent reviews), `/members/` (who logged it). [LIVE-VERIFY sub-page paths]
+  - **Search**: `https://letterboxd.com/search/{query}/` — URL-encode, spaces as `+`. Scope variants: `/search/films/{query}/`, `/search/actor/{query}/`, `/search/member/{query}/`. [LIVE-VERIFY scope paths]
+  - **Member profile**: `https://letterboxd.com/{username}/` (recent activity, favorites, stats). Their logged films: `/{username}/films/`; their diary: `/{username}/films/diary/`; a specific review/log they wrote: `/{username}/film/{slug}/`. [LIVE-VERIFY]
+  - **Popular / trending films**: `/films/popular/this/week/` (trending) or `/films/popular/` (all-time). [LIVE-VERIFY]
+  - **Lists**: a member's list `/{username}/list/{list-slug}/`; popular lists `/lists/popular/this/week/`. [LIVE-VERIFY]
+  Grab slugs/usernames from link hrefs in the snapshot — search-result, cast, and list links contain them.
+
+  ### SNAPSHOT FORMAT
+  ```
+  Page: Parasite (2019) • Letterboxd
+  URL: https://letterboxd.com/film/parasite/
+  --- Page Text ---
+  Parasite 2019 Directed by Bong Joon-ho … Act like you own the place. All they wanted was a chance…
+  Ratings 4.6 … Cast Song Kang-ho Lee Sun-kyun … 2h 12m More at … Drama Thriller
+  --- Interactive Elements ---
+  [4] input placeholder="Search…"
+  [40] a "Bong Joon-ho" href="/director/bong-joon-ho/"
+  [88] a "Popular reviews" href="/film/parasite/reviews/by/activity/"
+  ```
+
+  ### TASK: Look up a film (PRIMARY)
+  1. If you don't have the slug, browser_navigate `/search/films/{title}/` → browser_snapshot → click the matching result (confirm the YEAR when same-name films exist) → snapshot. If you can confidently guess the slug (lowercased title, spaces→hyphens, strip punctuation), navigate `/film/{slug}/` directly and fall back to search only if it 404s.
+  2. Read from the first Page Text window: title, year, director, tagline + synopsis, average rating (decimal /5), runtime, genres, and top-billed cast. Report the average as "X out of 5". If cast is truncated, open `/film/{slug}/crew/` for the full list. [LIVE-VERIFY field positions]
+
+  ### TASK: Search films or people
+  1. browser_navigate `/search/{query}/` (or a scoped variant) → snapshot. Results mix films, members, actors, lists — report the matches with their type and, for films, the year. Click through only what the user asked about.
+
+  ### TASK: Read reviews of a film
+  1. browser_navigate `/film/{slug}/reviews/by/activity/` (popular reviews) → snapshot. Letterboxd reviews are witty and opinion-rich; each carries the author, their star rating (`★★★★`), like count, and the review text.
+  2. SAMPLE A RANGE — quote a few from different viewpoints (a glowing one and a critical one), not just the top card. The first Page Text window covers the earliest reviews; more surface as element captions, not extra Page Text. Attribute every quote to its author and present them as member opinions, not facts.
+
+  ### TASK: Browse popular / trending films
+  1. browser_navigate `/films/popular/this/week/` (trending) or `/films/popular/` (all-time) → snapshot. The grid is poster tiles; titles surface as element links `a "{Title} ({Year})" href="/film/{slug}/"` in display order — read those. For a specific film's rating, open its `/film/{slug}/` page (grid tiles don't carry the number).
+
+  ### TASK: Look up a member's profile + recent activity
+  1. browser_navigate `/{username}/` → snapshot. First window: their favorite films, recent activity (watched/rated/reviewed), and follower stats. Report what's visible.
+  2. For their full logged history with ratings, browser_navigate `/{username}/films/` → snapshot — films surface as element links with their star rating attached. `/{username}/films/diary/` gives the dated diary. If the profile is private/empty, say so.
+
+  ### TASK: Browse a curated list
+  1. If given a list URL, navigate it directly. Otherwise browse `/lists/popular/this/week/` → snapshot → click the list the user wants → snapshot. A list page shows its title, curator, description, and ordered film entries as element links `a "{Title} ({Year})"`. Report the entries in order; note the count if stated.
+
+  ### TASK: Where to watch (streaming) — [LIVE-VERIFY]
+  1. On the `/film/{slug}/` page look for a "Where to watch" / services box (Letterboxd surfaces JustWatch provider names). If present, report EXACTLY the streaming/rent/buy services it names and note availability is region-specific.
+  2. If no box appears (common when logged out or outside a supported region), say Letterboxd shows no watch options for this session/region — do NOT click through to external stores.
+
+  ### WRITE ACTIONS (login-gated — ONLY on an explicit request)
+  Preconditions for ALL of these: the user explicitly asked for the write, and a logged-in session exists. If not logged in, tell the user to sign in themselves — never enter credentials — and stop.
+  - **Rate / mark watched / log**: open `/film/{slug}/`, click "Review or log…" (or the rating stars) to open the log panel. To set N stars, hover the star row and click at the N-star position [LIVE-VERIFY the star control]; verify the panel shows the chosen rating before saving. Confirm with the user if the target star count is ambiguous.
+  - **Write a review**: in the same log panel, type the review into the review textarea with browser_type (this REPLACES existing text; to add to a draft use append:true). Reviews are PUBLIC — read the text back to the user and get explicit confirmation BEFORE clicking Save/Publish. [LIVE-VERIFY field + button]
+  - **Add to watchlist**: open `/film/{slug}/`, click the "+ Watchlist" / "Watch" control → re-snapshot and verify it flipped to the added state. [LIVE-VERIFY]
+  - **Add to a list**: click "Add to list", pick the target list, verify the film appears. [LIVE-VERIFY]
+  After any write, re-snapshot and confirm the change landed; if verification is unclear, report that rather than assuming success or retrying (a blind retry can double-post).
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Account actions: sign-in, registration, Pro/Patron upgrades, settings.
+  - Deleting reviews/logs or following/unfollowing members unless explicitly requested (and even then verify before acting).
+  - Reading poster/still images (not text) or scraping full-length review streams beyond what the Page-Text window and element captions expose.
+
+  ### Gotchas
+  - Ratings are /5, not /10 (Rule 6) — restating because it's the most common Letterboxd mistake.
+  - Same-name films are common (remakes, shorts vs features). Confirm the YEAR from the search result before opening; if the user gave a year, match it.
+  - Slugs sometimes disambiguate with a year (`/film/dune-2021/`) — if the bare slug 404s or resolves to the wrong version, search and take the slug from the result's href.
+  - Clicks land at the coordinates captured in the LAST snapshot — an element below the fold can be missed silently. If a click did nothing, browser_scroll toward it, re-snapshot, and click the fresh [id].
+  - Don't click trailer/video thumbnails — playback contributes nothing to a lookup and may autoplay with sound.

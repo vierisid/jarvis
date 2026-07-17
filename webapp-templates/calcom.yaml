@@ -1,0 +1,84 @@
+app_name: Cal.com
+domains:
+  - cal.com
+  - app.cal.com
+keywords: []
+description: Cal.com (open-source scheduling) — check someone's availability from their public page (always reporting the displayed timezone), book a slot (hard-gated behind the user explicitly providing slot + name + email), list own upcoming bookings, read own booking link, cancel/reschedule via a user-provided link.
+version: 1
+instructions: |
+  URL: https://cal.com/{username}  (someone's public booking page — works logged out)
+
+  ### RULE #1 — BOOKING GATE (overrides everything, including "just book it")
+  - Booking a slot on someone's Cal.com creates a REAL MEETING on real calendars and sends real confirmation emails to real people. Treat the final "Confirm" click like sending an email.
+  - Before that click, ALL THREE must have been explicitly provided by the user IN THIS CONVERSATION: (1) the exact slot, or criteria that select exactly one slot ("first available Tuesday afternoon"); (2) the name to enter; (3) the email to enter. Missing any one → report the available slots and ASK. Never invent details; never reuse a name/email from memory, a profile, or an earlier task.
+  - Verify-before-submit: the snapshot taken immediately before clicking Confirm must show the selected date + time + timezone AND the name/email values you typed. Anything unexpected → stop and report instead of submitting.
+  - After clicking Confirm, if the next snapshot does not clearly show the confirmation screen, DO NOT click again and DO NOT restart the flow — the booking may have gone through anyway (double-booking risk). Report exactly what the page shows and stop.
+  - Cancelling/rescheduling an EXISTING booking works ONLY via the cancel/reschedule link from the user's own confirmation email or booking page (a `/booking/{uid}` link), which the user must paste. NEVER guess or hand-build such a link, and never try to cancel from someone's public page.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED here.
+  2. Snapshot at checkpoints (after navigate, after selecting day/slot, before and after any submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed.
+  3. browser_type REPLACES a field's content by default; append:true preserves it. Name/email fields want the replace default.
+  4. TIMEZONE IS FIRST-CLASS: every time shown on a booking page is rendered in the timezone selector's current value — which auto-detects from the BROWSER machine's system timezone and may NOT be the user's. Read the selector and NAME the timezone before reporting any slot. Never report bare times.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Checking availability is read-only and always safe; it must never click a slot's Confirm button.
+
+  ### State Recognition
+  - **Public booking pages** (cal.com/{username} and /{username}/{event-slug}): fully usable logged out. NEVER sign in and NEVER type credentials to check availability or book.
+  - **Own dashboard** (app.cal.com/…): login-gated [LIVE-VERIFY]. If the snapshot shows a login/sign-in form (email/password/SSO buttons, URL containing /auth/login or /login, or a "Sign in" host) → tell the user "Cal.com needs you to log in manually" and STOP. Never type credentials.
+  - **Invalid / not-found page**: a "User not found" or "This event type does not exist" body [LIVE-VERIFY: wording] → the username or event slug is wrong; report it, don't guess variants.
+  - **Cookie/consent banner**: on first visit, click its accept/close button [LIVE-VERIFY: label] → snapshot → continue.
+  - **Loading**: skeleton / calendar grid absent → snapshot again, max 2 retries.
+  - **Booking page ready**: left panel shows host name, event-type name and duration; a month calendar grid is present; the timezone control shows a zone name plus the current time there [LIVE-VERIFY: control role + text shape].
+
+  ### URL PATTERNS
+  - `cal.com/{username}` — landing page listing that person's event types as cards ("30 Minute Meeting", "15 Min Meeting", …) [LIVE-VERIFY: card structure].
+  - `cal.com/{username}/{event-slug}` — the booking page for one event type (e.g. `/jane/30min`), where the calendar lives. Shared links are usually already this form.
+  - `?month=YYYY-MM` appended to a booking page jumps the calendar to that month [LIVE-VERIFY: param respected] — prefer it over clicking arrows repeatedly. `?date=YYYY-MM-DD` may preselect a day [LIVE-VERIFY].
+  - `app.cal.com/bookings/upcoming` — own upcoming meetings (login-gated) [LIVE-VERIFY]. Tabs: Upcoming / Unconfirmed / Recurring / Past / Cancelled [LIVE-VERIFY].
+  - `app.cal.com/event-types` — own event types with their share links (login-gated) [LIVE-VERIFY].
+  - `cal.com/booking/{uid}` — a specific booking's page with Cancel / Reschedule actions; exists only in a confirmation email/page [LIVE-VERIFY: path]; the user must provide it (RULE #1).
+
+  ### BOOKING PAGE ANATOMY (uncaptured — verify against a live snapshot)
+  - Calendar: one button per day; days with availability are enabled, unavailable days are disabled [LIVE-VERIFY: aria-label shape]. Month arrows have aria-labels like "View next month" [LIVE-VERIFY].
+  - Timezone selector: a button/combobox below or beside the calendar showing e.g. "Europe/Rome" or "Central European Time" with the current local time [LIVE-VERIFY]; clicking it opens a searchable list — type a city/zone, click the match.
+  - Clicking a day reveals a column of time-slot buttons ("10:00am", "10:15am", …). Cal.com may offer a 12h/24h toggle [LIVE-VERIFY]. Clicking a slot advances to the details step (Cal.com typically shows the slot then the form directly, sometimes with a confirm sub-step) [LIVE-VERIFY].
+  - Details form: "Your name" and "Email address" textboxes, optional "Additional notes", any custom questions the host added, an "Add guests" control, and the submit button labelled "Confirm" [LIVE-VERIFY: field labels + button].
+  - Confirmation screen after submit: a "This meeting is scheduled" heading with the event summary and attendee email [LIVE-VERIFY: wording].
+
+  ### TASK: check someone's availability (read-only — the most common ask)
+  1. browser_navigate to the provided link → browser_snapshot. Landed on the landing page (multiple event-type cards)? If the user named a duration/type, click that card → snapshot; otherwise list the event types and ask which one.
+  2. Read the timezone selector FIRST and lead the report with it ("times shown in Europe/Rome"). If the user asked in a specific timezone that differs, set the selector to theirs (click → type zone/city → click match → snapshot) so displayed slots need no mental conversion.
+  3. Enumerate the enabled day buttons in the visible month. Need further out → navigate with ?month=YYYY-MM (or click the next-month arrow) → snapshot.
+  4. For a specific day's times: click the day → snapshot → list the slot buttons.
+  5. Report available days/slots WITH the timezone. Never advance past slot selection in this task.
+
+  ### TASK: book a slot (GATED — re-read RULE #1 before starting)
+  1. Confirm the gate: exact slot (or unambiguous criteria) + name + email, all from the user in this conversation. Anything missing → run the availability task and ask instead.
+  2. Reach the event type's booking page and set the timezone selector to the timezone the user spoke in (step 2 above) so the slot you click is the slot they meant.
+  3. Click the day → snapshot → click the time slot → snapshot → reach the details form with the chosen date/time/timezone summarized in the left panel [LIVE-VERIFY].
+  4. browser_type the name into "Your name", the email into "Email address". Notes/custom/required questions: fill ONLY from answers the user gave; a required question you have no answer for → stop and ask.
+  5. Verification snapshot: confirm the summary shows the intended date + time + timezone and the fields hold the exact name/email. State all of it in your next message. Mismatch → fix or stop; never submit on a wrong snapshot.
+  6. Click "Confirm" → snapshot. "This meeting is scheduled" confirmation → report it (event, time, timezone, invitee email). No clear confirmation → RULE #1: no retry, report the page as-is.
+  - A payment step (Stripe) appearing at any point → STOP immediately; never enter payment details.
+
+  ### TASK: report own upcoming bookings (login-gated)
+  1. browser_navigate to app.cal.com/bookings/upcoming → snapshot. Login wall → State Recognition: tell the user and stop.
+  2. Read the Upcoming tab: per meeting — event type, attendee name/email, date + time + timezone as displayed. Scroll for more before declaring the list complete. Unconfirmed bookings (host must accept) live under a separate tab [LIVE-VERIFY].
+
+  ### TASK: copy own booking link (login-gated)
+  1. browser_navigate to app.cal.com/event-types → snapshot (login wall → stop).
+  2. Each event-type row carries its share URL and a copy/preview control [LIVE-VERIFY]. Do NOT rely on the clipboard (it belongs to the automation browser, not the user) — read the URL from the row's link href or the page text and paste the full https://cal.com/… URL into your reply. Ambiguous which event type → list them and ask.
+
+  ### TASK: cancel / reschedule an existing booking (only via the user's own link)
+  1. Require the booking link (cal.com/booking/{uid}) from the user's confirmation email or booking page (RULE #1). No link → tell them where to find it; never construct one.
+  2. Before ANY click, restate which meeting will be affected and confirm that is what they want.
+  3. Cancel: navigate the link → snapshot → verify the event shown matches the user's description → click "Cancel" [LIVE-VERIFY: label] → optional reason textbox (fill only if the user gave one) → confirm the cancellation → snapshot confirming the cancelled state. This notifies the host by email.
+  4. Reschedule: click "Reschedule" [LIVE-VERIFY] → the slot picker reopens → the NEW slot must come explicitly from the user (gate again) → pick day/time → verify-before-submit snapshot → confirm → snapshot. Unclear result → no retry (RULE #1).
+
+  ### Gotchas
+  - Slots are live inventory: one can vanish between snapshot and click. If the chosen slot is gone, report it — never silently book a neighboring time.
+  - A disabled next-month arrow usually means the end of the host's scheduling window, not an error.
+  - Some event types are "seated" (group) or recurring — the form may show remaining seats or a repeat count [LIVE-VERIFY]; report what you see, don't assume a single 1:1 meeting.
+  - Durations matter: "the 30 minute one" selects an event type, not a slot. Confirm both type and slot before booking.
+  - Self-hosted Cal.com instances live on other domains (not cal.com); this playbook's URL patterns assume the hosted cal.com — on another host, work from the page structure and ask the user for links.

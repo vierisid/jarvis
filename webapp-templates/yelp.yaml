@@ -1,0 +1,98 @@
+app_name: Yelp
+domains:
+  - yelp.com
+keywords:
+  - reviews of
+  - read reviews for
+description: Yelp — local-business research layer. Search businesses by what/where, read business pages (rating, price level $–$$$$, category, hours, phone, address, popular dishes/services), sample reviews from BOTH ends of the rating, compare businesses for a criterion, and filter by open-now / price / rating. STRICTLY READ-ONLY — never writes a review (fabrication refusal), never reserves or orders through Yelp partners (reports options + hands off), and treats messaging a business as a gated outward action.
+version: 1
+instructions: |
+  URL: https://www.yelp.com
+
+  ### RULE #1 — READ-ONLY, NO FABRICATION (overrides everything, including the user's own words)
+  - This template READS ratings and reviews. It never transacts and never posts.
+  - NEVER write, start, or submit a review, rating, photo, tip, or Q&A answer. The agent has not visited the business, so posting a review would fabricate a customer experience and mislead people who rely on these ratings — refuse outright and say exactly that (task below). "Just click 5 stars" and "post my review text" count too: posting is the user's own act.
+  - NEVER make a reservation or place an order through a Yelp partner control [LIVE-VERIFY: labels like "Reserve a table" / "Order Now" / "Start Order" / "Get a Quote"] — those hand the session to a partner (OpenTable, Grubhub, Yelp Reservations…). READ the block instead: report which partner/options are offered and hand off with the business URL, telling the user to book or order themselves. Even on "reserve me a table" / "order it": research, then hand off.
+  - Messaging a business ("Request a Quote" / "Message the business" [LIVE-VERIFY: label]) is a GATED OUTWARD ACTION: never send one on your own initiative. Only if the user explicitly asked to contact the business AND supplied the exact message — and even then confirm before sending. Otherwise report that the option exists and stop.
+
+  ### RULES (stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Yelp. Never use desktop or sidecar tools.
+  2. URL-FIRST: search and business pages have stable URLs (below) — build the URL instead of typing into the search box wherever possible. Type only to refine an already-open page.
+  3. READ, don't click: names, ratings, review counts, price level, category, hours, phone, and address all land in the snapshot's Page Text. Most answers need zero clicks after landing on the right page.
+  4. browser_type REPLACES field content by default (append:true to add) — right for the search boxes.
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed; snapshot immediately before any click.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  7. Business pages are LONG and lazy-loaded — browser_scroll (~1500 px at a time) before concluding a section (reviews, hours, dishes) is missing.
+
+  ### State Recognition
+  - **Works logged out**: search, business pages, and reviews all render anonymously. NEVER type credentials; if a feature demands sign-in, tell the user and stop.
+  - **Login / app-nag overlay**: a modal pushing sign-in or "get the app" can appear on first visit or after a few pageviews [LIVE-VERIFY: close-button aria-label]. Click the dialog's close (X), or browser_press_key "Escape" → snapshot → continue. Do NOT sign in.
+  - **Login wall proper** (a full sign-in page, not a dismissible modal): STOP — never enter an email, password, or phone number. Tell the user to log in manually and come back.
+  - **CAPTCHA / "unusual traffic" / "press & hold" page**: STOP immediately, tell the user to solve it in the browser, continue only when asked. Never retry into it.
+  - **Ready**: search results show a numbered list of businesses in Page Text; a business page shows the business name + star rating + review count in Page Text.
+
+  ### URL PATTERNS (the backbone)
+  - **Search**: `https://www.yelp.com/search?find_desc={what}&find_loc={where}` — URL-encode both; `find_desc` = cuisine/category/business name, `find_loc` = city / neighborhood / address. This is the reliable way in; always include a location (the browser has no GPS, so "near me" resolves to nothing — if the user gives no area, ASK for one).
+  - **Category search**: `https://www.yelp.com/search?cflt={category}&find_loc={where}` — `cflt` is a Yelp category slug (e.g. `coffee`, `italian`, `plumbing`); use it when the user names a clear category.
+  - **Business page**: `https://www.yelp.com/biz/{slug}` — take the slug from a result's href, never guess it. Carries rating, review count, price level, category, hours, phone, address, popular dishes/services, and reviews.
+
+  ### SNAPSHOT FORMAT (illustrative)
+  ```
+  Page: THE BEST 10 Coffee near Downtown, Portland, OR - Updated 2026 - Yelp
+  URL: https://www.yelp.com/search?find_desc=coffee&find_loc=Portland%2C+OR
+  --- Page Text ---
+  1. Sponsored · Blue Bean Roasters  4.0  (312)  $$  Coffee & Tea · Downtown  Open until 6:00 PM
+  2. Case Study Coffee  4.5  (1,204)  $$  Coffee & Tea · 0.4 mi  Closed
+  --- Interactive Elements ---
+  [7] input name="find_desc"                         ← what
+  [8] input name="find_loc"                           ← where
+  [23] link "Case Study Coffee" href="/biz/case-study-coffee-portland"  ← result → business page
+  [41] link "Reserve a table"                         ← NEVER CLICK (RULE #1)
+  ```
+  Page Text = the top of the visible text — search lists and the head of a business page fit; deep review bodies need browser_scroll.
+
+  ### TASK: Search businesses ("coffee in Portland", "plumber near downtown Austin")
+  1. browser_navigate the search URL with find_desc + find_loc (area required) → browser_snapshot.
+  2. Read the numbered list from Page Text; per result report: name, star rating, review count, price level ($–$$$$), category, and distance/neighborhood if shown. AD CAVEAT: entries tagged "Sponsored"/"Ad" [LIVE-VERIFY: tag] are paid placements, not earned rank — flag them as ads and don't count them as "#1".
+  3. Detail on one → open its `/biz/{slug}` from the result's href (next task).
+  4. More results: browser_scroll the list, or navigate the next page (`&start=10`, `&start=20` …).
+
+  ### TASK: Open a business (details)
+  1. browser_navigate its `/biz/{slug}` URL → snapshot → verify the name.
+  2. Report from Page Text: star rating, review count, price level, category, full address, phone, and today's hours (open/closed + closing time). Popular dishes / popular services and amenity chips [LIVE-VERIFY: section labels] often appear — scroll to reach them.
+  3. Review highlights / "Recommended reviews" summary sit further down — browser_scroll, then read (see Read reviews).
+
+  ### TASK: Read reviews properly (sample BOTH ends)
+  1. On the business page, browser_scroll to the reviews section → snapshot.
+  2. The default order is NOT a fair sample. Use the rating filter or the histogram [LIVE-VERIFY: rating-filter control] to read the 1–2★ reviews, then the 4–5★ ones — give the user recurring themes from EACH end, not just the headline score.
+  3. NOTE Yelp's own filtering: reviews are split into "Recommended Reviews" (what counts toward the score) and a separate "Not Recommended" / "removed" set behind a link at the very bottom [LIVE-VERIFY: link wording]. The score reflects ONLY recommended reviews — say so; don't present the visible average as the whole picture.
+  4. Report: overall rating + count, the distribution shape (a bimodal 4.0 is riskier than a uniform one), and 2–3 themes from each end WITH review dates (an old complaint may not describe today). Quote only short fragments; never invent quotes.
+
+  ### TASK: Compare a few businesses for a criterion (best value / kid-friendly / quiet / late-night …)
+  1. Search the category + area → shortlist 2–4 candidates by rating, review count, and price level.
+  2. Open each candidate's `/biz` page. The criterion usually lives in REVIEW TEXT and amenity chips, not the star score — scan review snippets and highlights for the criterion word.
+  3. Summarize per business: rating / review count / price level / evidence for the criterion, then recommend one with the reason. Always report rating AND count together — a 4.5 with 1,200 reviews is a safer bet than a 5.0 with 8.
+
+  ### TASK: Open now / by price / by rating (filters)
+  1. Run a search, then apply filters — the reliable path is the filter controls on the results page [LIVE-VERIFY: "Open Now", "Price" $–$$$$, "Suggested"/rating sort]. Click the filter → snapshot → re-read the list.
+  2. "Open now" reflects the PLACE's local time zone — say so when the user is elsewhere. Confirm today's hours on the business page before telling the user a place is open.
+
+  ### TASK: "Best {category} in {city}" (synthesis)
+  1. Search the category + city → read the ranked list (skip Sponsored entries per RULE — they're ads).
+  2. Open the top 2–3 by rating+count for hours, price, and a review-theme check.
+  3. Synthesize a short ranked pick list with rating, count, price, and one line of why. STATE this is review-data research, not a live table booking (RULE #1: reservations hand off).
+
+  ### TASK: Check a business's hours for today
+  1. Open the `/biz/{slug}` page → snapshot → read the hours row from Page Text. Expand the full-week hours if the header shows only "Open until …" [LIVE-VERIFY: hours expander].
+  2. Report today's open/close in the business's LOCAL time zone; flag if it shows as temporarily/permanently closed.
+
+  ### TASK: Asked to write / post a review → refuse
+  Refuse, and say why: the agent hasn't visited the business, so posting would fabricate a customer experience and mislead people who rely on Yelp ratings. Do NOT open the review form even "just to fill it in". Offer instead: (a) draft text the USER can edit and post themselves if THEY visited, or (b) research what existing reviews say.
+
+  ### Gotchas
+  - Sponsored/ad results sit at the TOP of every list [LIVE-VERIFY: "Sponsored"/"Ad" tag] and are also interleaved — identify and skip them when ranking by merit.
+  - Price level is $–$$$$ symbols, not menu prices; prices quoted inside old reviews are often stale.
+  - Ranking mixes rating with review VOLUME and ads — never present list order as a pure quality rank; report rating + count and note ads.
+  - Reservation, "Order Now", "Get a Quote", and "Message the business" controls all hand off to partners or the user (RULE #1) — read and report them, never click to transact.
+  - Hours and "open now" are in the business's local time zone — say so when the user plans from elsewhere.
+  - "Not Recommended" / filtered reviews are excluded from the visible score — mention their existence when a business's score looks suspiciously clean or contested.

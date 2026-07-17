@@ -1,0 +1,104 @@
+# Keywords: only two, both distinctive activity phrases users say without naming
+# the app ("how far were my runs this week", "show me my rides"). The app name
+# (word-bound-matched) + strava.com carry everything else. Deliberately NOT added:
+# "activity stats"/"my feed"/"kudos"/"segment" — too generic for a substring
+# matcher or a bare English word that would hijack unrelated requests.
+app_name: Strava
+domains:
+  - strava.com
+keywords:
+  - my runs
+  - my rides
+description: Strava — read your own activities (runs/rides, distance/pace/time/elevation), activity details and splits, weekly/monthly training stats, public athlete profiles and segment leaderboards; give kudos or comment (explicit, gated)
+version: 1
+instructions: |
+  URL: https://www.strava.com/
+
+  ### RULES (each stated once — follow exactly)
+  1. PRIVACY IS RULE #1. Strava data is location-sensitive: an activity's start point can reveal a home address and its schedule can reveal a routine. NEVER change any privacy/visibility/map setting, NEVER make a private activity public, NEVER hide/unhide anything, NEVER upload or share/export an activity externally, and NEVER surface another athlete's location data beyond what the page you are on already displays. Reading the USER's OWN activities (they are logged in) is fine. See PRIVACY SAFETY below.
+  2. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  3. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after a new snapshot; re-locate elements by role/aria-label/href/text.
+  4. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  5. Snapshot at CHECKPOINTS (after navigation, after a dialog/menu opens, before and after posting a comment or giving kudos) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the current wording/locale, not the exact string.
+
+  ### PRIVACY SAFETY (rule #1, expanded)
+  - A route map is a CANVAS (like Google Maps): the GPS track / heatmap is NOT readable from a snapshot and MUST NOT be automated. Report only the text stats (distance, pace, time, elevation, splits, segments) — never claim to read the route line, and never describe where someone lives or was from a map.
+  - Kudos, comments and follows are OUTWARD social actions done publicly under the user's name: ONE per explicit request, verify-before-acting, never in a loop over a list ("kudos all her runs" -> refuse and explain). GO SLOW.
+  - Another athlete's activities: read ONLY what their profile/activity page already shows publicly. If a page is private ("This activity is private" / "follow to see …"), there is nothing to read — tell the user, do not try to get around it.
+  - NEVER supported, refuse and say so: changing privacy/visibility/map-visibility settings, making a private activity public, uploading an activity/file, exporting/sharing an activity externally, editing another athlete's data.
+
+  ### State Recognition
+  - **Login required for most of Strava**: your own dashboard/feed, your activities, your training stats, and all social actions (kudos, comment) need a session. Logged out you'll see a login/signup wall ("Log In", "Sign Up", a "Log in to Strava" panel, an email/password field, or a redirect to /login). Any of those -> tell the user: "You're logged out of Strava — please log in manually in the browser." STOP. NEVER type credentials, even if the user provides them.
+  - **Public without login**: some athlete profiles (if the athlete made them public), individual activities set to Everyone, and segment/leaderboard pages can be read logged out. If such a page shows a login wall instead, the owner made it private/followers-only — report that and stop.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Cookie/consent banner** (first visit, esp. EU): an "Accept"/"Reject"/"Manage" cookie bar may cover controls -> click the reject/decline option (privacy-safe default) or accept if no reject exists, snapshot, then continue [LIVE-VERIFY].
+  - **Ready markers** — dashboard: activity cards with athlete name, activity title, and a stat row (Distance / Pace or Speed / Time) in Page Text. Activity page: URL is /activities/ID and the title + stat row are in Page Text.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Own feed / dashboard (login): https://www.strava.com/dashboard
+  - Your own activities list (login): https://www.strava.com/athlete/training  [LIVE-VERIFY — the "My Activities" table]
+  - An activity: https://www.strava.com/activities/ACTIVITY_ID  (distance, pace/speed, time, elevation, splits, segments, kudos, comments)
+  - An athlete profile: https://www.strava.com/athletes/ATHLETE_ID
+  - A segment (public leaderboard): https://www.strava.com/segments/SEGMENT_ID
+  - Your training log / stats: https://www.strava.com/athlete/training  and the profile page shows weekly/recent totals [LIVE-VERIFY exact stats route]
+
+  ### Element Reference (ALL [LIVE-VERIFY] — Strava localizes labels; match by meaning)
+  - **Activity card** (feed/dashboard): athlete name + activity title (an `<a href="/activities/ID">`), a stat row reading like "Distance  Pace  Time" or "Distance  Speed  Elevation", plus a kudos count and a comment count. Card action row has a kudos button (thumb/medal icon, aria-label meaning "Give kudos") and a comment button.
+  - **Activity page**: title, activity type, date; a stats block (Distance, Moving Time, Pace/Speed, Elevation Gain, and often Calories/Heart Rate); a Splits table (per-km/mi pace); a Segments list (each with the athlete's time and an effort link); a kudos control + kudos list; a comment list with an "Add a comment" input at the bottom. The route map is a canvas — not readable (PRIVACY SAFETY).
+  - **Athlete profile**: name, location (only if the athlete published it), follower/following counts, and recent activities — read what's shown, nothing more.
+  - **Segment page**: segment name, distance, average grade, elevation; a Leaderboard table (rank, athlete name, time) readable in Page Text; filter tabs (Overall / by age / by weight / following) [LIVE-VERIFY].
+  - **Kudos button**: aria-label/title means "Give kudos"; once given it flips to a filled/active state meaning "kudos given" — read it to know the current state before clicking.
+  - **Comment box**: an input/textarea with placeholder meaning "Add a comment…"; a "Post"/"Comment" button beside it.
+
+  ---
+
+  ### TASK: Read your recent activities (login)  (budget: 5 calls)
+  1. browser_navigate https://www.strava.com/dashboard -> browser_snapshot. Login wall -> State Recognition; stop.
+  2. Each activity card in Page Text gives the title, type, and stat row (distance, pace/speed, moving time, and often elevation + date). Read them straight from the text.
+  3. browser_scroll down + snapshot for older cards (2-3 scrolls, then report — the feed is effectively infinite). For a clean chronological list prefer https://www.strava.com/athlete/training and read the table rows [LIVE-VERIFY].
+
+  ### TASK: Read a specific activity's details (login for own; public if shared)  (budget: 5 calls)
+  1. browser_navigate https://www.strava.com/activities/ACTIVITY_ID -> browser_snapshot. "This activity is private"/login wall -> report it and stop (PRIVACY SAFETY).
+  2. From Page Text read: distance, moving/elapsed time, pace or speed, elevation gain, and (if present) calories/heart rate; the Splits table; the Segments list with per-segment times; the kudos count and comment count.
+  3. Long pages: browser_scroll down + snapshot to reach the splits/segments/comments. The map is a canvas — report the TEXT stats only, never the route.
+
+  ### TASK: Weekly / monthly training summary (own stats, login)  (budget: 5 calls)
+  1. browser_navigate to your profile / training page (https://www.strava.com/athlete/training) -> browser_snapshot. Login wall -> State Recognition; stop.
+  2. Read the totals Strava already computes (this week's / recent distance, time, elevation, activity count) from Page Text [LIVE-VERIFY exact layout]. If the user wants a custom range Strava doesn't show, sum the individual activities you can read and SAY the total was computed from the listed activities.
+
+  ### TASK: Look up a public athlete's profile / recent public activities  (budget: 4 calls)
+  1. browser_navigate https://www.strava.com/athletes/ATHLETE_ID -> browser_snapshot. Athlete id unknown -> use the search box (input meaning "Search") and click the matching athlete row [LIVE-VERIFY].
+  2. Report only what the profile shows publicly (name, published location if any, recent activity titles + stats). Private/followers-only profile ("follow to see …") -> nothing to read; tell the user. NEVER infer or expose their home/location from a route map.
+
+  ### TASK: Read a segment's leaderboard (public)  (budget: 4 calls)
+  1. browser_navigate https://www.strava.com/segments/SEGMENT_ID -> browser_snapshot. Segment id unknown -> search the segment name and click the result [LIVE-VERIFY].
+  2. The leaderboard table (rank, athlete, time) is in Page Text; report the top entries. Different filter tabs (Overall / following / age / weight) reorder it — switch by clicking a tab if the user asked for a specific board [LIVE-VERIFY].
+
+  ### TASK: Give kudos to an activity (LOGIN; explicit request only; ONE per request)  (budget: 6 calls)
+  Only when the user explicitly asked to kudos THIS activity. Never as your own gesture, never across a list.
+  1. Open the activity's /activities/ID page (or find the exact card in the feed — make sure the kudos button belongs to the SAME activity) -> browser_snapshot.
+  2. Read the kudos button's state: already "kudos given"/active? Tell the user it's already kudos'd — clicking again would REMOVE it. Leave it.
+  3. Not yet given -> browser_click the kudos button -> browser_snapshot: it now shows the given/active state and the kudos count went up by one. Unconfirmed -> tell the user; do NOT click again (toggle/duplicate risk).
+
+  ### TASK: Comment on an activity (LOGIN; PUBLIC; explicit request only)  (budget: 8 calls)
+  Comments post publicly under the user's name. If what to write is ambiguous, ASK first.
+  1. Open the activity page -> browser_snapshot -> confirm from Page Text this is the intended activity (right athlete + title). Wrong/unsure -> stop and ask.
+  2. Click the "Add a comment…" box -> browser_type the comment (no submit unless the box is a single-line input where Enter posts [LIVE-VERIFY]).
+  3. browser_snapshot — VERIFY the box shows EXACTLY the intended text (no truncation, no leftovers). Wrong? Retype the full text (replace default), re-verify.
+  4. Click the "Post"/"Comment" button -> browser_snapshot — success = your comment appears in the comment list. Unconfirmed -> tell the user "it may or may not have posted — please check" and STOP. NEVER re-submit (public double-post risk).
+
+  ### NOT SUPPORTED — refuse and say why (PRIVACY SAFETY)
+  - Changing privacy/visibility/map-visibility settings, making a private activity public, hiding/unhiding activities.
+  - Uploading an activity or file; exporting/sharing an activity externally.
+  - Editing another athlete's data, or revealing anyone's location/home/route from a map.
+
+  ---
+
+  ### Gotchas
+  - The route map, heatmap, and elevation-profile graphics are canvas/WebGL — never readable from a snapshot. Report the numeric stats Strava writes in Page Text; say the map isn't readable rather than guessing.
+  - Page Text mixes the dashboard's "Suggested athletes"/"Your clubs"/promo blocks with real activity cards — don't report suggestions as the user's own activities.
+  - Pace vs speed: runs show pace (min/km or min/mi), rides show speed (km/h or mph). Report the unit Strava shows; don't convert silently.
+  - Kudos and Follow buttons TOGGLE — clicking one already in the active state undoes it. Always read the current state first (RULE: verify-before).
+  - Feed/leaderboard rows re-render as content loads; ids from a pre-scroll snapshot go stale — re-snapshot before clicking anything in a feed or table.

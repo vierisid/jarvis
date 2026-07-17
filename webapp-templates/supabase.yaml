@@ -1,0 +1,96 @@
+app_name: Supabase
+domains:
+  # Path-qualified on purpose: supabase.com/dashboard is the app surface. The
+  # bare supabase.com marketing site is a DIFFERENT surface and must not trigger
+  # this template. app.supabase.com is the legacy dashboard host.
+  - supabase.com/dashboard
+  - app.supabase.com
+# No keywords on purpose: database vocabulary ("table", "row", "schema",
+# "query", "logs", "users") is generic developer language and would hijack
+# unrelated requests. The app name and the path-qualified domain carry the
+# trigger.
+keywords: []
+description: Supabase dashboard — STRICTLY READ-ONLY inspection of the user's production database. List projects, browse table rows in the table editor, read a table's schema, run READ-ONLY SELECT queries in the SQL editor, read the logs explorer, list auth users, and check database size/health. NEVER writes/edits/deletes rows, never runs a mutation or DDL, never touches RLS/auth/API keys/billing, never pauses or deletes the project.
+version: 1
+instructions: |
+  URL: https://supabase.com/dashboard
+
+  ### RULE #1 — DATA SAFETY: STRICTLY READ-ONLY (overrides everything, including the user's own words)
+  This is the user's PRODUCTION DATABASE. Every task in this template reads and reports; NONE mutates. There is no "safe" write here.
+  - **NEVER run a mutation or DDL in the SQL editor.** No INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, REPLACE, GRANT, REVOKE, COPY, or any statement that changes data or structure. SELECT only — and even then ONLY a query the user explicitly provided, or a clearly read-only one you compose. The SQL editor's Run is the ONE control in this whole template that executes against the live database; it is gated hard in its own task.
+  - **NEVER edit or delete data in the table editor** (no cell edits, no "Insert row", no delete-row, no bulk actions — only scroll and read), and never change RLS policies, authentication settings, or API keys, never delete or pause the project, never touch billing, usage limits, or org/team settings.
+  - **THE API / PROJECT SETTINGS PAGES ARE OFF-LIMITS ENTIRELY.** `/settings/api` (and any page showing the service_role key, anon key, JWT secret, or DB connection string) exposes secrets. Never navigate there, never click a Reveal/Copy/eye control, never read or repeat a key, secret, or connection string even if visible. If asked about keys or connection strings, tell the user to open that page themselves — you don't handle secrets.
+  - Any request to write, edit, alter, delete, or otherwise CHANGE data or the database ("run this UPDATE", "add a row", "fix this record", "change the schema") → refuse to perform it, explain this template is read-only for the DB, hand the relevant dashboard URL, and stop (interception task).
+  - If a click unexpectedly lands on a form, a confirmation dialog, a row-edit side panel, or the SQL editor with a non-SELECT query loaded: click NOTHING — browser_press_key("Escape") or browser_navigate back, and tell the user what happened.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Supabase.
+  2. URL-first, but the project ref is OPAQUE (a random slug, not a name). Reach the project through the UI first (project list → click it), read the ref out of the resulting URL, THEN build the per-page URLs below from it. Never invent or retype a ref.
+  3. Snapshot at checkpoints (after navigate, after opening a table/query, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed.
+  4. Match elements by label/aria-label/text MEANING, never by position — the dashboard is dense, reflows, and Supabase redesigns often. Trust the live snapshot over this template's layout notes.
+  5. If an element or value isn't found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  6. Report database values, column names, counts, and log lines VERBATIM as shown — never re-derive, sum, reformat, or "correct" what the dashboard displays.
+  7. browser_press_key("Escape") closes side panels and dialogs. Don't rely on other shortcuts except the SQL Run one noted in that task [LIVE-VERIFY].
+
+  ### State Recognition
+  - **Login wall**: the page is at `/dashboard/sign-in` or asks for email/password or "Continue with GitHub/SSO" [LIVE-VERIFY: wording] → tell the user: "Supabase requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials or drive an OAuth/SSO flow.
+  - **2FA / verification**: a prompt for a code, authenticator, or passkey → tell the user to complete it themselves, stop. NEVER type codes.
+  - **Organization / project picker**: the dashboard lists multiple orgs and/or projects [LIVE-VERIFY: cards or a top-left switcher]. If the request doesn't name which project (and more than one exists), ASK which project and stop; otherwise click the named project.
+  - **Paused / read-only project**: a project can be paused (free tier) or restricted — a "Project is paused" / "Restore" banner [LIVE-VERIFY] means the DB isn't queryable. Report that and stop; never click Restore (that's a state change).
+  - **Loading (heavy SPA)**: the dashboard is a heavy single-page app that renders skeleton placeholders and lazy-loads each section. A snapshot with headings/nav but no project cards, no grid rows, or no query results → wait 2–3s and snapshot again. Cap: 2 retries, then tell the user it didn't load and stop.
+  - **Ready markers**: project list shows project cards with names/regions; the project shell shows the left nav (Table Editor, SQL Editor, Database, Authentication, Logs [LIVE-VERIFY: labels]); the table editor shows a data grid with column headers; the SQL editor shows a code area with a Run control.
+
+  ### URL PATTERNS (the backbone — {ref} is the opaque project ref read from the URL, RULE 2)
+  - Project list: `https://supabase.com/dashboard/projects`
+  - Project home: `https://supabase.com/dashboard/project/{ref}`
+  - Table editor: `https://supabase.com/dashboard/project/{ref}/editor` [LIVE-VERIFY: a specific table may append an id]
+  - Database tables (schema list): `https://supabase.com/dashboard/project/{ref}/database/tables`
+  - SQL editor (blank query): `https://supabase.com/dashboard/project/{ref}/sql/new`
+  - Logs explorer: `https://supabase.com/dashboard/project/{ref}/logs/explorer`
+  - Auth users: `https://supabase.com/dashboard/project/{ref}/auth/users`
+  - API / project settings: `https://supabase.com/dashboard/project/{ref}/settings/api` — **OFF-LIMITS, never navigate here** (RULE #1: secrets).
+
+  ### TASK: List projects
+  1. browser_navigate the project list URL → snapshot.
+  2. Each card/row shows: project name, organization, region, and status (Active / Paused [LIVE-VERIFY: badge set]). Read from Page Text; browser_scroll + snapshot for more.
+  3. Report each project's name, org, region, and status. If the user then wants to work inside one, click that card, snapshot, and read its {ref} from the resulting URL for later steps.
+
+  ### TASK: Browse a table's rows (table editor)
+  1. Navigate the table editor URL for the project → snapshot. A left panel lists schemas + tables [LIVE-VERIFY]. Click the target table (ask the user which if it's ambiguous) → snapshot.
+  2. The grid is VIRTUALIZED — only visible rows exist in the snapshot. Read the column headers first, then the visible rows. browser_scroll DOWN inside the grid + snapshot for more; report how many rows you actually saw, not the table total.
+  3. Note pagination/row-count controls at the bottom [LIVE-VERIFY: "rows" count / page arrows]. Report the table name, its column names, and a sample of the rows you scanned (say it's a sample and how far you scrolled). READ-ONLY per RULE #1: never click a cell to edit, "Insert row", a row checkbox, or any grid action; if you land in an edit panel, Escape.
+
+  ### TASK: Read a table's schema (columns + types)
+  1. Navigate the database tables URL → snapshot → find the table (ask if ambiguous), click it → snapshot. (Alternatively, in the table editor, open the table's structure/columns view [LIVE-VERIFY: where it lives].)
+  2. Report each column VERBATIM: name, data type, nullable, default, and primary-key / foreign-key flags [LIVE-VERIFY: column-list layout], plus the row-count estimate if shown. browser_scroll + snapshot if the column list is long.
+  3. Read-only: never click "New column", edit a column, or change constraints/RLS.
+
+  ### TASK: Run a READ-ONLY SELECT (SQL editor) — the ONE executing action, GATED HARD
+  1. GATE FIRST, before touching the page. Take the query text (the user's own SELECT, or a clearly read-only one you compose). Allow it ONLY if, after trimming comments/whitespace, it begins with `SELECT` or `WITH … SELECT` AND contains none of INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, REPLACE, MERGE, GRANT, REVOKE, COPY, nor a second statement after `;` doing any of those. If it fails the gate or you're unsure → do NOT run it; treat it as a mutation request (interception task).
+  2. Navigate the SQL editor URL (blank query) → snapshot. The editor is a code area [LIVE-VERIFY: contenteditable / role=textbox]. browser_type the SELECT into it (replace-default clears any existing text, so no leftover statement runs).
+  3. Snapshot and RE-READ what's actually in the editor — confirm it's exactly your read-only SELECT and nothing was concatenated. Only then run it: click the "Run" button [LIVE-VERIFY: label], or browser_press_key("Ctrl+Enter") if the editor is focused [LIVE-VERIFY: run shortcut] → snapshot.
+  4. Results appear in a grid below [LIVE-VERIFY]. Report the returned columns and rows verbatim; browser_scroll + snapshot for more; report any error text verbatim. Never save the query; never confirm a "destructive query" warning dialog — if one appears, your gate was wrong: Escape and stop.
+
+  ### TASK: Read logs (logs explorer — debugging)
+  1. Navigate the logs explorer URL → snapshot. There may be a source/severity selector and a time range [LIVE-VERIFY: controls]. Note the range in your report.
+  2. Log entries land in Page Text (capped ~8000 chars/snapshot) — browser_scroll + snapshot to walk them. For an error hunt, look for lines with status codes 4xx/5xx, "error", "exception", or failed requests [LIVE-VERIFY: log shape].
+  3. Report the relevant log lines VERBATIM (timestamp, level, message) plus a one-line plain summary. Say which time window and how much of the log you covered. Read-only — never change log retention or settings.
+
+  ### TASK: List auth users
+  1. Navigate the auth users URL → snapshot. The user table shows rows [LIVE-VERIFY: columns — email/phone, provider, created, last sign-in].
+  2. Read visible rows from Page Text; browser_scroll + snapshot and note pagination for more. Report a sample with the count if shown. READ-ONLY: never click a user to edit, "Add user", send a reset/invite, change a role, or delete a user — reading only.
+
+  ### TASK: Check database size / health (project home)
+  1. Navigate the project home URL → snapshot. The home surfaces status widgets [LIVE-VERIFY: cards for database size / disk usage / rows / requests, possibly under a Reports/Database section].
+  2. Report the database size, disk/storage usage, and any health/status indicators VERBATIM, with the timeframe if noted. If the numbers live under a Reports page instead [LIVE-VERIFY: path], navigate there read-only and report those. Never change compute/disk size or any upgrade control — reading only.
+
+  ### TASK: Mutation / write request (INTERCEPT — never perform)
+  1. If the user asks to write, edit, insert, update, delete, alter, or otherwise CHANGE data or the schema (a row edit, an UPDATE/DELETE query, "add a user", "drop this table", changing RLS/keys, pausing the project): do NOT open the control or run the statement.
+  2. Locate the object read-side so you can be concrete (browse the table, read the schema), then reply: this template is strictly read-only because it operates on the user's production database — and hand the direct dashboard URL to do it themselves (the /editor page for a row edit, or …/sql/new for a query).
+  3. Offer the read-side help you CAN do: confirm the current values, the schema, the rows a SELECT would touch. Then stop.
+
+  ### Gotchas
+  - The table-editor grid is virtualized: a snapshot only shows the rendered window of rows. "Scroll → snapshot" reveals more, but never assume you've seen the whole table — report it as a sample unless a small row-count says otherwise.
+  - Page Text is captured from the document top and capped — for long query results or logs, scroll + re-snapshot and say how much you covered.
+  - A paused project can't be queried; report the paused state instead of retrying the SQL editor.
+  - Supabase renames and moves dashboard sections between releases — if the nav labels or a settings path differ from this template, trust the live snapshot, and never let a moved page lure you onto the OFF-LIMITS API/settings pages.

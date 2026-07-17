@@ -1,0 +1,92 @@
+app_name: Google Scholar
+domains:
+  - scholar.google.com
+keywords:
+  - citation count
+  - cited by
+  - academic papers
+  - scholarly articles
+description: Google Scholar — search academic literature by topic, phrase, author, or source; report each hit's title, authors, venue/year, "Cited by N" count, and whether a [PDF]/[HTML] full-text link is present; find the most-cited work on a topic; look up an author's profile (h-index, total citations, top papers); follow "Cited by" to papers citing a given work; filter to recent years; and surface a paper's citation/BibTeX. Strictly read-only, no account needed. Scholar aggressively rate-limits automated access — a reCAPTCHA/"unusual traffic" wall is a first-class STOP state. Paper BODIES are not readable here; Scholar links out to publisher/PDF sites.
+version: 1
+instructions: |
+  URL: https://scholar.google.com
+
+  ### THE ONE THING TO KNOW
+  Google Scholar is a READ-ONLY index of academic literature with one backbone URL: the search page `https://scholar.google.com/scholar?q={query}`. Navigate by URL, read the first page of results from Page Text + Interactive Elements, answer — most tasks are 2–3 tool calls. Two hard truths shape everything below: (1) Scholar **aggressively blocks automated access** with a reCAPTCHA / "unusual traffic" wall — treat it as a first-class STOP state, never a puzzle to solve (see State Recognition). (2) Scholar is an INDEX, not a library: it holds titles/authors/venue/citation-counts and LINKS OUT to the publisher or PDF — the actual paper text lives on those external sites, not here.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Scholar. Never use desktop or sidecar tools.
+  2. URL-FIRST: search, year-filter, pagination, cited-by, and author-profile pages all have URL patterns (below). Click only to follow a link a snapshot actually shows (a result title, a "Cited by" link, a "Cite" popup).
+  3. READ-ONLY: no account is needed to read Scholar. Never sign in, save to "My library", create alerts, or touch profile/settings/login links — even if asked. Say it's unsupported and stop.
+  4. Page Text is the FIRST ~2000 characters of the page, taken from the TOP of the document. browser_scroll does NOT move this window — scrolling NEVER reveals more results. On a search page it holds the result count + roughly the first 2–3 hits as full text; every hit's title, "Cited by N", "[PDF]", and "Cite" links appear in Interactive Elements. To reach results past the first page, use the `&start=` pagination URL (below), NEVER scrolling.
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **RATE-LIMIT / reCAPTCHA WALL (the defining risk — check FIRST on every snapshot)**: if Page Text says ≈ "We're sorry..." / "but your computer or network may be sending automated queries" / "unusual traffic from your computer network", or a reCAPTCHA ("I'm not a robot" / image challenge) appears, Scholar has flagged the session. **STOP immediately. NEVER attempt to solve the CAPTCHA, click "I'm not a robot", or retry in a loop** — retrying makes it worse. Tell the user Google Scholar is blocking automated access right now and they'll need to open scholar.google.com in the JARVIS browser themselves (headless especially trips this). Do not fall back to any other tool.
+  - **No sign-in, ever**: reading Scholar needs no account. If a Google sign-in / "Choose an account" page (`accounts.google.com`) appears you clicked the wrong thing — navigate back to the search URL. Never enter credentials.
+  - **Consent interstitial**: EU sessions may land on a Google consent page (`consent.google.com`, "Before you continue to Google Scholar") → click the "Reject all" / "Accept all" button visible in the snapshot to proceed, then re-navigate your target URL. [LIVE-VERIFY]
+  - **Ready (search results)**: page title ends with "- Google Scholar"; Page Text opens with "About N results" then the first results.
+  - **No results**: Page Text ≈ "did not match any articles" → loosen the query or drop over-strict operators, then retry once.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Search**: `https://scholar.google.com/scholar?q={query}` — URL-encode, spaces as `+`. Operators inside `q`: quoted `"exact phrase"`; `author:"Jane Smith"` (restrict to an author); `source:"Nature"` (restrict to a venue/journal); a plain topic is fine. Default sort is by RELEVANCE, which surfaces highly-cited work near the top — good for "most influential papers on X".
+  - **Since a year**: append `&as_ylo={year}` (papers from that year onward), e.g. `&as_ylo=2022`. Upper bound `&as_yhi={year}`. Sort strictly by date with `&scisbd=1` (recency, fewer citation signals).
+  - **Pagination**: append `&start=10` for the 2nd page of 10, `&start=20` for the 3rd, etc. THIS is how you read beyond the first page — not scrolling (Rule 4). Confirm with the user before walking past a page or two.
+  - **Cited by**: each result's "Cited by N" is a link to `https://scholar.google.com/scholar?cites={cluster_id}` (the papers that cite it). Follow the link the snapshot gives — don't hand-build the id.
+  - **Author profile**: `https://scholar.google.com/citations?user={id}` — an author's profile: name, affiliation, the citation-metrics table (Citations, h-index, i10-index), and their publication list. Get `{id}` from an author-name link on a result (or from a user-supplied profile URL); it is NOT the display name.
+
+  ### SNAPSHOT FORMAT (illustrative — verify live)
+  ```
+  Page: attention is all you need - Google Scholar
+  --- Page Text ---
+  About 92,300 results
+  [PDF] Attention is all you need   A Vaswani, N Shazeer… - Advances in neural …, 2017 - proceedings.neurips.cc
+  … abstract snippet …   Cited by 140213   Related articles   All 78 versions
+  A survey of transformers   T Lin, Y Wang… - AI Open, 2022 - Elsevier   …
+  --- Interactive Elements ---
+  [21] a "Attention is all you need" href="https://proceedings.neurips.cc/..."
+  [22] a "[PDF] neurips.cc" href="https://proceedings.neurips.cc/...pdf"
+  [23] a "Cited by 140213" href="/scholar?cites=2960712678066186980..."
+  [24] a "Cite" role="button"
+  ```
+  The `[PDF]`/`[HTML]` tag left of a title (and its Interactive-Elements link) means a free full-text link exists; its absence means the result is likely paywalled at the publisher. [LIVE-VERIFY]
+
+  ### TASK: Search for papers on a topic (PRIMARY — the "find me papers on X" backbone)
+  1. Build the search URL: topic → `q={keywords}`; known title → `q="{exact title}"`; by a person → `q=author:"{Name}"` (optionally plus topic keywords). Navigate → snapshot; check the reCAPTCHA state FIRST (Rule/State above).
+  2. For each readable hit report: **title**, **authors**, **venue/year** (the "… - Journal, Year - publisher" line), the **"Cited by N"** count, and whether a **[PDF]/[HTML]** link is present. The first ~2–3 hits are in Page Text; use the "Cited by N" / title / "[PDF]" entries in Interactive Elements for the rest of the first page.
+  3. More than the first page → navigate `&start=10`, `&start=20`, … (Rule 4). Never promise "scroll for more."
+
+  ### TASK: Find the most-cited / most influential papers on a topic
+  1. Search the topic with default relevance sort (do NOT add `&scisbd=1`). Relevance already floats heavily-cited work up.
+  2. Read the first page and report the hits with the HIGHEST "Cited by N" — quote the count as shown. Say the ranking is from the first results page only (Rule 4); page with `&start=` if the user wants to scan deeper.
+
+  ### TASK: Recent papers on a topic (since a given year)
+  1. Search with `&as_ylo={year}` appended (e.g. `&as_ylo=2024`). For strictly newest-first, add `&scisbd=1` — but note recent papers naturally have LOW citation counts, so don't rank them by "Cited by".
+  2. Report title, authors, venue/year, and [PDF] presence per hit as in the PRIMARY task.
+
+  ### TASK: Find papers that CITE a given paper
+  1. Find the paper first (TASK: Search, ideally by its exact quoted title).
+  2. In Interactive Elements, click that result's **"Cited by N"** link (or navigate its `/scholar?cites=...` href) → snapshot. This is a normal search-results page of the citing papers — report it exactly like the PRIMARY task, and use `&start=` to page.
+
+  ### TASK: Look up an author's profile (h-index, citations, top papers)
+  1. Get the profile: from a search hit, click the author's NAME link (it points to `/citations?user={id}`); or navigate a user-supplied `/citations?user={id}` URL directly.
+  2. From the profile Page Text report: the author's name + affiliation; the metrics table — **total Citations**, **h-index**, **i10-index** (each has an "All" and a "Since {year}" column — say which you're quoting); and the **top publications** (the list defaults to sort-by-citations: title, venue, year, per-paper cited-by count). [LIVE-VERIFY]
+  3. The publication list is long; only the top rows are in the readable window (Rule 4). Report the top few and say the profile has more.
+
+  ### TASK: Get a paper's citation / BibTeX
+  1. Find the paper (TASK: Search). Click its **"Cite"** link/button in Interactive Elements → snapshot. A popup shows formatted citations (MLA, APA, Chicago, Harvard, Vancouver) as text plus export links (BibTeX, EndNote, RefMan, RefWorks). [LIVE-VERIFY]
+  2. If the user wants a ready-to-read citation, quote the formatted string from the popup verbatim. If they want BibTeX, the "BibTeX" export link opens a plain-text `@article{...}` page — navigate it and quote the record character-for-character in a code block. [LIVE-VERIFY]
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Reading a paper's BODY: Scholar only indexes metadata and links OUT. Follow a "[PDF]"/title link only if the user explicitly wants the source, and say you're leaving Scholar onto an external publisher/PDF site (which snapshots generally can't read; for arXiv papers, the arXiv template covers the abstract). Never navigate into a PDF expecting to read it.
+  - Solving the reCAPTCHA / "unusual traffic" wall — STOP and hand off to the user (State Recognition).
+  - Account actions: sign-in, "My library" saves, citation alerts, following authors, editing a profile.
+  - Full citation-graph analysis beyond the "Cited by" list Scholar shows.
+
+  ### Gotchas
+  - "Cited by N" counts are Scholar's own and can differ from the publisher's — always attribute them to Google Scholar.
+  - A result with NO "[PDF]/[HTML]" tag is usually paywalled; report that rather than promising the text.
+  - `author:` and `source:` need the quotes to bind multi-word values: `author:"Yoshua Bengio"`, not `author:Yoshua Bengio`.
+  - Relevance sort (default) ≠ recency (`&scisbd=1`) — pick deliberately; don't sort brand-new papers by citation count.
+  - Even a handful of rapid navigations can trip the rate-limit wall (Rule/State) — keep queries minimal and stop at the first block.

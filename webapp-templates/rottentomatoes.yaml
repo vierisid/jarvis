@@ -1,0 +1,104 @@
+app_name: Rotten Tomatoes
+domains:
+  - rottentomatoes.com
+keywords:
+  - tomatometer
+  - certified fresh
+description: Rotten Tomatoes — look up a movie or TV show's Tomatometer (critic score) and Audience Score, critics consensus, genre, runtime, and cast; search titles; sample critic and audience reviews; browse what's fresh in theaters or streaming; and compare scores across titles. Explains the two-score system and the Certified Fresh / Fresh / Rotten badges. Read-only; rating and reviewing are not supported.
+version: 1
+instructions: |
+  URL: https://www.rottentomatoes.com
+
+  ### THE ONE THING TO KNOW
+  Rotten Tomatoes is a READ surface built on two slug URLs: a movie is `/m/{slug}` and a TV show is `/tv/{slug}` (the slug is the lowercase title with underscores, e.g. `/m/dune_part_two`). Each page front-loads the two scores, the critics consensus, and the title details in its first Page Text. Find the slug once via search, then navigate by URL — never re-search. Reading needs NO account; anything that WRITES (rate a title, write/verify a review, Want-to-See) needs login and is NOT SUPPORTED (see UNSUPPORTED).
+
+  ### THE TWO-SCORE SYSTEM (explain this whenever you report a title)
+  - **Tomatometer** — the CRITIC score: the percentage of professional critic reviews counted as positive ("Fresh"). It is a share of critics, NOT an average rating. Shown with a red-tomato icon when ≥60% (Fresh) or a green-splat icon when <60% (Rotten).
+  - **Audience Score** — the percentage of verified USER ratings of 3.5 stars or higher. Shown with a popcorn-bucket icon.
+  - The two often disagree — always report BOTH numbers and say which is critics vs audience. A high Tomatometer with a low Audience Score (or vice versa) is the interesting signal in "is X worth watching".
+
+  ### THE BADGES (explain on request or when one is shown)
+  - **Certified Fresh** — a special seal: a Tomatometer of ≥75% (movies) / ≥75% steady over a season (TV), a minimum number of reviews including several from Top Critics, that stays above the bar. Stronger than plain Fresh.
+  - **Fresh** — Tomatometer ≥60% (red tomato).
+  - **Rotten** — Tomatometer <60% (green splat).
+  Report the exact badge shown; don't infer Certified Fresh from the percentage alone (it has extra criteria).
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED here. Never use desktop or sidecar tools.
+  2. URL-FIRST: search, movie, TV, per-season, and browse pages all have URL patterns (below). Click only to pick a search result or follow a link whose slug you don't yet know.
+  3. READ-ONLY: never click rating stars, "Want to See", "Add Review", "Rate and Review", a critic sign-in, or any account link — even if asked. Say those need a Rotten Tomatoes account and this template doesn't support writes, then stop.
+  4. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  5. Page Text is capped (~2000 chars) and ALWAYS shows the top of the page — scrolling does NOT move this window. Title pages front-load the scores, consensus, and details; answer from the first window. Review snippets and long cast lists sit lower — reach them via element captions, not more Page Text. Stop the moment you have the answer.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No login needed**: all reading works anonymously. If a sign-in/"Join" page appears you clicked a write action — go back to the title URL. Never enter credentials.
+  - **Cookie / consent banner**: a first-visit privacy banner may sit in Page Text ("We use cookies" / an OneTrust "Accept All" or "Reject All" button [LIVE-VERIFY: wording + button label]). Click its accept/reject button ONCE and re-snapshot; it never blocks reading after that.
+  - **Blank / loading first snapshot**: the page hydrates after navigate, so the first snapshot can come back thin. Take another browser_snapshot after a beat — the retry fills in. A near-empty page or a challenge/"verify you are human" screen is a bot check → wait a few seconds, re-snapshot; if it persists, report that Rotten Tomatoes is blocking the browser and stop.
+  - **Ready**: page title is `{Title} - {Rotten Tomatoes phrase}` [LIVE-VERIFY: exact suffix]. Page Text front-loads the title, release year, the Tomatometer % and Audience Score % (each with a label), the critics consensus line, and the synopsis/genre/runtime/cast block.
+  - **No results**: search returns "no results"/an empty list → loosen the query (drop the year/subtitle) once; if still nothing, report that and stop.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Search**: `https://www.rottentomatoes.com/search?search={query}` — URL-encode, spaces as `%20` or `+`. Returns movies, TV, and people sections.
+  - **Movie**: `https://www.rottentomatoes.com/m/{slug}` — slug is the lowercase title, spaces→underscores, punctuation dropped (e.g. `/m/dune_part_two`, `/m/the_shawshank_redemption`). If a guessed slug 404s, use search and click the result.
+  - **TV show**: `https://www.rottentomatoes.com/tv/{slug}` (series hub). **Per season**: `https://www.rottentomatoes.com/tv/{slug}/s01` (zero-padded season number) — each season has its OWN Tomatometer/Audience Score.
+  - **Reviews**: critic reviews at `/m/{slug}/reviews` (add `?type=user` for audience reviews) [LIVE-VERIFY: audience-review URL param]. The main page also surfaces a few review snippets without navigating.
+  - **Browse (what's fresh/popular)**: `/browse/movies_in_theaters/` (in theaters), `/browse/movies_at_home/` (streaming/at home), `/browse/tv_series_browse/` (TV) [LIVE-VERIFY: browse paths]. Append sort/filter query params only if visible in the page's own controls.
+  Grab slugs from link hrefs in the snapshot — search-result and browse cards contain `/m/…` and `/tv/…` links.
+
+  ### SNAPSHOT FORMAT (structure to expect — [LIVE-VERIFY] against a real capture)
+  ```
+  Page: Dune: Part Two - Rotten Tomatoes
+  URL: https://www.rottentomatoes.com/m/dune_part_two
+  --- Page Text ---
+  … Dune: Part Two  2024  PG-13  2h 46m  Sci-Fi/Adventure
+  TOMATOMETER 92%  Certified Fresh   AUDIENCE SCORE 95%
+  Critics Consensus: Visually thrilling and thematically …
+  Synopsis … Director Denis Villeneuve … Cast Timothée Chalamet, Zendaya …
+  --- Interactive Elements ---
+  [5] input placeholder="Search"
+  [40] a "Dune: Part Two" href="/m/dune_part_two"
+  ```
+
+  ### TASK: Look up a movie (PRIMARY — the "is it worth watching" backbone)
+  1. Have the slug? browser_navigate `/m/{slug}`. Otherwise `/search?search={title}` → snapshot → click the movie result matching the year → snapshot.
+  2. From the first Page Text window read and report: **Tomatometer %** (critics) and **Audience Score %** (audience) — label which is which per THE TWO-SCORE SYSTEM; the **critics consensus** line; genre, runtime, release year, MPAA rating; director and top-billed cast. Note the **badge** (Certified Fresh / Fresh / Rotten) exactly as shown.
+  3. If one score is missing (e.g. "— " / "No score yet" for an unreleased or under-reviewed title), say so rather than inventing a number.
+
+  ### TASK: Look up a TV show (per-season scores)
+  1. browser_navigate `/tv/{slug}` (or search → click the TV result) → snapshot. The series hub shows an overall/most-recent-season Tomatometer + Audience Score, consensus, and a season list.
+  2. For a SPECIFIC season, navigate `/tv/{slug}/s0N` → snapshot — each season carries its own two scores. Report the season number alongside the numbers; don't attribute one season's score to the whole series.
+
+  ### TASK: Search for a film or show
+  1. browser_navigate `/search?search={query}` → snapshot. Results group into Movies / TV / Celebrities sections; each card is a title with year and, usually, its scores.
+  2. Click the card that matches the year/type → snapshot. If several plausibly match (remakes, same-name show and film), report the options with their years and ask which one.
+
+  ### TASK: Read critic reviews (sample)
+  1. Open the movie/TV page — a few critic review snippets already sit lower in it. For more, browser_navigate `/m/{slug}/reviews` → snapshot.
+  2. Each review surfaces as a critic name + publication + a Fresh/Rotten mark + a one-line quote (as element captions or lower Page Text) [LIVE-VERIFY: review-row structure]. Report a handful of quotes with attribution; call them critic opinions, not facts. Only the first several are reachable (Rule 5) — say the sample is partial.
+
+  ### TASK: Read audience reviews
+  1. browser_navigate `/m/{slug}/reviews?type=user` (or click an "Audience Reviews" tab on the page) → snapshot [LIVE-VERIFY: audience-reviews path/label].
+  2. Report a few user reviews with their star rating and quote; label them as audience opinions. Same partial-sample caveat as critic reviews.
+
+  ### TASK: What's fresh / popular (in theaters or streaming)
+  1. browser_navigate `/browse/movies_in_theaters/` (in theaters) or `/browse/movies_at_home/` (streaming/at home) → snapshot.
+  2. Cards list title + Tomatometer (+ sometimes Audience Score) as element links/captions. Report the top titles with their scores in the order shown; note the list is what Rotten Tomatoes currently features, not an exhaustive ranking. For a specific title's full details, open its `/m/{slug}` page.
+
+  ### TASK: Compare a few titles' scores
+  1. For EACH title: navigate its `/m/{slug}` (or `/tv/{slug}`) page → note Tomatometer, Audience Score, and badge from the first window.
+  2. Report a compact table: title, year, Tomatometer %, Audience Score %, badge. Flag where critics and audience diverge sharply — that split is usually the point of the comparison.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Submitting or changing a star rating / "Want to See" on any title (needs login; write action).
+  - Writing, editing, or reporting a review (user or critic).
+  - Account actions: sign-in, "Join", Trivia, watchlist, newsletter, critic portal.
+  - Buying tickets or clicking through to Fandango/streaming checkout (external).
+
+  ### Gotchas
+  - Tomatometer is a SHARE of positive critics, not an average score — don't describe "92%" as "a 9.2 rating". State it as "92% of critics gave it a positive review".
+  - Report BOTH scores; the interesting answer to "is it good" usually lives in the gap between critics and audience.
+  - Slugs drop punctuation and lowercase everything (`/m/spider_man_no_way_home`). If a guessed slug 404s, don't brute-force variants — search and click.
+  - Same-name titles are common (remakes, a film vs its series). Confirm the YEAR and type from the search card before opening.
+  - TV scores are PER SEASON — the hub number may be the latest season, not the one the user means. Open `/tv/{slug}/s0N` for a specific season.
+  - Don't click trailer/video thumbnails — playback contributes nothing and may autoplay with sound.

@@ -1,0 +1,89 @@
+app_name: Google Trends
+domains:
+  - trends.google.com
+keywords:
+  - trending searches
+  - search trends
+  - what's trending
+description: Google Trends — READ-ONLY search-interest reporting. What's trending right now (the Trending-now list, with approximate search volumes), the Related/Rising queries and topics for a term, whether a term is rising or falling, relative interest between two terms, and interest by region — always honest that the line chart and map are CANVAS (numbers come from the ranked LISTS, not the graphics), and that the Explore surface is heavily rate-limited when not signed in.
+version: 1
+instructions: |
+  URL: https://trends.google.com
+
+  ### THE ONE THING TO KNOW — the numbers live in LISTS, not the graphics
+  Google Trends draws its interest-over-time line and its region map as a CANVAS/SVG chart. Those pixels contribute NOTHING readable to the snapshot — you can NEVER quote an exact index value "off the chart". What DOES render as text (the whole point of this template):
+  - **Trending now** (`/trending`): a ranked TABLE of surging searches with approximate volumes ("100K+"), a rise %, an age, and a breakdown of related terms. Fully snapshot-readable — verified live.
+  - **Related queries** / **Related topics** on an Explore page: ranked "Rising"/"Top" LISTS (term + a "Breakout" tag or "+350%"). The most useful, most readable Explore output.
+  - The Explore **region list**, when shown as a list rather than only the map.
+  If a task's answer only exists in the chart, SAY the chart isn't machine-readable and pivot to the lists — never invent an index number.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Trends. Never use desktop or sidecar tools.
+  2. READ-ONLY: this template only reads and reports. It never signs in, never exports, never saves. Reading needs NO account.
+  3. URL-FIRST: Trending and Explore have query-string URLs (below). Navigate directly; type into the on-page search box only to refine an already-open Explore page.
+  4. Trends is a heavy single-page app that lazy-renders. A snapshot with headings but no data rows → wait 2–3s, snapshot again. Max 2 retries, then tell the user. [LIVE-VERIFY: settle time]
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed. Match elements by label/aria-label/role MEANING, never by position (rows reflow, locale translates labels).
+  6. browser_type REPLACES field content by default — correct for the search box.
+  7. If a value or element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  8. Approximate volumes ("100K+", "500K+") and rise figures ("1,000%", "Breakout") are Trends' own rounded/relative estimates — quote them VERBATIM as shown, never present them as exact counts.
+
+  ### State Recognition
+  - **Rate-limit wall on Explore (COMMON when not signed in)**: navigating `/trends/explore?...` can return an "Error 429 (Too Many Requests)" page ("you have sent too many requests to us recently") — verified live from a logged-out browser. The Explore SPA is aggressively bot-/rate-walled for anonymous sessions. If you hit 429: do NOT hammer-retry (it worsens it). Tell the user Trends is rate-limiting Explore for this session and suggest they open Trends signed in / in their normal browser, then stop. **Trending now (`/trending`) is far more tolerant and usually still works** — prefer it, and offer it as the fallback.
+  - **Consent interstitial** (EU / first run): a consent.google.com page titled "Before you continue" with `button "Reject all"` and `button "Accept all"`. The buttons sit at the BOTTOM of a long page — if the first snapshot doesn't show them, browser_scroll DOWN, re-snapshot, then click "Reject all" [LIVE-VERIFY: exact label]. Trends then loads your original target (it rides the consent `continue=` param). Persists after 2 tries → tell the user and stop.
+  - **No sign-in needed** for any task here. A Google sign-in page (accounts.google.com) is only reached via the "Sign in" link and is NOT required — if a task somehow lands there, back out (browser_navigate to the target URL) and continue logged-out. NEVER type credentials or 2FA codes.
+  - **Ready markers**: Trending — the filter buttons (location / period / category / trend status / sort) and `tr role="row"` rows carrying a term + volume. Explore — the "Interest over time", "Related queries", "Related topics" section headings appear in Page Text. [LIVE-VERIFY: Explore headings — captured 429, not the loaded SPA]
+  - **Loading**: page nearly empty / only a spinner → Rule 4.
+
+  ### URL PATTERNS (the backbone)
+  - **Trending now**: `https://trends.google.com/trending?geo=US` — daily surging searches. `geo=` is a 2-letter country (US, GB, IN, DE…). Verified live: renders the full ranked table.
+    - Timeframe filter is on-page (Past 24 hours / 48h / 7 days) via the period button; the default is Past 24 hours. [LIVE-VERIFY: whether a URL param sets it]
+  - **Explore a term**: `https://trends.google.com/trends/explore?q={query}&geo={country}` — URL-encode the query (spaces → `%20` or `+`). Add `&date=now%207-d` (past 7 days), `&date=today%201-m` (past month), `&date=today%2012-m` (past year), `&date=today%205-y` (5 years), `&date=all` (2004→now). Omit `&geo` for Worldwide. **Expect 429 when logged out** (see State Recognition).
+  - **Compare two+ terms**: same Explore URL with a comma-separated `q`, e.g. `?q=coffee,tea&geo=US` — plots them together.
+  - **Category / property scoping** is done with extra Explore params (`&cat=`, `&gprop=youtube|images|news|froogle`) whose ids are not memorable — reach categories via the on-page filters instead of constructing them. [LIVE-VERIFY]
+  - Take `geo`/params only from a URL that actually loaded; never fabricate an index number to fill a param you couldn't set.
+
+  ### SNAPSHOT FORMAT — Trending now (captured live)
+  ```
+  --- Page Text ---
+  taylor farms  100K+  arrow_upward 1,000%  12 hours ago  trending_up Active  taylor farms lettuce  + 10 more
+  --- Interactive Elements ---
+  [9]  button "calendar_month Past 24 hours" aria-label="Past 24 hours, select period"
+  [10] button "category All categories"      aria-label="All categories, select category"
+  [20] tr "taylor farms 100K+ arrow_upward 1,000% 12 hours ago trending" role="row"
+  [22] button "taylor farms lettuce"         ← a related/breakdown query
+  [23] span "+ 10 more"                       aria-label="See 10 additional items" role="button"
+  ```
+  Each `tr role="row"` bundles: TERM · approx VOLUME ("100K+") · rise % · AGE ("12 hours ago") · status (Active/Lasted N h), then its breakdown terms as `button`s and a "+ N more". Location/period/category/sort are the filter `button`s at the top. Read term+volume+rise+age together per row.
+
+  ### TASK: What's trending right now
+  1. browser_navigate `https://trends.google.com/trending?geo={country}` (default `US`; use the user's country) → snapshot (Rule 4 if empty).
+  2. Report the top rows verbatim: "TERM — VOLUME, up RISE%, started AGE" (e.g. "taylor farms — 100K+, up 1,000%, 12h ago"). Include a couple of breakdown terms per row if useful. More below the fold: browser_scroll (~1500px) → snapshot once.
+  3. To scope: click the period button [9] for a different window, or the category button [10] to filter (State: match the option by MEANING) → snapshot → re-read. State the window/category you actually used.
+
+  ### TASK: Related / Rising queries & topics for a term  (the most readable Explore output)
+  1. browser_navigate `/trends/explore?q={term}&geo={country}&date=now%207-d` → snapshot. If 429 → State Recognition (rate-limit): tell the user, offer Trending-now, stop.
+  2. Scroll to the "Related queries" and "Related topics" panels → snapshot. Each has a **Rising** view (fastest-growing, tagged "Breakout" or "+NNN%") and a **Top** view (most popular). [LIVE-VERIFY: panel headings, the Rising/Top toggle, and "Breakout" wording — capture was 429-blocked]
+  3. Report the ranked LIST verbatim (term + its Breakout/percent tag), naming the term, timeframe, and geo. This is the primary deliverable — do NOT quote the line chart.
+
+  ### TASK: Is a term rising or falling?
+  1. Open the Explore URL for the term (429 → fall back as above).
+  2. HONEST LIMIT: the interest-over-time line is a canvas — you canNOT read exact index values from it. Instead report DIRECTION-of-travel evidence that IS text: the "Rising" related queries (a term with breakout risers is gaining), and any percent/summary text Trends renders near the chart [LIVE-VERIFY: does Explore surface a text delta?]. Say plainly the precise curve isn't machine-readable and that you're reporting direction from the lists, not chart numbers.
+
+  ### TASK: Compare two terms' relative interest
+  1. browser_navigate `/trends/explore?q={termA},{termB}&geo={country}&date=today%2012-m` (429 → fall back).
+  2. The head-to-head is drawn as two lines on the canvas — NOT snapshot-readable. Report only what renders as TEXT: an "average" summary figure if Trends prints one [LIVE-VERIFY: is there a legend/average readout in Page Text?], and each term's Related-queries lists for a qualitative read. If nothing but the chart carries the comparison, say so and hedge — never eyeball "A is ~2× B" from pixels.
+
+  ### TASK: Interest by region
+  1. Open the term's Explore page → scroll to "Interest by subregion" / "Compared breakdown by region" [LIVE-VERIFY: heading].
+  2. The MAP is a canvas — unreadable. Some views show a ranked region LIST beside the map (region name + a 0–100 index) [LIVE-VERIFY: is the list present in Page Text?]. If the list renders, report its top regions verbatim; if only the map renders, say the region breakdown is chart-only here and stop.
+
+  ### TASK: Breakout / rising searches in a category
+  1. Prefer Trending now: browser_navigate `/trending?geo={country}` → click the category button [10] → pick the category by meaning → snapshot → report the surging terms (these carry volumes + rise %). This path is reliable.
+  2. Alternatively, on a term's Explore page the "Rising" related queries with a "Breakout" tag ARE the breakout terms — but Explore may 429 logged-out (fall back to Trending now).
+
+  ### Gotchas
+  - **Trending vs Explore are different surfaces**: Trending = what's surging right now (approximate volumes, always readable). Explore = interest over time for a term you name (relative 0–100 index, canvas-drawn, often 429-walled anonymously). Pick the right one and name which you used.
+  - Explore's index is RELATIVE and unitless (100 = that series' own peak), never a raw search count.
+  - "Breakout" means a jump too large for a percentage (>5000%) — quote it as "Breakout", don't convert it. Trending volumes ("100K+") and status ("Active"/"Lasted 4 h") are Trends' own rounded labels — quote as shown.
+  - Ages ("12 hours ago") are relative to NOW — convert to absolute time only if asked.
+  - The line chart, the map, and the comparison overlay are ALL canvas — if the answer isn't in a list/table text, say it's chart-only rather than inventing a number.
