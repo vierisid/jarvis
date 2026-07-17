@@ -10,6 +10,16 @@ and send it back.
 
 Do these in order; each step gates the next.
 
+> **Status (2026-07-17):** acceptance suite at **15/16** on real Windows hardware.
+> The one failure is "AX-set To field" — compose editable fields missing from the
+> AX snapshot. Root cause fixed in `c9dde52` (interactive elements were being
+> truncated at the 300-element cap), but the last failing run (07-16 17:02) most
+> likely drove the **stale 07-15 `jarvis-sidecar.exe`** — the build-check preflight
+> only detects the *old install*, not stale same-branch builds. Both exes in
+> `sidecar/` were rebuilt from HEAD on 07-17; the harness now polls for the compose
+> fields (up to 8s) instead of a fixed sleep. **Next action:** re-run §3 with the
+> fresh `jarvis-sidecar.exe`, then §4 metrics, then §5 manual.
+
 ---
 
 ## 0. Prerequisites (once)
