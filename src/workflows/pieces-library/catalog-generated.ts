@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-07-12";
+export const GENERATED_AT = "2026-07-19";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -252,8 +252,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-s3",
     npmPackage: "@activepieces/piece-amazon-s3",
-    versionRange: "^0.6.1",
-    latestVersion: "0.6.1",
+    versionRange: "^0.6.2",
+    latestVersion: "0.6.2",
     displayName: "Amazon S3",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-s3",
@@ -5082,8 +5082,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "scrapeless",
     npmPackage: "@activepieces/piece-scrapeless",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.1.7",
+    latestVersion: "0.1.7",
     displayName: "Scrapeless",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/scrapeless",
