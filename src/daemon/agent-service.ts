@@ -554,13 +554,29 @@ export class AgentService implements Service, IAgentService {
     }
   }
 
-  /** One-line identity facts the conv LLM sees in every turn. */
+  /** User identity + full profile the conv LLM sees in every turn. */
   private buildUserIdentityBlock(): string {
     const parts: string[] = [];
     const name = this.config.user?.name;
     if (name) parts.push(`Name: ${name}`);
     parts.push(`Local time: ${new Date().toLocaleString()}`);
-    return parts.join('. ');
+
+    // Inject the full user profile (wizard answers + interview facts) so the
+    // conv LLM has the same rich context about the user that the classic path
+    // injects via buildPromptContext -> formatUserProfileForPrompt.
+    try {
+      const profile = getUserProfile();
+      const profileContext = formatUserProfileForPrompt(profile);
+      if (profileContext) {
+        parts.push('');
+        parts.push('## User Profile');
+        parts.push(profileContext);
+      }
+    } catch (err) {
+      console.warn('[AgentService] Error loading user profile for conv identity:', err);
+    }
+
+    return parts.join('\n');
   }
 
   /**

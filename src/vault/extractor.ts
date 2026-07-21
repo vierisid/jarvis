@@ -1,8 +1,9 @@
 import type { LLMManager } from '../llm/manager.ts';
-import { createEntity, findEntities } from './entities.ts';
+import { createEntity, findEntities, type Entity } from './entities.ts';
 import { createFact } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
+import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 
 export type ExtractionResult = {
   entities: Array<{ name: string; type: string; properties?: Record<string, unknown> }>;
@@ -165,6 +166,17 @@ export async function extractAndStore(
     // Store entities
     const entityMap = new Map<string, string>(); // name -> id
 
+    // Look up the existing user profile entity (if any) so extraction doesn't
+    // create a duplicate "User" entity that shadows the real profile. The user
+    // profile is set via the onboarding wizard with source='user_profile' and
+    // always takes precedence over any LLM extraction about "the user".
+    const profileEntities = findEntities({}) as Entity[];
+    const profileEntityNames = new Set(
+      profileEntities
+        .filter(e => e.source === USER_PROFILE_VAULT_SOURCE)
+        .map(e => e.name.toLowerCase())
+    );
+
     for (const entityData of extraction.entities) {
       const { name, type, properties } = entityData;
 
@@ -172,6 +184,34 @@ export async function extractAndStore(
       if (!isValidEntityType(type)) {
         console.warn(`Invalid entity type: ${type}, skipping entity ${name}`);
         continue;
+      }
+
+      // Skip extraction entities that shadow the user's own profile identity.
+      // This prevents the "User" ghost entity problem where the LLM extracts
+      // "name_is_unknown: true" facts about a generic "User" entity when it
+      // can't answer profile questions, creating confusion in the vault.
+      const nameLower = name.toLowerCase();
+      if (profileEntityNames.has(nameLower)) {
+        // Re-use the profile entity ID instead of creating a duplicate
+        const profileEntity = profileEntities.find(e => e.name.toLowerCase() === nameLower);
+        if (profileEntity) {
+          entityMap.set(name, profileEntity.id);
+          continue;
+        }
+      }
+
+      // Also skip entities whose properties mark them as representing the
+      // user identity (extraction sometimes sets is_current_user or is_user).
+      if (properties) {
+        const props = properties as Record<string, unknown>;
+        if (props.is_current_user === true || props.is_user === true) {
+          // Try to map to the real profile entity instead
+          const profileEntity = profileEntities.find(e => e.source === USER_PROFILE_VAULT_SOURCE);
+          if (profileEntity) {
+            entityMap.set(name, profileEntity.id);
+            continue;
+          }
+        }
       }
 
       // Check if entity already exists
