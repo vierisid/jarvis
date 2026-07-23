@@ -1,0 +1,97 @@
+app_name: DEV Community
+domains:
+  - dev.to
+keywords:
+  - tech blog
+  - programming article
+description: DEV Community (dev.to) — read articles in full (no paywall), browse the feed or a tag by Relevant/Latest/Top, search articles, read comment threads, look up an author and their posts, and (logged in) react/bookmark, comment, and write + publish a Markdown post with explicit confirmation.
+version: 1
+instructions: |
+  URL: https://dev.to
+
+  Users usually call this site "dev.to". It's the DEV Community — a developer blogging platform.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. URL-FIRST: the feed, tags, sort orders, search, author profiles, articles, and the editor are ALL addressable by URL (map below). Navigate directly; click through the UI only when no URL exists.
+  3. Element [id]s are 1-based and CHANGE on EVERY snapshot. Never reuse an id after the page changed; re-locate elements by role/aria-label/text.
+  4. **browser_type REPLACES the target's content by default.** That is what you want for the search box and the fresh editor fields. Pass append: true only to ADD to text a field already holds (e.g. a comment draft).
+  5. Snapshot at checkpoints (after navigate, after a composer opens, after each typed field, before and after any public submit) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the current UI wording, not the exact string.
+  8. Feeds and long comment threads load more on scroll: browser_scroll down → snapshot. Max ~4 scroll rounds per question; summarize what you have.
+
+  ### State Recognition
+  - **Reading is fully anonymous and there is NO paywall.** Articles, the feed, tags, search, author profiles, and comment threads all work logged out — the full article body comes through every time (unlike Medium; do not look for or expect a "member-only" wall here).
+  - **Logged out**: header shows "Log in" / "Create account" buttons and no avatar menu [LIVE-VERIFY]. Reacting, bookmarking, commenting, following, and publishing all REQUIRE login. If a write action is requested while logged out, or clicking a reaction/bookmark/comment control redirects to an "/enter" sign-in page, tell the user: "This needs your DEV login — please sign in in the browser first." STOP. NEVER type credentials, even if the user provides them.
+  - **Ready (logged in)**: an avatar/profile menu top-right and a "Create Post" button in the header [LIVE-VERIFY].
+  - **Cookie/consent banner**: if one overlays and blocks interaction, click reject/"necessary only" if present, else accept → continue.
+  - **Loading / empty**: near-empty snapshot → wait, re-snapshot (max 2 retries), then tell the user.
+
+  ### URL MAP (prefer these over clicking)
+  - Feed — Relevant (default): https://dev.to/  •  Latest: https://dev.to/latest  •  Top: https://dev.to/top/week (also `/top/month`, `/top/year`, `/top/infinity` for all-time)
+  - Tag feed: https://dev.to/t/{tag} (lowercase, no "#": "javascript", "webdev", "react") — sortable: https://dev.to/t/{tag}/top/week (same top windows as above), and https://dev.to/t/{tag}/latest
+  - Search: https://dev.to/search?q={query} (URL-encode; space → %20). Defaults to articles; the results page also has People / Comments / Tags filter tabs [LIVE-VERIFY].
+  - Author profile: https://dev.to/{username} — their published posts, bio, and stats are all here.
+  - Article: https://dev.to/{username}/{article-slug} — the backbone. Any pasted dev.to article link: navigate to it directly.
+  - New post editor (login-gated): https://dev.to/new — optionally https://dev.to/new?prefill= is unreliable; just navigate to /new and type.
+  - Reading list / bookmarks (login-gated): https://dev.to/readinglist
+
+  ### TASK: Read an article  ← strongest use case
+  1. browser_navigate the article URL (from the user, or found via search) → browser_snapshot.
+  2. Page Text carries the FULL article: title, author, published date, reading time, tags, and the complete body — no paywall, so summarize directly from it. For a long article, browser_scroll down → snapshot (Rule 8 budget).
+  3. CODE BLOCKS come through in Page Text as monospace/preformatted text. If the user wants the code, report it VERBATIM — do not paraphrase, reflow, or "fix" it.
+  4. Page Text also mixes in a bottom rail (reactions count, "Top comments", author's other posts) — don't report those rails as part of the article body.
+
+  ### TASK: Browse the feed or a tag
+  1. Pick the URL for the sort the user wants: Relevant (dev.to/), Latest (/latest), or Top over a window (/top/week etc.); for a tag use /t/{tag} with the same sort suffixes. browser_navigate → browser_snapshot.
+  2. Report the post titles, authors, tags, reaction counts, and comment counts straight from Page Text — no clicking needed for a "what's on {tag}" summary.
+  3. More posts: browser_scroll down → snapshot (Rule 8).
+
+  ### TASK: Search articles
+  1. Build https://dev.to/search?q={query} (URL-encode) → browser_navigate → browser_snapshot.
+  2. Results (titles, authors, tags, dates) are in Page Text. Open a result by clicking its title link.
+  3. Looking for a person/tag instead of articles? Click the People / Tags filter tab on the results page [LIVE-VERIFY], or use the author-profile / tag URLs directly.
+
+  ### TASK: Read comments on an article
+  1. Open the article URL → browser_snapshot. Comments render on the SAME page below the body (dev.to has no separate comment page).
+  2. The comment thread — authors, timestamps, and comment text, including nested replies — is in Page Text. Summarize from it directly.
+  3. Deeper/older threads: browser_scroll down → snapshot; if replies are collapsed behind a "N replies" / "Show more" control, click it → snapshot [LIVE-VERIFY: label]. 2–3 rounds is usually enough (Rule 8).
+
+  ### TASK: Look up an author + their posts
+  1. browser_navigate https://dev.to/{username} → browser_snapshot.
+  2. Bio, join date, follower/post counts, and their published posts are in Page Text. Scroll for more (Rule 8).
+  3. Username unknown? Run the search task, click the People tab, open the matching profile.
+
+  ### TASK: React or bookmark an article (login-gated)
+  1. Open the article → snapshot → confirm logged in (State Recognition). The reaction controls sit on a sticky sidebar beside the article: a like/heart, "unicorn", "exploding head"/fire, and other reactions, plus a separate bookmark/"Save" control [LIVE-VERIFY: aria-labels; logged out these redirect to /enter].
+  2. Match the control the user asked for by its aria-label MEANING (heart/like, unicorn, bookmark/save) — never by position. Click it ONCE → snapshot → the button shows a pressed/active state or an incremented count [LIVE-VERIFY]. Clicking again UNDOES it — do not click twice, and never loop clicks to inflate a count.
+
+  ### TASK: Comment on an article (login-gated, public)
+  1. Open the article → snapshot → confirm logged in. Find the comment composer: a Markdown textbox near the top of the comments section with a placeholder meaning "Add to the discussion" [LIVE-VERIFY]. It may need one click to expand into the full editor.
+  2. browser_type(composer id, comment text). dev.to comments are Markdown — write plain Markdown; do not rely on any toolbar. To add to text already typed, use append: true (Rule 4).
+  3. browser_snapshot → VERIFY the text reads EXACTLY as intended (it's public, under the user's name).
+  4. Click the "Submit"/"Comment" button [LIVE-VERIFY] → snapshot → your comment appears in the thread. If you cannot confirm it posted, tell the user and check the thread before ANY retry — NEVER blind-retry a submit (public double-post risk).
+  - Reply to a specific comment: click that comment's "Reply" control [LIVE-VERIFY], then the same flow.
+
+  ### TASK: Write + publish a post (login-gated — the Markdown editor)
+  dev.to uses a MARKDOWN editor (front matter fields + one Markdown body textarea) — friendlier than Medium's or Notion's block editors: the body is a single plain textarea, so one browser_type fills it (no per-block chaining, no clear-before-type traps between paragraphs).
+  1. browser_navigate https://dev.to/new → browser_snapshot. Sign-in wall / redirect to /enter? State Recognition — stop.
+  2. The editor shows: a Title input (placeholder "New post title here..."), a tags input ("Add up to 4 tags..."), an optional cover-image control, and the large Markdown body textarea [LIVE-VERIFY].
+  3. browser_type(title input id, title) → snapshot.
+  4. Tags (optional): if the user named tags, browser_type(tags input id, "tag1, tag2") → snapshot [LIVE-VERIFY: comma vs suggestion-click; max 4]. None named → leave empty.
+  5. browser_type(body textarea id, the full Markdown body) → snapshot. Write the body as Markdown (headings `##`, code fences ```lang, lists). Cover image, if requested and a local path is given: browser_upload_file("/absolute/path/to/img.png") to the hidden image input — do NOT click the upload area (native OS picker) [LIVE-VERIFY: selector].
+  6. DRAFT vs PUBLISH: clicking "Save draft" keeps it private [LIVE-VERIFY: button]. "Write a post about X" means SAVE A DRAFT — report it saved and STOP; do not publish.
+
+  ### PUBLISHING GATE (a published post is PUBLIC under the user's name)
+  - Only click "Publish" if the user explicitly said "publish" IN THIS CONVERSATION. Otherwise save a draft (above).
+  - Before the final Publish click: browser_snapshot and VERIFY the title AND body read exactly as the user approved.
+  - Click the "Publish" button [LIVE-VERIFY: top of the editor; a confirm step may follow] → snapshot → success = you land on the live post page (dev.to/{username}/{slug}) or a published confirmation. If you cannot confirm, tell the user to check their profile (dev.to/{username}) — NEVER click Publish again blind (public double-post risk).
+  - browser_press_key "Escape" dismisses a confirm dialog without publishing [LIVE-VERIFY] — use it to abort if verification fails.
+
+  ### Gotchas
+  - Reaction and comment counts are shown abbreviated ("1.2k") — report them as shown.
+  - A post may be part of a SERIES — Page Text then shows series navigation links; mention the series rather than treating siblings as one article.
+  - Some articles embed Liquid tags (rendered tweets, CodePen, YouTube) — Page Text shows a placeholder/caption, not the embedded media. Say so instead of inventing its content.
+  - Deleted/removed comments render as "[deleted]" or a removal notice — report that, don't dig for it.
+  - dev.to has no paywall — if body text ever looks truncated it's a load/scroll issue (Rule 8), never a paid wall; keep scrolling or re-snapshot.

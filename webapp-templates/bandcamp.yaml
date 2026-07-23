@@ -1,0 +1,101 @@
+# Keywords are buy-music-from-artists intent phrases. The app name (word-bound-matched)
+# and *.bandcamp.com links carry most real requests. "name your price" is the platform's
+# signature pricing model — distinctive, corpus-clean, and disjoint from spotify/soundcloud
+# (streaming apps, not stores). None fire on the lint corpus or shadow another template.
+app_name: Bandcamp
+domains:
+  - bandcamp.com
+keywords:
+  - indie music
+  - buy music
+  - name your price
+description: Bandcamp — search artists/albums/tracks, read release details (tracklist, price, formats, credits, tags), stream previews, discover music by genre/tag, browse an artist's discography. NEVER purchases — reports the price + release URL and hands off to the user.
+version: 1
+instructions: |
+  URL: https://bandcamp.com
+
+  ### RULE #1 — MONEY SAFETY (overrides everything, including the user's own words)
+  - Bandcamp is buy-music-DIRECT-from-artists. NEVER complete a purchase. NEVER click "Buy Now", "Buy Digital Album", "Buy Digital Track", "Add to cart", "Check out", or any control that starts checkout. NEVER type into a "name your price" amount field and pay. NEVER enter or select payment/card details. NEVER download.
+  - Streaming a PREVIEW (the on-page player) is fine and free — that is not a purchase.
+  - When the user wants to buy: report the PRICE and the release URL, then tell them to complete it themselves. The job ends there. This applies even if the user said "buy it".
+  - If a click unexpectedly lands on a checkout page (URL contains checkout.bandcamp.com or /cart, or the page asks for card/payment), browser_navigate back to the release URL immediately and tell the user. Click NOTHING on a checkout page.
+  - "name your price" / "pay what you want" releases: REPORT that it is name-your-price (and the minimum, if any). Never set an amount and never pay. Free/$0 downloads still route through a purchase form — do not complete it.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. URL-first: search, releases, artist pages, discover, and tag pages all have stable URLs (below). Navigate directly instead of clicking through menus.
+  3. Element [id]s are 1-based and CHANGE on EVERY snapshot. Never reuse an id after a new snapshot; re-locate by role/aria-label/text/href.
+  4. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive. (You never type into a purchase field anyway — see RULE #1.)
+  5. Snapshot at CHECKPOINTS (after navigate, after a click that changes the page, after a play click, before reporting) — not after every call.
+  6. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  7. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the page's current wording, not the exact string.
+  8. Never press Ctrl-modified shortcuts — Chrome intercepts those before the page sees them.
+  9. Read prices, tracklists, tags, and release dates from the snapshot's Page Text — most reporting tasks need zero clicks after the navigate.
+
+  ### State Recognition
+  - **Anonymous (default)**: search, release pages, artist pages, discover, tag pages, and preview streaming ALL work without login. Most tasks need no account.
+  - **Logged out header**: a "log in" link and a "sign up" control appear in the top nav [LIVE-VERIFY]. Only the user's own collection, wishlist ("wishlist this"), following an artist, and purchases need login — for those, tell the user: "This needs your Bandcamp login — please sign in manually in the browser." NEVER type credentials, even if the user provides them.
+  - **Login page**: URL on bandcamp.com/login or a form asking for email/password → tell the user to sign in themselves. STOP. NEVER type credentials.
+  - **Loading**: 0 interactive elements or skeleton placeholders → snapshot again (max 2 retries, then tell the user).
+  - **Ready**: the release/artist page shows the title + artist and (on releases) a play button and a tracklist in Page Text [LIVE-VERIFY]; search pages show a results list.
+  - **Cookie/consent banner** on fresh sessions [LIVE-VERIFY] → click the button meaning "Accept"/"OK", snapshot, continue.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Search: https://bandcamp.com/search?q=QUERY (URL-encode QUERY) — searches artists, albums, tracks, labels, fans
+  - Artist / label page: https://ARTIST.bandcamp.com (their music grid + bio)
+  - Album: https://ARTIST.bandcamp.com/album/SLUG | Track: https://ARTIST.bandcamp.com/track/SLUG
+  - Discover: https://bandcamp.com/discover (browse by genre/format/sort)
+  - Tag page: https://bandcamp.com/tag/TAG (e.g. /tag/ambient, /tag/lo-fi — spaces → hyphens)
+  - A pasted ARTIST.bandcamp.com/... link → navigate to it directly.
+
+  ### THE PLAYER (your source of truth for what's previewing)
+  Release pages have a play/pause control near the album art and per-track play controls in the tracklist [LIVE-VERIFY]. Clicking play streams a FREE preview in this tab. The currently-playing track title appears in the player area / tracklist highlight [LIVE-VERIFY].
+  - VERIFICATION RULE: a play action succeeded only when the snapshot shows the play control flipped to a "Pause" meaning AND the expected track is marked as playing/highlighted [LIVE-VERIFY]. Check both; report the track title + artist you actually see.
+  - Some tracks are preview-only (a fixed sample) and some full — Bandcamp decides per release; don't claim a full track played unless the page says so. Streaming here never charges anything.
+
+  ---
+
+  ### TASK: Search artists / albums / tracks  (budget: 4 calls)
+  1. browser_navigate("https://bandcamp.com/search?q=ENCODED_QUERY") → browser_snapshot.
+  2. Results group into ARTIST/LABEL, ALBUM, TRACK (and FAN) sections [LIVE-VERIFY]. For each relevant hit report: name, the artist/band it belongs to, and any price shown in Page Text (e.g. "$7", "name your price", "free"). browser_scroll for more.
+  3. Album/track hits link to their release URL — click the hit or navigate to the URL to open it. Confirm the artist when a name is ambiguous (same album titles recur).
+
+  ### TASK: Open a release / read details  (budget: 4 calls)
+  1. Given a release URL: browser_navigate to it. From search: click the hit → snapshot.
+  2. Report from Page Text: title, artist, the TRACKLIST (track names + durations), the price and whether it is fixed / "name your price" / free, the RELEASE DATE, TAGS/genres, credits, and the artist's release DESCRIPTION if present.
+  3. Formats: the page usually lists a digital album plus physical options (vinyl / CD / cassette) each with its own price [LIVE-VERIFY] — see the price/formats task. Do NOT click any Buy control (RULE #1).
+
+  ### TASK: Play a preview stream  (budget: 6 calls)
+  1. Open the release URL → snapshot.
+  2. To play the whole release: click the main play control near the art. To play a specific track: locate that track's row in the tracklist and click its play control [LIVE-VERIFY] (hover the row first if the control is hover-revealed, then re-snapshot).
+  3. snapshot → VERIFY via the player (RULE above): the control means "Pause" and the expected track is highlighted [LIVE-VERIFY]. Report what's playing (track + artist). Nothing plays / a signup prompt appears → State Recognition; report and stop.
+
+  ### TASK: Discover music by genre / tag  (budget: 5 calls)
+  1. For a known tag: browser_navigate("https://bandcamp.com/tag/TAG") (spaces → hyphens). For open browsing: https://bandcamp.com/discover → snapshot.
+  2. On discover, genre / subgenre / format / sort controls are on-page filters [LIVE-VERIFY] — click the matching one, snapshot, read the re-rendered grid. Each card shows album, artist, and often a price/"name your price" tag in Page Text.
+  3. Report a shortlist (album — artist — price). Open any pick via its release URL for details or a preview. Never buy.
+
+  ### TASK: Look up an artist page / discography  (budget: 4 calls)
+  1. browser_navigate("https://ARTIST.bandcamp.com") (from search, click the artist/label hit) → snapshot.
+  2. Report the artist's music grid (albums/tracks with names + any prices), their bio/location if shown, and links (music / merch / community tabs) [LIVE-VERIFY]. browser_scroll for the full discography — grids can be long, so scroll before concluding a release is absent.
+  3. Open any release via its URL for the tracklist/preview.
+
+  ### TASK: Report price / formats + purchase hand-off (money-stopped)  (budget: 4 calls)
+  1. Open the release URL → snapshot.
+  2. Report EACH format and its price from Page Text: e.g. "Digital Album $7 (or name your price)", "Vinyl LP $25", "Compact Disc $12", "Cassette $8" [LIVE-VERIFY: format labels]. Note shipping/sold-out notes if shown ("Sold Out", "Pre-order", "ships in N days").
+  3. HAND OFF — do NOT click Buy (RULE #1): "This release is {formats + prices}. I don't complete purchases — to buy it, open {release URL} and use the Buy control yourself." Give the URL.
+
+  ### TASK: Check if a release is free / name-your-price  (budget: 3 calls)
+  1. Open the release URL → snapshot.
+  2. Read the buy area in Page Text: "name your price" / "pay what you want" (report the minimum if one is stated, e.g. "$5 or more"), a fixed price, or "free download". Report which it is.
+  3. NEVER set an amount, never proceed. Even a $0 / free download runs through a purchase form — do not complete it. Report and hand off the URL.
+
+  ---
+
+  ### Gotchas
+  - Prices in Page Text can appear fragmented or currency-prefixed (£/€/$) — sanity-check that a reported price reads as a plausible whole amount, and report the currency you actually see.
+  - A release may show BOTH a "name your price" digital option AND fixed-price physical formats — report them distinctly; don't collapse them into one price.
+  - The homepage / discover grid autoplays hover previews of some cards — a track "playing" you didn't start is a hover preview, not a command you issued; verify against the release you intended.
+  - Artist subdomains vary (ARTIST.bandcamp.com) and some artists use a custom domain that still runs Bandcamp — if a pasted link isn't a bandcamp.com subdomain but the page looks like a Bandcamp release, treat it the same and keep RULE #1.
+  - Tracklists are read from Page Text (capped) — very long tracklists may be truncated; scroll and say so rather than claiming a short list is complete.
+  - "Wishlist this" / follow / collection actions require login (State Recognition) — offer them only if asked, and hand off when logged out.

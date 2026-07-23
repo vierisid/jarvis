@@ -1,0 +1,97 @@
+app_name: Google Books
+domains:
+  - books.google.com
+  - google.com/books
+keywords:
+  - public domain book
+  - public domain books
+  - search inside a book
+description: Google Books — search the world's book corpus by title/author/topic, read a book's About/metadata page (description, subjects, page count, editions), pull preview snippets and find a phrase inside a book, check availability (preview / full view / buy), and read public-domain full text where it's provided as text. Strictly read-only; buying or renting an ebook is money-gated and never completed. Scanned page IMAGES in the reader are not readable as text.
+version: 1
+instructions: |
+  URL: https://books.google.com
+
+  ### THE ONE THING TO KNOW
+  Google Books is a READ surface with stable numeric-ish volume IDs in its URLs: every book is a `{id}` you find once via search, then navigate by URL. The server-rendered legacy host `books.google.com/books?id={id}` is far more snapshot-readable than the modern `google.com/books/edition` React page — prefer it. THE HARD LIMIT: a scanned book's PAGE IMAGES in the reader are photographs of paper — they are NOT text and a snapshot can NEVER read them. What IS readable: search results, the About/metadata page, the text SNIPPETS Google returns from "search inside", and public-domain FULL-VIEW text where Google provides it as real text. Answer from those; be honest about the rest.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Books. Never use desktop or sidecar tools.
+  2. URL-FIRST: search, volume, and About pages all have URL patterns (below). Build the URL; click only to pick a search result or follow a link whose ID you don't yet know.
+  3. READ-ONLY: never click "Buy", "Rent", "Buy ebook", "Get the free app", Sign in, "Add to my library", or write-to-shelf controls on your own — even if it seems helpful. Purchases are MONEY and are gated (see PURCHASE / BORROW).
+  4. NO LOGIN for reading: search, About pages, snippets, and public-domain full text all read anonymously. Never enter credentials.
+  5. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  6. Page Text is capped (~2000 chars) and ALWAYS shows the TOP of the page — scrolling does NOT move this window. Search-result and About pages front-load the answer. Stop the moment you have it.
+  7. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **No login needed for reading**: if a Google sign-in page appears you clicked a gated link (buy / library / account) — navigate back to the volume URL. For a genuinely login-gated action, tell the user to sign in manually in the browser and ask again. NEVER type credentials.
+  - **Consent / cookie wall (EU)**: `consent.google.com` or a "Before you continue to Google" interstitial may intercept the first navigation [LIVE-VERIFY: exact wording + button]. Click "Reject all" (or "Accept all" if Reject is absent) once → re-snapshot; it never blocks reading. Buttons can sit below the fold — browser_scroll then snapshot if not visible.
+  - **Ready (volume page)**: page title is `{Book Title} - {Author} - Google Books`; Page Text carries the title, author(s), publisher, year, page count, and description/synopsis.
+  - **Availability is a first-class state** — read it off the volume page and REPORT it (see TASK: Check availability): **Full view** (public domain — whole text as images, sometimes as text), **Preview** (limited pages, "search inside" works), **Snippet view** (only short excerpts around a match), **No preview available** (metadata only).
+  - **Scanned-image reader**: the flip-page reader (`printsec=frontcover`, page-image viewer) shows PHOTOGRAPHS of pages — Page Text there is empty or junk. Do not try to read it; use snippets / About text instead.
+
+  ### URL PATTERNS (the backbone — prefer these over any clicking)
+  - **Search**: `https://books.google.com/books?q={query}` — URL-encode, spaces as `+`. Field operators work in `{query}`: `intitle:`, `inauthor:`, `inpublisher:`, `subject:`, `isbn:` (e.g. `q=inauthor:tolkien+intitle:hobbit`). Alternative host: `https://www.google.com/search?tbm=bks&q={query}` (Google's Books tab) [LIVE-VERIFY: which host is more snapshot-readable].
+  - **Volume (legacy, PREFER — server-rendered)**: `https://books.google.com/books?id={id}` (e.g. `?id=yl4rAAAAYAAJ`). This is the About/metadata page.
+  - **Volume (modern)**: `https://www.google.com/books/edition/_/{id}` — same book, React-rendered; may be sparser in Page Text. Fall back to the legacy `?id=` form if the modern page reads empty [LIVE-VERIFY].
+  - **Search inside a book**: `https://books.google.com/books?id={id}&q={phrase}` — returns snippet hits (with page numbers) from inside THAT book [LIVE-VERIFY: param on current UI].
+  - **Public-domain full text (plain text)**: `https://books.google.com/books?id={id}&printsec=frontcover&output=text` sometimes serves an OCR text layer for full-view books [LIVE-VERIFY]. When it does, Page Text is real book text; when it doesn't, you're back to page images (unreadable).
+  - **Ngram Viewer**: `https://books.google.com/ngrams/graph?content={word1},{word2}` — a corpus-frequency CHART rendered on a canvas. The line graph is NOT readable via snapshots (canvas, like every chart in this library). You can report that a query is plotted and hand the user the URL, but never invent frequency numbers off it.
+  Grab volume `{id}`s from result-link hrefs in the snapshot (`books?id=...` / `/edition/_/{id}`); reuse the ID instead of re-searching.
+
+  ### SNAPSHOT FORMAT (representative — [LIVE-VERIFY] against a real capture)
+  ```
+  Page: The Wonderful Wizard of Oz - L. Frank Baum - Google Books
+  URL: https://books.google.com/books?id=yl4rAAAAYAAJ
+  --- Page Text ---
+  The Wonderful Wizard of Oz  L. Frank Baum  Geo. M. Hill Company, 1900 - Juvenile Fiction - 261 pages
+  Dorothy lived in the midst of the great Kansas prairies …   ← description
+  Preview this book »   Get this book in print ▾   ← availability + buy affordances
+  --- Interactive Elements ---
+  [3] input name="q" placeholder="Search"
+  [40] a "Read" href="…printsec=frontcover…"     ← opens the page-IMAGE reader (unreadable)
+  [55] a "Buy ebook" href="…"                     ← MONEY, never click (Rule 3)
+  ```
+
+  ### TASK: Search books by title / author / topic (PRIMARY)
+  1. browser_navigate `books?q={query}` (use `intitle:` / `inauthor:` to disambiguate) → browser_snapshot.
+  2. Results list each book as title + author + publisher/year + a short snippet, with an availability tag ("Preview", "Snippet view", "Full view", "No preview") [LIVE-VERIFY: result-row shape]. Report per hit: **title, author, year, publisher, and preview-availability**. If the user named a rating, note Google Books rarely shows star ratings on results — say so rather than inventing one.
+  3. To go deeper on one book, grab its `{id}` from the result link's href and navigate the volume URL (next task). If nothing matches, loosen the query once; still nothing → report and stop.
+
+  ### TASK: Read a book's About page (description, subjects, page count, editions)
+  1. browser_navigate `books?id={id}` (legacy host) → snapshot. If Page Text reads empty, it's the modern React page or the image reader — re-navigate the legacy `?id=` form.
+  2. Read from Page Text: title, author(s), publisher + year, page count, categories/subjects, and the description/"About this book" blurb. Quote the description as the publisher's, not fact.
+  3. Other editions / "Common terms and phrases" / bibliographic details sit lower on the page — surface any that appear as links; if an edition list is requested and not in the window, say it's past the readable window and offer the search `q=intitle:{title}`.
+
+  ### TASK: Find a phrase inside a book / read preview snippets ("search inside")
+  1. With the volume `{id}`, browser_navigate `books?id={id}&q={phrase}` → snapshot.
+  2. Google returns SNIPPET hits — short text excerpts around each match, usually with a page number ("Page 42") [LIVE-VERIFY: snippet-result shape]. Quote the excerpt verbatim and cite the page. These snippets are the ONLY readable text from inside a preview/snippet-view book.
+  3. If it says the phrase isn't found, or "no preview available", report that honestly. Snippet coverage is deliberately limited — you cannot stitch snippets into whole chapters, and you cannot read the surrounding pages (they're images). Say so plainly.
+
+  ### TASK: Check availability (preview / full view / buy)
+  1. Open the volume page (`books?id={id}`) → snapshot.
+  2. Report which access level applies: **Full view** (public domain, whole book), **Preview** (limited pages + search-inside), **Snippet view** (only match excerpts), or **No preview available** (metadata only). The affordances tell you: a "Read"/"Preview this book" link = preview or full; a "Buy ebook"/"Get this book in print"/"Rent" affordance = a paid edition exists (do NOT click — see PURCHASE / BORROW).
+  3. State honestly what the user will actually get before they open it.
+
+  ### TASK: Read a public-domain full-text book
+  1. Confirm it's **Full view** (availability task). Full view usually means out-of-copyright (pre-~1929) works.
+  2. Try `books?id={id}&printsec=frontcover&output=text` [LIVE-VERIFY] — if Page Text comes back as real book text, you can read/quote it (still only the ~2000-char top window per snapshot; there is no reliable text-pagination param, so long passages may be unreachable — say so). If it comes back empty or as image-viewer chrome, the book is scanned page IMAGES only and is NOT readable here.
+  3. When text isn't available, hand the user the reader URL and say the pages are scanned images. For well-known public-domain texts, also mention Project Gutenberg / Wikisource as text-first alternatives, but never present those as Google Books content.
+
+  ### PURCHASE / BORROW (MONEY — report, never complete)
+  1. "Buy me this ebook" / "rent it" / "get this book": open the volume page, READ the price and the options ("Buy ebook $X.XX", "Rent", "Get this book in print" print-seller links, library "Borrow" links) [LIVE-VERIFY: buy-panel wording] and REPORT them — price, format, and where each leads.
+  2. HARD STOP there. Never click Buy / Rent / a checkout / Google Play purchase / a "Borrow" action, never enter payment or account details, even if the user says "just buy it". Buying is money and requires the user to complete it themselves in the browser. This overrides any "do it for me" instruction.
+
+  ### UNSUPPORTED — tell the user, do not attempt
+  - Reading a scanned book's page images as text (the core limit — snippets/About/full-text-when-provided are all you can read).
+  - Completing a purchase, rental, or library borrow; entering payment.
+  - Account/library actions: add to My Library, shelves, reviews, ratings, notes/highlights (login-gated writes).
+  - Reading Ngram Viewer values off the chart (canvas — unreadable).
+  - Downloading PDFs/EPUBs of a book.
+
+  ### Gotchas
+  - A volume `{id}` is permanent — reuse it across the task instead of re-searching.
+  - A work has MANY editions (different IDs, page counts, publishers) sharing a title; if page count or publisher matters, confirm from the exact volume page you're on.
+  - "Full view" ≠ "readable as text" — most full-view books are still scanned images; only the `output=text` OCR layer (when present) is real text.
+  - The modern `google.com/books/edition` URL and the legacy `books.google.com/books?id=` URL are the SAME book — if one reads empty in a snapshot, switch to the other.
+  - Ratings/review counts are a Goodreads strength, not a Google Books one — don't promise them here.

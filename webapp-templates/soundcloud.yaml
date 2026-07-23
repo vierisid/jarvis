@@ -1,0 +1,109 @@
+# Keywords deliberately EMPTY: the app name "SoundCloud" (word-bound-matched) and
+# soundcloud.com links carry every real request. Streaming/audio verbs ("play a
+# song", "now playing", "add to playlist", "skip this song") are Spotify's and are
+# far too generic for a substring matcher — leaving keywords empty keeps this
+# template strictly disjoint from spotify and off the lint corpus.
+app_name: SoundCloud
+domains:
+  - soundcloud.com
+keywords: []
+description: SoundCloud web player — search tracks/artists/playlists, play/pause/next, open artists, read a track's timed comments, like/follow/add-to-playlist (login-gated)
+version: 1
+instructions: |
+  URL: https://soundcloud.com
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll. browser_evaluate and browser_screenshot are BANNED. Never use desktop or sidecar tools.
+  2. Element [id]s are 1-based and change on EVERY snapshot. Never reuse an id after taking a new snapshot; re-locate elements by role/aria-label/href/text.
+  3. browser_type REPLACES a field's content by default; pass append: true only when adding to text that must survive.
+  4. Snapshot at CHECKPOINTS (after navigation, after a menu/dialog opens, after a playback-changing click) — not after every call.
+  5. If an element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds.
+  6. Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — find the element whose role + label mean that in the UI's current wording, rather than demanding the exact string.
+  7. SoundCloud localizes button text and aria-labels. Prefer URLs (locale-independent); match labels by meaning.
+  8. Never press Ctrl-modified shortcuts — Chrome intercepts those before the page sees them.
+
+  ### CENTRAL CAUTION — what is and isn't readable
+  The scrubbing WAVEFORM is a <canvas> and is NOT in the snapshot — you cannot read play position or waveform peaks from it. Track METADATA (title, artist, play count, duration, description) and COMMENTS are ordinary DOM text and ARE in Page Text. Uploading audio is OUT OF SCOPE — never attempt it.
+
+  ### THE PLAYER BAR (bottom of every page — your single source of truth for playback)
+  A persistent bar spans the bottom once something has played. Left: play/pause + skip-back + skip-forward (next) controls. Center-left: the CURRENT track's title + artist links and elapsed/total time. The play-pause button's aria-label means "Play" while paused and "Pause" while playing — READ it to know the state [LIVE-VERIFY]. Right of the bar: a like (heart) toggle for the current track and a volume control [LIVE-VERIFY].
+  - VERIFICATION RULE: a playback action succeeded only when the player bar shows the EXPECTED TRACK TITLE and the play-pause button's label means "Pause". Check both.
+  - "Space" via browser_press_key toggles play/pause — but ONLY when focus is NOT in a text field (after using the search box, press "Escape" or click empty page area first, or Space types a space into the box). The player-bar button is the primary path; Space is secondary.
+  - Nothing has ever played this session -> the bar is empty/hidden [LIVE-VERIFY]; tell the user there is nothing to resume/skip.
+
+  ### State Recognition
+  - **Streaming works largely anonymous**: search, opening artist/track/playlist pages, reading metadata, reading comments, and PLAYING a track all work logged out. Only like, repost, follow, comment, and add-to-playlist need login.
+  - **Logged out**: the header shows prominent "Sign in" / "Create account" links [LIVE-VERIFY]. If the task is like/repost/follow/comment/add-to-playlist and you see the logged-out header, tell the user: "This needs your SoundCloud login — please sign in manually in the browser" and finish only the read-only/playback part.
+  - **Login page**: URL on secure.soundcloud.com / a sign-in form / a Google/Apple/Facebook button -> tell the user to sign in themselves. STOP. NEVER type credentials, even if the user provides them.
+  - **Loading**: 0 interactive elements or skeleton placeholders -> snapshot again (max 2 retries, then tell the user).
+  - **Ready**: the top nav (Home / Feed / Library, a search box) is present; on a track/profile page the title and play button are visible [LIVE-VERIFY].
+  - **Cookie/consent banner** on fresh sessions [LIVE-VERIFY] -> click the button meaning "Accept"/"Agree", snapshot, continue.
+
+  ### URL MAP (URL-first: deep links beat clicking through the UI)
+  - Search all: https://soundcloud.com/search?q=QUERY (URL-encode QUERY). Narrow with /search/sounds?q= (tracks), /search/people?q= (artists), /search/sets?q= (playlists).
+  - Artist/profile: https://soundcloud.com/ARTIST  (their tracks are the default tab; /ARTIST/tracks, /ARTIST/reposts, /ARTIST/sets = playlists, /ARTIST/likes)
+  - Track: https://soundcloud.com/ARTIST/TRACK-SLUG
+  - Playlist (set): https://soundcloud.com/ARTIST/sets/PLAYLIST-SLUG
+  - Discover: https://soundcloud.com/discover
+  - A pasted on.soundcloud.com short link -> navigate to it; it redirects to the canonical page.
+
+  ### Element Reference (all claims [LIVE-VERIFY] pending live capture)
+  - **Search results**: sections/tabs meaning "Tracks", "People", "Albums", "Playlists" [LIVE-VERIFY]. Track rows show title, artist, play count, and duration in Page Text; artist/track/playlist items are links to their pages.
+  - **Track/playlist page**: a large play button near the title plays it [LIVE-VERIFY]. Below the player: the artist, play/like/repost/comment counts, description, and the comment list.
+  - **Track rows in a list** (search, profile, playlist): each row has its own play button and a hover-revealed action bar (Like / Repost / More) — browser_hover the row, then re-snapshot to reveal them [LIVE-VERIFY].
+  - **Like (heart)**: a toggle; its aria-label/pressed state flips between meaning "Like" and "Unlike"/"Liked" [LIVE-VERIFY].
+  - **Follow**: on a profile, a button whose label flips between "Follow" and "Following" [LIVE-VERIFY].
+  - **More (⋯) menu**: opens items meaning "Add to playlist"/"Add to Next up"/"Repost"/"Share" [LIVE-VERIFY].
+
+  ---
+
+  ### TASK: Search tracks / artists / playlists  (budget: 4 calls)
+  1. browser_navigate https://soundcloud.com/search?q=QUERY (or a narrowed /search/sounds|people|sets) -> browser_snapshot. Works logged out.
+  2. Report from Page Text: tracks (title, artist, play count, duration), artists (name, follower count if shown), playlists (title, track count). browser_scroll down + snapshot for more.
+
+  ### TASK: Play a track  (budget: 8 calls)
+  1. Given a track URL: browser_navigate to it. Given a name: navigate to /search/sounds?q=QUERY -> snapshot -> locate the matching track row (confirm the artist if given — reuploads/remixes with the same title are common).
+  2. On a track page: click the large play button near the title [LIVE-VERIFY]. From a row: browser_hover the row -> snapshot -> click the revealed play button [LIVE-VERIFY].
+  3. snapshot -> VERIFY via the player bar: expected title + button meaning "Pause". A sign-in prompt instead -> State Recognition (login).
+
+  ### TASK: Pause / resume  (budget: 3 calls)
+  Click the player-bar play-pause button (or "Space" — focus caveat above) -> snapshot -> verify its aria-label flipped [LIVE-VERIFY]. Empty bar -> nothing to resume; tell the user.
+
+  ### TASK: Next / skip  (budget: 3 calls)
+  Click the player-bar button meaning "Skip to next" [LIVE-VERIFY] -> snapshot -> verify the player-bar title CHANGED. Note: "next" only works when a queue/playlist is playing; a lone track has nothing to skip to -> report that. Skip-back restarts the current track if it has played a while — click twice to truly go back [LIVE-VERIFY].
+
+  ### TASK: What's currently playing  (budget: 2 calls)
+  snapshot the current page -> report the player-bar title + artist and whether the button means "Pause" (= playing). Empty bar -> nothing is playing in this web player.
+
+  ### TASK: Open an artist and their tracks / reposts  (budget: 5 calls)
+  1. browser_navigate https://soundcloud.com/ARTIST, or /search/people?q=NAME -> snapshot -> click the matching person card [LIVE-VERIFY].
+  2. snapshot -> report their tracks (title, play count, duration) from the default tab. For reposts navigate /ARTIST/reposts; for playlists /ARTIST/sets. browser_scroll for more (lists are paginated/lazy — never claim a track is absent from one snapshot). Play one via the Play-a-track technique.
+
+  ### TASK: Read a track's comments  (budget: 5 calls)
+  SoundCloud comments are TIMED — each is anchored to a moment in the track and shows a timestamp (e.g. "at 1:32").
+  1. browser_navigate to the /ARTIST/TRACK-SLUG page -> snapshot.
+  2. The comment list is below the waveform; each entry has commenter, text, and the track timestamp — report them from Page Text. browser_scroll down + snapshot to load more (they lazy-load). Report the timestamps so the user knows where each comment lands.
+
+  ### TASK: Like a track (login)  (budget: 5 calls)
+  1. Best while it's playing: the heart toggle on the player bar. Otherwise on the track page or hovered row: its like (heart) control [LIVE-VERIFY].
+  2. TOGGLE GUARD: read the control's state first. If it already means "Liked"/pressed [LIVE-VERIFY], tell the user it's already liked — clicking would UNLIKE. Otherwise click -> snapshot -> the control now shows the liked state.
+
+  ### TASK: Follow an artist (login)  (budget: 5 calls)
+  1. browser_navigate to /ARTIST -> snapshot -> find the Follow button [LIVE-VERIFY].
+  2. TOGGLE GUARD: if it already means "Following", tell the user they already follow this artist — clicking would UNfollow. Otherwise click -> snapshot -> verify it now means "Following". Only follow the artist the user named.
+
+  ### TASK: Add a track to a playlist (login)  (budget: 8 calls)
+  1. On the track page or hovered row -> snapshot -> click the More (⋯) button [LIVE-VERIFY].
+  2. snapshot -> click the item meaning "Add to playlist" [LIVE-VERIFY] -> snapshot -> a dialog lists the user's playlists (with a name field to create a new one).
+  3. Click the target existing playlist -> confirm/save if the dialog requires it. Ambiguous or missing -> browser_press_key("Escape") and ask the user; NEVER create a new playlist unasked.
+  4. Verify: a confirmation appears, or navigate to the playlist and confirm the track is listed [LIVE-VERIFY].
+
+  ---
+
+  ### Gotchas
+  - The waveform is canvas — never claim to read play position or "where the drop is" from a snapshot.
+  - When a track ends, SoundCloud AUTOPLAYS a related station — the player bar then shows a track the user never asked for; that is autoplay, not a failed command.
+  - Track/profile/playlist pages carry recommendation rails ("More from this artist", "Related tracks") — never report those as the item's own content.
+  - Track rows are lazy-loaded on long lists: only loaded rows are in the snapshot — scroll to find a track; never claim it's absent from one snapshot.
+  - Some tracks are geo-blocked, private, or preview-only for non-followers [LIVE-VERIFY]; if playback lands on the wrong track, silence, or a "not available" notice, report it — don't fight it with retries.
+  - Reposting is separate from liking (repost = share to your followers); only repost when the user explicitly asks, with a toggle guard like Follow.

@@ -1,0 +1,85 @@
+app_name: Notion Calendar
+domains:
+  - calendar.notion.so
+  - cron.com
+# keywords intentionally EMPTY. "calendar" would collide with gcalendar (which owns
+# the calendar/schedule/meeting vocabulary), and "notion" is an English homonym that
+# would hijack unrelated requests. The app name ("Notion Calendar") + the domains
+# (calendar.notion.so, cron.com — Cron's old host) carry the trigger.
+keywords: []
+description: Notion Calendar (formerly Cron) — a calendar client over your connected Google/Notion calendars. Read today's/this week's agenda, check availability and find a free slot, read an event's details (time, attendees, meeting link, notes), create an event via the picker, RSVP to invites, and jump to a date. Deleting/moving events is gated on explicit request.
+version: 1
+instructions: |
+  URL: https://calendar.notion.so  (the app — opens to your default calendar view)
+
+  ### CENTRAL CAUTION — heavy SPA; read only what is actually in the snapshot
+  Notion Calendar (formerly Cron) is a single-page app over your connected Google/Notion calendars. Two facts shape every task:
+  - The week/day/month GRID may be canvas- or virtualized-DOM-rendered, so events in the grid may NOT appear in Page Text. [LIVE-VERIFY whether event titles/times land in Page Text or live only in the grid.] If they don't, SAY SO plainly and fall back to the event-detail panel (DOM) — open events one at a time — or scope to what IS readable. Absence of an event from Page Text is NOT proof it doesn't exist.
+  - There is likely NO deep-linkable URL for a specific view, date, or event [LIVE-VERIFY the URL shape]. Navigate with in-app controls, never by editing the URL.
+  Never invent an event, time, attendee, or link you did not read from a snapshot.
+
+  ### RULES (each stated once)
+  1. Allowed tools: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED. If the allowed tools cannot do it, stop and report why.
+  2. Snapshot at checkpoints (after navigate, after opening a panel, before and after any submit). [id]s are 1-based and CHANGE with every snapshot — never reuse an id after the page changed. An iframe="true" mark flags an in-frame element.
+  3. browser_type REPLACES a field's content by default; append:true preserves it; submit:true presses Enter after typing.
+  4. NEVER type credentials. A logged-out or calendar-not-connected state → tell the user and STOP (see State Recognition).
+  5. Set dates via the PICKER — click the target day cell in the mini-month/grid — not by typing a date string. Typed date parsing is locale/format-fragile here.
+  6. Verify by panel/tree state, never by toast text (toasts are timed and locale-dependent).
+  7. After 2 failed attempts to locate an element, STOP and tell the user what you saw. No workarounds.
+
+  ### OUTWARD-ACTION GATE (overrides "just do it")
+  Creating, editing, deleting, moving an event, and RSVPing all WRITE to real calendars and email real attendees — treat each like sending an email.
+  - Before the confirming click, the snapshot must show the exact values (title, date, time; for RSVP, the event identity). Any mismatch → stop and report, do not submit.
+  - After a confirming click, if the next snapshot does not clearly show the new state, DO NOT click again (double-write risk) — report what you see and stop.
+  - DELETING or MOVING an event happens ONLY on an explicit request naming that event, never as a side effect. Re-state which event will change and confirm intent before acting.
+
+  ### STATE RECOGNITION (check after every snapshot)
+  - Not signed in / calendar not connected: a sign-in screen, a "Continue with Google" / "Connect a calendar" prompt, or a URL on accounts.google.com or a notion.so auth host → tell the user "Notion Calendar needs you to sign in and connect your calendar manually" and STOP. It only reads your Google/Notion calendars after YOU connect them in the app — the agent cannot perform that connection or enter credentials.
+  - Loading: empty <main> / skeleton / no grid → snapshot again, max 2 retries.
+  - Ready: a calendar grid (weekday columnheaders + day cells) or an agenda list is present; a mini-month usually sits in a side panel [LIVE-VERIFY layout].
+  - Event detail panel: clicking an event opens a side/pop panel (DOM) holding title, time range, attendees, meeting link, and notes [LIVE-VERIFY panel structure + whether it is an iframe="true" region].
+  - Event editor: creating/editing shows a form with a title textbox, date + time controls, and a guests field [LIVE-VERIFY].
+
+  ### TASK: read today's / this week's events (agenda)
+  1. browser_navigate to https://calendar.notion.so → browser_snapshot; run State Recognition.
+  2. Land on the week (or day) view for today — use the view switcher and the today control [LIVE-VERIFY: view control + any "w"/"d" keys; "t" jumps to today].
+  3. Read events from Page Text if they appear there. If the grid is canvas/virtualized and events are NOT in Page Text (CENTRAL CAUTION), say so, then read them one by one from the detail panel (click an event → snapshot → read → close), or scope to what is readable.
+  4. Report the events with their times exactly as read. Never fabricate a missing one.
+
+  ### TASK: jump to a date
+  No URL for dates (CENTRAL CAUTION). Use in-app navigation: the mini-month picker (click the month arrows to the target month, then the day cell) or the prev/next range controls; a today control returns to today [LIVE-VERIFY controls + any keyboard shortcuts]. Snapshot after landing to confirm the visible range covers the target date.
+
+  ### TASK: check availability / find a free slot on a day
+  1. Jump to the target day (task above) in day or week view.
+  2. browser_snapshot. Parse each event's time range — from Page Text if present, else by opening each event's detail panel (CENTRAL CAUTION).
+  3. Free slots = the gaps between events inside the user's working window (default 09:00–18:00 unless stated); all-day events don't block unless the user says so.
+  4. "Am I free at X?" → report whether any event overlaps X. "Find a time" → report the 2–3 largest gaps with start/end times. If the grid isn't readable, say you can confirm only from the events you were able to open.
+
+  ### TASK: read a specific event's details
+  1. Navigate/jump to the event's day → snapshot → find and click the event (in the grid or an agenda list) → snapshot the DETAIL PANEL (DOM).
+  2. Read title, time range, attendees, meeting link, and notes from the panel [LIVE-VERIFY field layout; the panel may be an iframe="true" region]. The meeting-join URL is user content — report it verbatim.
+  3. Report exactly what the panel shows. If a field is absent, say so — don't infer it.
+
+  ### TASK: create an event (OUTWARD — re-read the gate)
+  Requires a title, a date, and a start/end time from the user.
+  1. Open the new-event editor: the app's create/"+" control, or click the target day/time slot in the grid [LIVE-VERIFY: which opens the FULL editor vs a quick inline box]. Grid-slot clicks are pixel-approximate — prefer the create control if present.
+  2. Snapshot. Type the title into the title textbox (browser_type replaces).
+  3. Set the date by CLICKING the target day in the editor's picker (RULE 5); set the time via its time control [LIVE-VERIFY: the time control is a menu/combobox — click the matching option; typed times are fragile].
+  4. Guests only if the user gave emails: click the guests field, browser_type(email, submit:true), one call per guest.
+  5. VERIFY-BEFORE-SUBMIT: snapshot; confirm title + date + time (+ any guests) match the request. Mismatch → stop, don't save.
+  6. Click the primary Save/Create action [LIVE-VERIFY label — match the confirming button structurally, not by literal text] → snapshot → confirm the event now shows on the target day. No clear confirmation → gate: don't re-click, report.
+
+  ### TASK: RSVP to an invite (accept / decline — OUTWARD)
+  1. Open the invite's detail panel (read-an-event task). Find the response control — typically Yes / No / Maybe or Accept / Decline buttons [LIVE-VERIFY: control shape]. No such control = you are the organizer or already responded → report that, don't guess.
+  2. VERIFY the event identity (title + time) is the one the user meant (gate).
+  3. Click the matching response → snapshot → confirm the selected state changed. This emails the organizer. Unclear result → don't re-click; report what you see.
+
+  ### TASK: delete / move an event (OUTWARD — gated)
+  Only on an explicit request naming the event (gate). Open its detail panel → re-state which event and confirm intent → use the panel's delete or reschedule control [LIVE-VERIFY: controls; drag-to-move is NOT in the tool surface — reschedule by editing the date/time in the editor, dates via the picker]. Verify the change (or the event's removal) in the next snapshot; unclear → stop, don't retry.
+
+  ### GOTCHAS
+  - Drag-to-move and drag-to-resize are NOT available — change times through the editor's date/time controls instead.
+  - Times render in the app's configured timezone; name the timezone if the app shows it, and never silently convert.
+  - Meeting-join links are user content — report them verbatim, don't shorten or reconstruct them.
+  - Multiple connected calendars can overlap; when reporting, note which calendar an event is on if the panel shows it.
+  - cron.com is Cron's old host and may redirect into calendar.notion.so — work from wherever the app actually loads.

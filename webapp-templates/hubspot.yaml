@@ -1,0 +1,98 @@
+app_name: HubSpot
+domains:
+  - app.hubspot.com
+keywords:
+  - crm
+  - deal pipeline
+description: HubSpot CRM — READ-FIRST. List/search contacts, companies, deals, and tickets; read a contact/company/deal record with its properties, associations, and activity timeline; read dashboards/reports (numbers verbatim). Only on explicit request — log a note/call on a record, update a deal stage, or edit a contact property (each verify-before + post-verify). NEVER send marketing emails or sequences, delete records, run bulk actions, change workflows, edit billing, or export lists.
+version: 1
+instructions: |
+  URL: https://app.hubspot.com/contacts/{portalId}/… — every CRM page lives under the account's numeric portal id. You MUST know {portalId} before navigating (see State Recognition); it's opaque, so read it from an open tab's URL or the account picker, never guess it.
+
+  ### RULE #1 — READ-FIRST CRM, and NEVER SEND OUTWARD (overrides everything, including the user's own words)
+  This is the user's customer database. Reads are free; a wrong write touches real people and real revenue.
+  - **HIGHEST STOP — never contact customers.** NEVER send a marketing email, NEVER enrol a contact in a sequence, NEVER click "Send", "Send now", "Enroll", or "Start sequence" on a record. Outward customer contact is irreversible and reputational. If asked to email, sequence, or "reach out to" anyone, refuse and hand off (see the interception task). This overrides "just send it".
+  - NEVER delete a contact, company, deal, ticket, note, or any record — never click Delete in any CRM context.
+  - NEVER run a bulk action (select-all → edit/delete/email/assign), change a workflow/automation, edit billing or account settings, or export/download a list. If asked, refuse and hand off.
+  - ALLOWED only when the user asks for that exact change in this request, each with verify-before + post-verify: log a note or a call/activity on ONE named record; update ONE deal's STAGE; edit ONE contact/deal PROPERTY (report old→new).
+  - If a click unexpectedly lands on a Send/Enroll/Delete/confirm dialog, click NOTHING — press Escape or navigate back to the list and tell the user.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED here.
+  2. URL-first: contacts, companies, deals, tickets, records, and dashboards all have stable URLs (below). Navigate directly instead of clicking the left nav.
+  3. Snapshot at checkpoints (after navigate, after opening a record, before and after any save, before reporting). [id]s are 1-based and CHANGE every snapshot — never reuse ids after the page changed.
+  4. browser_type REPLACES the field's content by default. When ADDING to a note or a property that already has text you MUST pass append: true, or you silently destroy what was there. Replace-by-default is correct only when the user asked to replace.
+  5. Match elements by label/aria-label/text MEANING, never by position — the CRM is dense with look-alike buttons and renders in the account's locale.
+  6. Before any Save: snapshot and verify the field reads exactly as intended. After Save: verify the saved state in a fresh snapshot. Never blind-retry a Save — re-snapshot and check the outcome first.
+  7. If an element or value is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+  8. Report money/counts VERBATIM as shown (amount, currency, date range, pipeline name). Never re-derive, sum, or "correct" what the CRM displays. browser_press_key("Escape") closes HubSpot panels/dialogs.
+
+  ### State Recognition
+  - **Portal id unknown**: every URL needs {portalId}. If you don't have it (from the request, an open tab's URL, or earlier context), ASK the user for it (or to open HubSpot so you can read it) and stop.
+  - **Login wall**: the page asks for email/password, or a "Log in to HubSpot" / "Sign in" heading appears [LIVE-VERIFY: wording] → tell the user: "HubSpot requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials.
+  - **2FA / verification**: a prompt for a code, authenticator, or SMS → tell the user to complete it themselves, stop. NEVER type codes.
+  - **Account / portal picker**: a page listing multiple HubSpot accounts [LIVE-VERIFY: chooser layout, or a top-left account switcher] → if the request doesn't say which account, ASK and stop; otherwise click the named one, then read {portalId} from the resulting URL.
+  - **Loading**: skeleton placeholders render before data; a snapshot with headings but no rows/values → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Ready markers**: list pages show a table with record names/amounts in Page Text; a record page shows the record name as the main heading with an activity timeline; the left nav shows Contacts / Companies / Deals [LIVE-VERIFY: nav labels].
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  Object type ids are stable: Contacts=0-1, Companies=0-2, Deals=0-3, Tickets=0-5 [LIVE-VERIFY: id scheme].
+  - Contacts list: `https://app.hubspot.com/contacts/{portalId}/objects/0-1/views/all/list`
+  - Companies list: `https://app.hubspot.com/contacts/{portalId}/objects/0-2/views/all/list`
+  - Deals list (pipeline): `https://app.hubspot.com/contacts/{portalId}/objects/0-3/views/all/list` [LIVE-VERIFY: HubSpot also exposes a friendlier `/deals` path and a board vs. table toggle]
+  - Tickets list: `https://app.hubspot.com/contacts/{portalId}/objects/0-5/views/all/list`
+  - Record page: `https://app.hubspot.com/contacts/{portalId}/record/{objectType}/{recordId}` — e.g. a contact `/record/0-1/{id}`, a company `/record/0-2/{id}`, a deal `/record/0-3/{id}`. {recordId} is the numeric id from the row link's href, NOT the display name.
+  - Reports / dashboards: `https://app.hubspot.com/reports-dashboard/{portalId}` [LIVE-VERIFY: a specific dashboard is `/view/{dashboardId}`].
+
+  ### TASK: List / search contacts
+  1. browser_navigate the contacts list → snapshot.
+  2. Each row shows: name, primary company, email, lifecycle stage, and last-activity/contact date [LIVE-VERIFY: default column set — views are customisable per account]. Report straight from Page Text; browser_scroll + snapshot for more rows.
+  3. Search: click the search box above the table [LIVE-VERIFY: "Search name, phone, email…" placeholder] → browser_type(search input id, terms, submit: true) → snapshot → read the matching rows. Open a hit via its name link when detail is needed.
+
+  ### TASK: Read a contact record
+  1. Open the contact from the list (click its name link) or browser_navigate `/record/0-1/{contactId}` → snapshot.
+  2. Report from Page Text: name, email, phone, job title, lifecycle stage, and other key properties in the left "About" panel [LIVE-VERIFY: panel label]; associated companies and DEALS from the association cards [LIVE-VERIFY: card headings]; the activity TIMELINE in the centre (notes, emails, calls, meetings — most recent first). Scroll + snapshot for older entries.
+  3. Read-only here per RULE #1 unless the user explicitly asked to log/edit: never click Email, Sequence, Enroll, or Delete on this record.
+
+  ### TASK: List / read deals (the pipeline)
+  1. browser_navigate the deals list → snapshot. This is the "what's in my pipeline" backbone.
+  2. Each deal shows: deal name, STAGE, amount, close date, owner, and associated company/contact [LIVE-VERIFY: columns; a board view groups deals into stage columns]. Report verbatim, and NAME the pipeline the view shows [LIVE-VERIFY: pipeline selector near the top — an account can have several].
+  3. Filter/stage view: click the pipeline selector or a stage tab/filter [LIVE-VERIFY] → snapshot → the table re-renders. Open one deal via `/record/0-3/{id}` for its property detail, associations, and timeline. Read-only unless the user asked to change a stage.
+
+  ### TASK: Read a company record
+  1. Open from the companies list or browser_navigate `/record/0-2/{companyId}` → snapshot.
+  2. Report: company name, domain, industry, size/revenue and other About-panel properties [LIVE-VERIFY: panel]; associated contacts and deals from the association cards; recent timeline activity. Scroll + snapshot for more. Read-only per RULE #1.
+
+  ### TASK: Read a dashboard / report
+  1. browser_navigate the reports-dashboard URL → snapshot. If several dashboards exist, click the named one [LIVE-VERIFY: dashboard picker/tabs].
+  2. Read the numbers VERBATIM from Page Text with the DATE RANGE shown by the range control near the top [LIVE-VERIFY: range control]. Prefer report TABLES over chart canvases — charts are canvas-rendered and unreadable; if a report is only a chart, say so and report its summary figure/legend text instead of guessing points.
+  3. State the pipeline/filter context and range in every report. Never re-derive a displayed figure.
+
+  ### TASK: Log a note or call on a record (EXPLICIT request only — gated)
+  1. Confirm the user asked for this exact entry (which record, and the note/call text). This logs INTERNAL activity only — it does NOT contact the customer (the hard stop in RULE #1).
+  2. Open the record → snapshot. In the activity composer atop the timeline, click the "Note" (or "Call") tab [LIVE-VERIFY: composer tab labels] → snapshot.
+  3. browser_type(note body id, text) — replace is correct for a fresh note; use append: true only if adding to text already typed. Snapshot → VERIFY the composer shows exactly the intended text.
+  4. Click "Save" / "Log activity" [LIVE-VERIFY: save button label] → snapshot → VERIFY a new timeline entry appeared with that text and today's date. Do NOT tick any "email this to the contact" / associated-email option — logging is internal only. Report what you logged.
+
+  ### TASK: Update a deal stage (EXPLICIT request only — gated)
+  1. Confirm the user named the deal AND the target stage. Open the deal via `/record/0-3/{id}` → snapshot.
+  2. Note the CURRENT stage (the stage stepper/property near the top [LIVE-VERIFY: stage control]). Click the stage control → snapshot → select the target stage from the dropdown/stepper by its MEANING, never by position [LIVE-VERIFY: control type].
+  3. If a Save/confirm or next-step dialog appears, snapshot and verify it's the stage change (not a Close-lost reason or task prompt) before clicking Save [LIVE-VERIFY]. Escape out if it's anything else.
+  4. Snapshot → VERIFY the stage now reads the target value. Report old→new stage. Change nothing else (amount, close date, owner).
+
+  ### TASK: Edit a contact / deal property (EXPLICIT request only — gated)
+  1. Confirm the exact record, field, and new value. Open the record → snapshot.
+  2. Find the property in the About panel; click its value/pencil to make it editable [LIVE-VERIFY: inline-edit affordance] → snapshot → read the OLD value.
+  3. browser_type(field id, new value) — replace when setting a value; append: true only to add to existing text the user wants kept. For a dropdown property, click it and select the option by meaning.
+  4. Save the field [LIVE-VERIFY: inline check/Save, or Enter commits] → snapshot → VERIFY the property now shows the new value. Report old→new. Touch no other field.
+
+  ### TASK: Email / sequence / delete / bulk / export request (INTERCEPT — never perform)
+  1. If the user asks to email a contact, enrol/start a sequence, delete a record, run a bulk action, edit a workflow, or export a list: do NOT open the Email/Sequence/Delete/Export control (RULE #1).
+  2. Locate the record (read tasks) so you can be concrete, then reply: explain you don't send outward contact or run destructive/bulk/export actions here because they're irreversible and reach real people, and hand the direct link — e.g. "Open https://app.hubspot.com/contacts/{portalId}/record/0-1/{contactId} and use Email / Enroll there yourself."
+  3. Offer the read-side help you CAN do (confirm the contact's details, deal stage, timeline, owner), then stop.
+
+  ### Gotchas
+  - Views are customisable: columns may be hidden/renamed, so a property you expect can be missing from a list — open the record to be sure.
+  - Multiple pipelines/dashboards exist per account — always name which pipeline/dashboard and date range a number came from.
+  - List pages paginate — say when a report covers only the first page unless you paginated.
+  - HubSpot moves/renames controls between releases and hides some behind "Actions" menus — trust the live snapshot over this template's layout notes, and never click an Actions item you can't read.

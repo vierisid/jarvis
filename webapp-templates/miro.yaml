@@ -1,0 +1,69 @@
+app_name: Miro
+domains:
+  - miro.com
+# One keyword only. "whiteboard" is the term users reach for about this app and
+# is corpus-clean; "mind map" was rejected as too generic (many tools own it,
+# and it describes intent, not this site). The app name + domain carry the
+# trigger; board vocabulary otherwise describes user INTENT, not Miro.
+keywords:
+  - whiteboard
+description: Miro — browse and search your boards, open a board (reporting only that it opened), read board comments, report/share the board link with its access level, create a new blank board or one from a template, and rename or delete a board. The infinite board canvas (sticky notes, shapes, connectors, and their text) is not readable or editable.
+version: 1
+instructions: |
+  URL: https://miro.com/app/dashboard/
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll.
+  BANNED: browser_evaluate, browser_screenshot.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the element's content by default; `append=true` preserves it; `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — real key events, e.g. `"Escape"`, `"Enter"`. Never name a Chrome-reserved combo.
+  - Element ids are 1-based `[id]`s from the LAST snapshot and change every snapshot — never reuse ids across a state change.
+
+  ### CENTRAL CAUTION — the board is a picture, not a page
+  Miro's infinite board is a WebGL/custom-rendered canvas. It contributes almost NOTHING to browser_snapshot: sticky notes, shapes, frames, connectors, text objects, mind-map nodes, and their content are NOT reliably in the accessibility tree. This is expected, not an error. Be plain with the user:
+  - You CANNOT read what a board looks like, list its sticky notes/shapes/text, select or move objects, create or edit anything ON the board, or click through content on the canvas.
+  - The automatable surface is ONLY: the DASHBOARD / board browser (regular DOM), board search/open, the chrome AROUND the canvas (top bar, Share/permission dialogs), the COMMENTS panel if it renders as DOM [LIVE-VERIFY], and board management (create/rename/delete).
+  - Never improvise canvas interaction (blind coordinate clicks, guessing at objects). If a request needs the canvas, it is unsupported — see NOT SUPPORTED.
+
+  ### STATE RECOGNITION (check on the FIRST snapshot of every session)
+  - **Login wall**: URL on `miro.com/login` / `miro.com/signup`, or a sign-in form (email/password, "Continue with Google"/SSO) → you cannot log in for the user. Tell them to log in to Miro in the JARVIS browser, then STOP. NEVER type credentials.
+  - **Dashboard / board browser**: URL under `miro.com/app/dashboard/` (or a team space) listing board tiles by name with last-modified times and a sidebar of teams/spaces [LIVE-VERIFY structure] → ready for browsing/searching/opening/creating.
+  - **Open board**: URL matches `miro.com/app/board/{id}/…` and the top bar shows the board name [LIVE-VERIFY marker]. The snapshot will look nearly EMPTY apart from top-bar/panel chrome — that means the board is open and the canvas (invisible to you) is rendering. This is success, not a failure.
+  - **Board loading**: a board URL but no board name / top bar yet, or a loading indicator → snapshot once more. Still nothing after 2 tries → report and stop.
+  - **View-only board**: a view-only / commenter notice or no edit chrome [LIVE-VERIFY wording] → rename/delete/create-on-it are unavailable; comment reading may still work. Say the user lacks edit access and stop the mutating task.
+  - **Retry rule**: the same step failing twice in a row (element not found after a fresh snapshot, dialog not opening, comment not appearing) → STOP and tell the user exactly what failed. Do not loop.
+
+  ### URL PATTERNS (prefer these)
+  - Dashboard / recents: `https://miro.com/app/dashboard/`
+  - A board: `https://miro.com/app/board/{id}/` — if the user pastes a Miro board link, navigate it VERBATIM (it may carry extra `?moveToWidget=…`/`?share_link_id=…` segments that pin a location).
+  - A team space is reachable from the dashboard sidebar [LIVE-VERIFY path shape]. After navigating, the URL bar tells you which state you are in (`/dashboard/` vs `/board/{id}/`).
+
+  ### TASKS
+  **Browse / search your boards** — `browser_navigate("https://miro.com/app/dashboard/")` → snapshot → board names and last-modified times appear in Page Text [LIVE-VERIFY layout]. To search: click the search box at the top [LIVE-VERIFY placement/label] → `browser_type` the board name → snapshot → results list boards by name [LIVE-VERIFY whether results render live or need Enter] → report matches. The list may be windowed — `browser_scroll` and re-snapshot for more, and say how much you actually saw. Report names and last-modified from Page Text; never invent counts or content.
+
+  **Open a board** — by URL: navigate it directly. By name: dashboard → find/search it → click the board by its NAME [LIVE-VERIFY whether opening needs a double-click: try single click, snapshot, `double=true` if still on the dashboard]. Verify the open-board state (URL `miro.com/app/board/{id}/…` + board name in the top bar), then report the board is open. State the limit plainly: the board's contents (sticky notes, shapes, diagrams, text) are on the canvas and CANNOT be read from this browser surface — you can confirm it opened, nothing more.
+
+  **Read comments on a board** — with the board open: open the comments panel from the top bar / toolbar comment control [LIVE-VERIFY icon label and that it opens a DOM sidebar] → snapshot → if a comments sidebar lists threads with author, text, and timestamp as DOM [LIVE-VERIFY], report them from Page Text, scrolling the panel for more if needed. Use the SIDEBAR list only — comment pins sit on the canvas and are not reliably clickable. If NO DOM comments panel appears [LIVE-VERIFY], say comments could not be read from this surface and stop — do not guess. `browser_press_key("Escape")` closes the panel when done.
+
+  **Report / share the board link** — the board's URL IS its link: report the current URL from the snapshot. To report who can access it: click "Share" (top-right [LIVE-VERIFY label]) → snapshot → read the general-access line (e.g. "Anyone with the link can view/edit" or team-restricted [LIVE-VERIFY wording]) and report it alongside the URL. A "Copy link" button exists but the clipboard is unreadable to you — ALWAYS report the URL itself. Do NOT change access unless the user explicitly asked; if they did, click the access dropdown → snapshot → click the requested level by its label → verify the dialog reflects it. Close with `browser_press_key("Escape")`.
+
+  **Create a new board (blank or from a template)** — dashboard → click the create control ("New board" / "Create new" [LIVE-VERIFY exact label]) → snapshot. For a BLANK board: click the blank/"Start from scratch" option [LIVE-VERIFY]. For a TEMPLATE: a template picker opens — search or scroll to the template by NAME (mind map, kanban, flowchart, retro [LIVE-VERIFY picker structure]) → click it → confirm/"Use template" if prompted [LIVE-VERIFY label]. Either way, VERIFY the new board opened (URL `miro.com/app/board/{id}/…` + top bar). Report that a new board opened; you cannot populate or read its canvas afterward.
+
+  **Rename a board** — from the dashboard: hover the board's tile → snapshot → click its "…" / more-options menu [LIVE-VERIFY] → click "Rename" → `browser_type(field_id, "New name")` (replaces the old name by itself) → `browser_press_key("Enter")` → snapshot → verify the tile shows the new name. Or in the open board: click the board title in the top bar [LIVE-VERIFY it becomes editable] → type → Enter → verify the top bar shows the new name.
+
+  **Delete a board** — GATED: only delete a board the user NAMED in this request. Never delete by guess, never bulk-delete, never delete "the empty one" without an exact name. From the dashboard: hover the named board's tile → snapshot → click its "…" menu → click "Delete" [LIVE-VERIFY label; may be "Move to trash"] → a confirm dialog appears → confirm by its labelled button [LIVE-VERIFY wording] → snapshot → verify the board is gone from the list (Miro typically moves it to Trash, recoverable for a limited window — say so). If more than one board matches the name, STOP and ask the user which one; do not choose.
+
+  ### NOT SUPPORTED — tell the user plainly, don't improvise
+  - Anything ON the canvas: reading/listing sticky notes, shapes, connectors, frames, or their text; creating, moving, resizing, recoloring, or deleting objects; typing text into a note or shape; building or editing a mind map / diagram / kanban ON the board.
+  - Reading or verifying what a board LOOKS like, or summarizing its content.
+  - Exporting the board (PDF/image/CSV), presenting, or running a timer/voting/facilitation tool.
+  - Placing new comment pins on the canvas (reading existing DOM threads only, if available).
+
+  ### RULES
+  1. Only the ALLOWED tools. Nothing on the canvas is readable or clickable — never pretend otherwise, never guess at board content.
+  2. Match boards, threads, templates, and menu items by NAME/label text, never by position. Prefer URL patterns over clicks.
+  3. One verify-snapshot after each state change; verification must distinguish success from failure (URL change, board name, dialog content — not just "no error"). Don't reuse element ids across snapshots.
+  4. Delete is gated: only a board named in THIS request, single match, with a confirm-dialog verification; ambiguity → ask and stop.
+  5. Share/access changes only when the user explicitly asked; report the URL and access level, never rely on the (unreadable) clipboard.
+  6. Budgets: browse/search ≤ 8 calls; open-and-report ≤ 6; read comments ≤ 10; share/report ≤ 8; create ≤ 10; rename ≤ 8; delete ≤ 8. Hitting a budget or the retry rule = report and stop.
+  7. Stop conditions: login wall, an unsupported (canvas) request, missing edit/comment access, board ambiguity on delete, or the same step failing twice.

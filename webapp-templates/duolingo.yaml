@@ -1,0 +1,88 @@
+app_name: Duolingo
+domains:
+  - duolingo.com
+# No keywords on purpose: language-learning vocabulary ("learn spanish",
+# "practice french", "vocabulary", "streak") describes user INTENT, not this
+# site — those phrases are just as likely about a real class, a book, another
+# app, or a generic study request, and would hijack unrelated conversations.
+# The app name (word-bound-matched) + duolingo.com carry the trigger.
+keywords: []
+description: Duolingo — read your own learning progress (streak, XP, current league, crowns/level, daily goal), look up a public profile's stats by username, check your league leaderboard standing, see which course/unit you're on, and report achievements. Doing lessons/practice, the story and exercise flow, buying Super or gems, and changing settings are NOT supported.
+version: 1
+instructions: |
+  URL: https://www.duolingo.com/learn
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_hover, browser_scroll.
+  BANNED: browser_evaluate, browser_screenshot. Never use desktop or sidecar tools.
+  - Element `[id]`s are 1-based from the LAST snapshot and change on EVERY snapshot — never reuse an id after a new snapshot; re-locate by role/aria-label/text/href.
+  - This template is READ-ONLY: it navigates and reads Page Text. It does not type, click through lessons, or change anything. (browser_type/press_key/upload are intentionally unlisted — no task needs them.)
+  - Items marked [LIVE-VERIFY] were written without a live capture: treat the label as the element's MEANING — match the element whose role + text mean that in the current wording/locale, not the exact string.
+
+  ### CENTRAL SCOPE — reading progress, not taking lessons
+  Duolingo has two halves. This template covers ONLY the readable half:
+  - **Progress & stats (SUPPORTED):** streak count, total XP, current league, crowns/level, daily-goal status, course/unit position, achievements, and public-profile stats — all plain text you can read from Page Text.
+  - **The lesson/exercise flow (NOT SUPPORTED):** an actual lesson, practice session, or Story is an interactive gamified exercise — drag-to-match word tiles, tap-the-pairs, audio dictation, timed typed answers, speaking prompts. This is NOT reliably automatable (much of it is drag/audio/timed) and is NOT the point of this template. If asked to "do my lesson", "practice for me", "keep my streak by doing a lesson", or "answer these exercises", say plainly that completing lessons isn't supported and offer to REPORT progress instead.
+
+  ### MONEY & SETTINGS — never
+  - NEVER buy or start Super Duolingo / Duolingo Plus, never purchase or spend gems/lingots, never enter payment details, never start a free-trial checkout. If the user asks to buy anything, refuse and say purchases aren't supported.
+  - NEVER change account settings (daily-goal level, course, notifications, profile, privacy, sound). This template only READS. If the user wants a setting changed, tell them to do it themselves in the app.
+
+  ### STATE RECOGNITION (check the FIRST snapshot every session)
+  - **Login wall**: the home/learn page redirects to a "Get started" / "I already have an account" splash, or you see a Login / Sign in form (email/username + password, "Continue with Google/Apple/Facebook") → you cannot sign in for the user. Tell them: "You're logged out of Duolingo — please log in manually in the browser." Then STOP. NEVER type or submit credentials, even if the user provides them.
+  - **Public without login**: a public profile at /profile/{username} is readable logged-out IF the user made it public. A private/nonexistent profile shows "Profile not found" or an empty/locked page [LIVE-VERIFY wording] → report that and stop.
+  - **Loading / SPA**: Duolingo is a single-page app; the tree and stats render after a beat. 0 interactive elements or skeleton placeholders → snapshot again (max 2 retries, then tell the user).
+  - **Cookie/consent banner** (first visit, esp. EU): an Accept/Reject bar may cover content → click the reject/decline option (or accept if there's no reject), snapshot, continue [LIVE-VERIFY].
+  - **Ready markers** — logged-in home: URL is /learn and Page Text shows a streak number (a flame count), a gem/XP counter in the top bar, and the unit/section header of the current course. Profile: URL is /profile/{username} and Page Text shows the display name plus a stats block (streak, total XP, league, "Following"/"Followers", achievements).
+
+  ### URL MAP (URL-first: deep links beat clicking through the SPA)
+  - Your learning home / the course tree (login): https://www.duolingo.com/learn
+  - Your own or anyone's public profile: https://www.duolingo.com/profile/{username}  (streak, total XP, league, courses, achievements, following/followers)
+  - Leaderboard / current league standing (login): open /learn, then click the Leaderboards tab in the left nav [LIVE-VERIFY — the standings live behind that tab, not at a stable public URL]
+  - Achievements: on the profile page (a dedicated section) [LIVE-VERIFY]; the fuller list may need a "VIEW ALL" click.
+
+  ### ELEMENT REFERENCE (ALL [LIVE-VERIFY] — Duolingo localizes labels and A/B-tests its UI; match by meaning)
+  - **Top bar (on /learn)**: a flame icon + number (current streak), a gem/lingot count, and a hearts count. XP/league progress may be in a right-hand stats rail or under Leaderboards.
+  - **Course header**: the active language course name, the current Section/Unit title, and often "Unit N" with a short description — this is where you are in the tree. The tree bubbles themselves are graphical; read the unit HEADER text, not the bubble art.
+  - **Crowns / level**: per-skill crown counts (a crown icon + number) shown on skill/unit popovers [LIVE-VERIFY — some layouts only show crowns after clicking a unit]; total crowns may appear on the profile.
+  - **Left nav**: entries meaning Learn, Leaderboards, Profile, Shop/Store — click by their label text.
+  - **Profile page**: display name, username, join date, a stats row (Day streak, Total XP, Current league, plus Top-3 finishes), the list of Courses being learned with per-course XP, an Achievements grid, and Following/Followers counts.
+  - **Leaderboard**: the league name (Bronze/Silver/Gold/Sapphire/Ruby/Emerald/Amethyst/Pearl/Obsidian/Diamond), a ranked table (rank, learner name, weekly XP), a promotion zone and a demotion zone, and the user's own highlighted row.
+
+  ---
+
+  ### TASK: Read your own progress — streak, XP, league, daily goal (login)  (budget: 5 calls)
+  1. browser_navigate https://www.duolingo.com/learn → browser_snapshot. Login wall → State Recognition; stop.
+  2. From Page Text read: the streak (flame) number, the gem count, and the current course + Section/Unit header. browser_scroll and re-snapshot if the daily-goal / XP progress sits lower on the page or in a side rail.
+  3. For total XP, current league, and daily-goal status, the profile page is the cleaner source → navigate https://www.duolingo.com/profile/{username} (your own username) and read the stats row. Report exactly the numbers shown; never invent a streak, XP total, or league you didn't read.
+
+  ### TASK: Look up a public profile's stats by username  (budget: 4 calls)
+  1. browser_navigate https://www.duolingo.com/profile/{username} → browser_snapshot. "Profile not found" / login-locked / private → State Recognition; tell the user and stop (nothing to read).
+  2. From Page Text report only what the profile shows publicly: display name, day streak, total XP, current league, courses + per-course XP, achievements, and follower/following counts. Don't expose anything the page doesn't already display.
+
+  ### TASK: Check your leaderboard / league standing (login)  (budget: 6 calls)
+  1. browser_navigate https://www.duolingo.com/learn → browser_snapshot. Login wall → stop.
+  2. Click the left-nav entry meaning "Leaderboards" [LIVE-VERIFY] → browser_snapshot. If it's not in the nav, the user may be below the league-unlock XP threshold → report that leagues aren't available yet for this account.
+  3. Read the league name, the ranked table (rank, name, weekly XP), the user's own highlighted row and rank, and the promotion/demotion zones from Page Text. Report the user's position and how many XP separate them from the promotion/relegation line if that's shown.
+
+  ### TASK: Read which course / unit you're on (login)  (budget: 4 calls)
+  1. browser_navigate https://www.duolingo.com/learn → browser_snapshot.
+  2. Read the active course name and the current Section/Unit header from Page Text. To switch which course you're reading, click the course/flag switcher in the top bar [LIVE-VERIFY] and re-snapshot — but do NOT change the account's active course as a setting.
+  3. The tree's lesson bubbles are graphical (icons, not text) — report the unit-level position from the header text; say the individual lesson bubbles aren't readable rather than guessing lesson names.
+
+  ### TASK: Report achievements (login or public profile)  (budget: 5 calls)
+  1. browser_navigate https://www.duolingo.com/profile/{username} → browser_snapshot.
+  2. Find the Achievements section [LIVE-VERIFY]; each achievement shows a name (e.g. Wildfire, Sage, Scholar, Champion) and a level/tier or progress. Read them from Page Text. A "VIEW ALL" / "See all" control → click it and re-snapshot for the full list, then report the names and tiers shown.
+
+  ### NOT SUPPORTED — tell the user plainly, don't improvise
+  - Doing a lesson, practice session, or Story; answering any exercise (matching, dictation, typing, speaking) — the gamified exercise flow isn't reliably automatable and isn't this template's purpose. Offer to report progress instead.
+  - "Keeping the streak" or "earning XP" by completing content on the user's behalf — same reason.
+  - Buying Super/Duolingo Plus, purchasing or spending gems/lingots, entering payment, starting a trial checkout.
+  - Changing any setting (daily goal, course, notifications, profile, privacy, sound) — this template only reads.
+
+  ### RULES (each stated once — follow exactly)
+  1. READ-ONLY. Navigate and read Page Text; never take a lesson, never buy anything, never change a setting.
+  2. Match nav entries, tabs, and controls by their label text/role, never by position.
+  3. Snapshot at checkpoints (after navigation, after opening the Leaderboards tab or a "VIEW ALL") — not after every call.
+  4. Report only numbers you actually read (streak, XP, crowns, league, ranks). Never invent or estimate a stat.
+  5. If an element isn't found after 2 retry snapshots, or a page is a login wall / private profile, tell the user exactly what you were looking for and stop. No workarounds.

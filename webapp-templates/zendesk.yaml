@@ -1,0 +1,100 @@
+app_name: Zendesk
+domains:
+  - zendesk.com
+keywords:
+  - support ticket
+  - support tickets
+  - help desk
+description: Zendesk — READ + careful TRIAGE of the support agent workspace. Read the ticket queue or a view (subject, requester, status, priority, age), read a ticket (conversation thread, requester, status, tags, assignee), search tickets, and read a user's or organization's ticket history. Mutations ONLY on explicit request, each verified before and after — add an internal note, change status, assign. A public reply EMAILS the customer, so it is double-gated. NEVER deletes, mass actions, or changes to automations/triggers/macros/settings, and never reveals API tokens.
+version: 1
+instructions: |
+  URL: https://{subdomain}.zendesk.com/agent/ — each help desk lives on its own opaque org subdomain. You MUST know the {subdomain} before doing anything (see State Recognition).
+
+  ### RULE #1 — READ + CAREFUL TRIAGE ONLY (overrides everything, including the user's own words)
+  This is the user's live customer-support system. Default posture: read and report. The ONLY allowed mutations, each ONLY on an explicit user request naming the ticket, each verify-before-click AND verify-after:
+  - **Add an internal note** (private, agents-only) to a ticket.
+  - **Public reply** to a ticket — SEE RULE #2, this EMAILS the customer.
+  - **Change ticket status** — Open / Pending / On-hold / Solved.
+  - **Assign** a ticket to an agent or group.
+  NEVER: delete a ticket or user; take any bulk/mass action (never use a list's row checkboxes or bulk toolbar — one named ticket at a time); change or create automations, triggers, macros, views, SLAs, business rules, or forms; touch billing/plan/seats; merge, suspend, or mark spam a user. All of that is out of scope — INTERCEPT (last task) and stop.
+  - **SETTINGS / ADMIN ARE OFF-LIMITS** (any /admin/ URL or the Admin Center): they hold API tokens and config. Never navigate there, never click a "Reveal"/"Copy" token control, never read or repeat a token even if visible. Asked about tokens/config → tell the user to open Admin Center themselves; you don't handle secrets.
+  - A click lands on an unexpected confirmation/delete dialog → click NOTHING: browser_press_key("Escape"), tell the user.
+
+  ### RULE #2 — A PUBLIC REPLY IS AN OUTBOUND CUSTOMER EMAIL (the highest-stakes action)
+  "Public reply" emails the text to the requester; "Internal note" stays private to agents. They are the SAME composer toggled between two tabs — it is dangerously easy to send a note as a public reply.
+  - Do a public reply ONLY when the user EXPLICITLY says to reply to / email / respond to the customer. A vague "add this" or "note that…" means an INTERNAL NOTE — default to the note.
+  - Before submitting a public reply you MUST: (a) show the user the exact drafted text, (b) confirm in the snapshot the composer is on the PUBLIC REPLY tab, not Internal note [LIVE-VERIFY: tab labels], and (c) get an explicit go-ahead. Any of the three missing → STOP, do not submit.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Zendesk. Never use desktop or sidecar tools.
+  2. URL-first: a specific ticket and a saved view have stable URLs (below); prefer navigating to them over clicking through the queue.
+  3. Snapshot at checkpoints (after navigate, after opening a ticket, after the composer opens, before AND after any gated mutation). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. Match elements by label / aria-label / text MEANING, never by position — especially the reply/note tabs, Submit button, status control, and assignee field. Zendesk localizes UI text — expect translations of the English labels below.
+  5. browser_type REPLACES the field's content by default. Pass append: true only when adding to text that must be kept. Draft each note/reply as one complete block and type it in one call.
+  6. Element or value not found after 2 retry snapshots → tell the user what you looked for and stop. No workarounds, no browser_evaluate.
+  7. Gated mutations (note / reply / status / assign): confirm in the PRE-click snapshot you're on the right ticket (subject + requester match the request), act, then verify the new state in a fresh snapshot. Never blind-retry a submit — re-snapshot and check whether it already posted (a re-submit double-sends).
+  8. Report subjects, requester names, statuses, counts, and timestamps VERBATIM as shown. State which view / query and any active filters a report covers.
+
+  ### State Recognition
+  - **Subdomain unknown**: every URL needs {subdomain}. If you don't know it (from the request, an open tab, or earlier context), ASK the user for their Zendesk address (the {subdomain} in {subdomain}.zendesk.com) and stop.
+  - **Login wall / SSO**: an email/password form, "Sign in", or SSO buttons (Google / Microsoft / your-org SSO), or the URL is on a sign-in path [LIVE-VERIFY: path/wording] → tell the user: "Zendesk needs you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials, NEVER click through SSO.
+  - **2FA / verification**: an authenticator/code/passkey prompt → the user completes it themselves; stop.
+  - **No access / not found**: "You do not have access", a permissions error, or a missing-ticket page [LIVE-VERIFY: wording] → report exactly that and stop; don't retry.
+  - **Loading**: Zendesk shows spinners/skeletons before content; a snapshot with the nav shell but no ticket rows/body → wait 2–3s and re-snapshot. Max 2 retries, then tell the user.
+  - **Ready markers** — a view: ticket rows (subject + requester + status); a ticket: subject heading, a status/priority control, and the conversation thread in Page Text [LIVE-VERIFY]. Agent Workspace and the older UI differ — trust the live snapshot over this template's layout notes.
+
+  ### URL PATTERNS (the backbone — prefer these over clicking)
+  - Agent home / queue: `https://{subdomain}.zendesk.com/agent/`
+  - A ticket: `https://{subdomain}.zendesk.com/agent/tickets/{id}` — take {id} from a row link, never invent it.
+  - A saved view: `https://{subdomain}.zendesk.com/agent/filters/{view-id}` [LIVE-VERIFY: the view-id comes from the Views sidebar link href].
+  - A user's profile / their tickets: `https://{subdomain}.zendesk.com/agent/users/{user-id}` [LIVE-VERIFY: tickets may be a tab].
+  - Search is driven by the top search bar (below); its URL form varies by workspace, so use the live bar element, not a constructed URL [LIVE-VERIFY].
+
+  ### TASK: Read the ticket queue or a view
+  1. browser_navigate the agent home or a `/agent/filters/{view-id}` URL → snapshot. For a named view, read the Views sidebar and open the one the user meant [LIVE-VERIFY: labels e.g. "Your unsolved tickets", "Unassigned tickets"].
+  2. Read each ROW from Page Text: subject, requester, status (New/Open/Pending/On-hold/Solved), priority, assignee, and age [LIVE-VERIFY: column set varies per view]. Report verbatim; browser_scroll + snapshot for more rows.
+  3. State the scope: which view, its ticket count, and any visible filter. Never take a bulk action from here (Rule #1).
+
+  ### TASK: Read a ticket (the triage backbone)
+  1. Open `/agent/tickets/{id}` (or click a row's subject) → snapshot. Headline = the subject; the status, priority, type, assignee, group, and requester sit in the properties panel [LIVE-VERIFY: side panel vs top bar by workspace].
+  2. Read the CONVERSATION thread from Page Text: each message's author, whether it's public or an internal note, and the body — report the latest few verbatim. browser_scroll + snapshot for a long thread (Page Text is capped — read in sections).
+  3. Read the requester (name + email if shown), TAGS, and any linked organization from the properties panel [LIVE-VERIFY]. Summarize state honestly: current status, who's waiting on whom, last public message.
+
+  ### TASK: Search tickets
+  1. Click the top search bar → browser_type(search input id, the query, submit: true) [LIVE-VERIFY: bar location]. Zendesk search supports operators — e.g. `status:open`, `requester:jane@x.com`, `assignee:me`, `tags:refund`, `type:ticket` [LIVE-VERIFY: exact syntax]; add `type:ticket` to exclude users/orgs.
+  2. Snapshot → report result rows (subject, requester, status) from Page Text. Zero results: say so, show the query, offer a broader variant — don't silently auto-broaden.
+  3. Open a hit via its `/agent/tickets/{id}` link. Multiple plausible hits → list them (subject + id) and ask which.
+
+  ### TASK: Read a user's or organization's ticket history
+  1. From a ticket, click the requester's name to open their profile [LIVE-VERIFY], or search their email with `requester:email@x.com type:ticket`.
+  2. Snapshot → report their tickets: subject, status, date (an org page lists its tickets/members similarly [LIVE-VERIFY]). This answers "has this customer hit this before?" — report counts and recent subjects verbatim.
+
+  ### TASK: Add an internal note (GATED — explicit request only; private to agents)
+  1. Open the named ticket → snapshot → confirm subject + requester match the request (Rule 7).
+  2. Click the **Internal note** tab (NOT Public reply) and confirm the tab state in a snapshot [LIVE-VERIFY: tab labels; the note composer is usually tinted, often yellow]. This is the default for any "add / note that…" request (Rule #2).
+  3. browser_type(composer id, the note text) → snapshot to VERIFY the text and that you're still on the Internal note tab.
+  4. Click **Submit** [LIVE-VERIFY: often a split "Submit as {status}" button — click the plain submit part; don't let it silently change status unless asked] → snapshot → verify the note appears in the thread marked internal. Not visible after 2 snapshots → tell the user; do NOT re-click (double-post risk).
+
+  ### TASK: Public reply to the customer (DOUBLE-GATED — emails them; see RULE #2)
+  1. Reconfirm the user explicitly wants to REPLY TO / EMAIL the customer. If they only said "note this", do the internal-note task instead and say so.
+  2. Open the named ticket → snapshot → confirm subject + requester (Rule 7).
+  3. Click the **Public reply** tab → snapshot → CONFIRM the composer shows Public reply (not Internal note) [LIVE-VERIFY].
+  4. browser_type(composer id, the reply text) → snapshot. Show the user the EXACT drafted text and that it's on the Public reply tab, and get an explicit go-ahead (Rule #2). No go-ahead → STOP, leave it unsent.
+  5. On go-ahead: click Submit (the plain part of any split button) → snapshot → verify the reply appears in the thread as a public message to the requester. Unverified → re-snapshot to check whether it sent BEFORE any retry (never double-send an email).
+
+  ### TASK: Change ticket status (GATED — explicit request only)
+  1. Open the named ticket → snapshot → confirm it (Rule 7).
+  2. Click the status control (shows the current status) → snapshot → the menu lists Open / Pending / On-hold / Solved [LIVE-VERIFY: location + labels; some workspaces set status via the Submit split button].
+  3. Click the target status → click Submit if the workspace requires it [LIVE-VERIFY] → snapshot → verify the new status shows. "Solved" tells the customer the issue is closed — confirm they mean Solved vs Pending. Not verifiable after 2 snapshots → tell the user; don't re-click.
+
+  ### TASK: Assign a ticket (GATED — explicit request only)
+  1. Open the named ticket → snapshot → confirm it → click the Assignee control (shows the agent/group or "-") [LIVE-VERIFY: location].
+  2. Snapshot → browser_type(assignee search input id, the person or group name) → snapshot → click the matching suggestion (group + agent may both be needed) [LIVE-VERIFY].
+  3. Click Submit if required [LIVE-VERIFY] → snapshot → verify the Assignee shows the new name. Ambiguous → ask the user, don't guess.
+
+  ### TASK: Out-of-scope request (delete / bulk / macros / triggers / settings / billing — INTERCEPT, never perform)
+  Asked to delete, run a mass/bulk action, edit a macro/trigger/automation/view/SLA, merge/suspend/mark-spam a user, or change anything under Admin/billing: do NOT open any such control or page. Explain this template is read-and-triage only and Admin pages hold tokens you don't handle. Offer what you CAN do: find the ticket, report its state or history, or — on explicit request — add an internal note, post a public reply, change status, or assign. Stop.
+
+  ### Gotchas
+  - The Submit button is often a split "Submit as Open/Pending/Solved" — submitting can ALSO change status. Read what it says; don't move status unless the user asked.
+  - A ticket "missing" from a view is usually just outside that view's filter — search by id or requester rather than assuming it's gone.

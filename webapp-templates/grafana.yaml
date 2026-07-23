@@ -1,0 +1,87 @@
+app_name: Grafana
+domains:
+  - grafana.net
+  - grafana.com
+description: Grafana — STRICTLY READ-ONLY observability. List dashboards and folders, open a dashboard and read its stat/gauge/table panels (the big-number VALUES, panel titles, and the time range shown), read one panel's current value, check alert states (firing/pending/ok — the "is anything on fire" backbone), read a table panel's rows, and set the time range via the URL. Charts are canvas — plotted lines are NOT readable; only stat/table values and alert states are. NEVER edits/saves/deletes dashboards or panels, never silences or edits alerts, never runs mutating queries, never touches data sources or settings.
+version: 1
+instructions: |
+  URL: Grafana Cloud instances are https://{org}.grafana.net; self-hosted lives on the org's own host (any domain/port). You MUST know the instance host first (see State Recognition). After the first successful navigate, trust the URL bar and reuse that host shape.
+
+  ### RULE #1 — STRICTLY READ-ONLY OBSERVABILITY (overrides everything, including the user's own words)
+  This is the user's MONITORING infrastructure — what tells them whether production is healthy. Every task here reads and reports; NONE changes anything.
+  - NEVER edit/save/duplicate/delete a dashboard or a panel; never click Save, "Save dashboard", "Add panel", "Edit", or a panel's edit/delete menu item. If you enter an edit/panel-edit view by accident, browser_press_key("Escape") or browser_navigate back to the dashboard — click nothing.
+  - NEVER silence, create, pause, or edit an alert rule/contact point/notification policy; never acknowledge or mute. Alerts are READ ONLY — report firing/pending/ok, never act on them.
+  - NEVER run an ad-hoc query that mutates, never change or test a data source, never edit users/orgs/teams/preferences. **Anything under /alerting/*/edit, /datasources, /admin, /org, or /profile that CHANGES state is off-limits** — reading the alert LIST (/alerting/list) is fine; opening a rule's EDIT form is not.
+  - Never read or repeat an API key/token/data-source secret even if one is visible. Asked to change ANYTHING → report the current state + the dashboard/panel URL and STOP.
+
+  ### NUMBERS COME FROM STAT/GAUGE/TABLE PANELS AND ALERT STATES — NOT FROM CHARTS
+  Grafana time-series panels are canvas/SVG: the plotted LINES contribute nothing readable to the snapshot's Page Text. NEVER read a value off a time-series line or "estimate from the chart". What IS readable as text and the ONLY things you may quote:
+  - **Stat / gauge / single-stat panels** — the big number (e.g. "CPU 87%", "Requests 1.2k/s") plus its panel title.
+  - **Table panels** — rows render as text; report them in table order.
+  - **Panel titles** — always readable; use them to say WHICH panel a number came from.
+  - **Alert states** — firing / pending / normal(ok) render as text/badges on /alerting/list and the alert-list panel.
+  - **Legend / "current"/"last" values** IF the panel renders them as a text legend row below the chart [LIVE-VERIFY: legend-as-table mode is per-panel — only quote it when it's actually text in Page Text].
+  If a dashboard's panels expose NO values to the snapshot (all pure time-series, no stat/table/legend text), say so honestly and scope your answer to what does render (stat panels, tables, the alert list). Don't invent a number.
+
+  ### RULES
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Grafana.
+  2. URL-first: dashboard list, a dashboard, the alert list, and the time range all live in the URL — most tasks start with one browser_navigate. The time range is URL state (?from=&to=) — set it there, don't fight the picker.
+  3. Snapshot at checkpoints (after navigate, after a panel/time-range change, before reporting). [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed.
+  4. Match elements by label/aria-label/text MEANING, never by position — panel layout reflows and every dashboard is different.
+  5. Element or value not found after 2 retry snapshots → tell the user what you looked for and stop. No workarounds, no browser_evaluate.
+  6. Report numbers, states, and timestamps VERBATIM as shown (Grafana abbreviates: "1.2k", "87%", "3m ago"). Never re-derive or extrapolate. **Every report MUST name the dashboard (or panel) AND the time range shown** — the same metric over two ranges looks like two different numbers.
+
+  ### State Recognition
+  - **Instance host unknown**: every URL needs the instance host. If you don't know it (request, pasted link, earlier context), ASK the user: "What's your Grafana host — the {org} in {org}.grafana.net for Grafana Cloud, or your self-hosted URL?" and stop. Never guess it.
+  - **Login wall**: a sign-in form ("Welcome to Grafana", email/username + password, or SSO buttons — Google/GitHub/Okta/SAML/"Sign in with…"), or a URL containing /login [LIVE-VERIFY: wording/path] → tell the user: "Grafana requires you to sign in. Please log in manually, then ask me again." Stop. NEVER type credentials, NEVER click through SSO.
+  - **No access / not found**: "You do not have permission" / "Access denied" / a 404 [LIVE-VERIFY: wording] → report exactly that and stop.
+  - **Loading**: panels load asynchronously (spinners/skeletons, "No data" that later fills). A snapshot with panel titles but no values → wait 2–3s, re-snapshot. Max 2 retries, then report what rendered.
+  - **Ready markers**: dashboard — panel titles plus the time-range control (top right, e.g. "Last 6 hours" / an absolute range) [LIVE-VERIFY: control text/location]; dashboard list — rows of dashboard names with folder labels; alert list — rows with a state badge (Firing/Pending/Normal).
+  - **Time-range control**: top-right, shows the active range (relative like "Last 6 hours" or two absolute timestamps) [LIVE-VERIFY]. It silently scopes EVERY number on the page — read it and state it in every report.
+
+  ### URL PATTERNS (the backbone — prefer over clicking) [LIVE-VERIFY: paths may vary by Grafana version, esp. older self-hosted]
+  - Dashboard list: `{host}/dashboards`
+  - A dashboard: `{host}/d/{uid}/{slug}` — take {uid} from a dashboard-list row's link href, never invent it.
+  - Alert rules list: `{host}/alerting/list`
+  - Explore (ad-hoc, READ-only reads only): `{host}/explore`
+  - **Time range is in the URL**: append `?from=…&to=…`. Relative: `?from=now-6h&to=now` (also now-1h, now-24h, now-7d, now-30d). Absolute: epoch-milliseconds (`?from=1704067200000&to=1704153600000`). On a dashboard URL that already has params, add/replace `from`/`to` while KEEPING the rest (uid/slug and any `var-*` template variables). Changing the range = one browser_navigate with the new from/to — no picker fiddling.
+  - Template variables ride the URL as `&var-{name}={value}` (e.g. `&var-namespace=prod`) — preserve them; changing one is a read, not a mutation.
+
+  ### TASK: List dashboards (names + folders)
+  1. browser_navigate `{host}/dashboards` → snapshot → resolve state.
+  2. Report dashboard names with their folder labels from Page Text, in list order. The list may paginate/lazy-load — browser_scroll + snapshot for more; say if you only read the visible page.
+  3. To find one: browser_type the name into the search box [LIVE-VERIFY: search field at top of the list] → snapshot → report matches (name + folder). Give the user the /d/{uid}/{slug} link when they want to open one.
+
+  ### TASK: Open a dashboard and read its panels
+  1. browser_navigate `{host}/d/{uid}/{slug}` (add `?from=…&to=…` if the user named a range) → snapshot → read the time-range control (State Recognition) FIRST.
+  2. Report from Page Text: each STAT/GAUGE panel's title + its big value; each TABLE panel's title + rows; panel titles for the time-series panels you CAN see but note their lines aren't readable. browser_scroll + snapshot for panels below the fold.
+  3. Report with the dashboard name + the time range shown. If every panel is a pure time-series with no stat/table/legend text, say the values aren't machine-readable here and report only what is (titles, any stat panels, the alert-list panel if present).
+
+  ### TASK: Read a specific panel's current value
+  1. Open the dashboard → snapshot → locate the panel by its TITLE in Page Text.
+  2. **Stat/gauge/single-stat** → report the big number verbatim + the panel title + the time range. **Table** → report the relevant row(s) in order.
+  3. **Time-series** → say plainly you can't read the plotted line. If the panel shows a text legend with current/last/mean values [LIVE-VERIFY: legend-in-table mode], quote that and label it as the legend value, not the line. Otherwise report the panel title + time range and that no text value is exposed. Never guess a value off the curve.
+
+  ### TASK: Check alert states ("is anything on fire?")
+  1. browser_navigate `{host}/alerting/list` → snapshot → resolve state.
+  2. Report each rule's name + state badge VERBATIM: **Firing** (active), **Pending** (breaching but within its `for` window), **Normal**/OK. Group by state — lead with Firing. browser_scroll + snapshot for the full list; a state filter may ride the URL [LIVE-VERIFY: e.g. ?state=firing]. Say how many of each and the evaluation time if shown.
+  3. Nothing firing → say so explicitly ("no rules firing; N normal, M pending"). This is READ ONLY — never silence, pause, or acknowledge; if asked to, report state + the /alerting/list URL and stop (RULE #1).
+  4. An alert-list PANEL embedded on a dashboard shows the same states as text — read it the same way.
+
+  ### TASK: Read a table panel's rows
+  1. Open the dashboard → snapshot → find the table panel by title.
+  2. Report its header columns and rows in table order from Page Text. The panel may scroll internally and paginate — browser_scroll + snapshot for more rows; state when you've only read the visible rows. Large tables cap the Page Text window — read top-down and say where you stopped.
+
+  ### TASK: Set / change the time range
+  1. Preferred: browser_navigate the SAME dashboard URL with `?from=…&to=…` swapped in (relative `now-…/now` or absolute epoch-ms), preserving uid/slug and every `var-*`. → snapshot.
+  2. Verify the time-range control now shows the new range before reading any number (State Recognition). Then re-run the read the user wanted, reporting the new range explicitly.
+  3. Picker fallback (only if a URL range won't take): click the time-range control → snapshot → click a relative preset by its label ("Last 6 hours", "Last 24 hours", … [LIVE-VERIFY: preset labels]) → snapshot → confirm the control updated. Absolute custom ranges need typed From/To fields [LIVE-VERIFY: field layout]; if unclear, use the nearest preset and TELL the user which range you actually used.
+
+  ### TASK: Change request (INTERCEPT — never perform)
+  Asked to edit/save/delete a dashboard or panel, silence/create/pause/edit an alert, change a data source, run a mutating query, or edit settings/users: do NOT open any edit/save/delete control or settings page. Explain this template is strictly read-only for observability, report the current state + the relevant dashboard/panel/alert URL so they can act themselves, and stop.
+
+  ### Gotchas
+  - **Freshness**: panels refresh on their own interval (or only on load) — a value can be seconds to minutes stale. If a refresh interval or "last updated" is shown, quote it; otherwise say the reading is a point-in-time snapshot.
+  - **"No data" ≠ zero**: an empty panel can mean the query returned nothing, the data source is down, or the time range has no data — report "No data" verbatim, don't call it 0.
+  - Panel VALUES depend entirely on the time range and template variables in the URL — two people on the same dashboard with different ranges/vars see different numbers. Always state both.
+  - Self-hosted Grafana can sit behind a reverse-proxy sub-path (e.g. `{host}/grafana/…`) — after the first navigate, mirror whatever prefix the URL bar actually shows.

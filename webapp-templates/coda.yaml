@@ -1,0 +1,87 @@
+app_name: Coda
+domains:
+  - coda.io
+# No keywords on purpose: "coda" is an everyday English/music word (the closing
+# passage of a piece; "a coda to the story") — a homonym false-injection class
+# like linear/zoom/medium. Coda's task vocabulary ("doc", "page", "table",
+# "row", "add a row") is also generic productivity language that would hijack
+# unrelated requests. The app name and coda.io domain carry the trigger.
+keywords: []
+description: Coda — browse/search your docs, navigate a doc's pages, read page text and table rows, append text to a page, add a table row, and create a page. Cannot build tables/columns, edit formulas/Packs, or configure views.
+version: 1
+instructions: |
+  URL: https://coda.io — your doc list/home is https://coda.io/. A doc opens at
+  https://coda.io/d/{docSlug}_{docId} (docId looks like d + short id). A specific
+  page inside a doc appends a page segment, e.g.
+  https://coda.io/d/{docSlug}_{docId}/{pageSlug}_su{pageId}
+  [LIVE-VERIFY the exact doc/page URL shapes]. A Coda doc is a single-page app:
+  once open, you move between its pages via the LEFT PAGE PANEL, not by full
+  navigations. If the user gives you a Coda link, navigate it verbatim.
+
+  ### TOOLS
+  ALLOWED: browser_navigate, browser_snapshot, browser_click, browser_type, browser_hover, browser_press_key, browser_scroll, browser_upload_file.
+  BANNED: browser_evaluate, browser_screenshot. No desktop or other tools.
+  - `browser_type(element_id, text, submit?, append?)` — REPLACES the target's content by default; `append=true` preserves it and inserts at the end. `submit=true` presses Enter after typing.
+  - `browser_press_key(key)` — real key events. Keys this template uses: "Enter", "Escape", "End", "/". Never name Chrome-reserved combos (new window/tab, tab switching) — those keydowns never reach the page.
+  - Element ids are 1-based `[id]`s from the LATEST snapshot and change every snapshot — never reuse an id across a state change, never guess one.
+
+  ### TYPING MODEL — the #1 source of doc-editor bugs
+  Coda pages are a block editor (rich text + inline tables), same hazard class as Notion:
+  - browser_type CLEARS the target block first, then inserts text paste-like (no per-character keystrokes). With append:true it preserves existing content and inserts at the end.
+  - NEVER "append" by plain-typing into an existing block — that ERASES the block. NEVER chain two plain browser_type calls into the same block — the second wipes the first.
+  - Markdown autoformat ("# " → heading) and inline "/" triggers depend on real keystrokes and may NOT fire on paste-like insertion. Use the SAFE-APPEND recipe below rather than relying on them.
+
+  **SAFE-APPEND — the only safe way to add text to a page:**
+  1. snapshot → find the LAST body block (the lowest contenteditable in the page's main area)
+  2. browser_click it → browser_press_key "End" (caret to end of that block)
+  3. browser_press_key "Enter" (real keydown → a new empty block appears below)
+  4. snapshot → browser_type your text into the NEW empty contenteditable
+  Repeat Enter → snapshot → type for each additional block. Each new block has a NEW id.
+
+  ### CENTRAL CAUTION — tables and long pages
+  - Coda tables are a virtualized custom grid (canvas/DOM hybrid). Individual grid cells may not surface as distinct clickable elements, and inline cell editing is NOT the supported path [LIVE-VERIFY whether cells surface]. **All reliable reading and editing of a row goes through the EXPANDED ROW detail** (open the row → a modal/panel with labeled fields), which is regular DOM. Grid view is for scanning only.
+  - Page Text is a scroll-blind ~2000-char WINDOW from the top of the page — it does NOT grow when you scroll (innerText is whole-document but capped). For content past the window, say what you actually saw ("the first ~2000 characters / first N visible rows"); never claim a page's or table's full contents from one snapshot.
+
+  ### STATE RECOGNITION (check on the FIRST snapshot after every navigate)
+  - **Logged out**: a login/sign-in form ("Sign in", "Continue with Google", email code) or the coda.io marketing/pricing landing page. You cannot log in for the user and SSO cannot be automated → tell the user to log into Coda in this browser, then STOP. NEVER type credentials.
+  - **Doc list / home**: coda.io root; the page lists your docs by NAME with last-edited/last-opened metadata [LIVE-VERIFY list markers] → ready to browse or open a doc.
+  - **Open doc**: a left PAGE PANEL with the doc's page tree, and a doc/page title plus body content in the main area [LIVE-VERIFY markers] → ready for page/table work.
+  - **Expanded row**: a modal/side panel over the table showing one row's field names and values [LIVE-VERIFY] → ready for a row read. browser_press_key "Escape" returns to the page.
+  - **Loading**: near-empty snapshot or skeleton placeholders → re-snapshot (max 2 retries), then report and stop.
+  - **View-only / no edit access**: no editable title/blocks, or a "read-only"/"can view" notice [LIVE-VERIFY wording] → reading still works; for any write task, tell the user you need edit access and STOP.
+
+  ### ELEMENT MAP (roles/labels; get ids from the current snapshot)
+  - Left page panel: page-tree links whose text is each page's user-set title (stable — match these); a doc/section header near the top; a "+" / "New page" control to add a page [LIVE-VERIFY label/icon].
+  - Main area: page title = the topmost contenteditable; each block = its own contenteditable in page order; tables render as a grid of rows within the page.
+  - Table controls: a per-row expand/open affordance (often revealed on hover) and an "Add row"/"+" control at the bottom of the table [LIVE-VERIFY].
+  - Top bar: a doc search/quick-find control and a share control [LIVE-VERIFY labels].
+
+  ### TASKS
+
+  **Browse / search your docs** — navigate https://coda.io/ → snapshot → read doc NAMES and last-edited metadata from the doc list [LIVE-VERIFY]. If there is a search box on the home page, click it → browser_type the query → snapshot → read the matching docs. Report the actual doc names you saw, never guesses. To open one, click it by NAME (or navigate its URL).
+
+  **Open a doc & navigate its pages** — If you have a URL/docId: browser_navigate it directly. Otherwise open from the doc list (above). Once the doc is open, use the LEFT PAGE PANEL: snapshot → click the target page by its TITLE in the page tree → snapshot → verify the main-area title changed. Do NOT full-navigate between pages of the same doc; use the panel.
+
+  **Read a page's content** — Open the page → snapshot → read the body from Page Text. Coda pages MIX rich text and inline tables, and Page Text is the scroll-blind ~2000-char window (see CENTRAL CAUTION): report the first window honestly and note that more may follow; scrolling will NOT extend the text. For a table's contents, use "Read a table's rows" below, not Page Text.
+
+  **Read a table's rows** — Open the page holding the table → snapshot → scan visible rows from Page Text (virtualized: only rows scrolled into view exist; scroll + re-snapshot to see more, within budget). For a specific row's full values, EXPAND it: find the row by its display text → browser_hover the row → snapshot → click the row's expand/open control that hover revealed [LIVE-VERIFY icon]; fallback: click an already-visible expand control on the row. Verify a row-detail modal/panel with field labels appears → read field names and values from it → browser_press_key "Escape" to close. Never claim a table's total row count from one snapshot.
+
+  **Append text to a page** — Open the page → run the SAFE-APPEND recipe (TYPING MODEL). Never plain-type into an existing block to "append" — replace-by-default deletes its content. Verify the new block's text in the next snapshot.
+
+  **Add a row to a table** — Open the page with the table → snapshot → click the table's "Add row"/"+" control at the bottom of the table [LIVE-VERIFY label/position; a toolbar add-row control is an alternative] → snapshot → a new empty row appears. Preferred fill path: EXPAND the new row (hover → expand, as above) and set each field in the row-detail panel — click the field by its column NAME label → browser_type the value (replace-by-default is correct for a fresh field; append:true only to add to existing text). Select/date/relation fields open a picker → snapshot → choose the option by its label; if a picker's structure is unclear, stop and ask rather than guessing. Verify each value in the panel, then Escape. Avoid inline grid typing.
+
+  **Create a new page** — Open the doc → snapshot → click the left panel's "+"/"New page" control [LIVE-VERIFY] → snapshot → a new page opens with a title contenteditable → browser_click the title → browser_type the page title (replace-by-default is correct here) → browser_press_key "Enter" to move into the first body block → snapshot to verify the title and the new page-tree entry. Add body content via SAFE-APPEND.
+
+  **Delete a page (gated)** — Only when the user named the specific page to delete in THIS request. Open/select the page → snapshot → open its page-tree row context menu (right-click the page, or click its "..."/more control) [LIVE-VERIFY] → snapshot → click the "Delete"/"Move to trash" item, matched by its LABEL/trash icon, never by menu position → confirm if Coda prompts → snapshot to verify the page is gone. If you cannot identify the delete item with confidence, STOP and ask — do not click blind.
+
+  ### NOT SUPPORTED — tell the user, don't improvise
+  Creating/deleting tables or columns; editing column types, formulas, or Packs; configuring views (filters, sorts, groups, layouts); importing data; publishing a doc. If asked, say plainly this surface doesn't support it and stop that part.
+
+  ### RULES
+  1. Only the ALLOWED tools. All reliable row reads/writes go through the EXPANDED ROW detail — never edit inline in the grid.
+  2. Match docs, pages, rows, and fields by their NAME/label text, never by position — especially before any edit or delete.
+  3. One verify-snapshot after each state change (doc opened, page switched, block created, row expanded/added). Not after every keystroke, not zero.
+  4. Coda auto-saves; there is no Save button. Escape closes an expanded row.
+  5. Page Text is a scroll-blind ~2000-char window and tables are virtualized — never claim full page or table contents from one snapshot; say how much you actually saw.
+  6. Budgets: open a doc ≈ 4 calls · read a page ≈ 4 · read/expand a row ≈ 7 · append one block ≈ 7 · create a page with title ≈ 6 · add a row (title only) ≈ 8. Exceeding roughly double the budget = stop and report.
+  7. Stop conditions: login wall, view-only doc on a write task, an unsupported request, or the same step failing twice after a fresh snapshot — report exactly what failed, don't loop.

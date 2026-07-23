@@ -1,0 +1,103 @@
+app_name: Google Finance
+domains:
+  # path-qualified: Finance lives under the google.com/finance path, not a bare host
+  - google.com/finance
+keywords:
+  - stock price
+  - share price
+  - stock quote
+  - market cap
+description: Google Finance — READ-ONLY market data. Look up a stock/ETF/index/currency/crypto quote (current price, day change %, market cap, P/E, day and 52-week range from the stats TABLE), compare several tickers, read a market overview (S&P/Dow/Nasdaq), skim a company's About/financials summary, and list news headlines for a ticker — always reporting the as-of time + exchange, NEVER giving investment advice, and NEVER touching a signed-in watchlist or portfolio without the user logging in.
+version: 1
+instructions: |
+  URL: https://www.google.com/finance
+
+  ### THE ONE THING TO KNOW — the numbers are TEXT; only the price GRAPH is canvas
+  On a quote page the price CHART (the interactive line/candlestick graph) is a CANVAS/SVG drawing — it contributes NOTHING readable to the snapshot, so you can NEVER read a price "off the chart" or trace the line. Everything you actually report renders as TEXT in Page Text (the whole point of this template):
+  - the **current price** and the **day change** (absolute + percent, e.g. "$142.65  +1.24 (0.88%)"),
+  - the **stats table** below the chart: Market cap, P/E ratio, Day range (Low–High), Year range (52-week), Dividend yield, Avg volume, Previous close, Open, etc.,
+  - the **About** blurb, the financials summary rows, and the **news headline** list.
+  Report those from Page Text. If a value only exists visually in the chart (e.g. "the price at 11am", the exact shape of the intraday line), SAY it isn't machine-readable — never invent a number.
+
+  ### RULES (each stated once — follow exactly)
+  1. ONLY use: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, browser_hover, browser_scroll. browser_evaluate and browser_screenshot are BANNED for Google Finance. Never use desktop or sidecar tools.
+  2. READ-ONLY: this template only looks up and reports market data. It never signs in, never trades, never edits a watchlist/portfolio. Quote/market/news reading needs NO account.
+  3. DATA, NOT ADVICE (non-negotiable): report the numbers and let the user decide. NEVER say "you should buy/sell/hold", never call anything a good/bad investment, never predict a price. If asked "should I buy X?", give the current data and a plain "I can report the data but not give investment advice."
+  4. ALWAYS report the AS-OF TIME and the EXCHANGE. Prices here are delayed (typically ~15–20 min for many exchanges) and depend on the listing — every quote page shows a timestamp and market-status line (e.g. "As of 3:47 PM EDT · Market open" / "After hours" / "Closed") and the exchange (NASDAQ, NYSE, …). Quote every price WITH its timestamp + exchange; a bare number is misleading.
+  5. URL-FIRST: quotes, the markets page, and currency/crypto all have stable URLs (below). Build the URL rather than typing into the search box; type into the search box only to resolve a name you can't turn into a ticker.
+  6. browser_type REPLACES field content by default — correct for the search box.
+  7. [id]s are 1-based and CHANGE with every snapshot — never reuse ids after the page changed. Match elements by label/aria-label/role MEANING, never by position (rows reflow, and Finance localizes labels by geo-IP).
+  8. If a value or element is not found after 2 retry snapshots, tell the user what you were looking for and stop. No workarounds, no browser_evaluate.
+
+  ### State Recognition
+  - **Consent interstitial** (EU / first run): the URL becomes a consent.google.com page ("Before you continue to Google"). Buttons often sit BELOW the fold — browser_scroll DOWN, re-snapshot, then click "Reject all" (rejecting is sufficient for all reading here) [LIVE-VERIFY: exact label; localized without hl]. It then loads your original target. If it persists after 2 tries, re-navigate to the target once, then tell the user and stop.
+  - **No sign-in needed** for quotes, comparison, markets, currency/crypto, About/financials, or news — all public. A "Sign in" button in the top bar is normal; ignore it.
+  - **Watchlist / portfolio require sign-in** — GATED: if the user asks to view/add to their watchlist or portfolio and the page shows a signed-out state (a sign-in prompt, or an empty "Sign in to see your watchlist"), tell them to log in manually in their browser, then ask again. NEVER type credentials or 2FA codes, and never add/remove watchlist items on their behalf (that is a write — out of scope).
+  - **Force English (optional)**: append `?hl=en` to a Finance URL if labels come back localized; if they still localize, match by role/meaning, not exact English text.
+  - **Ready markers**: the price + change line and the stats table (Market cap / P/E / Day range rows) are present in Page Text; the page title reads like "GOOGL Stock Price ... - Google Finance".
+  - **Loading**: header present but no price/stats numbers → wait 2–3s, snapshot again. Max 2 retries, then tell the user.
+  - **Bad ticker**: an unresolved symbol lands on a search-results view or "we couldn't find" state rather than a quote page — do NOT report a price; tell the user the ticker didn't resolve and ask them to confirm the symbol/exchange.
+
+  ### URL PATTERNS (the backbone — prefer these over the search box)
+  - **Quote (ticker + exchange)**: `https://www.google.com/finance/quote/{TICKER}:{EXCHANGE}` — e.g. `/finance/quote/GOOGL:NASDAQ`, `/finance/quote/BRK.B:NYSE`. The exchange suffix is the reliable form.
+  - **Quote (ticker only)**: `https://www.google.com/finance/quote/{TICKER}` — e.g. `/finance/quote/AAPL` often resolves to the primary listing. If it lands ambiguous, add the `:EXCHANGE` suffix.
+  - **Currency pair**: `https://www.google.com/finance/quote/{FROM}-{TO}` — e.g. `/finance/quote/EUR-USD`, `/finance/quote/USD-JPY`.
+  - **Crypto**: `https://www.google.com/finance/quote/{COIN}-{FIAT}` — e.g. `/finance/quote/BTC-USD`, `/finance/quote/ETH-USD`.
+  - **Markets / indexes**: `https://www.google.com/finance/markets/indexes` — the major indices page (S&P 500, Dow Jones, Nasdaq, etc.). Sub-pages exist for `/markets/gainers`, `/markets/losers`, `/markets/most-active`, `/markets/climate-leaders`, `/markets/cryptocurrencies` [LIVE-VERIFY: exact slugs].
+  - **Home**: `https://www.google.com/finance/` — market summary + (signed in) watchlist.
+  - **Search by name** (only when you can't build a ticker): navigate the home page, browser_type the company name into the top search box (aria-label like "Search for stocks..." [LIVE-VERIFY]) → snapshot → click the matching suggestion/result whose exchange you want → snapshot the quote page.
+
+  ### SNAPSHOT FORMAT (expected shape — [LIVE-VERIFY], not live-captured)
+  ```
+  Page: GOOGL Stock Price & News - Alphabet Inc. - Google Finance
+  URL: https://www.google.com/finance/quote/GOOGL:NASDAQ
+  --- Page Text ---
+  Alphabet Inc  GOOGL · NASDAQ … $142.65  +1.24  (0.88%)  today  As of 3:47 PM EDT · Market open …
+  Previous close $141.41  Day range $140.90 - $143.02  Year range $120.21 - $155.20
+  Market cap 1.78T USD  Avg volume 24.10M  P/E ratio 24.35  Dividend yield -  …
+  About  Alphabet Inc. is an American multinational technology company … News …
+  --- Interactive Elements ---
+  [n] tab "Overview" / "Compare" / "Financials" [LIVE-VERIFY]
+  ```
+  Page Text = the FIRST ~2000 chars of visible text, top-anchored — browser_scroll does NOT extend it; deep sections (full news list, financials tables far down) can be cut. The price chart canvas contributes nothing — expected, not an error.
+
+  ### TASK: Get a stock/ETF quote (the backbone)
+  1. Build the quote URL (`:EXCHANGE` form when you know it) → browser_navigate → snapshot.
+  2. From Page Text report VERBATIM: current price, day change (absolute + %), and the stats you were asked for from the table — Market cap, P/E ratio, Day range, Year range (52-week), Previous close, Open, Avg volume, Dividend yield. Quote Finance's own abbreviations ("1.78T", "24.10M") as shown.
+  3. ALWAYS append the AS-OF timestamp + market-status line and the EXCHANGE (Rule 4). If the market line says "After hours"/"Closed", say so — the headline price is the last regular-session close and there may be a separate after-hours line.
+  4. Add the data-not-advice note if the user framed it as a buy/sell decision (Rule 3).
+
+  ### TASK: Compare a few tickers
+  1. Look up each ticker with the quote task (separate navigations) — most reliable.
+  2. Build a small table of the SAME fields for each (price, day change %, market cap, P/E), each with its own exchange + as-of time (they can differ). Report differences as facts, not as a recommendation.
+  3. (Optional) A quote page may have a "Compare" tab/box [LIVE-VERIFY] — if clearly present you can add a second ticker there, but per-ticker navigation is the dependable path.
+
+  ### TASK: Market overview (major indices)
+  1. browser_navigate `/finance/markets/indexes` → snapshot.
+  2. Report the index LEVELS and day change % from Page Text for the majors the user asked about — S&P 500, Dow Jones Industrial Average, Nasdaq Composite (and Russell 2000, VIX, etc. if listed) [LIVE-VERIFY: row labels]. Include the as-of time / market status shown on the page.
+  3. For "biggest movers", use `/markets/gainers`, `/markets/losers`, or `/markets/most-active` [LIVE-VERIFY] and report the ranked rows (ticker, price, change %).
+
+  ### TASK: Currency / crypto quote
+  1. Build the pair URL — currency `/finance/quote/EUR-USD`, crypto `/finance/quote/BTC-USD` → navigate → snapshot.
+  2. Report the current rate/price, day change %, and the as-of time (crypto trades 24/7 — there's no exchange close, say the time is a snapshot of a continuous market). For "convert 100 EUR to USD", read the rate and compute the product YOURSELF, labeling it as computed from the quoted rate at that timestamp.
+
+  ### TASK: About / financials summary for a company
+  1. On the quote page, the **About** blurb (business description, HQ, CEO, employees, founded [LIVE-VERIFY: which fields render]) is usually in Page Text below the stats — report it verbatim.
+  2. For financials, click the **Financials** tab (`role="tab"` [LIVE-VERIFY]) → snapshot → report the summary rows that render as text (Revenue, Net income, EPS, etc. for the shown period). Charts within are canvas — read the tabular figures only; if a figure is only in a chart, say so. Name the reporting period (quarter/year) exactly as labeled.
+
+  ### TASK: News headlines for a ticker
+  1. On the quote page, snapshot → the **News** section lists recent headlines, each with a SOURCE and a relative time ("2 hours ago") [LIVE-VERIFY: structure].
+  2. Report headline + source + time for the top items in Page Text order. Quote headlines verbatim; NEVER summarize a headline into a buy/sell signal or add sentiment (Rule 3). If a headline's full article isn't on the page, don't invent its contents — offer to open the linked source only if the user asks.
+
+  ### UNSUPPORTED / OUT OF SCOPE — tell the user, do not attempt
+  - Trading, placing orders, or connecting a brokerage.
+  - Adding to / editing a watchlist or portfolio (a signed-in write — GATED; see State Recognition).
+  - Reading exact values off the price chart canvas, or reconstructing the intraday line.
+  - Investment advice, price predictions, or "is now a good time" judgments (Rule 3).
+
+  ### Gotchas
+  - **Delay**: quotes are typically delayed (often ~15–20 min; varies by exchange) — the on-page timestamp is the truth; always pass it through and never present a price as real-time.
+  - **Exchange matters**: the same ticker can list on multiple exchanges (e.g. dual listings) at different prices/currencies — use the `:EXCHANGE` suffix and always state which exchange you read.
+  - **Currency of the figure**: market cap and prices carry a currency (USD, EUR, …) shown next to the number — quote it; don't assume USD.
+  - **Ticker vs name collisions**: short tickers can resolve to the wrong instrument — if the resolved company name doesn't match what the user meant, stop and confirm rather than reporting the wrong company.
+  - **After-hours / pre-market**: outside regular hours the big price may be the prior close with a separate extended-hours line — report both and say which is which.
