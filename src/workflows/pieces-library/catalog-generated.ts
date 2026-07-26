@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-07-19";
+export const GENERATED_AT = "2026-07-26";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -352,8 +352,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "apify",
     npmPackage: "@activepieces/piece-apify",
-    versionRange: "^0.2.5",
-    latestVersion: "0.2.5",
+    versionRange: "^0.2.7",
+    latestVersion: "0.2.7",
     displayName: "Apify",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/apify",
@@ -1692,8 +1692,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "docusign",
     npmPackage: "@activepieces/piece-docusign",
-    versionRange: "^0.2.4",
-    latestVersion: "0.2.4",
+    versionRange: "^0.2.5",
+    latestVersion: "0.2.5",
     displayName: "Docusign",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/docusign",
@@ -2002,8 +2002,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "firecrawl",
     npmPackage: "@activepieces/piece-firecrawl",
-    versionRange: "^0.3.8",
-    latestVersion: "0.3.8",
+    versionRange: "^0.3.10",
+    latestVersion: "0.3.10",
     displayName: "Firecrawl",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/firecrawl",
@@ -2932,8 +2932,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "intercom",
     npmPackage: "@activepieces/piece-intercom",
-    versionRange: "^0.7.3",
-    latestVersion: "0.7.3",
+    versionRange: "^0.7.4",
+    latestVersion: "0.7.4",
     displayName: "Intercom",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/intercom",
@@ -2972,8 +2972,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "jira-cloud",
     npmPackage: "@activepieces/piece-jira-cloud",
-    versionRange: "^0.3.7",
-    latestVersion: "0.3.7",
+    versionRange: "^0.3.8",
+    latestVersion: "0.3.8",
     displayName: "Jira Cloud",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/jira-cloud",
@@ -3462,8 +3462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "mailchimp",
     npmPackage: "@activepieces/piece-mailchimp",
-    versionRange: "^0.5.5",
-    latestVersion: "0.5.5",
+    versionRange: "^0.5.6",
+    latestVersion: "0.5.6",
     displayName: "Mailchimp",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/mailchimp",
@@ -3802,8 +3802,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-teams",
     npmPackage: "@activepieces/piece-microsoft-teams",
-    versionRange: "^0.5.5",
-    latestVersion: "0.5.5",
+    versionRange: "^0.6.0",
+    latestVersion: "0.6.0",
     displayName: "Microsoft Teams",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-teams",
@@ -4152,8 +4152,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "omnihr",
     npmPackage: "@activepieces/piece-omnihr",
-    versionRange: "^0.0.8",
-    latestVersion: "0.0.8",
+    versionRange: "^0.1.0",
+    latestVersion: "0.1.0",
     displayName: "Omnihr",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/omnihr",
@@ -4212,8 +4212,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "openai",
     npmPackage: "@activepieces/piece-openai",
-    versionRange: "^0.9.2",
-    latestVersion: "0.9.2",
+    versionRange: "^0.10.1",
+    latestVersion: "0.10.1",
     displayName: "Openai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/openai",
@@ -4742,8 +4742,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "quickbooks",
     npmPackage: "@activepieces/piece-quickbooks",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.1.7",
+    latestVersion: "0.1.7",
     displayName: "Quickbooks",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/quickbooks",
@@ -5142,8 +5142,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "sendgrid",
     npmPackage: "@activepieces/piece-sendgrid",
-    versionRange: "^0.5.4",
-    latestVersion: "0.5.4",
+    versionRange: "^0.5.5",
+    latestVersion: "0.5.5",
     displayName: "Sendgrid",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/sendgrid",
@@ -6412,8 +6412,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "xero",
     npmPackage: "@activepieces/piece-xero",
-    versionRange: "^0.6.7",
-    latestVersion: "0.6.7",
+    versionRange: "^0.6.8",
+    latestVersion: "0.6.8",
     displayName: "Xero",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/xero",
@@ -6462,8 +6462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "zendesk",
     npmPackage: "@activepieces/piece-zendesk",
-    versionRange: "^0.2.9",
-    latestVersion: "0.2.9",
+    versionRange: "^0.2.10",
+    latestVersion: "0.2.10",
     displayName: "Zendesk",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/zendesk",
