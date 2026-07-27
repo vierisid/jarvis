@@ -226,6 +226,56 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
     }
   }, [nvidiaModels, providerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Ollama serves only what the operator pulled, and every id carries a tag
+  // ("qwen2.5:3b"). The curated `provider.models` list is untagged, so picking
+  // from it yields ":latest" — usually not pulled — and the first chat 404s.
+  // Ask the daemon for the real list. Re-fetches when the base URL changes so
+  // pointing at a different host shows that host's models. Falls back to the
+  // curated list when the call fails (daemon down, Ollama not running).
+  const [ollamaModels, setOllamaModels] = useState<string[] | null>(null);
+  const [ollamaLoading, setOllamaLoading] = useState(false);
+  useEffect(() => {
+    if (providerId !== "ollama") return;
+    let cancelled = false;
+    setOllamaLoading(true);
+    fetch(`/api/config/llm/ollama/models?base_url=${encodeURIComponent(baseUrl.trim())}`)
+      .then((r) => r.json())
+      .then((d: { ok: boolean; models?: string[] }) => {
+        if (cancelled) return;
+        setOllamaModels(d.ok && d.models && d.models.length > 0 ? d.models : []);
+      })
+      .catch(() => {
+        if (!cancelled) setOllamaModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setOllamaLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, baseUrl]);
+
+  // Snap off the untagged curated default once the real list arrives, so the
+  // test button works without the user having to notice the mismatch.
+  useEffect(() => {
+    if (providerId !== "ollama") return;
+    if (!ollamaModels || ollamaModels.length === 0) return;
+    if (!ollamaModels.includes(model)) {
+      // Prefer a tagged variant of whatever was selected ("qwen2.5" ->
+      // "qwen2.5:3b") before falling back to the first installed model.
+      const sameFamily = ollamaModels.find((m) => m.split(":")[0] === model.split(":")[0]);
+      setModel(sameFamily ?? ollamaModels[0]!);
+      setTestResult(null);
+    }
+  }, [ollamaModels, providerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What the generic model dropdown offers: the live Ollama catalog when we
+  // have one, the curated per-provider list otherwise.
+  const pickerModels =
+    providerId === "ollama" && ollamaModels && ollamaModels.length > 0
+      ? ollamaModels
+      : provider.models;
+
   // ── STT screen state ───────────────────────────────────────────────
   // Default to "skip" so users who only want text chat aren't forced to
   // hand over a Whisper key on first run. They can wire STT later from
@@ -681,18 +731,18 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 <label className="v2-setup__label" htmlFor="setup-model">
                   Model
                 </label>
-                {provider.models.length > 0 && (
+                {pickerModels.length > 0 && (
                   <select
                     id="setup-model"
                     className="v2-setup__select"
-                    value={provider.models.includes(model) ? model : "custom"}
+                    value={pickerModels.includes(model) ? model : "custom"}
                     onChange={(e) => {
                       const v = e.target.value;
                       setModel(v === "custom" ? "" : v);
                       setTestResult(null);
                     }}
                   >
-                    {provider.models.map((m) => (
+                    {pickerModels.map((m) => (
                       <option key={m} value={m}>
                         {m}
                       </option>
@@ -700,7 +750,16 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     <option value="custom">Custom…</option>
                   </select>
                 )}
-                {!provider.models.includes(model) && (
+                {providerId === "ollama" && ollamaLoading && (
+                  <p className="v2-setup__hint">Reading installed models from Ollama…</p>
+                )}
+                {providerId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && (
+                  <p className="v2-setup__hint">
+                    Could not reach Ollama at this URL — showing suggestions instead.
+                    Type the exact model id including its tag (e.g. <code>llama3.1:8b</code>).
+                  </p>
+                )}
+                {!pickerModels.includes(model) && (
                   <input
                     className="v2-setup__input"
                     value={model}
@@ -717,7 +776,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                     }
                     autoComplete="off"
                     style={{
-                      marginTop: provider.models.length > 0 ? "var(--s-2)" : 0,
+                      marginTop: pickerModels.length > 0 ? "var(--s-2)" : 0,
                     }}
                   />
                 )}
@@ -729,6 +788,7 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
                 provider={provider}
                 providerId={providerId}
                 nvidiaModels={nvidiaModels}
+                ollamaModels={ollamaModels}
                 tierConversation={tierConversation}
                 setTierConversation={(m) => { setTierConversation(m); setTestResult(null); }}
                 tierHigh={tierHigh}
@@ -1073,14 +1133,15 @@ function ChoiceCard({
 
 // Inline tier picker bank used by the onboarding LLM screen when the user
 // flips on "Advanced setup". Reuses the same provider catalogue as the
-// single-model picker (provider.models + the optional live NVIDIA catalog)
-// so models match exactly. Cross-provider tiers are a settings-room
+// single-model picker (provider.models + the optional live NVIDIA/Ollama
+// catalogs) so models match exactly. Cross-provider tiers are a settings-room
 // concern; here every tier rides the same provider/key the user just
 // configured above.
 function AdvancedTierPickers({
   provider,
   providerId,
   nvidiaModels,
+  ollamaModels,
   tierConversation, setTierConversation,
   tierHigh, setTierHigh,
   tierMedium, setTierMedium,
@@ -1089,14 +1150,16 @@ function AdvancedTierPickers({
   provider: (typeof PROVIDERS)[number];
   providerId: LLMProviderId;
   nvidiaModels: string[] | null;
+  ollamaModels: string[] | null;
   tierConversation: string; setTierConversation: (m: string) => void;
   tierHigh: string; setTierHigh: (m: string) => void;
   tierMedium: string; setTierMedium: (m: string) => void;
   tierLow: string; setTierLow: (m: string) => void;
 }) {
-  const liveModels = providerId === "nvidia" && nvidiaModels && nvidiaModels.length > 0
-    ? nvidiaModels
-    : provider.models;
+  const live = providerId === "nvidia" ? nvidiaModels
+    : providerId === "ollama" ? ollamaModels
+    : null;
+  const liveModels = live && live.length > 0 ? live : provider.models;
 
   const tiers: Array<{ id: string; label: string; sub: string; value: string; set: (m: string) => void }> = [
     { id: "conversation", label: "Conversation", sub: "Thin LLM that drives dialogue and routes work. Setting any tier activates router-first.", value: tierConversation, set: setTierConversation },

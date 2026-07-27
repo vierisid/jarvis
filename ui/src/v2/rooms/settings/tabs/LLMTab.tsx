@@ -667,12 +667,18 @@ function ModelSelector({
   const parsed = useMemo(() => parseModelRef(value), [value]);
   const providerNames = Object.keys(providers).sort();
 
+  // Read the installed Ollama models whenever an Ollama provider exists, so
+  // the dropdown offers tagged ids that actually resolve.
+  const ollamaModels = useOllamaModels(
+    Object.values(providers).some((p) => p.kind === "ollama"),
+  );
+
   const [selectedProvider, setSelectedProvider] = useState<string>(
     parsed?.provider ?? providerNames[0] ?? "",
   );
   const [selectedModel, setSelectedModel] = useState<string>(parsed?.model ?? "");
   const [customModel, setCustomModel] = useState<string>(
-    parsed?.model && !providerModels(providers, parsed.provider).includes(parsed.model)
+    parsed?.model && !providerModels(providers, parsed.provider, ollamaModels).includes(parsed.model)
       ? parsed.model
       : "",
   );
@@ -681,7 +687,7 @@ function ModelSelector({
   useEffect(() => {
     if (parsed) {
       setSelectedProvider(parsed.provider);
-      const known = providerModels(providers, parsed.provider);
+      const known = providerModels(providers, parsed.provider, ollamaModels);
       if (known.includes(parsed.model)) {
         setSelectedModel(parsed.model);
         setCustomModel("");
@@ -696,9 +702,12 @@ function ModelSelector({
       setSelectedModel("");
       setCustomModel("");
     }
-  }, [value]);
+    // `ollamaModels` participates: until the live catalog lands, a tagged id
+    // looks unknown and would be parked in the custom field. Re-run when it
+    // arrives so the dropdown snaps to the real entry.
+  }, [value, ollamaModels]);
 
-  const models = providerModels(providers, selectedProvider);
+  const models = providerModels(providers, selectedProvider, ollamaModels);
   const usesCustomOnly = models.length === 0;
   const effectiveModel = selectedModel === "__custom__" ? customModel.trim() : selectedModel;
 
@@ -731,7 +740,7 @@ function ModelSelector({
             const next = e.target.value;
             setSelectedProvider(next);
             // Reset model when provider changes - the model list is now different.
-            const nextModels = providerModels(providers, next);
+            const nextModels = providerModels(providers, next, ollamaModels);
             const defaultModel = nextModels[0] ?? "__custom__";
             setSelectedModel(defaultModel);
             setCustomModel("");
@@ -812,8 +821,38 @@ function ModelSelector({
 function providerModels(
   providers: Record<string, LLMConfigProviderView>,
   name: string,
+  live?: string[] | null,
 ): string[] {
   const entry = providers[name];
   if (!entry) return [];
+  // Ollama only serves what the operator pulled, and every id carries a tag.
+  // The curated list is untagged guesswork, so prefer the real catalog when
+  // the daemon could read it; fall back to the guesses when it could not.
+  if (entry.kind === "ollama" && live && live.length > 0) return live;
   return MODELS_BY_KIND[entry.kind] ?? [];
+}
+
+/**
+ * Installed Ollama models, read from the daemon once per mount. `null` while
+ * in flight or when the provider isn't Ollama; `[]` when Ollama was
+ * unreachable (callers then fall back to the curated list).
+ */
+function useOllamaModels(enabled: boolean): string[] | null {
+  const [models, setModels] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    fetch("/api/config/llm/ollama/models")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; models?: string[] }) => {
+        if (!cancelled) setModels(d.ok && d.models ? d.models : []);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return models;
 }

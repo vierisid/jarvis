@@ -243,19 +243,19 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    try {
-      const response = await fetch(`${this.baseUrl}/api/tags`);
+    // Deliberately NOT caught: a failed call must not masquerade as an empty
+    // or invented install. This used to fall back to a hardcoded list
+    // (['llama3', 'llama2', ...]) which was wrong twice over — those models
+    // are usually not pulled, and the untagged ids resolve to ':latest',
+    // which 404s on first use. Callers decide how to present the failure.
+    const response = await fetch(`${this.baseUrl}/api/tags`);
 
-      if (!response.ok) {
-        throw new Error(`Failed to list models: ${response.status}`);
-      }
-
-      const data = await response.json() as { models: OllamaModelInfo[] };
-      return data.models.map(m => m.name).sort();
-    } catch (err) {
-      // Fallback to common models if API call fails
-      return ['llama3', 'llama2', 'mistral', 'mixtral', 'codellama'];
+    if (!response.ok) {
+      throw new Error(`Failed to list models: ${response.status}`);
     }
+
+    const data = await response.json() as { models: OllamaModelInfo[] };
+    return data.models.map(m => m.name).sort();
   }
 
   private convertMessages(messages: LLMMessage[]): OllamaMessage[] {

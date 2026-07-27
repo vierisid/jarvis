@@ -1494,6 +1494,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Live model catalog for Ollama. Unlike the cloud providers, an Ollama
+    // install only serves the models the operator actually pulled, and every
+    // one of them carries a tag ("qwen2.5:3b"). A curated list can only ever
+    // guess, and a guessed *untagged* id ("qwen2.5") resolves to ":latest",
+    // which is typically NOT pulled -> `model not found` at first chat.
+    // Ask the server instead. `base_url` is a query param because onboarding
+    // tests a URL the user has typed but not saved yet; it falls back to the
+    // configured entry, then to the default endpoint.
+    '/api/config/llm/ollama/models': {
+      GET: async (req: Request) => {
+        try {
+          const { OllamaProvider } = await import('../llm/ollama.ts');
+          const typed = new URL(req.url).searchParams.get('base_url')?.trim();
+          const configured = Object.values(ctx.config.llm.providers ?? {})
+            .find((e) => e?.kind === 'ollama')?.base_url;
+          const baseUrl = typed || configured || 'http://localhost:11434';
+          const models = await new OllamaProvider(baseUrl).listModels();
+          return json({ ok: true, models });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ ok: false, error: msg, models: [] });
+        }
+      },
+    },
+
     // --- Usage telemetry ---
     /**
      * Filterable LLM usage query. All query params are optional:
