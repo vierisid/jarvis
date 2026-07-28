@@ -72,17 +72,29 @@ export function LiveToggle({ on, onClick, children = "live tail" }: { on?: boole
 }
 
 /* ── Table grammar ── */
-export function Table({ children }: { children: React.ReactNode }) { return <div className="rk-table">{children}</div>; }
+/* Div grids visually, but announced as real tables: Table/Row carry ARIA table
+   semantics, and cells should be Cell/HCell (columnheader in head rows) so
+   screen readers get the same navigation the old <table> markup provided. */
+export function Table({ children, label }: { children: React.ReactNode; label?: string }) {
+  return <div className="rk-table" role="table" aria-label={label}>{children}</div>;
+}
 export function Row({ cols, head, selected, onClick, children }: { cols: string; head?: boolean; selected?: boolean; onClick?: () => void; children: React.ReactNode }) {
   return (
     <div
       className={`rk-row${head ? " rk-row--head" : ""}${selected ? " rk-row--sel" : ""}${onClick ? " rk-row--link" : ""}`}
       style={{ gridTemplateColumns: cols }}
+      role="row"
       onClick={onClick}
     >
       {children}
     </div>
   );
+}
+export function Cell({ className, children, title }: { className?: string; children?: React.ReactNode; title?: string }) {
+  return <span role="cell" className={className} title={title}>{children}</span>;
+}
+export function HCell({ className, children }: { className?: string; children?: React.ReactNode }) {
+  return <span role="columnheader" className={className}>{children}</span>;
 }
 export function StatusIcon({ tone }: { tone: Tone }) { return <span className={`rk-statico rk-statico--${tone}`}><i /></span>; }
 
@@ -128,7 +140,7 @@ export function Skeleton({ lines = 3, widths }: { lines?: number; widths?: strin
 /* ── Toast ── */
 export function Toast({ tone = "ok", children }: { tone?: Tone; children: React.ReactNode }) {
   const hue: Record<Tone, string> = { run: "var(--speak)", ok: "var(--ok)", hold: "var(--hold)", fail: "var(--listen)", mut: "var(--faint)" };
-  return <span className="rk-toast"><span className="rk-toast__dot" style={{ background: hue[tone] }} />{children}</span>;
+  return <span className="rk-toast" role="status" aria-live="polite"><span className="rk-toast__dot" style={{ background: hue[tone] }} aria-hidden="true" />{children}</span>;
 }
 
 /* ── Form controls ── */

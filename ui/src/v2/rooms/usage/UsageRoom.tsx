@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { BarChart3, Calendar, RefreshCw, type LucideIcon } from "lucide-react";
 import { Icon } from "../../ui";
-import { Select, FilterChip, Check, Table, Row } from "../../ui/roomkit";
+import { Select, FilterChip, Check, Table, Row, Cell, HCell } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { MultiSelectDropdown } from "./MultiSelectDropdown";
 import { useUsageData, type UsageGroupBy, type UsagePeriod, type UsageRawRow } from "./useUsageData";
@@ -119,7 +119,7 @@ function TotalsStrip({ totals }: { totals?: { calls: number; input_tokens: numbe
   const cacheHitPct = input + cacheRead + cacheWrite > 0 ? Math.round((cacheRead / (input + cacheRead + cacheWrite)) * 100) : 0;
   const errors = totals?.errors ?? 0;
   const avg = calls > 0 ? Math.round((totals?.total_latency_ms ?? 0) / calls) : 0;
-  const Cell = ({ k, n, hi, tone }: { k: string; n: string; hi?: boolean; tone?: "amber" }) => (
+  const StatCell = ({ k, n, hi, tone }: { k: string; n: string; hi?: boolean; tone?: "amber" }) => (
     <div className={`rk-stats__cell${hi ? " rk-stats__cell--hi" : ""}`}>
       <div className="rk-stats__k">{k}</div>
       <div className={`rk-stats__n${tone ? " rk-stats__n--amber" : ""}`}>{n}</div>
@@ -127,13 +127,13 @@ function TotalsStrip({ totals }: { totals?: { calls: number; input_tokens: numbe
   );
   return (
     <div className="rk-stats">
-      <Cell k="calls" n={formatNumber(calls)} />
-      <Cell k="input" n={formatNumber(input)} />
-      <Cell k="cached" n={cacheRead > 0 ? `${formatNumber(cacheRead)} (${cacheHitPct}%)` : "—"} />
-      <Cell k="output" n={formatNumber(output)} />
-      <Cell k="total tokens" n={formatNumber(total)} hi />
-      <Cell k="avg latency" n={avg > 0 ? `${avg} ms` : "—"} />
-      <Cell k="errors" n={String(errors)} tone={errors > 0 ? "amber" : undefined} />
+      <StatCell k="calls" n={formatNumber(calls)} />
+      <StatCell k="input" n={formatNumber(input)} />
+      <StatCell k="cached" n={cacheRead > 0 ? `${formatNumber(cacheRead)} (${cacheHitPct}%)` : "—"} />
+      <StatCell k="output" n={formatNumber(output)} />
+      <StatCell k="total tokens" n={formatNumber(total)} hi />
+      <StatCell k="avg latency" n={avg > 0 ? `${avg} ms` : "—"} />
+      <StatCell k="errors" n={String(errors)} tone={errors > 0 ? "amber" : undefined} />
     </div>
   );
 }
@@ -150,24 +150,24 @@ function GroupedTable({ rows, groupBy, grand, loading }: {
   const keyHeader = groupBy === "tier" ? "Difficulty" : groupBy === "subsystem" ? "Task" : groupBy === "model" ? "Model" : groupBy === "provider" ? "Provider" : groupBy === "date" ? "Date" : "Group";
 
   return (
-    <Table>
-      <Row cols={GROUP_COLS} head><span>{keyHeader}</span><span className="rk-num">calls</span><span className="rk-num">input</span><span className="rk-num">cached</span><span className="rk-num">output</span><span className="rk-num">total</span><span className="rk-num">latency</span><span className="rk-num">errors</span></Row>
+    <Table label={`Usage grouped by ${keyHeader}`}>
+      <Row cols={GROUP_COLS} head><HCell>{keyHeader}</HCell><HCell className="rk-num">calls</HCell><HCell className="rk-num">input</HCell><HCell className="rk-num">cached</HCell><HCell className="rk-num">output</HCell><HCell className="rk-num">total</HCell><HCell className="rk-num">latency</HCell><HCell className="rk-num">errors</HCell></Row>
       {rows.map((r) => {
         const tot = r.input_tokens + r.cache_read_input_tokens + r.cache_creation_input_tokens + r.output_tokens;
         const share = Math.max(2, Math.round((tot / grand) * 100));
         return (
           <Row key={r.key} cols={GROUP_COLS}>
-            <span className="rk-usage__key">
+            <Cell className="rk-usage__key">
               <span className="rk-usage__key-name"><b>{groupBy === "tier" ? TIER_LABELS[r.key] ?? r.key : r.key}</b></span>
               <span className="rk-usage__share" style={{ width: `${share}%` }} />
-            </span>
-            <span className="rk-num">{formatNumber(r.calls)}</span>
-            <span className="rk-num">{formatNumber(r.input_tokens)}</span>
-            <span className="rk-num">{r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}</span>
-            <span className="rk-num">{formatNumber(r.output_tokens)}</span>
-            <span className="rk-num rk-num--tot">{formatNumber(tot)}</span>
-            <span className="rk-num">{r.calls > 0 ? `${Math.round(r.total_latency_ms / r.calls)} ms` : "—"}</span>
-            <span className={`rk-num${r.errors > 0 ? " rk-usage__err" : ""}`}>{r.errors}</span>
+            </Cell>
+            <Cell className="rk-num">{formatNumber(r.calls)}</Cell>
+            <Cell className="rk-num">{formatNumber(r.input_tokens)}</Cell>
+            <Cell className="rk-num">{r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}</Cell>
+            <Cell className="rk-num">{formatNumber(r.output_tokens)}</Cell>
+            <Cell className="rk-num rk-num--tot">{formatNumber(tot)}</Cell>
+            <Cell className="rk-num">{r.calls > 0 ? `${Math.round(r.total_latency_ms / r.calls)} ms` : "—"}</Cell>
+            <Cell className={`rk-num${r.errors > 0 ? " rk-usage__err" : ""}`}>{r.errors}</Cell>
           </Row>
         );
       })}
@@ -175,7 +175,7 @@ function GroupedTable({ rows, groupBy, grand, loading }: {
   );
 }
 
-const RAW_COLS = "112px 88px 1.5fr 1.2fr 64px 64px 64px 74px 84px";
+const RAW_COLS = "112px 88px 1.4fr 1.1fr 76px 64px 64px 64px 74px 84px";
 
 function RawRowsTable({ rows, truncated, loading }: { rows: UsageRawRow[]; truncated?: boolean; loading: boolean }) {
   if (loading && rows.length === 0) return <div className="rk-usage__empty">Loading…</div>;
@@ -183,19 +183,20 @@ function RawRowsTable({ rows, truncated, loading }: { rows: UsageRawRow[]; trunc
   return (
     <>
       {truncated && <div className="rk-usage__hint">Showing the 500 most recent rows. Narrow the period or add filters to see more.</div>}
-      <Table>
-        <Row cols={RAW_COLS} head><span>time</span><span>difficulty</span><span>task</span><span>model</span><span className="rk-num">in</span><span className="rk-num">cached</span><span className="rk-num">out</span><span className="rk-num">latency</span><span className="rk-num">error</span></Row>
+      <Table label="Raw usage rows">
+        <Row cols={RAW_COLS} head><HCell>time</HCell><HCell>difficulty</HCell><HCell>task</HCell><HCell>model</HCell><HCell>provider</HCell><HCell className="rk-num">in</HCell><HCell className="rk-num">cached</HCell><HCell className="rk-num">out</HCell><HCell className="rk-num">latency</HCell><HCell className="rk-num">error</HCell></Row>
         {rows.map((r, i) => (
           <Row key={`${r.ts}-${i}`} cols={RAW_COLS}>
-            <span className="rk-usage__raw-mono">{new Date(r.ts).toLocaleString()}</span>
-            <span>{TIER_LABELS[r.tier] ?? r.tier}</span>
-            <span className="rk-usage__raw-mono">{r.subsystem}</span>
-            <span className="rk-usage__raw-mono">{r.model}</span>
-            <span className="rk-num">{formatNumber(r.input_tokens)}</span>
-            <span className="rk-num">{r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}</span>
-            <span className="rk-num">{formatNumber(r.output_tokens)}</span>
-            <span className="rk-num">{r.latency_ms} ms</span>
-            <span className={`rk-num${r.error_code ? " rk-usage__err" : ""}`}>{r.error_code ?? ""}</span>
+            <Cell className="rk-usage__raw-mono">{new Date(r.ts).toLocaleString()}</Cell>
+            <Cell>{TIER_LABELS[r.tier] ?? r.tier}</Cell>
+            <Cell className="rk-usage__raw-mono">{r.subsystem}</Cell>
+            <Cell className="rk-usage__raw-mono">{r.model}</Cell>
+            <Cell className="rk-usage__raw-mono">{r.provider}</Cell>
+            <Cell className="rk-num">{formatNumber(r.input_tokens)}</Cell>
+            <Cell className="rk-num">{r.cache_read_input_tokens > 0 ? formatNumber(r.cache_read_input_tokens) : "—"}</Cell>
+            <Cell className="rk-num">{formatNumber(r.output_tokens)}</Cell>
+            <Cell className="rk-num">{r.latency_ms} ms</Cell>
+            <Cell className={`rk-num${r.error_code ? " rk-usage__err" : ""}`}>{r.error_code ?? ""}</Cell>
           </Row>
         ))}
       </Table>
