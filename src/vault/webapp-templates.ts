@@ -177,47 +177,16 @@ export function listWebappTemplates(enabledOnly = true): WebappTemplate[] {
 }
 
 /**
- * Hard cap on injected instruction characters (~10K tokens). Templates are
- * injected best-match-first; when the next template would blow the budget it
- * is skipped and replaced by a one-line pointer, so the model knows the
- * instructions exist rather than silently missing them.
+ * Format a template into prompt-ready text. URL-driven delivery resolves at
+ * most one template per page, so this formats exactly one.
  */
-const MAX_INJECTED_CHARS = 40_000;
-
-/**
- * Format matched templates into prompt-ready text.
- */
-export function formatWebappInstructions(templates: WebappTemplate[]): string {
-  if (templates.length === 0) return '';
-
-  const sections: string[] = [];
-  const skipped: string[] = [];
-  let used = 0;
-
-  for (const t of templates) {
-    const block = [
-      `## ${t.app_name} — Browser Instructions`,
-      `Domains: ${t.domains.join(', ')}`,
-      '',
-      t.instructions,
-    ].join('\n');
-
-    // Always inject at least the best match, even if oversized
-    if (sections.length > 0 && used + block.length > MAX_INJECTED_CHARS) {
-      skipped.push(t.app_name);
-      continue;
-    }
-    sections.push(block);
-    used += block.length;
-  }
-
-  if (skipped.length > 0) {
-    sections.push(
-      `(Instructions for ${skipped.join(', ')} also matched but were omitted for space — ask again mentioning that app specifically if needed.)`
-    );
-  }
-
-  return sections.join('\n');
+export function formatWebappInstructions(template: WebappTemplate): string {
+  return [
+    `## ${template.app_name} — Browser Instructions`,
+    `Domains: ${template.domains.join(', ')}`,
+    '',
+    template.instructions,
+  ].join('\n');
 }
 
 /**
@@ -234,7 +203,7 @@ export function getWebappInstructionsForUrl(
     return {
       templateId: template.id,
       appName: template.app_name,
-      instructions: formatWebappInstructions([template]),
+      instructions: formatWebappInstructions(template),
     };
   } catch (err) {
     console.error('[WebappTemplates] Error resolving template for URL:', err);

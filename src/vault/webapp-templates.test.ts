@@ -79,41 +79,22 @@ describe('getWebappInstructionsForUrl', () => {
   });
 });
 
-describe('formatWebappInstructions injection cap', () => {
-  const template = (name: string, size: number): WebappTemplate => ({
-    id: name,
-    app_name: name,
-    domains: [`${name.toLowerCase()}.example.com`],
-    keywords: [],
-    description: '',
-    instructions: 'x'.repeat(size),
-    version: 1,
-    enabled: true,
-    created_at: 0,
-    updated_at: 0,
-  });
-
-  test('injects everything under the cap', () => {
-    const out = formatWebappInstructions([template('A', 1000), template('B', 1000)]);
-    expect(out).toContain('## A — Browser Instructions');
-    expect(out).toContain('## B — Browser Instructions');
-    expect(out).not.toContain('omitted for space');
-  });
-
-  test('skips templates beyond the cap and says so', () => {
-    const out = formatWebappInstructions([template('A', 35_000), template('B', 20_000)]);
-    expect(out).toContain('## A — Browser Instructions');
-    expect(out).not.toContain('## B — Browser Instructions');
-    expect(out).toContain('omitted for space');
-    expect(out).toContain('B');
-  });
-
-  test('always injects the best match even when oversized', () => {
-    const out = formatWebappInstructions([template('Huge', 60_000)]);
-    expect(out).toContain('## Huge — Browser Instructions');
-  });
-
-  test('empty input produces empty output', () => {
-    expect(formatWebappInstructions([])).toBe('');
+describe('formatWebappInstructions', () => {
+  test('formats a single template into a prompt-ready block', () => {
+    const template: WebappTemplate = {
+      id: 'a',
+      app_name: 'A',
+      domains: ['a.example.com', 'alias.example.com'],
+      keywords: [],
+      description: '',
+      instructions: 'Be careful on A.',
+      version: 1,
+      enabled: true,
+      created_at: 0,
+      updated_at: 0,
+    };
+    expect(formatWebappInstructions(template)).toBe(
+      '## A — Browser Instructions\nDomains: a.example.com, alias.example.com\n\nBe careful on A.'
+    );
   });
 });

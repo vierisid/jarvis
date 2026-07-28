@@ -16,7 +16,7 @@ import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
-import { withWebappTemplateInstructions } from './webapp-template-injection.ts';
+import { WebappTemplateDelivery, globalWebappTemplateDelivery } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 
@@ -576,13 +576,13 @@ export const browserNavigateTool: ToolDefinition = {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       const result = await routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
-      return withWebappTemplateInstructions(result, params.url as string);
+      return globalWebappTemplateDelivery.withInstructions(result, params.url as string);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.navigate(params.url as string);
-      return withWebappTemplateInstructions(formatSnapshot(snap), params.url as string);
+      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), params.url as string);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -604,13 +604,13 @@ export const browserSnapshotTool: ToolDefinition = {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
       const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
-      return withWebappTemplateInstructions(result);
+      return globalWebappTemplateDelivery.withInstructions(result);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.snapshot();
-      return withWebappTemplateInstructions(formatSnapshot(snap));
+      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap));
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -963,6 +963,11 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
  * while keeping tool definitions identical to the main agent's.
  */
 export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
+  // Each bound tool set serves its own LLM conversation (e.g. a background
+  // agent), so it gets its own template-delivery state — sharing the global
+  // agent's would let one conversation's browsing suppress the playbook in
+  // the other's history.
+  const templateDelivery = new WebappTemplateDelivery();
   return [
     {
       name: 'browser_navigate',
@@ -972,7 +977,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async (params) => {
         try {
           const snap = await ctrl.navigate(params.url as string);
-          return withWebappTemplateInstructions(formatSnapshot(snap), params.url as string);
+          return templateDelivery.withInstructions(formatSnapshot(snap), params.url as string);
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -986,7 +991,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async () => {
         try {
           const snap = await ctrl.snapshot();
-          return withWebappTemplateInstructions(formatSnapshot(snap));
+          return templateDelivery.withInstructions(formatSnapshot(snap));
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }

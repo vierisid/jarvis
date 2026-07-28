@@ -13,7 +13,6 @@ import { BrowserController } from '../browser/session.ts';
 import { createBrowserTools } from './builtin.ts';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
-import { resetDeliveredWebappTemplates } from './webapp-template-injection.ts';
 
 const TEST_CDP_PORT = 9778;
 
@@ -27,15 +26,19 @@ const CHROMIUM_CANDIDATES = [
 
 const chromiumExe = CHROMIUM_CANDIDATES.find(p => existsSync(p));
 
+function toolMap(ctrl: BrowserController) {
+  return new Map(createBrowserTools(ctrl).map(t => [t.name, t.execute]));
+}
+
 describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integration)', () => {
   let proc: ReturnType<typeof Bun.spawn> | null = null;
   let profileDir: string;
   let server: ReturnType<typeof Bun.serve>;
+  let ctrl: BrowserController;
   let tools: Map<string, (params: Record<string, unknown>) => Promise<unknown>>;
 
   beforeAll(async () => {
     initDatabase(':memory:');
-    resetDeliveredWebappTemplates();
 
     server = Bun.serve({
       port: 0,
@@ -75,18 +78,20 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     ], { stdout: 'ignore', stderr: 'ignore' });
 
     const deadline = Date.now() + 15_000;
+    let up = false;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://127.0.0.1:${TEST_CDP_PORT}/json/version`, {
           signal: AbortSignal.timeout(1000),
         });
-        if (res.ok) break;
+        if (res.ok) { up = true; break; }
       } catch { /* not up yet */ }
       await Bun.sleep(250);
     }
+    if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_CDP_PORT}`);
 
-    const ctrl = new BrowserController(TEST_CDP_PORT);
-    tools = new Map(createBrowserTools(ctrl).map(t => [t.name, t.execute]));
+    ctrl = new BrowserController(TEST_CDP_PORT);
+    tools = toolMap(ctrl);
   }, 30_000);
 
   afterAll(async () => {
@@ -119,20 +124,25 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     expect(result).not.toContain('LoopbackApp');
   }, 30_000);
 
-  test('snapshot after a link click delivers the template when the domain is new', async () => {
-    resetDeliveredWebappTemplates();
-    const navigate = tools.get('browser_navigate')!;
-    const snapshot = tools.get('browser_snapshot')!;
-    const click = tools.get('browser_click')!;
-
-    const nav = await navigate({ url: `http://127.0.0.1:${server.port}/start` }) as string;
+  test('snapshot after a link click delivers the template when the domain is new to the conversation', async () => {
+    // Get on the page with the already-delivered tool set, then act through a
+    // FRESH tool set (a new conversation): its first sight of the domain is
+    // the snapshot after the click, which must deliver.
+    const nav = await tools.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/start` }) as string;
     const linkId = nav.match(/\[(\d+)\] a "Next page"/)?.[1];
     expect(linkId).toBeTruthy();
 
-    // Forget deliveries to simulate landing on the domain via click alone
-    resetDeliveredWebappTemplates();
-    await click({ element_id: Number(linkId) });
-    const snap = await snapshot({}) as string;
+    const freshTools = toolMap(ctrl);
+    await freshTools.get('browser_click')!({ element_id: Number(linkId) });
+    const snap = await freshTools.get('browser_snapshot')!({}) as string;
     expect(snap).toContain('You are now on LoopbackApp');
+  }, 30_000);
+
+  test('separate tool sets deliver independently (main vs background agent)', async () => {
+    // `tools` delivered LoopbackApp long ago in this file; a brand-new tool
+    // set navigating to the same site must still get its own copy.
+    const other = toolMap(ctrl);
+    const result = await other.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/again` }) as string;
+    expect(result).toContain('You are now on LoopbackApp');
   }, 30_000);
 });
