@@ -54,6 +54,14 @@ type AudioCaptureService struct {
 	device  *malgo.Device
 	session *AudioSession
 	active  atomic.Bool
+	// sampleRate is the capture rate (Hz). One-shot STT captures use 16 kHz
+	// (what STT providers want); the realtime voice path uses 24 kHz (what the
+	// OpenAI realtime API requires).
+	sampleRate int
+	// streamOnly skips the in-memory PCM accumulator — used by the perpetual
+	// realtime stream, which forwards each chunk live and never calls Stop()
+	// for the buffer (so accumulating minutes of audio would just leak).
+	streamOnly bool
 	// onChunk, when set, is invoked synchronously on every PCM chunk
 	// delivered by the audio device. Used by VAD-driven capture to
 	// monitor speech energy without exposing the malgo callback.
@@ -62,7 +70,17 @@ type AudioCaptureService struct {
 }
 
 func NewAudioCaptureService() *AudioCaptureService {
-	return &AudioCaptureService{}
+	return &AudioCaptureService{sampleRate: pebbleAudioSampleRate}
+}
+
+// NewStreamingCaptureService builds a capture service for the realtime voice
+// loop: a custom sample rate (≥24 kHz for OpenAI realtime) and no PCM
+// accumulation (chunks are forwarded live via the chunk listener).
+func NewStreamingCaptureService(rate int) *AudioCaptureService {
+	if rate <= 0 {
+		rate = pebbleAudioSampleRate
+	}
+	return &AudioCaptureService{sampleRate: rate, streamOnly: true}
 }
 
 // Start begins a new capture session. Returns an error if a session is
@@ -96,16 +114,22 @@ func (s *AudioCaptureService) Start(sessionID string) error {
 	}
 	s.session = session
 
+	rate := s.sampleRate
+	if rate <= 0 {
+		rate = pebbleAudioSampleRate
+	}
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = pebbleAudioChannels
-	deviceConfig.SampleRate = pebbleAudioSampleRate
+	deviceConfig.SampleRate = uint32(rate)
 	deviceConfig.Alsa.NoMMap = 1
 
 	onRecv := func(_, input []byte, _ uint32) {
-		session.mu.Lock()
-		session.pcm.Write(input)
-		session.mu.Unlock()
+		if !s.streamOnly {
+			session.mu.Lock()
+			session.pcm.Write(input)
+			session.mu.Unlock()
+		}
 		s.onChunkMu.RLock()
 		cb := s.onChunk
 		s.onChunkMu.RUnlock()
@@ -125,7 +149,7 @@ func (s *AudioCaptureService) Start(sessionID string) error {
 		return fmt.Errorf("device.Start: %w", err)
 	}
 	s.device = device
-	log.Printf("[audio] capture session %q started (PCM s16 mono %d Hz)", sessionID, pebbleAudioSampleRate)
+	log.Printf("[audio] capture session %q started (PCM s16 mono %d Hz)", sessionID, rate)
 	return nil
 }
 

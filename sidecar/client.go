@@ -43,10 +43,10 @@ func (e *tokenRejectedError) Error() string {
 }
 
 type SidecarClient struct {
-	config          *SidecarConfig
-	claims          *SidecarTokenClaims
-	tokenProvider   *accessTokenProvider // mints short-lived panel access tokens
-	handlers        map[string]RPCHandler
+	config        *SidecarConfig
+	claims        *SidecarTokenClaims
+	tokenProvider *accessTokenProvider // mints short-lived panel access tokens
+	handlers      map[string]RPCHandler
 	// conn is read by readLoop/sendJSON/sendBinary (per-connection goroutines)
 	// and written by connectAndServe; Stop() clears it from the signal-handler
 	// goroutine. atomic.Pointer makes those cross-goroutine accesses race-free
@@ -71,6 +71,14 @@ type SidecarClient struct {
 	subPebble SubPebbleService       // per-sub-agent rail overlays (CapSubPebble)
 	playback  *AudioPlaybackService  // pebble TTS playback (alongside CapPebble)
 	regions   RegionSelectionService // T19 drag-select capture (alongside CapPebble)
+
+	// Realtime voice (gpt-realtime). streamPlayer is the live PCM playback
+	// device, read by the readLoop's pebble.play_pcm fast-path; realtime is the
+	// per-connection controller (built in connectAndServe). atomic.Pointer
+	// because it's re-assigned on every reconnect while the tray/Cocoa/hotkey
+	// threads read it — a plain field is a data race.
+	streamPlayer atomic.Pointer[AudioStreamPlayer]
+	realtime     atomic.Pointer[realtimeVoice]
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -596,6 +604,124 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 		}
 
+		// ── Native realtime voice (gpt-realtime) ──────────────────────────
+		// When the daemon reports realtime is enabled, the summon hotkey
+		// toggles a perpetual speech-to-speech session instead of the one-shot
+		// capture above. A dedicated 24 kHz streaming capture feeds the daemon;
+		// inbound PCM plays through a persistent low-latency device. See
+		// realtimeVoice + PebbleRealtimeManager (daemon side).
+		realtimeCapture := NewStreamingCaptureService(realtimeInputSampleRate)
+		emit := func(eventType string, payload map[string]any) {
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: eventType,
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   payload,
+			}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[realtime] emit %s failed: %v", eventType, err)
+			}
+		}
+		setStream := func(p *AudioStreamPlayer) { c.streamPlayer.Store(p) }
+		setPebbleState := func(s PebbleState) { _ = c.pebble.SetState(s) }
+		resumeWake := func() {
+			if wakeListener != nil {
+				wakeListener.Resume(ctx)
+			}
+		}
+		// openAudio dials a SECOND, dedicated WebSocket (`?channel=audio`) used
+		// only for realtime PCM — isolated from this control connection so a
+		// 2.4 MB screenshot can't queue in front of audio frames. Returns false
+		// (graceful) if the dial fails, in which case the controller falls back
+		// to streaming mic over the main connection as `pebble.audio_frame`.
+		openAudio := func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool) {
+			audioURL := c.claims.Brain + "?channel=audio"
+			aconn, _, derr := websocket.Dial(ctx, audioURL, &websocket.DialOptions{
+				HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}},
+			})
+			if derr != nil {
+				log.Printf("[realtime] audio channel dial failed (using main connection): %v", derr)
+				return nil, nil, false
+			}
+			aconn.SetReadLimit(4 << 20) // playback deltas can be tens of KB
+			go func() {
+				for {
+					typ, data, rerr := aconn.Read(context.Background())
+					if rerr != nil {
+						return // conn closed on Stop → read loop exits
+					}
+					switch typ {
+					case websocket.MessageBinary:
+						onBinary(data) // playback PCM
+					case websocket.MessageText:
+						// Control frames are JSON ({"t":"flush"}); parse rather
+						// than substring-match so unrelated text can't flush.
+						var ctl struct {
+							T string `json:"t"`
+						}
+						if json.Unmarshal(data, &ctl) == nil && ctl.T == "flush" {
+							onFlush() // barge-in
+						}
+					}
+				}
+			}()
+			// Keepalive: the brain's WS server reaps sockets idle >30 s, and an
+			// audio channel is legitimately silent between utterances. Ping until
+			// the conn dies or the connection context ends; each write is bounded
+			// so a wedged TCP conn can't park the goroutine forever.
+			go func() {
+				t := time.NewTicker(20 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+						wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						err := aconn.Write(wctx, websocket.MessageText, []byte(`{"t":"ping"}`))
+						cancel()
+						if err != nil {
+							return
+						}
+					}
+				}
+			}()
+			writePCM := func(frame []byte) error {
+				return aconn.Write(context.Background(), websocket.MessageBinary, frame)
+			}
+			closeFn := func() { _ = aconn.Close(websocket.StatusNormalClosure, "") }
+			log.Printf("[realtime] dedicated audio channel open")
+			return writePCM, closeFn, true
+		}
+		rt := newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio)
+		c.realtime.Store(rt)
+		// Tear the session down when this connection ends.
+		defer rt.Stop(false)
+
+		// Tray "Mute microphone" toggle → gate the mic locally. Muting ends any
+		// live realtime session (which re-arms the wake listener), then releases
+		// the always-on wake mic and shows the muted pebble; unmuting re-arms the
+		// wake listener and clears the pebble. Note the Stop-then-Pause order:
+		// realtime.Stop() calls resumeWake internally, so Pause must come after.
+		setTrayApplyMute(func(muted bool) {
+			if muted {
+				if rt := c.realtime.Load(); rt != nil {
+					rt.Stop(true)
+				}
+				if wakeListener != nil {
+					wakeListener.Pause()
+				}
+				_ = c.pebble.SetState(PebbleMuted)
+			} else {
+				if wakeListener != nil {
+					wakeListener.Resume(ctx)
+				}
+				_ = c.pebble.SetState(PebbleIdle)
+			}
+		})
+		defer setTrayApplyMute(func(bool) {})
+
 		// Long-answer overflow — click on the "open full ↗" button emits
 		// pebble.open_answer with the answer id stored via SetAnswerOverflow.
 		c.pebble.OnAnswerOpen(func(answerID string) {
@@ -631,6 +757,16 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		})
 
 		c.pebble.OnSummon(func() {
+			// When realtime voice is enabled, the summon hotkey toggles a
+			// perpetual speech-to-speech session (press again to end) instead
+			// of the one-shot capture → STT → LLM → TTS loop.
+			rt := c.realtime.Load()
+			rtEnabled := rt != nil && rt.enabled.Load()
+			log.Printf("[pebble] summon (realtime_enabled=%v)", rtEnabled)
+			if rtEnabled {
+				rt.Toggle()
+				return
+			}
 			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
 			summonEvt := SidecarEvent{
 				Type:      "sidecar_event",
@@ -761,6 +897,62 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			sessionID := fmt.Sprintf("listen-%d", time.Now().UnixMilli())
 			go runSessionCapture(sessionID)
 			return &RPCResult{Result: map[string]any{"session_id": sessionID, "started": true}}, nil
+		}
+
+		// Realtime voice control (daemon → sidecar). pebble.play_pcm (the audio
+		// output stream) is handled inline in readLoop to preserve frame order.
+		c.handlers["pebble.configure_realtime"] = func(params map[string]any) (*RPCResult, error) {
+			enabled, _ := params["enabled"].(bool)
+			log.Printf("[realtime] configure_realtime enabled=%v", enabled)
+			if rt := c.realtime.Load(); rt != nil {
+				rt.enabled.Store(enabled)
+				if !enabled {
+					rt.Stop(true) // disabling mid-session ends it cleanly
+				}
+			}
+			return &RPCResult{Result: map[string]any{"enabled": enabled}}, nil
+		}
+		// Tray menu live data (brain → sidecar): approvals count, recent
+		// activity, pause/mute, brain/sidecar health (design: usejarvis-tray §00).
+		c.handlers["tray.status"] = func(params map[string]any) (*RPCResult, error) {
+			setTrayStatus(trayStatusFromParams(params))
+			return &RPCResult{Result: map[string]any{"ok": true}}, nil
+		}
+		// Outbound OS notification (brain → sidecar): the four reasons Jarvis
+		// interrupts — approval / done / sidecar / update (design: usejarvis-tray
+		// §01). The sidecar raises it natively; the choice comes back via
+		// notify.action (emitted below).
+		c.handlers["notify.show"] = func(params map[string]any) (*RPCResult, error) {
+			showNotification(notificationFromParams(params))
+			return &RPCResult{Result: map[string]any{"ok": true}}, nil
+		}
+		setNotifyEmitAction(func(id, kind, action string) {
+			_ = c.sendEvent(c.obsCtx, SidecarEvent{
+				EventType: "notify.action",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload:   map[string]any{"id": id, "kind": kind, "action": action},
+			}, nil)
+		})
+		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
+			state, _ := params["state"].(string)
+			// Daemon-initiated teardown (budget / timeout / error): stop the
+			// local audio without re-emitting realtime_stop (its side is gone).
+			if rt := c.realtime.Load(); rt != nil && (state == "closed" || state == "error") {
+				rt.Stop(false)
+			}
+			return &RPCResult{Result: map[string]any{"ok": true}}, nil
+		}
+		// Override stop_audio so barge-in flushes the realtime stream player too
+		// (not just the clip-based TTS queue).
+		c.handlers["pebble.stop_audio"] = func(_ map[string]any) (*RPCResult, error) {
+			if c.playback != nil {
+				c.playback.Stop()
+			}
+			if sp := c.streamPlayer.Load(); sp != nil {
+				sp.Flush()
+			}
+			return &RPCResult{Result: map[string]any{"stopped": true}}, nil
 		}
 		c.mu.Unlock()
 
@@ -923,6 +1115,22 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 			continue
 		}
 		if req.Type != "rpc_request" {
+			continue
+		}
+
+		// Realtime audio output fast-path: handle pebble.play_pcm INLINE (not in
+		// a per-RPC goroutine) so frames reach the playback device in receive
+		// order — goroutine reordering would click the audio. Work is just a
+		// base64 decode + a buffered append (microseconds).
+		if req.Method == "pebble.play_pcm" {
+			if sp := c.streamPlayer.Load(); sp != nil {
+				if d, ok := req.Params["data"].(string); ok {
+					if pcm, err := base64.StdEncoding.DecodeString(d); err == nil {
+						sp.Write(pcm)
+					}
+				}
+			}
+			c.sendResult(ctx, req.ID, &RPCResult{Result: map[string]any{"ok": true}}, nil)
 			continue
 		}
 

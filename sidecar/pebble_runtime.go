@@ -293,6 +293,12 @@ func pebbleStateToInt(s PebbleState) int {
 		return 3
 	case PebbleWorking:
 		return 4
+	case PebbleAsking:
+		return 5
+	case PebbleDone:
+		return 6
+	case PebbleMuted:
+		return 7
 	default:
 		return 0
 	}

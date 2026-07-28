@@ -1,51 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  CalendarRange,
-  ChevronLeft,
-  ChevronRight,
-  FileText,
-  Plus,
-  RefreshCw,
-  Search,
-  Sparkles,
-  X,
-  type LucideIcon,
-} from "lucide-react";
-import { Chip, Icon } from "../../ui";
+import React, { useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, RefreshCw, Search, X } from "lucide-react";
+import { Icon } from "../../ui";
+import { Tabs, StatusChip, EmptyState, Toast, DeepLink, Skeleton, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
+import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
 import { parseRelativeDate } from "../../../../../src/voice/parse-date";
-import {
-  useCalendarData,
-  type CalendarEvent,
-  type CalendarPriority,
-} from "./useCalendarData";
+import { useCalendarData, type CalendarEvent, type CalendarPriority } from "./useCalendarData";
 import "./CalendarRoom.css";
 
 type ViewMode = "week" | "day";
 
-const PRIORITY_TONE: Record<string, "ok" | "neutral" | "warn" | "accent"> = {
-  critical: "accent",
-  high: "warn",
-  normal: "neutral",
-  low: "ok",
-};
-
-const STATUS_TONE: Record<string, "ok" | "neutral" | "warn" | "accent"> = {
-  done: "ok",
-  completed: "ok",
-  failed: "accent",
-  cancelled: "accent",
-  active: "warn",
-  pending: "neutral",
-};
-
-const TYPE_ICON: Record<CalendarEvent["type"], LucideIcon> = {
-  commitment: CalendarRange,
-  content: FileText,
-};
-
-const DAY_LABEL_LONG = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Tone remap (calendar §05, citing Book 03): active→blue, low→neutral,
+// failed/cancelled→red, high→amber, done→green, pending→neutral.
+const PRIORITY_TONE: Record<string, Tone> = { critical: "fail", high: "hold", normal: "mut", low: "mut" };
+const STATUS_TONE: Record<string, Tone> = { done: "ok", completed: "ok", failed: "fail", cancelled: "fail", active: "run", pending: "mut" };
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -53,11 +23,7 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useCalendarData();
   const [view, setView] = useState<ViewMode>("week");
   const [search, setSearch] = useState("");
-  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() => {
-    const d = new Date();
-    const dow = d.getDay();
-    return dow === 0 ? 6 : dow - 1; // Mon=0..Sun=6
-  });
+  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(currentDayIdx);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
@@ -72,12 +38,7 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
     if (!search.trim()) return data.eventsByDay;
     const q = search.trim().toLowerCase();
     const out = new Map<number, CalendarEvent[]>();
-    for (const [k, v] of data.eventsByDay) {
-      out.set(
-        k,
-        v.filter((e) => e.title.toLowerCase().includes(q)),
-      );
-    }
+    for (const [k, v] of data.eventsByDay) out.set(k, v.filter((e) => e.title.toLowerCase().includes(q)));
     return out;
   }, [data.eventsByDay, search]);
 
@@ -94,26 +55,14 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
     return null;
   }, [data.eventsByDay, selectedEventId]);
 
-  // Phase 6.3.5 voice room actions for Calendar.
   useRoomActions("calendar", (action, args) => {
     switch (action) {
-      case "switch_view": {
-        const v = String(args.view);
-        if (v === "week" || v === "day") {
-          setView(v);
-          return true;
-        }
-        return false;
-      }
-      case "search":
-        setSearch(typeof args.query === "string" ? args.query : "");
-        return true;
+      case "switch_view": { const v = String(args.view); if (v === "week" || v === "day") { setView(v); return true; } return false; }
+      case "search": setSearch(typeof args.query === "string" ? args.query : ""); return true;
       case "select_event": {
-        const name = typeof args.title === "string" ? args.title : "";
-        const ev = data.findByTitle(name);
+        const ev = data.findByTitle(typeof args.title === "string" ? args.title : "");
         if (!ev) return false;
         setSelectedEventId(ev.id);
-        // Pivot to the day of the selected event so it's actually visible.
         const dayIdx = Math.floor((ev.timestamp - data.weekStart) / 86_400_000);
         if (dayIdx >= 0 && dayIdx < 7) setSelectedDayIdx(dayIdx);
         return true;
@@ -124,427 +73,232 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
         if (!title) return false;
         const parsed = whenStr ? parseRelativeDate(whenStr) : null;
         (async () => {
-          const r = await data.addEvent({
-            title,
-            whenMs: parsed?.ts,
-            priority: (args.priority as CalendarPriority) ?? undefined,
-            assigned_to: typeof args.with === "string" ? args.with : undefined,
-          });
+          const r = await data.addEvent({ title, whenMs: parsed?.ts, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined });
           if (r.ok && parsed) {
-            // Jump the calendar to the event's week so it's visible.
-            const targetWeekStart = startOfWeek(parsed.ts);
-            const offset = Math.round((targetWeekStart - data.weekStart) / (7 * 86_400_000));
+            const offset = Math.round((startOfWeek(parsed.ts) - data.weekStart) / (7 * 86_400_000));
             if (offset !== 0) data.goToWeek(offset);
           }
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
         })();
         return true;
       }
-      default:
-        return false;
+      default: return false;
     }
   });
 
+  const dayView = view === "day" && mode === "expanded";
+
   return (
-    <div className={`v2-cal v2-cal--${mode}`}>
-      {/* Stats */}
-      <div className="v2-cal__stats">
-        <StatCard
-          label="This week"
-          value={data.events.length}
-          sub={`${data.events.filter((e) => e.type === "commitment").length} tasks · ${data.events.filter((e) => e.type === "content").length} content`}
-        />
-        <StatCard
-          label="Today"
-          value={(data.eventsByDay.get(currentDayIdx()) ?? []).length}
-          sub="events scheduled"
-        />
-        <StatCard
-          label="View"
-          value={view === "week" ? "Week" : "Day"}
-          sub={dayLabel(data.weekStart, selectedDayIdx)}
-        />
-        <StatCard
-          label="Selected day"
-          value={tasksForDay.length + contentForDay.length}
-          sub={`${tasksForDay.length} tasks · ${contentForDay.length} content`}
-        />
-      </div>
-
-      {/* Toolbar — week navigation + search + new */}
-      <div className="v2-cal__toolbar">
-        <div className="v2-cal__nav">
-          <button
-            type="button"
-            className="v2-cal__nav-btn"
-            onClick={() => data.goToWeek(-1)}
-            aria-label="Previous week"
-          >
-            <Icon icon={ChevronLeft} size="sm" />
-          </button>
-          <button
-            type="button"
-            className="v2-cal__today-btn"
-            onClick={data.goToToday}
-          >
-            This week
-          </button>
-          <button
-            type="button"
-            className="v2-cal__nav-btn"
-            onClick={() => data.goToWeek(1)}
-            aria-label="Next week"
-          >
-            <Icon icon={ChevronRight} size="sm" />
-          </button>
-          <span className="v2-cal__week-label">{weekRangeLabel(data.weekStart)}</span>
-        </div>
-
-        <div className="v2-cal__search">
-          <Icon icon={Search} size="sm" />
-          <input
-            className="v2-cal__search-input"
-            type="text"
-            placeholder="Search events…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search calendar"
-          />
-        </div>
-
+    <div className={`rk-cal rk-cal--${mode}`} style={{ position: "relative" }}>
+      <div className="rk-cal__tool">
+        <span className="rk-cal__title">Calendar</span>
         {mode === "expanded" && (
-          <div className="v2-cal__view-row" role="tablist" aria-label="View">
-            <button
-              type="button"
-              className="v2-cal__view-btn"
-              data-active={view === "week"}
-              onClick={() => setView("week")}
-            >
-              Week
-            </button>
-            <button
-              type="button"
-              className="v2-cal__view-btn"
-              data-active={view === "day"}
-              onClick={() => setView("day")}
-            >
-              Day
-            </button>
-          </div>
+          <Tabs tabs={[{ key: "week", label: "Week" }, { key: "day", label: "Day" }]} active={view} onChange={(k) => setView(k as ViewMode)} />
         )}
-
-        <button
-          type="button"
-          className="v2-cal__refresh"
-          onClick={data.refresh}
-          aria-label="Refresh"
-          title="Refresh"
-        >
-          <Icon icon={RefreshCw} size="sm" />
-        </button>
-        <button
-          type="button"
-          className="v2-cal__new-btn"
-          onClick={() => setCreateOpen(true)}
-        >
-          <Icon icon={Plus} size="sm" />
-          New
-        </button>
+        <div className="rk-cal__search">
+          <Icon icon={Search} size="sm" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="search events…" aria-label="Search events" />
+        </div>
+        <button className="rk-cal__icbtn" onClick={data.refresh} aria-label="Refresh"><Icon icon={RefreshCw} size="sm" /></button>
+        <button className="rk-cal__new" onClick={() => setCreateOpen(true)}>New event</button>
       </div>
 
-      {data.error && <div className="v2-cal__error">{data.error}</div>}
-
-      {/* Week strip — 7 day cells. Hidden in day-only inline mode. */}
-      {(mode === "expanded" && view === "week") || mode === "inline" ? (
-        <div className="v2-cal__week" role="tablist" aria-label="Days of the week">
-          {DAY_LABEL_LONG.map((label, i) => {
-            const dayTs = data.weekStart + i * 86_400_000;
-            const dayEvents = filteredEventsByDay.get(i) ?? [];
-            const isToday = isSameDay(dayTs, Date.now());
-            return (
-              <button
-                key={i}
-                type="button"
-                className="v2-cal__day-cell"
-                data-active={selectedDayIdx === i}
-                data-today={isToday}
-                onClick={() => setSelectedDayIdx(i)}
-                role="tab"
-                aria-selected={selectedDayIdx === i}
-              >
-                <span className="v2-cal__day-name">{label}</span>
-                <span className="v2-cal__day-num">{new Date(dayTs).getDate()}</span>
-                {dayEvents.length > 0 && (
-                  <div className="v2-cal__day-dots">
-                    {dayEvents.slice(0, 5).map((e, idx) => (
-                      <span
-                        key={`${e.id}-${idx}`}
-                        className="v2-cal__day-dot"
-                        data-type={e.type}
-                      />
-                    ))}
-                    {dayEvents.length > 5 && (
-                      <span className="v2-cal__day-more">+{dayEvents.length - 5}</span>
-                    )}
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {/* Detail strip — Tasks + Content swimlanes for the selected day */}
-      <div className="v2-cal__detail">
-        <header className="v2-cal__detail-head">
-          <h3 className="v2-cal__detail-title">
-            {fullDayLabel(data.weekStart, selectedDayIdx)}
-          </h3>
-          <span className="v2-cal__detail-count">
-            {tasksForDay.length + contentForDay.length} events
-          </span>
-        </header>
-
-        <div className="v2-cal__lanes">
-          <Lane
-            label="Tasks"
-            tone="neutral"
-            events={tasksForDay}
-            selectedId={selectedEventId}
-            onSelect={setSelectedEventId}
-            loading={data.loading}
-          />
-          <Lane
-            label="Content"
-            tone="warn"
-            events={contentForDay}
-            selectedId={selectedEventId}
-            onSelect={setSelectedEventId}
-            loading={data.loading}
-          />
-        </div>
+      <div className="rk-cal__nav">
+        <button className="rk-cal__nb" onClick={() => data.goToWeek(-1)} aria-label="Previous week"><Icon icon={ChevronLeft} size="sm" /></button>
+        <button className="rk-cal__nb" onClick={() => data.goToWeek(1)} aria-label="Next week"><Icon icon={ChevronRight} size="sm" /></button>
+        <span className="rk-cal__wk">{weekRangeLabel(data.weekStart)}</span>
+        <button className="rk-cal__tw" onClick={data.goToToday}>This week</button>
       </div>
 
-      {/* Side panel — selected event detail. Only in expanded mode. */}
-      {mode === "expanded" && selectedEvent && (
-        <DetailPanel event={selectedEvent} onClose={() => setSelectedEventId(null)} />
+      <div className="rk-cal__strip">
+        {Array.from({ length: 7 }, (_, i) => (
+          <DayCell key={i} idx={i} weekStart={data.weekStart} events={filteredEventsByDay.get(i) ?? []} selected={selectedDayIdx === i} onClick={() => setSelectedDayIdx(i)} />
+        ))}
+      </div>
+
+      {data.error ? (
+        <div className="rk-cal__msg">{data.error}</div>
+      ) : data.loading && data.events.length === 0 ? (
+        <div style={{ padding: 22, flex: 1 }}><Skeleton lines={6} /></div>
+      ) : dayView ? (
+        <DayView weekStart={data.weekStart} idx={selectedDayIdx} events={dayEvents} selectedId={selectedEventId} onSelect={setSelectedEventId} selectedEvent={selectedEvent} />
+      ) : (
+        <div className="rk-cal__body">
+          <div className="rk-cal__lanes">
+            <Lane label="tasks" shape="task" events={tasksForDay} selectedId={selectedEventId} onSelect={(id) => setSelectedEventId(selectedEventId === id ? null : id)} />
+            <Lane label="content" shape="content" events={contentForDay} selectedId={selectedEventId} onSelect={(id) => setSelectedEventId(selectedEventId === id ? null : id)} />
+          </div>
+          {mode === "expanded" && selectedEvent && (
+            <div className="rk-cal__side"><div className="rk-cal__side-inner"><SideDetail event={selectedEvent} onClose={() => setSelectedEventId(null)} /></div></div>
+          )}
+        </div>
       )}
 
-      {/* Create dialog */}
       {createOpen && (
         <CreateDialog
           onClose={() => setCreateOpen(false)}
-          onCreate={async (input) => {
-            const parsed = input.when ? parseRelativeDate(input.when) : null;
-            const r = await data.addEvent({
-              title: input.title,
-              whenMs: parsed?.ts,
-              priority: input.priority,
-            });
+          onCreate={async ({ title, when, priority }) => {
+            const parsed = when ? parseRelativeDate(when) : null;
+            const r = await data.addEvent({ title, whenMs: parsed?.ts, priority });
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
             return r.ok;
           }}
         />
       )}
 
-      {toast && (
-        <div role="status" aria-live="polite" className="v2-cal__toast" data-tone={toast.tone}>
-          {toast.text}
-        </div>
-      )}
+      {toast && <div className="rk-cal__toast"><Toast tone={toast.tone === "ok" ? "ok" : "hold"}>{toast.text}</Toast></div>}
     </div>
   );
 }
 
 export function CalendarRoom() {
   return (
-    <RoomShell
-      title="Calendar"
-      subtitle="this week · commitments · content"
-      breadcrumb={["Calendar"]}
-    >
+    <RoomShell title="Calendar" subtitle="this week · commitments" breadcrumb={["Calendar"]}>
       <CalendarRoomBody mode="expanded" />
     </RoomShell>
   );
 }
 
-/* ─────────── Subcomponents ─────────── */
-
-function StatCard({ label, value, sub }: { label: string; value: number | string; sub: string }) {
+/* ── week strip cell ── */
+function DayCell({ idx, weekStart, events, selected, onClick }: { idx: number; weekStart: number; events: CalendarEvent[]; selected: boolean; onClick: () => void }) {
+  const ts = weekStart + idx * 86_400_000;
+  const d = new Date(ts);
+  const today = isSameDay(ts, Date.now());
+  const overdue = events.some((e) => e.type === "commitment" && (e.status === "pending" || e.status === "active") && e.timestamp < Date.now());
+  const dots = events.slice(0, 5);
+  const extra = events.length - dots.length;
   return (
-    <div className="v2-cal__stat">
-      <div className="v2-cal__stat-label">{label}</div>
-      <div className="v2-cal__stat-value">{value}</div>
-      <div className="v2-cal__stat-sub">{sub}</div>
-    </div>
-  );
-}
-
-function Lane({
-  label,
-  tone,
-  events,
-  selectedId,
-  onSelect,
-  loading,
-}: {
-  label: string;
-  tone: "neutral" | "warn";
-  events: CalendarEvent[];
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-  loading: boolean;
-}) {
-  return (
-    <section className="v2-cal__lane" data-tone={tone}>
-      <header className="v2-cal__lane-head">
-        <span className="v2-cal__lane-label">{label}</span>
-        <span className="v2-cal__lane-count">{events.length}</span>
-      </header>
-      {loading && events.length === 0 ? (
-        <div className="v2-cal__lane-empty">Loading…</div>
-      ) : events.length === 0 ? (
-        <div className="v2-cal__lane-empty">No {label.toLowerCase()} for this day.</div>
-      ) : (
-        <ul className="v2-cal__lane-list">
-          {events.map((e) => (
-            <li key={e.id}>
-              <EventCard
-                event={e}
-                active={selectedId === e.id}
-                onClick={() => onSelect(selectedId === e.id ? null : e.id)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function EventCard({
-  event,
-  active,
-  onClick,
-}: {
-  event: CalendarEvent;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const IconComp = TYPE_ICON[event.type];
-  const priorityTone = event.priority ? PRIORITY_TONE[event.priority] ?? "neutral" : "neutral";
-  const statusTone = STATUS_TONE[event.status] ?? "neutral";
-  return (
-    <button
-      type="button"
-      className="v2-cal__event"
-      data-active={active}
-      data-type={event.type}
-      onClick={onClick}
-    >
-      <span className="v2-cal__event-icon">
-        <Icon icon={IconComp} size="sm" />
+    <button className={`rk-cal__cell${selected ? " rk-cal__cell--sel" : ""}${today ? " rk-cal__cell--today" : ""}`} onClick={onClick} aria-current={selected ? "date" : undefined}>
+      <span className="rk-cal__cell-top">
+        <span className="rk-cal__dow">{DOW[idx]}</span>
+        <span className="rk-cal__date">{d.getDate()}</span>
       </span>
-      <span className="v2-cal__event-body">
-        <span className="v2-cal__event-time">{formatTime(event.timestamp)}</span>
-        <span className="v2-cal__event-title">{event.title}</span>
-        <span className="v2-cal__event-meta">
-          {event.priority && (
-            <Chip tone={priorityTone} dot>
-              {event.priority}
-            </Chip>
-          )}
-          <Chip tone={statusTone} dot>
-            {event.status}
-          </Chip>
-          {event.assigned_to && (
-            <span className="v2-cal__event-assignee">→ {event.assigned_to}</span>
-          )}
-        </span>
+      <span className="rk-cal__dots">
+        {overdue && <span className="cdot cdot--overdue" />}
+        {dots.map((e, i) => <span key={i} className={`cdot${e.type === "content" ? " cdot--content" : ""}`} />)}
+        {extra > 0 && <span className="rk-cal__plus">+{extra}</span>}
       </span>
     </button>
   );
 }
 
-function DetailPanel({ event, onClose }: { event: CalendarEvent; onClose: () => void }) {
+/* ── week lane ── */
+function Lane({ label, shape, events, selectedId, onSelect }: { label: string; shape: "task" | "content"; events: CalendarEvent[]; selectedId: string | null; onSelect: (id: string) => void }) {
   return (
-    <aside className="v2-cal__side">
-      <header className="v2-cal__side-head">
-        <div>
-          <div className="v2-cal__side-eyebrow">
-            {event.type === "commitment" ? "Task" : "Content"}
-          </div>
-          <h3 className="v2-cal__side-title">{event.title}</h3>
-        </div>
-        <button
-          type="button"
-          className="v2-cal__icon-btn"
-          onClick={onClose}
-          aria-label="Close detail"
-        >
-          <Icon icon={X} size="sm" />
-        </button>
-      </header>
-
-      <dl className="v2-cal__side-fields">
-        <div>
-          <dt>When</dt>
-          <dd>{formatFullDateTime(event.timestamp)}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>
-            <Chip tone={STATUS_TONE[event.status] ?? "neutral"} dot>
-              {event.status}
-            </Chip>
-          </dd>
-        </div>
-        {event.priority && (
-          <div>
-            <dt>Priority</dt>
-            <dd>
-              <Chip tone={PRIORITY_TONE[event.priority] ?? "neutral"} dot>
-                {event.priority}
-              </Chip>
-            </dd>
-          </div>
+    <div className="rk-cal__lane">
+      <div className="rk-cal__lh"><span className={`cdot${shape === "content" ? " cdot--content" : ""}`} />{label}<span className="c">{events.length}</span></div>
+      <div className="rk-cal__lane-scroll">
+        {events.length === 0 ? (
+          <div className="rk-cal__lane-empty">Nothing {shape === "task" ? "due" : "scheduled"} this day.</div>
+        ) : (
+          events.map((e) => <EventCard key={e.id} event={e} selected={selectedId === e.id} onClick={() => onSelect(e.id)} />)
         )}
-        {event.assigned_to && (
-          <div>
-            <dt>Assignee</dt>
-            <dd>{event.assigned_to}</dd>
-          </div>
-        )}
-        {event.content_type && (
-          <div>
-            <dt>Type</dt>
-            <dd>{event.content_type}</dd>
-          </div>
-        )}
-        {event.has_due_date === false && (
-          <div>
-            <dt>Due date</dt>
-            <dd className="v2-cal__side-muted">Showing on creation date</dd>
-          </div>
-        )}
-      </dl>
-    </aside>
+      </div>
+    </div>
   );
 }
 
-function CreateDialog({
-  onClose,
-  onCreate,
-}: {
-  onClose: () => void;
-  onCreate: (input: { title: string; when: string; priority: CalendarPriority }) => Promise<boolean>;
-}) {
+function EventCard({ event, selected, onClick }: { event: CalendarEvent; selected: boolean; onClick: () => void }) {
+  return (
+    <button className={`rk-cal__card${selected ? " rk-cal__card--sel" : ""}`} onClick={onClick}>
+      <span className="rk-cal__card-time">{formatTime(event.timestamp)}{event.has_due_date === false ? " · on creation date" : ""}</span>
+      <span className="rk-cal__card-title">{event.title}</span>
+      <span className="rk-cal__card-chips">
+        <StatusChip tone={STATUS_TONE[event.status] ?? "mut"}>{event.status}</StatusChip>
+        {event.priority && event.type === "commitment" && <StatusChip tone={PRIORITY_TONE[event.priority] ?? "mut"}>{event.priority}</StatusChip>}
+        {event.assigned_to && <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink3)" }}>→ {event.assigned_to}</span>}
+      </span>
+    </button>
+  );
+}
+
+/* ── side / day detail ── */
+function SideDetail({ event, onClose }: { event: CalendarEvent; onClose?: () => void }) {
+  const isContent = event.type === "content";
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "flex-start" }}>
+        <div style={{ flex: 1 }}>
+          <div className="rk-cal__eyebrow">{isContent ? "content" : "task"}</div>
+          <div className="rk-cal__side-title">{event.title}</div>
+        </div>
+        {onClose && <button className="rk-cal__icbtn" onClick={onClose} aria-label="Close"><Icon icon={X} size="sm" /></button>}
+      </div>
+      <div className="rk-cal__kv"><span className="k">when</span><span className="v">{formatFullDateTime(event.timestamp)}</span></div>
+      <div className="rk-cal__kv"><span className="k">{isContent ? "stage" : "status"}</span><span className="v"><StatusChip tone={STATUS_TONE[event.status] ?? "mut"}>{event.status}</StatusChip></span></div>
+      {event.priority && !isContent && <div className="rk-cal__kv"><span className="k">priority</span><span className="v"><StatusChip tone={PRIORITY_TONE[event.priority] ?? "mut"}>{event.priority}</StatusChip></span></div>}
+      {event.content_type && <div className="rk-cal__kv"><span className="k">type</span><span className="v">{event.content_type}</span></div>}
+      {event.assigned_to && <div className="rk-cal__kv"><span className="k">assignee</span><span className="v">{event.assigned_to}</span></div>}
+      <div className="rk-cal__acts">
+        <DeepLink onClick={() => openRoom(isContent ? "content" : "tasks")}>Open in {isContent ? "Content" : "Tasks"} →</DeepLink>
+      </div>
+      {event.has_due_date === false && <div className="rk-cal__note">Showing on creation date</div>}
+    </>
+  );
+}
+
+/* ── day hour grid (calendar §03) ── */
+const HOURS = Array.from({ length: 15 }, (_, i) => i + 7); // 07:00–21:00
+function DayView({ weekStart, idx, events, selectedId, onSelect, selectedEvent }: { weekStart: number; idx: number; events: CalendarEvent[]; selectedId: string | null; onSelect: (id: string) => void; selectedEvent: CalendarEvent | null }) {
+  const dayTs = weekStart + idx * 86_400_000;
+  const today = isSameDay(dayTs, Date.now());
+  const undated = events.filter((e) => e.has_due_date === false);
+  const placed = events.filter((e) => e.has_due_date !== false);
+  // Events outside the 07:00–21:00 grid still exist — surface them in a tray
+  // instead of silently dropping them.
+  const offGrid = placed.filter((e) => { const h = new Date(e.timestamp).getHours(); return h < 7 || h > 21; });
+  const now = new Date();
+  const nowTop = today && now.getHours() >= 7 && now.getHours() <= 21 ? (now.getHours() - 7 + now.getMinutes() / 60) * 44 : null;
+  const detail = selectedEvent ?? events[0] ?? null;
+
+  return (
+    <div className="rk-cal__day">
+      <div className="rk-cal__hours">
+        {undated.length > 0 && (
+          <div className="rk-cal__tray">
+            <span className="rk-cal__tray-lab">due today</span>
+            {undated.map((e) => <button key={e.id} className={`rk-cal__card${selectedId === e.id ? " rk-cal__card--sel" : ""}`} style={{ padding: "5px 9px" }} onClick={() => onSelect(e.id)}><span className="rk-cal__card-title" style={{ fontSize: 11.5 }}>{e.title}</span></button>)}
+          </div>
+        )}
+        {offGrid.length > 0 && (
+          <div className="rk-cal__tray">
+            <span className="rk-cal__tray-lab">earlier / later</span>
+            {offGrid.map((e) => <button key={e.id} className={`rk-cal__card${selectedId === e.id ? " rk-cal__card--sel" : ""}`} style={{ padding: "5px 9px" }} onClick={() => onSelect(e.id)}><span className="rk-cal__card-title" style={{ fontSize: 11.5 }}>{formatTime(e.timestamp)} · {e.title}</span></button>)}
+          </div>
+        )}
+        <div style={{ position: "relative" }}>
+          {HOURS.map((h) => (
+            <div key={h} className="rk-cal__hour"><span className="rk-cal__hour-label">{String(h).padStart(2, "0")}:00</span><span className="rk-cal__hour-slot" /></div>
+          ))}
+          <div className="rk-cal__blocks">
+            {placed.map((e) => {
+              const d = new Date(e.timestamp);
+              const h = d.getHours();
+              if (h < 7 || h > 21) return null;
+              const top = (h - 7 + d.getMinutes() / 60) * 44;
+              return (
+                <button key={e.id} className={`rk-cal__block rk-cal__block--${e.type === "content" ? "content" : "task"}${selectedId === e.id ? " rk-cal__block--sel" : ""}`} style={{ top, height: 22 }} onClick={() => onSelect(e.id)}>
+                  <span className="rk-cal__block-t">{formatTime(e.timestamp)}</span> {e.title}
+                </button>
+              );
+            })}
+          </div>
+          {nowTop != null && <div className="rk-cal__nowline" style={{ top: nowTop }}><i>now</i></div>}
+        </div>
+      </div>
+      <div className="rk-cal__side-inner">
+        {detail ? <SideDetail event={detail} /> : <div className="rk-cal__side-empty">Select an event to inspect it.</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ── create dialog ── */
+function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: { title: string; when: string; priority: CalendarPriority }) => Promise<boolean> }) {
   const [title, setTitle] = useState("");
   const [when, setWhen] = useState("");
   const [priority, setPriority] = useState<CalendarPriority>("normal");
   const [busy, setBusy] = useState(false);
-
-  // Live-preview the parsed date so the user sees what they'll get.
   const parsed = useMemo(() => (when.trim() ? parseRelativeDate(when) : null), [when]);
 
   const submit = async () => {
@@ -556,171 +310,48 @@ function CreateDialog({
   };
 
   return (
-    <div className="v2-cal__overlay" onClick={() => !busy && onClose()}>
-      <div
-        className="v2-cal__dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="v2-cal-create-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="v2-cal__dialog-head">
-          <div>
-            <div id="v2-cal-create-title" className="v2-cal__dialog-title">
-              New event
-            </div>
-            <div className="v2-cal__dialog-subtitle">
-              Schedule a task. Reuses your existing commitment surface.
-            </div>
-          </div>
-          <button
-            type="button"
-            className="v2-cal__icon-btn"
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Close"
-          >
-            <Icon icon={X} size="sm" />
-          </button>
+    <div className="rk-cal__overlay" onClick={() => !busy && onClose()}>
+      <div className="rk-cal__dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="rk-cal__dialog-head">
+          <div className="rk-cal__dialog-title">New event</div>
+          <div className="rk-cal__dialog-sub">Schedules a task, on the commitment surface Tasks already owns.</div>
         </div>
-
-        <div className="v2-cal__dialog-body">
-          <label className="v2-cal__field">
-            <span className="v2-cal__field-label">Title</span>
-            <input
-              type="text"
-              className="v2-cal__input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="What's the event?"
-              autoFocus
-            />
-          </label>
-
-          <label className="v2-cal__field">
-            <span className="v2-cal__field-label">When</span>
-            <input
-              type="text"
-              className="v2-cal__input"
-              value={when}
-              onChange={(e) => setWhen(e.target.value)}
-              placeholder="e.g. tomorrow at 3pm, next monday, 2026-04-30 15:00"
-            />
-            <span className="v2-cal__field-hint">
-              {when.trim()
-                ? parsed
-                  ? `→ ${formatFullDateTime(parsed.ts)}`
-                  : "Couldn't parse that — leave blank for an undated task."
-                : "Leave blank for an undated task."}
-            </span>
-          </label>
-
-          <label className="v2-cal__field">
-            <span className="v2-cal__field-label">Priority</span>
-            <div className="v2-cal__chip-row">
+        <div className="rk-cal__dialog-body">
+          <div>
+            <div className="rk-cal__field-lab">title</div>
+            <input className="rk-cal__dialog-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What's the event?" autoFocus />
+          </div>
+          <div>
+            <div className="rk-cal__field-lab">when</div>
+            <input className="rk-cal__dialog-input" value={when} onChange={(e) => setWhen(e.target.value)} placeholder="e.g. tomorrow at 3pm, next monday" />
+            <div className="rk-cal__parse">{when.trim() ? (parsed ? `→ ${formatFullDateTime(parsed.ts)}` : "Couldn't parse that — leave blank for an undated task.") : "Leave blank for an undated task."}</div>
+          </div>
+          <div>
+            <div className="rk-cal__field-lab">priority</div>
+            <div style={{ display: "flex", gap: 6 }}>
               {(["low", "normal", "high", "critical"] as CalendarPriority[]).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className="v2-cal__chip"
-                  data-active={priority === p}
-                  onClick={() => setPriority(p)}
-                >
-                  {p}
-                </button>
+                <button key={p} className={`rk-cal__sbtn${priority === p ? " rk-cal__sbtn--pri" : ""}`} onClick={() => setPriority(p)}>{p}</button>
               ))}
             </div>
-          </label>
+          </div>
         </div>
-
-        <div className="v2-cal__dialog-foot">
-          <button
-            type="button"
-            className="v2-cal__btn v2-cal__btn--secondary"
-            onClick={onClose}
-            disabled={busy}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="v2-cal__btn v2-cal__btn--primary"
-            onClick={submit}
-            disabled={busy || !title.trim()}
-          >
-            {busy ? "Creating…" : "Create"}
-          </button>
+        <div className="rk-cal__dialog-acts" style={{ padding: "0 18px 16px" }}>
+          <button className="rk-cal__sbtn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="rk-cal__sbtn rk-cal__sbtn--pri" onClick={submit} disabled={busy || !title.trim()}>{busy ? "Creating…" : "Create"}</button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ─────────── helpers ─────────── */
-
-function formatTime(ts: number): string {
-  if (!Number.isFinite(ts)) return "";
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function formatFullDateTime(ts: number): string {
-  return new Date(ts).toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function isSameDay(a: number, b: number): boolean {
-  const da = new Date(a);
-  const db = new Date(b);
-  return (
-    da.getFullYear() === db.getFullYear() &&
-    da.getMonth() === db.getMonth() &&
-    da.getDate() === db.getDate()
-  );
-}
-
-function startOfWeek(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  const dow = d.getDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + offset);
-  return d.getTime();
-}
-
-function dayLabel(weekStart: number, idx: number): string {
-  const d = new Date(weekStart + idx * 86_400_000);
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
-
-function fullDayLabel(weekStart: number, idx: number): string {
-  const d = new Date(weekStart + idx * 86_400_000);
-  return d.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
-
+/* ── helpers ── */
+function formatTime(ts: number): string { if (!Number.isFinite(ts)) return ""; const d = new Date(ts); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; }
+function formatFullDateTime(ts: number): string { return new Date(ts).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+function isSameDay(a: number, b: number): boolean { const da = new Date(a), db = new Date(b); return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate(); }
+function startOfWeek(ts: number): number { const d = new Date(ts); d.setHours(0, 0, 0, 0); const dow = d.getDay(); d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow)); return d.getTime(); }
 function weekRangeLabel(weekStart: number): string {
-  const start = new Date(weekStart);
-  const end = new Date(weekStart + 6 * 86_400_000);
-  const sameMonth = start.getMonth() === end.getMonth();
-  if (sameMonth) {
-    return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })}–${end.getDate()}`;
-  }
+  const start = new Date(weekStart), end = new Date(weekStart + 6 * 86_400_000);
+  if (start.getMonth() === end.getMonth()) return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })}–${end.getDate()}`;
   return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${end.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
-
-function currentDayIdx(): number {
-  const dow = new Date().getDay();
-  return dow === 0 ? 6 : dow - 1;
-}
-
-// silence unused-import lints
-void Sparkles;
+function currentDayIdx(): number { const dow = new Date().getDay(); return dow === 0 ? 6 : dow - 1; }

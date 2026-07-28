@@ -612,3 +612,24 @@
   word-break: break-word;
   line-height: 1.4;
 }
+
+/* ═══════════════════ Brand Book III / Monochrome Lab ═══════════════════
+   Room chrome (design room 01 §01): Workflows list, Connections, Library.
+   Drop corners on rows/cards, Familjen weight on titles, blue focus, and
+   the amber #fbbf24 leak remapped to --hold. */
+.wf-room { --accent-warn: var(--hold); }
+.wf-list,
+.wf-conn__row,
+.wf-lib__row,
+.wf-detail,
+.wf-empty,
+.wf-conn__form,
+.wf-list__warning-full { border-radius: var(--corner); }
+.wf-list__title,
+.wf-detail__title,
+.wf-conn__title,
+.wf-lib__header,
+.wf-room__header { font-weight: 700; letter-spacing: -0.01em; }
+.wf-room__tabs button[aria-selected="true"],
+.wf-room__tabs button[data-active="true"] { border-radius: var(--corner-sm); }
+.wf-room :focus-visible { outline-color: var(--speak); }

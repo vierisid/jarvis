@@ -54,9 +54,31 @@ typedef struct {
     unsigned long long handle;        // == (uintptr)self, the Go-side key
 } SubWin;
 
-static void sub_fill_circle(cairo_t* cr, double cx, double cy, double r) {
-    cairo_arc(cr, cx, cy, r, 0, 2*M_PI);
-    cairo_fill(cr);
+// ── Monochrome Lab mini glass drop (self-contained; the main pebble's Cairo helpers
+//    live in a different cgo translation unit). ──
+static void sub_drop_path(cairo_t* cr, double cx, double cy, double r, double sharpR) {
+    cairo_save(cr);
+    cairo_translate(cr, cx, cy);
+    cairo_rotate(cr, M_PI / 4.0);
+    double x = -r, y = -r, w = 2*r, h = 2*r;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x+w-r,      y+r,          r,      -M_PI/2, 0);    // top-right
+    cairo_arc(cr, x+w-r,      y+h-r,        r,      0, M_PI/2);      // bottom-right
+    cairo_arc(cr, x+sharpR,   y+h-sharpR,   sharpR, M_PI/2, M_PI);   // bottom-left (sharp)
+    cairo_arc(cr, x+r,        y+r,          r,      M_PI, 3*M_PI/2); // top-left
+    cairo_close_path(cr);
+    cairo_restore(cr);
+}
+static void sub_radial(cairo_t* cr, double cx, double cy, double rad,
+                       double innerA, double rr, double gg, double bb) {
+    if (innerA <= 0 || rad <= 0) return;
+    cairo_pattern_t* pat = cairo_pattern_create_radial(cx, cy, 0, cx, cy, rad);
+    cairo_pattern_add_color_stop_rgba(pat, 0.0, rr, gg, bb, innerA);
+    cairo_pattern_add_color_stop_rgba(pat, 0.5, rr, gg, bb, innerA * 0.25);
+    cairo_pattern_add_color_stop_rgba(pat, 1.0, rr, gg, bb, 0.0);
+    cairo_set_source(cr, pat);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pat);
 }
 
 static gboolean sub_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
@@ -66,31 +88,45 @@ static gboolean sub_draw(GtkWidget* widget, cairo_t* cr, gpointer data) {
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    const double cx = SUB_CX, cy = SUB_CY, discR = 9.0, dotR = 3.0, sh = 2.0;
-    // Hard offset shadow (ink @ 10%).
-    cairo_set_source_rgba(cr, 26/255.0, 26/255.0, 26/255.0, 0.10);
-    sub_fill_circle(cr, cx+sh, cy+sh, discR);
-    // Paper disc.
-    cairo_set_source_rgba(cr, 245/255.0, 242/255.0, 235/255.0, 1.0);
-    sub_fill_circle(cr, cx, cy, discR);
-    // Tinted hairline ring (accent @ 70%).
-    cairo_set_source_rgba(cr, sw->r, sw->g, sw->b, 0.70);
-    cairo_set_line_width(cr, 1.0);
-    cairo_arc(cr, cx, cy, discR, 0, 2*M_PI);
-    cairo_stroke(cr);
-    // Centre dot — pulse while active (1.2s, 60%-100%), flat dim when idle.
-    double alpha;
-    if (sw->state == 0) {
-        alpha = 110/255.0;
-    } else {
-        const int cycleFrames = 75;
-        double phase = (double)(sw->tick % cycleFrames) / (double)cycleFrames;
-        double v = phase * 2;
-        if (v > 1) v = 2 - v;
-        alpha = (153 + 102*v) / 255.0;
+    const double cx = SUB_CX, cy = SUB_CY, dR = 11.5, sR = 4.5;
+    double r = sw->r, g = sw->g, b = sw->b;
+    if (sw->state == 6) { r = 0x2F/255.0; g = 0xA4/255.0; b = 0x5E/255.0; } // done → ok
+
+    double core = 0.42, glow = 0.0; int spinning = 0;
+    if (sw->state == 0) { core = 0.40; }                    // idle — dim glass
+    else if (sw->state == 6) { core = 0.92; glow = 0.55; }  // done — bright green
+    else {                                                  // active — pulse + spinner
+        const int cf = 75;
+        double phase = (double)(sw->tick % cf) / (double)cf;
+        double v = phase * 2; if (v > 1) v = 2 - v;
+        core = 0.6 + 0.4*v; glow = 0.45; spinning = 1;
     }
-    cairo_set_source_rgba(cr, sw->r, sw->g, sw->b, alpha);
-    sub_fill_circle(cr, cx, cy, dotR);
+
+    if (glow > 0) sub_radial(cr, cx, cy+1, dR*2.0, glow*150.0/255.0, r, g, b);
+    sub_drop_path(cr, cx, cy+2, dR, sR);
+    cairo_set_source_rgba(cr, 0x13/255.0, 0x16/255.0, 0x1A/255.0, 34.0/255.0);
+    cairo_fill(cr);
+    sub_drop_path(cr, cx, cy, dR, sR);
+    cairo_set_source_rgba(cr, 1, 1, 1, 120.0/255.0);
+    cairo_fill(cr);
+    cairo_save(cr); sub_drop_path(cr, cx, cy, dR, sR); cairo_clip(cr);
+    sub_radial(cr, cx, cy, dR, core, r, g, b);
+    cairo_restore(cr);
+    cairo_save(cr); sub_drop_path(cr, cx, cy, dR, sR); cairo_clip(cr);
+    sub_radial(cr, cx - dR*0.32, cy - dR*0.34, dR*0.7, 140.0/255.0, 1, 1, 1);
+    cairo_restore(cr);
+    sub_drop_path(cr, cx, cy, dR, sR);
+    cairo_set_source_rgba(cr, 0x13/255.0, 0x16/255.0, 0x1A/255.0, 85.0/255.0);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+    if (spinning) {
+        const int sf = 66;
+        double ang = (double)(sw->tick % sf) / (double)sf * 2 * M_PI;
+        double ox = cx + cos(ang)*dR*0.66, oy = cy + sin(ang)*dR*0.66;
+        cairo_set_source_rgba(cr, 1, 1, 1, 235.0/255.0);
+        cairo_arc(cr, ox, oy, 1.9, 0, 2*M_PI);
+        cairo_fill(cr);
+    }
     return FALSE;
 }
 

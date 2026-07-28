@@ -2,22 +2,14 @@
 @import "./tokens.css";
 
 :root {
-  --j-bg: #07070A;
-  --j-surface: #0C0C12;
-  --j-surface-hover: #1A1A22;
-  --j-border: rgba(255,255,255,0.04);
-  --j-border-bright: rgba(255,255,255,0.07);
-  --j-accent: #8B5CF6;
-  --j-accent-dim: #6D28D9;
-  --j-accent2: #A78BFA;
-  --j-success: #34D399;
-  --j-warning: #FBBF24;
-  --j-error: #FB7185;
-  --j-text: rgba(255,255,255,0.88);
-  --j-text-dim: rgba(255,255,255,0.48);
-  --j-text-muted: rgba(255,255,255,0.25);
-  --j-glow: 0 0 20px rgba(139,92,246,0.15);
-  --j-glow-strong: 0 0 30px rgba(139,92,246,0.3);
+  /* Legacy IDE (Workspaces §02) status hues — the last of the old --j-* graft.
+     The rest were flattened onto Monochrome Lab tokens in Phase 6; these stay
+     only because the IDE overrides error/warning room-scoped to the -tx text
+     variants, so a global flatten would shift the colour (--j-success is still
+     read by SidecarConfigEditor). Remove with the native IDE rebuild. */
+  --j-warning: var(--hold);
+  --j-error: var(--listen);
+  --j-success: var(--ok);
 }
 
 * {
@@ -27,9 +19,9 @@
 }
 
 body {
-  background: var(--j-bg);
-  color: var(--j-text);
-  font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
   min-height: 100vh;
   overflow: hidden;
 }
@@ -50,12 +42,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--j-border-bright);
-  border-radius: 3px;
+  background: var(--rule);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--j-text-muted);
+  background: var(--faint);
 }
 
 /* Selection */
@@ -85,16 +77,16 @@ body {
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  color: var(--j-text);
+  color: var(--ink);
   font-weight: 600;
   margin: 16px 0 8px;
   line-height: 1.3;
 }
 
-.markdown-content h1 { font-size: 1.4em; border-bottom: 1px solid var(--j-border); padding-bottom: 4px; }
+.markdown-content h1 { font-size: 1.4em; border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
 .markdown-content h2 { font-size: 1.25em; }
 .markdown-content h3 { font-size: 1.1em; }
-.markdown-content h4 { font-size: 1em; color: var(--j-text-dim); }
+.markdown-content h4 { font-size: 1em; color: var(--ink2); }
 
 .markdown-content p {
   margin: 6px 0;
@@ -115,7 +107,7 @@ body {
 }
 
 .markdown-content li::marker {
-  color: var(--j-text-muted);
+  color: var(--ink3);
 }
 
 /* Task list checkboxes */
@@ -125,28 +117,28 @@ body {
 }
 
 .markdown-content strong {
-  color: var(--j-text);
+  color: var(--ink);
   font-weight: 600;
 }
 
 .markdown-content em {
-  color: var(--j-text-dim);
+  color: var(--ink2);
   font-style: italic;
 }
 
 .markdown-content del {
-  color: var(--j-text-muted);
+  color: var(--ink3);
   text-decoration: line-through;
 }
 
 .markdown-content a:hover {
-  border-bottom-color: var(--j-accent) !important;
+  border-bottom-color: var(--ink) !important;
 }
 
 /* ── Highlight.js Theme (Cyberpunk Dark) ─────────────────── */
 
 .hljs {
-  color: var(--j-text);
+  color: var(--ink);
 }
 
 .hljs-keyword,
@@ -187,7 +179,7 @@ body {
 
 .hljs-variable,
 .hljs-params {
-  color: var(--j-text);
+  color: var(--ink);
 }
 
 .hljs-regexp {

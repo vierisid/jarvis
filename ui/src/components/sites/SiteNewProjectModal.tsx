@@ -77,7 +77,7 @@ export function SiteNewProjectModal({ onClose, onCreated }: Props) {
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--j-text)", marginBottom: "16px" }}>
+        <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--ink)", marginBottom: "16px" }}>
           New Project
         </h3>
 
@@ -113,8 +113,8 @@ export function SiteNewProjectModal({ onClose, onCreated }: Props) {
                 key={t.id}
                 style={{
                   ...templateOptionStyle,
-                  borderColor: selectedTemplate === t.id ? "var(--j-accent)" : "var(--j-border)",
-                  background: selectedTemplate === t.id ? "rgba(0, 212, 255, 0.05)" : "var(--j-surface)",
+                  borderColor: selectedTemplate === t.id ? "var(--ink)" : "var(--rule)",
+                  background: selectedTemplate === t.id ? "rgba(0, 212, 255, 0.05)" : "var(--panel)",
                   opacity: gitCheck !== null && !gitCheck.installed ? 0.5 : 1,
                   pointerEvents: gitCheck !== null && !gitCheck.installed ? "none" : "auto",
                 }}
@@ -128,8 +128,8 @@ export function SiteNewProjectModal({ onClose, onCreated }: Props) {
                   style={{ display: "none" }}
                 />
                 <div>
-                  <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--j-text)" }}>{t.name}</div>
-                  <div style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>{t.description}</div>
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink)" }}>{t.name}</div>
+                  <div style={{ fontSize: "11px", color: "var(--ink3)" }}>{t.description}</div>
                 </div>
               </label>
             ))}
@@ -156,12 +156,12 @@ export function SiteNewProjectModal({ onClose, onCreated }: Props) {
                 style={inputStyle}
               />
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--j-text-dim)", cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--ink2)", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={gitGlobal}
                 onChange={(e) => setGitGlobal(e.target.checked)}
-                style={{ accentColor: "var(--j-accent)" }}
+                style={{ accentColor: "var(--ink)" }}
               />
               Set as global git config
             </label>
@@ -205,8 +205,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "8px",
   padding: "20px",
   width: 420,
@@ -218,7 +218,7 @@ const modalStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = {
   fontSize: "11px",
   fontWeight: 600,
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   textTransform: "uppercase",
   letterSpacing: "0.5px",
   marginBottom: "6px",
@@ -229,17 +229,17 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "8px 10px",
   fontSize: "13px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   outline: "none",
   boxSizing: "border-box",
 };
 
 const templateOptionStyle: React.CSSProperties = {
   padding: "10px 12px",
-  border: "1px solid var(--j-border)",
+  border: "1px solid var(--rule)",
   borderRadius: "6px",
   cursor: "pointer",
   transition: "border-color 0.15s",
@@ -260,9 +260,9 @@ const cancelBtnStyle: React.CSSProperties = {
   padding: "6px 16px",
   fontSize: "12px",
   background: "none",
-  border: "1px solid var(--j-border)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
   cursor: "pointer",
 };
 
@@ -273,6 +273,6 @@ const createBtnStyle: React.CSSProperties = {
   background: "rgba(0, 212, 255, 0.15)",
   border: "1px solid rgba(0, 212, 255, 0.4)",
   borderRadius: "4px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
 };

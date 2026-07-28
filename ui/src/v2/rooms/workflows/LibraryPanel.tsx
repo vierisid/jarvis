@@ -17,6 +17,7 @@
  */
 
 import React, { useMemo, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { ChevronRight, RefreshCw, Download, Trash2, ExternalLink, ShieldCheck } from "lucide-react";
 import { useLibrary, type LibraryEntry, type LibraryActionState } from "./useLibrary";
@@ -195,7 +196,7 @@ function LibraryRowWired({
       onInstall={async () => {
         if (entry.estimatedSizeMb !== null && entry.estimatedSizeMb >= 100) {
           if (
-            !window.confirm(
+            !await confirmDialog(
               `Installing ${entry.displayName} will use about ${entry.estimatedSizeMb}MB of disk. Continue?`,
             )
           ) {
@@ -210,7 +211,7 @@ function LibraryRowWired({
       }}
       onUninstall={async () => {
         if (
-          !window.confirm(
+          !await confirmDialog(
             `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
           )
         )

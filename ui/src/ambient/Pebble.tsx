@@ -5,20 +5,26 @@ export type PebbleState =
   | "listening"
   | "thinking"
   | "speaking"
-  | "working";
+  | "working"
+  | "asking"   // amber — waiting on your approval/authority
+  | "done"     // green flash — job landed
+  | "muted";   // mic muted — quiet, no chroma
 
 // "thinking" is intentionally NOT locked — it should follow the cursor like
 // idle, since thinking is a transient state where the user has no input
 // affordance to interact with. Listening + speaking lock so bubble buttons
 // stay clickable.
-const LOCKED: ReadonlySet<PebbleState> = new Set(["listening", "speaking"]);
+// Only speaking summons a bubble + grabs clicks. Listening is just the red
+// drop following the cursor — no window, clicks pass through so you can keep
+// working while you talk.
+const LOCKED: ReadonlySet<PebbleState> = new Set(["speaking"]);
 
 const FOLLOW_FACTOR = 0.10;
 const SETTLE_FACTOR = 0.18;
 
 // Cursor never sits on the pebble. Small offset down-right of the pointer.
-const CURSOR_OFFSET_X = 18;
-const CURSOR_OFFSET_Y = 22;
+const CURSOR_OFFSET_X = 30;
+const CURSOR_OFFSET_Y = 36;
 
 // In native mode the sidecar moves the entire window to follow the cursor,
 // so the pebble div itself stays put. Pinned a few px from the window's
@@ -26,9 +32,6 @@ const CURSOR_OFFSET_Y = 22;
 // (which lives just outside the window's TL corner).
 const NATIVE_PEBBLE_X = 4;
 const NATIVE_PEBBLE_Y = 4;
-
-const WAVE_BARS = 4;
-const THINK_DOTS = 3;
 
 // True when the daemon spawned this page with ?native=1, meaning the
 // sidecar is doing native cursor-follow at the window level. The page
@@ -167,44 +170,17 @@ export function Pebble() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const showBubble = state === "listening" || state === "speaking";
+  const showBubble = state === "speaking";
   const cls =
     "pebble pebble--" + state + (LOCKED.has(state) ? " pebble--locked" : "");
 
   return (
     <>
       <div ref={pebbleRef} className={cls} aria-hidden>
-        <span className="pebble-glyph">
-          {state === "idle" && <span className="idle-dot" />}
-
-          {(state === "listening" || state === "speaking") && (
-            <span className="wave">
-              {Array.from({ length: WAVE_BARS }).map((_, i) => (
-                <span key={i} className="wave-bar" style={{ animationDelay: `${i * 0.09}s` }} />
-              ))}
-            </span>
-          )}
-
-          {state === "thinking" && (
-            <span className="think">
-              {Array.from({ length: THINK_DOTS }).map((_, i) => (
-                <span key={i} className="think-dot" style={{ animationDelay: `${i * 0.15}s` }} />
-              ))}
-            </span>
-          )}
-
-          {state === "working" && (
-            <span className="working-dot" />
-          )}
+        <span className="gd">
+          <span className="in" />
+          <span className="ring" />
         </span>
-
-        {state !== "idle" && state !== "thinking" && (
-          <span className="pebble-label">
-            {state === "listening" && "listening"}
-            {state === "speaking" && "speaking"}
-            {state === "working" && "working"}
-          </span>
-        )}
       </div>
 
       {showBubble && (
@@ -221,7 +197,7 @@ export function Pebble() {
           </div>
           <div className="thread-body">
             <span className="thread-from">jarvis</span>
-            {state === "listening" ? "listening — go ahead." : "ready when you are."}
+            speaking…
           </div>
           <div className="thread-actions">
             <button

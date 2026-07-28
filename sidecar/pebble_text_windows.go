@@ -77,7 +77,7 @@ func colorRef(r, g, b uint8) uint32 {
 // dynamic text from SetText winning over the per-state placeholder.
 func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
 	dyn, _ := s.bubbleText.Load().(string)
-	if dyn != "" && (state == PebbleListening || state == PebbleSpeaking) {
+	if dyn != "" && state == PebbleSpeaking {
 		return dyn
 	}
 	// Canonical placeholder copy lives in pebble_core.go.
@@ -90,7 +90,7 @@ func (s *pebbleServiceWindows) resolveBodyText(state PebbleState) string {
 func makeBodyFont() uintptr {
 	bodyHeight := int32(-13)
 	weightNormal := int32(fwNormal)
-	bodyFace, _ := syscall.UTF16PtrFromString("Inter Tight")
+	bodyFace, _ := syscall.UTF16PtrFromString("Familjen Grotesk")
 	font, _, _ := procCreateFontW.Call(
 		uintptr(bodyHeight),
 		0, 0, 0,
@@ -112,7 +112,7 @@ func makeBodyFont() uintptr {
 //
 // Returns 0 when the bubble shouldn't be drawn at all (idle/thinking/working).
 func (s *pebbleServiceWindows) computeBubbleBottom(memDC uintptr, state PebbleState) int32 {
-	if state != PebbleListening && state != PebbleSpeaking {
+	if state != PebbleSpeaking {
 		return 0
 	}
 	body := s.resolveBodyText(state)
@@ -120,32 +120,17 @@ func (s *pebbleServiceWindows) computeBubbleBottom(memDC uintptr, state PebbleSt
 		return pebbleBubbleY1Min
 	}
 
-	bodyFont := makeBodyFont()
-	defer procDeleteObjectGdi.Call(bodyFont)
+	// Measure the markdown layout (headings/lists/paragraphs) so the card
+	// grows to fit the rendered blocks, not a single wrapped run.
+	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
+	fonts := newMdFonts()
+	defer fonts.delete()
+	blocks := parseMarkdownBlocks(body)
+	bodyBottom := layoutMarkdown(memDC, fonts, blocks,
+		pebbleBubbleBodyX0, pebbleBubbleBodyX1,
+		pebbleBubbleBodyY0, int32(pebbleBubbleY1Max), false)
 
-	prev, _, _ := procSelectObject.Call(memDC, bodyFont)
-	defer procSelectObject.Call(memDC, prev)
-
-	bodyStr, _ := syscall.UTF16PtrFromString(body)
-	// DT_CALCRECT modifies the rect in place — Right stays fixed at the
-	// bubble's inner width, Bottom comes back as the height required to
-	// render the wrapped text without truncation.
-	rect := pblRect{
-		Left:   pebbleBubbleBodyX0,
-		Top:    pebbleBubbleBodyY0,
-		Right:  pebbleBubbleBodyX1,
-		Bottom: pebbleBubbleBodyY0,
-	}
-	nullTerm := int32(-1)
-	procDrawTextW.Call(
-		memDC,
-		uintptr(unsafe.Pointer(bodyStr)),
-		uintptr(nullTerm),
-		uintptr(unsafe.Pointer(&rect)),
-		uintptr(uint32(dtLeft|dtWordBreak|dtCalcRect)),
-	)
-
-	bottom := rect.Bottom + int32(pebbleBubbleBottomP)
+	bottom := bodyBottom + int32(pebbleBubbleBottomP)
 	if bottom < int32(pebbleBubbleY1Min) {
 		bottom = int32(pebbleBubbleY1Min)
 	}
@@ -169,52 +154,16 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 		return
 	}
 
-	// Negative height in CreateFontW means "character height in pixels"
-	// rather than cell height — gives more predictable sizing across DPIs.
-	// Cast through int32 vars at runtime so the negative bit pattern
-	// doesn't trip Go's constant overflow check on uintptr conversion.
-	eyebrowHeight := int32(-10)
-	weightMedium := int32(fwMedium)
-
-	// Eyebrow font — uppercase mono, medium weight.
-	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
-	eyebrowFont, _, _ := procCreateFontW.Call(
-		uintptr(eyebrowHeight),
-		0, 0, 0,
-		uintptr(weightMedium),
-		0, 0, 0,
-		uintptr(ansiCharset),
-		0, 0,
-		uintptr(antialiasedQuality),
-		0,
-		uintptr(unsafe.Pointer(eyebrowFace)),
-	)
-	defer procDeleteObjectGdi.Call(eyebrowFont)
-
-	// Body font — Inter Tight if installed, else Segoe UI Variable / Segoe UI.
-	bodyFont := makeBodyFont()
-	defer procDeleteObjectGdi.Call(bodyFont)
-
 	// Transparent text background — preserves the bubble fill underneath.
 	procSetBkMode.Call(memDC, uintptr(bkModeTransparent))
 
-	// Per-state colours. Speaking has dark bg → light text; listening has
-	// paper bg → ink text + vermilion eyebrow.
-	var bodyCol, eyebrowCol uint32
-	if state == PebbleSpeaking {
-		// Dark card: paper-tone text + paper eyebrow (so the JARVIS label
-		// reads clearly against the ink background).
-		bodyCol = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-		eyebrowCol = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-	} else {
-		bodyCol = colorRef(pebbleInkR, pebbleInkG, pebbleInkB)
-		eyebrowCol = colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
-	}
-
-	// Eyebrow row.
-	procSelectObject.Call(memDC, eyebrowFont)
-	procSetTextColor.Call(memDC, uintptr(eyebrowCol))
-	nullTerm := int32(-1) // DrawText sentinel for null-terminated string
+	// Eyebrow row — uppercase mono "JARVIS" in speak-blue. Negative height in
+	// CreateFontW means character height in px (predictable across DPIs).
+	eyebrowFont := makeMdFont(int32(-11), int32(fwMedium), "Spline Sans Mono")
+	defer procDeleteObjectGdi.Call(eyebrowFont)
+	prevEyebrow, _, _ := procSelectObject.Call(memDC, eyebrowFont)
+	procSetTextColor.Call(memDC, uintptr(colorRef(pebbleSpeakTxR, pebbleSpeakTxG, pebbleSpeakTxB)))
+	nullTerm := int32(-1)
 	eyebrowStr, _ := syscall.UTF16PtrFromString("JARVIS")
 	eyebrowRect := pblRect{Left: pebbleBubbleBodyX0, Top: 62, Right: pebbleBubbleBodyX1, Bottom: 80}
 	procDrawTextW.Call(
@@ -224,27 +173,18 @@ func (s *pebbleServiceWindows) drawBubbleText(memDC uintptr, state PebbleState, 
 		uintptr(unsafe.Pointer(&eyebrowRect)),
 		uintptr(uint32(dtLeft|dtSingleLine|dtNoClip)),
 	)
+	procSelectObject.Call(memDC, prevEyebrow) // restore before delete (no leak)
 
-	// Body row — fills from below the eyebrow down to the auto-fitted bubble
-	// bottom (minus the bottom padding). End-ellipsis trims when content
-	// would overflow the *capped* card; otherwise the bubble grew to fit.
-	procSelectObject.Call(memDC, bodyFont)
-	procSetTextColor.Call(memDC, uintptr(bodyCol))
-	bodyStr, _ := syscall.UTF16PtrFromString(bodyText)
-	bodyBottom := bubbleY1 - int32(pebbleBubbleBottomP)/2
-	bodyRect := pblRect{
-		Left:   pebbleBubbleBodyX0,
-		Top:    pebbleBubbleBodyY0,
-		Right:  pebbleBubbleBodyX1,
-		Bottom: bodyBottom,
-	}
-	procDrawTextW.Call(
-		memDC,
-		uintptr(unsafe.Pointer(bodyStr)),
-		uintptr(nullTerm),
-		uintptr(unsafe.Pointer(&bodyRect)),
-		uintptr(uint32(dtLeft|dtWordBreak|dtEndEllipsis|dtEditControl)),
-	)
+	// Body — rendered markdown (headings, lists, code, paragraphs) from below
+	// the eyebrow down to the auto-fitted card bottom. layoutMarkdown stops at
+	// maxY so it never paints past the capped card; the daemon registers an
+	// "open full" overflow button when the answer is too long to fit.
+	fonts := newMdFonts()
+	defer fonts.delete()
+	blocks := parseMarkdownBlocks(bodyText)
+	layoutMarkdown(memDC, fonts, blocks,
+		pebbleBubbleBodyX0, pebbleBubbleBodyX1,
+		pebbleBubbleBodyY0, bubbleY1-int32(pebbleBubbleBottomP), true)
 }
 
 // repairBubbleTextAlpha clamps the alpha channel back to 255 across the
@@ -268,7 +208,7 @@ func repairBubbleTextAlpha(pixels []uint32, bubbleY1 int32) {
 	// text — which lays out to pebbleBubbleBodyX1=434 — with alpha=0, i.e.
 	// invisible. Span the full card interior instead.
 	const (
-		inset = 8                     // > corner radius (6)
+		inset = 8                      // > corner radius (6)
 		x0    = pebbleBubbleX0 + inset // 20
 		x1    = pebbleBubbleX1 - inset // 440 — covers body text out to 434
 		y0    = 56
@@ -314,14 +254,12 @@ func (s *pebbleServiceWindows) drawAnswerOverflowButtonText(memDC uintptr, dark 
 		uintptr(unsafe.Pointer(face)),
 	)
 	defer procDeleteObjectGdi.Call(font)
-	procSelectObject.Call(memDC, font)
+	prevFont, _, _ := procSelectObject.Call(memDC, font)
+	defer procSelectObject.Call(memDC, prevFont) // restore before delete (no GDI leak)
 
-	var col uint32
-	if dark {
-		col = colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
-	} else {
-		col = colorRef(pebbleAccentR, pebbleAccentG, pebbleAccentB)
-	}
+	// The overflow button is now an ink-filled pill in both states → white text.
+	_ = dark
+	col := colorRef(pebblePaperR, pebblePaperG, pebblePaperB)
 	procSetTextColor.Call(memDC, uintptr(col))
 
 	str, _ := syscall.UTF16PtrFromString("open full ↗")

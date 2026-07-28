@@ -6,8 +6,10 @@ import {
   extractAndStore,
   type ExtractionResult,
 } from './extractor.ts';
-import { findEntities } from './entities.ts';
+import { createEntity, findEntities } from './entities.ts';
 import { findFacts } from './facts.ts';
+import { getDb } from './schema.ts';
+import { saveUserProfile, USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 import { findRelationships } from './relationships.ts';
 import { findCommitments } from './commitments.ts';
 import type { LLMProvider, LLMMessage, LLMOptions, LLMResponse } from '../llm/provider.ts';
@@ -363,6 +365,136 @@ describe('Vault Extractor', () => {
       // Entity should not be created
       const entities = findEntities({});
       expect(entities).toHaveLength(0);
+    });
+  });
+
+  describe('extractAndStore user profile dedup', () => {
+    /** Provider whose chat() always returns the given extraction JSON. */
+    function extractionProvider(extraction: ExtractionResult): LLMProvider {
+      return {
+        name: 'mock',
+        async chat(): Promise<LLMResponse> {
+          return {
+            content: JSON.stringify(extraction),
+            tool_calls: [],
+            usage: { input_tokens: 100, output_tokens: 50 },
+            model: 'mock-model',
+            finish_reason: 'stop',
+          };
+        },
+        async *stream() {
+          yield { type: 'done', response: {} as any };
+        },
+        async listModels() {
+          return ['mock-model'];
+        },
+      };
+    }
+
+    function runExtraction(extraction: ExtractionResult) {
+      return extractAndStore('Test', 'Test', makeManager(extractionProvider(extraction)));
+    }
+
+    function profileEntityId(): string {
+      const profile = findEntities({ source: USER_PROFILE_VAULT_SOURCE });
+      expect(profile).toHaveLength(1);
+      return profile[0]!.id;
+    }
+
+    test('maps extracted entity sharing the profile name to the profile entity', async () => {
+      saveUserProfile({ preferred_name: 'Alice' });
+      const profileId = profileEntityId();
+
+      await runExtraction({
+        entities: [{ name: 'alice', type: 'person' }],
+        facts: [{ subject: 'alice', predicate: 'likes', object: 'espresso', confidence: 1.0 }],
+        relationships: [],
+        commitments: [],
+      });
+
+      // No duplicate entity; the fact lands on the profile entity.
+      expect(findEntities({ nameContains: 'lice' })).toHaveLength(1);
+      const facts = findFacts({ subject_id: profileId });
+      expect(facts.some(f => f.predicate === 'likes')).toBe(true);
+    });
+
+    test('maps entities flagged is_current_user/is_user (boolean or string) to the profile entity', async () => {
+      saveUserProfile({ preferred_name: 'Alice' });
+      const profileId = profileEntityId();
+
+      await runExtraction({
+        entities: [
+          { name: 'Boss', type: 'person', properties: { is_current_user: true } },
+          { name: 'Speaker', type: 'person', properties: { is_user: 'true' } },
+          { name: 'Narrator', type: 'person', properties: { is_current_user: 'True' } },
+        ],
+        facts: [
+          { subject: 'Boss', predicate: 'role_is', object: 'engineer', confidence: 1.0 },
+          { subject: 'Speaker', predicate: 'city_is', object: 'Milan', confidence: 1.0 },
+          { subject: 'Narrator', predicate: 'age_is', object: '30', confidence: 1.0 },
+        ],
+        relationships: [],
+        commitments: [],
+      });
+
+      expect(findEntities({ name: 'Boss' })).toHaveLength(0);
+      expect(findEntities({ name: 'Speaker' })).toHaveLength(0);
+      expect(findEntities({ name: 'Narrator' })).toHaveLength(0);
+      const predicates = findFacts({ subject_id: profileId }).map(f => f.predicate);
+      expect(predicates).toContain('role_is');
+      expect(predicates).toContain('city_is');
+      expect(predicates).toContain('age_is');
+    });
+
+    test('prefers the profile entity even when a newer same-name duplicate exists', async () => {
+      saveUserProfile({ preferred_name: 'Alice' });
+      const profileId = profileEntityId();
+
+      // Ghost duplicate from before the dedup fix, updated more recently than
+      // the profile entity - the buggy lookup (all entities, updated_at DESC)
+      // would pick this one.
+      const ghost = createEntity('person', 'Alice', undefined, 'llm_extraction');
+      getDb().prepare('UPDATE entities SET updated_at = ? WHERE id = ?')
+        .run(Date.now() + 60_000, ghost.id);
+
+      await runExtraction({
+        entities: [{ name: 'Alice', type: 'person' }],
+        facts: [{ subject: 'Alice', predicate: 'likes', object: 'espresso', confidence: 1.0 }],
+        relationships: [],
+        commitments: [],
+      });
+
+      const facts = findFacts({ subject_id: profileId });
+      expect(facts.some(f => f.predicate === 'likes')).toBe(true);
+      expect(findFacts({ subject_id: ghost.id })).toHaveLength(0);
+    });
+
+    test('drops user-representing entities when no profile exists instead of creating ghosts', async () => {
+      await runExtraction({
+        entities: [{ name: 'User', type: 'person', properties: { is_current_user: true } }],
+        facts: [{ subject: 'User', predicate: 'name_is_unknown', object: 'true', confidence: 1.0 }],
+        relationships: [],
+        commitments: [],
+      });
+
+      expect(findEntities({})).toHaveLength(0);
+      expect(findFacts({})).toHaveLength(0);
+    });
+
+    test('still creates unrelated entities normally alongside a profile', async () => {
+      saveUserProfile({ preferred_name: 'Alice' });
+
+      await runExtraction({
+        entities: [{ name: 'Bob', type: 'person' }],
+        facts: [{ subject: 'Bob', predicate: 'email_is', object: 'bob@example.com', confidence: 1.0 }],
+        relationships: [],
+        commitments: [],
+      });
+
+      const bobs = findEntities({ name: 'Bob' });
+      expect(bobs).toHaveLength(1);
+      expect(bobs[0]!.source).toBe('llm_extraction');
+      expect(findFacts({ subject_id: bobs[0]!.id })).toHaveLength(1);
     });
   });
 });

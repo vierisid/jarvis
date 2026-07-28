@@ -381,6 +381,7 @@ export function useWebSocket() {
     ts: number;
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
   const toolCallsRef = useRef<ToolCall[]>([]);
@@ -389,6 +390,10 @@ export function useWebSocket() {
   const pendingChatIdsRef = useRef<Set<string>>(new Set());
 
   const connect = useCallback(() => {
+    // A manual "Retry now" or the scheduled backoff can fire while a socket is
+    // already opening/open; clear any pending backoff and don't stack sockets.
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.CONNECTING || wsRef.current.readyState === WebSocket.OPEN)) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.binaryType = "arraybuffer";
@@ -457,7 +462,7 @@ export function useWebSocket() {
     ws.onclose = () => {
       setIsConnected(false);
       console.log("[WS] Disconnected, reconnecting in 2s...");
-      setTimeout(connect, 2000);
+      reconnectTimerRef.current = setTimeout(connect, 2000);
     };
 
     ws.onerror = () => {
@@ -940,7 +945,13 @@ export function useWebSocket() {
 
   useEffect(() => {
     connect();
+    // "Retry now" on the offline system-state forces an immediate reconnect
+    // instead of waiting out the 2s backoff (recovery is automatic either way).
+    const onManualRetry = () => connect();
+    window.addEventListener("jarvis:ws-reconnect", onManualRetry);
     return () => {
+      window.removeEventListener("jarvis:ws-reconnect", onManualRetry);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);

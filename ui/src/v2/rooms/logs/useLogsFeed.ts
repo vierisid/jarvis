@@ -167,7 +167,9 @@ export function useLogsFeed() {
             ? `${a.tool_name} ran in ${a.execution_time_ms}ms (${a.action_category})`
             : `${a.tool_name} (${a.action_category})`,
         tags: [a.action_category, a.authority_decision],
-        tone: denied ? "warn" : pending ? "accent" : "neutral",
+        // Tone rule (logs design §03): denied → red, escalated/approval → amber,
+        // allowed → neutral. ("accent" maps to the red fail tone in the kit.)
+        tone: denied ? "accent" : pending ? "warn" : "neutral",
         timestamp: a.created_at,
         raw: a as unknown as Record<string, unknown>,
       });

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import { confirmDialog } from "../../../ui/ConfirmDialog";
 // Embed the legacy config editor — it's a 200+ LOC YAML+form editor with
 // its own modal chrome; rebuilding pixel-perfect adds a lot of LOC for a
 // power-user surface. The retheme cascade on .v2-set__legacy-embed
@@ -35,7 +36,7 @@ export function SidecarTab({
   };
 
   const handleRevoke = async (id: string, name: string) => {
-    if (!confirm(`Revoke sidecar "${name}"? It will lose access to Jarvis.`)) return;
+    if (!await confirmDialog(`Revoke sidecar "${name}"? It will lose access to Jarvis.`)) return;
     const r = await data.revokeSidecar(id);
     onToast(r.message, r.ok ? "ok" : "warn");
   };

@@ -810,3 +810,30 @@
 }
 
 .v2-mem--inline .v2-mem__detail { display: none; }
+
+/* ════════════ Brand Book III / Monochrome Lab (memory §02: retire the rainbow) ════════════
+   Shape carries type, not colour — every constellation node is ink, and the
+   concept node is a ring. Size still speaks (fact count → radius, in the TSX). */
+.v2-mem__node[data-type="person"] .v2-mem__node-disc,
+.v2-mem__node[data-type="project"] .v2-mem__node-disc,
+.v2-mem__node[data-type="tool"] .v2-mem__node-disc,
+.v2-mem__node[data-type="place"] .v2-mem__node-disc,
+.v2-mem__node[data-type="event"] .v2-mem__node-disc { fill: var(--ink2); stroke: none; }
+.v2-mem__node[data-type="concept"] .v2-mem__node-disc { fill: none; stroke: var(--ink2); stroke-width: 2; }
+.v2-mem__node[data-selected="true"] .v2-mem__node-disc { fill: var(--ink); stroke: none; }
+.v2-mem__node[data-type="concept"][data-selected="true"] .v2-mem__node-disc { fill: none; stroke: var(--ink); stroke-width: 2.4; }
+.v2-mem__node-glow { fill: color-mix(in srgb, var(--speak) 20%, transparent); }
+.v2-mem__node-label { font-family: var(--mono); fill: var(--ink3); }
+.v2-mem__node[data-selected="true"] .v2-mem__node-label { fill: var(--ink); }
+/* edges: dashed 1px hairlines (labels live in the pane, not the sky) */
+.v2-mem__line { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 3; }
+
+/* asymmetric drop corner + brand sans on the surfaces that were flat / Fraunces */
+.v2-mem, .v2-mem__card, .v2-mem__detail { border-radius: var(--corner); }
+.v2-mem__card-name { font-family: var(--sans); }
+
+/* shape glyphs (kit rk-shape defaults to 20px) sized to their containers */
+.v2-mem__card-icon .rk-shape { width: 15px; height: 15px; }
+.v2-mem__detail-icon .rk-shape { width: 16px; height: 16px; }
+.v2-mem__filter-btn .rk-shape { width: 11px; height: 11px; }
+.v2-mem__browser .rk-shape { width: 13px; height: 13px; }

@@ -617,28 +617,11 @@ func (s *pebbleServiceWindows) present() error {
 		pixels[i] = 0
 	}
 	state, _ := s.state.Load().(PebbleState)
-	// Auto-fit bubble height: measure the wrapped body text first (DT_CALCRECT
-	// against the same memDC + body font we'll paint with) so the rounded card
-	// is exactly tall enough to hold the response — no wasted black space for
-	// short replies, but still capped so it can't overflow the layered window.
-	bubbleY1 := s.computeBubbleBottom(memDC, state)
-	s.drawState(pixels, state, bubbleY1)
-	// GDI text rendering on top of the bubble's fully-opaque (alpha=255)
-	// pixels. DrawText writes RGB *and corrupts* alpha on the glyph
-	// pixels — repairBubbleTextAlpha clamps alpha back to 255 across the
-	// text region so the bubble doesn't end up "see-through" wherever
-	// glyphs were drawn.
-	if state == PebbleListening || state == PebbleSpeaking {
-		s.drawBubbleText(memDC, state, bubbleY1)
-		repairBubbleTextAlpha(pixels, bubbleY1)
-		// Long-answer overflow button — only meaningful while bubble shows.
-		s.drawAnswerOverflowButton(pixels, state == PebbleSpeaking, bubbleY1)
-		s.drawAnswerOverflowButtonText(memDC, state == PebbleSpeaking, bubbleY1)
-		repairBubbleTextAlpha(pixels, bubbleY1)
-		s.lastBubbleY1.Store(bubbleY1)
-	} else {
-		s.lastBubbleY1.Store(0)
-	}
+	// No transcript bubble: the speaking state is just the blue drop (see
+	// drawState). The pebble never paints a caption card at the cursor, so
+	// there's no bubble height to measure and no glyph alpha to repair.
+	s.drawState(pixels, state, 0)
+	s.lastBubbleY1.Store(0)
 	// W6-T4 — outward halo around disc when JARVIS is remotely controlling
 	// (PointAt active). Drawn before the eye glyph so the glyph sits on
 	// top of the halo, not under it.

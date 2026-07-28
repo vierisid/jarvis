@@ -1,0 +1,36 @@
+/* System-states gallery chrome (#/_states). QA-only. */
+.sysx {
+  min-height: 100vh;
+  background: var(--panel2);
+  color: var(--ink);
+  font-family: var(--sans);
+  padding: 32px clamp(20px, 5vw, 64px) 80px;
+}
+.sysx-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
+.sysx-head h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink); }
+.sysx-head p { font-size: 13px; line-height: 1.55; color: var(--ink3); max-width: 66ch; margin-top: 6px; }
+.sysx-seg { margin-left: auto; display: flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+.sysx-seg button { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; padding: 7px 15px; background: transparent; border: none; color: var(--ink3); cursor: pointer; }
+.sysx-seg button.on { background: var(--ink); color: var(--bg); }
+
+.sysx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 22px; }
+
+.sysx-frame {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  box-shadow: var(--sh-md);
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+}
+.sysx-frame[data-tall="true"] { min-height: 440px; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+
+/* faint working-dashboard context behind a banner */
+.sysx-ctx { flex: 1; padding: 16px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 11px; align-content: start; opacity: 0.5; }
+.sysx-ctx .cc { height: 54px; border: 1px solid var(--rule); border-radius: 10px; background: var(--raise); }
+.sysx-ctx .cc.wide { grid-column: 1 / -1; height: 30px; }
+
+.sysx-lab { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); margin: 9px 2px 0; }

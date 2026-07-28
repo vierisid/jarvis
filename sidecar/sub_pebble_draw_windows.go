@@ -39,8 +39,8 @@ func subPebbleBubbleRect(entry *subPebbleEntry) (x0, y0, x1, y1 int) {
 func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color SubPebbleColor, entry *subPebbleEntry) {
 	r, g, b := subPebbleRGB(color)
 	x0, y0, x1, y1 := subPebbleBubbleRect(entry)
-	const radius = 8.0
-	const shadowOffset = 2.0
+	const radius = 13.0
+	const shadowOffset = 3.0
 
 	// 1) Hard offset shadow.
 	fillRoundedRect(pixels,
@@ -69,7 +69,7 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubble(pixels []uint32, color Sub
 	byR0 := y1 - subPebbleButtonInsetB - subPebbleButtonH
 	bxR1 := bxR0 + subPebbleButtonW
 	byR1 := byR0 + subPebbleButtonH
-	const btnRadius = 4.0
+	const btnRadius = 7.0
 	// Soft fill — very light tint of the agent color so the button reads
 	// as part of the bubble but obviously interactive.
 	fillRoundedRect(pixels,
@@ -110,8 +110,8 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 
 	nullTerm := int32(-1)
 	// Eyebrow — mono uppercase, tinted to the sub-pebble's color.
-	eyebrowFace, _ := syscall.UTF16PtrFromString("JetBrains Mono")
-	eyebrowHeight := int32(-10)
+	eyebrowFace, _ := syscall.UTF16PtrFromString("Spline Sans Mono")
+	eyebrowHeight := int32(-12)
 	weightMedium := int32(fwMedium)
 	eyebrowFont, _, _ := procCreateFontW.Call(
 		uintptr(eyebrowHeight),
@@ -126,12 +126,12 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 	)
 	defer procDeleteObjectGdi.Call(eyebrowFont)
 
-	// Body font (Inter Tight w/ fallback).
-	bodyFont := makeBodyFont()
+	// Task body font — Familjen Grotesk, enlarged so the bubble reads at a glance.
+	bodyFont := makeMdFont(int32(-15), int32(fwNormal), "Familjen Grotesk")
 	defer procDeleteObjectGdi.Call(bodyFont)
 
 	// Footer font (smaller body, muted color).
-	footerHeight := int32(-10)
+	footerHeight := int32(-11)
 	weightNormal := int32(fwNormal)
 	footerFont, _, _ := procCreateFontW.Call(
 		uintptr(footerHeight),
@@ -147,15 +147,19 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 	defer procDeleteObjectGdi.Call(footerFont)
 
 	// ── Eyebrow ──────────────────────────────────────────────
-	procSelectObject.Call(memDC, eyebrowFont)
+	// Capture the DC's original font and restore it before the deferred
+	// DeleteObject calls run — a font still selected into the DC can't be
+	// deleted, which leaked one HFONT per frame and crashed the overlay.
+	prevObj, _, _ := procSelectObject.Call(memDC, eyebrowFont)
+	defer procSelectObject.Call(memDC, prevObj)
 	procSetTextColor.Call(memDC, uintptr(colorRef(tr, tg, tb)))
 	eyebrowText := fmt.Sprintf("%s · %s", agent, formatSubPebbleElapsed(elapsed))
 	eyebrowStr, _ := syscall.UTF16PtrFromString(eyebrowText)
 	eyebrowRect := pblRect{
 		Left:   int32(bx0 + subPebbleBubbleInnerPad),
-		Top:    int32(by0 + 10),
+		Top:    int32(by0 + 14),
 		Right:  int32(bx1 - subPebbleBubbleInnerPad),
-		Bottom: int32(by0 + 26),
+		Bottom: int32(by0 + 34),
 	}
 	procDrawTextW.Call(memDC,
 		uintptr(unsafe.Pointer(eyebrowStr)),
@@ -171,9 +175,9 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 		taskStr, _ := syscall.UTF16PtrFromString(task)
 		taskRect := pblRect{
 			Left:   int32(bx0 + subPebbleBubbleInnerPad),
-			Top:    int32(by0 + 30),
+			Top:    int32(by0 + 40),
 			Right:  int32(bx1 - subPebbleBubbleInnerPad),
-			Bottom: int32(by0 + 72),
+			Bottom: int32(by0 + 84), // ends above the compact-mode button row
 		}
 		procDrawTextW.Call(memDC,
 			uintptr(unsafe.Pointer(taskStr)),
@@ -192,7 +196,7 @@ func (s *subPebbleServiceWindows) drawSubPebbleBubbleText(memDC uintptr, entry *
 		resultBottom := by1 - subPebbleButtonInsetB - subPebbleButtonH - 8
 		resultRect := pblRect{
 			Left:   int32(bx0 + subPebbleBubbleInnerPad),
-			Top:    int32(by0 + 76),
+			Top:    int32(by0 + 90),
 			Right:  int32(bx1 - subPebbleBubbleInnerPad),
 			Bottom: int32(resultBottom),
 		}

@@ -1,89 +1,102 @@
-/* Jarvis Dashboard — design tokens (v2 redesign)
-   Source: design_handoff_jarvis_redesign/tokens.css
-   Riso palette, voice-first, one accent only.
-   Change here, change everywhere.
+/* Jarvis — design tokens · Brand Book III "Monochrome Lab"
+   The locked system: cool-tinted neutrals, state hues as the ONLY chroma,
+   the asymmetric corner, Familjen Grotesk + Spline Sans Mono.
+   Light and dark are both first-class — set data-theme on <html>, or use
+   .plate / .plate.dk for a locally-themed subtree.
 
-   Coexists with the legacy --j-* tokens in globals.css without conflict.
-   Only the v2 shell (ui/src/v2/) consumes these. */
+   Legacy riso names (--paper, --accent, --font-sans, --r-*, ...) are kept as
+   compat aliases that resolve THROUGH the theme vars, so un-migrated v2
+   surfaces re-palette automatically. Strip them per-surface as rooms migrate
+   (Phase 6). Source of truth: REBRAND_ROADMAP.md. */
 
 :root {
-  /* ── Color ──────────────────────────────── */
-  --paper:        #F5F2EB;   /* bone, page bg */
-  --paper-2:      #EEE9DC;   /* card bg, subtle fills */
-  --paper-3:      #E3DCC8;   /* hover / pressed surfaces */
-  --rule:         #CBC3B2;   /* default hairlines & borders (paper-tinted beige) */
-  --rule-soft:    #DFD9CC;   /* interior dividers inside the rail, subtle separators */
-  --rule-bold:    #1A1A1A;   /* hard black — rare structural emphasis only */
-  --ink:          #1A1A1A;   /* primary text — contrast vs --paper ≈ 13:1 (AAA) */
-  --ink-2:        #4A4A46;   /* secondary text — ≈ 8:1 (AAA) */
-  --ink-3:        #6A6760;   /* tertiary / meta — ≈ 5.07:1 (AA body)
-                                Phase 7 Pass B: darkened from #7A766D
-                                (4.06:1) which failed WCAG AA body. */
-  --accent:       #C23A2A;   /* vermilion — ONE accent, use sparingly. ≈ 4.76:1 (AA body) */
-  --accent-ink:   #FFFFFF;   /* text on accent */
-  --ok:           #2E5E3A;   /* muted forest, confirmations only — ≈ 6.74:1 (AA body) */
-  --warn:         #8A6A1F;   /* muted ochre, awaiting-approval only — ≈ 4.51:1 (AA body, borderline) */
+  /* ── type (theme-independent) ── */
+  --sans: 'Familjen Grotesk', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'Spline Sans Mono', ui-monospace, 'SF Mono', monospace;
 
-  /* ── Type ───────────────────────────────── */
-  --font-sans:    "Inter Tight", "Helvetica Neue", system-ui, sans-serif;
-  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
-  --font-display: "Fraunces", "Inter Tight", serif;  /* display + body speech */
+  /* ── state hues · the only chroma in the system ── */
+  --listen: #E63B2E;   /* hears you · failure */
+  --speak:  #2D78FF;   /* speaking · running */
+  --hold:   #EAA40E;   /* asking · awaiting your yes */
+  --ok:     #2FA45E;   /* done · success */
 
-  --text-xs:   11px;
-  --text-sm:   13px;
-  --text-md:   15px;   /* body default */
-  --text-lg:   18px;
-  --text-xl:   24px;
-  --text-2xl:  34px;
-  --text-3xl:  48px;
+  /* ── dark-scene exterior (always dark: loading, brand moments) ── */
+  --x-bg: #0B0D10; --x-panel: #14171C; --x-rule: #232730;
+  --x-ink: #E7EAEE; --x-ink2: #AEB4BD; --x-dim: #79808A;
 
-  --lh-tight:  1.15;
-  --lh-body:   1.45;
+  /* ── geometry & motion ── */
+  --corner: 14px 3px 14px 14px;
+  --corner-sm: 9px 2px 9px 9px;
+  --ease: cubic-bezier(.2, .7, .2, 1);
 
-  /* ── Space (4px grid) ───────────────────── */
-  --s-1:  4px;
-  --s-2:  8px;
-  --s-3:  12px;
-  --s-4:  16px;
-  --s-5:  20px;
-  --s-6:  24px;
-  --s-8:  32px;
-  --s-10: 40px;
-  --s-12: 48px;
-  --s-16: 64px;
+  /* ── type scale (fixed rem-style, product register) ── */
+  --text-xs: 11px; --text-sm: 13px; --text-md: 15px; --text-lg: 18px;
+  --text-xl: 24px; --text-2xl: 34px; --text-3xl: 48px;
+  --lh-tight: 1.15; --lh-body: 1.45;
 
-  /* ── Radii ──────────────────────────────── */
-  --r-0: 0;          /* default — riso is flat */
-  --r-1: 2px;
-  --r-2: 4px;
-  --r-pill: 999px;
+  /* ── space (4px grid) ── */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px;
+  --s-6: 24px; --s-8: 32px; --s-10: 40px; --s-12: 48px; --s-16: 64px;
 
-  /* ── Lines ──────────────────────────────── */
-  --hair:      1px solid var(--rule);
-  --hair-soft: 1px solid var(--rule-soft);
-  --hair-2:    2px solid var(--rule);
+  /* ── radii (legacy flat scale, kept for un-migrated surfaces) ── */
+  --r-0: 0; --r-1: 2px; --r-2: 4px; --r-pill: 999px;
 
-  /* ── Motion ─────────────────────────────── */
-  --ease-out: cubic-bezier(.2, .7, .2, 1);
-  --dur-fast: 120ms;
-  --dur-med:  220ms;
-  --dur-slow: 360ms;
+  /* ── motion durations ── */
+  --dur-fast: 150ms; --dur-med: 220ms; --dur-slow: 360ms;
 
-  /* ── Z ──────────────────────────────────── */
-  --z-rail:    10;
-  --z-palette: 50;
-  --z-room:    60;
-  --z-toast:   70;
+  /* ── z-scale ── */
+  --z-rail: 10; --z-palette: 50; --z-room: 60; --z-toast: 70;
 
-  /* ── Layout ───────────────────────────────
-     Width of the persistent VoiceRail column. Shared by AppShell's grid
-     and the RoomShell overlay so opening a Room leaves the rail visible
-     and interactive (per the handoff "voice is always available" rule). */
+  /* ── shell layout (Phase 2 shell moves these to 212 / 44) ── */
   --v2-rail-width: 260px;
-
-  /* Height of the persistent Header. Shared by AppShell's grid and the
-     RoomShell overlay so opening a Room leaves the header (notification
-     bell, palette, mode toggle) visible — same "always-available"
-     principle as the rail. Matches `.v2-header` min-height. */
   --v2-header-height: 52px;
+}
+
+/* ════════════════ LIGHT (default) ════════════════ */
+:root,
+.plate {
+  --bg: #FAFBFC; --raise: #FFFFFF; --panel: #EFF2F5; --panel2: #F6F8FA;
+  --rule: #E2E7EC; --rule2: #EDF0F3;
+  --ink: #13161A; --ink2: #535B63; --ink3: #677077; --faint: #9AA2AB;
+  --listen-tx: #C2301F; --speak-tx: #1E5FD8; --hold-tx: #8A6206; --ok-tx: #1F7A43;
+  --sh-sm: 0 1px 2px rgba(20,30,45,.06), 0 1px 1px rgba(20,30,45,.04);
+  --sh-md: 0 2px 6px rgba(20,30,45,.06), 0 10px 24px -10px rgba(20,30,45,.18);
+  --sh-lg: 0 3px 8px rgba(20,30,45,.05), 0 22px 48px -18px rgba(20,30,45,.24);
+}
+
+/* ════════════════ DARK ════════════════ */
+:root[data-theme="dark"],
+.plate.dk,
+.dk {
+  --bg: #121417; --raise: #1A1D22; --panel: #16191E; --panel2: #1E2128;
+  --rule: #272C33; --rule2: #21252B;
+  --ink: #EEF1F4; --ink2: #A4ABB3; --ink3: #8A919A; --faint: #5C636B;
+  --listen-tx: #FF6A5C; --speak-tx: #6FA4FF; --hold-tx: #F0B53C; --ok-tx: #52C97F;
+  --sh-sm: 0 1px 2px rgba(0,0,0,.4);
+  --sh-md: 0 10px 24px -10px rgba(0,0,0,.6);
+  --sh-lg: 0 22px 48px -18px rgba(0,0,0,.7);
+}
+
+/* ════════════════ COMPAT ALIASES — legacy riso names → Monochrome Lab.
+   These reference the theme vars above, so they follow light/dark.
+   --accent maps to --listen-tx (#C2301F ≈ the old vermilion #C23A2A) so it
+   stays AA-legible as both text and fill on un-migrated surfaces. ════════════════ */
+:root {
+  --paper: var(--bg);
+  --paper-2: var(--panel);
+  --paper-3: var(--panel2);
+  --rule-soft: var(--rule2);
+  --rule-bold: var(--ink);
+  --ink-2: var(--ink2);
+  --ink-3: var(--ink3);
+  --accent: var(--listen-tx);
+  --accent-ink: #FFFFFF;
+  --warn: var(--hold-tx);
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --font-display: var(--sans);
+  --ease-out: var(--ease);
+  --hair: 1px solid var(--rule);
+  --hair-soft: 1px solid var(--rule2);
+  --hair-2: 2px solid var(--rule);
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../hooks/useApi";
+import { confirmDialog } from "../../v2/ui/ConfirmDialog";
 import type { GitBranch, GitCommit } from "./types";
 import { SiteGitHubModal } from "./SiteGitHubModal";
 
@@ -152,7 +153,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
   };
 
   const handleDisconnect = async () => {
-    if (!confirm("Disconnect this project from GitHub? (The remote repo will not be deleted.)")) return;
+    if (!await confirmDialog("Disconnect this project from GitHub? (The remote repo will not be deleted.)")) return;
     try {
       await api(`/api/sites/projects/${projectId}/github/repo`, { method: "DELETE" });
       setRemoteStatus(null);
@@ -174,7 +175,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
         <div style={{
           padding: "6px 10px", margin: "0 8px 8px", borderRadius: "4px", fontSize: "11px",
           background: actionMessage.type === "ok" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
-          color: actionMessage.type === "ok" ? "var(--j-success)" : "var(--j-error)",
+          color: actionMessage.type === "ok" ? "var(--ok)" : "var(--j-error)",
         }}>
           {actionMessage.text}
         </div>
@@ -203,7 +204,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
         )}
 
         {loading ? (
-          <div style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "4px 0" }}>Loading...</div>
+          <div style={{ fontSize: "11px", color: "var(--ink3)", padding: "4px 0" }}>Loading...</div>
         ) : (
           branches.map((b) => (
             <div
@@ -212,7 +213,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
               style={{
                 ...branchItemStyle,
                 fontWeight: b.current ? 600 : 400,
-                color: b.current ? "var(--j-accent)" : "var(--j-text-dim)",
+                color: b.current ? "var(--ink)" : "var(--ink2)",
                 cursor: b.current ? "default" : "pointer",
               }}
             >
@@ -233,7 +234,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
       {/* Merge dialog */}
       {mergeBranch && (
         <div style={{ ...sectionStyle, background: "rgba(0,212,255,0.05)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: "4px", margin: "0 8px 8px" }}>
-          <div style={{ fontSize: "11px", marginBottom: 6, color: "var(--j-text)" }}>
+          <div style={{ fontSize: "11px", marginBottom: 6, color: "var(--ink)" }}>
             Merge <strong>{mergeBranch}</strong> into <strong>{currentBranch}</strong>
           </div>
           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
@@ -246,7 +247,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
               <option value="rebase">Rebase</option>
             </select>
             <button onClick={handleMerge} style={smallBtnStyle}>Confirm</button>
-            <button onClick={() => setMergeBranch(null)} style={{ ...smallBtnStyle, color: "var(--j-text-muted)" }}>Cancel</button>
+            <button onClick={() => setMergeBranch(null)} style={{ ...smallBtnStyle, color: "var(--ink3)" }}>Cancel</button>
           </div>
         </div>
       )}
@@ -257,25 +258,25 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
         <div style={{ maxHeight: 300, overflow: "auto", marginTop: 4 }}>
           {commits.map((c) => (
             <div key={c.hash} style={commitStyle} title={`${c.hash}\n${c.author}\n${new Date(c.date).toLocaleString()}`}>
-              <span style={{ color: "var(--j-accent)", fontSize: "10px", fontFamily: "monospace", marginRight: 6 }}>
+              <span style={{ color: "var(--ink)", fontSize: "10px", fontFamily: "monospace", marginRight: 6 }}>
                 {c.shortHash}
               </span>
               <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {c.message}
               </span>
-              <span style={{ fontSize: "10px", color: "var(--j-text-muted)", marginLeft: 8, whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: "10px", color: "var(--ink3)", marginLeft: 8, whiteSpace: "nowrap" }}>
                 {formatRelativeDate(c.date)}
               </span>
             </div>
           ))}
           {commits.length === 0 && !loading && (
-            <div style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "4px 0" }}>No commits yet</div>
+            <div style={{ fontSize: "11px", color: "var(--ink3)", padding: "4px 0" }}>No commits yet</div>
           )}
         </div>
       </div>
 
       {/* GitHub section */}
-      <div style={{ ...sectionStyle, borderTop: "1px solid var(--j-border)" }}>
+      <div style={{ ...sectionStyle, borderTop: "1px solid var(--rule)" }}>
         <span style={sectionLabelStyle}>GitHub</span>
         {githubUrl ? (
           <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -285,13 +286,13 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
             {remoteStatus && (
               <div style={{ display: "flex", gap: "8px", fontSize: "11px" }}>
                 {remoteStatus.ahead > 0 && (
-                  <span style={{ color: "var(--j-accent)" }}>{remoteStatus.ahead} ahead</span>
+                  <span style={{ color: "var(--ink)" }}>{remoteStatus.ahead} ahead</span>
                 )}
                 {remoteStatus.behind > 0 && (
                   <span style={{ color: "var(--j-warning)" }}>{remoteStatus.behind} behind</span>
                 )}
                 {remoteStatus.ahead === 0 && remoteStatus.behind === 0 && (
-                  <span style={{ color: "var(--j-text-muted)" }}>Up to date</span>
+                  <span style={{ color: "var(--ink3)" }}>Up to date</span>
                 )}
               </div>
             )}
@@ -302,7 +303,7 @@ export function SiteGitPanel({ projectId, projectName, githubUrl, onClose, onGit
               <button onClick={handlePull} disabled={pulling} style={smallBtnStyle}>
                 {pulling ? "Pulling..." : "Pull"}
               </button>
-              <button onClick={handleDisconnect} style={{ ...smallBtnStyle, color: "var(--j-text-muted)", borderColor: "var(--j-border)", marginLeft: "auto" }}>
+              <button onClick={handleDisconnect} style={{ ...smallBtnStyle, color: "var(--ink3)", borderColor: "var(--rule)", marginLeft: "auto" }}>
                 Disconnect
               </button>
             </div>
@@ -346,8 +347,8 @@ const panelStyle: React.CSSProperties = {
   right: 8,
   width: 340,
   maxHeight: "70vh",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "8px",
   zIndex: 100,
   overflow: "auto",
@@ -359,13 +360,13 @@ const headerStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "10px 12px",
-  borderBottom: "1px solid var(--j-border)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const closeBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   fontSize: "14px",
 };
@@ -377,7 +378,7 @@ const sectionStyle: React.CSSProperties = {
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: "10px",
   fontWeight: 600,
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   textTransform: "uppercase",
   letterSpacing: "0.5px",
 };
@@ -388,7 +389,7 @@ const smallBtnStyle: React.CSSProperties = {
   background: "rgba(0,212,255,0.1)",
   border: "1px solid rgba(0,212,255,0.3)",
   borderRadius: "3px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
@@ -397,10 +398,10 @@ const inputStyle: React.CSSProperties = {
   flex: 1,
   padding: "4px 8px",
   fontSize: "12px",
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "3px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   outline: "none",
 };
 
@@ -418,13 +419,13 @@ const commitStyle: React.CSSProperties = {
   alignItems: "center",
   padding: "4px 0",
   fontSize: "11px",
-  color: "var(--j-text-dim)",
-  borderBottom: "1px solid var(--j-border)",
+  color: "var(--ink2)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const ghLinkStyle: React.CSSProperties = {
   fontSize: "12px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   textDecoration: "none",
   fontFamily: "monospace",
 };

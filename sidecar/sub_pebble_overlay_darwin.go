@@ -22,8 +22,36 @@ package main
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <stdlib.h>
+#include <math.h>
 
 extern void goSubPebbleClick(unsigned long long handle, int x, int y);
+
+// ── Monochrome Lab mini glass drop (self-contained: the main pebble's drop statics live
+//    in a different cgo translation unit, so we re-declare a minimal set). ──
+static CGPathRef sub_drop_path(CGFloat cx, CGFloat cy, CGFloat r, CGFloat sharpR) {
+    CGAffineTransform t = CGAffineTransformMakeTranslation(cx, cy);
+    t = CGAffineTransformRotate(t, M_PI / 4.0);
+    CGMutablePathRef p = CGPathCreateMutable();
+    CGFloat L = -r, T = -r, R = r, B = r;
+    CGPathMoveToPoint(p, &t, 0, T);
+    CGPathAddArcToPoint(p, &t, R, T, R, 0, r);       // top-right
+    CGPathAddArcToPoint(p, &t, R, B, 0, B, r);       // bottom-right
+    CGPathAddArcToPoint(p, &t, L, B, L, 0, sharpR);  // bottom-left (sharp)
+    CGPathAddArcToPoint(p, &t, L, T, 0, T, r);       // top-left
+    CGPathCloseSubpath(p);
+    return p;
+}
+static void sub_radial(CGContextRef ctx, CGFloat cx, CGFloat cy, CGFloat rad,
+                       CGFloat innerA, CGFloat rr, CGFloat gg, CGFloat bb) {
+    if (innerA <= 0 || rad <= 0) return;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGFloat comps[12] = { rr, gg, bb, innerA,  rr, gg, bb, innerA * 0.25,  rr, gg, bb, 0.0 };
+    CGFloat locs[3] = { 0.0, 0.5, 1.0 };
+    CGGradientRef grad = CGGradientCreateWithColorComponents(cs, comps, locs, 3);
+    CGContextDrawRadialGradient(ctx, grad, CGPointMake(cx, cy), 0, CGPointMake(cx, cy), rad, 0);
+    CGGradientRelease(grad);
+    CGColorSpaceRelease(cs);
+}
 
 #define SUBW 44.0
 #define SUBH 44.0
@@ -60,31 +88,50 @@ typedef struct {
     if (!sw) return;
     CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
     CGFloat cx = SUB_CX, cy = SUB_CY;
-    const CGFloat discR = 9.0, dotR = 3.0, sh = 2.0;
+    const CGFloat dR = 11.5, sR = 4.5; // mini drop (mirrors sub_pebble_draw_windows.go)
 
-    // Hard offset shadow (ink @ 10%).
-    CGContextSetRGBFillColor(ctx, 26/255.0, 26/255.0, 26/255.0, 0.10);
-    CGContextFillEllipseInRect(ctx, CGRectMake(cx-discR+sh, cy-discR+sh, discR*2, discR*2));
-    // Paper disc.
-    CGContextSetRGBFillColor(ctx, 245/255.0, 242/255.0, 235/255.0, 1.0);
-    CGContextFillEllipseInRect(ctx, CGRectMake(cx-discR, cy-discR, discR*2, discR*2));
-    // Tinted hairline ring (accent @ 70%).
-    CGContextSetRGBStrokeColor(ctx, sw->r, sw->g, sw->b, 0.70);
-    CGContextSetLineWidth(ctx, 1.0);
-    CGContextStrokeEllipseInRect(ctx, CGRectMake(cx-discR+0.5, cy-discR+0.5, discR*2-1, discR*2-1));
-    // Centre dot — pulse while active, flat dim when idle.
-    CGFloat alpha;
-    if (sw->state == 0) {
-        alpha = 110/255.0;
-    } else {
-        const int cycleFrames = 75;
-        double phase = (double)(sw->tick % cycleFrames) / (double)cycleFrames;
-        double v = phase * 2;
-        if (v > 1) v = 2 - v;
-        alpha = (153 + 102*v) / 255.0;
+    // The agent color tints the core; a finished sub-agent turns brand green.
+    CGFloat r = sw->r, g = sw->g, b = sw->b;
+    if (sw->state == 6) { r = 0x2F/255.0; g = 0xA4/255.0; b = 0x5E/255.0; } // done → ok
+
+    double core = 0.42, glow = 0.0; int spinning = 0;
+    if (sw->state == 0) { core = 0.40; }                      // idle — dim glass
+    else if (sw->state == 6) { core = 0.92; glow = 0.55; }    // done — bright green
+    else {                                                    // active — pulse + spinner
+        const int cf = 75;
+        double phase = (double)(sw->tick % cf) / (double)cf;
+        double v = phase * 2; if (v > 1) v = 2 - v;
+        core = 0.6 + 0.4*v; glow = 0.45; spinning = 1;
     }
-    CGContextSetRGBFillColor(ctx, sw->r, sw->g, sw->b, alpha);
-    CGContextFillEllipseInRect(ctx, CGRectMake(cx-dotR, cy-dotR, dotR*2, dotR*2));
+
+    if (glow > 0) sub_radial(ctx, cx, cy+1, dR*2.0, glow*150.0/255.0, r, g, b);
+    CGPathRef shp = sub_drop_path(cx, cy+2, dR, sR);
+    CGContextAddPath(ctx, shp);
+    CGContextSetRGBFillColor(ctx, 0x13/255.0, 0x16/255.0, 0x1A/255.0, 34.0/255.0);
+    CGContextFillPath(ctx);
+    CGPathRelease(shp);
+    CGPathRef dp = sub_drop_path(cx, cy, dR, sR);
+    CGContextAddPath(ctx, dp);
+    CGContextSetRGBFillColor(ctx, 1, 1, 1, 120.0/255.0);
+    CGContextFillPath(ctx);
+    CGContextSaveGState(ctx); CGContextAddPath(ctx, dp); CGContextClip(ctx);
+    sub_radial(ctx, cx, cy, dR, core, r, g, b);
+    CGContextRestoreGState(ctx);
+    CGContextSaveGState(ctx); CGContextAddPath(ctx, dp); CGContextClip(ctx);
+    sub_radial(ctx, cx - dR*0.32, cy - dR*0.34, dR*0.7, 140.0/255.0, 1, 1, 1);
+    CGContextRestoreGState(ctx);
+    CGContextAddPath(ctx, dp);
+    CGContextSetRGBStrokeColor(ctx, 0x13/255.0, 0x16/255.0, 0x1A/255.0, 85.0/255.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextStrokePath(ctx);
+    CGPathRelease(dp);
+    if (spinning) {
+        const int sf = 66;
+        double ang = (double)(sw->tick % sf) / (double)sf * 2 * M_PI;
+        CGFloat ox = cx + cos(ang)*dR*0.66, oy = cy + sin(ang)*dR*0.66;
+        CGContextSetRGBFillColor(ctx, 1, 1, 1, 235.0/255.0);
+        CGContextFillEllipseInRect(ctx, CGRectMake(ox-1.9, oy-1.9, 3.8, 3.8));
+    }
 }
 @end
 

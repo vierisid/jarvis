@@ -1,0 +1,116 @@
+/* ═══════════════════ Cold-start splash · Brand Book III / Monochrome Lab ═══════════
+   The runtime waking up (design: usejarvis-loading-screens). One lockup —
+   drop, wordmark, one honest mono status line, a real hairline — in one of
+   five temperaments. The drop is the only colour and the only motion; it
+   never disappears, it hands off to the dashboard. Uses the app theme tokens
+   so it lands in light or dark. */
+
+.jboot {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(15px, 2.1vmin, 25px);
+  opacity: 1;
+  transition: opacity 0.24s var(--ease-out, cubic-bezier(0.2, 0.7, 0.2, 1));
+  -webkit-font-smoothing: antialiased;
+}
+.jboot.out { opacity: 0; pointer-events: none; }
+
+.jboot .lstage { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.jboot .dropwrap { position: relative; display: grid; place-items: center; }
+.jboot .lword { font-family: var(--sans); font-weight: 700; letter-spacing: -0.045em; color: var(--ink); font-size: 1.3em; margin-top: 1.1em; }
+.jboot .lword .u { color: var(--ink3); }
+.jboot .lstat { font-family: var(--mono); letter-spacing: 0.04em; color: var(--ink3); font-size: 0.62em; margin-top: 0.5em; transition: opacity 0.18s ease; }
+.jboot .lbar { position: relative; height: 2px; border-radius: 2px; background: var(--rule); overflow: hidden; width: 8em; margin-top: 0.95em; }
+.jboot .lbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--ink); transition: width 0.35s var(--ease-out, ease); }
+.jboot .lbloom { position: absolute; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--listen) 26%, transparent), transparent 66%); filter: blur(8px); pointer-events: none; }
+
+/* the glass drop */
+.jboot .ldrop {
+  position: relative;
+  border-radius: 50% 50% 50% 12px;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid rgba(255, 255, 255, 0.5);
+  -webkit-backdrop-filter: blur(2px) brightness(1.05) saturate(1.15);
+  backdrop-filter: blur(2px) brightness(1.05) saturate(1.15);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), inset -1px -1px 2px rgba(255, 255, 255, 0.4), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
+}
+:root[data-theme="dark"] .jboot .ldrop { border-color: rgba(255, 255, 255, 0.4); box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.55), 0 8px 22px -4px rgba(0, 0, 0, 0.6); }
+.jboot .ldrop .in { position: absolute; inset: 0; border-radius: inherit; opacity: 0.85; }
+.jboot .ldrop .ring {
+  position: absolute; inset: -2px; border-radius: inherit; opacity: 0;
+  background: conic-gradient(from 0deg, transparent 0 200deg, rgba(255, 255, 255, 0.98) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 38%, #000 45%, #000 56%, transparent 63%);
+  mask: radial-gradient(circle, transparent 38%, #000 45%, #000 56%, transparent 63%);
+}
+
+@keyframes jb-br { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes jb-brS { 0%, 100% { opacity: 0.62; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.05); } }
+@keyframes jb-spin { to { transform: rotate(360deg); } }
+@keyframes jb-formdrop { 0% { opacity: 0; transform: rotate(45deg) scale(0.2); } 55% { opacity: 1; transform: rotate(45deg) scale(1.12); } 75% { transform: rotate(45deg) scale(0.96); } 100% { transform: rotate(45deg) scale(1); } }
+@keyframes jb-bloomin { 0% { opacity: 0; transform: scale(0.4); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes jb-sonar { 0% { transform: scale(0.78); opacity: 0.55; } 80% { opacity: 0; } 100% { transform: scale(2.7); opacity: 0; } }
+@keyframes jb-blcycle { 0% { opacity: 0; transform: translateY(0.35em); } 7% { opacity: 1; transform: none; } 88% { opacity: 1; } 96% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes jb-pmark { 0% { opacity: 0.32; color: var(--faint); border-color: var(--rule); } 5% { opacity: 1; color: var(--c); border-color: var(--c); } 20% { opacity: 1; color: var(--c); border-color: var(--c); } 30% { opacity: 0.5; color: var(--faint); border-color: var(--rule); } 100% { opacity: 0.32; } }
+@keyframes jb-twinkle { 0% { opacity: 0; transform: scale(0.4); } 30% { opacity: 0.75; transform: scale(1); } 60% { opacity: 0.2; } 100% { opacity: 0; transform: scale(0.4); } }
+
+/* SUMMON */
+.jboot .st-summon .lbloom { width: 9.5em; height: 9.5em; animation: jb-bloomin 0.9s var(--ease-out, ease) both 0.2s, jb-br 2.5s var(--ease-out, ease) infinite 0.95s; }
+.jboot .st-summon .ldrop { width: 3.7em; height: 3.7em; animation: jb-formdrop 1.1s var(--ease-out, ease) both; }
+.jboot .st-summon .ldrop .in { background: radial-gradient(circle at 50% 40%, #FF6E60, #E63B2E 58%, #B81E16); animation: jb-brS 2.5s var(--ease-out, ease) infinite 0.95s; }
+.jboot .st-summon .lword { animation: jb-rise 0.6s var(--ease-out, ease) both 0.55s; }
+.jboot .st-summon .lstat, .jboot .st-summon .lbar { animation: jb-rise 0.6s var(--ease-out, ease) both 0.72s; }
+@keyframes jb-rise { 0% { opacity: 0; transform: translateY(0.6em); } 100% { opacity: 1; transform: none; } }
+
+/* HEARTBEAT */
+.jboot .st-pulse .dropwrap { width: 6em; height: 6em; }
+.jboot .st-pulse .ldrop { width: 3.4em; height: 3.4em; }
+.jboot .st-pulse .ldrop .in { background: radial-gradient(circle at 50% 40%, #FF6E60, #E63B2E 58%, #B81E16); animation: jb-brS 2.6s var(--ease-out, ease) infinite; }
+.jboot .st-pulse .sonar { position: absolute; width: 3.4em; height: 3.4em; border-radius: 50%; border: 1px solid var(--listen); opacity: 0; animation: jb-sonar 2.7s var(--ease-out, ease) infinite; }
+.jboot .st-pulse .sonar.d2 { animation-delay: 0.9s; }
+.jboot .st-pulse .sonar.d3 { animation-delay: 1.8s; }
+.jboot .st-pulse .lword { font-size: 1.05em; opacity: 0.9; }
+.jboot .st-pulse .lstat { margin-top: 0.9em; }
+
+/* BOOT LOG */
+.jboot .st-boot { align-items: flex-start; justify-content: center; padding-left: 14%; }
+.jboot .st-boot .blhead { display: flex; align-items: center; gap: 0.7em; margin-bottom: 1em; }
+.jboot .st-boot .ldrop { width: 1.9em; height: 1.9em; }
+.jboot .st-boot .ldrop .in { background: radial-gradient(circle at 50% 40%, #FF6E60, #E63B2E 58%, #B81E16); animation: jb-brS 2.5s var(--ease-out, ease) infinite; }
+.jboot .st-boot .blhead .lword { font-size: 1.05em; margin: 0; }
+.jboot .st-boot .bootlog { font-family: var(--mono); font-size: 0.66em; line-height: 2; color: var(--ink3); }
+.jboot .st-boot .bl { opacity: 0; animation: jb-blcycle 5.5s var(--ease-out, ease) both; animation-delay: calc(var(--i) * 0.55s); }
+.jboot .st-boot .bl.ok { color: var(--ok); font-weight: 600; }
+.jboot .st-boot .bl .mut { color: var(--faint); }
+
+/* PILLARS */
+.jboot .st-pillars .dropwrap { width: 9.4em; height: 9.4em; }
+.jboot .st-pillars .lbloom { width: 5em; height: 5em; background: radial-gradient(circle, color-mix(in srgb, var(--ink) 16%, transparent), transparent 66%); animation: jb-br 2.6s var(--ease-out, ease) infinite; }
+.jboot .st-pillars .ldrop { width: 3em; height: 3em; animation: jb-formdrop 1s var(--ease-out, ease) both; }
+.jboot .st-pillars .ldrop .in { background: radial-gradient(circle at 50% 40%, #fff, #E6EAEF 70%); animation: jb-brS 2.6s var(--ease-out, ease) infinite; }
+.jboot .st-pillars .ldrop .ring { animation: jb-spin 3.6s linear infinite; opacity: 0.9; }
+.jboot .st-pillars .pmark { position: absolute; font-family: var(--mono); font-size: 0.52em; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); padding: 0.3em 0.55em; border: 1px solid var(--rule); border-radius: 6px 1px 6px 6px; opacity: 0.4; animation: jb-pmark 4.6s var(--ease-out, ease) infinite; }
+.jboot .st-pillars .m-mem { top: 0; left: 50%; transform: translateX(-50%); --c: var(--listen); animation-delay: 0s; }
+.jboot .st-pillars .m-awr { top: 50%; right: 0; transform: translateY(-50%); --c: var(--speak); animation-delay: 0.7s; }
+.jboot .st-pillars .m-act { bottom: 0; left: 50%; transform: translateX(-50%); --c: var(--hold); animation-delay: 1.4s; }
+.jboot .st-pillars .m-orc { top: 50%; left: 0; transform: translateY(-50%); --c: var(--ok); animation-delay: 2.1s; }
+
+/* CONSTELLATION */
+.jboot .st-stars .dropwrap { width: 12em; height: 8.5em; }
+.jboot .st-stars .lbloom { width: 5.5em; height: 5.5em; animation: jb-bloomin 0.9s var(--ease-out, ease) both 0.3s, jb-br 2.6s var(--ease-out, ease) infinite 1s; }
+.jboot .st-stars .ldrop { width: 3em; height: 3em; animation: jb-formdrop 1.1s var(--ease-out, ease) both 0.25s; }
+.jboot .st-stars .ldrop .in { background: radial-gradient(circle at 50% 40%, #FF6E60, #E63B2E 58%, #B81E16); animation: jb-brS 2.6s var(--ease-out, ease) infinite 1.1s; }
+.jboot .st-stars .star { position: absolute; width: 0.2em; height: 0.2em; border-radius: 50%; background: var(--ink3); opacity: 0; animation: jb-twinkle 3.6s var(--ease-out, ease) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .jboot .lstage *, .jboot .ldrop .in { animation: none !important; }
+  .jboot .ldrop .in { opacity: 1 !important; }
+  .jboot .st-pillars .ldrop .ring { opacity: 0.9 !important; }
+  .jboot .st-boot .bl { opacity: 1 !important; }
+}

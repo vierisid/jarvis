@@ -525,7 +525,8 @@ export class WebSocketService implements Service {
 
   /**
    * Broadcast an approval request to all connected dashboard clients.
-   * Always pushed via WS; urgent requests are also sent to external channels.
+   * External channel delivery is handled by ApprovalDelivery so messages
+   * are never duplicated.
    */
   broadcastApprovalRequest(request: ApprovalRequest): void {
     const shortId = request.id.slice(0, 8);
@@ -544,14 +545,6 @@ export class WebSocketService implements Service {
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
-
-    // Push urgent approvals to external channels
-    if (request.urgency === 'urgent' && this.channelService) {
-      const text = `[APPROVAL NEEDED] ${request.agent_name} wants to run ${request.tool_name} (${request.action_category}).\nReason: ${request.reason}\nReply: approve ${shortId} / deny ${shortId}`;
-      this.channelService.broadcastToAll(text).catch(err =>
-        console.error('[WSService] Approval channel broadcast error:', err)
-      );
-    }
   }
 
   /**

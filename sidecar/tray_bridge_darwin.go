@@ -37,3 +37,43 @@ func goTrayOpenLogs() {
 		go trayOpenLogsDarwin()
 	}
 }
+
+//export goTrayPause
+func goTrayPause() {
+	ts := getTrayStatus()
+	ts.Paused = !ts.Paused
+	setTrayStatus(ts) // triggers trayRefresh → menu/icon rebuild
+	// WS write off the Cocoa main thread (a stalled brain must not block the
+	// run loop), serialized so rapid toggles apply in click order.
+	paused := ts.Paused
+	trayCtlAsync(func() {
+		if trayEmitDarwin != nil {
+			trayEmitDarwin("tray.set_pause", map[string]any{"paused": paused})
+		}
+	})
+}
+
+//export goTrayMute
+func goTrayMute() {
+	ts := getTrayStatus()
+	ts.Muted = !ts.Muted
+	setTrayStatus(ts)
+	// Mic gating tears down audio devices (blocking I/O) and the emit is a WS
+	// write — off the Cocoa main thread, serialized so a rapid double-toggle
+	// can't interleave and desync the mic from the menu.
+	muted := ts.Muted
+	trayCtlAsync(func() {
+		trayApplyMute(muted) // gate the mic locally (sidecar owns mic control)
+		if trayEmitDarwin != nil {
+			trayEmitDarwin("tray.set_mute", map[string]any{"muted": muted})
+		}
+	})
+}
+
+//export goTrayWaiting
+func goTrayWaiting() {
+	// Into the dashboard to review the pending approval (Authority).
+	if trayOpenChatDarwin != nil {
+		go trayOpenChatDarwin()
+	}
+}

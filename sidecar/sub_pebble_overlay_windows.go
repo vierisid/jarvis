@@ -22,6 +22,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -649,43 +650,62 @@ func (s *subPebbleServiceWindows) paint(entry *subPebbleEntry) error {
 //     against any desktop.
 func (s *subPebbleServiceWindows) drawSubPebble(pixels []uint32, color SubPebbleColor, state PebbleState, tick uint64) {
 	r, g, b := subPebbleRGB(color)
+	// Finished tasks turn green (the brand "ok" hue), mirroring the main
+	// pebble's done state. Failures are recolored vermilion by the daemon.
+	if state == PebbleDone {
+		r, g, b = pebbleOkR, pebbleOkG, pebbleOkB
+	}
 	cx := float64(subPebbleAnchorX)
 	cy := float64(subPebbleAnchorY)
-	const discR = 9.0
-	const dotR = 3.0
-	const shadowOffset = 2.0
+	const dR = 11.5 // mini drop radius (grew from 9 — too small flying out)
+	const sR = 4.5  // its sharp corner
 
-	// 1) Hard offset shadow — disc shape, ink at 10% alpha.
-	fillCircle(pixels, cx+shadowOffset, cy+shadowOffset, discR,
-		premultiply(28, pebbleInkR, pebbleInkG, pebbleInkB))
-
-	// 2) Paper disc fill.
-	fillCircle(pixels, cx, cy, discR,
-		premultiply(255, pebblePaperR, pebblePaperG, pebblePaperB))
-
-	// 3) Tinted hairline border — the color's saturated tone at 70% alpha
-	//    so the ring reads as "this is the X agent" without competing
-	//    with the centre dot.
-	strokeCircle(pixels, cx, cy, discR, 1.0,
-		premultiply(178, r, g, b))
-
-	// 4) Centre dot — saturated color. Pulsing breath while active; flat
-	//    50% alpha when idle.
-	var alpha uint8 = 255
+	// Core intensity + glow per state, mirroring the main pebble:
+	//   active (working/thinking/speaking/…) — pulse + an orbiting spinner dot
+	//   done                                  — steady bright green, no motion
+	//   idle                                  — dim glass
+	core := 0.42
+	glow := 0.0
+	spinning := false
 	switch state {
 	case PebbleIdle:
-		alpha = 110
-	case PebbleWorking, PebbleListening, PebbleThinking, PebbleSpeaking:
-		// 1.2s cycle, 60%–100% — faster than the main pebble's idle
-		// breath so "actively working" reads at a glance.
+		core = 0.40
+	case PebbleDone:
+		core = 0.92
+		glow = 0.55
+	default:
 		const cycleFrames = 75
 		phase := float64(tick%cycleFrames) / float64(cycleFrames)
-		// triangle wave from 0..1..0
 		v := phase * 2
 		if v > 1 {
 			v = 2 - v
 		}
-		alpha = uint8(153 + 102*v)
+		core = 0.6 + 0.4*v
+		glow = 0.45
+		spinning = true
 	}
-	fillCircle(pixels, cx, cy, dotR, premultiply(alpha, r, g, b))
+
+	// 1) glow
+	if glow > 0 {
+		fillRadial(pixels, cx, cy+1, dR*2.0, uint8(glow*150), r, g, b)
+	}
+	// 2) drop shadow
+	fillDrop(pixels, cx, cy+2, dR, sR, premultiply(34, pebbleInkR, pebbleInkG, pebbleInkB))
+	// 3) glass body
+	fillDrop(pixels, cx, cy, dR, sR, premultiply(120, 255, 255, 255))
+	// 4) colored core (clipped to the drop, tip included)
+	fillDropRadial(pixels, cx, cy, dR, sR, dR, uint8(core*255), r, g, b)
+	// 5) inner shine
+	fillRadial(pixels, cx-dR*0.32, cy-dR*0.34, dR*0.7, 140, 255, 255, 255)
+	// 6) hairline border
+	strokeDrop(pixels, cx, cy, dR, sR, 1.0, premultiply(85, pebbleInkR, pebbleInkG, pebbleInkB))
+	// 7) working spinner — a white dot orbiting the rim (same cue as the main
+	//    pebble's thinking ring) so "still working" reads at a glance.
+	if spinning {
+		const spinFrames = 66
+		ang := float64(tick%spinFrames) / float64(spinFrames) * 2 * math.Pi
+		ox := cx + math.Cos(ang)*dR*0.66
+		oy := cy + math.Sin(ang)*dR*0.66
+		fillCircle(pixels, ox, oy, 1.9, premultiply(235, 255, 255, 255))
+	}
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isDevToolsEnabled } from "./devtools";
 
 /**
  * v2 route union.
@@ -36,13 +37,16 @@ export type RoomKey =
 export type V2Route =
   | { kind: "home" }
   | { kind: "primitives" }
+  | { kind: "kit" }
+  | { kind: "states" }
+  | { kind: "billing" }
   | { kind: "room"; key: RoomKey }
   | { kind: "panel"; key: RoomKey }
   | { kind: "palette" }
   | { kind: "task"; id: string }
   | { kind: "answer"; id: string };
 
-const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
+export const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "workflows",
   "memory",
   "tools",
@@ -63,6 +67,11 @@ export function getV2Route(): V2Route {
   if (typeof window === "undefined") return { kind: "home" };
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash === "_primitives") return { kind: "primitives" };
+  // Design showcases are dev-only: #/_billing renders fake invoice rows and
+  // #/_states fake failure takeovers — not for production users.
+  if (hash === "_kit") return isDevToolsEnabled() ? { kind: "kit" } : { kind: "home" };
+  if (hash === "_states") return isDevToolsEnabled() ? { kind: "states" } : { kind: "home" };
+  if (hash === "_billing") return isDevToolsEnabled() ? { kind: "billing" } : { kind: "home" };
   if (hash === "_palette") return { kind: "palette" };
   if (hash.startsWith("_room_")) {
     const key = hash.slice("_room_".length);
@@ -102,6 +111,9 @@ export function useV2Route(): V2Route {
 export function navigateV2(route: V2Route): void {
   let hash = "#/";
   if (route.kind === "primitives") hash = "#/_primitives";
+  else if (route.kind === "kit") hash = "#/_kit";
+  else if (route.kind === "states") hash = "#/_states";
+  else if (route.kind === "billing") hash = "#/_billing";
   else if (route.kind === "palette") hash = "#/_palette";
   else if (route.kind === "room") hash = `#/_room_${route.key}`;
   else if (route.kind === "panel") hash = `#/_panel_${route.key}`;

@@ -6,6 +6,7 @@
  */
 
 import type { HealthMonitor } from './health.ts';
+import { applyApprovalDecision } from './approval-decision.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
@@ -2246,6 +2247,45 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Synthesize a short sample with the given voice params and return the
+     * raw MP3 bytes, so the UI (onboarding + settings) can PLAY a preview
+     * directly instead of relying on the WS/Pebble broadcast path. The config
+     * passed here is EPHEMERAL — nothing is saved, so it never disturbs the
+     * live TTS. For ElevenLabs this doubles as a real key test: a synthesis
+     * call exercises the same TTS path (and scope) the app actually uses, so
+     * a key that lacks `voices_read` but can synthesize still passes.
+     */
+    '/api/tts/preview': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as {
+            provider?: string; voice?: string; api_key?: string; voice_id?: string; model?: string; text?: string;
+          };
+          const text = (typeof body.text === 'string' && body.text.trim() ? body.text.trim() : "Hi, I'm Jarvis. This is how I'll sound.").slice(0, 280);
+          const cfg: Record<string, unknown> = { enabled: true, provider: body.provider === 'elevenlabs' ? 'elevenlabs' : 'edge' };
+          if (body.provider === 'elevenlabs') {
+            if (!body.api_key) return error('ElevenLabs API key required.', 400);
+            cfg.elevenlabs = {
+              api_key: body.api_key,
+              voice_id: typeof body.voice_id === 'string' ? body.voice_id : undefined,
+              model: typeof body.model === 'string' ? body.model : undefined,
+            };
+          } else {
+            cfg.voice = body.voice || 'en-US-AriaNeural';
+          }
+          const { createTTSProvider } = await import('../comms/voice.ts');
+          const provider = createTTSProvider(cfg as never);
+          if (!provider) return error('Could not build a TTS provider from those settings.', 400);
+          const audio = await provider.synthesize(text);
+          return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error(msg, 502);
+        }
+      },
+    },
+
     // --- Authority & Autonomy ---
     '/api/authority/status': {
       GET: () => {
@@ -2304,27 +2344,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager || !ctx.deferredExecutor) {
           return error('Authority system not configured', 500);
         }
-        const requestId = req.params.id;
-        const approved = ctx.approvalManager.approve(requestId, 'dashboard');
-        if (!approved) return error('Request not found or already decided', 404);
-
-        // Intent-declaration approvals have no deferred tool to execute —
-        // the originating `request_approval` tool call is blocked waiting for
-        // the DB status to flip (via waitForResolution polling). Skipping
-        // executeApproved avoids a recursive call into the tool registry.
-        // Inline-mode requests are likewise executed by the authority gate
-        // that is blocked on this status flip, so the result flows back to
-        // the conversation — executing here would run the tool twice.
-        let result = '';
-        if (approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
-          result = await ctx.deferredExecutor.executeApproved(requestId);
-        }
-
-        // Broadcast the update (removes the card from the dashboard thread)
-        const updated = ctx.approvalManager.getRequest(requestId);
-        if (updated) ctx.wsService?.broadcastApprovalUpdate(updated);
-
-        return json({ ok: true, result: result.slice(0, 500) });
+        const outcome = await applyApprovalDecision('approve', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        });
+        if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
+        if (outcome.status !== 'approved') return error('Unexpected decision outcome', 500);
+        return json({ ok: true, result: outcome.result.slice(0, 500) });
       },
     },
 
@@ -2333,16 +2360,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager || !ctx.deferredExecutor) {
           return error('Authority system not configured', 500);
         }
-        const requestId = req.params.id;
-        const denied = ctx.approvalManager.deny(requestId, 'dashboard');
-        if (!denied) return error('Request not found or already decided', 404);
-
-        // Record denial for learning
-        ctx.deferredExecutor.recordDenial(denied);
-
-        // Broadcast the update
-        ctx.wsService?.broadcastApprovalUpdate(denied);
-
+        const outcome = await applyApprovalDecision('deny', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        });
+        if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
         return json({ ok: true });
       },
     },

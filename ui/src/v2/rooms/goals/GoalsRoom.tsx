@@ -268,7 +268,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {data.error && <div className="v2-goals__error">{data.error}</div>}
 
       {/* Content */}
-      {(mode === "inline" || activeTab === "constellation") && (
+      {mode === "inline" && (
         <Constellation
           roots={data.roots.filter((g) => visibleIds.has(g.id))}
           childrenByParent={data.childrenByParent}
@@ -278,15 +278,21 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
           loading={data.loading}
         />
       )}
-      {mode === "expanded" && activeTab === "timeline" && (
-        <Timeline
-          goals={filteredGoals.filter((g) => g.deadline !== null)}
+      {mode === "expanded" && activeTab === "constellation" && (
+        <ConstellationSky
+          roots={data.roots.filter((g) => visibleIds.has(g.id))}
+          childrenByParent={data.childrenByParent}
+          visibleIds={visibleIds}
           selectedId={selectedId}
           onSelect={setSelectedId}
+          loading={data.loading}
         />
       )}
+      {mode === "expanded" && activeTab === "timeline" && (
+        <Timeline goals={filteredGoals} selectedId={selectedId} onSelect={setSelectedId} />
+      )}
       {mode === "expanded" && activeTab === "metrics" && data.metrics && (
-        <Metrics metrics={data.metrics} overdue={data.overdue} onSelect={setSelectedId} />
+        <Metrics metrics={data.metrics} goals={filteredGoals} />
       )}
 
       {/* Detail panel — expanded mode only */}
@@ -529,7 +535,193 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
-/* ─────────── Timeline tab ─────────── */
+/* ─────────── Constellation sky (spatial OKR graph) ─────────── */
+
+/** health → the single state hue the ring carries. at_risk and behind share
+ *  amber deliberately (the word does the work); critical is the only red. */
+function healthHue(health: GoalHealth): string {
+  switch (health) {
+    case "on_track":
+      return "var(--ok)";
+    case "critical":
+      return "var(--listen)";
+    default:
+      return "var(--hold)"; // at_risk + behind
+  }
+}
+
+/** ring diameter by level — size alone carries the ladder, so the old five
+ *  level colours retire (design §01). */
+function ringSize(level: GoalLevel): number {
+  switch (level) {
+    case "objective":
+      return 58;
+    case "key_result":
+      return 42;
+    case "milestone":
+      return 32;
+    case "task":
+      return 26;
+    default:
+      return 20; // daily_action
+  }
+}
+
+/** ".64" / "1.0" / ".00" — the OKR score, Google convention. */
+function scoreLabel(score: number): string {
+  if (score >= 1) return "1.0";
+  return "." + String(Math.round(Math.max(0, score) * 100)).padStart(2, "0");
+}
+
+type SkyNode = { goal: Goal; depth: number; x: number; y: number; size: number };
+type SkyEdge = { key: string; parentId: string; childId: string; x1: number; y1: number; x2: number; y2: number; depth: number };
+
+/** Tidy-tree layout: objectives anchor the left column, children arc rightward
+ *  and shrink with depth; a parent sits at the vertical mean of its children. */
+function layoutConstellation(
+  roots: Goal[],
+  childrenByParent: Map<string, Goal[]>,
+  visibleIds: Set<string>,
+): { nodes: SkyNode[]; edges: SkyEdge[] } {
+  const X_COLS = [14, 39, 62, 80, 91];
+  const kidsOf = (g: Goal) => (childrenByParent.get(g.id) ?? []).filter((c) => visibleIds.has(c.id));
+  const countLeaves = (g: Goal): number => {
+    const k = kidsOf(g);
+    return k.length === 0 ? 1 : k.reduce((s, c) => s + countLeaves(c), 0);
+  };
+  const totalLeaves = Math.max(1, roots.reduce((s, r) => s + countLeaves(r), 0));
+
+  const nodes: SkyNode[] = [];
+  const pos = new Map<string, { x: number; y: number }>();
+  let leaf = 0;
+
+  const place = (g: Goal, depth: number): number => {
+    const k = kidsOf(g);
+    let slot: number;
+    if (k.length === 0) {
+      slot = (leaf + 0.5) / totalLeaves;
+      leaf += 1;
+    } else {
+      const ys = k.map((c) => place(c, depth + 1));
+      slot = (Math.min(...ys) + Math.max(...ys)) / 2;
+    }
+    const x = X_COLS[Math.min(depth, X_COLS.length - 1)]!;
+    const y = 9 + slot * 82; // keep rings off the top/bottom edges
+    nodes.push({ goal: g, depth, x, y, size: ringSize(g.level) });
+    pos.set(g.id, { x, y });
+    return slot;
+  };
+  roots.forEach((r) => place(r, 0));
+
+  const edges: SkyEdge[] = [];
+  for (const n of nodes) {
+    const pid = n.goal.parent_id;
+    if (pid && pos.has(pid)) {
+      const p = pos.get(pid)!;
+      edges.push({ key: `${pid}-${n.goal.id}`, parentId: pid, childId: n.goal.id, x1: p.x, y1: p.y, x2: n.x, y2: n.y, depth: n.depth });
+    }
+  }
+  return { nodes, edges };
+}
+
+function ConstellationSky({
+  roots,
+  childrenByParent,
+  visibleIds,
+  selectedId,
+  onSelect,
+  loading,
+}: {
+  roots: Goal[];
+  childrenByParent: Map<string, Goal[]>;
+  visibleIds: Set<string>;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  loading: boolean;
+}) {
+  const { nodes, edges } = useMemo(
+    () => layoutConstellation(roots, childrenByParent, visibleIds),
+    [roots, childrenByParent, visibleIds],
+  );
+
+  if (loading && nodes.length === 0) {
+    return <div className="v2-goals__empty">Loading goals…</div>;
+  }
+  if (nodes.length === 0) {
+    return (
+      <div className="v2-goals__empty">
+        No goals match the current filters. Click <strong>New</strong> to create one.
+      </div>
+    );
+  }
+
+  return (
+    <div className="v2-goals__sky">
+      <svg className="v2-goals__edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        {edges.map((e) => {
+          const hot = selectedId === e.childId || selectedId === e.parentId;
+          return (
+            <line
+              key={e.key}
+              x1={e.x1}
+              y1={e.y1}
+              x2={e.x2}
+              y2={e.y2}
+              className={hot ? "hot" : ""}
+              style={{ strokeWidth: e.depth >= 2 ? 0.8 : 1 }}
+            />
+          );
+        })}
+      </svg>
+      {nodes.map((n) => (
+        <button
+          key={n.goal.id}
+          type="button"
+          className="v2-goals__gnode"
+          data-level={n.goal.level}
+          data-selected={selectedId === n.goal.id}
+          data-critical={n.goal.health === "critical"}
+          style={
+            {
+              left: `${n.x}%`,
+              top: `${n.y}%`,
+              ["--rs" as string]: `${n.size}px`,
+              ["--sc" as string]: Math.round(Math.max(0, Math.min(1, n.goal.score)) * 100),
+              ["--hl" as string]: healthHue(n.goal.health),
+            } as React.CSSProperties
+          }
+          onClick={() => onSelect(selectedId === n.goal.id ? null : n.goal.id)}
+          title={`${n.goal.title} · ${(n.goal.score * 100).toFixed(0)}%`}
+          aria-label={`${n.goal.title}, ${n.goal.level.replace(/_/g, " ")}, score ${(n.goal.score * 100).toFixed(0)} percent`}
+        >
+          <span className="v2-goals__gring">
+            {n.size >= 32 && <b className="v2-goals__scin">{scoreLabel(n.goal.score)}</b>}
+          </span>
+          <span className="v2-goals__glb">{n.goal.title}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ─────────── Timeline tab (Gantt) ─────────── */
+
+const GANTT_ORDER: ReadonlyArray<GoalLevel> = ["objective", "key_result", "milestone", "task", "daily_action"];
+const GANTT_LEVEL_LABEL: Record<GoalLevel, string> = {
+  objective: "Objectives",
+  key_result: "Key results",
+  milestone: "Milestones",
+  task: "Tasks",
+  daily_action: "Daily actions",
+};
+const RULER_H = 30;
+const LVL_H = 22;
+const ROW_H = 30;
+const DAY = 86_400_000;
+
+type GanttRow =
+  | { kind: "header"; id: string; label: string; top: number }
+  | { kind: "goal"; id: string; goal: Goal; start: number; end: number; dated: boolean; top: number };
 
 function Timeline({
   goals,
@@ -540,139 +732,262 @@ function Timeline({
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }) {
-  if (goals.length === 0) {
-    return <div className="v2-goals__empty">No deadlines in the current filter.</div>;
+  const now = Date.now();
+
+  const model = useMemo(() => {
+    const rows: GanttRow[] = [];
+    let y = RULER_H;
+    let minT = Infinity;
+    let maxT = -Infinity;
+
+    for (const level of GANTT_ORDER) {
+      const inLevel = goals
+        .filter((g) => g.level === level)
+        .map((g) => {
+          const start = g.started_at ?? g.created_at;
+          const end = g.deadline ?? now + 14 * DAY;
+          return { goal: g, start, end: Math.max(end, start + DAY), dated: g.deadline !== null };
+        })
+        .sort((a, b) => a.start - b.start);
+      if (inLevel.length === 0) continue;
+
+      rows.push({ kind: "header", id: `h-${level}`, label: GANTT_LEVEL_LABEL[level], top: y });
+      y += LVL_H;
+      for (const it of inLevel) {
+        rows.push({ kind: "goal", id: it.goal.id, goal: it.goal, start: it.start, end: it.end, dated: it.dated, top: y });
+        y += ROW_H;
+        minT = Math.min(minT, it.start);
+        maxT = Math.max(maxT, it.end);
+      }
+    }
+
+    if (!Number.isFinite(minT)) return null;
+    // Snap the domain to whole months so the ruler segments read as real months.
+    const lo = startOfMonth(Math.min(minT, now));
+    const hi = endOfMonth(Math.max(maxT, now));
+    const months: number[] = [];
+    for (let t = lo; t <= hi; t = startOfMonth(t + 32 * DAY)) months.push(t);
+
+    return { rows, totalH: y, lo, hi, months };
+  }, [goals, now]);
+
+  if (!model) {
+    return (
+      <div className="v2-goals__empty">
+        No goals to display. Create your first goal to see the timeline.
+      </div>
+    );
   }
 
-  // Bucket by month for a simple horizontal-ish timeline.
-  const buckets = useMemo(() => {
-    const map = new Map<string, Goal[]>();
-    const sorted = [...goals].sort((a, b) => (a.deadline ?? 0) - (b.deadline ?? 0));
-    for (const g of sorted) {
-      if (g.deadline === null) continue;
-      const key = monthKey(g.deadline);
-      const arr = map.get(key);
-      if (arr) arr.push(g);
-      else map.set(key, [g]);
-    }
-    return map;
-  }, [goals]);
+  const span = Math.max(1, model.hi - model.lo);
+  const pct = (t: number) => ((t - model.lo) / span) * 100;
 
   return (
-    <div className="v2-goals__timeline">
-      {Array.from(buckets.entries()).map(([key, list]) => (
-        <section key={key} className="v2-goals__time-band">
-          <div className="v2-goals__time-band-head">{monthLabel(key)}</div>
-          <ul className="v2-goals__time-list">
-            {list.map((g) => (
-              <li key={g.id}>
-                <button
-                  type="button"
-                  className="v2-goals__time-row"
-                  data-selected={selectedId === g.id}
-                  onClick={() => onSelect(selectedId === g.id ? null : g.id)}
-                >
-                  <span className="v2-goals__time-date">{shortDate(g.deadline!)}</span>
-                  <span className="v2-goals__time-title">{g.title}</span>
-                  <Chip tone={STATUS_TONE[g.status]} dot>
-                    {g.status}
-                  </Chip>
-                  <Chip tone={HEALTH_TONE[g.health]} dot>
-                    {g.health.replace(/_/g, " ")}
-                  </Chip>
-                  <ScoreBar score={g.score} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
+    <div className="v2-goals__gantt" style={{ ["--gantt-h" as string]: `${model.totalH}px` } as React.CSSProperties}>
+      {/* left: the ladder */}
+      <div className="v2-goals__gantt-labels">
+        <div className="v2-goals__gantt-spacer">goal tree</div>
+        {model.rows.map((r) =>
+          r.kind === "header" ? (
+            <div key={r.id} className="v2-goals__glvl" style={{ top: r.top, height: LVL_H }}>
+              {r.label}
+            </div>
+          ) : (
+            <button
+              key={r.id}
+              type="button"
+              className="v2-goals__grow"
+              data-selected={selectedId === r.goal.id}
+              data-dead={r.goal.status === "killed" || r.goal.status === "failed"}
+              style={{ top: r.top, height: ROW_H }}
+              onClick={() => onSelect(selectedId === r.goal.id ? null : r.goal.id)}
+            >
+              <span className="v2-goals__stdot" style={{ background: healthHue(r.goal.health) }} />
+              <span className="v2-goals__grow-title">{r.goal.title}</span>
+              <span className="v2-goals__grow-sc">{scoreLabel(r.goal.score)}</span>
+            </button>
+          ),
+        )}
+      </div>
+
+      {/* right: the calendar */}
+      <div className="v2-goals__gantt-bars">
+        <div className="v2-goals__gmon">
+          {model.months.map((m) => (
+            <span key={m}>{monthShort(m)}</span>
+          ))}
+        </div>
+        <div className="v2-goals__today" style={{ left: `${pct(now)}%` }}>
+          <i>today</i>
+        </div>
+        {model.rows.map((r) =>
+          r.kind === "goal" ? (
+            <button
+              key={r.id}
+              type="button"
+              className="v2-goals__gbar"
+              data-selected={selectedId === r.goal.id}
+              data-undated={!r.dated}
+              style={
+                {
+                  top: r.top + 8,
+                  left: `${pct(r.start)}%`,
+                  width: `${Math.max(1.5, pct(r.end) - pct(r.start))}%`,
+                  ["--sc" as string]: Math.round(Math.max(0, Math.min(1, r.goal.score)) * 100),
+                  ["--hl" as string]: healthHue(r.goal.health),
+                } as React.CSSProperties
+              }
+              onClick={() => onSelect(selectedId === r.goal.id ? null : r.goal.id)}
+              aria-label={`${r.goal.title} timeline bar`}
+            >
+              <i />
+              {r.dated && <span className="v2-goals__gbar-dl">{shortDate(r.goal.deadline!)}</span>}
+            </button>
+          ) : null,
+        )}
+      </div>
     </div>
   );
 }
 
 /* ─────────── Metrics tab ─────────── */
 
+const HEALTH_ROWS: ReadonlyArray<{ health: GoalHealth; label: string; tx: string }> = [
+  { health: "on_track", label: "On track", tx: "var(--ok-tx)" },
+  { health: "at_risk", label: "At risk", tx: "var(--hold-tx)" },
+  { health: "behind", label: "Behind", tx: "var(--hold-tx)" },
+  { health: "critical", label: "Critical", tx: "var(--listen-tx)" },
+];
+
+const HISTO_COLORS = [
+  "color-mix(in srgb, var(--listen) 55%, var(--panel))",
+  "color-mix(in srgb, var(--hold) 55%, var(--panel))",
+  "var(--panel)",
+  "color-mix(in srgb, var(--ok) 40%, var(--panel))",
+  "color-mix(in srgb, var(--ok) 70%, var(--panel))",
+];
+
 function Metrics({
   metrics,
-  overdue,
-  onSelect,
+  goals,
 }: {
   metrics: NonNullable<ReturnType<typeof useGoalsData>["metrics"]>;
-  overdue: Goal[];
-  onSelect: (id: string) => void;
+  goals: Goal[];
 }) {
+  const healthTotal = Math.max(1, metrics.on_track + metrics.at_risk + metrics.behind + metrics.critical);
+
+  // Score histogram — five buckets on the tone ramp, computed from live scores.
+  const histo = useMemo(() => {
+    const scored = goals.filter((g) => g.status === "active" || g.status === "completed");
+    const buckets = [0, 0, 0, 0, 0];
+    for (const g of scored) {
+      const i = Math.min(4, Math.floor(Math.max(0, Math.min(0.999, g.score)) / 0.2));
+      buckets[i] = (buckets[i] ?? 0) + 1;
+    }
+    const max = Math.max(1, ...buckets);
+    const sorted = scored.map((g) => g.score).sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0;
+    return { buckets, max, median, n: scored.length };
+  }, [goals]);
+
+  // Goals by level — active vs total, live.
+  const byLevel = useMemo(() => {
+    return GANTT_ORDER.map((level) => {
+      const all = goals.filter((g) => g.level === level);
+      const active = all.filter((g) => g.status === "active").length;
+      return { level, label: GANTT_LEVEL_LABEL[level], active, total: all.length };
+    }).filter((r) => r.total > 0);
+  }, [goals]);
+
   return (
-    <div className="v2-goals__metrics">
-      <section className="v2-goals__metrics-section">
-        <h3 className="v2-goals__metrics-title">Status breakdown</h3>
-        <div className="v2-goals__metrics-grid">
-          <MetricTile label="Total" value={metrics.total} />
-          <MetricTile label="Active" value={metrics.active} tone="warn" />
-          <MetricTile label="Completed" value={metrics.completed} tone="ok" />
-          <MetricTile label="Failed" value={metrics.failed} tone="accent" />
-          <MetricTile label="Killed" value={metrics.killed} tone="accent" />
-          <MetricTile
-            label="Avg score"
-            value={`${Math.round(metrics.avg_score * 100)}%`}
-          />
+    <div className="v2-goals__mgrid">
+      {/* overall score */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">overall score</div>
+        <div className="v2-goals__mscore">
+          <span
+            className="v2-goals__bigring"
+            style={{ ["--sc" as string]: Math.round(metrics.avg_score * 100), ["--hl" as string]: "var(--ink)" } as React.CSSProperties}
+          >
+            <b>{scoreLabel(metrics.avg_score)}</b>
+          </span>
+          <div>
+            <div className="v2-goals__mbig">{Math.round(metrics.avg_score * 100)}%</div>
+            <div className="v2-goals__mnote">avg across {metrics.active} active goals · 0.7 is a good score</div>
+          </div>
         </div>
-      </section>
+      </div>
 
-      <section className="v2-goals__metrics-section">
-        <h3 className="v2-goals__metrics-title">Health</h3>
-        <div className="v2-goals__metrics-grid">
-          <MetricTile label="On track" value={metrics.on_track} tone="ok" />
-          <MetricTile label="At risk" value={metrics.at_risk} tone="warn" />
-          <MetricTile label="Behind" value={metrics.behind} tone="warn" />
-          <MetricTile label="Critical" value={metrics.critical} tone="accent" />
+      {/* health distribution */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">health distribution</div>
+        {HEALTH_ROWS.map((r) => {
+          const count = metrics[r.health];
+          return (
+            <div key={r.health} className="v2-goals__hrow">
+              <span className="v2-goals__stdot" style={{ background: healthHue(r.health) }} />
+              <span className="v2-goals__hlabel">{r.label}</span>
+              <span className="v2-goals__hbar">
+                <i style={{ width: `${(count / healthTotal) * 100}%`, background: healthHue(r.health) }} />
+              </span>
+              <span className="v2-goals__hc" style={{ color: r.tx }}>{count}</span>
+            </div>
+          );
+        })}
+        <div className="v2-goals__mfoot">
+          {metrics.completed} completed · {metrics.failed} failed · {metrics.killed} killed
         </div>
-      </section>
+      </div>
 
-      <section className="v2-goals__metrics-section">
-        <h3 className="v2-goals__metrics-title">
-          Overdue ({overdue.length})
-        </h3>
-        {overdue.length === 0 ? (
-          <div className="v2-goals__empty-line">Nothing overdue. Nice.</div>
-        ) : (
-          <ul className="v2-goals__overdue-list">
-            {overdue.map((g) => (
-              <li key={g.id}>
-                <button
-                  type="button"
-                  className="v2-goals__overdue-row"
-                  onClick={() => onSelect(g.id)}
-                >
-                  <Icon icon={AlertTriangle} size="sm" />
-                  <span className="v2-goals__overdue-title">{g.title}</span>
-                  <span className="v2-goals__overdue-due">
-                    Due {shortDate(g.deadline ?? 0)}
-                  </span>
-                  <ScoreBar score={g.score} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
-}
+      {/* score distribution */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">score distribution</div>
+        <div className="v2-goals__histo">
+          {histo.buckets.map((b, i) => (
+            <i key={i} style={{ height: `${Math.max(4, (b / histo.max) * 100)}%`, background: HISTO_COLORS[i] }} />
+          ))}
+        </div>
+        <div className="v2-goals__histo-axis">
+          <span>0–.2</span><span>.2–.4</span><span>.4–.6</span><span>.6–.8</span><span>.8–1</span>
+        </div>
+        <div className="v2-goals__mfoot">median {histo.median.toFixed(2)} · {histo.n} scored</div>
+      </div>
 
-function MetricTile({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number | string;
-  tone?: "neutral" | "ok" | "warn" | "accent";
-}) {
-  return (
-    <div className="v2-goals__metric-tile" data-tone={tone ?? "neutral"}>
-      <div className="v2-goals__metric-label">{label}</div>
-      <div className="v2-goals__metric-value">{value}</div>
+      {/* score velocity — honest: needs check-in history the metrics API doesn't expose yet */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">score velocity · 30 days</div>
+        <div className="v2-goals__mbig" style={{ color: "var(--ink3)" }}>—</div>
+        <svg className="v2-goals__spark" viewBox="0 0 280 48" width="100%" height="40" aria-hidden="true">
+          <line x1="0" y1="40" x2="280" y2="40" stroke="var(--rule2)" strokeWidth="1.5" strokeDasharray="3 4" />
+        </svg>
+        <div className="v2-goals__mnote">Needs a check-in history the metrics API doesn't track yet.</div>
+      </div>
+
+      {/* goals by level */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">goals by level</div>
+        {byLevel.map((r) => (
+          <div key={r.level} className="v2-goals__hrow">
+            <span className="v2-goals__hlabel v2-goals__hlabel--wide">{r.label}</span>
+            <span className="v2-goals__hbar">
+              <i style={{ width: `${(r.active / Math.max(1, r.total)) * 100}%`, background: "var(--ink2)" }} />
+            </span>
+            <span className="v2-goals__hc">{r.active}/{r.total}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* escalation — derived from health (the drill-sergeant ladder is health-driven) */}
+      <div className="v2-goals__mcard">
+        <div className="v2-goals__mk">escalation status</div>
+        <div className="v2-goals__esrow">Gentle nudge<span className="v2-goals__esb" data-tone="amb">{metrics.at_risk}</span></div>
+        <div className="v2-goals__esrow">Direct call<span className="v2-goals__esb" data-tone="amb">{metrics.behind}</span></div>
+        <div className="v2-goals__esrow">Drill sergeant<span className="v2-goals__esb" data-tone="mut">0</span></div>
+        <div className="v2-goals__esrow">Intervention<span className="v2-goals__esb" data-tone="red">{metrics.critical}</span></div>
+        <div className="v2-goals__mnote">
+          Watching <b style={{ color: "var(--hold-tx)" }}>{metrics.at_risk} at-risk goals</b>; escalates if scores don't improve within <b style={{ color: "var(--ink)" }}>72 hours</b>.
+        </div>
+      </div>
     </div>
   );
 }
@@ -982,6 +1297,21 @@ function monthLabel(key: string): string {
   const [y, m] = key.split("-");
   const d = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, 1);
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function startOfMonth(ts: number): number {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+}
+
+function endOfMonth(ts: number): number {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).getTime();
+}
+
+function monthShort(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
 /** Parse an `<input type="date">` value (YYYY-MM-DD) to local-time epoch ms.

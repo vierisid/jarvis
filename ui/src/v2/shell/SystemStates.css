@@ -1,0 +1,163 @@
+/* ═══════════════════ System states · Monochrome Lab ═══════════════
+   The moments the app has to speak up: an update ready, the hosted brain out
+   of reach, a crash it recovered from, a token limit hit, a provider that's
+   busy. Two kinds: quiet banners over a working app (update, provider-busy)
+   and full-window takeovers when the agent can't act (offline, updating,
+   crash, out-of-tokens). Ported from usejarvis-system-states.html onto
+   the app theme tokens. The rule: say what's wrong, say what still works, give
+   the one way out. Never a dead end, never a spinner with no explanation. */
+
+/* ── the glass drop (the one living thing; carries the mood) ── */
+.sys-drop {
+  position: relative;
+  border-radius: 50% 50% 50% 12px;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
+}
+:root[data-theme="dark"] .sys-drop {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.55), 0 8px 22px -4px rgba(0, 0, 0, 0.6);
+}
+.sys-drop .in {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 40%, #ff6e60, var(--listen) 58%, #b81e16);
+  animation: sys-brS 2.6s var(--ease, cubic-bezier(0.2, 0.7, 0.2, 1)) infinite;
+}
+.sys-drop .ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  opacity: 0;
+  background: conic-gradient(from 0deg, transparent 0 200deg, rgba(255, 255, 255, 0.98) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 38%, #000 46%, #000 56%, transparent 64%);
+  mask: radial-gradient(circle, transparent 38%, #000 46%, #000 56%, transparent 64%);
+}
+/* working / retrying — white core + spinning ring */
+.sys-drop.think .in { background: radial-gradient(circle at 50% 40%, #fff, #e6eaef 70%); opacity: 0.5; animation: none; }
+.sys-drop.think .ring { opacity: 0.95; animation: sys-spin 1.5s linear infinite; }
+/* needs-you — amber */
+.sys-drop.hold .in { background: radial-gradient(circle at 50% 40%, #f4c24e, var(--hold) 60%, #b97f08); }
+/* done — green */
+.sys-drop.done .in { background: radial-gradient(circle at 50% 40%, #56c98a, var(--ok) 60%, #1f7e45); }
+/* offline — dim + dashed, a diagonal slash, no motion */
+.sys-drop.muted { border-style: dashed; border-color: rgba(140, 150, 162, 0.7); background: rgba(225, 230, 238, 0.32); }
+:root[data-theme="dark"] .sys-drop.muted { background: rgba(60, 66, 74, 0.4); border-color: rgba(120, 128, 138, 0.6); }
+.sys-drop.muted .in { opacity: 1; animation: none; background: linear-gradient(135deg, transparent 45%, rgba(120, 128, 138, 0.7) 45% 55%, transparent 55%); }
+
+@keyframes sys-brS { 0%, 100% { opacity: 0.62; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.05); } }
+@keyframes sys-spin { to { transform: rotate(360deg); } }
+
+.sys-dropwrap { position: relative; display: flex; justify-content: center; margin-bottom: 16px; }
+.sys-bloom { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -52%); border-radius: 50%; filter: blur(10px); pointer-events: none; }
+.sys-bloom.r { background: radial-gradient(circle, color-mix(in srgb, var(--listen) 22%, transparent), transparent 66%); }
+.sys-bloom.a { background: radial-gradient(circle, color-mix(in srgb, var(--hold) 22%, transparent), transparent 66%); }
+.sys-bloom.w { background: radial-gradient(circle, rgba(225, 232, 242, 0.18), transparent 66%); }
+.sys-bloom.n { background: radial-gradient(circle, rgba(120, 128, 138, 0.18), transparent 66%); }
+
+/* ── full-window takeover ── */
+.sys-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 30px;
+  opacity: 1;
+  transition: opacity 0.24s var(--ease, cubic-bezier(0.2, 0.7, 0.2, 1));
+  -webkit-font-smoothing: antialiased;
+}
+.sys-overlay.out { opacity: 0; pointer-events: none; }
+.sys-wrap { width: 100%; max-width: 380px; }
+.sys-h2 { font-family: var(--sans); font-size: 21px; font-weight: 700; letter-spacing: -0.028em; color: var(--ink); line-height: 1.18; text-wrap: balance; }
+.sys-sub { font-size: 13px; color: var(--ink3); line-height: 1.55; margin-top: 8px; }
+.sys-sub b { color: var(--ink2); font-weight: 600; }
+.sys-fine { font-size: 11px; color: var(--faint); margin-top: 14px; line-height: 1.5; }
+.sys-fine a { color: var(--ink3); }
+
+/* ── buttons ── */
+.sys-btnrow { display: flex; gap: 10px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+.sys-btn {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 9px 2px 9px 9px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.15s, border-color 0.15s;
+}
+.sys-btn:focus-visible { outline: 2px solid var(--speak); outline-offset: 2px; }
+.sys-btn--pri { background: var(--ink); color: var(--bg); }
+.sys-btn--pri:hover { filter: brightness(1.08); }
+.sys-btn--ghost { background: var(--raise); border-color: var(--rule); color: var(--ink); }
+.sys-btn--ghost:hover { border-color: var(--ink3); }
+
+/* ── offline status list (the heart of it) ── */
+.sys-statuslist { margin: 16px 0 0; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--panel2); overflow: hidden; text-align: left; }
+.sys-statuslist .sr { display: flex; align-items: center; gap: 10px; padding: 9px 14px; font-size: 12.5px; color: var(--ink2); border-bottom: 1px solid var(--rule); }
+.sys-statuslist .sr:last-child { border-bottom: none; }
+.sys-statuslist .sr .si { width: 15px; height: 15px; flex-shrink: 0; display: grid; place-items: center; }
+.sys-statuslist .sr .si svg { width: 14px; height: 14px; }
+.sys-statuslist .sr.ok .si { color: var(--ok-tx); }
+.sys-statuslist .sr.wait .si { color: var(--ink3); }
+.sys-statuslist .sr.no { color: var(--ink3); }
+.sys-statuslist .sr.no .si { color: var(--listen-tx); }
+.sys-statuslist .sr b { color: var(--ink); font-weight: 600; }
+.sys-statuslist .sr.wait .si svg { animation: sys-spin2 1.2s linear infinite; }
+@keyframes sys-spin2 { to { transform: rotate(360deg); } }
+
+/* ── updating progress bar ── */
+.sys-pbar { width: 100%; max-width: 220px; height: 4px; border-radius: 3px; background: var(--panel); overflow: hidden; margin: 14px auto 0; }
+.sys-pbar i { display: block; height: 100%; border-radius: 3px; background: var(--ink); width: 8%; }
+.sys-pbar.run i { animation: sys-fill 2.6s var(--ease, cubic-bezier(0.2, 0.7, 0.2, 1)) forwards; }
+@keyframes sys-fill { 0% { width: 8%; } 80% { width: 88%; } 100% { width: 96%; } }
+
+/* ── out-of-tokens options ── */
+.sys-opts { margin: 16px 0 0; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.sys-opt { display: flex; align-items: center; gap: 12px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--raise); padding: 12px 14px; }
+.sys-opt .ot { flex: 1; }
+.sys-opt .otn { font-size: 13px; font-weight: 600; color: var(--ink); }
+.sys-opt .otd { font-size: 11px; color: var(--ink3); margin-top: 1px; }
+.sys-opt .op { font-family: var(--mono); font-size: 11px; color: var(--ink2); margin: 0 4px; }
+.sys-opt.free .op { color: var(--ok-tx); font-weight: 600; }
+.sys-opt .ob { font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 7px 2px 7px 7px; border: 1px solid var(--rule); color: var(--ink); background: var(--raise); flex-shrink: 0; cursor: pointer; }
+.sys-opt .ob.pri { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.sys-opt .ob:focus-visible { outline: 2px solid var(--speak); outline-offset: 2px; }
+
+/* ── banner (over a usable app) ── */
+.sys-bnr { display: flex; align-items: flex-start; gap: 11px; padding: 11px 15px; border-bottom: 1px solid var(--rule); }
+.sys-bnr .bi { width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px 1px 7px 7px; display: grid; place-items: center; margin-top: 1px; }
+.sys-bnr .bi svg { width: 14px; height: 14px; }
+.sys-bnr .bm { flex: 1; font-size: 12.5px; line-height: 1.45; color: var(--ink2); align-self: center; }
+.sys-bnr .bm b { color: var(--ink); font-weight: 600; }
+.sys-bnr .ba { flex-shrink: 0; display: flex; gap: 7px; align-items: center; align-self: center; }
+.sys-bnr.info { background: color-mix(in srgb, var(--speak) 7%, var(--panel2)); border-bottom-color: color-mix(in srgb, var(--speak) 22%, var(--rule)); }
+.sys-bnr.info .bi { background: color-mix(in srgb, var(--speak) 14%, transparent); color: var(--speak-tx); }
+.sys-bnr.warn { background: color-mix(in srgb, var(--hold) 9%, var(--panel2)); border-bottom-color: color-mix(in srgb, var(--hold) 28%, var(--rule)); }
+.sys-bnr.warn .bi { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold-tx); }
+.sys-bnr .ratespin { display: inline-flex; animation: sys-spin2 1.2s linear infinite; }
+.sys-sbtn { font-size: 12px; font-weight: 600; padding: 7px 13px; border-radius: 7px 2px 7px 7px; border: 1px solid var(--rule); color: var(--ink); background: var(--raise); cursor: pointer; }
+.sys-sbtn.pri { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.sys-sbtn:focus-visible { outline: 2px solid var(--speak); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sys-drop .in, .sys-drop .ring, .sys-statuslist .sr.wait .si svg, .sys-pbar.run i, .sys-bnr .ratespin { animation: none !important; }
+  .sys-drop .in { opacity: 1 !important; }
+  .sys-drop.think .ring { opacity: 0.95 !important; }
+  .sys-pbar.run i { width: 88% !important; }
+  .sys-overlay { transition: none; }
+}

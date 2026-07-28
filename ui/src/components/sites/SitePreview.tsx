@@ -16,7 +16,7 @@ export function SitePreview({ project }: Props) {
     return (
       <div style={emptyStyle}>
         <div style={{ fontSize: "14px", marginBottom: "8px" }}>Server is stopped</div>
-        <div style={{ fontSize: "12px", color: "var(--j-text-muted)" }}>
+        <div style={{ fontSize: "12px", color: "var(--ink3)" }}>
           Open the project tab to auto-start the dev server
         </div>
       </div>
@@ -63,7 +63,7 @@ export function SitePreview({ project }: Props) {
 
       {/* URL bar */}
       <div style={urlBarStyle}>
-        <span style={{ fontSize: "10px", color: "var(--j-text-muted)" }}>
+        <span style={{ fontSize: "10px", color: "var(--ink3)" }}>
           {previewUrl}
         </span>
       </div>
@@ -90,7 +90,7 @@ const emptyStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   height: "100%",
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
   fontSize: "13px",
 };
 
@@ -117,15 +117,15 @@ const urlBarStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   padding: "0 10px",
-  background: "var(--j-bg)",
-  borderBottom: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const spinnerStyle: React.CSSProperties = {
   width: 24,
   height: 24,
-  border: "2px solid var(--j-border)",
-  borderTop: "2px solid var(--j-accent)",
+  border: "2px solid var(--rule)",
+  borderTop: "2px solid var(--ink)",
   borderRadius: "50%",
   animation: "spin 1s linear infinite",
 };

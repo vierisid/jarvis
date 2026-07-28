@@ -843,3 +843,29 @@
 .v2-auth--inline .v2-auth__section {
   padding: var(--s-3) var(--s-4);
 }
+
+/* ════════════ Brand Book III / Monochrome Lab ════════════
+   The palette already rides Phase 0's compat aliases; this fixes the
+   Monochrome Lab-specific geometry (the asymmetric drop corner) and type
+   (Familjen, not Fraunces), plus impact-as-card-edge on the queue. */
+.v2-auth__stat,
+.v2-auth__pending,
+.v2-auth__audit-row,
+.v2-auth__suggestion { border-radius: var(--corner); }
+.v2-auth__stat-value,
+.v2-auth__section-title { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
+.v2-auth__tab[data-active="true"] { border-radius: 7px 2px 7px 7px; }
+.v2-auth__emergency-btn,
+.v2-auth__btn { border-radius: 7px 2px 7px 7px; }
+/* impact = the card's edge (authority §01): destructive gets a soft red halo,
+   external an amber hairline; urgent keeps its inset ring. */
+.v2-auth__pending[data-tone="accent"] { box-shadow: 0 0 0 1px color-mix(in srgb, var(--listen) 22%, transparent), var(--sh-sm); }
+.v2-auth__pending[data-tone="warn"] { box-shadow: var(--sh-sm); }
+
+/* chips → the design's mono-micro tinted style (scoped to Authority) */
+.v2-auth .v2-chip { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; border: none; padding: 3px 9px; background: var(--panel); }
+.v2-auth .v2-chip__dot { display: none; }
+.v2-auth .v2-chip--ok { color: var(--ok-tx); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.v2-auth .v2-chip--warn { color: var(--hold-tx); background: color-mix(in srgb, var(--hold) 14%, transparent); }
+.v2-auth .v2-chip--accent { color: var(--listen-tx); background: color-mix(in srgb, var(--listen) 11%, transparent); }
+.v2-auth .v2-chip--neutral { color: var(--ink2); background: var(--panel); }

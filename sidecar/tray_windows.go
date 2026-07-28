@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"runtime"
 	"sync/atomic"
@@ -38,6 +39,7 @@ var (
 const (
 	trayCallbackMsg  = 0x0400 + 1 // WM_APP-ish (WM_USER+1) tray callback
 	trayMsgSetState  = 0x0400 + 2 // WM_APP+2: poll goroutine -> tray thread, swap icon (wParam=state)
+	trayMsgRefresh   = 0x0400 + 4 // WM_APP+4: tray.status changed -> tray thread, re-render icon (+3 is the balloon)
 	trayWmRButtonUp  = 0x0205
 	trayWmContextMnu = 0x007B
 	trayWmClose      = 0x0010
@@ -53,6 +55,7 @@ const (
 	trayMfString     = 0x00000000
 	trayMfGrayed     = 0x00000001
 	trayMfDisabled   = 0x00000002
+	trayMfChecked    = 0x00000008
 	trayMfSeparator  = 0x00000800
 	trayTpmRightBtn  = 0x0002
 	trayTpmReturnCmd = 0x0100
@@ -61,8 +64,14 @@ const (
 	trayMenuChatID     = 2
 	trayMenuSettingsID = 3
 	trayMenuLogsID     = 4
-	trayIDIApp         = 32512 // IDI_APPLICATION (stock icon placeholder; brand later)
-	trayIDIError       = 32515 // IDI_WARNING (connection-error placeholder; brand later)
+	trayMenuWaitingID  = 5
+	trayMenuPauseID    = 6
+	trayMenuMuteID     = 7
+	// Brand icon resources compiled into rsrc_windows_amd64.syso from jarvis.rc.
+	// ID 2 is also the .exe / taskbar application icon (lowest-numbered group
+	// icon). ID 3 is the vermilion drop shown when the connection drops.
+	trayIconBrandID = 2 // light drop on dark tile — normal state + app icon
+	trayIconErrorID = 3 // vermilion drop on dark tile — connection-error state
 )
 
 // NOTIFYICONDATAW (current/Vista+ layout).
@@ -101,6 +110,7 @@ var (
 	trayOpenChat     func()
 	trayOpenSettings func()
 	trayOpenLogs     func()
+	trayEmit         func(eventType string, payload map[string]any) // tray → brain (pause/mute)
 	trayNID          trayNotifyIconData
 )
 
@@ -115,6 +125,22 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	trayOpenChat = client.OpenChat
 	trayOpenSettings = client.OpenSettings
 	trayOpenLogs = client.OpenLogViewer
+	trayEmit = func(et string, p map[string]any) {
+		_ = client.sendEvent(context.Background(), SidecarEvent{
+			EventType: et,
+			Timestamp: time.Now().UnixMilli(),
+			Priority:  "normal",
+			Payload:   p,
+		}, nil)
+	}
+	// Pebble-state changes (tray.status pushes) re-render the icon so the tray
+	// mirrors the pebble like the macOS status item. The render must happen on
+	// the tray thread (it owns trayNID), so just post it over.
+	trayRefresh = func() {
+		if h := trayHwnd.Load(); h != 0 {
+			procPostMessageW.Call(h, trayMsgRefresh, 0, 0)
+		}
+	}
 
 	// Poll the connection state; when it changes, ask the tray thread (which owns
 	// the icon) to swap the notification-area icon to reflect connected / error.
@@ -199,7 +225,7 @@ func createTrayIcon() bool {
 	}
 	trayHwnd.Store(hwnd)
 
-	hIcon, _, _ := procLoadIconW.Call(0, uintptr(trayIDIApp))
+	hIcon, _, _ := procLoadIconW.Call(hInstance, uintptr(trayIconBrandID))
 
 	trayNID = trayNotifyIconData{}
 	trayNID.CbSize = uint32(unsafe.Sizeof(trayNID))
@@ -234,20 +260,46 @@ func runTrayMessageLoop() {
 	}
 }
 
-// traySetIconForState swaps the notification-area icon to reflect the current
-// connection state. Must run on the tray thread (it owns trayNID), so it's
-// invoked via the trayMsgSetState window message posted by the poll goroutine.
+// Tray-thread-only icon state: the last connection state seen (so the render
+// can prioritise the error icon) and the previous dynamically synthesized
+// HICON (destroyed on swap — LoadIconW handles are shared and must NOT be).
+var (
+	trayLastConnState int32
+	trayDynIcon       uintptr
+)
+
+// traySetIconForState records the connection state and re-renders. Tray thread
+// only (invoked via the trayMsgSetState message posted by the poll goroutine).
 func traySetIconForState(state int32) {
-	id := uintptr(trayIDIApp)
-	if state == connError {
-		id = uintptr(trayIDIError) // connection-error placeholder; brand later
+	trayLastConnState = state
+	trayRenderIcon()
+}
+
+// trayRenderIcon rebuilds the notification-area icon from connection state +
+// pebble state (tray.status): connection-error wins, then a synthesized
+// brand-icon-with-state-dot, then the plain brand icon. Tray thread only.
+func trayRenderIcon() {
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	var hIcon, dyn uintptr
+	if trayLastConnState == connError {
+		hIcon, _, _ = procLoadIconW.Call(hInstance, uintptr(trayIconErrorID))
+	} else if code := trayStateCode(getTrayStatus().State); code != 0 {
+		dyn = traySynthesizeStateIcon(code)
+		hIcon = dyn
 	}
-	hIcon, _, _ := procLoadIconW.Call(0, id)
+	if hIcon == 0 {
+		hIcon, _, _ = procLoadIconW.Call(hInstance, uintptr(trayIconBrandID))
+		dyn = 0
+	}
 	if hIcon == 0 {
 		return
 	}
 	trayNID.HIcon = hIcon
 	procShellNotifyIconW.Call(trayNimModify, uintptr(unsafe.Pointer(&trayNID)))
+	if trayDynIcon != 0 {
+		procDestroyIcon.Call(trayDynIcon) // the shell has its own copy after NIM_MODIFY
+	}
+	trayDynIcon = dyn
 }
 
 func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
@@ -257,12 +309,27 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		ev := uint32(lParam) & 0xFFFF
 		if ev == trayWmRButtonUp || ev == trayWmContextMnu {
 			showTrayMenu(hwnd)
+		} else if ev == ninBalloonUserClick {
+			onBalloonClick()
 		}
 		return 0
 
 	case trayMsgSetState:
 		traySetIconForState(int32(wParam))
 		return 0
+
+	case trayMsgRefresh:
+		trayRenderIcon()
+		return 0
+
+	case trayMsgShowBalloon:
+		showBalloonNow()
+		return 0
+
+	case trayWmCopyData:
+		// A notification-button click, forwarded from the launched instance.
+		onNotifyCopyData(lParam)
+		return 1
 
 	case trayWmClose:
 		procShellNotifyIconW.Call(trayNimDelete, uintptr(unsafe.Pointer(&trayNID)))
@@ -286,27 +353,55 @@ func showTrayMenu(hwnd uintptr) {
 	}
 	defer procDestroyMenu.Call(hMenu)
 
-	// Connection status — disabled (unclickable) info line, rebuilt each open so
-	// it always reflects the current state.
-	status := "Disconnected"
-	if trayConnState != nil {
-		switch trayConnState() {
-		case connConnected:
-			status = "Connected"
-		case connError:
-			status = "Connection error"
-		}
+	// Live data (pushed by the brain via tray.status) + local connection state.
+	// Rebuilt each open so it always reflects the current situation.
+	ts := getTrayStatus()
+	online := trayConnState != nil && trayConnState() == connConnected
+
+	// Header — Jarvis + current state (disabled info line).
+	header := "Jarvis"
+	if ts.State != "" && ts.State != "idle" {
+		header = "Jarvis · " + ts.State
 	}
-	statusLabel, _ := syscall.UTF16PtrFromString(status)
-	procAppendMenuW.Call(hMenu, trayMfString|trayMfGrayed|trayMfDisabled, 0, uintptr(unsafe.Pointer(statusLabel)))
+	appendTrayDisabled(hMenu, header)
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
-	appendTrayItem(hMenu, "Jarvis", trayMenuChatID)
+	// Waiting on you — pending approvals; opens the dashboard (Authority).
+	if ts.Waiting > 0 {
+		appendTrayItem(hMenu, fmt.Sprintf("Waiting on you (%d)", ts.Waiting), trayMenuWaitingID)
+		procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
+	}
+
+	// Controls — the two toggles worth a click (checkable).
+	appendTrayCheck(hMenu, "Pause Jarvis", trayMenuPauseID, ts.Paused)
+	appendTrayCheck(hMenu, "Mute microphone", trayMenuMuteID, ts.Muted)
+	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
+
+	// Recent activity (disabled info lines).
+	if len(ts.Recent) > 0 {
+		appendTrayDisabled(hMenu, "Recent")
+		for i, r := range ts.Recent {
+			if i >= 3 {
+				break
+			}
+			appendTrayDisabled(hMenu, "   "+r)
+		}
+		procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
+	}
+
+	// Into the app. (No accelerator labels: a tray menu has no focused window
+	// for a menu accelerator to fire against, and Ctrl+J/Ctrl+Q are common
+	// combos we won't hijack globally. A deliberate global "open dashboard"
+	// hotkey would be a separate opt-in, on an uncommon combo.)
+	appendTrayItem(hMenu, "Open dashboard", trayMenuChatID)
 	appendTrayItem(hMenu, "Settings", trayMenuSettingsID)
 	appendTrayItem(hMenu, "Logs", trayMenuLogsID)
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
-	appendTrayItem(hMenu, "Close", trayMenuCloseID)
+	appendTrayItem(hMenu, "Quit Jarvis", trayMenuCloseID)
+
+	// Footer — brain / sidecar / port health (disabled info line).
+	appendTrayDisabled(hMenu, trayFooterText(online, ts))
 
 	var pt pblPoint
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -340,6 +435,36 @@ func showTrayMenu(hwnd uintptr) {
 		if trayOpenLogs != nil {
 			go trayOpenLogs()
 		}
+	case trayMenuWaitingID:
+		if trayOpenChat != nil {
+			go trayOpenChat() // into the dashboard to review the pending approval
+		}
+	case trayMenuPauseID:
+		ts := getTrayStatus()
+		ts.Paused = !ts.Paused
+		setTrayStatus(ts)
+		// WS write off the tray thread (a stalled brain must not freeze the
+		// message pump), serialized so rapid toggles apply in click order.
+		paused := ts.Paused
+		trayCtlAsync(func() {
+			if trayEmit != nil {
+				trayEmit("tray.set_pause", map[string]any{"paused": paused})
+			}
+		})
+	case trayMenuMuteID:
+		ts := getTrayStatus()
+		ts.Muted = !ts.Muted
+		setTrayStatus(ts)
+		// Mic gating tears down audio devices (blocking I/O) and the emit is a
+		// WS write — off the tray thread, serialized so a rapid double-toggle
+		// can't interleave and desync the mic from the menu.
+		muted := ts.Muted
+		trayCtlAsync(func() {
+			trayApplyMute(muted) // gate the mic locally (sidecar owns mic control)
+			if trayEmit != nil {
+				trayEmit("tray.set_mute", map[string]any{"muted": muted})
+			}
+		})
 	}
 }
 
@@ -347,4 +472,35 @@ func showTrayMenu(hwnd uintptr) {
 func appendTrayItem(hMenu uintptr, label string, id uintptr) {
 	l, _ := syscall.UTF16PtrFromString(label)
 	procAppendMenuW.Call(hMenu, trayMfString, id, uintptr(unsafe.Pointer(l)))
+}
+
+// appendTrayDisabled adds a greyed, unclickable info line (header / recent / footer).
+func appendTrayDisabled(hMenu uintptr, label string) {
+	l, _ := syscall.UTF16PtrFromString(label)
+	procAppendMenuW.Call(hMenu, trayMfString|trayMfGrayed|trayMfDisabled, 0, uintptr(unsafe.Pointer(l)))
+}
+
+// appendTrayCheck adds a checkable toggle item (Pause / Mute).
+func appendTrayCheck(hMenu uintptr, label string, id uintptr, checked bool) {
+	l, _ := syscall.UTF16PtrFromString(label)
+	flags := uintptr(trayMfString)
+	if checked {
+		flags |= trayMfChecked
+	}
+	procAppendMenuW.Call(hMenu, flags, id, uintptr(unsafe.Pointer(l)))
+}
+
+// trayFooterText builds the "brain online · sidecar 2/2 · :3142" health line.
+func trayFooterText(online bool, ts TrayStatus) string {
+	s := "brain offline"
+	if online {
+		s = "brain online"
+	}
+	if ts.Sidecars != "" {
+		s += " · sidecar " + ts.Sidecars
+	}
+	if ts.Port > 0 {
+		s += fmt.Sprintf(" · :%d", ts.Port)
+	}
+	return s
 }

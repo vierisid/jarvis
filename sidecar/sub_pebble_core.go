@@ -25,19 +25,19 @@ const (
 	// when a sub-pebble is expanded. Height is dynamic (compact vs tall); see
 	// bubbleHeightForEntry. Width is generous enough to read a sentence-length
 	// task; the tall variant fits a 3-line result clamp.
-	subPebbleBubbleW        = 230
-	subPebbleBubbleHCompact = 95
-	subPebbleBubbleHTall    = 180
+	subPebbleBubbleW        = 304 // grew 230→304 (founder: "still very small to see")
+	subPebbleBubbleHCompact = 124
+	subPebbleBubbleHTall    = 236
 	subPebbleBubbleOffset   = 14 // gap between disc edge and bubble's right edge
-	subPebbleBubbleAnchorY  = 20 // top of bubble relative to the disc's y axis
-	subPebbleBubbleInnerPad = 12 // px from the bubble's outer edge to the text rect
+	subPebbleBubbleAnchorY  = 24 // top of bubble relative to the disc's y axis
+	subPebbleBubbleInnerPad = 16 // px from the bubble's outer edge to the text rect
 
 	// "open full" button inside the bubble (spawns a native window with the
 	// full task result), anchored to the bubble's bottom-right.
-	subPebbleButtonW      = 92
-	subPebbleButtonH      = 20
-	subPebbleButtonInsetR = 10 // gap from bubble right edge to button right edge
-	subPebbleButtonInsetB = 8  // gap from bubble bottom to button bottom
+	subPebbleButtonW      = 112
+	subPebbleButtonH      = 26
+	subPebbleButtonInsetR = 12 // gap from bubble right edge to button right edge
+	subPebbleButtonInsetB = 10 // gap from bubble bottom to button bottom
 )
 
 // subPebbleRGB returns the (R,G,B) accent for a palette colour. Each is
@@ -51,7 +51,7 @@ func subPebbleRGB(c SubPebbleColor) (r, g, b uint8) {
 	case SubPebbleViolet:
 		return 0x6E, 0x53, 0x9C
 	case SubPebbleVermilion:
-		return 0xC2, 0x3A, 0x2A
+		return 0xE6, 0x3B, 0x2E
 	case SubPebbleMustard:
 		return 0xB7, 0x8A, 0x1E
 	case SubPebbleTeal:

@@ -145,7 +145,7 @@ export function SiteGitHubModal({ projectId, projectName, onClose, onConnected }
         {/* Token setup */}
         {mode === "check-token" && (
           <div style={bodyStyle}>
-            <div style={{ color: "var(--j-text-muted)", fontSize: "12px" }}>Checking GitHub connection...</div>
+            <div style={{ color: "var(--ink3)", fontSize: "12px" }}>Checking GitHub connection...</div>
           </div>
         )}
 
@@ -186,13 +186,13 @@ export function SiteGitHubModal({ projectId, projectName, onClose, onConnected }
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
               <button onClick={() => setMode("create-repo")} style={optionBtnStyle}>
                 <span style={{ fontWeight: 600 }}>Create New Repository</span>
-                <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>
+                <span style={{ fontSize: "11px", color: "var(--ink3)" }}>
                   Create a new GitHub repo and push this project
                 </span>
               </button>
               <button onClick={() => setMode("connect-repo")} style={optionBtnStyle}>
                 <span style={{ fontWeight: 600 }}>Connect Existing Repository</span>
-                <span style={{ fontSize: "11px", color: "var(--j-text-muted)" }}>
+                <span style={{ fontSize: "11px", color: "var(--ink3)" }}>
                   Link to a repository you already have on GitHub
                 </span>
               </button>
@@ -259,9 +259,9 @@ export function SiteGitHubModal({ projectId, projectName, onClose, onConnected }
             />
             <div style={{ maxHeight: 250, overflow: "auto", display: "flex", flexDirection: "column", gap: "2px" }}>
               {loadingRepos ? (
-                <div style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "8px 0" }}>Loading repositories...</div>
+                <div style={{ fontSize: "11px", color: "var(--ink3)", padding: "8px 0" }}>Loading repositories...</div>
               ) : filteredRepos.length === 0 ? (
-                <div style={{ fontSize: "11px", color: "var(--j-text-muted)", padding: "8px 0" }}>
+                <div style={{ fontSize: "11px", color: "var(--ink3)", padding: "8px 0" }}>
                   {repoSearch ? "No matching repositories" : "No repositories found"}
                 </div>
               ) : (
@@ -298,8 +298,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "12px",
   width: 420,
   maxHeight: "80vh",
@@ -312,13 +312,13 @@ const headerStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "16px 20px",
-  borderBottom: "1px solid var(--j-border)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const closeBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   fontSize: "16px",
 };
@@ -332,24 +332,24 @@ const bodyStyle: React.CSSProperties = {
 
 const descStyle: React.CSSProperties = {
   fontSize: "12px",
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
   lineHeight: 1.5,
   margin: 0,
 };
 
 const linkStyle: React.CSSProperties = {
   fontSize: "11px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   textDecoration: "none",
 };
 
 const inputStyle: React.CSSProperties = {
   padding: "8px 12px",
   fontSize: "13px",
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "6px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   outline: "none",
   width: "100%",
   boxSizing: "border-box",
@@ -358,7 +358,7 @@ const inputStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = {
   fontSize: "11px",
   fontWeight: 600,
-  color: "var(--j-text-dim)",
+  color: "var(--ink2)",
   marginTop: "4px",
 };
 
@@ -369,7 +369,7 @@ const primaryBtnStyle: React.CSSProperties = {
   background: "rgba(0, 212, 255, 0.15)",
   border: "1px solid rgba(0, 212, 255, 0.4)",
   borderRadius: "6px",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
   marginTop: "4px",
 };
@@ -379,10 +379,10 @@ const optionBtnStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: "2px",
   padding: "12px 16px",
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "8px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   cursor: "pointer",
   textAlign: "left",
   fontSize: "13px",
@@ -392,7 +392,7 @@ const backBtnStyle: React.CSSProperties = {
   alignSelf: "flex-start",
   background: "none",
   border: "none",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   cursor: "pointer",
   fontSize: "12px",
   padding: 0,
@@ -402,7 +402,7 @@ const backBtnStyle: React.CSSProperties = {
 const smallTextBtn: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   fontSize: "11px",
   padding: 0,
@@ -417,7 +417,7 @@ const repoItemStyle: React.CSSProperties = {
   background: "none",
   border: "1px solid transparent",
   borderRadius: "6px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   cursor: "pointer",
   textAlign: "left",
   fontSize: "12px",
@@ -428,7 +428,7 @@ const privateBadge: React.CSSProperties = {
   padding: "1px 5px",
   borderRadius: "3px",
   background: "rgba(0,212,255,0.1)",
-  color: "var(--j-accent)",
+  color: "var(--ink)",
   marginLeft: "auto",
 };
 

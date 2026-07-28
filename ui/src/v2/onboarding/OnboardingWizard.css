@@ -1,0 +1,252 @@
+/* ═══════════════════ Onboarding · Brand Book III / Monochrome Lab ═══════════════════
+   The nine-screen first-run flow (design: usejarvis-onboarding.html). One
+   guided sequence in the Monochrome Lab system; the Pebble is the only thing
+   alive. Uses the app's global theme tokens so it follows light/dark. */
+
+.obw {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* window bar */
+.obw-bar {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 15px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel2);
+}
+.obw-bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); }
+.obw-bar .obw-wt { margin-left: 8px; font-family: var(--mono); font-size: 10px; color: var(--ink3); letter-spacing: 0.02em; }
+
+/* nine-segment progress */
+.obw-steps { display: flex; align-items: center; gap: 6px; padding: 16px 28px 0; max-width: 620px; margin: 0 auto; width: 100%; }
+.obw-steps i { height: 3px; border-radius: 2px; background: var(--rule); flex: 1; transition: background 0.3s var(--ease-out, ease); }
+.obw-steps i.done { background: var(--ink2); }
+.obw-steps i.cur { background: var(--listen); }
+.obw-steplab { padding: 8px 28px 0; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); max-width: 620px; margin: 0 auto; width: 100%; }
+
+/* body + wrap */
+.obw-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.obw-body { flex: 1; display: flex; flex-direction: column; padding: 26px 28px 30px; }
+.obw-body.mid { justify-content: center; align-items: center; text-align: center; }
+.obw-wrap { width: 100%; max-width: 400px; margin: 0 auto; }
+.obw-wrap.wide { max-width: 560px; }
+.obw h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.028em; color: var(--ink); line-height: 1.15; text-wrap: balance; }
+.obw-sub { font-size: 13px; color: var(--ink3); line-height: 1.55; margin-top: 8px; }
+.obw-sub b { color: var(--ink2); font-weight: 600; }
+.obw-word { font-weight: 700; letter-spacing: -0.045em; color: var(--ink); }
+.obw-word .u { color: var(--ink3); }
+.obw-signed { margin-top: 18px; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+.obw-recap { margin-top: 15px; display: flex; flex-direction: column; gap: 6px; align-items: center; font-family: var(--mono); font-size: 10px; color: var(--ink3); }
+.obw-recap .ok { color: var(--ok); }
+
+/* the drop (Pebble) */
+.obw-drop {
+  position: relative;
+  border-radius: 50% 50% 50% 12px;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
+}
+:root[data-theme="dark"] .obw-drop { border-color: rgba(255, 255, 255, 0.4); box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.55), 0 8px 22px -4px rgba(0, 0, 0, 0.6); }
+.obw-drop .in { position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(circle at 50% 40%, #FF6E60, #E63B2E 58%, #B81E16); animation: obw-brS 2.6s var(--ease-out, ease) infinite; }
+.obw-drop .ring {
+  position: absolute; inset: -2px; border-radius: inherit; opacity: 0;
+  background: conic-gradient(from 0deg, transparent 0 200deg, rgba(255, 255, 255, 0.98) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 38%, #000 46%, #000 56%, transparent 64%);
+  mask: radial-gradient(circle, transparent 38%, #000 46%, #000 56%, transparent 64%);
+}
+.obw-drop.s-think .in { background: radial-gradient(circle at 50% 40%, #fff, #E6EAEF 70%); }
+.obw-drop.s-think .ring { opacity: 0.95; animation: obw-spin 3.4s linear infinite; }
+.obw-drop.s-speak .in { background: radial-gradient(circle at 50% 40%, #5E97FF, #2D78FF 60%, #1B5BD0); animation: obw-brS 1.1s var(--ease-out, ease) infinite; }
+.obw-drop.s-done .in { background: radial-gradient(circle at 50% 40%, #56C98A, #2FA45E 60%, #1F7E45); }
+@keyframes obw-brS { 0%, 100% { opacity: 0.62; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.05); } }
+@keyframes obw-spin { to { transform: rotate(360deg); } }
+@keyframes obw-br { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+@keyframes obw-mic { 0%, 100% { height: 18%; } 50% { height: 100%; } }
+.obw-bloom { position: absolute; border-radius: 50%; background: radial-gradient(circle, rgba(230, 59, 46, 0.24), transparent 66%); filter: blur(10px); pointer-events: none; }
+.obw-bloom.ok { background: radial-gradient(circle, rgba(47, 164, 94, 0.26), transparent 66%); }
+
+/* buttons */
+.obw-btn { height: 40px; border-radius: 9px 2px 9px 9px; font-family: var(--sans); font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; border: 1px solid transparent; transition: filter 0.15s, border-color 0.15s, background 0.15s; padding: 0 18px; }
+.obw-btn:disabled { opacity: 0.45; cursor: default; }
+.obw-btn-pri { background: var(--ink); color: var(--bg); }
+.obw-btn-pri:not(:disabled):hover { filter: brightness(1.08); }
+.obw-btn-ghost { background: var(--raise); border-color: var(--rule); color: var(--ink); }
+.obw-btn-ghost:not(:disabled):hover { border-color: var(--ink3); }
+.obw-btn.sm { height: 32px; font-size: 12px; padding: 0 13px; border-radius: 8px 2px 8px 8px; }
+.obw-btnrow { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+.obw-btnrow .grow { flex: 1; }
+.obw-skip { font-size: 12px; color: var(--ink3); text-decoration: none; cursor: pointer; border: none; background: none; border-bottom: 1px solid transparent; font-family: var(--sans); padding: 0; }
+.obw-skip:hover { color: var(--ink2); border-color: var(--rule); }
+
+/* fields */
+.obw-field { margin-bottom: 11px; text-align: left; }
+.obw-field label { display: block; font-size: 11px; color: var(--ink3); margin-bottom: 5px; font-weight: 500; }
+.obw-inp { width: 100%; height: 40px; background: var(--panel2); border: 1px solid var(--rule); border-radius: 8px 2px 8px 8px; padding: 0 12px; font-family: var(--sans); font-size: 13.5px; color: var(--ink); transition: border-color 0.15s, box-shadow 0.15s; }
+select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
+.obw-inp::placeholder { color: var(--faint); }
+.obw-inp:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px rgba(120, 130, 145, 0.16); }
+.obw-hint { font-size: 10.5px; color: var(--faint); line-height: 1.5; margin-top: 6px; }
+
+/* choice cards (STT / TTS) */
+.obw-choices { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
+.obw-choice { display: flex; gap: 12px; align-items: flex-start; padding: 13px 14px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--raise); cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; text-align: left; width: 100%; }
+.obw-choice:hover { border-color: var(--ink3); }
+.obw-choice.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.obw-choice .gi { width: 34px; height: 34px; flex-shrink: 0; border-radius: 9px 2px 9px 9px; background: var(--panel); display: grid; place-items: center; color: var(--ink2); }
+.obw-choice.on .gi { background: var(--ink); color: var(--bg); }
+.obw-choice .ct { flex: 1; }
+.obw-choice .cn { font-size: 13.5px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.obw-choice .cb { font-size: 11.5px; color: var(--ink3); line-height: 1.45; margin-top: 2px; }
+.obw-choice .rad { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--rule); flex-shrink: 0; margin-top: 2px; position: relative; }
+.obw-choice.on .rad { border-color: var(--ink); }
+.obw-choice.on .rad::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--ink); }
+.obw-subctl { margin: 9px 0 2px; padding-left: 46px; display: flex; align-items: center; gap: 10px; }
+.obw-pill { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 2px 6px; }
+
+/* provider grid (LLM) */
+.obw-provgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 4px; }
+.obw-prov { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid var(--rule); border-radius: 9px 2px 9px 9px; background: var(--raise); cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; text-align: left; }
+.obw-prov:hover { border-color: var(--ink3); }
+.obw-prov.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.obw-prov .pd { width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px 1px 7px 7px; background: var(--panel); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink2); }
+.obw-prov.on .pd { background: var(--ink); color: var(--bg); }
+.obw-prov.reco { border-color: color-mix(in srgb, var(--listen) 50%, transparent); }
+.obw-prov.soon { cursor: default; opacity: 0.6; background: var(--panel2); }
+.obw-prov.soon:hover { border-color: var(--rule); }
+.obw-prov.soon .pn { color: var(--ink2); }
+.obw-soon { font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--speak-tx); background: color-mix(in srgb, var(--speak) 13%, transparent); border-radius: 999px; padding: 2px 6px; margin-left: 7px; vertical-align: middle; }
+.obw-prov .pn { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.1; }
+.obw-prov .pk { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); margin-top: 2px; }
+.obw-provdetail { margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.obw-testrow { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.obw-testres { font-family: var(--mono); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.obw-testres.ok { color: var(--ok); }
+.obw-testres.err { color: var(--listen); }
+.obw-testres .dot { width: 7px; height: 7px; border-radius: 50% 50% 50% 1px; transform: rotate(45deg); background: currentColor; }
+.obw-advlink { display: inline-block; margin-top: 12px; font-size: 11.5px; color: var(--speak); cursor: pointer; font-weight: 500; background: none; border: none; padding: 0; font-family: var(--sans); }
+
+/* permission / integration rows */
+.obw-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.obw-prow { display: flex; align-items: center; gap: 13px; padding: 13px 14px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--raise); }
+.obw-prow .pg { width: 36px; height: 36px; flex-shrink: 0; border-radius: 9px 2px 9px 9px; background: var(--panel); display: grid; place-items: center; color: var(--ink2); }
+.obw-prow .pt { flex: 1; min-width: 0; }
+.obw-prow .pt .pn { font-size: 13px; font-weight: 600; color: var(--ink); }
+.obw-prow .pt .pn .req { font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--listen); margin-left: 7px; }
+.obw-prow .pt .pb { font-size: 11.5px; color: var(--ink3); line-height: 1.4; margin-top: 2px; }
+.obw-grant { height: 30px; padding: 0 13px; border-radius: 8px 2px 8px 8px; border: 1px solid var(--rule); background: var(--raise); color: var(--ink); font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0; transition: border-color 0.15s; }
+.obw-grant:hover { border-color: var(--ink3); }
+.obw-grant:disabled { opacity: 0.5; cursor: default; }
+.obw-granted { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ok); flex-shrink: 0; }
+.obw-granted svg { width: 15px; height: 15px; }
+
+/* mic meter + tts waveform */
+.obw-micbars { display: flex; align-items: flex-end; gap: 4px; height: 34px; margin: 2px 0; }
+.obw-micbars b { width: 5px; background: var(--ink2); border-radius: 2px; animation: obw-mic 1.1s var(--ease-out, ease) infinite; }
+/* live variant — heights come from the real mic level, not an animation */
+.obw-micbars.live b { animation: none; height: 22%; opacity: 0.35; transition: height 90ms linear, opacity 90ms linear, background 90ms linear; }
+.obw-micbars.live b.on { height: 92%; opacity: 1; background: var(--ok); }
+.obw-miccheck { margin-top: 13px; display: flex; align-items: center; gap: 13px; padding: 11px 13px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; }
+.obw-wave { display: inline-flex; align-items: center; gap: 3px; height: 22px; }
+.obw-wave b { width: 3px; background: var(--speak); border-radius: 2px; animation: obw-mic 1s var(--ease-out, ease) infinite; }
+
+/* interview */
+.obw-iv { flex: 1; display: flex; flex-direction: column; padding: 0; min-height: 0; }
+.obw-ivhead { display: flex; align-items: center; justify-content: space-between; padding: 14px 22px; border-bottom: 1px solid var(--rule); }
+.obw-ivhead .l { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); }
+.obw-ivhead .r { display: flex; align-items: center; gap: 14px; }
+.obw-ivhead .facts { font-family: var(--mono); font-size: 10px; color: var(--ink2); }
+.obw-ivhead .facts b { color: var(--ink); }
+.obw-ivstage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 18px; position: relative; overflow: hidden; }
+.obw-ivstage .obw-bloom { width: 160px; height: 160px; }
+.obw-ivphase { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink3); }
+.obw-ivq { font-size: 17px; font-weight: 600; color: var(--ink); text-align: center; max-width: 30ch; line-height: 1.35; letter-spacing: -0.01em; min-height: 46px; transition: opacity 0.18s; }
+.obw-ivtrans { display: flex; flex-direction: column; gap: 7px; width: 100%; max-width: 430px; margin-top: 2px; }
+.obw-bub { max-width: 78%; padding: 8px 12px; font-size: 12.5px; line-height: 1.4; }
+.obw-bub.jv { align-self: flex-start; background: var(--panel); color: var(--ink2); border-radius: 11px 11px 11px 2px; }
+.obw-bub.me { align-self: flex-end; background: var(--ink); color: var(--bg); border-radius: 11px 11px 2px 11px; }
+.obw-ivcomposer { display: flex; gap: 9px; align-items: center; padding: 13px 22px; border-top: 1px solid var(--rule); }
+.obw-ivcomposer .obw-inp { flex: 1; }
+.obw-voicepill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px; flex-shrink: 0; }
+.obw-voicepill .ld { width: 9px; height: 9px; border-radius: 50% 50% 50% 1px; transform: rotate(45deg); background: var(--listen); animation: obw-br 1.6s var(--ease-out, ease) infinite; }
+
+/* spotlight tour */
+.obw-tourstage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background:
+    radial-gradient(65% 60% at 50% 42%, color-mix(in srgb, var(--ink) 5%, transparent), transparent),
+    var(--panel2);
+}
+/* The mini-app is a contained *preview*, not the whole window — a fixed
+   frame centred in the stage so the spotlights land on their targets and
+   it never balloons into a broken-looking empty dashboard. */
+.obw-tourframe {
+  position: relative;
+  width: min(880px, 100%);
+  height: min(520px, 100%);
+  border: 1px solid var(--rule);
+  border-radius: 14px 3px 14px 14px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 30px 70px -34px rgba(0, 0, 0, 0.65);
+}
+.obw-miniapp { position: absolute; inset: 0; display: grid; grid-template-columns: 118px 1fr; }
+.obw-miniapp .mrail { border-right: 1px solid var(--rule); background: var(--bg); padding: 12px 10px; display: flex; flex-direction: column; gap: 5px; }
+.obw-miniapp .mrail .mh { font-family: var(--mono); font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 7px 0 2px; }
+.obw-miniapp .mrail .mr { font-size: 10.5px; color: var(--ink2); padding: 3px 6px; border-radius: 5px; display: flex; align-items: center; gap: 6px; }
+.obw-miniapp .mrail .mr.on { background: var(--panel); color: var(--ink); font-weight: 600; }
+.obw-miniapp .mrail .mr .bd { margin-left: auto; font-family: var(--mono); font-size: 8px; color: var(--hold); }
+.obw-miniapp .mmain { padding: 14px; position: relative; }
+.obw-miniapp .mtop { height: 30px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); display: flex; align-items: center; padding: 0 11px; gap: 8px; font-family: var(--mono); font-size: 9px; color: var(--ink3); }
+.obw-miniapp .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 11px; }
+.obw-miniapp .mcard { height: 60px; border: 1px solid var(--rule); border-radius: 9px; background: var(--bg); }
+.obw-miniapp .mpeb { position: absolute; right: 16px; bottom: 14px; }
+.obw-tourdim { position: absolute; inset: 0; background: rgba(8, 10, 14, 0.52); z-index: 40; }
+:root[data-theme="dark"] .obw-tourdim { background: rgba(0, 0, 0, 0.62); }
+.obw-spot { position: absolute; z-index: 60; background: var(--raise); border: 1px solid var(--rule); border-radius: 13px 3px 13px 13px; box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); padding: 15px 16px; width: 248px; }
+.obw-spot .sh { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.obw-spot .sh .sd { width: 13px; height: 13px; border-radius: 50% 50% 50% 2px; transform: rotate(45deg); position: relative; }
+.obw-spot .sh .sd .in { position: absolute; inset: 0; border-radius: inherit; background: var(--listen); animation: obw-brS 2s var(--ease-out, ease) infinite; }
+.obw-spot .sh .sl { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); }
+.obw-spot .sh .sc { margin-left: auto; font-family: var(--mono); font-size: 8.5px; color: var(--faint); }
+/* direct child only — `.sm` also collides with the small-button modifier
+   (`.obw-btn.sm`), which would force the button text to --ink (invisible). */
+.obw-spot > .sm { font-size: 13px; line-height: 1.45; color: var(--ink); letter-spacing: -0.005em; }
+.obw-spot .stry { font-family: var(--mono); font-size: 9.5px; color: var(--speak); margin-top: 8px; }
+.obw-spot .sb { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
+.obw-spot .sb .grow { flex: 1; }
+
+/* welcome theme chooser */
+.obw-themeseg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px 2px 8px 8px; overflow: hidden; margin-top: 4px; }
+.obw-themeseg button { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3); background: var(--raise); border: none; padding: 8px 16px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.obw-themeseg button.on { background: var(--ink); color: var(--bg); }
+.obw-themelab { font-size: 11px; color: var(--ink3); margin-bottom: 7px; }
+
+@media (max-width: 760px) { .obw-provgrid { grid-template-columns: 1fr; } .obw-miniapp { grid-template-columns: 84px 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+  .obw-drop .in, .obw-drop .ring, .obw-spot .sh .sd .in, .obw-micbars b, .obw-wave b, .obw-voicepill .ld { animation: none !important; }
+  .obw-drop .in { opacity: 1 !important; }
+  .obw-drop.s-think .ring { opacity: 0.95 !important; }
+  .obw-micbars b { height: 60% !important; }
+}

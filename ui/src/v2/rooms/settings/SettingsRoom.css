@@ -694,14 +694,8 @@
 /* ── Embedded legacy SidecarConfigEditor — retheme cascade ── */
 
 .v2-set__legacy-embed {
-  --j-bg: var(--paper);
-  --j-surface: var(--paper-2);
-  --j-border: var(--rule);
-  --j-text: var(--ink);
-  --j-text-dim: var(--ink-2);
-  --j-text-muted: var(--ink-3);
-  --j-accent: var(--ink);
-  --j-success: var(--ok);
+  /* Only the two divergent --j-* hues remain (the rest flattened in Phase 6):
+     the legacy IDE wants the darker -tx text variants for error/warning. */
   --j-warning: var(--warn);
   --j-error: var(--accent);
 }
@@ -774,4 +768,13 @@
   color: var(--ink-3);
   line-height: 1.4;
 }
+
+/* ════════════ Brand Book III / Monochrome Lab ════════════
+   The room already has the §09 grammar (one row, custom toggles, state
+   chips); this fixes the asymmetric drop corner + Familjen, and makes the
+   focus ring blue (colour is state, and a red focus ring reads as danger). */
+.v2-set__section, .v2-set__stat { border-radius: var(--corner); }
+.v2-set__tab[data-active="true"] { border-radius: 7px 2px 7px 7px; }
+.v2-set__stat-value, .v2-set__section-title { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
+.v2-set :focus-visible { outline-color: var(--speak); }
 

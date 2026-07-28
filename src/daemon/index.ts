@@ -20,6 +20,9 @@ import { AgentService } from "./agent-service.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
+import { PebbleRealtimeManager } from "./pebble-realtime.ts";
+import { resolveRealtimeVoice } from "../config/realtime.ts";
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -34,10 +37,13 @@ import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
+import { impactFromCategory } from "../roles/authority.ts";
+import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
+import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -632,15 +638,176 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // text wins over the per-state placeholder ("speaking…", "listening —
       // go ahead.") so we can surface the live LLM response instead of the
       // generic copy. Empty/undefined text falls back to the placeholder.
+      // Last state mirrored to each sidecar's tray menu, so we only push
+      // `tray.status` when the state actually changes (state churns fast during
+      // a turn; the tray only reads it on menu-open, so a per-change push would
+      // be pure waste otherwise).
+      const lastTrayState = new Map<string, string>();
       const setState = async (sidecarId: string, state: string, text?: string) => {
         try {
           const params: { state: string; text?: string } = { state };
           if (text !== undefined) params.text = text;
           await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_state', params);
+          // Mirror the state to the tray menu header (best-effort, deduped).
+          if (lastTrayState.get(sidecarId) !== state) {
+            lastTrayState.set(sidecarId, state);
+            void sidecarManager.dispatchRPC(sidecarId, 'tray.status', { state }).catch(() => {});
+          }
         } catch (err) {
           console.warn(`[ambient-ui] pebble.set_state(${state}) on ${sidecarId} failed:`, err);
         }
       };
+
+      // Realtime nav-tool execution for the pebble: open a native room panel (or
+      // window-manage it) on the pebble's machine, mirroring the one-shot intent
+      // path. (ROOMS/dashboardURL/boundsForRoom/trackPanel/findPanel are defined
+      // further down in this same scope; this closure runs at tool-call time, by
+      // when they're initialised.) Returns a confirmation, or null if `name`
+      // isn't a nav tool so the caller falls through to the agent tool bridge.
+      const executePebbleNavTool = async (
+        sidecarId: string,
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<string | null> => {
+        if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
+        const openRoom = async (key: string): Promise<string> => {
+          const meta = ROOMS[key];
+          if (!meta) return `I don't have a "${key}" screen.`;
+          try {
+            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+              url: dashboardURL(key),
+              title: meta.title,
+              bounds: boundsForRoom(key, meta.w, meta.h),
+              resizable: true,
+              always_on_top: meta.alwaysOnTop ?? false,
+              multi_instance: false,
+            });
+            const id = (result && typeof result === 'object' && 'id' in (result as object))
+              ? String((result as { id?: unknown }).id ?? '') : '';
+            if (id) trackPanel(sidecarId, { id, key, title: meta.title });
+            return `Opened ${meta.title}.`;
+          } catch (err) {
+            console.warn(`[pebble-realtime] open room "${key}" failed:`, err);
+            return `I couldn't open ${meta.title}.`;
+          }
+        };
+        switch (name) {
+          case 'open_dashboard_room':
+            return openRoom(String(args.room ?? ''));
+          case 'dashboard_room_action':
+            // In-room actions target the dashboard SPA, which a native panel
+            // doesn't receive — opening the room is the useful part here.
+            return openRoom(String(args.room ?? ''));
+          case 'control_dashboard_window': {
+            const action = String(args.action ?? '');
+            const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);
+            if (!target) return "There's no window open to do that with.";
+            const stateMap: Record<string, string> = {
+              maximize: 'maximized', maximized: 'maximized',
+              minimize: 'minimized', minimized: 'minimized',
+              restore: 'normal', normal: 'normal',
+            };
+            try {
+              if (action === 'close') {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
+                untrackPanel(sidecarId, target.id);
+                return `Closed ${target.title}.`;
+              }
+              if (action === 'focus') {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.focus', { id: target.id });
+                return 'Here it is.';
+              }
+              if (stateMap[action]) {
+                await sidecarManager.dispatchRPC(sidecarId, 'panel.set_window_state', { id: target.id, state: stateMap[action] });
+                return `Done.`;
+              }
+              return "I'm not sure how to do that with the window.";
+            } catch {
+              return "I couldn't do that with the window.";
+            }
+          }
+          case 'go_back_to_thread':
+            return 'Okay.'; // the pebble has no dashboard thread to return to
+          default:
+            return null;
+        }
+      };
+
+      // ─────────────────── Native pebble realtime voice ───────────────────
+      // The summon hotkey toggles a perpetual realtime (gpt-realtime) session
+      // when realtime is enabled. The sidecar is the audio device: it streams
+      // mic PCM up (`pebble.audio_frame`) and plays streamed PCM down
+      // (`pebble.play_pcm`); the daemon runs the realtime session itself. See
+      // PebbleRealtimeManager + PebbleAudioTransport — all the OpenAI protocol
+      // logic is reused from the dashboard realtime path.
+      const pebbleRealtime = new PebbleRealtimeManager({
+        dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
+        dispatchNotify: (sidecarId, method, params) => sidecarManager.dispatchNotify(sidecarId, method, params ?? {}),
+        getAudioChannel: (sidecarId) => sidecarManager.getAudioChannel(sidecarId),
+        resolve: () => resolveRealtimeVoice(agentService.getConfig()),
+        // Agent tools + the nav tools (open_dashboard_room, …) so realtime voice
+        // can drive the desktop UI just like the one-shot path ("open settings").
+        tools: () => [...agentService.getOrchestrator().getRealtimeTools(), ...REALTIME_NAV_TOOLS],
+        instructions: () => agentService.buildRealtimeVoiceInstructions(),
+        executeToolCall: async (sidecarId, name, args, blockedCategories) => {
+          // Nav tools open a native panel on the pebble's machine (the realtime
+          // model otherwise had no way to honor "open workflows / settings").
+          const nav = await executePebbleNavTool(sidecarId, name, args);
+          if (nav !== null) return nav;
+          return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories });
+        },
+        onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
+        onStatus: (sidecarId, status, detail) => {
+          console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);
+          // Echo lifecycle to the sidecar so it can stop capture / show the
+          // reason when the daemon closes or errors the session.
+          void sidecarManager.dispatchRPC(sidecarId, 'pebble.realtime_status', { state: status, detail: detail ?? '' })
+            .catch(() => {/* sidecar may lack the handler / be gone */});
+        },
+      });
+
+      // Tell each pebble-capable sidecar whether realtime is available so its
+      // summon hotkey knows to toggle a live session vs. the one-shot capture.
+      sidecarManager.onSidecarConnected((sidecar) => {
+        if (!sidecar.capabilities.includes('pebble')) return;
+        const res = resolveRealtimeVoice(agentService.getConfig());
+        const enabled = res.ok;
+        console.log(`[pebble-realtime] configure_realtime → ${sidecar.id} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
+        void sidecarManager.dispatchRPC(sidecar.id, 'pebble.configure_realtime', { enabled })
+          .catch((err) => console.warn(`[pebble-realtime] configure_realtime dispatch failed (older sidecar?):`, err));
+      });
+
+      // Sidecar → daemon realtime control + mic stream.
+      const pebbleMicFrames = new Map<string, number>(); // sidecarId -> frame count (diagnostic)
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type === 'pebble.realtime_start') {
+          console.log(`[pebble-realtime] realtime_start from ${sidecarId} — opening session`);
+          pebbleMicFrames.set(sidecarId, 0);
+          void pebbleRealtime.start(sidecarId);
+        } else if (event.event_type === 'pebble.realtime_stop') {
+          console.log(`[pebble-realtime] realtime_stop from ${sidecarId}`);
+          pebbleRealtime.stop(sidecarId);
+        } else if (event.event_type === 'pebble.audio_frame') {
+          const data = (event.payload as { data?: unknown })?.data;
+          if (typeof data === 'string') {
+            const n = (pebbleMicFrames.get(sidecarId) ?? 0) + 1;
+            pebbleMicFrames.set(sidecarId, n);
+            // Confirm the mic stream is flowing without spamming: first frame, then every ~5s.
+            if (n === 1 || n % 125 === 0) console.log(`[pebble-realtime] mic frames from ${sidecarId}: ${n}`);
+            pebbleRealtime.pushMicChunk(sidecarId, Buffer.from(data, 'base64'));
+          }
+        }
+      });
+      // Mic PCM arriving on the dedicated audio channel (binary, isolated from
+      // the bulk control connection) — the preferred path; the pebble.audio_frame
+      // event above is the fallback when no audio channel is connected.
+      sidecarManager.onAudioFrame((sidecarId, frame) => {
+        const n = (pebbleMicFrames.get(sidecarId) ?? 0) + 1;
+        pebbleMicFrames.set(sidecarId, n);
+        if (n === 1 || n % 125 === 0) console.log(`[pebble-realtime] mic frames (audio channel) from ${sidecarId}: ${n}`);
+        pebbleRealtime.pushMicChunk(sidecarId, frame);
+      });
+      sidecarManager.onSidecarDisconnected((sidecarId) => pebbleRealtime.stop(sidecarId));
 
       // STT + TTS providers for the pebble's voice loop. Both built from
       // the same jarvisConfig.* the dashboard uses so API keys / provider
@@ -797,8 +964,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         spawnedOn.add(sidecar.id);
         try {
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
-            cursor_offset_x: 22,
-            cursor_offset_y: 26,
+            cursor_offset_x: 34,
+            cursor_offset_y: 40,
             summon_hotkey: 'ctrl+space',
             palette_hotkey: 'ctrl+k',
           });
@@ -1133,10 +1300,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 });
                 console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
               } else if (event === 'complete' || event === 'fail') {
-                // Flip to idle so the pulse stops; failures additionally
-                // recolor to vermilion so the user sees red on the rail.
+                // Success turns the drop green (the brand "done" state) so the
+                // rail shows finished work at a glance; failures stop the pulse
+                // (idle) and recolor to vermilion so the user sees red.
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
-                  id: task.id, state: 'idle',
+                  id: task.id, state: event === 'complete' ? 'done' : 'idle',
                 });
                 if (event === 'fail') {
                   await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_color', {
@@ -2673,6 +2841,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return { sentences, remainder: buffer.slice(lastEnd) };
       };
 
+      // stripMarkdownForSpeech flattens markdown to plain prose so TTS doesn't
+      // read syntax aloud ("asterisk asterisk", "hash hash"). The bubble still
+      // receives the raw markdown (the sidecar renders it styled); only the
+      // synthesized audio gets the cleaned text.
+      const stripMarkdownForSpeech = (s: string): string =>
+        s
+          .replace(/```[\s\S]*?```/g, ' ')          // fenced code blocks
+          .replace(/`([^`]*)`/g, '$1')              // inline code
+          .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')    // images
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')  // links -> text
+          .replace(/^\s{0,3}#{1,6}\s+/gm, '')       // ATX headings
+          .replace(/^\s{0,3}>\s?/gm, '')            // blockquote markers
+          .replace(/^\s*[-*+]\s+/gm, '')            // bullet markers
+          .replace(/^\s*\d+[.)]\s+/gm, '')          // numbered markers
+          .replace(/(\*\*|__)(.*?)\1/g, '$2')       // bold
+          .replace(/(\*|_)(.*?)\1/g, '$2')          // italic
+          .replace(/~~(.*?)~~/g, '$1')              // strikethrough
+          .replace(/^\s*([-*_]\s*){3,}$/gm, ' ')    // horizontal rules
+          .replace(/\|/g, ' ')                      // table pipes
+          .replace(/\s+/g, ' ')
+          .trim();
+
       // runResponseCycle — streams the LLM response token-by-token.
       // Each completed sentence is synthesized and queued on the sidecar
       // immediately so playback starts within ~1 s of the LLM's first
@@ -2751,12 +2941,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         };
 
         const enqueueSentence = (sentence: string): void => {
-          if (!pebbleTTS || !sentence.trim()) return;
+          if (!pebbleTTS) return;
+          const speakText = stripMarkdownForSpeech(sentence);
+          if (!speakText) return; // sentence was pure markdown (e.g. a code fence)
           const prev = ttsTail;
           const job = (async () => {
             const ttsStart = Date.now();
             try {
-              const audio = await pebbleTTS!.synthesize(sentence);
+              const audio = await pebbleTTS!.synthesize(speakText);
               // Synthesis may have finished out of order; wait for the previous
               // sentence's clip to be queued before queueing ours.
               await prev;
@@ -3378,6 +3570,235 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     });
 
+    // ── Tray menu live data (design: usejarvis-tray §00) ──
+    // Push a status snapshot to each connected sidecar every few seconds so the
+    // tray menu (read on open) shows pending approvals, pause state, health, and
+    // the recent-activity block. The pebble state is pushed separately by the
+    // ambient-ui loop, deduped.
+    const trayRelTime = (ts: number): string => {
+      const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (s < 60) return 'just now';
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h`;
+      return `${Math.floor(h / 24)}d`;
+    };
+    // Humanize a tool_name ("send_email") into a short activity label ("Send email").
+    const trayHumanizeTool = (tool: string): string => {
+      const words = tool.replace(/[_-]+/g, ' ').trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
+    };
+    // Recent activity = the last few actions Jarvis actually carried out, newest
+    // first. Sourced from approvals that were approved/executed (the actions the
+    // user cares about); auto-approved low-risk actions aren't gated so don't
+    // appear here. Best-effort — never let it break the heartbeat.
+    const buildTrayRecent = (): string[] => {
+      try {
+        return approvalManager
+          .getHistory({ limit: 8 })
+          .filter((r) => r.status === 'executed' || r.status === 'approved')
+          .slice(0, 3)
+          .map((r) => `${trayHumanizeTool(r.tool_name)} · ${trayRelTime(r.executed_at ?? r.decided_at ?? r.created_at)}`);
+      } catch {
+        return [];
+      }
+    };
+    const trayStatusTimer = setInterval(() => {
+      try {
+        const connected = sidecarManager.getConnectedSidecars();
+        if (connected.length === 0) return;
+        const enrolled = sidecarManager.listSidecars().length || connected.length;
+        const payload = {
+          waiting: approvalManager.getPending().length,
+          paused: emergencyController.getState() === 'paused',
+          brain_online: true,
+          port: config.port,
+          sidecars: `${connected.length}/${enrolled}`,
+          recent: buildTrayRecent(),
+        };
+        for (const sc of connected) {
+          void sidecarManager.dispatchRPC(sc.id, 'tray.status', payload).catch(() => {});
+        }
+      } catch {
+        /* best-effort heartbeat */
+      }
+    }, 4000);
+    trayStatusTimer.unref?.(); // the heartbeat must not keep the process alive
+
+    // Tray → brain: the "Pause Jarvis" toggle drives the emergency controller.
+    // ("Mute microphone" is mic control the sidecar owns locally, not here.)
+    sidecarManager.onEvent((_sidecarId, event) => {
+      if (event.event_type !== 'tray.set_pause') return;
+      const paused = (event.payload as { paused?: boolean } | undefined)?.paused === true;
+      if (paused) emergencyController.pause();
+      else emergencyController.resume();
+    });
+
+    // ── Outbound OS notifications (design: usejarvis-tray §01) ──
+    // The four reasons Jarvis interrupts: it needs your OK (approval), it
+    // finished (done), a machine dropped (sidecar), or an update is ready
+    // (update). Each is raised natively by the sidecar via notify.show; the
+    // user's choice returns as a notify.action event. Book 08 originally held
+    // Approve/Deny to ordinary actions and gave irreversible ones "Review in
+    // Jarvis" only; the founder opted to allow Approve/Deny on every approval
+    // notification (the impact still shows in the body's meta as a risk cue).
+    // All four reasons are wired: approval, done (an approved action finished),
+    // sidecar-offline, and update (a connecting sidecar below the recommended
+    // version — the compat verdict already on the ConnectedSidecar).
+    const notifyAll = (payload: Record<string, unknown>): void => {
+      for (const sc of sidecarManager.getConnectedSidecars()) {
+        void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
+      }
+    };
+
+    // New pending approvals → one notification each, deduped and recent-only so a
+    // sidecar reconnect doesn't blast the whole backlog. The same poll also
+    // catches approvals that just finished executing → the "done" notification.
+    const notifiedApprovalIds = new Set<string>();
+    const notifiedDoneIds = new Set<string>();
+    const approvalNotifyTimer = setInterval(() => {
+      try {
+        if (sidecarManager.getConnectedSidecars().length === 0) return;
+        for (const req of approvalManager.getPending()) {
+          if (notifiedApprovalIds.has(req.id)) continue;
+          notifiedApprovalIds.add(req.id);
+          if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
+          // Product call (founder): Approve/Deny on every approval notification,
+          // including irreversible ones — the review-only candor exception is
+          // dropped. The impact still rides along in `meta` ("destructive ·
+          // delete_data") so the toast reads the risk even when it's approvable.
+          const impact = impactFromCategory(req.action_category);
+          notifyAll({
+            id: req.id,
+            kind: 'approval',
+            title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
+            body: req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`,
+            meta: `${impact} · ${req.tool_name}`,
+            destructive: impact === 'destructive',
+            actions: [
+              { id: 'deny', label: 'Deny' },
+              { id: 'approve', label: 'Approve', primary: true },
+            ],
+          });
+        }
+        if (notifiedApprovalIds.size > 200) {
+          const pending = new Set(approvalManager.getPending().map((r) => r.id));
+          for (const id of notifiedApprovalIds) if (!pending.has(id)) notifiedApprovalIds.delete(id);
+        }
+
+        // Approved actions that finished → the "Task complete" (done) notification
+        // — the design's own example (the send_email you approved, sent). Scoped
+        // to executed approvals for now: a bounded, non-naggy source (you approved
+        // them); broader task-done hooks can feed the same path later. Ordered by
+        // creation, but approvals execute shortly after creation, so the recent
+        // window catches them.
+        const executed = approvalManager.getHistory({ status: 'executed', limit: 12 });
+        for (const req of executed) {
+          if (notifiedDoneIds.has(req.id)) continue;
+          notifiedDoneIds.add(req.id);
+          const doneAt = req.executed_at ?? req.decided_at ?? req.created_at;
+          if (Date.now() - doneAt > 60_000) continue; // skip the backlog
+          notifyAll({
+            id: `done:${req.id}`,
+            kind: 'done',
+            title: 'Task complete',
+            body: req.reason?.trim() || `${trayHumanizeTool(req.tool_name)} finished.`,
+            actions: [
+              { id: 'view', label: 'View', primary: true },
+              { id: 'dismiss', label: 'Dismiss' },
+            ],
+          });
+        }
+        if (notifiedDoneIds.size > 200) {
+          const recent = new Set(executed.map((r) => r.id));
+          for (const id of notifiedDoneIds) if (!recent.has(id)) notifiedDoneIds.delete(id);
+        }
+      } catch {
+        /* best-effort */
+      }
+    }, 3000);
+    approvalNotifyTimer.unref?.();
+
+    // A machine dropped → tell the other connected sidecars. Keep a name map so
+    // the body can say which machine (the sidecar object is gone by disconnect).
+    // On connect we also fire the "update" notification when the sidecar's
+    // version verdict is 'suggested' (below SIDECAR_RECOMMENDED_VERSION) — the
+    // honest, already-computed signal for the fourth reason. Sent only to that
+    // machine, deduped per (id, version) so a reconnect flap can't nag.
+    const sidecarNameById = new Map<string, string>();
+    const notifiedUpdateKeys = new Set<string>();
+    sidecarManager.onSidecarConnected((sc) => {
+      sidecarNameById.set(sc.id, sc.name);
+      if (sc.updateStatus === 'suggested') {
+        const key = `${sc.id}:${sc.version}`;
+        if (!notifiedUpdateKeys.has(key)) {
+          notifiedUpdateKeys.add(key);
+          void sidecarManager.dispatchRPC(sc.id, 'notify.show', {
+            id: `update:${sc.id}`,
+            kind: 'update',
+            title: 'Update Jarvis',
+            body: `This machine is on ${sc.version}; ${SIDECAR_RECOMMENDED_VERSION} is recommended.`,
+            destructive: false,
+            actions: [
+              { id: 'review', label: 'Open Jarvis', primary: true },
+              { id: 'later', label: 'Later' },
+            ],
+          }).catch(() => {});
+        }
+      }
+    });
+    // Offline toasts ride a grace timer (a quick reconnect cancels it) plus a
+    // per-machine cooldown, so a flapping connection can't nag every flap.
+    const offlineNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const offlineNotifiedAt = new Map<string, number>();
+    const OFFLINE_NOTIFY_GRACE_MS = 15_000;
+    const OFFLINE_NOTIFY_COOLDOWN_MS = 5 * 60_000;
+    sidecarManager.onSidecarConnected((sc) => {
+      const t = offlineNotifyTimers.get(sc.id);
+      if (t) {
+        clearTimeout(t);
+        offlineNotifyTimers.delete(sc.id);
+      }
+    });
+    sidecarManager.onSidecarDisconnected((id) => {
+      const name = sidecarNameById.get(id) ?? 'A machine';
+      sidecarNameById.delete(id);
+      if (offlineNotifyTimers.has(id)) return;
+      const last = offlineNotifiedAt.get(id) ?? 0;
+      if (Date.now() - last < OFFLINE_NOTIFY_COOLDOWN_MS) return;
+      const timer = setTimeout(() => {
+        offlineNotifyTimers.delete(id);
+        offlineNotifiedAt.set(id, Date.now());
+        notifyAll({
+          id: `sidecar:${id}`,
+          kind: 'sidecar',
+          title: 'Sidecar disconnected',
+          body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
+          destructive: false,
+          actions: [
+            { id: 'review', label: 'Open Jarvis', primary: true },
+            { id: 'dismiss', label: 'Dismiss' },
+          ],
+        });
+      }, OFFLINE_NOTIFY_GRACE_MS);
+      timer.unref?.();
+      offlineNotifyTimers.set(id, timer);
+    });
+
+    // The user's choice from a notification. Only the approval buttons act on the
+    // brain (Approve/Deny, mirroring the dashboard endpoint); 'review'/'dismiss'
+    // are handled sidecar-side (it opened the app) so there's nothing to do here.
+    sidecarManager.onEvent((_sidecarId, event) => {
+      if (event.event_type !== 'notify.action') return;
+      const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
+      if (p.kind === 'approval' && p.id && (p.action === 'approve' || p.action === 'deny')) {
+        const { id, action } = p;
+        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService })
+          .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
+      }
+    });
+
     // Wire authority engine into orchestrator
     const orchestrator = agentService.getOrchestrator();
     orchestrator.setAuthorityEngine(authorityEngine);
@@ -3407,29 +3828,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const request = approvalManager.findByShortId(shortId);
       if (!request) return `No pending approval found for ID ${shortId}`;
 
-      if (action === 'approve') {
-        const approved = approvalManager.approve(request.id, channel);
-        if (!approved) return 'Request already decided';
-        let reply: string;
-        if (approved.tool_name === 'request_approval' || approved.execution_mode === 'inline') {
-          // Intent-only and inline requests are executed by the blocked
-          // caller (request_approval tool / authority gate) once it sees
-          // the status flip — executing here would run the tool twice.
-          reply = 'Approved. The agent will continue and report back in chat.';
-        } else {
-          const result = await deferredExecutor.executeApproved(request.id);
-          reply = `Approved and executed. Result: ${result.slice(0, 200)}`;
-        }
-        const updated = approvalManager.getRequest(request.id);
-        if (updated) wsService.broadcastApprovalUpdate(updated);
-        return reply;
-      } else {
-        const denied = approvalManager.deny(request.id, channel);
-        if (!denied) return 'Request already decided';
-        deferredExecutor.recordDenial(denied);
-        wsService.broadcastApprovalUpdate(denied);
-        return `Denied: ${request.tool_name}`;
-      }
+      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
+      if (outcome.status === 'already_decided') return 'Request already decided';
+      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
+      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
+      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
+      return 'Approved. The agent will continue and report back in chat.';
     });
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
@@ -3843,6 +4247,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
+    channelService.setDeliveryFailureHandler(({ channel, attempts, error }) => {
+      // 'normal', not 'urgent': urgent notifications are echoed back to
+      // external channels, which would loop the failure into the channel
+      // that just failed. The dashboard is the fallback the user still has.
+      wsService.broadcastNotification(
+        `Could not deliver message to ${channel} after ${attempts} attempt(s): ${error}`,
+        'normal',
+      );
+    });
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
       // Skip for intent-only approvals — they have no deferred execution.
@@ -4229,30 +4642,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             });
         });
 
-        // Auto-launch overlay widget (non-blocking, best-effort)
-        if (jarvisConfig.awareness?.overlay_autolaunch !== false && jarvisConfig.browser?.local !== false) {
-          try {
-            const overlayUrl = `http://localhost:${config.port}/overlay`;
-            const browsers = ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
-            for (const browser of browsers) {
-              const which = Bun.spawnSync(['which', browser]);
-              if (which.exitCode === 0) {
-                Bun.spawn([
-                  browser,
-                  `--app=${overlayUrl}`,
-                  '--window-size=300,320',
-                  '--window-position=20,20',
-                  '--no-sandbox',
-                  '--disable-extensions',
-                  '--disable-gpu',
-                  `--user-data-dir=${path.join(config.dataDir, 'browser', 'overlay-profile')}`,
-                ], { stdout: 'ignore', stderr: 'ignore' });
-                console.log(`[Daemon] Awareness overlay launched (${browser})`);
-                break;
-              }
-            }
-          } catch (err) { console.warn('[Daemon] Awareness overlay failed (non-fatal):', err instanceof Error ? err.message : err); }
-        }
+        // (Removed) The old-dashboard awareness overlay widget used to
+        // auto-launch a Chromium window pointed at /overlay. It connected as a
+        // WebSocket client, which made the daemon's proactive TTS play THROUGH
+        // it — talking over the native pebble's realtime voice. The native
+        // pebble is the awareness surface now, so the overlay is gone.
       } catch (err) {
         console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without awareness

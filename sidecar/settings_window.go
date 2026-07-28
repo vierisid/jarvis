@@ -155,112 +155,121 @@ const settingsWindowHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  /* Force the sidecar's own light theme regardless of the OS appearance:
-     color-scheme: light keeps the engine from dark-rendering form controls /
-     scrollbars, and there is no prefers-color-scheme override. */
-  :root { color-scheme: light; }
+  /* Monochrome Lab (Brand Book III) — sidecar settings. Forced light;
+     row grammar from the room-13 settings design: label + consequence left,
+     control right, inside raised panels with the asymmetric corner. */
+  :root {
+    color-scheme: light;
+    --bg:#FAFBFC; --raise:#FFFFFF; --panel:#EFF2F5; --panel2:#F6F8FA;
+    --rule:#E2E7EC; --rule2:#EDF0F3; --rule-hi:#D2D9E0;
+    --ink:#13161A; --ink2:#535B63; --ink3:#677077; --faint:#9AA2AB;
+    --listen:#E63B2E; --listen-tx:#C2301F; --speak:#2D78FF;
+    --hold:#EAA40E; --ok:#2FA45E; --ok-tx:#1F7A43;
+    --sans:'Familjen Grotesk', system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:'Spline Sans Mono', ui-monospace, "Cascadia Code", Consolas, monospace;
+    --corner:14px 3px 14px 14px; --corner-sm:9px 2px 9px 9px; --ease:cubic-bezier(.2,.7,.2,1);
+    --sh-sm:0 1px 2px rgba(20,30,45,.06),0 1px 1px rgba(20,30,45,.04);
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-    background: #f5f2eb; color: #1a1a1a; padding: 22px; overflow-y: auto;
-  }
-  h1 { font-size: 18px; margin: 0 0 16px; }
-  h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
-    opacity: 0.6; margin: 22px 0 8px;
-  }
-  .card {
-    background: #fff; border: 1px solid #cbc3b2; border-radius: 10px;
-    padding: 14px 16px; margin-bottom: 2px;
-  }
-  .status { display: flex; align-items: center; gap: 10px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: #b9b3a6; flex: 0 0 auto; }
-  .dot.connected { background: #2fae57; }
-  .dot.connecting { background: #d2a23a; }
-  .dot.error { background: #c23a2a; }
-  .status-text { font-size: 14px; font-weight: 600; }
-  label.field { font-size: 12px; font-weight: 600; display: block; margin-bottom: 6px; }
-  textarea {
-    width: 100%; height: 84px; resize: none; padding: 9px 11px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
-    border: 1px solid #cbc3b2; border-radius: 8px; background: #fbf9f4; color: #1a1a1a; line-height: 1.4;
-  }
-  textarea:focus { outline: 2px solid #c23a2a; outline-offset: 1px; border-color: #c23a2a; }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
-  .msg { font-size: 12px; min-height: 16px; flex: 1; }
-  .msg.ok { color: #2fae57; }
-  .msg.err { color: #c23a2a; }
-  button {
-    appearance: none; border: 0; border-radius: 8px; padding: 9px 16px;
-    background: #c23a2a; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
-  }
-  button:hover { background: #a83120; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .pref { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
-  .pref + .pref { border-top: 1px solid rgba(128,128,128,0.18); margin-top: 6px; padding-top: 12px; }
-  .pref input { margin-top: 2px; width: 16px; height: 16px; flex: 0 0 auto; }
-  .pref .label { font-size: 14px; }
-  .pref .hint { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-  #prefMsg { font-size: 12px; min-height: 16px; margin-top: 6px; }
-  #prefMsg.err { color: #c23a2a; }
-  .idlerow { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; margin-top: 8px; border-top: 1px solid rgba(128,128,128,0.18); font-size: 14px; }
-  .idlerow .label { flex: 1; }
-  .idlerow input { width: 60px; padding: 5px 8px; border: 1px solid #cbc3b2; border-radius: 6px; background: #fff; color: #1a1a1a; font-size: 13px; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--ink); padding: 24px 22px 28px; overflow-y: auto; font-size: 13px; }
+  h1 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 3px; }
+  .sub { font-size: 12px; color: var(--ink3); margin: 0 0 18px; }
+  .sec { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); margin: 20px 4px 8px; }
+  .panel { background: var(--raise); border: 1px solid var(--rule); border-radius: var(--corner); box-shadow: var(--sh-sm); overflow: hidden; }
+  .panel.pad { padding: 14px 16px; }
+  /* row grammar */
+  .srow { display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-bottom: 1px solid var(--rule2); }
+  .srow:last-child { border-bottom: none; }
+  .sl7 { flex: 1; min-width: 0; }
+  .sl7 .a { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .sl7 .b { font-size: 11px; color: var(--ink3); margin-top: 3px; line-height: 1.5; }
+  .sv7 { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+  /* status dot with state-hue halo */
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; box-shadow: 0 0 0 3px color-mix(in srgb, var(--faint) 16%, transparent); }
+  .dot.connected { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .dot.connecting { background: var(--hold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hold) 20%, transparent); }
+  .dot.error { background: var(--listen); box-shadow: 0 0 0 3px color-mix(in srgb, var(--listen) 20%, transparent); }
+  .status-text { font-size: 13.5px; font-weight: 600; }
+  /* toggle switch */
+  .sw { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; cursor: pointer; }
+  .sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .sw .track { position: absolute; inset: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 999px; transition: background .16s var(--ease), border-color .16s; }
+  .sw .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--raise); box-shadow: var(--sh-sm); transition: transform .16s var(--ease); }
+  .sw input:checked + .track { background: var(--ink); border-color: var(--ink); }
+  .sw input:checked + .track::after { transform: translateX(16px); }
+  /* token field */
+  .field { font-size: 11px; font-weight: 600; color: var(--ink2); display: block; margin-bottom: 7px; }
+  textarea { width: 100%; height: 80px; resize: none; padding: 10px 12px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); outline: none; transition: border-color .12s, box-shadow .12s, background .12s; }
+  textarea::placeholder { color: var(--faint); }
+  textarea:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; }
+  .msg { font-size: 11.5px; min-height: 16px; flex: 1; color: var(--ink3); }
+  .msg.ok { color: var(--ok-tx); }
+  .msg.err { color: var(--listen-tx); }
+  /* buttons */
+  .sbtn { appearance: none; font-family: var(--sans); font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: var(--corner-sm); border: 1px solid var(--rule); color: var(--ink); background: var(--raise); cursor: pointer; transition: background .12s, border-color .12s; }
+  .sbtn:hover { background: var(--panel); border-color: var(--rule-hi); }
+  .sbtn.pri { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .sbtn.pri:hover { background: #272C33; }
+  .sbtn:disabled { opacity: .5; cursor: default; }
+  /* number input */
+  .num { width: 62px; padding: 6px 9px; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); font-family: var(--mono); font-size: 12px; outline: none; text-align: center; }
+  .num:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
+  .unit { font-size: 12px; color: var(--ink3); }
+  #prefMsg { font-size: 11.5px; min-height: 16px; padding: 2px 16px 12px; color: var(--ink3); }
+  #prefMsg.err { color: var(--listen-tx); }
 </style>
 </head>
 <body>
   <h1>Sidecar Settings</h1>
+  <p class="sub">Connection, enrollment, and how the pebble behaves on this machine.</p>
 
-  <h2>Connection</h2>
-  <div class="card">
-    <div class="status">
-      <span id="dot" class="dot"></span>
-      <span id="statusText" class="status-text">Checking…</span>
+  <div class="sec">Connection</div>
+  <div class="panel">
+    <div class="srow">
+      <div class="sl7"><div class="a">Brain connection</div><div class="b">Live status of this machine's link to Jarvis.</div></div>
+      <div class="sv7"><span id="dot" class="dot"></span><span id="statusText" class="status-text">Checking…</span></div>
     </div>
   </div>
 
-  <h2>Enrollment token</h2>
-  <div class="card">
+  <div class="sec">Enrollment token</div>
+  <div class="panel pad">
     <label class="field" for="tok">Paste a new token to re-point this machine</label>
-    <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false"></textarea>
+    <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs…" spellcheck="false"></textarea>
     <div class="row">
       <span id="tokMsg" class="msg"></span>
-      <button id="saveTok" onclick="doSaveToken()">Save token</button>
+      <button id="saveTok" class="sbtn pri" onclick="doSaveToken()">Save token</button>
     </div>
   </div>
 
-  <h2>General</h2>
-  <div class="card">
-    <label class="pref">
-      <input type="checkbox" id="start_at_startup" onchange="togglePref(this)">
-      <span><span class="label">Start at system startup</span>
-        <div class="hint">Launch the sidecar automatically when you log in.</div></span>
-    </label>
+  <div class="sec">General</div>
+  <div class="panel">
+    <div class="srow">
+      <div class="sl7"><div class="a">Start at system startup</div><div class="b">Launch the sidecar automatically when you log in.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="start_at_startup" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
   </div>
 
-  <h2>Style</h2>
-  <div class="card">
-    <label class="pref">
-      <input type="checkbox" id="ethereal_pebble" onchange="togglePref(this)">
-      <span><span class="label">Ethereal pebble</span>
-        <div class="hint">Fade the pebble out while it sits idle; it pops back in when Jarvis activates.</div></span>
-    </label>
-    <div class="idlerow" id="etherealIdleRow">
-      <span class="label">Fade out after</span>
-      <input type="number" id="ethereal_idle_seconds" min="1" max="3600" step="1" onchange="saveIdle(this)">
-      <span>seconds idle</span>
+  <div class="sec">Style</div>
+  <div class="panel">
+    <div class="srow">
+      <div class="sl7"><div class="a">Ethereal pebble</div><div class="b">Fade the pebble out while it sits idle; it pops back in when Jarvis activates.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="ethereal_pebble" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
+    <div class="srow" id="etherealIdleRow">
+      <div class="sl7"><div class="a">Fade out after</div></div>
+      <div class="sv7"><input class="num" type="number" id="ethereal_idle_seconds" min="1" max="3600" step="1" onchange="saveIdle(this)"><span class="unit">seconds idle</span></div>
     </div>
     <div id="prefMsg"></div>
   </div>
 
-  <h2>Privacy</h2>
-  <div class="card">
-    <label class="pref">
-      <input type="checkbox" id="telemetry_enabled" onchange="togglePref(this)">
-      <span><span class="label">Send anonymous usage metrics</span>
-        <div class="hint">A small anonymous ping (hashed machine id, version, OS, capabilities) at startup and hourly, so the project can measure usage. No personal data or screen content. On by default; turn off here anytime.</div></span>
-    </label>
+  <div class="sec">Privacy</div>
+  <div class="panel">
+    <div class="srow">
+      <div class="sl7"><div class="a">Send anonymous usage metrics</div><div class="b">A small anonymous ping (hashed machine id, version, OS, capabilities) at startup and hourly, so the project can measure usage. No personal data or screen content. On by default; turn off here anytime.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="telemetry_enabled" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
   </div>
 
 <script>

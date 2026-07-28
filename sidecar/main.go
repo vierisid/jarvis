@@ -12,6 +12,13 @@ import (
 )
 
 func main() {
+	// A notification button was clicked: the OS launched us with a jarvis:// URI.
+	// Forward the action to the already-running sidecar and exit before any heavy
+	// init (so we never boot a second instance that would grab the mic / tray).
+	if maybeForwardProtocolLaunch() {
+		return
+	}
+
 	token := flag.String("token", "", "JWT enrollment token from the brain")
 	help := flag.Bool("help", false, "Show help")
 	showVersion := flag.Bool("version", false, "Print the sidecar version and exit")
@@ -42,6 +49,10 @@ Usage:
 	// Route logs to ~/.jarvis/sidecar.log so the GUI-subsystem Windows build runs
 	// without a console window (and so there's a log to inspect anywhere).
 	setupLogging()
+
+	// Register the AUMID + jarvis:// URI scheme notifications need (Windows-only;
+	// no-op elsewhere). Idempotent, cheap, safe to run every launch.
+	setupNotifications()
 
 	// When relaunched by an in-app restart (settings token change), wait briefly
 	// for the previous instance to exit and release the mic / hotkeys / tray icon

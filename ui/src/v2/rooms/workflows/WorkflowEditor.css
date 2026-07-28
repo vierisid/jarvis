@@ -1982,3 +1982,104 @@
   cursor: pointer;
 }
 .wf-flow-ref__clear:hover { color: var(--accent); }
+
+/* ═══════════════════ Brand Book III / Monochrome Lab ═══════════════════
+   Re-skin of the full-surface editor (design room 01 §02–05): the canvas
+   nodes get the asymmetric drop corner and the raised surface, selection
+   is ink (not danger-red), the run overlay pips carry the real state hues
+   (running is blue), and the amber #fbbf24 leak is remapped to --hold. */
+.wf-editor {
+  --accent-warn: var(--hold);
+  /* The full-surface editor covers the whole surface. The old shell reserved
+     a persistent 260px right voice rail (--v2-rail-width); the room-centric
+     shell has none (the pebble/Talk is a docked toggle that floats on top),
+     so the reserved gap just exposed the room list behind the editor. */
+  right: 0;
+}
+
+/* — Canvas node (design .wfnode) — */
+.wf-node {
+  border-radius: 11px 3px 11px 11px;
+  background: var(--raise);
+  border-color: var(--rule);
+  box-shadow: var(--sh-md);
+}
+.wf-node:hover { border-color: var(--ink-3); }
+.wf-node--selected {
+  border-color: var(--ink);
+  box-shadow: var(--sh-lg), 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.wf-node--unconfigured,
+.wf-node--orphan { border-style: dashed; border-color: var(--rule2); }
+.wf-node--unconfigured .wf-node__body,
+.wf-node--orphan .wf-node__body { color: var(--hold-tx); }
+.wf-node--nested { background: var(--panel); border-style: dashed; border-color: var(--rule2); }
+.wf-node__name { font-weight: 700; letter-spacing: -0.01em; }
+.wf-node__piece--missing { color: var(--hold-tx); }
+.wf-node__branch-label {
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+}
+
+/* run overlay pips — the state hues; running breathes blue, not amber */
+.wf-node__run-pip--succeeded { background: var(--ok); }
+.wf-node__run-pip--running {
+  background: var(--speak);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--speak) 26%, transparent);
+}
+.wf-node__run-pip--paused { background: var(--hold); }
+.wf-node__run-pip--failed { background: var(--listen); }
+.wf-node__run-pip--skipped,
+.wf-node__run-pip--not-reached { background: var(--ink-3); }
+
+/* edges + handles (design .edges / .hl/.hr) */
+.react-flow__edge-path { stroke: var(--rule); stroke-width: 1.5; }
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path { stroke: var(--ink-2); }
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: var(--bg);
+  border: 1.5px solid var(--rule2);
+}
+.react-flow__handle-connecting,
+.react-flow__handle-valid { border-color: var(--speak); }
+
+/* zoom / controls (design .zoomctl) */
+.react-flow__controls {
+  border-radius: 8px 2px 8px 8px;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  background: var(--raise);
+  box-shadow: var(--sh-sm);
+}
+.react-flow__controls-button {
+  background: var(--raise);
+  border-bottom: 1px solid var(--rule2);
+  color: var(--ink-2);
+}
+.react-flow__controls-button:hover { background: var(--panel); }
+.react-flow__controls-button svg { fill: var(--ink-2); }
+
+/* editor chrome, panels, picker, menus — drop corners */
+.wf-editor__title-text { font-weight: 700; letter-spacing: -0.01em; }
+.wf-editor__runs-panel,
+.wf-canvas-menu,
+.wf-var-picker { border-radius: var(--corner); }
+.wf-editor__run,
+.wf-chip,
+.wf-chip-field { border-radius: var(--corner-sm); }
+.wf-canvas-menu__item--destructive { color: var(--listen-tx); }
+.wf-props__field-label--missing { color: var(--hold-tx); }
+
+/* running banner → blue (design .runban), the dominant in-flight state */
+.wf-editor__running-banner--warn {
+  background: color-mix(in srgb, var(--speak) 8%, var(--panel));
+  border-bottom-color: color-mix(in srgb, var(--speak) 30%, var(--rule));
+}
+
+/* focus → blue, not the danger-red accent */
+.wf-editor :focus-visible,
+.react-flow :focus-visible { outline-color: var(--speak); }

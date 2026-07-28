@@ -1,6 +1,6 @@
 /**
  * Approval Delivery — Pushes approval requests to the user through
- * appropriate channels (WebSocket always, Telegram/Discord if urgent).
+ * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
 import type { ApprovalRequest } from './approval.ts';
@@ -32,8 +32,9 @@ export class ApprovalDelivery {
     // Always push to dashboard via WebSocket
     this.broadcaster?.broadcastApprovalRequest(request);
 
-    // If urgent, also push to Telegram/Discord
-    if (request.urgency === 'urgent' && this.channelSender) {
+    // Always push to Telegram/Discord so users can approve/deny directly
+    // from messaging channels without opening the dashboard.
+    if (this.channelSender) {
       const message = this.formatApprovalMessage(request);
       try {
         await this.channelSender.broadcastToAll(message);

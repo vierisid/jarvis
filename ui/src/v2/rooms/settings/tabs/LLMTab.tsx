@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
+import { confirmDialog } from "../../../ui/ConfirmDialog";
 import { Icon } from "../../../ui";
 import {
   KEY_BASED_KINDS,
@@ -20,10 +21,11 @@ import {
  */
 const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   anthropic: [
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
     "claude-opus-4-7",
-    "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5-20251001",
   ],
   openai: [
@@ -406,7 +408,7 @@ function ProviderRow({
               className="v2-set__btn v2-set__btn--danger"
               style={{ marginLeft: "auto" }}
               onClick={async () => {
-                if (!confirm(`Remove provider '${name}'? This deletes the stored API key.`)) return;
+                if (!await confirmDialog(`Remove provider '${name}'? This deletes the stored API key.`)) return;
                 const r = await data.removeProvider(name);
                 onToast(r.message, r.ok ? "ok" : "warn");
               }}

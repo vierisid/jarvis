@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   ArrowLeft,
   Box,
@@ -33,13 +34,16 @@ import { SiteTopBar } from "../../../components/sites/SiteTopBar";
 import { SiteLeftPanel } from "../../../components/sites/SiteLeftPanel";
 import { SiteRightPanel } from "../../../components/sites/SiteRightPanel";
 import { SiteNewProjectModal } from "../../../components/sites/SiteNewProjectModal";
+import { StatusChip, type Tone } from "../../ui/roomkit";
 import "./WorkspacesRoom.css";
 
-const STATUS_TONE: Record<ProjectStatus, "ok" | "neutral" | "warn" | "accent"> = {
-  stopped: "neutral",
-  starting: "warn",
+// Status remap (workspaces §01): starting → blue (in-motion), not amber
+// (amber is reserved for "needs you"); stopped neutral, running green, error red.
+const STATUS_TONE: Record<ProjectStatus, Tone> = {
+  stopped: "mut",
+  starting: "run",
   running: "ok",
-  error: "accent",
+  error: "fail",
 };
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -254,9 +258,8 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
           </button>
           <div className="v2-ws__detail-title">
             <span className="v2-ws__project-name">{activeProject.name}</span>
-            <Chip tone={STATUS_TONE[activeProject.status]} dot>
-              {STATUS_LABEL[activeProject.status]}
-            </Chip>
+            <StatusChip tone={STATUS_TONE[activeProject.status]} dot>
+              {STATUS_LABEL[activeProject.status]}</StatusChip>
             {activeProject.gitBranch && (
               <span className="v2-ws__branch">
                 <Icon icon={GitBranch} size="sm" />
@@ -405,7 +408,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
                   setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
                 }}
                 onDelete={async () => {
-                  if (!confirm(`Delete "${p.name}"? Cannot be undone.`)) return;
+                  if (!await confirmDialog(`Delete "${p.name}"? Cannot be undone.`)) return;
                   const r = await data.deleteProject(p.id);
                   setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
                 }}
@@ -495,9 +498,8 @@ function ProjectCard({
           </button>
           <div className="v2-ws__card-meta">
             <span className="v2-ws__framework">{project.framework}</span>
-            <Chip tone={STATUS_TONE[project.status]} dot>
-              {STATUS_LABEL[project.status]}
-            </Chip>
+            <StatusChip tone={STATUS_TONE[project.status]} dot>
+              {STATUS_LABEL[project.status]}</StatusChip>
           </div>
         </div>
       </div>

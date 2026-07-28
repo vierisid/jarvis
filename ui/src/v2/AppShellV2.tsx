@@ -1,6 +1,8 @@
 import React, { useEffect } from "react";
 import { useV2Route } from "./router";
 import { AppShell } from "./shell/AppShell";
+import { BootSplash } from "./shell/BootSplash";
+import { ConfirmHost } from "./ui/ConfirmDialog";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomActionBus";
@@ -8,6 +10,9 @@ import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
 import { PalettePage } from "./pages/PalettePage";
+import { KitShowcase } from "./pages/KitShowcase";
+import { SystemStatesShowcase } from "./pages/SystemStatesShowcase";
+import { BillingShowcase } from "./pages/BillingShowcase";
 import { TaskResultRoom } from "./rooms/taskResult/TaskResultRoom";
 import { AnswerRoom } from "./rooms/answer/AnswerRoom";
 import "./v2.css";
@@ -51,6 +56,7 @@ export function AppShellV2() {
     const Body = getRoomBody(route.key);
     return (
       <div className="jarvis-v2-root jarvis-v2-panel-mode">
+        <ConfirmHost />
         <RoomActionBusProvider>
           <PanelRoomActionBridge />
           <Body mode="expanded" />
@@ -93,18 +99,55 @@ export function AppShellV2() {
     );
   }
 
+  // Kit showcase — the Phase 3 room-kit gallery (#/_kit). Standalone, no
+  // shell chrome, so the primitives can be QA'd in isolation in both themes.
+  if (route.kind === "kit") {
+    return (
+      <div className="jarvis-v2-root">
+        <KitShowcase />
+      </div>
+    );
+  }
+
+  // System-states gallery (#/_states) — the six states framed in both themes.
+  if (route.kind === "states") {
+    return (
+      <div className="jarvis-v2-root">
+        <SystemStatesShowcase />
+      </div>
+    );
+  }
+
+  // Billing-states gallery (#/_billing) — plan card + banners + change-plan modal.
+  if (route.kind === "billing") {
+    return (
+      <div className="jarvis-v2-root">
+        <BillingShowcase />
+      </div>
+    );
+  }
+
   return (
     <div className="jarvis-v2-root">
       {/* Panel mode body sits above this guard. */}
       {route.kind === "primitives" ? (
         <PrimitivesPage />
       ) : (
-        <OnboardingGate>
-          <RoomActionBusProvider>
-            <AppShell />
-            {route.kind === "room" && <RoomDispatcher roomKey={route.key} />}
-          </RoomActionBusProvider>
-        </OnboardingGate>
+        <>
+          {/* Cold-start splash — overlays the booting app until the gate
+              resolves (dispatches jarvis:boot-ready), then cross-fades away. */}
+          <BootSplash />
+          {/* Branded confirm dialogs (replaces native confirm()). */}
+          <ConfirmHost />
+          <OnboardingGate>
+            <RoomActionBusProvider>
+              {/* Phase 2 — room-centric shell. The AppShell renders the active
+                  room inside its surface (persistent Index + top bar around it),
+                  so rooms no longer overlay the home as a separate layer. */}
+              <AppShell />
+            </RoomActionBusProvider>
+          </OnboardingGate>
+        </>
       )}
     </div>
   );

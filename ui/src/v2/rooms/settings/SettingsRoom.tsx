@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   AlertCircle,
   Bot,
   Cable,
   Cog,
+  CreditCard,
   MessagesSquare,
   Mic,
   Server,
@@ -26,6 +28,7 @@ import { ChannelsTab } from "./tabs/ChannelsTab";
 import { VoiceTab } from "./tabs/VoiceTab";
 import { IntegrationsTab } from "./tabs/IntegrationsTab";
 import { SidecarTab } from "./tabs/SidecarTab";
+import { BillingTab } from "./tabs/BillingTab";
 import "./SettingsRoom.css";
 
 export type SettingsTab =
@@ -35,6 +38,7 @@ export type SettingsTab =
   | "channels"
   | "voice"
   | "integrations"
+  | "billing"
   | "sidecar";
 
 const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> = [
@@ -44,6 +48,7 @@ const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }>
   { key: "channels", label: "Channels", icon: MessagesSquare },
   { key: "voice", label: "Voice", icon: Mic },
   { key: "integrations", label: "Integrations", icon: Cable },
+  { key: "billing", label: "Billing", icon: CreditCard },
   { key: "sidecar", label: "Sidecar", icon: Server },
 ];
 
@@ -334,7 +339,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             type="button"
             className="v2-set__banner-btn"
             onClick={async () => {
-              if (!confirm("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
+              if (!await confirmDialog("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
               const r = await data.restartDaemon();
               showToast(r.message, r.ok ? "ok" : "warn");
             }}
@@ -386,6 +391,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             {tab === "channels" && <ChannelsTab data={data} onToast={showToast} />}
             {tab === "voice" && <VoiceTab data={data} onToast={showToast} />}
             {tab === "integrations" && <IntegrationsTab data={data} onToast={showToast} />}
+            {tab === "billing" && <BillingTab data={data} onToast={showToast} />}
             {tab === "sidecar" && <SidecarTab data={data} onToast={showToast} />}
           </>
         )}

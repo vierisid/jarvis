@@ -21,6 +21,7 @@ export class EventScheduler {
   private sidecarIds: string[] = [];
   private roundRobinIndex = 0;
   private handlers = new Map<string, EventHandler[]>();
+  private directTypes = new Set<string>();
   private running = false;
   private processing = false;
   private drainTimer: Timer | null = null;
@@ -37,8 +38,39 @@ export class EventScheduler {
     this.handlers.set(eventType, existing);
   }
 
+  /**
+   * Mark event types that bypass the round-robin queue and dispatch
+   * synchronously on enqueue, in receive order. The queue drains only one
+   * event per ~50 ms tick — fine for discrete events, but it would back up a
+   * high-rate stream (e.g. realtime mic audio at ~25 frames/s) into seconds of
+   * latency. Direct types skip the queue entirely so they stay real-time and
+   * in order.
+   */
+  setDirectTypes(types: string[]): void {
+    for (const t of types) this.directTypes.add(t);
+  }
+
   /** Enqueue an event from a sidecar */
   enqueue(sidecarId: string, event: SidecarEvent, priority?: EventPriority): void {
+    if (this.directTypes.has(event.event_type)) {
+      // Bypass the queue: dispatch now, in receive order, zero added latency.
+      const handlers = this.handlers.get(event.event_type) ?? [];
+      const wildcardHandlers = this.handlers.get('*') ?? [];
+      for (const handler of [...handlers, ...wildcardHandlers]) {
+        // Handler starts synchronously (receive order); Promise.resolve routes
+        // async rejections into the same log — a bare try/catch around a
+        // void'ed call only sees synchronous throws.
+        try {
+          Promise.resolve(handler(sidecarId, event)).catch((err) => {
+            console.error(`[EventScheduler] Direct handler error for ${event.event_type}:`, err);
+          });
+        } catch (err) {
+          console.error(`[EventScheduler] Direct handler error for ${event.event_type}:`, err);
+        }
+      }
+      return;
+    }
+
     let queue = this.queues.get(sidecarId);
     if (!queue) {
       queue = [];

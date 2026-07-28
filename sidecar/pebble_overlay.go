@@ -23,6 +23,9 @@ const (
 	PebbleThinking  PebbleState = "thinking"
 	PebbleSpeaking  PebbleState = "speaking"
 	PebbleWorking   PebbleState = "working"
+	PebbleAsking    PebbleState = "asking" // amber — waiting on your approval/authority
+	PebbleDone      PebbleState = "done"   // green flash — job landed
+	PebbleMuted     PebbleState = "muted"  // mic muted — quiet, no chroma
 )
 
 // PebbleSpec configures the overlay at spawn time.

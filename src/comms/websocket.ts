@@ -225,7 +225,7 @@ export class WebSocketServer {
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
     const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port }) as { port: number };
-    this.server = Bun.serve<{ sidecar_id?: string; proxy_target?: string; _proxyUpstream?: WebSocket }>({
+    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; _proxyUpstream?: WebSocket }>({
       ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
@@ -248,7 +248,12 @@ export class WebSocketServer {
             return new Response('Invalid or revoked token', { status: 403 });
           }
 
-          const success = server.upgrade(req, { data: { sidecar_id: claims.sid } });
+          // A `?channel=audio` connection is the pebble's dedicated realtime
+          // audio pipe — isolated from this sidecar's bulk RPC/screenshot
+          // connection so a 2.4 MB capture can't queue in front of audio frames.
+          // Same JWT, so it's attributable to the same sidecar (claims.sid).
+          const channel = url.searchParams.get('channel') === 'audio' ? 'audio' : undefined;
+          const success = server.upgrade(req, { data: { sidecar_id: claims.sid, channel } });
           if (success) return undefined;
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
@@ -530,6 +535,12 @@ export class WebSocketServer {
 
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
+            // Dedicated realtime audio channel — register it, don't treat it as
+            // a second control connection.
+            if ((ws.data as any)?.channel === 'audio') {
+              self.sidecarManager.registerAudioChannel(sidecarId, ws);
+              return;
+            }
             self.sidecarManager.handleSidecarConnect(ws, sidecarId);
             return;
           }
@@ -551,6 +562,12 @@ export class WebSocketServer {
 
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
+            // Audio channel: binary frames are mic PCM; route them to the
+            // realtime session (text frames, if any, are control — ignored here).
+            if ((ws.data as any)?.channel === 'audio') {
+              if (message instanceof Buffer) self.sidecarManager.handleAudioFrame(sidecarId, message);
+              return;
+            }
             self.sidecarManager.handleSidecarMessage(ws, message);
             return;
           }
@@ -608,6 +625,12 @@ export class WebSocketServer {
 
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
+            // Audio channel closing must NOT tear down the control connection —
+            // just deregister the pipe.
+            if ((ws.data as any)?.channel === 'audio') {
+              self.sidecarManager.unregisterAudioChannel(sidecarId, ws);
+              return;
+            }
             self.sidecarManager.handleSidecarDisconnect(sidecarId);
             return;
           }

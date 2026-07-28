@@ -25,13 +25,22 @@ package main
 #include <math.h>
 #include <stdlib.h>
 
-// Riso colours.
-static const double kPaperR = 245.0/255.0, kPaperG = 242.0/255.0, kPaperB = 235.0/255.0;
-static const double kInkR   = 26.0/255.0,  kInkG   = 26.0/255.0,  kInkB   = 26.0/255.0;
-static const double kInk3R  = 106.0/255.0, kInk3G  = 103.0/255.0, kInk3B  = 96.0/255.0;
-static const double kRuleR  = 203.0/255.0, kRuleG  = 195.0/255.0, kRuleB = 178.0/255.0;
-static const double kAccR   = 194.0/255.0, kAccG   = 58.0/255.0,  kAccB   = 42.0/255.0;
-static const double kWarmR  = 138.0/255.0, kWarmG  = 106.0/255.0, kWarmB  = 31.0/255.0;
+// Monochrome Lab (Brand Book III) — mirrors pebble_draw_windows.go / pebble.css.
+// The pebble is the glass "drop": translucent white body + colored radial core
+// + soft glow + hairline. The state hues are the only chroma.
+static const double kInkR   = 0x13/255.0, kInkG   = 0x16/255.0, kInkB   = 0x1A/255.0; // --ink
+static const double kInk3R  = 0x67/255.0, kInk3G  = 0x70/255.0, kInk3B  = 0x77/255.0; // --ink3
+static const double kRuleR  = 0xE2/255.0, kRuleG  = 0xE7/255.0, kRuleB  = 0xEC/255.0; // --rule
+static const double kPaperR = 1.0,        kPaperG = 1.0,        kPaperB = 1.0;        // --raise
+static const double kFaintR = 0x9A/255.0, kFaintG = 0xA2/255.0, kFaintB = 0xAB/255.0; // --faint
+static const double kListenR = 0xE6/255.0, kListenG = 0x3B/255.0, kListenB = 0x2E/255.0; // --listen
+static const double kSpeakR  = 0x2D/255.0, kSpeakG  = 0x78/255.0, kSpeakB  = 0xFF/255.0; // --speak
+static const double kHoldR   = 0xEA/255.0, kHoldG   = 0xA4/255.0, kHoldB   = 0x0E/255.0; // --hold
+static const double kOkR     = 0x2F/255.0, kOkG     = 0xA4/255.0, kOkB     = 0x5E/255.0; // --ok
+// The awareness eye glyph reuses the brand red (was riso vermilion).
+static const double kAccR = 0xE6/255.0, kAccG = 0x3B/255.0, kAccB = 0x2E/255.0;
+// Drop geometry — matches pebbleDiscR / pebbleSharpR on Windows.
+static const double kDropR = 13.0, kSharpR = 5.0;
 
 static const int kWindowW = 360;
 static const int kWindowH = 220;
@@ -55,66 +64,6 @@ static int gAnswerOverflow = 0;
 // this module — replaced with g_free + g_strdup. NULL means use the
 // per-state placeholder.
 static gchar* gPebbleBodyText = NULL;
-
-static void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x+w-r, y+r,   r, -M_PI/2, 0);
-    cairo_arc(cr, x+w-r, y+h-r, r, 0, M_PI/2);
-    cairo_arc(cr, x+r,   y+h-r, r, M_PI/2, M_PI);
-    cairo_arc(cr, x+r,   y+r,   r, M_PI, 3*M_PI/2);
-    cairo_close_path(cr);
-}
-
-static void draw_text_layout(cairo_t* cr, double x, double y, const char* text,
-                              const char* font_desc, double r, double g, double b) {
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    pango_layout_set_text(layout, text, -1);
-    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-    cairo_set_source_rgba(cr, r, g, b, 1.0);
-    cairo_move_to(cr, x, y);
-    pango_cairo_show_layout(cr, layout);
-    g_object_unref(layout);
-}
-
-// draw_text_wrapped renders multi-line body copy inside (x,y,w,h). Pango
-// handles word wrapping. Used for the bubble body where transcripts can
-// overflow a single line.
-static void draw_text_wrapped(cairo_t* cr, double x, double y, double w, double h,
-                              const char* text, const char* font_desc,
-                              double r, double g, double b) {
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    pango_layout_set_text(layout, text, -1);
-    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-    pango_layout_set_width(layout, (int)(w * PANGO_SCALE));
-    pango_layout_set_height(layout, (int)(h * PANGO_SCALE));
-    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
-    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-    cairo_set_source_rgba(cr, r, g, b, 1.0);
-    cairo_move_to(cr, x, y);
-    pango_cairo_show_layout(cr, layout);
-    g_object_unref(layout);
-}
-
-// measure_text_height returns the wrapped height (px) the body text needs
-// at the given inner width + font. Mirrors Win32 DT_CALCRECT / Cocoa
-// boundingRectWithSize so the bubble can auto-fit identically across OSes.
-static int measure_text_height(cairo_t* cr, double w, const char* text, const char* font_desc) {
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    pango_layout_set_text(layout, text, -1);
-    PangoFontDescription* desc = pango_font_description_from_string(font_desc);
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-    pango_layout_set_width(layout, (int)(w * PANGO_SCALE));
-    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
-    int pw = 0, ph = 0;
-    pango_layout_get_pixel_size(layout, &pw, &ph);
-    g_object_unref(layout);
-    return ph;
-}
 
 // draw_eye_glyph paints the awareness eye (§5.3): a lens outline + iris dot that
 // pulses while awareness fires, muted + struck-through when blinded. Mirrors the
@@ -152,26 +101,133 @@ static void draw_eye_glyph(cairo_t* cr) {
     }
 }
 
-// draw_answer_button paints the "open full ↗" overflow button at the bubble's
-// bottom-right (§5.3). by1 is the auto-fitted bubble bottom; speaking picks the
-// light-on-dark tint. Mirrors the Windows drawAnswerOverflowButton geometry.
-static void draw_answer_button(cairo_t* cr, double by1, gboolean speaking) {
-    const double btnW = 108, btnH = 22, insetR = 10, insetB = 8;
-    const double kBubbleX1 = 340;
-    double bxL = kBubbleX1 - insetR - btnW;
-    double byTop = by1 - insetB - btnH;
-    double tr = speaking ? kPaperR : kAccR;
-    double tg = speaking ? kPaperG : kAccG;
-    double tb = speaking ? kPaperB : kAccB;
+// ── Monochrome Lab glass drop (Cairo; mirrors pebble_draw_windows.go drawDrop) ───────
 
-    rounded_rect(cr, bxL, byTop, btnW, btnH, 5.0);
-    cairo_set_source_rgba(cr, tr, tg, tb, speaking ? 32/255.0 : 36/255.0);
+// c_breathe returns a 0..1 sine over `frames` at 60fps, for state pulses.
+static double c_breathe(int frames) {
+    if (frames <= 0) return 1.0;
+    double ph = (double)(gFrameTick % (unsigned long long)frames) / (double)frames;
+    return 0.5 + 0.5 * sin(ph * 2 * M_PI);
+}
+
+// drop_path adds the brand "drop" to cr's path: a rounded square with three 50%
+// corners + one sharp corner, rotated 45° (built under a rotated CTM, which is
+// baked into the device-space path, then restored).
+static void drop_path(cairo_t* cr, double cx, double cy, double r, double sharpR) {
+    cairo_save(cr);
+    cairo_translate(cr, cx, cy);
+    cairo_rotate(cr, M_PI / 4.0);
+    double x = -r, y = -r, w = 2*r, h = 2*r;
+    double rTR = r, rBR = r, rBL = sharpR, rTL = r;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x+w-rTR, y+rTR,   rTR, -M_PI/2, 0);      // top-right
+    cairo_arc(cr, x+w-rBR, y+h-rBR, rBR, 0, M_PI/2);        // bottom-right
+    cairo_arc(cr, x+rBL,   y+h-rBL, rBL, M_PI/2, M_PI);     // bottom-left (sharp)
+    cairo_arc(cr, x+rTL,   y+rTL,   rTL, M_PI, 3*M_PI/2);   // top-left
+    cairo_close_path(cr);
+    cairo_restore(cr);
+}
+
+// radial_fill fills the current target (or clip) with a soft radial gradient
+// (innerA at centre → 0 at rad), eased with a mid stop to mimic the Windows t*t.
+static void radial_fill(cairo_t* cr, double cx, double cy, double rad,
+                        double innerA, double rr, double gg, double bb) {
+    if (innerA <= 0 || rad <= 0) return;
+    cairo_pattern_t* pat = cairo_pattern_create_radial(cx, cy, 0, cx, cy, rad);
+    cairo_pattern_add_color_stop_rgba(pat, 0.0, rr, gg, bb, innerA);
+    cairo_pattern_add_color_stop_rgba(pat, 0.5, rr, gg, bb, innerA * 0.25);
+    cairo_pattern_add_color_stop_rgba(pat, 1.0, rr, gg, bb, 0.0);
+    cairo_set_source(cr, pat);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pat);
+}
+
+// draw_drop_cairo paints the glass drop: soft glow, neutral shadow, translucent
+// white glass body, a colored radial core clipped to the drop, a top-left inner
+// shine, and a hairline. coreAlpha / glowAlpha are 0..1.
+static void draw_drop_cairo(cairo_t* cr, double cx, double cy,
+                            double dr, double dg, double db,
+                            double coreAlpha, double glowAlpha) {
+    // 1) outer glow.
+    if (glowAlpha > 0) radial_fill(cr, cx, cy + 1, kDropR * 2.1, glowAlpha * 150.0/255.0, dr, dg, db);
+    // 2) drop shadow.
+    drop_path(cr, cx, cy + 2, kDropR, kSharpR);
+    cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 40.0/255.0);
     cairo_fill(cr);
-    rounded_rect(cr, bxL, byTop, btnW, btnH, 5.0);
-    cairo_set_source_rgba(cr, tr, tg, tb, speaking ? 200/255.0 : 220/255.0);
+    // 3) glass body.
+    drop_path(cr, cx, cy, kDropR, kSharpR);
+    cairo_set_source_rgba(cr, 1, 1, 1, 120.0/255.0);
+    cairo_fill(cr);
+    // 4) colored core — radial, clipped to the drop.
+    if (coreAlpha > 0) {
+        cairo_save(cr);
+        drop_path(cr, cx, cy, kDropR, kSharpR);
+        cairo_clip(cr);
+        radial_fill(cr, cx, cy, kDropR * 1.05, coreAlpha, dr, dg, db);
+        cairo_restore(cr);
+    }
+    // 5) inner shine — top-left highlight, clipped to the drop.
+    cairo_save(cr);
+    drop_path(cr, cx, cy, kDropR, kSharpR);
+    cairo_clip(cr);
+    radial_fill(cr, cx - kDropR*0.32, cy - kDropR*0.34, kDropR*0.7, 150.0/255.0, 1, 1, 1);
+    cairo_restore(cr);
+    // 6) hairline border.
+    drop_path(cr, cx, cy, kDropR, kSharpR);
+    cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 90.0/255.0);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
-    draw_text_layout(cr, bxL + 12, byTop + 4, "open full ↗", "Inter Tight 9", tr, tg, tb);
+}
+
+// draw_pebble_state paints one state's drop (no eye) at the anchor. Factored
+// so the offscreen harness can reuse it; reads gFrameTick for the phase.
+static void draw_pebble_state(cairo_t* cr, int state) {
+    double cx = kAnchorX, cy = kAnchorY;
+    switch (state) {
+    case 1: // listening — red drop, no bubble.
+        draw_drop_cairo(cr, cx, cy, kListenR, kListenG, kListenB, 0.55 + 0.45*c_breathe(84), 0.5);
+        break;
+    case 3: // speaking — blue drop, no transcript.
+        draw_drop_cairo(cr, cx, cy, kSpeakR, kSpeakG, kSpeakB, 0.6 + 0.4*c_breathe(96), 0.5);
+        break;
+    case 2: { // thinking — clear glass + orbiting white dot.
+        draw_drop_cairo(cr, cx, cy, kInk3R, kInk3G, kInk3B, 0.16, 0);
+        double ang = ((double)(gFrameTick % 84) / 84.0) * 2 * M_PI;
+        double ox = cx + cos(ang)*kDropR*0.62, oy = cy + sin(ang)*kDropR*0.62;
+        cairo_set_source_rgba(cr, 1, 1, 1, 235.0/255.0);
+        cairo_arc(cr, ox, oy, 2.0, 0, 2*M_PI);
+        cairo_fill(cr);
+        break;
+    }
+    case 4: // working — steady blue.
+        draw_drop_cairo(cr, cx, cy, kSpeakR, kSpeakG, kSpeakB, 0.45 + 0.35*c_breathe(144), 0.35);
+        break;
+    case 5: { // asking — amber + expanding ring.
+        draw_drop_cairo(cr, cx, cy, kHoldR, kHoldG, kHoldB, 0.55 + 0.35*c_breathe(120), 0.4);
+        double ph = (double)(gFrameTick % 120) / 120.0;
+        double ringR = kDropR + ph*9.0;
+        cairo_set_source_rgba(cr, kHoldR, kHoldG, kHoldB, (1.0 - ph) * 120.0/255.0);
+        cairo_set_line_width(cr, 1.2);
+        cairo_arc(cr, cx, cy, ringR, 0, 2*M_PI);
+        cairo_stroke(cr);
+        break;
+    }
+    case 6: // done — green flash.
+        draw_drop_cairo(cr, cx, cy, kOkR, kOkG, kOkB, 0.9, 0.55);
+        break;
+    case 7: { // muted — gray glass + diagonal slash.
+        draw_drop_cairo(cr, cx, cy, kFaintR, kFaintG, kFaintB, 0.22, 0);
+        cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, 210.0/255.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, cx - kDropR*0.6, cy + kDropR*0.6);
+        cairo_line_to(cr, cx + kDropR*0.6, cy - kDropR*0.6);
+        cairo_stroke(cr);
+        break;
+    }
+    default: // idle — faint neutral breath.
+        draw_drop_cairo(cr, cx, cy, kInk3R, kInk3G, kInk3B, 0.18 + 0.16*c_breathe(240), 0);
+        break;
+    }
 }
 
 static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
@@ -181,176 +237,11 @@ static gboolean draw_pebble(GtkWidget* widget, cairo_t* cr, gpointer data) {
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    double cx = kAnchorX, cy = kAnchorY;
-    double phase4s     = (double)(gFrameTick % 240) / 240.0;
-    double phaseListen = (double)(gFrameTick % 57)  / 57.0;
-    double phaseThink  = (double)(gFrameTick % 78)  / 78.0;
-    double phaseWork   = (double)(gFrameTick % 96)  / 96.0;
-
-    if (gPebbleState == 0) {
-        const double discR = 8.0, dotR = 2.0, shadowOffset = 2.0;
-        // shadow
-        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
-        cairo_arc(cr, cx+shadowOffset, cy+shadowOffset, discR, 0, 2*M_PI);
-        cairo_fill(cr);
-        // disc
-        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
-        cairo_arc(cr, cx, cy, discR, 0, 2*M_PI);
-        cairo_fill(cr);
-        // border
-        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
-        cairo_set_line_width(cr, 1.0);
-        cairo_arc(cr, cx, cy, discR, 0, 2*M_PI);
-        cairo_stroke(cr);
-        // breathing dot
-        double breathe = 0.5 + 0.5*sin(phase4s * 2 * M_PI);
-        double dotAlpha = 0.5 + 0.5*breathe;
-        cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, dotAlpha);
-        cairo_arc(cr, cx, cy, dotR, 0, 2*M_PI);
-        cairo_fill(cr);
-        draw_eye_glyph(cr);
-        return FALSE;
-    }
-
-    if (gPebbleState == 1 || gPebbleState == 3) {
-        gboolean speaking = (gPebbleState == 3);
-        double pillW = 36, pillH = 9, shadowOffset = 2;
-        double bgR  = speaking ? kInkR  : kPaperR;
-        double bgG  = speaking ? kInkG  : kPaperG;
-        double bgB  = speaking ? kInkB  : kPaperB;
-        double brR  = speaking ? kInkR  : kAccR;
-        double brG  = speaking ? kInkG  : kAccG;
-        double brB  = speaking ? kInkB  : kAccB;
-        double barR = speaking ? kPaperR : kAccR;
-        double barG = speaking ? kPaperG : kAccG;
-        double barB = speaking ? kPaperB : kAccB;
-
-        // pill shadow
-        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
-        cairo_fill(cr);
-        // pill
-        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, bgR, bgG, bgB, 1.0);
-        cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, brR, brG, brB, 1.0);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-        // wave bars
-        const int barCount = 4;
-        const double barW = 2.0, barGap = 2.5;
-        double totalW = barCount*barW + (barCount-1)*barGap;
-        double startX = cx - totalW/2;
-        for (int i = 0; i < barCount; i++) {
-            double bx = startX + i*(barW+barGap);
-            double phase = phaseListen + i*0.18;
-            double v = 0.5 + 0.5*sin(phase * 2 * M_PI);
-            double barH = 2.5 + v*5.5;
-            rounded_rect(cr, bx, cy-barH/2, barW, barH, barW/2);
-            cairo_set_source_rgba(cr, barR, barG, barB, 1.0);
-            cairo_fill(cr);
-        }
-
-        // Resolve body text first so we can measure for auto-fit.
-        const char* body;
-        if (gPebbleBodyText && *gPebbleBodyText) {
-            body = gPebbleBodyText;
-        } else {
-            body = speaking ? "speaking…" : "listening — go ahead.";
-        }
-
-        // Auto-fit bubble height: measure wrapped text height inside the
-        // bubble's inner width, then size the card to fit. Mirrors the
-        // Win32 computeBubbleBottom math.
-        const double kBubbleX0 = 12, kBubbleY0 = 50, kBubbleX1 = 340;
-        const double kBubbleY1Min = 108, kBubbleY1Max = 200;
-        const double kBodyX0 = 26, kBodyX1 = 326, kBodyY0 = 80, kBubbleBottomP = 12;
-        int textH = measure_text_height(cr, kBodyX1-kBodyX0, body, "Inter Tight 11");
-        double by1 = kBodyY0 + (double)textH + kBubbleBottomP;
-        if (by1 < kBubbleY1Min) by1 = kBubbleY1Min;
-        if (by1 > kBubbleY1Max) by1 = kBubbleY1Max;
-
-        // bubble (auto-fit)
-        double cornerR = 6, bs = 4;
-        rounded_rect(cr, kBubbleX0+bs, kBubbleY0+bs, kBubbleX1-kBubbleX0, by1-kBubbleY0, cornerR);
-        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.12);
-        cairo_fill(cr);
-        rounded_rect(cr, kBubbleX0, kBubbleY0, kBubbleX1-kBubbleX0, by1-kBubbleY0, cornerR);
-        cairo_set_source_rgba(cr, bgR, bgG, bgB, 1.0);
-        cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr,
-            speaking ? kInkR : kRuleR,
-            speaking ? kInkG : kRuleG,
-            speaking ? kInkB : kRuleB, 1.0);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-
-        // text
-        double textR = speaking ? kPaperR : kInkR;
-        double textG = speaking ? kPaperG : kInkG;
-        double textB = speaking ? kPaperB : kInkB;
-        double eyR = speaking ? kPaperR : kAccR;
-        double eyG = speaking ? kPaperG : kAccG;
-        double eyB = speaking ? kPaperB : kAccB;
-        draw_text_layout(cr, 26, 60, "JARVIS", "JetBrains Mono Medium 8", eyR, eyG, eyB);
-        // Body draw height tracks the auto-fitted card.
-        double bodyDrawH = by1 - kBodyY0 - kBubbleBottomP/2.0;
-        draw_text_wrapped(cr, kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawH,
-                          body, "Inter Tight 11", textR, textG, textB);
-        if (gAnswerOverflow) draw_answer_button(cr, by1, speaking);
-        draw_eye_glyph(cr);
-        return FALSE;
-    }
-
-    if (gPebbleState == 2) {
-        double pillW=14, pillH=6, shadowOffset=2;
-        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
-        cairo_fill(cr);
-        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
-        cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-
-        const int dotCount=3;
-        const double dotR=1.4, dotGap=4.0;
-        double startX = cx - (dotCount-1)*dotGap/2;
-        for (int i=0; i<dotCount; i++) {
-            double ph = phaseThink + i*0.15;
-            double bounce = sin(ph*2*M_PI);
-            double dy = -bounce*1.5;
-            double alpha = 0.35 + 0.65 * fmax(0.0, bounce);
-            cairo_set_source_rgba(cr, kInk3R, kInk3G, kInk3B, alpha);
-            cairo_arc(cr, startX+i*dotGap, cy+dy, dotR, 0, 2*M_PI);
-            cairo_fill(cr);
-        }
-        draw_eye_glyph(cr);
-        return FALSE;
-    }
-
-    if (gPebbleState == 4) {
-        double pillW=18, pillH=7, shadowOffset=2;
-        rounded_rect(cr, cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, kInkR, kInkG, kInkB, 0.10);
-        cairo_fill(cr);
-        rounded_rect(cr, cx-pillW, cy-pillH, pillW*2, pillH*2, pillH);
-        cairo_set_source_rgba(cr, kPaperR, kPaperG, kPaperB, 1.0);
-        cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, kRuleR, kRuleG, kRuleB, 1.0);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-
-        double pulse = 0.85 + 0.15*sin(phaseWork * 2 * M_PI);
-        double dotR = 2.5 * pulse;
-        cairo_set_source_rgba(cr, kWarmR, kWarmG, kWarmB, 1.0);
-        cairo_arc(cr, cx-pillW+5, cy, dotR, 0, 2*M_PI);
-        cairo_fill(cr);
-    }
+    draw_pebble_state(cr, gPebbleState);
     draw_eye_glyph(cr);
     return FALSE;
 }
+
 
 // present_idle applies one frame on the GTK main thread: the shared Go runtime
 // already eased the position (x,y) and bumped the frame tick; we just push
@@ -470,8 +361,8 @@ type pebbleServiceLinux struct {
 	pebbleCore
 	summonCallback    atomic.Value // func(); re-assigned per reconnect, read by the hotkey goroutine
 	paletteCallback   atomic.Value // func()
-	hotkeyStop        func() // summon hotkey listener stop
-	paletteHotkeyStop func() // palette hotkey listener stop
+	hotkeyStop        func()       // summon hotkey listener stop
+	paletteHotkeyStop func()       // palette hotkey listener stop
 }
 
 func NewPebbleService() PebbleService {

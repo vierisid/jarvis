@@ -57,6 +57,29 @@ const magicColorKey = 0x00FE00FE
 // HWND_TOPMOST is officially -1, encoded as the largest uintptr.
 const hwndTopmost = ^uintptr(0)
 
+// WM_SETICON assigns a window its title-bar (small) / Alt-Tab + taskbar (big)
+// icon. WebView2 windows don't inherit the .exe icon on their own, so framed
+// panels (the dashboard) show WebView2's default until we set it explicitly.
+const (
+	wmSetIcon = 0x0080
+	iconSmall = 0
+	iconBig   = 1
+)
+
+// setPanelBrandIcon stamps the Brand Book III drop mark (the same resource the
+// .exe and tray load, ID trayIconBrandID) onto a framed panel window so its
+// title bar and taskbar entry read as usejarvis rather than WebView2's stock
+// icon. hInstance/LoadIconW are reused from the tray + pebble overlay decls.
+func setPanelBrandIcon(hwnd uintptr) {
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	hIcon, _, _ := procLoadIconW.Call(hInstance, uintptr(trayIconBrandID))
+	if hIcon == 0 {
+		return
+	}
+	procSendMessageW.Call(hwnd, wmSetIcon, iconBig, hIcon)
+	procSendMessageW.Call(hwnd, wmSetIcon, iconSmall, hIcon)
+}
+
 // user32, procSetForegroundWindow, procShowWindow are already declared in
 // uia_windows.go — reuse those. The procs below are panel-service specific.
 var (
@@ -69,6 +92,7 @@ var (
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procSetWindowRgn               = user32.NewProc("SetWindowRgn")
 	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
+	procSendMessageW               = user32.NewProc("SendMessageW")
 
 	gdi32                  = syscall.NewLazyDLL("gdi32.dll")
 	procCreateRectRgn      = gdi32.NewProc("CreateRectRgn")
@@ -207,6 +231,9 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 	// with custom rendering). Calls silently fail on older Windows.
 	if !spec.Frameless && !spec.Transparent && !spec.ClickThrough && !spec.AlwaysOnTop {
 		applyWin11ChromePolish(hwnd)
+		// Framed panels (the dashboard) show a real title bar + taskbar entry,
+		// so give them the brand drop icon instead of WebView2's default.
+		setPanelBrandIcon(hwnd)
 	}
 
 	return nil

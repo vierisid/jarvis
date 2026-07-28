@@ -278,7 +278,10 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 
   constructor(config: NonNullable<TTSConfig['elevenlabs']>) {
     this.apiKey = config.api_key;
-    this.voiceId = config.voice_id ?? '21m00Tcm4TlvDq8ikWAM'; // Rachel (default)
+    // Voice ids are opaque alphanumeric tokens; anything else (slashes, query
+    // chars) would rewrite the request path below, so fall back to the default.
+    const voiceId = config.voice_id && /^[A-Za-z0-9_-]{1,64}$/.test(config.voice_id) ? config.voice_id : undefined;
+    this.voiceId = voiceId ?? '21m00Tcm4TlvDq8ikWAM'; // Rachel (default)
     this.model = config.model ?? 'eleven_flash_v2_5';
     this.stability = config.stability ?? 0.5;
     this.similarityBoost = config.similarity_boost ?? 0.75;
@@ -286,7 +289,7 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 
   async synthesize(text: string): Promise<Buffer> {
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream?output_format=mp3_44100_128`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(this.voiceId)}/stream?output_format=mp3_44100_128`,
       {
         method: 'POST',
         headers: {

@@ -120,7 +120,7 @@ export function SidecarConfigEditor({ sidecarId, sidecarName, unavailableCapabil
         {/* Header */}
         <div style={modalHeaderStyle}>
           <div>
-            <span style={{ fontWeight: 600, fontSize: "15px", color: "var(--j-text)" }}>
+            <span style={{ fontWeight: 600, fontSize: "15px", color: "var(--ink)" }}>
               Configure: {sidecarName}
             </span>
           </div>
@@ -150,7 +150,7 @@ export function SidecarConfigEditor({ sidecarId, sidecarName, unavailableCapabil
         {/* Content */}
         <div style={modalBodyStyle}>
           {loading ? (
-            <div style={{ color: "var(--j-text-muted)", padding: "20px", textAlign: "center" }}>Loading config...</div>
+            <div style={{ color: "var(--ink3)", padding: "20px", textAlign: "center" }}>Loading config...</div>
           ) : error && !config ? (
             <div style={{ color: "var(--j-error, #f44)", padding: "20px" }}>{error}</div>
           ) : mode === "form" && config ? (
@@ -307,23 +307,23 @@ function FormMode({ config, updateConfig, unavailableCapabilities = [] }: {
 function ConfigSection({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
   return (
-    <div style={{ border: "1px solid var(--j-border)", borderRadius: "6px", overflow: "hidden" }}>
+    <div style={{ border: "1px solid var(--rule)", borderRadius: "6px", overflow: "hidden" }}>
       <div
         onClick={() => setOpen(!open)}
         style={{
           padding: "8px 12px",
-          background: "var(--j-surface)",
+          background: "var(--panel)",
           cursor: "pointer",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           fontSize: "13px",
           fontWeight: 500,
-          color: "var(--j-text)",
+          color: "var(--ink)",
         }}
       >
         {title}
-        <span style={{ color: "var(--j-text-muted)", fontSize: "11px" }}>{open ? "\u25B2" : "\u25BC"}</span>
+        <span style={{ color: "var(--ink3)", fontSize: "11px" }}>{open ? "\u25B2" : "\u25BC"}</span>
       </div>
       {open && <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>{children}</div>}
     </div>
@@ -393,7 +393,7 @@ function ConfigListField({ label, items, placeholder, onChange }: {
           </span>
         ))}
         {items.length === 0 && (
-          <span style={{ fontSize: "11px", color: "var(--j-text-dim)" }}>None</span>
+          <span style={{ fontSize: "11px", color: "var(--ink2)" }}>None</span>
         )}
       </div>
       <div style={{ display: "flex", gap: "4px" }}>
@@ -436,8 +436,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "10px",
   width: "560px",
   maxHeight: "80vh",
@@ -451,13 +451,13 @@ const modalHeaderStyle: React.CSSProperties = {
   justifyContent: "space-between",
   alignItems: "center",
   padding: "16px 20px",
-  borderBottom: "1px solid var(--j-border)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const closeButtonStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "20px",
   cursor: "pointer",
   padding: "0 4px",
@@ -467,7 +467,7 @@ const tabBarStyle: React.CSSProperties = {
   display: "flex",
   gap: "0",
   padding: "0 20px",
-  borderBottom: "1px solid var(--j-border)",
+  borderBottom: "1px solid var(--rule)",
 };
 
 const tabStyle: React.CSSProperties = {
@@ -475,7 +475,7 @@ const tabStyle: React.CSSProperties = {
   background: "none",
   border: "none",
   borderBottom: "2px solid transparent",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   cursor: "pointer",
   fontWeight: 500,
@@ -483,8 +483,8 @@ const tabStyle: React.CSSProperties = {
 
 const activeTabStyle: React.CSSProperties = {
   ...tabStyle,
-  color: "var(--j-accent)",
-  borderBottomColor: "var(--j-accent)",
+  color: "var(--ink)",
+  borderBottomColor: "var(--ink)",
 };
 
 const modalBodyStyle: React.CSSProperties = {
@@ -498,22 +498,22 @@ const modalFooterStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "8px",
   padding: "12px 20px",
-  borderTop: "1px solid var(--j-border)",
+  borderTop: "1px solid var(--rule)",
 };
 
 const cancelButtonStyle: React.CSSProperties = {
   padding: "6px 14px",
   background: "transparent",
-  border: "1px solid var(--j-border)",
+  border: "1px solid var(--rule)",
   borderRadius: "6px",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   cursor: "pointer",
 };
 
 const saveButtonStyle: React.CSSProperties = {
   padding: "6px 14px",
-  background: "var(--j-accent)",
+  background: "var(--ink)",
   border: "none",
   borderRadius: "6px",
   color: "#fff",
@@ -530,16 +530,16 @@ const fieldRowStyle: React.CSSProperties = {
 
 const fieldLabelStyle: React.CSSProperties = {
   fontSize: "12px",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   minWidth: "140px",
 };
 
 const fieldInputStyle: React.CSSProperties = {
   padding: "5px 8px",
-  background: "var(--j-bg)",
-  border: "1px solid var(--j-border)",
+  background: "var(--bg)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   fontSize: "12px",
   outline: "none",
   width: "160px",
@@ -547,7 +547,7 @@ const fieldInputStyle: React.CSSProperties = {
 
 const checkboxLabelStyle: React.CSSProperties = {
   fontSize: "12px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   display: "flex",
   alignItems: "center",
   gap: "4px",
@@ -559,17 +559,17 @@ const tagStyle: React.CSSProperties = {
   alignItems: "center",
   gap: "4px",
   padding: "2px 8px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
   fontSize: "11px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
 };
 
 const tagRemoveStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   cursor: "pointer",
   padding: "0",
   fontSize: "14px",
@@ -578,10 +578,10 @@ const tagRemoveStyle: React.CSSProperties = {
 
 const addButtonStyle: React.CSSProperties = {
   padding: "5px 10px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "4px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   fontSize: "11px",
   cursor: "pointer",
 };
@@ -590,10 +590,10 @@ const textareaStyle: React.CSSProperties = {
   width: "100%",
   minHeight: "400px",
   padding: "12px",
-  background: "var(--j-surface)",
-  border: "1px solid var(--j-border)",
+  background: "var(--panel)",
+  border: "1px solid var(--rule)",
   borderRadius: "6px",
-  color: "var(--j-text)",
+  color: "var(--ink)",
   fontSize: "12px",
   fontFamily: "monospace",
   resize: "vertical",

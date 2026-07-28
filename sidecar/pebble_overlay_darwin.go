@@ -47,13 +47,23 @@ static int        gAnswerOverflow    = 0;
 // "listening — go ahead."). ARC manages the strong reference.
 static NSString*  gPebbleBodyText    = nil;
 
-// Riso colours (matched to the Windows pipeline / mock).
-static const CGFloat kPaperR = 245.0/255.0, kPaperG = 242.0/255.0, kPaperB = 235.0/255.0;
-static const CGFloat kInkR   = 26.0/255.0,  kInkG   = 26.0/255.0,  kInkB   = 26.0/255.0;
-static const CGFloat kInk3R  = 106.0/255.0, kInk3G  = 103.0/255.0, kInk3B  = 96.0/255.0;
-static const CGFloat kRuleR  = 203.0/255.0, kRuleG  = 195.0/255.0, kRuleB = 178.0/255.0;
-static const CGFloat kAccR   = 194.0/255.0, kAccG   = 58.0/255.0,  kAccB   = 42.0/255.0;
-static const CGFloat kWarmR  = 138.0/255.0, kWarmG  = 106.0/255.0, kWarmB  = 31.0/255.0;
+// Monochrome Lab (Brand Book III) — mirrors pebble_draw_windows.go / pebble.css.
+// The pebble is the glass "drop": a translucent lens that breathes one state
+// hue at a time (translucent white body + colored radial core + soft glow +
+// hairline). The state hues are the only chroma.
+static const CGFloat kInkR   = 0x13/255.0, kInkG   = 0x16/255.0, kInkB   = 0x1A/255.0; // --ink
+static const CGFloat kInk3R  = 0x67/255.0, kInk3G  = 0x70/255.0, kInk3B  = 0x77/255.0; // --ink3
+static const CGFloat kRuleR  = 0xE2/255.0, kRuleG  = 0xE7/255.0, kRuleB  = 0xEC/255.0; // --rule
+static const CGFloat kPaperR = 1.0,        kPaperG = 1.0,        kPaperB = 1.0;        // --raise
+static const CGFloat kFaintR = 0x9A/255.0, kFaintG = 0xA2/255.0, kFaintB = 0xAB/255.0; // --faint
+static const CGFloat kListenR = 0xE6/255.0, kListenG = 0x3B/255.0, kListenB = 0x2E/255.0; // --listen
+static const CGFloat kSpeakR  = 0x2D/255.0, kSpeakG  = 0x78/255.0, kSpeakB  = 0xFF/255.0; // --speak
+static const CGFloat kHoldR   = 0xEA/255.0, kHoldG   = 0xA4/255.0, kHoldB   = 0x0E/255.0; // --hold
+static const CGFloat kOkR     = 0x2F/255.0, kOkG     = 0xA4/255.0, kOkB     = 0x5E/255.0; // --ok
+// The awareness eye glyph reuses the brand red (was riso vermilion).
+static const CGFloat kAccR = 0xE6/255.0, kAccG = 0x3B/255.0, kAccB = 0x2E/255.0;
+// Drop geometry — matches pebbleDiscR / pebbleSharpR on Windows.
+static const CGFloat kDropR = 13.0, kSharpR = 5.0;
 
 static const CGFloat kWindowW = 360.0;
 static const CGFloat kWindowH = 220.0;
@@ -94,33 +104,139 @@ static void draw_eye_cg(CGContextRef ctx) {
     }
 }
 
-// draw_answer_cg paints the "open full ↗" overflow button at the bubble's
-// bottom-right (§5.3). by1 is the auto-fitted bubble bottom.
-static void draw_answer_cg(CGContextRef ctx, CGFloat by1, BOOL speaking) {
-    const CGFloat btnW = 108, btnH = 22, insetR = 10, insetB = 8, kBubbleX1 = 340;
-    CGFloat bxL = kBubbleX1 - insetR - btnW;
-    CGFloat byTop = by1 - insetB - btnH;
-    CGFloat tr = speaking ? kPaperR : kAccR;
-    CGFloat tg = speaking ? kPaperG : kAccG;
-    CGFloat tb = speaking ? kPaperB : kAccB;
+// ── Monochrome Lab glass drop (mirrors pebble_draw_windows.go drawDrop) ─────────────
 
-    CGRect rect = CGRectMake(bxL, byTop, btnW, btnH);
-    CGPathRef fillPath = CGPathCreateWithRoundedRect(rect, 5.0, 5.0, NULL);
-    CGContextAddPath(ctx, fillPath);
-    CGContextSetRGBFillColor(ctx, tr, tg, tb, speaking ? 32/255.0 : 36/255.0);
+// c_breathe returns a 0..1 sine over `frames` at 60fps, for state pulses.
+static double c_breathe(int frames) {
+    if (frames <= 0) return 1.0;
+    double ph = (double)(gFrameTick % (unsigned long long)frames) / (double)frames;
+    return 0.5 + 0.5 * sin(ph * 2 * M_PI);
+}
+
+// make_drop_path builds the brand "drop": a rounded square with three 50%
+// corners + one sharp corner, rotated 45° (CSS border-radius:50% 50% 50% 6px;
+// rotate(45deg)). Caller releases the path.
+static CGPathRef make_drop_path(CGFloat cx, CGFloat cy, CGFloat r, CGFloat sharpR) {
+    CGAffineTransform t = CGAffineTransformMakeTranslation(cx, cy);
+    t = CGAffineTransformRotate(t, M_PI / 4.0);
+    CGMutablePathRef p = CGPathCreateMutable();
+    CGFloat L = -r, T = -r, R = r, B = r;
+    // Order TR, BR, BL(the point), TL — start mid top edge.
+    CGPathMoveToPoint(p, &t, 0, T);
+    CGPathAddArcToPoint(p, &t, R, T, R, 0, r);       // top-right
+    CGPathAddArcToPoint(p, &t, R, B, 0, B, r);       // bottom-right
+    CGPathAddArcToPoint(p, &t, L, B, L, 0, sharpR);  // bottom-left (sharp)
+    CGPathAddArcToPoint(p, &t, L, T, 0, T, r);       // top-left
+    CGPathCloseSubpath(p);
+    return p;
+}
+
+// radial_fill draws a soft radial gradient (innerA at centre → 0 at r), eased
+// toward the centre with a mid stop to mimic the Windows t*t light falloff.
+static void radial_fill(CGContextRef ctx, CGFloat cx, CGFloat cy, CGFloat r,
+                        CGFloat innerA, CGFloat rr, CGFloat gg, CGFloat bb) {
+    if (innerA <= 0 || r <= 0) return;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGFloat comps[12] = { rr, gg, bb, innerA,
+                          rr, gg, bb, innerA * 0.25,
+                          rr, gg, bb, 0.0 };
+    CGFloat locs[3] = { 0.0, 0.5, 1.0 };
+    CGGradientRef grad = CGGradientCreateWithColorComponents(cs, comps, locs, 3);
+    CGContextDrawRadialGradient(ctx, grad, CGPointMake(cx, cy), 0,
+                                CGPointMake(cx, cy), r, 0);
+    CGGradientRelease(grad);
+    CGColorSpaceRelease(cs);
+}
+
+// draw_drop_cg paints the glass drop: soft glow, neutral shadow, translucent
+// white glass body, a colored radial core clipped to the drop, a top-left inner
+// shine, and a hairline. coreAlpha / glowAlpha are 0..1 (glowAlpha 0 = no halo).
+static void draw_drop_cg(CGContextRef ctx, CGFloat cx, CGFloat cy,
+                         CGFloat cr, CGFloat cg, CGFloat cb,
+                         double coreAlpha, double glowAlpha) {
+    // 1) outer glow — soft colored halo behind the lens.
+    if (glowAlpha > 0) radial_fill(ctx, cx, cy + 1, kDropR * 2.1, glowAlpha * 150.0/255.0, cr, cg, cb);
+    // 2) drop shadow — neutral, offset down.
+    CGPathRef shadow = make_drop_path(cx, cy + 2, kDropR, kSharpR);
+    CGContextAddPath(ctx, shadow);
+    CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 40.0/255.0);
     CGContextFillPath(ctx);
-    CGContextAddPath(ctx, fillPath);
-    CGContextSetRGBStrokeColor(ctx, tr, tg, tb, speaking ? 200/255.0 : 220/255.0);
+    CGPathRelease(shadow);
+    // 3) glass body — translucent white.
+    CGPathRef drop = make_drop_path(cx, cy, kDropR, kSharpR);
+    CGContextAddPath(ctx, drop);
+    CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 120.0/255.0);
+    CGContextFillPath(ctx);
+    // 4) colored core — radial, clipped to the drop so light reads through the glass.
+    if (coreAlpha > 0) {
+        CGContextSaveGState(ctx);
+        CGContextAddPath(ctx, drop);
+        CGContextClip(ctx);
+        radial_fill(ctx, cx, cy, kDropR * 1.05, coreAlpha, cr, cg, cb);
+        CGContextRestoreGState(ctx);
+    }
+    // 5) inner shine — top-left glass highlight, clipped to the drop.
+    CGContextSaveGState(ctx);
+    CGContextAddPath(ctx, drop);
+    CGContextClip(ctx);
+    radial_fill(ctx, cx - kDropR*0.32, cy - kDropR*0.34, kDropR*0.7, 150.0/255.0, 1.0, 1.0, 1.0);
+    CGContextRestoreGState(ctx);
+    // 6) hairline border along the drop outline.
+    CGContextAddPath(ctx, drop);
+    CGContextSetRGBStrokeColor(ctx, kInkR, kInkG, kInkB, 90.0/255.0);
     CGContextSetLineWidth(ctx, 1.0);
     CGContextStrokePath(ctx);
-    CGPathRelease(fillPath);
+    CGPathRelease(drop);
+}
 
-    NSDictionary* attrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightMedium],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:tr green:tg blue:tb alpha:1.0],
-    };
-    NSAttributedString* label = [[NSAttributedString alloc] initWithString:@"open full ↗" attributes:attrs];
-    [label drawAtPoint:NSMakePoint(bxL + 12, byTop + 5)];
+// draw_pebble_state paints one state's drop (no eye glyph) at the anchor.
+// Factored out of drawRect so the offscreen harness can reuse it. Reads
+// gFrameTick for the per-state animation phase.
+static void draw_pebble_state(CGContextRef ctx, int state) {
+    CGFloat cx = kAnchorX, cy = kAnchorY;
+    switch (state) {
+    case 1: // listening — red drop, no bubble (you're talking, not reading).
+        draw_drop_cg(ctx, cx, cy, kListenR, kListenG, kListenB, 0.55 + 0.45*c_breathe(84), 0.5);
+        break;
+    case 3: // speaking — blue drop, no transcript (voice-first).
+        draw_drop_cg(ctx, cx, cy, kSpeakR, kSpeakG, kSpeakB, 0.6 + 0.4*c_breathe(96), 0.5);
+        break;
+    case 2: { // thinking — clear glass + a white dot orbiting the rim.
+        draw_drop_cg(ctx, cx, cy, kInk3R, kInk3G, kInk3B, 0.16, 0);
+        double ang = ((double)(gFrameTick % 84) / 84.0) * 2 * M_PI;
+        CGFloat ox = cx + cos(ang)*kDropR*0.62, oy = cy + sin(ang)*kDropR*0.62;
+        CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 235.0/255.0);
+        CGContextFillEllipseInRect(ctx, CGRectMake(ox-2, oy-2, 4, 4));
+        break;
+    }
+    case 4: // working — steady blue, gentle breath.
+        draw_drop_cg(ctx, cx, cy, kSpeakR, kSpeakG, kSpeakB, 0.45 + 0.35*c_breathe(144), 0.35);
+        break;
+    case 5: { // asking — amber core + an expanding fading ring.
+        draw_drop_cg(ctx, cx, cy, kHoldR, kHoldG, kHoldB, 0.55 + 0.35*c_breathe(120), 0.4);
+        double ph = (double)(gFrameTick % 120) / 120.0;
+        CGFloat ringR = kDropR + ph*9.0;
+        CGContextSetRGBStrokeColor(ctx, kHoldR, kHoldG, kHoldB, (1.0 - ph) * 120.0/255.0);
+        CGContextSetLineWidth(ctx, 1.2);
+        CGContextStrokeEllipseInRect(ctx, CGRectMake(cx-ringR, cy-ringR, ringR*2, ringR*2));
+        break;
+    }
+    case 6: // done — green flash.
+        draw_drop_cg(ctx, cx, cy, kOkR, kOkG, kOkB, 0.9, 0.55);
+        break;
+    case 7: { // muted — quiet gray glass + a diagonal slash.
+        draw_drop_cg(ctx, cx, cy, kFaintR, kFaintG, kFaintB, 0.22, 0);
+        CGContextSetRGBStrokeColor(ctx, kInk3R, kInk3G, kInk3B, 210.0/255.0);
+        CGContextSetLineWidth(ctx, 1.0);
+        CGContextMoveToPoint(ctx, cx - kDropR*0.6, cy + kDropR*0.6);
+        CGContextAddLineToPoint(ctx, cx + kDropR*0.6, cy - kDropR*0.6);
+        CGContextStrokePath(ctx);
+        break;
+    }
+    default: // idle — clear glass with a faint neutral presence that breathes.
+        draw_drop_cg(ctx, cx, cy, kInk3R, kInk3G, kInk3B, 0.18 + 0.16*c_breathe(240), 0);
+        break;
+    }
 }
 
 @interface JarvisPebbleView : NSView
@@ -132,248 +248,7 @@ static void draw_answer_cg(CGContextRef ctx, CGFloat by1, BOOL speaking) {
 
 - (void)drawRect:(NSRect)dirty {
     CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
-
-    // Anchor: pebble centre at (kAnchorX, kAnchorY) in view-local coords.
-    CGFloat cx = kAnchorX;
-    CGFloat cy = kAnchorY;
-
-    // Frame-tick driven animations (matches Windows numbers).
-    double phase4s = (double)(gFrameTick % 240) / 240.0;
-    double phaseListen = (double)(gFrameTick % 57) / 57.0;
-    double phaseThink = (double)(gFrameTick % 78) / 78.0;
-    double phaseWork = (double)(gFrameTick % 96) / 96.0;
-
-    if (gPebbleState == 0) {
-        // IDLE — paper disc with shadow + hairline border + breathing dot.
-        const CGFloat discR = 8.0;
-        const CGFloat dotR = 2.0;
-        const CGFloat shadowOffset = 2.0;
-
-        // Shadow
-        CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.10);
-        CGContextFillEllipseInRect(ctx, CGRectMake(cx-discR+shadowOffset, cy-discR+shadowOffset, discR*2, discR*2));
-        // Disc
-        CGContextSetRGBFillColor(ctx, kPaperR, kPaperG, kPaperB, 1.0);
-        CGContextFillEllipseInRect(ctx, CGRectMake(cx-discR, cy-discR, discR*2, discR*2));
-        // Border
-        CGContextSetRGBStrokeColor(ctx, kRuleR, kRuleG, kRuleB, 1.0);
-        CGContextSetLineWidth(ctx, 1.0);
-        CGContextStrokeEllipseInRect(ctx, CGRectMake(cx-discR+0.5, cy-discR+0.5, discR*2-1, discR*2-1));
-        // Breathing dot
-        CGFloat breathe = 0.5 + 0.5*sin(phase4s * 2 * M_PI);
-        CGFloat dotAlpha = 0.5 + 0.5*breathe;
-        CGContextSetRGBFillColor(ctx, kInk3R, kInk3G, kInk3B, dotAlpha);
-        CGContextFillEllipseInRect(ctx, CGRectMake(cx-dotR, cy-dotR, dotR*2, dotR*2));
-        draw_eye_cg(ctx);
-        return;
-    }
-
-    if (gPebbleState == 1 || gPebbleState == 3) {
-        // LISTENING (1) / SPEAKING (3) — wider pill with wave bars + bubble.
-        BOOL speaking = (gPebbleState == 3);
-        CGFloat pillW = 36.0;
-        CGFloat pillH = 9.0;
-        CGFloat shadowOffset = 2.0;
-
-        CGFloat bgR = speaking ? kInkR : kPaperR;
-        CGFloat bgG = speaking ? kInkG : kPaperG;
-        CGFloat bgB = speaking ? kInkB : kPaperB;
-        CGFloat brR = speaking ? kInkR : kAccR;
-        CGFloat brG = speaking ? kInkG : kAccG;
-        CGFloat brB = speaking ? kInkB : kAccB;
-        CGFloat barR = speaking ? kPaperR : kAccR;
-        CGFloat barG = speaking ? kPaperG : kAccG;
-        CGFloat barB = speaking ? kPaperB : kAccB;
-
-        // Pill shadow
-        CGRect pillShadow = CGRectMake(cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2);
-        CGPathRef shadowPath = CGPathCreateWithRoundedRect(pillShadow, pillH, pillH, NULL);
-        CGContextAddPath(ctx, shadowPath);
-        CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.10);
-        CGContextFillPath(ctx);
-        CGPathRelease(shadowPath);
-
-        // Pill fill
-        CGRect pill = CGRectMake(cx-pillW, cy-pillH, pillW*2, pillH*2);
-        CGPathRef pillPath = CGPathCreateWithRoundedRect(pill, pillH, pillH, NULL);
-        CGContextAddPath(ctx, pillPath);
-        CGContextSetRGBFillColor(ctx, bgR, bgG, bgB, 1.0);
-        CGContextFillPath(ctx);
-
-        // Pill border
-        CGContextAddPath(ctx, pillPath);
-        CGContextSetRGBStrokeColor(ctx, brR, brG, brB, 1.0);
-        CGContextSetLineWidth(ctx, 1.0);
-        CGContextStrokePath(ctx);
-        CGPathRelease(pillPath);
-
-        // 4 wave bars
-        const int barCount = 4;
-        const CGFloat barW = 2.0;
-        const CGFloat barGap = 2.5;
-        CGFloat totalW = barCount*barW + (barCount-1)*barGap;
-        CGFloat startX = cx - totalW/2;
-        for (int i = 0; i < barCount; i++) {
-            CGFloat bx = startX + i*(barW+barGap);
-            double phase = phaseListen + i*0.18;
-            double v = 0.5 + 0.5*sin(phase * 2 * M_PI);
-            CGFloat barH = 2.5 + v*5.5;
-            CGRect bar = CGRectMake(bx, cy-barH/2, barW, barH);
-            CGPathRef barPath = CGPathCreateWithRoundedRect(bar, barW/2, barW/2, NULL);
-            CGContextAddPath(ctx, barPath);
-            CGContextSetRGBFillColor(ctx, barR, barG, barB, 1.0);
-            CGContextFillPath(ctx);
-            CGPathRelease(barPath);
-        }
-
-        // Resolve body text (dynamic transcript wins over per-state placeholder).
-        NSString* bodyText;
-        if (gPebbleBodyText && [gPebbleBodyText length] > 0) {
-            bodyText = gPebbleBodyText;
-        } else {
-            bodyText = speaking ? @"speaking…" : @"listening — go ahead.";
-        }
-
-        // Auto-fit bubble height: measure how tall the wrapped body text needs
-        // to be inside the bubble's inner width, add eyebrow + paddings, clamp
-        // to [108, 200]. Mirrors the Win32 computeBubbleBottom math.
-        const CGFloat kBubbleX0 = 12, kBubbleY0 = 50, kBubbleX1 = 340;
-        const CGFloat kBubbleY1Min = 108, kBubbleY1Max = 200;
-        const CGFloat kBodyX0 = 26, kBodyX1 = 326, kBodyY0 = 84, kBubbleBottomP = 12;
-
-        NSMutableParagraphStyle* paragraph = [[NSMutableParagraphStyle alloc] init];
-        paragraph.lineBreakMode = NSLineBreakByWordWrapping;
-        NSDictionary* bodyAttrsForMeasure = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
-            NSParagraphStyleAttributeName: paragraph,
-        };
-        NSRect measureRect = [bodyText boundingRectWithSize:NSMakeSize(kBodyX1-kBodyX0, CGFLOAT_MAX)
-                                                    options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
-                                                 attributes:bodyAttrsForMeasure];
-        CGFloat textHeight = ceil(measureRect.size.height);
-        CGFloat by1 = kBodyY0 + textHeight + kBubbleBottomP;
-        if (by1 < kBubbleY1Min) by1 = kBubbleY1Min;
-        if (by1 > kBubbleY1Max) by1 = kBubbleY1Max;
-
-        // Bubble (auto-fit height)
-        CGFloat cornerR = 6;
-        CGFloat bs = 4; // shadow offset
-
-        CGRect bubShadow = CGRectMake(kBubbleX0+bs, kBubbleY0+bs, kBubbleX1-kBubbleX0, by1-kBubbleY0);
-        CGPathRef bubShadowPath = CGPathCreateWithRoundedRect(bubShadow, cornerR, cornerR, NULL);
-        CGContextAddPath(ctx, bubShadowPath);
-        CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.12);
-        CGContextFillPath(ctx);
-        CGPathRelease(bubShadowPath);
-
-        CGRect bub = CGRectMake(kBubbleX0, kBubbleY0, kBubbleX1-kBubbleX0, by1-kBubbleY0);
-        CGPathRef bubPath = CGPathCreateWithRoundedRect(bub, cornerR, cornerR, NULL);
-        CGContextAddPath(ctx, bubPath);
-        CGContextSetRGBFillColor(ctx, bgR, bgG, bgB, 1.0);
-        CGContextFillPath(ctx);
-        CGContextAddPath(ctx, bubPath);
-        CGContextSetRGBStrokeColor(ctx, speaking ? kInkR : kRuleR,
-                                    speaking ? kInkG : kRuleG,
-                                    speaking ? kInkB : kRuleB, 1.0);
-        CGContextSetLineWidth(ctx, 1.0);
-        CGContextStrokePath(ctx);
-        CGPathRelease(bubPath);
-
-        // Text — mono uppercase eyebrow + body
-        CGFloat textR = speaking ? kPaperR : kInkR;
-        CGFloat textG = speaking ? kPaperG : kInkG;
-        CGFloat textB = speaking ? kPaperB : kInkB;
-        CGFloat eyR = speaking ? kPaperR : kAccR;
-        CGFloat eyG = speaking ? kPaperG : kAccG;
-        CGFloat eyB = speaking ? kPaperB : kAccB;
-
-        NSDictionary* eyebrowAttrs = @{
-            NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9 weight:NSFontWeightMedium],
-            NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:eyR green:eyG blue:eyB alpha:1.0],
-            NSKernAttributeName: @1.0,
-        };
-        NSAttributedString* eyebrow = [[NSAttributedString alloc] initWithString:@"JARVIS" attributes:eyebrowAttrs];
-        [eyebrow drawAtPoint:NSMakePoint(26, 64)];
-
-        NSDictionary* bodyAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
-            NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:textR green:textG blue:textB alpha:1.0],
-            NSParagraphStyleAttributeName: paragraph,
-        };
-        NSAttributedString* body = [[NSAttributedString alloc] initWithString:bodyText attributes:bodyAttrs];
-        // Wrap inside the bubble's auto-fitted body region. Last-line
-        // truncation kicks in only when content would overflow the *capped*
-        // card; otherwise the bubble grew to fit.
-        CGFloat bodyDrawHeight = by1 - kBodyY0 - kBubbleBottomP/2.0;
-        [body drawWithRect:NSMakeRect(kBodyX0, kBodyY0, kBodyX1-kBodyX0, bodyDrawHeight)
-                   options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
-                   context:nil];
-        if (gAnswerOverflow) draw_answer_cg(ctx, by1, speaking);
-        draw_eye_cg(ctx);
-        return;
-    }
-
-    if (gPebbleState == 2) {
-        // THINKING — pill with 3 bouncing dots
-        CGFloat pillW = 14, pillH = 6, shadowOffset = 2;
-        CGRect ps = CGRectMake(cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2);
-        CGPathRef psPath = CGPathCreateWithRoundedRect(ps, pillH, pillH, NULL);
-        CGContextAddPath(ctx, psPath);
-        CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.10);
-        CGContextFillPath(ctx); CGPathRelease(psPath);
-
-        CGRect p = CGRectMake(cx-pillW, cy-pillH, pillW*2, pillH*2);
-        CGPathRef pp = CGPathCreateWithRoundedRect(p, pillH, pillH, NULL);
-        CGContextAddPath(ctx, pp);
-        CGContextSetRGBFillColor(ctx, kPaperR, kPaperG, kPaperB, 1.0);
-        CGContextFillPath(ctx);
-        CGContextAddPath(ctx, pp);
-        CGContextSetRGBStrokeColor(ctx, kRuleR, kRuleG, kRuleB, 1.0);
-        CGContextSetLineWidth(ctx, 1.0);
-        CGContextStrokePath(ctx); CGPathRelease(pp);
-
-        const int dotCount = 3;
-        const CGFloat dotR = 1.4;
-        const CGFloat dotGap = 4.0;
-        CGFloat startX = cx - (dotCount-1)*dotGap/2;
-        for (int i = 0; i < dotCount; i++) {
-            double ph = phaseThink + i*0.15;
-            double bounce = sin(ph * 2 * M_PI);
-            CGFloat dy = -bounce*1.5;
-            CGFloat alpha = 0.35 + 0.65 * MAX(0.0, bounce);
-            CGContextSetRGBFillColor(ctx, kInk3R, kInk3G, kInk3B, alpha);
-            CGContextFillEllipseInRect(ctx, CGRectMake(startX+i*dotGap-dotR, cy+dy-dotR, dotR*2, dotR*2));
-        }
-        draw_eye_cg(ctx);
-        return;
-    }
-
-    if (gPebbleState == 4) {
-        // WORKING — pill with pulsing amber dot
-        CGFloat pillW = 18, pillH = 7, shadowOffset = 2;
-        CGRect ps = CGRectMake(cx-pillW+shadowOffset, cy-pillH+shadowOffset, pillW*2, pillH*2);
-        CGPathRef psPath = CGPathCreateWithRoundedRect(ps, pillH, pillH, NULL);
-        CGContextAddPath(ctx, psPath);
-        CGContextSetRGBFillColor(ctx, kInkR, kInkG, kInkB, 0.10);
-        CGContextFillPath(ctx); CGPathRelease(psPath);
-
-        CGRect p = CGRectMake(cx-pillW, cy-pillH, pillW*2, pillH*2);
-        CGPathRef pp = CGPathCreateWithRoundedRect(p, pillH, pillH, NULL);
-        CGContextAddPath(ctx, pp);
-        CGContextSetRGBFillColor(ctx, kPaperR, kPaperG, kPaperB, 1.0);
-        CGContextFillPath(ctx);
-        CGContextAddPath(ctx, pp);
-        CGContextSetRGBStrokeColor(ctx, kRuleR, kRuleG, kRuleB, 1.0);
-        CGContextSetLineWidth(ctx, 1.0);
-        CGContextStrokePath(ctx); CGPathRelease(pp);
-
-        double pulse = 0.85 + 0.15*sin(phaseWork * 2 * M_PI);
-        CGFloat dotR = 2.5 * pulse;
-        CGContextSetRGBFillColor(ctx, kWarmR, kWarmG, kWarmB, 1.0);
-        CGContextFillEllipseInRect(ctx, CGRectMake(cx-pillW+5-dotR, cy-dotR, dotR*2, dotR*2));
-        draw_eye_cg(ctx);
-        return;
-    }
+    draw_pebble_state(ctx, gPebbleState);
     draw_eye_cg(ctx);
 }
 @end
@@ -486,8 +361,8 @@ type pebbleServiceDarwin struct {
 	pebbleCore
 	summonCallback    atomic.Value // func(); re-assigned per reconnect, read by the hotkey goroutine
 	paletteCallback   atomic.Value // func()
-	hotkeyStop        func() // summon hotkey listener stop
-	paletteHotkeyStop func() // palette hotkey listener stop
+	hotkeyStop        func()       // summon hotkey listener stop
+	paletteHotkeyStop func()       // palette hotkey listener stop
 }
 
 func NewPebbleService() PebbleService {

@@ -207,6 +207,75 @@ describe('ConvOrchestrator', () => {
     expect(captured[0]![1]!.content).not.toBe(captured[1]![1]!.content);
   });
 
+  it('renders the user profile as a cache-marked system block between static and dynamic', async () => {
+    const captured: LLMMessage[][] = [];
+    class CapturingProvider extends MockProvider {
+      override async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
+        captured.push(messages);
+        return super.chat(messages, opts);
+      }
+    }
+    const provider = new CapturingProvider([textResponse('Hi!'), textResponse('Hello again!')]);
+    const llm = makeManager(provider);
+    const runner = async () => ({ kind: 'completed' as const, text: '', conversation: [] });
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const profileBlock = '# User Profile\n- Preferred name: Alice';
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: sunny' });
+    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: rainy' });
+
+    expect(captured).toHaveLength(2);
+    for (const messages of captured) {
+      // message[0]: static persona, cache-marked; profile stays out of it
+      expect(messages[0]!.role).toBe('system');
+      expect(messages[0]!.cache).toBe(true);
+      expect(String(messages[0]!.content)).not.toContain('User Profile');
+      // message[1]: profile block, cache-marked (provider puts the single
+      // breakpoint on the LAST marked block, caching persona + profile)
+      expect(messages[1]!.role).toBe('system');
+      expect(messages[1]!.cache).toBe(true);
+      expect(String(messages[1]!.content)).toBe(profileBlock);
+      // message[2]: dynamic system prompt, NOT cache-marked
+      expect(messages[2]!.role).toBe('system');
+      expect(messages[2]!.cache).toBeUndefined();
+      expect(String(messages[2]!.content)).toContain('Weather');
+    }
+    // Cached prefix (persona + profile) must be byte-identical across turns
+    // while the dynamic block changes.
+    expect(captured[0]![0]!.content).toBe(captured[1]![0]!.content);
+    expect(captured[0]![1]!.content).toBe(captured[1]![1]!.content);
+    expect(captured[0]![2]!.content).not.toBe(captured[1]![2]!.content);
+  });
+
+  it('omits the profile block when userProfile is not provided', async () => {
+    const captured: LLMMessage[][] = [];
+    class CapturingProvider extends MockProvider {
+      override async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
+        captured.push(messages);
+        return super.chat(messages, opts);
+      }
+    }
+    const provider = new CapturingProvider([textResponse('Hi!')]);
+    const llm = makeManager(provider);
+    const runner = async () => ({ kind: 'completed' as const, text: '', conversation: [] });
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
+
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice' });
+    const messages = captured[0]!;
+    // No profile block: the dynamic system prompt sits directly after the
+    // static persona, and it alone carries the identity.
+    expect(messages[0]!.cache).toBe(true);
+    expect(messages[1]!.role).toBe('system');
+    expect(messages[1]!.cache).toBeUndefined();
+    expect(String(messages[1]!.content)).toContain('Alice');
+    expect(messages[2]!.role).toBe('user');
+    for (const m of messages) {
+      expect(String(m.content)).not.toContain('User Profile');
+    }
+  });
+
   it('omits the dynamic system message entirely when there is no dynamic context', async () => {
     const captured: LLMMessage[][] = [];
     class CapturingProvider extends MockProvider {

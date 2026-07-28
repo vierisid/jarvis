@@ -330,16 +330,16 @@ export class OpenAIProvider implements LLMProvider {
       const data = await response.json() as { data: Array<{ id: string }> };
       return data.data
         .map(m => m.id)
-        .filter(id => id.startsWith('gpt-'))
+        .filter(id => id.startsWith('gpt-') || /^o\d/.test(id)) // gpt-* + the o-series (o1/o3/o4-mini…)
         .sort();
     } catch (err) {
-      // Fallback to known models if API call fails
+      // Fallback to known models if the live /models call fails.
       return [
-        'gpt-4o',
-        'gpt-4o-mini',
-        'gpt-4-turbo',
-        'gpt-4',
-        'gpt-3.5-turbo',
+        'gpt-5.5',
+        'gpt-5.5-pro',
+        'gpt-5.4',
+        'gpt-5-mini',
+        'o4-mini',
       ];
     }
   }

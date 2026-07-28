@@ -1,0 +1,162 @@
+/* Room kit — one vocabulary, every room. Brand Book III / Monochrome Lab.
+   The shared composites Phase-4 rooms inherit: status chips, stats strip,
+   tabs, toolbar, table grammar, detail drawer, the shape grammar, empty
+   states, skeletons, toasts, and form controls. Tokens are global
+   (theme-aware via data-theme on <html>). Namespaced `rk-` so room code
+   never collides with the shell (`rs-`) or primitives (`v2-`). */
+
+/* ───────────────────────── Status chips (5 tones) ───────────────────────── */
+.rk-chip {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase;
+  border-radius: 999px; padding: 2.5px 9px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.rk-chip__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.rk-chip--run  { color: var(--speak-tx);  background: color-mix(in srgb, var(--speak) 12%, transparent); }
+.rk-chip--run  .rk-chip__dot { background: var(--speak); }
+.rk-chip--ok   { color: var(--ok-tx);     background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.rk-chip--ok   .rk-chip__dot { background: var(--ok); }
+.rk-chip--hold { color: var(--hold-tx);   background: color-mix(in srgb, var(--hold) 14%, transparent); }
+.rk-chip--hold .rk-chip__dot { background: var(--hold); }
+.rk-chip--fail { color: var(--listen-tx); background: color-mix(in srgb, var(--listen) 11%, transparent); }
+.rk-chip--fail .rk-chip__dot { background: var(--listen); }
+.rk-chip--mut  { color: var(--ink2);      background: var(--panel); }
+.rk-chip--mut  .rk-chip__dot { background: var(--faint); }
+
+/* ───────────────────────── Stats strip (KPIs) ───────────────────────── */
+.rk-stats { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 1px; background: var(--rule); border-bottom: 1px solid var(--rule); }
+.rk-stats__cell { background: var(--panel2); padding: 9px 14px; }
+.rk-stats__k { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); }
+.rk-stats__n { font-size: 14px; font-weight: 700; margin-top: 2px; color: var(--ink); }
+.rk-stats__n small { font-size: 9.5px; color: var(--ink3); font-weight: 500; }
+.rk-stats__n--amber  { color: var(--hold-tx); }
+.rk-stats__n--alert  { color: var(--listen-tx); }
+.rk-stats__n--ok     { color: var(--ok-tx); }
+
+/* ───────────────────────── Tabs ───────────────────────── */
+.rk-tabs { display: flex; gap: 2px; }
+.rk-tab {
+  font-size: 12px; font-weight: 500; color: var(--ink2); padding: 6px 11px; border-radius: 7px 2px 7px 7px;
+  white-space: nowrap; cursor: pointer; border: none; background: none; font-family: var(--sans);
+}
+.rk-tab:hover { color: var(--ink); }
+.rk-tab--on { background: var(--raise); color: var(--ink); font-weight: 600; box-shadow: var(--sh-sm); }
+.rk-tab:focus-visible { outline: 1.5px solid var(--speak); outline-offset: 1px; }
+
+/* ───────────────────────── Toolbar ───────────────────────── */
+.rk-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--rule); background: var(--panel2); flex-wrap: wrap; }
+.rk-toolbar__title { font-weight: 700; font-size: 13px; color: var(--ink); flex-shrink: 0; }
+.rk-toolbar__spacer { margin-left: auto; }
+
+.rk-filterbar { display: flex; align-items: center; gap: 6px; padding: 9px 16px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+.rk-flabel { font-family: var(--mono); font-size: 8px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); margin-right: 2px; }
+.rk-filterchip {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .04em; text-transform: uppercase;
+  border: 1px solid var(--rule); border-radius: 999px; padding: 4px 10px; color: var(--ink2); white-space: nowrap;
+  background: var(--raise); cursor: pointer;
+}
+.rk-filterchip--on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+/* segmented toggle (time windows etc.) */
+.rk-seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; overflow: hidden; }
+.rk-seg button {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .04em; text-transform: uppercase;
+  padding: 4px 10px; color: var(--ink3); cursor: pointer; border: none; border-right: 1px solid var(--rule); background: none;
+}
+.rk-seg button:last-child { border-right: none; }
+.rk-seg button.rk-seg--on { background: var(--ink); color: var(--bg); }
+
+/* live-tail toggle */
+.rk-live {
+  display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 8.5px;
+  letter-spacing: .06em; text-transform: uppercase; border: 1px solid var(--rule); border-radius: 999px;
+  padding: 4px 10px; color: var(--ink3); cursor: pointer; background: var(--raise);
+}
+.rk-live__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.rk-live--on { border-color: color-mix(in srgb, var(--listen) 40%, transparent); color: var(--listen-tx); background: color-mix(in srgb, var(--listen) 6%, transparent); }
+.rk-live--on .rk-live__dot { background: var(--listen); animation: rk-lpulse 1.6s infinite; }
+@keyframes rk-lpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(230,59,46,.4); } 50% { box-shadow: 0 0 0 4px rgba(230,59,46,0); } }
+
+/* ───────────────────────── Table grammar ───────────────────────── */
+.rk-table { display: flex; flex-direction: column; }
+.rk-row { display: grid; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--rule2); align-items: center; font-size: 12px; color: var(--ink); }
+.rk-row:hover:not(.rk-row--head) { background: var(--panel2); }
+.rk-row--head { font-family: var(--mono); font-size: 8px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink3); border-bottom: 1px solid var(--rule); position: sticky; top: 0; background: var(--panel2); z-index: 1; }
+.rk-row--sel { background: var(--panel2); box-shadow: inset 2px 0 0 var(--ink); }
+.rk-row--link { cursor: pointer; }
+.rk-num { text-align: right; font-family: var(--mono); font-size: 10px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.rk-num--tot { color: var(--ink); font-weight: 700; }
+.rk-cell-strong { font-weight: 600; }
+.rk-cell-mut { color: var(--ink3); }
+
+/* status icon cell (toned square) */
+.rk-statico { width: 24px; height: 24px; border-radius: 7px 1px 7px 7px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.rk-statico i { width: 11px; height: 11px; border-radius: 3px; display: block; }
+.rk-statico--ok   { background: color-mix(in srgb, var(--ok) 12%, transparent); }      .rk-statico--ok i   { background: var(--ok); }
+.rk-statico--run  { background: color-mix(in srgb, var(--speak) 12%, transparent); }   .rk-statico--run i  { background: var(--speak); }
+.rk-statico--hold { background: color-mix(in srgb, var(--hold) 14%, transparent); }    .rk-statico--hold i { background: var(--hold); }
+.rk-statico--fail { background: color-mix(in srgb, var(--listen) 12%, transparent); }  .rk-statico--fail i { background: var(--listen); }
+.rk-statico--mut  { background: var(--panel); }                                        .rk-statico--mut i  { background: var(--faint); }
+
+/* ───────────────────────── Detail drawer / pane ───────────────────────── */
+.rk-drawer { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); height: 100%; }
+.rk-drawer__head { padding: 13px 16px 10px; border-bottom: 1px solid var(--rule2); flex-shrink: 0; }
+.rk-drawer__title { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.35; }
+.rk-drawer__meta { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-family: var(--mono); font-size: 9px; color: var(--ink3); }
+.rk-drawer__body { flex: 1; overflow-y: auto; padding: 0 16px; }
+.rk-drawer__label { font-family: var(--mono); font-size: 8px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink3); padding: 12px 0 6px; }
+.rk-drawer__text { font-size: 12px; color: var(--ink2); line-height: 1.55; }
+.rk-drawer__raw { font-family: var(--mono); font-size: 10px; line-height: 1.7; color: var(--ink2); background: var(--panel2); border: 1px solid var(--rule); border-radius: 8px 2px 8px 8px; padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre; margin-bottom: 12px; }
+.rk-drawer__raw .k { color: var(--ink3); }
+.rk-drawer__actions { display: flex; gap: 7px; padding: 11px 16px 14px; border-top: 1px solid var(--rule2); flex-wrap: wrap; flex-shrink: 0; }
+.rk-deeplink { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--ink); border: 1px solid var(--rule); border-radius: 7px 2px 7px 7px; padding: 6px 11px; cursor: pointer; background: var(--raise); }
+.rk-deeplink:hover { border-color: var(--ink3); }
+.rk-drawer__empty { padding: 30px 16px; text-align: center; font-size: 12px; color: var(--ink3); }
+
+/* ───────────────────────── Shape grammar ───────────────────────── */
+.rk-shape { width: 20px; height: 20px; display: inline-block; flex-shrink: 0; }
+.rk-shape--circle  { border-radius: 50%; background: var(--panel); box-shadow: inset 0 0 0 1.4px var(--ink2); }
+.rk-shape--drop    { border-radius: 50% 22% 50% 50%; transform: rotate(45deg); background: var(--panel); box-shadow: inset 0 0 0 1.4px var(--ink2); }
+.rk-shape--square  { border-radius: 24% 6% 24% 24%; background: var(--panel); box-shadow: inset 0 0 0 1.4px var(--ink2); }
+.rk-shape--peak    { clip-path: polygon(50% 4%, 96% 92%, 4% 92%); background: var(--ink2); }
+.rk-shape--ring    { border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 2.6px var(--ink2); }
+.rk-shape--diamond { transform: rotate(45deg); border-radius: 14%; background: var(--panel); box-shadow: inset 0 0 0 1.4px var(--ink2); }
+
+/* ───────────────────────── Empty state ───────────────────────── */
+.rk-empty { border: 1px dashed var(--rule); border-radius: var(--corner); padding: 26px; text-align: center; background: var(--panel2); }
+.rk-empty__drop { width: 34px; height: 34px; border-radius: 50% 50% 50% 7px; transform: rotate(45deg); margin: 0 auto 12px; background: var(--panel); border: 1px solid var(--rule); }
+.rk-empty__t { font-size: 14px; font-weight: 700; color: var(--ink); }
+.rk-empty__s { font-size: 12.5px; color: var(--ink2); margin: 6px auto 12px; max-width: 44ch; line-height: 1.5; }
+
+/* ───────────────────────── Skeleton ───────────────────────── */
+.rk-skeleton { display: flex; flex-direction: column; gap: 9px; }
+.rk-skeleton__bar { height: 13px; border-radius: 6px; background: linear-gradient(90deg, var(--panel) 25%, var(--panel2) 45%, var(--panel) 65%); background-size: 200% 100%; animation: rk-shimmer 1.6s linear infinite; }
+@keyframes rk-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .rk-skeleton__bar, .rk-live--on .rk-live__dot { animation: none; } }
+
+/* ───────────────────────── Toast ───────────────────────── */
+.rk-toast {
+  display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink);
+  border-radius: 9px 2px 9px 9px; padding: 9px 14px; background: color-mix(in srgb, var(--raise) 70%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--sh-md);
+  border: .5px solid color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.rk-toast__dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ok); }
+
+/* ───────────────────────── Inputs ───────────────────────── */
+.rk-input { font-size: 12.5px; color: var(--ink); border: 1px solid var(--rule); border-radius: var(--corner-sm); padding: 8px 12px; background: var(--raise); box-shadow: var(--sh-sm); font-family: var(--sans); }
+.rk-input::placeholder { color: var(--ink3); }
+.rk-input:focus { outline: none; border-color: var(--ink2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent); }
+.rk-input--mono { font-family: var(--mono); font-size: 11.5px; padding: 6px 11px; }
+
+.rk-select { font-family: var(--mono); font-size: 11.5px; color: var(--ink); border: 1px solid var(--rule); border-radius: var(--corner-sm); padding: 6px 11px; background: var(--raise); box-shadow: var(--sh-sm); cursor: pointer; }
+
+.rk-switch { width: 28px; height: 16px; border-radius: 999px; background: var(--ink); position: relative; flex-shrink: 0; border: none; cursor: pointer; padding: 0; transition: background .18s var(--ease); }
+.rk-switch i { position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); transition: left .18s var(--ease), right .18s var(--ease); }
+.rk-switch--off { background: var(--rule); }
+.rk-switch--off i { right: auto; left: 2px; }
+.rk-switch:focus-visible { outline: 1.5px solid var(--speak); outline-offset: 2px; }
+
+.rk-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink2); cursor: pointer; }
+.rk-check__bx { width: 13px; height: 13px; border-radius: 4px 1px 4px 4px; border: 1.5px solid var(--ink2); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.rk-check--on .rk-check__bx { background: var(--ink); border-color: var(--ink); }
+.rk-check--on .rk-check__bx::after { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--bg); }

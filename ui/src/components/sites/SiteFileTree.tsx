@@ -71,10 +71,10 @@ function FileNode({ entry, depth, expanded, onToggle, onSelect }: {
         }}
         title={entry.path}
       >
-        <span style={{ width: 14, textAlign: "center", fontSize: "10px", color: "var(--j-text-muted)" }}>
+        <span style={{ width: 14, textAlign: "center", fontSize: "10px", color: "var(--ink3)" }}>
           {isDir ? (isOpen ? "▼" : "▶") : ""}
         </span>
-        <span style={{ marginLeft: 4, color: isDir ? "var(--j-text-dim)" : "var(--j-text)" }}>
+        <span style={{ marginLeft: 4, color: isDir ? "var(--ink2)" : "var(--ink)" }}>
           {entry.name}
         </span>
       </div>
@@ -102,7 +102,7 @@ const itemStyle: React.CSSProperties = {
 };
 
 const emptyStyle: React.CSSProperties = {
-  color: "var(--j-text-muted)",
+  color: "var(--ink3)",
   fontSize: "12px",
   textAlign: "center",
   padding: "20px",

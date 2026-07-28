@@ -95,6 +95,7 @@ export function findEntities(query: {
   type?: EntityType;
   name?: string;
   nameContains?: string;
+  source?: string;
 }): Entity[] {
   const db = getDb();
   const conditions: string[] = [];
@@ -103,6 +104,11 @@ export function findEntities(query: {
   if (query.type) {
     conditions.push('type = ?');
     params.push(query.type);
+  }
+
+  if (query.source) {
+    conditions.push('source = ?');
+    params.push(query.source);
   }
 
   if (query.name) {

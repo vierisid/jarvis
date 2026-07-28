@@ -31,6 +31,13 @@ const MAX_CONV_ITERATIONS = 8;
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
   userIdentity?: string;
+  /**
+   * Full user profile block (wizard answers + interview facts). Rendered as
+   * its own cache-marked system message, so it MUST be byte-stable across
+   * turns - keep anything volatile (local time, task state) in userIdentity
+   * or ambientFacts instead.
+   */
+  userProfile?: string;
   /** Last N dialogue turns from the persistent conversation - verbatim. */
   recentDialogue?: LLMMessage[];
   /** Optional extra grounding the conv LLM should always see (e.g., active commitments count). */
@@ -106,17 +113,19 @@ export class ConvOrchestrator {
     context: ConvSystemContext,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): AsyncGenerator<ConvStreamEvent> {
-    // Two system messages split at the prompt-cache boundary: the static
-    // persona/instructions prefix is byte-stable across turns (marked
-    // `cache: true` so Anthropic can serve it from cache), while task state
-    // and user identity change every turn and follow unmarked. Note: at
-    // ~1500 tokens the static block may sit below some models' minimum
-    // cacheable prefix and silently not cache - harmless (no premium is
-    // charged); the provider's last-message breakpoint still caches
-    // system + dialogue as one growing prefix.
+    // System messages split at the prompt-cache boundary: the static
+    // persona/instructions prefix and the user profile block are byte-stable
+    // across turns (both marked `cache: true`; the provider places the single
+    // breakpoint on the LAST marked block, so persona + profile cache as one
+    // prefix), while task state and user identity change every turn and
+    // follow unmarked. Note: at ~1500 tokens the static block may sit below
+    // some models' minimum cacheable prefix and silently not cache -
+    // harmless (no premium is charged); the provider's last-message
+    // breakpoint still caches system + dialogue as one growing prefix.
     const dynamicPrompt = this.buildDynamicSystemPrompt(context);
     const messages: LLMMessage[] = [
       { role: 'system', content: this.buildStaticSystemPrompt(), cache: true },
+      ...(context.userProfile ? [{ role: 'system', content: context.userProfile, cache: true } satisfies LLMMessage] : []),
       ...(dynamicPrompt ? [{ role: 'system', content: dynamicPrompt } satisfies LLMMessage] : []),
       ...(context.recentDialogue ?? []),
       { role: 'user', content: userMessage },

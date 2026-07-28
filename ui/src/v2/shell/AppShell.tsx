@@ -13,9 +13,11 @@ import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
 import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
-import { closeRoom, openRoom, type RoomKey } from "../router";
+import { SystemTakeover, SystemBanners, useSystemStateOverride, type TakeoverKind } from "./SystemStates";
+import { BillingBanner } from "../billing/BillingBanner";
+import { closeRoom, openRoom, useV2Route, ROOM_KEYS, type RoomKey } from "../router";
+import { getRoomBody } from "../rooms/RoomBodyRegistry";
 import { setRoomEntry } from "../rooms/roomEntryStore";
-import { useTutorialEventDispatcher } from "../onboarding/TutorialEventContext";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
 import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
@@ -24,7 +26,11 @@ import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
+import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
+import { TopBar } from "./TopBar";
+import { NowRoom } from "./NowRoom";
 import "./AppShell.css";
+import "./roomShell.css";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
   workflow: "workflow",
@@ -63,23 +69,28 @@ function paletteTypeToRoomKey(t: PaletteResultType): RoomKey {
   return objectTypeToRoomKey(PALETTE_TYPE_TO_OBJECT_TYPE[t]);
 }
 
-const ROOM_KEYS_SET: ReadonlySet<RoomKey> = new Set([
-  "workflows",
-  "memory",
-  "tools",
-  "agents",
-  "authority",
-  "logs",
-  "calendar",
-  "goals",
-  "tasks",
-  "content",
-  "workspaces",
-  "settings",
-]);
-
 function isRoomKey(k: string): k is RoomKey {
-  return ROOM_KEYS_SET.has(k as RoomKey);
+  return ROOM_KEYS.has(k as RoomKey); // router's canonical set — no drifting copy
+}
+
+/** Debounced offline: a reconnect blip (or the pre-connect mount state) never
+ *  flashes the takeover, but genuine outages still surface. Once-connected
+ *  sessions get a short grace; a session whose WS NEVER connects (daemon
+ *  serving static UI with a dead handshake) gets a longer one — suppressing
+ *  that case forever would hide the recovery screen exactly when it's needed. */
+function useStableOffline(offline: boolean, graceMs = 5000, neverConnectedGraceMs = 15000): boolean {
+  const [stable, setStable] = useState(false);
+  const everConnectedRef = useRef(false);
+  useEffect(() => {
+    if (!offline) {
+      everConnectedRef.current = true;
+      setStable(false);
+      return;
+    }
+    const t = window.setTimeout(() => setStable(true), everConnectedRef.current ? graceMs : neverConnectedGraceMs);
+    return () => window.clearTimeout(t);
+  }, [offline, graceMs, neverConnectedGraceMs]);
+  return stable;
 }
 
 const VOICE_CYCLE: VoiceState[] = [
@@ -358,111 +369,9 @@ function AppShellLive() {
 
   // ── Palette wiring (Phase 5A) ──
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Phase C — tutorial auto-advance event bus. No-op when the
-  // TutorialEventProvider isn't mounted, so this is free in
-  // post-onboarding daily use.
-  const fireTutorialEvent = useTutorialEventDispatcher();
-  const openPalette = useCallback(() => {
-    setPaletteOpen(true);
-    fireTutorialEvent("palette_opened", undefined as never);
-  }, [fireTutorialEvent]);
-  const closePalette = useCallback(() => {
-    setPaletteOpen(false);
-    fireTutorialEvent("palette_closed", undefined as never);
-  }, [fireTutorialEvent]);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
   usePaletteHotkey(openPalette);
-
-  // Fire tutorial event when a fullscreen Room opens (URL hash flips
-  // to `#/_room_<key>`). AppShell doesn't have direct access to the
-  // V2 route (that lives in AppShellV2); we read the hash and listen
-  // for hashchange. The tutorial's "rooms-fullscreen" step
-  // auto-advances when the user actually opens a room.
-  useEffect(() => {
-    const detectAndFire = () => {
-      const hash = window.location.hash;
-      const m = hash.match(/^#\/?_room_([a-z]+)$/);
-      if (m && m[1]) {
-        fireTutorialEvent("room_opened", { key: m[1] as RoomKey });
-      } else {
-        fireTutorialEvent("room_closed", undefined as never);
-      }
-    };
-    detectAndFire(); // initial
-    window.addEventListener("hashchange", detectAndFire);
-    return () => window.removeEventListener("hashchange", detectAndFire);
-  }, [fireTutorialEvent]);
-
-  // Phase C — sample-data injection for the tutorial. The gate
-  // dispatches window CustomEvents because it can't reach the
-  // useLiveThread instance directly (lives inside AppShell scope).
-  // Subscribing here keeps AppShell the single owner of `live.*`
-  // and avoids prop-drilling injection helpers up to OnboardingGate.
-  useEffect(() => {
-    const onInjectCard = () => {
-      live.injectCard({
-        objectType: "memory",
-        ref: "tutorial-sample-memory",
-        title: "Sample memory: Vieri's onboarding",
-        summary:
-          "This is what an InlineCard looks like. I bring objects up like this whenever I reference something concrete in the conversation.",
-        meta: "onboarding · sample",
-        status: { label: "Sample", tone: "neutral" },
-      });
-    };
-    const onInjectRoomWindow = () => {
-      live.openRoomWindow("memory");
-    };
-    // Per-room walkthrough block — the tutorial drives Room nav so it
-    // can spotlight each one in turn. We use openRoom/closeRoom (the
-    // same helpers used by the voice-action and palette paths) so the
-    // tutorial-driven nav behaves exactly like a user-driven nav.
-    const onOpenRoom = (e: Event) => {
-      const detail = (e as CustomEvent<{ key?: RoomKey }>).detail;
-      if (detail?.key && isRoomKey(detail.key)) {
-        setRoomEntry(detail.key, "voice");
-        openRoom(detail.key);
-      }
-    };
-    const onCloseRoom = () => {
-      if (window.location.hash.startsWith("#/_room_")) closeRoom();
-    };
-    window.addEventListener("v2-tutorial:inject-card", onInjectCard);
-    window.addEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
-    window.addEventListener("v2-tutorial:open-room", onOpenRoom);
-    window.addEventListener("v2-tutorial:close-room", onCloseRoom);
-    return () => {
-      window.removeEventListener("v2-tutorial:inject-card", onInjectCard);
-      window.removeEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
-      window.removeEventListener("v2-tutorial:open-room", onOpenRoom);
-      window.removeEventListener("v2-tutorial:close-room", onCloseRoom);
-    };
-  }, [live]);
-
-  // Phase C — mic mute control for the tutorial overlay. The TutorialRoom
-  // dispatches `mute-mic` on mount / `unmute-mic` on unmount so the
-  // narration playing through the speakers doesn't loop back through the
-  // mic and get sent to the chat agent. We capture whatever the user's
-  // muted state was before the tutorial mounted and restore it on unmount.
-  const preTutorialMutedRef = useRef<boolean | null>(null);
-  useEffect(() => {
-    const onMute = () => {
-      if (preTutorialMutedRef.current === null) {
-        preTutorialMutedRef.current = voice.muted;
-      }
-      if (!voice.muted) voice.setMuted(true);
-    };
-    const onUnmute = () => {
-      const prior = preTutorialMutedRef.current;
-      preTutorialMutedRef.current = null;
-      if (prior === false) voice.setMuted(false);
-    };
-    window.addEventListener("v2-tutorial:mute-mic", onMute);
-    window.addEventListener("v2-tutorial:unmute-mic", onUnmute);
-    return () => {
-      window.removeEventListener("v2-tutorial:mute-mic", onMute);
-      window.removeEventListener("v2-tutorial:unmute-mic", onUnmute);
-    };
-  }, [voice]);
 
   // ── Notification center (Phase 6.2-A) ──
   const threadRef = useRef<ThreadHandle | null>(null);
@@ -473,13 +382,7 @@ function AppShellLive() {
     notices: live.notices,
   });
   const [notifOpen, setNotifOpen] = useState(false);
-  const toggleNotif = useCallback(() => {
-    setNotifOpen((v) => {
-      const next = !v;
-      if (next) fireTutorialEvent("notif_opened", undefined as never);
-      return next;
-    });
-  }, [fireTutorialEvent]);
+  const toggleNotif = useCallback(() => setNotifOpen((v) => !v), []);
   const closeNotif = useCallback(() => setNotifOpen(false), []);
 
   // ⌥N (Alt+N) toggles the drawer. Skipped while typing in editable fields
@@ -891,6 +794,22 @@ interface ShellLayoutProps {
   notificationsSlot?: React.ReactNode;
 }
 
+/** Render the active room's body (expanded) inside the shell surface. */
+function RoomSurface({ roomKey }: { roomKey: RoomKey }) {
+  const Body = getRoomBody(roomKey);
+  return <Body mode="expanded" />;
+}
+
+/** Live-state microcopy on the Talk hint line — the old rail's lines, verbatim. */
+const TALK_HINT: Record<VoiceState, string> = {
+  idle: "Tap the pebble, or say “Hey Jarvis.”",
+  listening: "Listening. Pause to send.",
+  thinking: "Thinking through that…",
+  speaking: "Speaking — the reply is in the thread.",
+  "awaiting-approval": "Answer here, or say “yes.”",
+  muted: "Mic is muted. Tap mute to resume.",
+};
+
 function ShellLayout({
   connection,
   items,
@@ -922,60 +841,187 @@ function ShellLayout({
   onToggleNotifications,
   notificationsSlot,
 }: ShellLayoutProps) {
+  const route = useV2Route();
+  const [collapsed, toggleCollapse] = useIndexCollapsed();
+  const [arranging, setArranging] = useState(false);
+  const [talkOpen, setTalkOpen] = useState(false);
+  const [talkIn, setTalkIn] = useState(false);
+
+  // awaiting-approval renders as the "asking" (amber) pebble state.
+  const dataState = voiceState === "awaiting-approval" ? "asking" : voiceState;
+
+  // ⌘J summons/dismisses Talk; Esc dismisses it. No editable-field gate: the
+  // chord never inserts text, and Esc must work from inputs inside Talk.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J")) {
+        e.preventDefault();
+        setTalkOpen((o) => !o);
+      } else if (e.key === "Escape" && talkOpen) {
+        setTalkOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [talkOpen]);
+
+  // Drop-to-glass enter animation (two RAFs so the transition catches).
+  useEffect(() => {
+    if (!talkOpen) { setTalkIn(false); return; }
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => { raf2 = requestAnimationFrame(() => setTalkIn(true)); });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [talkOpen]);
+
+  // System states. Offline is wired to the real connection; the rest (updating,
+  // crash, out-of-tokens, and both banners) are previewable via the override
+  // until their backend triggers (update feed, crash capture, quota) land.
+  // The full-screen takeover only fires once a previously-established
+  // connection has been down for a few seconds — a WS blip (or the initial
+  // pre-connect state on mount) must not flash a takeover.
+  const sysOverride = useSystemStateOverride();
+  const offlineStable = useStableOffline(connection === "offline");
+  const takeover: TakeoverKind | null = offlineStable ? "offline" : sysOverride.takeover;
+  const sysHandlers = useMemo(
+    () => ({
+      onRetry: () => window.dispatchEvent(new Event("jarvis:ws-reconnect")),
+      onCheckStatus: () => window.open("https://status.usejarvis.com", "_blank", "noopener"),
+      onReopen: () => window.location.reload(),
+      onSendReport: () => window.open("https://usejarvis.com/support", "_blank", "noopener"),
+      onUpgrade: () => window.open("https://usejarvis.com/pricing", "_blank", "noopener"),
+      onTopUp: () => window.open("https://usejarvis.com/pricing", "_blank", "noopener"),
+      onSwitchLocal: () => { window.location.hash = "#/_room_settings"; },
+    }),
+    [],
+  );
+
   return (
-    <div className="v2-shell">
-      <div className="v2-shell__header">
-        <Header
-          connection={connection}
-          onPalette={onOpenPalette}
-          notificationCount={notificationCount}
-          notificationsOpen={notificationsOpen}
-          onToggleNotifications={onToggleNotifications}
-          notificationsSlot={notificationsSlot}
+    <div className={`rshell${collapsed ? " slim" : ""}`} data-state={dataState}>
+      <IndexSidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
+
+      <TopBar
+        connection={connection}
+        voiceState={voiceState}
+        arranging={arranging}
+        onArrange={() => setArranging((a) => !a)}
+        onOpenPalette={onOpenPalette}
+        notificationCount={notificationCount}
+        notificationsOpen={notificationsOpen}
+        onToggleNotifications={onToggleNotifications}
+      />
+
+      {/* Surface — the active room owns it; the conversation is summoned.
+          Render the room BODY (mode="expanded") directly, not the RoomShell-
+          wrapped overlay, so the room sheds its own header/back chrome and
+          inherits the Index + top bar around it. */}
+      <div className="rs-main">
+        {/* Banners over a usable app — sit under the top bar, push content down. */}
+        <SystemBanners
+          update={sysOverride.banners.includes("update")}
+          providerBusy={sysOverride.banners.includes("rate")}
         />
+        {/* Subscription state banner (trial / past-due / canceling / expired). */}
+        <BillingBanner />
+        {route.kind === "room" ? (
+          <div className="rs-surface rs-room">
+            <RoomSurface roomKey={route.key} />
+          </div>
+        ) : (
+          <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
+        )}
       </div>
 
-      <PausedTasksBanner />
+      {/* Docked pebble — opens/closes Talk. It does NOT start voice; the
+          mic only engages from the pebble inside the Talk panel (or PTT). */}
+      <button
+        className="rs-peb"
+        aria-label={talkOpen ? "Close Talk" : "Open Talk"}
+        aria-expanded={talkOpen}
+        onClick={() => setTalkOpen((o) => !o)}
+      >
+        <span className="gdrop live"><span className="in" /><span className="ring" /></span>
+        <span className="rs-stl">{dataState}</span>
+      </button>
 
-      <div className="v2-shell__thread">
-        <Thread
-          ref={threadRef}
-          items={items}
-          onApprove={onApprove}
-          onCancel={onCancel}
-          onFocusCard={onFocusCard}
-          onClarifier={onClarifier}
-          onRepeatBack={onRepeatBack}
-          onRoomClose={onRoomClose}
-          onRoomMinimize={onRoomMinimize}
-          onRoomRestore={onRoomRestore}
-          onRoomExpand={onRoomExpand}
-          onRoomLayoutChange={onRoomLayoutChange}
-          dev={devAppend ? { onAppend: devAppend } : undefined}
-        />
-      </div>
+      {/* Talk — everything the VoiceRail + thread + composer did, summoned. */}
+      {talkOpen && (
+        <div className={`rs-talk${talkIn ? " in" : ""}`} role="dialog" aria-label="Talk to Jarvis">
+          <div className="th">
+            <button
+              className="rs-talk-mic"
+              onClick={onTapOrb}
+              aria-label={voiceState === "idle" || voiceState === "muted" ? "Start talking" : "Stop"}
+              aria-pressed={voiceState !== "idle" && voiceState !== "muted"}
+              title="Tap to talk"
+            >
+              <span className="gdrop live"><span className="in" /><span className="ring" /></span>
+            </button>
+            <div className="rs-talk-title">
+              <span className="tt">Talk</span>
+              <span className="rs-talk-sub">
+                {voiceState === "idle" ? "tap the pebble to talk" : TALK_HINT[voiceState]}
+              </span>
+            </div>
+            <button className="esc" onClick={() => setTalkOpen(false)} aria-label="Close Talk">⌘J · esc</button>
+          </div>
 
-      <div className="v2-shell__composer">
-        <Composer
-          onSubmit={onSubmit}
-          onSlash={onOpenPalette}
-          disabled={composerDisabled}
-          placeholder={composerPlaceholder}
-        />
-      </div>
+          <div className="rs-talk-thread">
+            <PausedTasksBanner />
+            <Thread
+              ref={threadRef}
+              items={items}
+              onApprove={onApprove}
+              onCancel={onCancel}
+              onFocusCard={onFocusCard}
+              onClarifier={onClarifier}
+              onRepeatBack={onRepeatBack}
+              onRoomClose={onRoomClose}
+              onRoomMinimize={onRoomMinimize}
+              onRoomRestore={onRoomRestore}
+              onRoomExpand={onRoomExpand}
+              onRoomLayoutChange={onRoomLayoutChange}
+              dev={devAppend ? { onAppend: devAppend } : undefined}
+            />
+          </div>
 
-      <div className="v2-shell__rail">
-        <VoiceRail
-          state={voiceState}
-          suggestions={suggestions}
-          vu={vu}
-          device="Default microphone"
-          partialTranscript={partialTranscript}
-          onTapOrb={onTapOrb}
-          onSuggestion={onSuggestion}
-          onToggleMute={onToggleMute}
-        />
-      </div>
+          {partialTranscript && (
+            <div style={{ padding: "0 14px 8px", fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink3)" }}>
+              {partialTranscript}…
+            </div>
+          )}
+
+          {suggestions.length > 0 && (
+            <div style={{ padding: "0 14px 10px", display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {suggestions.slice(0, 3).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => onSuggestion(s)}
+                  style={{ fontSize: 11, color: "var(--ink2)", border: "1px solid var(--rule)", borderRadius: 999, padding: "5px 11px", background: "var(--raise)", cursor: "pointer", fontFamily: "var(--sans)" }}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="rs-talk-foot">
+            <div style={{ padding: "11px 13px" }}>
+              <Composer
+                onSubmit={onSubmit}
+                onSlash={onOpenPalette}
+                disabled={composerDisabled}
+                placeholder={composerPlaceholder}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notificationsSlot}
+
+      {/* Full-window takeover — offline is live (fades back to the app on
+          reconnect); updating/crash/out-of-tokens preview via the override. */}
+      <SystemTakeover kind={takeover} handlers={sysHandlers} />
     </div>
   );
 }
