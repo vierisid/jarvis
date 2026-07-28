@@ -351,6 +351,7 @@ export interface SendRetryOptions {
   maxDelayMs?: number;
   budgetMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
   isTransient?: (err: unknown) => boolean;
 }
 
@@ -358,20 +359,42 @@ export type SendRetryResult =
   | { ok: true; attempts: number }
   | { ok: false; attempts: number; error: string };
 
+/** Runtime error codes for connection-level failures (Node + Bun spellings). */
+const TRANSIENT_ERROR_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
+  'ConnectionRefused', 'ConnectionClosed', 'FailedToOpenSocket',
+]);
+
 function defaultIsTransient(err: unknown): boolean {
   // An explicit retry-after from the provider always means "try again",
   // regardless of how the error message is worded.
   if (typeof (err as { retryAfterMs?: unknown })?.retryAfterMs === 'number') return true;
+  if (err instanceof Error) {
+    // AbortError is fetchWithTimeout's timeout. Retrying a timed-out send can
+    // duplicate a message that was actually delivered (Telegram has no
+    // idempotency key) — accepted: a duplicate beats a silently dropped
+    // approval request.
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+    const errCode = (err as { code?: unknown }).code;
+    if (typeof errCode === 'string' && TRANSIENT_ERROR_CODES.has(errCode)) return true;
+  }
   const code = classifyErrorString(err instanceof Error ? err.message : String(err));
   return code === 'rate_limit' || code === 'network' || code === 'server';
 }
 
 /**
  * Send a message through an adapter, retrying transient failures (rate
- * limits, network errors) with exponential backoff. Honors an explicit
- * retryAfterMs on the thrown error (e.g. Telegram 429 retry_after) when it
- * exceeds the backoff. Never sleeps past the total budget: if the required
- * wait doesn't fit, it fails immediately instead of stalling the caller.
+ * limits, network errors, timeouts) with exponential backoff. An explicit
+ * retryAfterMs on the thrown error (e.g. Telegram 429 retry_after) is
+ * honored even beyond the per-wait cap, which only bounds the synthetic
+ * backoff. The budget is a wall-clock deadline covering sleeps and attempt
+ * duration: if the required wait doesn't fit before the deadline, it fails
+ * immediately instead of stalling the caller.
+ *
+ * Note: retrying re-runs the adapter's whole sendMessage, so a multi-chunk
+ * (>4096 char) text that fails mid-way resends its leading chunks. Discord
+ * rarely gets here at all — discord.js queues 429s internally, and the
+ * adapter's own errors (not connected, invalid channel) are non-transient.
  */
 export async function sendWithRetry(
   adapter: Pick<ChannelAdapter, 'name' | 'sendMessage'>,
@@ -383,8 +406,9 @@ export async function sendWithRetry(
   const baseDelayMs = opts?.baseDelayMs ?? SEND_RETRY_BASE_DELAY_MS;
   const maxDelayMs = opts?.maxDelayMs ?? SEND_RETRY_MAX_DELAY_MS;
   const sleep = opts?.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const now = opts?.now ?? Date.now;
   const isTransient = opts?.isTransient ?? defaultIsTransient;
-  let budgetMs = opts?.budgetMs ?? SEND_RETRY_BUDGET_MS;
+  const deadline = now() + (opts?.budgetMs ?? SEND_RETRY_BUDGET_MS);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -397,18 +421,14 @@ export async function sendWithRetry(
       }
 
       const retryAfterMs = (err as { retryAfterMs?: unknown }).retryAfterMs;
-      const backoff = baseDelayMs * Math.pow(2, attempt - 1);
-      const desired = Math.max(typeof retryAfterMs === 'number' ? retryAfterMs : 0, backoff);
-      // Compare the uncapped wait against the budget: if the provider demands
-      // more time than we can afford, fail now instead of stalling the caller.
-      if (desired > budgetMs) {
+      const backoff = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));
+      const delay = Math.max(typeof retryAfterMs === 'number' ? retryAfterMs : 0, backoff);
+      if (now() + delay > deadline) {
         return { ok: false, attempts: attempt, error: message };
       }
-      const delay = Math.min(maxDelayMs, desired);
 
       console.warn(`[ChannelService] Send to ${adapter.name} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms: ${message}`);
       await sleep(delay);
-      budgetMs -= delay;
     }
   }
   // Unreachable: the loop always returns on the last attempt.

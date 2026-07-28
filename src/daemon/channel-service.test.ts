@@ -247,13 +247,72 @@ describe("sendWithRetry", () => {
     expect(sleeps).toEqual([2_000, 4_000, 8_000]);
   });
 
-  test("caps a single wait at maxDelayMs even when retryAfterMs asks for more", async () => {
+  test("honors an explicit retryAfterMs beyond the per-wait cap when it fits the budget", async () => {
+    // Sleeping only the capped 30s would retry inside Telegram's stated
+    // penalty window and burn an attempt on a guaranteed 429.
     const adapter = new ScriptedAdapter([rateLimitError(45_000)]);
     const { sleeps, sleep } = makeSleepRecorder();
 
-    const res = await sendWithRetry(adapter, "user", "hi", { sleep, maxDelayMs: 30_000 });
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, maxDelayMs: 30_000, budgetMs: 60_000 });
 
     expect(res).toEqual({ ok: true, attempts: 2 });
-    expect(sleeps).toEqual([30_000]);
+    expect(sleeps).toEqual([45_000]);
+  });
+
+  test("caps the synthetic backoff at maxDelayMs", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(), rateLimitError()]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 20_000, maxDelayMs: 30_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 3 });
+    expect(sleeps).toEqual([20_000, 30_000]);
+  });
+
+  test("depletes the budget across attempts, counting elapsed wall-clock time", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(), rateLimitError(), rateLimitError()]);
+    let clock = 0;
+    const sleeps: number[] = [];
+    const sleep = async (ms: number) => {
+      sleeps.push(ms);
+      clock += ms;
+    };
+
+    const res = await sendWithRetry(adapter, "user", "hi", {
+      sleep,
+      now: () => clock,
+      baseDelayMs: 2_000,
+      budgetMs: 10_000,
+    });
+
+    // Backoff wants 2s, 4s, then 8s — but after 6s of sleeping only 4s of
+    // budget remains, so the third retry fails fast instead of sleeping.
+    expect(res.ok).toBe(false);
+    expect(res.attempts).toBe(3);
+    expect(sleeps).toEqual([2_000, 4_000]);
+  });
+
+  test("retries a fetch timeout (AbortError)", async () => {
+    const abortError = new Error("The operation was aborted.");
+    abortError.name = "AbortError";
+    const adapter = new ScriptedAdapter([abortError]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(sleeps).toEqual([2_000]);
+  });
+
+  test("retries connection-level failures identified by error code", async () => {
+    const connError = new Error("Unable to connect") as Error & { code?: string };
+    connError.code = "ConnectionRefused";
+    const adapter = new ScriptedAdapter([connError]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(sleeps).toEqual([2_000]);
   });
 });
