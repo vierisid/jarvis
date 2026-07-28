@@ -8,7 +8,7 @@ import type { ApprovalRequest } from './approval.ts';
 
 function makeRequest(overrides?: Partial<ApprovalRequest>): ApprovalRequest {
   return {
-    id: 'req-1234-5678-abcd',
+    id: '3f2a9b1c-4d5e-4f60-8a7b-9c0d1e2f3a4b',
     agent_id: 'agent-1',
     agent_name: 'Test Agent',
     tool_name: 'execute_command',
@@ -84,6 +84,11 @@ describe('ApprovalDelivery', () => {
     expect(message).toContain(request.tool_name);
     expect(message).toContain(request.agent_name);
     expect(message).toContain(request.reason);
+
+    // The reply command must match the approve/deny regex in
+    // channel-service.ts handleChannelMessage, or replies can't be parsed.
+    const approveLine = message.split('\n').find((line) => line.trim().startsWith('approve '))!;
+    expect(approveLine.trim()).toMatch(/^approve\s+[a-f0-9-]+$/);
   });
 
   test('always pushes to the websocket broadcaster', async () => {
@@ -92,7 +97,7 @@ describe('ApprovalDelivery', () => {
     delivery.setBroadcaster(broadcaster);
 
     const normal = makeRequest({ urgency: 'normal' });
-    const urgent = makeRequest({ id: 'req-urgent-0001', urgency: 'urgent' });
+    const urgent = makeRequest({ id: 'a1b2c3d4-0000-4000-8000-000000000001', urgency: 'urgent' });
     await delivery.deliver(normal);
     await delivery.deliver(urgent);
 
