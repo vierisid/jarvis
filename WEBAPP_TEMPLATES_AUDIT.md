@@ -7,6 +7,18 @@
 
 Branch: `worktree-webapp-templates` (worktree at `.claude/worktrees/webapp-templates`, branched from `6fa5cfb`).
 
+> **TRIGGER REDESIGN 2026-07-28 (supersedes the matcher described throughout this doc):** templates
+> are no longer matched against the user's MESSAGE at all. They are delivered when the browser
+> actually LANDS on a known site — `browser_navigate`/`browser_snapshot` resolve the page URL via
+> `getWebappTemplateByDomain` and append the template to the tool result once per session
+> (`src/actions/tools/webapp-template-injection.ts`). Rationale: message-mention injection flooded
+> context for requests that never browse ("reply to a facebook.com post about reddit.com" loaded
+> two templates for nothing) and the word-bounded app-name matcher could never fix homonyms
+> (Linear/Threads/Notion/Medium as English words). The scored message matcher and the keyword
+> field's runtime role were removed; `keywords:` in the YAML files is now inert metadata, and the
+> lint's keyword-hygiene rules went with it. References below to the scored matcher, RC5 keyword
+> hygiene, and explicit-beats-keyword describe the superseded design.
+
 Audited against the **real runtime**, not the templates' own assumptions. Key source files:
 - Matcher/injection: `src/vault/webapp-templates.ts:169-207` (case-insensitive **substring** match of app_name, domains, keywords against the whole user message; ALL matches inject their full instructions block)
 - Seeder: `src/vault/webapp-template-seeds.ts` (repo `webapp-templates/` + `~/.jarvis/webapp-templates/` overrides; override dir currently empty)

@@ -2,14 +2,16 @@
  * Webapp template linter — keeps the template library honest.
  *
  * Checks every webapp-templates/*.yaml against the REAL browser tool surface
- * and the trigger-hygiene rules from WEBAPP_TEMPLATES_AUDIT.md:
+ * and the structural rules from WEBAPP_TEMPLATES_AUDIT.md:
  *   - schema: required fields, sane types
  *   - executability: only real browser_* tools, no desktop-tool routing,
  *     no Chrome-reserved shortcuts, correct browser_upload_file signature
- *   - keyword hygiene: no keywords that fire on everyday non-webapp requests,
- *     no redundant (app-name-containing) keywords, no cross-template shadowing
  *   - structure: state recognition present, no positional selectors on
  *     destructive actions, size budget
+ *
+ * (Keyword-hygiene rules were removed along with the message-mention matcher:
+ * templates are now delivered by the URL the browser actually lands on, so
+ * the keywords field is inert metadata.)
  *
  * Usage: bun run scripts/lint-webapp-templates.ts [dir]
  * Exits 1 if any template has errors (warnings don't fail the build).
@@ -18,7 +20,6 @@
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { parse as parseYAML } from 'yaml';
-import { wordBoundedIncludes } from '../src/vault/webapp-templates.ts';
 
 export type LintSeverity = 'error' | 'warning';
 
@@ -61,46 +62,6 @@ const KNOWN_BROWSER_TOOLS = new Set([
  */
 const CHROME_RESERVED_RE = /\bctrl\s*[+,]\s*(shift\s*[+,]\s*)?(n|t|w|f5|[0-9])\b/i;
 
-/**
- * Everyday requests that must NOT trigger any webapp template. A keyword that
- * fires on one of these will hijack unrelated conversations with a full
- * template injection.
- */
-export const NON_WEBAPP_PROMPTS = [
-  'create a folder for the screenshots',
-  'delete the file config.old from the repo',
-  'find a file called notes.txt on my desktop',
-  'open the file in vim',
-  'rename the file to index.ts',
-  'move the file into src/utils',
-  'list files in the downloads folder',
-  'what is the word count of this README',
-  'insert a comment above this function',
-  'read the docs for bun test',
-  'take notes while I dictate',
-  'my presentation is tomorrow morning',
-  'make a deck of flashcards for spanish',
-  'add event listener to the button',
-  'create event handlers for the form',
-  'reschedule the cron job to midnight',
-  'what do i have to change in this file',
-  'do i have anything misconfigured here',
-  'find the event loop bug',
-  'enter data into the signup form',
-  'add a row to the database table',
-  'add a column to the users table',
-  'find and replace across the project',
-  'add a tab to the settings page',
-  'sort the data with pandas',
-  'filter the data by date in sql',
-  'send a message to the team on discord',
-  'post in channel on discord',
-  'check my messages on telegram',
-  'upload a file to the s3 bucket',
-  'give access to the deploy key',
-  'text message me when the build is done',
-];
-
 const MAX_INSTRUCTIONS_WARN = 12_000;
 const MAX_INSTRUCTIONS_ERROR = 24_000;
 
@@ -134,8 +95,6 @@ export function lintTemplates(templates: LintableTemplate[]): LintFinding[] {
     }
 
     const instructions = typeof t.instructions === 'string' ? t.instructions : '';
-    const appName = typeof t.app_name === 'string' ? t.app_name : '';
-    const keywords = Array.isArray(t.keywords) ? (t.keywords as string[]) : [];
 
     // --- size budget ---
     if (instructions.length > MAX_INSTRUCTIONS_ERROR) {
@@ -201,40 +160,6 @@ export function lintTemplates(templates: LintableTemplate[]): LintFinding[] {
       }
     }
 
-    // --- keyword hygiene: genericity against the corpus ---
-    for (const keyword of keywords) {
-      const hits = NON_WEBAPP_PROMPTS.filter(p => wordBoundedIncludes(p, keyword.toLowerCase()));
-      if (hits.length > 0) {
-        add(file, 'error', 'generic-keyword',
-          `keyword "${keyword}" fires on non-webapp requests, e.g. "${hits[0]}"`);
-      }
-    }
-
-    // --- keyword hygiene: redundant keywords (app name already matches) ---
-    if (appName) {
-      const redundant = keywords.filter(k => wordBoundedIncludes(k, appName.toLowerCase()));
-      if (redundant.length > 0) {
-        add(file, 'warning', 'redundant-keyword',
-          `${redundant.length} keyword(s) contain the app name and are dead weight (the app name already matches): ${redundant.slice(0, 3).map(k => `"${k}"`).join(', ')}${redundant.length > 3 ? ', …' : ''}`);
-      }
-    }
-  }
-
-  // Cross-template: keyword shadowing (A's keyword inside B's keyword → both inject)
-  for (const a of templates) {
-    const aKeywords = Array.isArray(a.keywords) ? (a.keywords as string[]) : [];
-    for (const b of templates) {
-      if (a === b) continue;
-      const bKeywords = Array.isArray(b.keywords) ? (b.keywords as string[]) : [];
-      for (const ka of aKeywords) {
-        for (const kb of bKeywords) {
-          if (ka.toLowerCase() !== kb.toLowerCase() && wordBoundedIncludes(kb, ka.toLowerCase())) {
-            add(a.file, 'warning', 'keyword-shadowing',
-              `keyword "${ka}" is contained in ${String(b.app_name)}'s keyword "${kb}" — a message with the longer phrase matches both templates`);
-          }
-        }
-      }
-    }
   }
 
   return findings;

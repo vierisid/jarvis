@@ -13,7 +13,6 @@ export type PromptContext = {
   contentPipeline?: string[];
   authorityRules?: string;
   activeGoals?: string;
-  webappInstructions?: string;
   hasSidecars?: boolean;
   effectiveAuthorityLevel?: number;
 };
@@ -188,15 +187,6 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
   // changes per turn and must not sit inside the cacheable prefix.
   const staticPrompt = sections.join('\n');
   const dynamicSections: string[] = [];
-
-  // Webapp-specific browser instructions (loaded from DB on demand)
-  if (context?.webappInstructions) {
-    dynamicSections.push('# Webapp Navigation Instructions');
-    dynamicSections.push('The following instructions are specific to the web app the user is asking about. Follow these closely when interacting with this app via browser tools:');
-    dynamicSections.push('');
-    dynamicSections.push(context.webappInstructions);
-    dynamicSections.push('');
-  }
 
   // Current Context
   if (context) {

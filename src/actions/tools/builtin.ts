@@ -16,6 +16,7 @@ import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
+import { withWebappTemplateInstructions } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 
@@ -574,13 +575,14 @@ export const browserNavigateTool: ToolDefinition = {
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
-      return routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
+      const result = await routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
+      return withWebappTemplateInstructions(result, params.url as string);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.navigate(params.url as string);
-      return formatSnapshot(snap);
+      return withWebappTemplateInstructions(formatSnapshot(snap), params.url as string);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -601,13 +603,14 @@ export const browserSnapshotTool: ToolDefinition = {
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability("browser");
     if (target) {
-      return routeToSidecar(target, 'browser_snapshot', {}, 'browser');
+      const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
+      return withWebappTemplateInstructions(result);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.snapshot();
-      return formatSnapshot(snap);
+      return withWebappTemplateInstructions(formatSnapshot(snap));
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -969,7 +972,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async (params) => {
         try {
           const snap = await ctrl.navigate(params.url as string);
-          return formatSnapshot(snap);
+          return withWebappTemplateInstructions(formatSnapshot(snap), params.url as string);
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -983,7 +986,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async () => {
         try {
           const snap = await ctrl.snapshot();
-          return formatSnapshot(snap);
+          return withWebappTemplateInstructions(formatSnapshot(snap));
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }

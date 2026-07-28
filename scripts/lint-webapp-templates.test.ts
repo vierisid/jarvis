@@ -97,30 +97,14 @@ describe('lintTemplates', () => {
     expect(rules(fine)).not.toContain('positional-destructive');
   });
 
-  test('generic keywords that fire on everyday requests are errors', () => {
-    const findings = lintTemplates([tpl({ keywords: ['create a folder', 'testapp report'] })]);
-    const generic = findings.filter(f => f.rule === 'generic-keyword');
-    expect(generic).toHaveLength(1);
-    expect(generic[0]!.message).toContain('create a folder');
-  });
-
-  test('keywords containing the app name are flagged as redundant', () => {
+  test('keywords are inert metadata — no hygiene findings on any content', () => {
+    // The message-mention matcher is gone (templates deliver by browsed URL),
+    // so even keywords that used to be trigger hazards must not be flagged.
     const findings = lintTemplates([tpl({
       app_name: 'Notion',
-      keywords: ['open notion', 'notion page', 'take a structured note'],
+      keywords: ['create a folder', 'open notion', 'notion page'],
     })]);
-    const redundant = findings.find(f => f.rule === 'redundant-keyword');
-    expect(redundant).toBeDefined();
-    expect(redundant!.message).toContain('2 keyword(s)');
-  });
-
-  test('cross-template keyword shadowing is a warning on the shorter keyword', () => {
-    const sheets = tpl({ file: 'sheets.yaml', app_name: 'Sheets', keywords: ['add a row'] });
-    const notion = tpl({ file: 'notion.yaml', app_name: 'Notion', keywords: ['add a row in notion'] });
-    const findings = lintTemplates([sheets, notion]);
-    const shadow = findings.find(f => f.rule === 'keyword-shadowing');
-    expect(shadow).toBeDefined();
-    expect(shadow!.file).toBe('sheets.yaml');
+    expect(findings).toEqual([]);
   });
 });
 

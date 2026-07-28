@@ -2,11 +2,9 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { initDatabase } from './schema.ts';
 import {
   upsertWebappTemplate,
-  matchWebappTemplates,
-  matchWebappTemplatesScored,
   getWebappTemplateByDomain,
+  getWebappInstructionsForUrl,
   formatWebappInstructions,
-  wordBoundedIncludes,
   type WebappTemplate,
 } from './webapp-templates.ts';
 
@@ -19,104 +17,6 @@ function seed(t: Partial<Parameters<typeof upsertWebappTemplate>[0]> & { app_nam
     ...t,
   });
 }
-
-describe('wordBoundedIncludes', () => {
-  test('matches whole words and phrases', () => {
-    expect(wordBoundedIncludes('send it on slack please', 'slack')).toBe(true);
-    expect(wordBoundedIncludes('Open Slack.', 'slack')).toBe(true);
-    expect(wordBoundedIncludes('check my email now', 'check my email')).toBe(true);
-  });
-
-  test('does not match inside larger words', () => {
-    expect(wordBoundedIncludes('I have many notions about this', 'notion')).toBe(false);
-    expect(wordBoundedIncludes('use gcalc for that', 'gcal')).toBe(false);
-    expect(wordBoundedIncludes('rescheduled the job', 'reschedule')).toBe(false);
-    expect(wordBoundedIncludes('unslackable', 'slack')).toBe(false);
-  });
-
-  test('handles phrases with non-word edges', () => {
-    expect(wordBoundedIncludes('send an e-mail to bob', 'e-mail')).toBe(true);
-    expect(wordBoundedIncludes('emailing is fine', 'e-mail')).toBe(false);
-  });
-
-  test('empty phrase never matches', () => {
-    expect(wordBoundedIncludes('anything', '')).toBe(false);
-    expect(wordBoundedIncludes('anything', '  ')).toBe(false);
-  });
-});
-
-describe('matchWebappTemplates (scored matcher)', () => {
-  beforeEach(() => {
-    initDatabase(':memory:');
-    seed({
-      app_name: 'Slack',
-      domains: ['app.slack.com'],
-      keywords: ['slack message', 'slack dm'],
-    });
-    seed({
-      app_name: 'WhatsApp',
-      domains: ['web.whatsapp.com'],
-      keywords: ['send a message to', 'check my messages'],
-    });
-    seed({
-      app_name: 'Google Docs',
-      domains: ['docs.google.com/document'],
-      keywords: ['create a document'],
-    });
-    seed({
-      app_name: 'Google Sheets',
-      domains: ['docs.google.com/spreadsheets', 'sheets.google.com'],
-      keywords: ['spreadsheet'],
-    });
-  });
-
-  test('explicit app-name mention wins over another template keyword', () => {
-    // "send a message to" is a WhatsApp keyword, but Slack is named explicitly
-    const matches = matchWebappTemplates('send a message to John on Slack');
-    expect(matches.map(m => m.app_name)).toEqual(['Slack']);
-  });
-
-  test('keyword-only match returns single best template', () => {
-    const matches = matchWebappTemplates('can you check my messages?');
-    expect(matches.map(m => m.app_name)).toEqual(['WhatsApp']);
-  });
-
-  test('app name does not match inside larger words', () => {
-    expect(matchWebappTemplates('whatsapping is not a word but whatsappish either')).toEqual([]);
-  });
-
-  test('two explicit mentions both match, best first', () => {
-    const matches = matchWebappTemplates('check Slack and WhatsApp for updates');
-    expect(matches.map(m => m.app_name).sort()).toEqual(['Slack', 'WhatsApp']);
-  });
-
-  test('path-specific domain shadows the shorter overlapping one', () => {
-    // Sheets URL contains "docs.google.com/spreadsheets"; if Docs claimed bare
-    // docs.google.com it would be shadowed. Verify with a template that does.
-    seed({ app_name: 'Legacy Docs', domains: ['docs.google.com'], keywords: [] });
-    const matches = matchWebappTemplates(
-      'summarize https://docs.google.com/spreadsheets/d/abc123/edit'
-    );
-    expect(matches.map(m => m.app_name)).toEqual(['Google Sheets']);
-  });
-
-  test('unrelated messages match nothing', () => {
-    expect(matchWebappTemplates('refactor the auth module and run the tests')).toEqual([]);
-  });
-
-  test('scored matcher reports explicit flag and reasons', () => {
-    const scored = matchWebappTemplatesScored('post a slack message please');
-    expect(scored).toHaveLength(1);
-    expect(scored[0]!.template.app_name).toBe('Slack');
-    expect(scored[0]!.explicit).toBe(true); // app name "slack" inside the keyword phrase counts as name mention
-    expect(scored[0]!.reasons.length).toBeGreaterThan(0);
-  });
-
-  test('disabled templates never match', () => {
-    seed({ app_name: 'Ghost', domains: ['ghost.example.com'], keywords: ['ghost'], enabled: false });
-    expect(matchWebappTemplates('open ghost.example.com')).toEqual([]);
-  });
-});
 
 describe('getWebappTemplateByDomain', () => {
   beforeEach(() => {
@@ -138,8 +38,44 @@ describe('getWebappTemplateByDomain', () => {
     expect(getWebappTemplateByDomain('https://web.whatsapp.com/some/path')?.app_name).toBe('WhatsApp');
   });
 
+  test('most specific domain entry wins when both match', () => {
+    seed({ app_name: 'Legacy Docs', domains: ['docs.google.com'] });
+    expect(getWebappTemplateByDomain('https://docs.google.com/spreadsheets/d/x/edit')?.app_name)
+      .toBe('Google Sheets');
+  });
+
   test('unmatched host returns null', () => {
     expect(getWebappTemplateByDomain('https://example.com')).toBeNull();
+  });
+
+  test('disabled templates never resolve', () => {
+    seed({ app_name: 'Ghost', domains: ['ghost.example.com'], enabled: false });
+    expect(getWebappTemplateByDomain('https://ghost.example.com')).toBeNull();
+  });
+});
+
+describe('getWebappInstructionsForUrl', () => {
+  beforeEach(() => {
+    initDatabase(':memory:');
+    seed({ app_name: 'Slack', domains: ['app.slack.com'] });
+  });
+
+  test('resolves a browsed URL to formatted instructions', () => {
+    const resolved = getWebappInstructionsForUrl('https://app.slack.com/client/T123/C456');
+    expect(resolved).not.toBeNull();
+    expect(resolved!.appName).toBe('Slack');
+    expect(resolved!.templateId).toBeTruthy();
+    expect(resolved!.instructions).toContain('## Slack — Browser Instructions');
+    expect(resolved!.instructions).toContain('instructions for Slack');
+  });
+
+  test('returns null for URLs no template claims', () => {
+    expect(getWebappInstructionsForUrl('https://example.com/whatever')).toBeNull();
+  });
+
+  test('never throws on garbage input', () => {
+    expect(getWebappInstructionsForUrl('')).toBeNull();
+    expect(getWebappInstructionsForUrl('not a url at all')).toBeNull();
   });
 });
 
