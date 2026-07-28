@@ -139,7 +139,7 @@ const GENERIC_USER_NAMES = new Set(['user', 'the user', 'current user', 'unknown
  */
 function representsUser(name: string, properties?: Record<string, unknown>): boolean {
   if (GENERIC_USER_NAMES.has(name.toLowerCase())) return true;
-  const flag = (v: unknown) => v === true || v === 'true';
+  const flag = (v: unknown) => v === true || (typeof v === 'string' && v.toLowerCase() === 'true');
   return flag(properties?.is_current_user) || flag(properties?.is_user);
 }
 
@@ -185,8 +185,10 @@ export async function extractAndStore(
     // profile is set via the onboarding wizard with source='user_profile' and
     // always takes precedence over any LLM extraction about "the user".
     const profileEntities = findEntities({ source: USER_PROFILE_VAULT_SOURCE });
+    // Reversed so on a name collision the newest entity (first in the
+    // updated_at DESC result) wins, matching the profileEntities[0] fallback.
     const profileIdByName = new Map(
-      profileEntities.map(e => [e.name.toLowerCase(), e.id])
+      [...profileEntities].reverse().map(e => [e.name.toLowerCase(), e.id] as const)
     );
 
     for (const entityData of extraction.entities) {

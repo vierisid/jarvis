@@ -248,6 +248,34 @@ describe('ConvOrchestrator', () => {
     expect(captured[0]![2]!.content).not.toBe(captured[1]![2]!.content);
   });
 
+  it('omits the profile block when userProfile is not provided', async () => {
+    const captured: LLMMessage[][] = [];
+    class CapturingProvider extends MockProvider {
+      override async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
+        captured.push(messages);
+        return super.chat(messages, opts);
+      }
+    }
+    const provider = new CapturingProvider([textResponse('Hi!')]);
+    const llm = makeManager(provider);
+    const runner = async () => ({ kind: 'completed' as const, text: '', conversation: [] });
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
+
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice' });
+    const messages = captured[0]!;
+    // No profile block: the dynamic system prompt sits directly after the
+    // static persona, and it alone carries the identity.
+    expect(messages[0]!.cache).toBe(true);
+    expect(messages[1]!.role).toBe('system');
+    expect(messages[1]!.cache).toBeUndefined();
+    expect(String(messages[1]!.content)).toContain('Alice');
+    expect(messages[2]!.role).toBe('user');
+    for (const m of messages) {
+      expect(String(m.content)).not.toContain('User Profile');
+    }
+  });
+
   it('omits the dynamic system message entirely when there is no dynamic context', async () => {
     const captured: LLMMessage[][] = [];
     class CapturingProvider extends MockProvider {

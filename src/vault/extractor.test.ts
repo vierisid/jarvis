@@ -426,10 +426,12 @@ describe('Vault Extractor', () => {
         entities: [
           { name: 'Boss', type: 'person', properties: { is_current_user: true } },
           { name: 'Speaker', type: 'person', properties: { is_user: 'true' } },
+          { name: 'Narrator', type: 'person', properties: { is_current_user: 'True' } },
         ],
         facts: [
           { subject: 'Boss', predicate: 'role_is', object: 'engineer', confidence: 1.0 },
           { subject: 'Speaker', predicate: 'city_is', object: 'Milan', confidence: 1.0 },
+          { subject: 'Narrator', predicate: 'age_is', object: '30', confidence: 1.0 },
         ],
         relationships: [],
         commitments: [],
@@ -437,9 +439,11 @@ describe('Vault Extractor', () => {
 
       expect(findEntities({ name: 'Boss' })).toHaveLength(0);
       expect(findEntities({ name: 'Speaker' })).toHaveLength(0);
+      expect(findEntities({ name: 'Narrator' })).toHaveLength(0);
       const predicates = findFacts({ subject_id: profileId }).map(f => f.predicate);
       expect(predicates).toContain('role_is');
       expect(predicates).toContain('city_is');
+      expect(predicates).toContain('age_is');
     });
 
     test('prefers the profile entity even when a newer same-name duplicate exists', async () => {
