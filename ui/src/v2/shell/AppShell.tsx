@@ -73,16 +73,12 @@ function isRoomKey(k: string): k is RoomKey {
   return ROOM_KEYS.has(k as RoomKey); // router's canonical set — no drifting copy
 }
 
-function isEditableTarget(t: EventTarget | null): boolean {
-  const el = t as HTMLElement | null;
-  if (!el || !el.tagName) return false;
-  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
-}
-
-/** True only after the connection has been up once AND offline has persisted
- *  ~5 s — so a reconnect blip or the pre-connect mount state never takes over
- *  the whole window. */
-function useStableOffline(offline: boolean, graceMs = 5000): boolean {
+/** Debounced offline: a reconnect blip (or the pre-connect mount state) never
+ *  flashes the takeover, but genuine outages still surface. Once-connected
+ *  sessions get a short grace; a session whose WS NEVER connects (daemon
+ *  serving static UI with a dead handshake) gets a longer one — suppressing
+ *  that case forever would hide the recovery screen exactly when it's needed. */
+function useStableOffline(offline: boolean, graceMs = 5000, neverConnectedGraceMs = 15000): boolean {
   const [stable, setStable] = useState(false);
   const everConnectedRef = useRef(false);
   useEffect(() => {
@@ -91,10 +87,9 @@ function useStableOffline(offline: boolean, graceMs = 5000): boolean {
       setStable(false);
       return;
     }
-    if (!everConnectedRef.current) return;
-    const t = window.setTimeout(() => setStable(true), graceMs);
+    const t = window.setTimeout(() => setStable(true), everConnectedRef.current ? graceMs : neverConnectedGraceMs);
     return () => window.clearTimeout(t);
-  }, [offline, graceMs]);
+  }, [offline, graceMs, neverConnectedGraceMs]);
   return stable;
 }
 
@@ -855,11 +850,10 @@ function ShellLayout({
   // awaiting-approval renders as the "asking" (amber) pebble state.
   const dataState = voiceState === "awaiting-approval" ? "asking" : voiceState;
 
-  // ⌘J summons/dismisses Talk; Esc dismisses it. Skipped while typing in
-  // editable fields so it doesn't hijack keyboard input.
+  // ⌘J summons/dismisses Talk; Esc dismisses it. No editable-field gate: the
+  // chord never inserts text, and Esc must work from inputs inside Talk.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return;
       if ((e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J")) {
         e.preventDefault();
         setTalkOpen((o) => !o);

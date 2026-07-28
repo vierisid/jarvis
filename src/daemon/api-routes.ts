@@ -6,6 +6,7 @@
  */
 
 import type { HealthMonitor } from './health.ts';
+import { applyApprovalDecision } from './approval-decision.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
@@ -2315,27 +2316,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager || !ctx.deferredExecutor) {
           return error('Authority system not configured', 500);
         }
-        const requestId = req.params.id;
-        const approved = ctx.approvalManager.approve(requestId, 'dashboard');
-        if (!approved) return error('Request not found or already decided', 404);
-
-        // Intent-declaration approvals have no deferred tool to execute —
-        // the originating `request_approval` tool call is blocked waiting for
-        // the DB status to flip (via waitForResolution polling). Skipping
-        // executeApproved avoids a recursive call into the tool registry.
-        // Inline-mode requests are likewise executed by the authority gate
-        // that is blocked on this status flip, so the result flows back to
-        // the conversation — executing here would run the tool twice.
-        let result = '';
-        if (approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
-          result = await ctx.deferredExecutor.executeApproved(requestId);
-        }
-
-        // Broadcast the update (removes the card from the dashboard thread)
-        const updated = ctx.approvalManager.getRequest(requestId);
-        if (updated) ctx.wsService?.broadcastApprovalUpdate(updated);
-
-        return json({ ok: true, result: result.slice(0, 500) });
+        const outcome = await applyApprovalDecision('approve', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        });
+        if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
+        if (outcome.status !== 'approved') return error('Unexpected decision outcome', 500);
+        return json({ ok: true, result: outcome.result.slice(0, 500) });
       },
     },
 
@@ -2344,16 +2332,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager || !ctx.deferredExecutor) {
           return error('Authority system not configured', 500);
         }
-        const requestId = req.params.id;
-        const denied = ctx.approvalManager.deny(requestId, 'dashboard');
-        if (!denied) return error('Request not found or already decided', 404);
-
-        // Record denial for learning
-        ctx.deferredExecutor.recordDenial(denied);
-
-        // Broadcast the update
-        ctx.wsService?.broadcastApprovalUpdate(denied);
-
+        const outcome = await applyApprovalDecision('deny', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        });
+        if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
         return json({ ok: true });
       },
     },

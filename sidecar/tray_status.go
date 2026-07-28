@@ -44,6 +44,32 @@ func trayApplyMute(muted bool) {
 
 func setTrayApplyMute(f func(bool)) { trayApplyMuteV.Store(f) }
 
+// trayCtlQ serializes mute/pause side effects off the UI threads. The work
+// (audio-device teardown, WS emits) must not block the tray/Cocoa thread, but
+// one goroutine per toggle had no ordering guarantee — a rapid double-toggle
+// could interleave and leave the mic state diverging from the menu. A single
+// worker drains in click order.
+var trayCtlQ = make(chan func(), 32)
+
+func init() {
+	go func() {
+		for f := range trayCtlQ {
+			f()
+		}
+	}()
+}
+
+// trayCtlAsync enqueues f for the serialized worker. The 32-deep buffer is far
+// beyond any human toggle rate; if it ever fills (wedged brain connection),
+// fall back to a raw goroutine rather than blocking the UI thread.
+func trayCtlAsync(f func()) {
+	select {
+	case trayCtlQ <- f:
+	default:
+		go f()
+	}
+}
+
 func setTrayStatus(s TrayStatus) {
 	trayStatusMu.Lock()
 	trayStatusCur = s

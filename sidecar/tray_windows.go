@@ -443,25 +443,28 @@ func showTrayMenu(hwnd uintptr) {
 		ts := getTrayStatus()
 		ts.Paused = !ts.Paused
 		setTrayStatus(ts)
-		// WS write off the tray thread — a stalled brain must not freeze the
-		// message pump (icon, menu, WM_COPYDATA delivery).
-		go func(paused bool) {
+		// WS write off the tray thread (a stalled brain must not freeze the
+		// message pump), serialized so rapid toggles apply in click order.
+		paused := ts.Paused
+		trayCtlAsync(func() {
 			if trayEmit != nil {
 				trayEmit("tray.set_pause", map[string]any{"paused": paused})
 			}
-		}(ts.Paused)
+		})
 	case trayMenuMuteID:
 		ts := getTrayStatus()
 		ts.Muted = !ts.Muted
 		setTrayStatus(ts)
 		// Mic gating tears down audio devices (blocking I/O) and the emit is a
-		// WS write — both off the tray thread, like the sibling menu items.
-		go func(muted bool) {
+		// WS write — off the tray thread, serialized so a rapid double-toggle
+		// can't interleave and desync the mic from the menu.
+		muted := ts.Muted
+		trayCtlAsync(func() {
 			trayApplyMute(muted) // gate the mic locally (sidecar owns mic control)
 			if trayEmit != nil {
 				trayEmit("tray.set_mute", map[string]any{"muted": muted})
 			}
-		}(ts.Muted)
+		})
 	}
 }
 

@@ -22,10 +22,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net/url"
@@ -60,58 +57,7 @@ var (
 
 	pendingNotifyMu sync.Mutex
 	pendingNotify   Notification
-
-	// notifyNonces maps notification id → single-use secret embedded in that
-	// toast's button URIs. Protocol activation is world-invokable (any local
-	// process can launch a jarvis:// URI or send our WM_COPYDATA), so
-	// approve/deny must prove the URI came from a toast we minted.
-	notifyNonceMu sync.Mutex
-	notifyNonces  = map[string]notifyNonceEntry{}
 )
-
-const notifyNonceTTL = 10 * time.Minute
-
-type notifyNonceEntry struct {
-	nonce   string
-	expires time.Time
-}
-
-// mintNotifyNonce creates and stores the nonce for a notification id, pruning
-// expired entries. Returns "" on entropy failure — then approve/deny buttons
-// simply won't validate (fail closed).
-func mintNotifyNonce(id string) string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return ""
-	}
-	n := hex.EncodeToString(b)
-	notifyNonceMu.Lock()
-	defer notifyNonceMu.Unlock()
-	now := time.Now()
-	for k, e := range notifyNonces {
-		if now.After(e.expires) {
-			delete(notifyNonces, k)
-		}
-	}
-	notifyNonces[id] = notifyNonceEntry{nonce: n, expires: now.Add(notifyNonceTTL)}
-	return n
-}
-
-// consumeNotifyNonce validates and burns the nonce for id (single use — the
-// first of Approve/Deny to arrive wins; a replay finds nothing).
-func consumeNotifyNonce(id, nonce string) bool {
-	if id == "" || nonce == "" {
-		return false
-	}
-	notifyNonceMu.Lock()
-	defer notifyNonceMu.Unlock()
-	e, ok := notifyNonces[id]
-	if !ok || time.Now().After(e.expires) || subtle.ConstantTimeCompare([]byte(e.nonce), []byte(nonce)) != 1 {
-		return false
-	}
-	delete(notifyNonces, id)
-	return true
-}
 
 type copyDataStruct struct {
 	dwData uintptr
@@ -221,10 +167,14 @@ func handleNotifyURI(uri string) {
 	// approve/deny act on the brain, and this entry point is world-invokable —
 	// require the single-use nonce minted into this toast's buttons. Everything
 	// else (review/view/reconnect/restart) only opens the app, so it stays open.
+	// A failed check (expired toast from the Action Center, replay, re-minted
+	// notification) must never approve — but the click still deserves a
+	// response, so it degrades to review: the app opens and the user decides
+	// there.
 	if action == "approve" || action == "deny" {
 		if !consumeNotifyNonce(vals.Get("id"), vals.Get("n")) {
-			log.Printf("[notify] dropped unauthenticated %q for %q", action, vals.Get("id"))
-			return
+			log.Printf("[notify] unauthenticated %q for %q — degrading to review", action, vals.Get("id"))
+			action = "review"
 		}
 	}
 	// Let the brain act on approve/deny; everything else (review/view/reconnect/

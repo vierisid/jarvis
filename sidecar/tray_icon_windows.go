@@ -94,6 +94,11 @@ func traySynthesizeStateIcon(code int) uintptr {
 	if w < 8 || h < 8 || w > 256 || h > 256 {
 		return 0
 	}
+	// The verbatim-alpha copy below only holds for a 32bpp colour plane; a
+	// 24/8bpp decode would come back with alpha 0 everywhere → invisible icon.
+	if bm.bmBitsPixel != 32 {
+		return 0
+	}
 
 	hdc, _, _ := procCreateCompatibleDC.Call(0)
 	if hdc == 0 {

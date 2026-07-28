@@ -54,13 +54,20 @@ export function ConfirmHost() {
   const [state, setState] = useState<{ opts: ConfirmOptions; resolve: (v: boolean) => void } | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     openConfirm = (opts) => new Promise<boolean>((resolve) => {
       restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setState({ opts, resolve });
     });
-    return () => { openConfirm = null; };
+    return () => {
+      openConfirm = null;
+      // Unmounting with a dialog open: settle its promise (as cancel) so the
+      // module-level queue can't wedge every future confirmDialog() forever.
+      stateRef.current?.resolve(false);
+    };
   }, []);
 
   useEffect(() => {
@@ -80,7 +87,9 @@ export function ConfirmHost() {
         // the obscured page underneath.
         const box = boxRef.current;
         if (!box) return;
-        const focusables = box.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+        const focusables = box.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        );
         if (focusables.length === 0) return;
         const first = focusables[0]!;
         const last = focusables[focusables.length - 1]!;

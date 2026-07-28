@@ -668,13 +668,22 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}()
 			// Keepalive: the brain's WS server reaps sockets idle >30 s, and an
 			// audio channel is legitimately silent between utterances. Ping until
-			// the conn dies (the write fails once closeFn has run).
+			// the conn dies or the connection context ends; each write is bounded
+			// so a wedged TCP conn can't park the goroutine forever.
 			go func() {
 				t := time.NewTicker(20 * time.Second)
 				defer t.Stop()
-				for range t.C {
-					if aconn.Write(context.Background(), websocket.MessageText, []byte(`{"t":"ping"}`)) != nil {
+				for {
+					select {
+					case <-ctx.Done():
 						return
+					case <-t.C:
+						wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						err := aconn.Write(wctx, websocket.MessageText, []byte(`{"t":"ping"}`))
+						cancel()
+						if err != nil {
+							return
+						}
 					}
 				}
 			}()

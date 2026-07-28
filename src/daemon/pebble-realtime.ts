@@ -133,8 +133,12 @@ export class PebbleRealtimeManager {
         if (ch) { ch.sendPCM(chunk); return; }
         this.deps.dispatchNotify(sidecarId, 'pebble.play_pcm', { data: chunk.toString('base64') });
       },
-      // Barge-in → flush the sidecar's playback immediately.
+      // Barge-in → flush the sidecar's playback immediately. The interrupted
+      // utterance may never get its transcript final, so drop the partial
+      // buffer too — the next response must not inherit it.
       signalStopPlayback: () => {
+        const entry = this.sessions.get(sidecarId);
+        if (entry) entry.transcript = newTranscriptAccumulator();
         const ch = this.deps.getAudioChannel(sidecarId);
         if (ch) { ch.sendFlush(); return; }
         this.deps.dispatchNotify(sidecarId, 'pebble.stop_audio', {});
