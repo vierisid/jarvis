@@ -75,7 +75,9 @@ export type { VectorRecord } from './vectors.ts';
 export {
   storeVector,
   findSimilar,
+  findSimilarByRef,
   deleteVectors,
+  countVectors,
 } from './vectors.ts';
 
 // Re-export extractor module
