@@ -155,7 +155,7 @@ const settingsWindowHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  /* Monochrome Lab (Brand Book III / FABLE5) — sidecar settings. Forced light;
+  /* Monochrome Lab (Brand Book III) — sidecar settings. Forced light;
      row grammar from the room-13 settings design: label + consequence left,
      control right, inside raised panels with the asymmetric corner. */
   :root {

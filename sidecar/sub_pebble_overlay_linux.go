@@ -54,7 +54,7 @@ typedef struct {
     unsigned long long handle;        // == (uintptr)self, the Go-side key
 } SubWin;
 
-// ── FABLE5 mini glass drop (self-contained; the main pebble's Cairo helpers
+// ── Monochrome Lab mini glass drop (self-contained; the main pebble's Cairo helpers
 //    live in a different cgo translation unit). ──
 static void sub_drop_path(cairo_t* cr, double cx, double cy, double r, double sharpR) {
     cairo_save(cr);

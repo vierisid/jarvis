@@ -1,9 +1,9 @@
-/* ═══════════════════ System states · FABLE5 / Monochrome Lab ═══════════════
+/* ═══════════════════ System states · Monochrome Lab ═══════════════
    The moments the app has to speak up: an update ready, the hosted brain out
    of reach, a crash it recovered from, a token limit hit, a provider that's
    busy. Two kinds: quiet banners over a working app (update, provider-busy)
    and full-window takeovers when the agent can't act (offline, updating,
-   crash, out-of-tokens). Ported from usejarvis-system-states-FABLE5.html onto
+   crash, out-of-tokens). Ported from usejarvis-system-states.html onto
    the app theme tokens. The rule: say what's wrong, say what still works, give
    the one way out. Never a dead end, never a spinner with no explanation. */
 

@@ -4,7 +4,7 @@ import "./ConfirmDialog.css";
 
 /* ═══════════════════ Branded confirm dialog ═══════════════════
    Replaces native window.confirm() — which renders as unbranded OS/browser
-   chrome — with an in-app FABLE5 modal. Imperative, promise-based, so a call
+   chrome — with an in-app Monochrome Lab modal. Imperative, promise-based, so a call
    site is just `if (!(await confirmDialog("Delete X?"))) return;`. A single
    <ConfirmHost/> mounted at the app root does the rendering. */
 

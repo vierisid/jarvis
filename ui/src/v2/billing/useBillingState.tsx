@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 
-/* ═══════════════════ Billing state · FABLE5 ═══════════════════
-   The subscription lifecycle from usejarvis-billing-states-FABLE5.html. Five
+/* ═══════════════════ Billing state · Monochrome Lab ═══════════════════
+   The subscription lifecycle from usejarvis-billing-states.html. Five
    states, five tones. No payment processor is wired in code yet (the design's
    own candor note), so this is the state vocabulary + copy for a billing
    backend to drive. Until then it's localStorage-backed so the lifecycle is

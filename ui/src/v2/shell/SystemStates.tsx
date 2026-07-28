@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { isDevToolsEnabled } from "../devtools";
 import "./SystemStates.css";
 
-/* ═══════════════════ System states · FABLE5 ═══════════════════
+/* ═══════════════════ System states · Monochrome Lab ═══════════════════
    Six honest answers for when the app has to speak up. Two banners over a
    working app (update-available, provider-busy) and four full-window takeovers
    when the agent can't act (offline, updating, crash, out-of-tokens). Built to
-   usejarvis-system-states-FABLE5.html. The rule: say what's wrong, say what
+   usejarvis-system-states.html. The rule: say what's wrong, say what
    still works, give the one way out. The Pebble carries the mood. */
 
 export type TakeoverKind = "offline" | "updating" | "crash" | "quota";

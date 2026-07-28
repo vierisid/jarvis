@@ -104,7 +104,7 @@ static void draw_eye_cg(CGContextRef ctx) {
     }
 }
 
-// ── FABLE5 glass drop (mirrors pebble_draw_windows.go drawDrop) ─────────────
+// ── Monochrome Lab glass drop (mirrors pebble_draw_windows.go drawDrop) ─────────────
 
 // c_breathe returns a 0..1 sine over `frames` at 60fps, for state pulses.
 static double c_breathe(int frames) {

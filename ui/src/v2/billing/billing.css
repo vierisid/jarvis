@@ -1,5 +1,5 @@
-/* ═══════════════════ Billing states · FABLE5 / Monochrome Lab ═══════════════
-   In-app subscription surfaces from usejarvis-billing-states-FABLE5.html:
+/* ═══════════════════ Billing states · Monochrome Lab ═══════════════
+   In-app subscription surfaces from usejarvis-billing-states.html:
    the Settings → Billing plan card, the top-of-app state banner, and the
    change-plan modal. Money is mono + tabular; tone carries the state (info
    trial · ok active · hold past-due · neutral cancel · listen lapse). Ported

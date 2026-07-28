@@ -4,7 +4,7 @@ import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
-   Faithful to the design (usejarvis-onboarding-FABLE5): Welcome · Permissions
+   Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
    · The brain · Hearing · Speaking · Connect · The interview · The tour · All
    set. The ported steps (brain / hearing / speaking / interview) keep the real
    daemon wiring; the new steps (welcome / permissions / connect / tour / all
@@ -776,7 +776,7 @@ function MicLevelCheck() {
 /* ─────────── The interview (step 7) ───────────
    The design's ivstage, driven by the real useInterviewSession hook — the WS
    lifecycle, TTS playback, live STT, facts counter, skip and done are all
-   preserved; only the presentation is rebuilt to FABLE5. */
+   preserved; only the presentation is rebuilt to Monochrome Lab. */
 const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", speaking: "s-speak", done: "s-done" };
 const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "ready", error: "reconnecting…", thinking: "thinking", speaking: "speaking", listening: "listening", done: "done" };
 

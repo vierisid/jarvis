@@ -844,9 +844,9 @@
   padding: var(--s-3) var(--s-4);
 }
 
-/* ════════════ Brand Book III / FABLE5 ════════════
+/* ════════════ Brand Book III / Monochrome Lab ════════════
    The palette already rides Phase 0's compat aliases; this fixes the
-   FABLE5-specific geometry (the asymmetric drop corner) and type
+   Monochrome Lab-specific geometry (the asymmetric drop corner) and type
    (Familjen, not Fraunces), plus impact-as-card-edge on the queue. */
 .v2-auth__stat,
 .v2-auth__pending,

@@ -1,6 +1,6 @@
-/* Room-centric shell — Brand Book III "Monochrome Lab" (FABLE5).
+/* Room-centric shell — Brand Book III "Monochrome Lab".
    The Inversion: rooms own the surface, the conversation is summoned.
-   Ported from usejarvis-room-00-shell-now-FABLE5.html. Tokens come from
+   Ported from usejarvis-room-00-shell-now.html. Tokens come from
    tokens.css (global, theme-aware via data-theme on <html>). */
 
 .rshell {

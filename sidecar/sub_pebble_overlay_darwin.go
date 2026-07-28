@@ -26,7 +26,7 @@ package main
 
 extern void goSubPebbleClick(unsigned long long handle, int x, int y);
 
-// ── FABLE5 mini glass drop (self-contained: the main pebble's drop statics live
+// ── Monochrome Lab mini glass drop (self-contained: the main pebble's drop statics live
 //    in a different cgo translation unit, so we re-declare a minimal set). ──
 static CGPathRef sub_drop_path(CGFloat cx, CGFloat cy, CGFloat r, CGFloat sharpR) {
     CGAffineTransform t = CGAffineTransformMakeTranslation(cx, cy);

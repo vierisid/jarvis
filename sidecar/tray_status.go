@@ -5,10 +5,10 @@ import (
 	"sync/atomic"
 )
 
-// TrayStatus is the live data the tray menu shows (design: usejarvis-tray-
-// FABLE5.html §00). The brain pushes it via the `tray.status` RPC; the tray
-// thread reads it when the menu opens. Platform-neutral so Windows + macOS
-// share one source of truth.
+// TrayStatus is the live data the tray menu shows (design: usejarvis-tray.html
+// §00). The brain pushes it via the `tray.status` RPC; the tray thread reads
+// it when the menu opens. Platform-neutral so Windows + macOS share one source
+// of truth.
 type TrayStatus struct {
 	State       string   // pebble state: idle/listening/thinking/speaking/asking/done/muted
 	Waiting     int      // pending approvals — the "Waiting on you" row

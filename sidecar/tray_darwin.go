@@ -10,7 +10,7 @@ package main
 // this establishes the process's Cocoa main run loop, which is what the pebble /
 // panels overlays need for their dispatch_async(main_queue) work to drain.
 //
-// The menu mirrors the Windows tray (design: usejarvis-tray-FABLE5.html §00): a
+// The menu mirrors the Windows tray (design: usejarvis-tray.html §00): a
 // header with the current state, a "Waiting on you" row when approvals pend, the
 // Pause / Mute toggles, recent activity, the ways into the app, Quit, and a
 // brain/sidecar/port health footer. It is rebuilt from the live TrayStatus each

@@ -522,7 +522,7 @@
 
 .v2-ws--inline .v2-ws__card { padding: var(--s-2) var(--s-3); }
 
-/* ════════════ Brand Book III / FABLE5 ════════════
+/* ════════════ Brand Book III / Monochrome Lab ════════════
    The roster already re-palettes via Phase 0 aliases; fix the asymmetric
    drop corner + Familjen (not Fraunces) on the room's native surfaces. */
 .v2-ws__stat, .v2-ws__card { border-radius: var(--corner); }

@@ -2,7 +2,7 @@ package main
 
 import "sync/atomic"
 
-// Outbound OS notifications (design: usejarvis-tray-FABLE5.html §01). The brain
+// Outbound OS notifications (design: usejarvis-tray.html §01). The brain
 // decides WHEN to interrupt — the four reasons Jarvis is allowed to: it needs
 // your OK (approval), it finished something (done), a machine dropped (sidecar),
 // or an update is ready (update) — and pushes a `notify.show` RPC. The sidecar

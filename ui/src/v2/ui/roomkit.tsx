@@ -3,7 +3,7 @@ import "./roomkit.css";
 
 /**
  * Room kit — the shared vocabulary every Phase-4 room is built from.
- * Brand Book III / FABLE5. Thin, composable wrappers over `roomkit.css`.
+ * Brand Book III / Monochrome Lab. Thin, composable wrappers over `roomkit.css`.
  * Chroma is the five state tones only; ink carries primary actions.
  */
 

@@ -101,7 +101,7 @@ static void draw_eye_glyph(cairo_t* cr) {
     }
 }
 
-// ── FABLE5 glass drop (Cairo; mirrors pebble_draw_windows.go drawDrop) ───────
+// ── Monochrome Lab glass drop (Cairo; mirrors pebble_draw_windows.go drawDrop) ───────
 
 // c_breathe returns a 0..1 sine over `frames` at 60fps, for state pulses.
 static double c_breathe(int frames) {
