@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { isDevToolsEnabled } from "../devtools";
 import "./SystemStates.css";
 
 /* ═══════════════════ System states · FABLE5 ═══════════════════
@@ -73,24 +74,22 @@ function TakeoverBody({ kind, on, data }: { kind: TakeoverKind; on: TakeoverHand
   );
 
   if (kind === "offline") {
-    const status = data.statusUrl ?? "status.usejarvis.com";
-    const api = data.apiHost ?? "api.usejarvis.com";
+    // The brain is the LOCAL daemon — the copy must say so, not blame "our
+    // servers" (align with NowRoom's jarvis-start notice).
     return (
       <div className="sys-wrap">
         {head}
-        <h2 className="sys-h2">Can't reach your brain.</h2>
-        <div className="sys-sub">Jarvis runs its thinking on our servers, and we can't get through right now. Retrying automatically.</div>
+        <h2 className="sys-h2">Can't reach your daemon.</h2>
+        <div className="sys-sub">The dashboard lost its connection to the Jarvis runtime on this machine. Retrying automatically.</div>
         <div className="sys-statuslist">
-          <div className="sr ok"><span className="si"><IChk /></span><span>Your <b>sidecar is running</b> locally</span></div>
           <div className="sr ok"><span className="si"><IChk /></span><span><b>Nothing is lost</b>, your work is saved</span></div>
           <div className="sr wait"><span className="si"><ISpin /></span><span>Reconnecting every few seconds…</span></div>
-          <div className="sr no"><span className="si"><ICross /></span><span>The agent <b>can't think or act</b> until we're back</span></div>
+          <div className="sr no"><span className="si"><ICross /></span><span>The agent <b>can't think or act</b> until it's back</span></div>
         </div>
         <div className="sys-btnrow">
           <button className="sys-btn sys-btn--pri" onClick={on.onRetry}>Retry now</button>
-          <button className="sys-btn sys-btn--ghost" onClick={on.onCheckStatus}>Check status</button>
         </div>
-        <div className="sys-fine">{status} · error reaching {api}</div>
+        <div className="sys-fine">if it stays down, start it yourself: <span style={{ fontFamily: "var(--mono)" }}>jarvis start</span></div>
       </div>
     );
   }
@@ -248,7 +247,9 @@ export function SystemBanners({
  * QA / manual-trigger override. Lets any state be forced in the live shell for
  * testing without a real trigger — offline is the only one wired to a real
  * signal today (the update feed, crash capture and quota counters are pending
- * backend). Reads two localStorage keys, live across tabs:
+ * backend). Gated behind the jarvis-devtools opt-in so a stray localStorage
+ * key can't fake an "Out of tokens" takeover for a real user. Reads two
+ * localStorage keys, live across tabs:
  *   jarvis-system-state  → one TakeoverKind ("offline"|"updating"|"crash"|"quota")
  *   jarvis-system-banner → comma list of BannerKind ("update","rate")
  */
@@ -256,6 +257,7 @@ export function useSystemStateOverride(): { takeover: TakeoverKind | null; banne
   const read = () => {
     let takeover: TakeoverKind | null = null;
     const banners: BannerKind[] = [];
+    if (!isDevToolsEnabled()) return { takeover, banners };
     try {
       const t = localStorage.getItem("jarvis-system-state");
       if (t === "offline" || t === "updating" || t === "crash" || t === "quota") takeover = t;

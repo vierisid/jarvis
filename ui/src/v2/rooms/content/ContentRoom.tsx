@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, Paperclip, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Icon } from "../../ui";
-import { Tabs, StatusChip, Select, EmptyState, Toast, type Tone } from "../../ui/roomkit";
+import { Tabs, StatusChip, Select, EmptyState, Toast, Skeleton, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { parseRelativeDate } from "../../../../../src/voice/parse-date";
@@ -112,7 +112,11 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
       </div>
 
       <div className="rk-content__body">
-        {kanban ? (
+        {data.error ? (
+          <div className="rk-content__msg">{data.error}</div>
+        ) : data.loading && data.items.length === 0 ? (
+          <div style={{ padding: 22, flex: 1 }}><Skeleton lines={6} /></div>
+        ) : kanban ? (
           <div className="rk-content__board">
             {CONTENT_STAGES.map((stage) => {
               const items = byStage.get(stage) ?? [];

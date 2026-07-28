@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isDevToolsEnabled } from "./devtools";
 
 /**
  * v2 route union.
@@ -45,7 +46,7 @@ export type V2Route =
   | { kind: "task"; id: string }
   | { kind: "answer"; id: string };
 
-const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
+export const ROOM_KEYS: ReadonlySet<RoomKey> = new Set([
   "workflows",
   "memory",
   "tools",
@@ -66,9 +67,11 @@ export function getV2Route(): V2Route {
   if (typeof window === "undefined") return { kind: "home" };
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash === "_primitives") return { kind: "primitives" };
-  if (hash === "_kit") return { kind: "kit" };
-  if (hash === "_states") return { kind: "states" };
-  if (hash === "_billing") return { kind: "billing" };
+  // Design showcases are dev-only: #/_billing renders fake invoice rows and
+  // #/_states fake failure takeovers — not for production users.
+  if (hash === "_kit") return isDevToolsEnabled() ? { kind: "kit" } : { kind: "home" };
+  if (hash === "_states") return isDevToolsEnabled() ? { kind: "states" } : { kind: "home" };
+  if (hash === "_billing") return isDevToolsEnabled() ? { kind: "billing" } : { kind: "home" };
   if (hash === "_palette") return { kind: "palette" };
   if (hash.startsWith("_room_")) {
     const key = hash.slice("_room_".length);

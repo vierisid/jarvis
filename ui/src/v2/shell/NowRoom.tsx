@@ -94,6 +94,7 @@ function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      if (document.hidden) return; // don't poll hidden tabs; refresh on return
       fetch(url)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (!cancelled) { setData((d ?? null) as T | null); setLoaded(true); } })
@@ -101,7 +102,9 @@ function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded
     };
     load();
     const t = window.setInterval(load, pollMs);
-    return () => { cancelled = true; window.clearInterval(t); };
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, [url, pollMs]);
   return { data, loaded };
 }
@@ -275,7 +278,7 @@ const WIDGETS: Record<string, WidgetDef> = {
     render: ({ live }) => {
       const t = taskRows(live);
       return (<><WHeader label="tasks · due" room="tasks" />
-        {t.length ? t.map((x) => <Row key={x.id} dot={x.status === "in_progress" ? "var(--speak)" : "var(--faint)"} room="tasks" tm={x.due ? rel(x.due) : ""}>{x.what}</Row>)
+        {t.length ? t.map((x) => <Row key={x.id} dot={x.status === "in_progress" ? "var(--speak)" : "var(--faint)"} room="tasks" tm={x.due ? (x.due < Date.now() ? relPast(x.due) : relSoon(x.due)) : ""}>{x.what}</Row>)
           : <Empty>No open tasks. <span className="dim">Ask Jarvis to track one, or add it in Tasks.</span></Empty>}</>);
     },
   },
@@ -344,7 +347,10 @@ function loadLayout(): LayoutItem[] {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as LayoutItem[];
-    const clean = parsed.filter((i) => WIDGETS[i.id]).map((i) => ({ id: i.id, size: (i.size === 2 ? 2 : 1) as WSize }));
+    const seen = new Set<string>(); // duplicate ids would collide as React keys
+    const clean = parsed
+      .filter((i) => WIDGETS[i.id] && !seen.has(i.id) && (seen.add(i.id), true))
+      .map((i) => ({ id: i.id, size: (i.size === 2 ? 2 : 1) as WSize }));
     return clean.length ? clean : DEFAULT_LAYOUT;
   } catch { return DEFAULT_LAYOUT; }
 }
@@ -384,7 +390,7 @@ export function NowRoom({
 
   const remove = (id: string) => { if (id === "waiting" && amberPinned) return; commit(layout.filter((i) => i.id !== id)); };
   const resize = (id: string) => commit(layout.map((i) => (i.id === id ? { ...i, size: (i.size === 2 ? 1 : 2) as WSize } : i)));
-  const add = (id: string) => { const def = WIDGETS[id]; if (!def) return; commit([...layout, { id, size: def.defaultSize }]); };
+  const add = (id: string) => { const def = WIDGETS[id]; if (!def || layout.some((i) => i.id === id)) return; commit([...layout, { id, size: def.defaultSize }]); };
   const resetDefault = () => { commit(DEFAULT_LAYOUT); setCatalogOpen(false); };
 
   // Native drag-reorder: live-reorder as the dragged widget passes over a target.
@@ -422,16 +428,19 @@ export function NowRoom({
         const def = WIDGETS[item.id];
         if (!def) return null;
         const canRemove = !(item.id === "waiting" && amberPinned);
+        // The force-pinned waiting widget isn't in `layout`, so drag/resize
+        // would be silent no-ops — don't offer chrome that does nothing.
+        const synthetic = !layout.some((i) => i.id === item.id);
         return (
           <div
             key={item.id}
             className={`rs-wid${item.size === 2 ? " w2" : ""}${dragId === item.id ? " dragging" : ""}${overId === item.id && dragId && dragId !== item.id ? " dragover" : ""}`}
-            draggable={arranging}
-            onDragStart={() => onDragStart(item.id)}
-            onDragOver={(e) => onDragOver(e, item.id)}
-            onDragEnd={onDragEnd}
+            draggable={arranging && !synthetic}
+            onDragStart={synthetic ? undefined : () => onDragStart(item.id)}
+            onDragOver={synthetic ? undefined : (e) => onDragOver(e, item.id)}
+            onDragEnd={synthetic ? undefined : onDragEnd}
           >
-            {arranging && (
+            {arranging && !synthetic && (
               <div className="rs-wtools">
                 <button className="rs-wtool" onClick={() => resize(item.id)} title={item.size === 2 ? "Half width" : "Full width"} aria-label={item.size === 2 ? "Half width" : "Full width"}>{item.size === 2 ? "½" : "full"}</button>
                 <button className="rs-wtool rm" onClick={() => remove(item.id)} disabled={!canRemove} title={canRemove ? "Remove" : "Can't remove while waiting"} aria-label="Remove widget">✕</button>

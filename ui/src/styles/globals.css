@@ -2,13 +2,14 @@
 @import "./tokens.css";
 
 :root {
-  /* Legacy IDE (Workspaces §02) error/warning hues — the last two of the old
-     --j-* graft. The rest were flattened onto Monochrome Lab tokens in Phase 6;
-     these two stay only because the IDE overrides them room-scoped to the
-     -tx text variants, so a global flatten would shift the colour. Remove with
-     the native IDE rebuild. */
+  /* Legacy IDE (Workspaces §02) status hues — the last of the old --j-* graft.
+     The rest were flattened onto Monochrome Lab tokens in Phase 6; these stay
+     only because the IDE overrides error/warning room-scoped to the -tx text
+     variants, so a global flatten would shift the colour (--j-success is still
+     read by SidecarConfigEditor). Remove with the native IDE rebuild. */
   --j-warning: var(--hold);
   --j-error: var(--listen);
+  --j-success: var(--ok);
 }
 
 * {

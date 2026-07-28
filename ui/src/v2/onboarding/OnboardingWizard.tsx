@@ -121,6 +121,10 @@ export function OnboardingWizard({
 
   const [step, setStep] = useState(startStep);
   const key = STEPS[step]![0];
+  // True when the wizard is running the setup steps in this session (fresh
+  // start) — a resume at the interview/tour never touched brain/voice state,
+  // so the recap must not print those defaults as if they were saved.
+  const configuredThisSession = startStep === 0;
 
   // welcome
   const [theme, setTheme] = useState<"light" | "dark">(
@@ -174,8 +178,21 @@ export function OnboardingWizard({
     setTest({ status: "idle" });
   }, [provId]);
 
+  // Same for the brain test: a changed key, base URL, or model invalidates a
+  // previous "Connected" verdict.
+  useEffect(() => { setTest((t) => (t.status === "idle" ? t : { status: "idle" })); }, [apiKey, baseUrl, model]);
+
+  // The Google OAuth poll outlives the click handler — keep its id in a ref so
+  // finishing/unmounting the wizard stops it (it ran for up to 5 min after).
+  const googlePollRef = useRef<number | null>(null);
+  const stopGooglePoll = useCallback(() => {
+    if (googlePollRef.current != null) { window.clearInterval(googlePollRef.current); googlePollRef.current = null; }
+  }, []);
+  useEffect(() => stopGooglePoll, [stopGooglePoll]);
+
   const go = (n: number) => { setError(null); setStep(n); };
   const next = () => go(Math.min(step + 1, STEPS.length - 1));
+  const back = () => go(Math.max(0, step - 1));
 
   /* — brain: test connection — */
   const runTest = useCallback(async () => {
@@ -226,9 +243,14 @@ export function OnboardingWizard({
 
   const skipAll = useCallback(async () => {
     setBusy(true);
-    try { await fetch("/api/onboarding/skip", { method: "POST" }); onComplete(); }
-    catch { onComplete(); }
-    finally { setBusy(false); }
+    try {
+      const r = await fetch("/api/onboarding/skip", { method: "POST" });
+      if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
+      onComplete();
+    } catch (e) {
+      // Closing anyway would replay onboarding next launch — surface it instead.
+      setError(e instanceof Error && e.message ? `Couldn't save the skip: ${e.message}` : "Couldn't reach the daemon — try again.");
+    } finally { setBusy(false); }
   }, [onComplete]);
 
   /* — speaking: ElevenLabs test via real synthesis — */
@@ -273,48 +295,67 @@ export function OnboardingWizard({
         return;
       }
       const win = window.open(d.auth_url, "_blank", "noopener,noreferrer");
-      if (!win) setConnectErr("Your browser blocked the sign-in window. Allow pop-ups, or open Settings → Integrations to connect.");
+      if (!win) {
+        // No popup → no sign-in in flight; don't sit in "Connecting…" polling.
+        setGoogleState("idle");
+        setConnectErr("Your browser blocked the sign-in window. Allow pop-ups, or open Settings → Integrations to connect.");
+        return;
+      }
     } catch {
       setGoogleState("idle");
       setConnectErr("Couldn't reach the daemon to start Google sign-in.");
       return;
     }
     let tries = 0;
-    const poll = window.setInterval(async () => {
+    stopGooglePoll();
+    googlePollRef.current = window.setInterval(async () => {
       tries += 1;
       try {
         const s = await fetch("/api/auth/google/status");
         const d = (await s.json()) as { status?: string; is_authenticated?: boolean };
         if (d.is_authenticated || d.status === "connected") {
-          window.clearInterval(poll);
+          stopGooglePoll();
           setGoogleState("connected");
           setConnected((c) => new Set(c).add("google").add("gmail"));
         }
       } catch { /* ignore */ }
-      if (tries > 150) { window.clearInterval(poll); setGoogleState((g) => (g === "pending" ? "idle" : g)); } // ~5 min cap
+      if (tries > 150) { stopGooglePoll(); setGoogleState((g) => (g === "pending" ? "idle" : g)); } // ~5 min cap
     }, 2000);
-  }, []);
+  }, [stopGooglePoll]);
+
+  const cancelGoogle = useCallback(() => {
+    stopGooglePoll();
+    setGoogleState("idle");
+  }, [stopGooglePoll]);
 
   // Telegram: real — needs a bot token, saved to the channels config.
   const saveTelegram = useCallback(async () => {
     if (!tgToken.trim()) return;
     setTgBusy(true);
+    setConnectErr(null);
     try {
       const r = await fetch("/api/config/channels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ telegram: { bot_token: tgToken.trim(), enabled: true } }) });
       if (r.ok) { setConnected((c) => new Set(c).add("telegram")); setTgOpen(false); setTgToken(""); }
-    } catch { /* ignore */ }
+      else setConnectErr(((await r.text().catch(() => "")) || `Couldn't save the Telegram token (HTTP ${r.status}).`).slice(0, 120));
+    } catch { setConnectErr("Couldn't reach the daemon to save the Telegram token."); }
     finally { setTgBusy(false); }
   }, [tgToken]);
 
   /* — tour + finish — */
-  const finishTour = useCallback(async () => {
-    try { await fetch("/api/onboarding/tutorial/complete", { method: "POST" }); } catch { /* ignore */ }
-    go(8);
+  // Both check the response: silently swallowing a failed POST would replay
+  // the whole tour on next launch.
+  const endTour = useCallback(async (endpoint: string) => {
+    try {
+      const r = await fetch(endpoint, { method: "POST" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      go(8);
+    } catch {
+      setError("Couldn't reach the daemon to save your progress — try again.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const skipTour = useCallback(async () => {
-    try { await fetch("/api/onboarding/tutorial/dismiss", { method: "POST" }); } catch { /* ignore */ }
-    go(8);
-  }, []);
+  const finishTour = useCallback(() => endTour("/api/onboarding/tutorial/complete"), [endTour]);
+  const skipTour = useCallback(() => endTour("/api/onboarding/tutorial/dismiss"), [endTour]);
 
   // Real preview: synthesize a sample and play the returned MP3 in the
   // dashboard (no config round-trip, no Pebble dependency).
@@ -390,6 +431,7 @@ export function OnboardingWizard({
             </div>
             <button className="obw-btn obw-btn-pri" style={{ minWidth: 208, marginTop: 8 }} onClick={next}>Set up Jarvis</button>
             <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>
+            {error && <div className="obw-hint" style={{ color: "var(--listen)" }}>{error}</div>}
           </div>
         </div></div>
       );
@@ -416,7 +458,7 @@ export function OnboardingWizard({
               ))}
             </div>
             <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in {IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security"}, or from Settings → Permissions.</div>
-            <div className="obw-btnrow"><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
           </div></div>
         );
       }
@@ -443,7 +485,7 @@ export function OnboardingWizard({
             ))}
           </div>
           <div className="obw-provdetail">{renderProvDetail()}</div>
-          <div className="obw-btnrow"><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>Continue</button></div>
+          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>Continue</button></div>
           {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>Test the connection to continue.</div>}
         </div></div>
       );
@@ -474,11 +516,8 @@ export function OnboardingWizard({
             {stt === "local" && (
               <div className="obw-subctl"><input className="obw-inp" placeholder="http://localhost:8080" value={sttEndpoint} onChange={(e) => setSttEndpoint(e.target.value)} /></div>
             )}
-            <div className="obw-miccheck">
-              <div className="obw-micbars">{Array.from({ length: 9 }, (_, i) => <b key={i} style={{ animationDelay: `${(i * 0.09).toFixed(2)}s` }} />)}</div>
-              <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>Default microphone</div><div style={{ fontSize: 11, color: "var(--ink3)" }}>Say something to check your level</div></div>
-            </div>
-            <div className="obw-btnrow"><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            {stt !== "skip" && <MicLevelCheck />}
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
           </div></div>
         );
       }
@@ -535,7 +574,7 @@ export function OnboardingWizard({
             )}
             {error && <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 10 }}>{error}</div>}
             {!speakReady && <div className="obw-hint" style={{ marginTop: 10 }}>Test your ElevenLabs key and pick a voice to continue.</div>}
-            <div className="obw-btnrow"><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={busy || !speakReady} onClick={saveSetup}>{busy ? "Setting up…" : "Continue"}</button></div>
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={busy || !speakReady} onClick={saveSetup}>{busy ? "Setting up…" : "Continue"}</button></div>
           </div></div>
         );
       }
@@ -562,7 +601,11 @@ export function OnboardingWizard({
                     <div className="pt"><div className="pn">{nm}</div><div className="pb">{bd}</div></div>
                     {soon ? <span className="obw-pill">Soon</span>
                       : isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
-                      : isGoogle ? <button className="obw-grant" disabled={googleState === "pending"} onClick={connectGoogle}>{googleState === "pending" ? "Connecting…" : "Connect"}</button>
+                      : isGoogle ? (
+                        googleState === "pending"
+                          ? <button className="obw-grant" onClick={cancelGoogle} title="Stop waiting for the sign-in">Connecting… ✕</button>
+                          : <button className="obw-grant" onClick={connectGoogle}>Connect</button>
+                      )
                       : id === "telegram" ? <button className="obw-grant" onClick={() => setTgOpen((o) => !o)}>Connect</button>
                       : <span className="obw-pill">Soon</span>}
                     {id === "telegram" && tgOpen && !isConnected && (
@@ -576,7 +619,7 @@ export function OnboardingWizard({
               })}
             </div>
             {connectErr && <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 12 }}>{connectErr}</div>}
-            <div className="obw-btnrow"><button className="obw-skip grow" onClick={next} style={{ textAlign: "left" }}>Skip for now</button><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><button className="obw-skip grow" onClick={next} style={{ textAlign: "left", marginLeft: 8 }}>Skip for now</button><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
           </div></div>
         );
       }
@@ -592,9 +635,17 @@ export function OnboardingWizard({
             {recapLine()} Bringing your dashboard online now.
           </div>
           <div className="obw-recap">
-            <div><span className="ok">✓</span> brain · {prov.name}</div>
-            <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
-            <div><span className="ok">✓</span> profile saved to your Vault</div>
+            {configuredThisSession ? (
+              <>
+                <div><span className="ok">✓</span> brain · {prov.name}</div>
+                <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
+                <div><span className="ok">✓</span> profile saved to your Vault</div>
+              </>
+            ) : (
+              // Resumed past the setup steps: this session never touched
+              // brain/voice, so don't print their defaults as saved config.
+              <div><span className="ok">✓</span> profile saved to your Vault</div>
+            )}
           </div>
           <div style={{ marginTop: 22 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 208 }} onClick={onComplete}>Open Jarvis</button></div>
         </div></div>
@@ -605,6 +656,7 @@ export function OnboardingWizard({
   }
 
   function recapLine() {
+    if (!configuredThisSession) return "Your brain is wired up, and I know a little about you.";
     return `${prov.name} is wired up${tts !== "off" ? ", voice is on" : ""}, and I know a little about you.`;
   }
 
@@ -650,6 +702,7 @@ export function OnboardingWizard({
             <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of 5</span></div>
             <div className="sm">{T.sm}</div>
             {T.t && <div className="stry">{T.t}</div>}
+            {error && <div className="stry" style={{ color: "var(--listen)" }}>{error}</div>}
             <div className="sb">
               <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
               <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === TOUR.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
@@ -659,6 +712,65 @@ export function OnboardingWizard({
       </div>
     );
   }
+}
+
+/* ─────────── Mic level check (Hearing step) ───────────
+   A REAL meter: getUserMedia + AnalyserNode drive the bars. Mounted only when
+   an STT option is selected, so text-only users never see a mic prompt. Falls
+   back to honest copy when access is denied/unavailable. */
+function MicLevelCheck() {
+  const [level, setLevel] = useState(0); // 0..1 RMS, boosted for visibility
+  const [micState, setMicState] = useState<"requesting" | "live" | "denied">("requesting");
+  useEffect(() => {
+    let raf = 0;
+    let ctx: AudioContext | null = null;
+    let stream: MediaStream | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        setMicState("live");
+        const tick = () => {
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) { const v = (buf[i]! - 128) / 128; sum += v * v; }
+          setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 4));
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      } catch {
+        if (!cancelled) setMicState("denied");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      stream?.getTracks().forEach((t) => t.stop());
+      void ctx?.close().catch(() => { /* already closed */ });
+    };
+  }, []);
+  const BARS = 9;
+  return (
+    <div className="obw-miccheck">
+      <div className="obw-micbars live">
+        {Array.from({ length: BARS }, (_, i) => <b key={i} className={micState === "live" && level * BARS >= i + 0.5 ? "on" : ""} />)}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>Default microphone</div>
+        <div style={{ fontSize: 11, color: "var(--ink3)" }}>
+          {micState === "denied"
+            ? "Couldn't access the microphone — you can test it later in Settings."
+            : micState === "live" ? "Say something to check your level" : "Requesting microphone access…"}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ─────────── The interview (step 7) ───────────
@@ -708,7 +820,18 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
   }, [session.phase, session.textOnly]);
 
   const sendTyped = () => { const t = composerText.trim(); if (!t) return; setComposerText(""); session.sendUserMessage(t); };
-  const skip = async () => { try { await fetch("/api/onboarding/profile/skip", { method: "POST" }); } catch { /* ignore */ } onComplete(); };
+  const [skipErr, setSkipErr] = useState<string | null>(null);
+  const skip = async () => {
+    setSkipErr(null);
+    try {
+      const r = await fetch("/api/onboarding/profile/skip", { method: "POST" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      onComplete();
+    } catch {
+      // Completing anyway would replay the interview next launch.
+      setSkipErr("Couldn't reach the daemon — try again.");
+    }
+  };
 
   if (session.phase === "done") {
     return (
@@ -736,6 +859,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
         <span className="l">Jarvis · getting to know you</span>
         <span className="r">
           <span className="facts"><b>{session.factsRecorded}</b> facts</span>
+          {skipErr && <span className="obw-hint" style={{ color: "var(--listen)" }}>{skipErr}</span>}
           <button type="button" className="obw-skip" onClick={skip}>Skip</button>
         </span>
       </div>

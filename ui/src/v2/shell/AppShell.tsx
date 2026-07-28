@@ -15,10 +15,9 @@ import { navKeyToObjectType } from "../palette/types";
 import { usePaletteHotkey } from "../palette/usePaletteHotkey";
 import { SystemTakeover, SystemBanners, useSystemStateOverride, type TakeoverKind } from "./SystemStates";
 import { BillingBanner } from "../billing/BillingBanner";
-import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
+import { closeRoom, openRoom, useV2Route, ROOM_KEYS, type RoomKey } from "../router";
 import { getRoomBody } from "../rooms/RoomBodyRegistry";
 import { setRoomEntry } from "../rooms/roomEntryStore";
-import { useTutorialEventDispatcher } from "../onboarding/TutorialEventContext";
 import { FloatingWindowsLayer } from "../rooms/FloatingWindowsLayer";
 import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
@@ -70,23 +69,33 @@ function paletteTypeToRoomKey(t: PaletteResultType): RoomKey {
   return objectTypeToRoomKey(PALETTE_TYPE_TO_OBJECT_TYPE[t]);
 }
 
-const ROOM_KEYS_SET: ReadonlySet<RoomKey> = new Set([
-  "workflows",
-  "memory",
-  "tools",
-  "agents",
-  "authority",
-  "logs",
-  "calendar",
-  "goals",
-  "tasks",
-  "content",
-  "workspaces",
-  "settings",
-]);
-
 function isRoomKey(k: string): k is RoomKey {
-  return ROOM_KEYS_SET.has(k as RoomKey);
+  return ROOM_KEYS.has(k as RoomKey); // router's canonical set — no drifting copy
+}
+
+function isEditableTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
+}
+
+/** True only after the connection has been up once AND offline has persisted
+ *  ~5 s — so a reconnect blip or the pre-connect mount state never takes over
+ *  the whole window. */
+function useStableOffline(offline: boolean, graceMs = 5000): boolean {
+  const [stable, setStable] = useState(false);
+  const everConnectedRef = useRef(false);
+  useEffect(() => {
+    if (!offline) {
+      everConnectedRef.current = true;
+      setStable(false);
+      return;
+    }
+    if (!everConnectedRef.current) return;
+    const t = window.setTimeout(() => setStable(true), graceMs);
+    return () => window.clearTimeout(t);
+  }, [offline, graceMs]);
+  return stable;
 }
 
 const VOICE_CYCLE: VoiceState[] = [
@@ -365,111 +374,9 @@ function AppShellLive() {
 
   // ── Palette wiring (Phase 5A) ──
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Phase C — tutorial auto-advance event bus. No-op when the
-  // TutorialEventProvider isn't mounted, so this is free in
-  // post-onboarding daily use.
-  const fireTutorialEvent = useTutorialEventDispatcher();
-  const openPalette = useCallback(() => {
-    setPaletteOpen(true);
-    fireTutorialEvent("palette_opened", undefined as never);
-  }, [fireTutorialEvent]);
-  const closePalette = useCallback(() => {
-    setPaletteOpen(false);
-    fireTutorialEvent("palette_closed", undefined as never);
-  }, [fireTutorialEvent]);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
   usePaletteHotkey(openPalette);
-
-  // Fire tutorial event when a fullscreen Room opens (URL hash flips
-  // to `#/_room_<key>`). AppShell doesn't have direct access to the
-  // V2 route (that lives in AppShellV2); we read the hash and listen
-  // for hashchange. The tutorial's "rooms-fullscreen" step
-  // auto-advances when the user actually opens a room.
-  useEffect(() => {
-    const detectAndFire = () => {
-      const hash = window.location.hash;
-      const m = hash.match(/^#\/?_room_([a-z]+)$/);
-      if (m && m[1]) {
-        fireTutorialEvent("room_opened", { key: m[1] as RoomKey });
-      } else {
-        fireTutorialEvent("room_closed", undefined as never);
-      }
-    };
-    detectAndFire(); // initial
-    window.addEventListener("hashchange", detectAndFire);
-    return () => window.removeEventListener("hashchange", detectAndFire);
-  }, [fireTutorialEvent]);
-
-  // Phase C — sample-data injection for the tutorial. The gate
-  // dispatches window CustomEvents because it can't reach the
-  // useLiveThread instance directly (lives inside AppShell scope).
-  // Subscribing here keeps AppShell the single owner of `live.*`
-  // and avoids prop-drilling injection helpers up to OnboardingGate.
-  useEffect(() => {
-    const onInjectCard = () => {
-      live.injectCard({
-        objectType: "memory",
-        ref: "tutorial-sample-memory",
-        title: "Sample memory: Vieri's onboarding",
-        summary:
-          "This is what an InlineCard looks like. I bring objects up like this whenever I reference something concrete in the conversation.",
-        meta: "onboarding · sample",
-        status: { label: "Sample", tone: "neutral" },
-      });
-    };
-    const onInjectRoomWindow = () => {
-      live.openRoomWindow("memory");
-    };
-    // Per-room walkthrough block — the tutorial drives Room nav so it
-    // can spotlight each one in turn. We use openRoom/closeRoom (the
-    // same helpers used by the voice-action and palette paths) so the
-    // tutorial-driven nav behaves exactly like a user-driven nav.
-    const onOpenRoom = (e: Event) => {
-      const detail = (e as CustomEvent<{ key?: RoomKey }>).detail;
-      if (detail?.key && isRoomKey(detail.key)) {
-        setRoomEntry(detail.key, "voice");
-        openRoom(detail.key);
-      }
-    };
-    const onCloseRoom = () => {
-      if (window.location.hash.startsWith("#/_room_")) closeRoom();
-    };
-    window.addEventListener("v2-tutorial:inject-card", onInjectCard);
-    window.addEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
-    window.addEventListener("v2-tutorial:open-room", onOpenRoom);
-    window.addEventListener("v2-tutorial:close-room", onCloseRoom);
-    return () => {
-      window.removeEventListener("v2-tutorial:inject-card", onInjectCard);
-      window.removeEventListener("v2-tutorial:inject-roomwindow", onInjectRoomWindow);
-      window.removeEventListener("v2-tutorial:open-room", onOpenRoom);
-      window.removeEventListener("v2-tutorial:close-room", onCloseRoom);
-    };
-  }, [live]);
-
-  // Phase C — mic mute control for the tutorial overlay. The TutorialRoom
-  // dispatches `mute-mic` on mount / `unmute-mic` on unmount so the
-  // narration playing through the speakers doesn't loop back through the
-  // mic and get sent to the chat agent. We capture whatever the user's
-  // muted state was before the tutorial mounted and restore it on unmount.
-  const preTutorialMutedRef = useRef<boolean | null>(null);
-  useEffect(() => {
-    const onMute = () => {
-      if (preTutorialMutedRef.current === null) {
-        preTutorialMutedRef.current = voice.muted;
-      }
-      if (!voice.muted) voice.setMuted(true);
-    };
-    const onUnmute = () => {
-      const prior = preTutorialMutedRef.current;
-      preTutorialMutedRef.current = null;
-      if (prior === false) voice.setMuted(false);
-    };
-    window.addEventListener("v2-tutorial:mute-mic", onMute);
-    window.addEventListener("v2-tutorial:unmute-mic", onUnmute);
-    return () => {
-      window.removeEventListener("v2-tutorial:mute-mic", onMute);
-      window.removeEventListener("v2-tutorial:unmute-mic", onUnmute);
-    };
-  }, [voice]);
 
   // ── Notification center (Phase 6.2-A) ──
   const threadRef = useRef<ThreadHandle | null>(null);
@@ -480,13 +387,7 @@ function AppShellLive() {
     notices: live.notices,
   });
   const [notifOpen, setNotifOpen] = useState(false);
-  const toggleNotif = useCallback(() => {
-    setNotifOpen((v) => {
-      const next = !v;
-      if (next) fireTutorialEvent("notif_opened", undefined as never);
-      return next;
-    });
-  }, [fireTutorialEvent]);
+  const toggleNotif = useCallback(() => setNotifOpen((v) => !v), []);
   const closeNotif = useCallback(() => setNotifOpen(false), []);
 
   // ⌥N (Alt+N) toggles the drawer. Skipped while typing in editable fields
@@ -954,9 +855,11 @@ function ShellLayout({
   // awaiting-approval renders as the "asking" (amber) pebble state.
   const dataState = voiceState === "awaiting-approval" ? "asking" : voiceState;
 
-  // ⌘J summons/dismisses Talk; Esc dismisses it.
+  // ⌘J summons/dismisses Talk; Esc dismisses it. Skipped while typing in
+  // editable fields so it doesn't hijack keyboard input.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
       if ((e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J")) {
         e.preventDefault();
         setTalkOpen((o) => !o);
@@ -979,8 +882,12 @@ function ShellLayout({
   // System states. Offline is wired to the real connection; the rest (updating,
   // crash, out-of-tokens, and both banners) are previewable via the override
   // until their backend triggers (update feed, crash capture, quota) land.
+  // The full-screen takeover only fires once a previously-established
+  // connection has been down for a few seconds — a WS blip (or the initial
+  // pre-connect state on mount) must not flash a takeover.
   const sysOverride = useSystemStateOverride();
-  const takeover: TakeoverKind | null = connection === "offline" ? "offline" : sysOverride.takeover;
+  const offlineStable = useStableOffline(connection === "offline");
+  const takeover: TakeoverKind | null = offlineStable ? "offline" : sysOverride.takeover;
   const sysHandlers = useMemo(
     () => ({
       onRetry: () => window.dispatchEvent(new Event("jarvis:ws-reconnect")),

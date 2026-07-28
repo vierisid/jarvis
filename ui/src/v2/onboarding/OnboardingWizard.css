@@ -157,6 +157,9 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 /* mic meter + tts waveform */
 .obw-micbars { display: flex; align-items: flex-end; gap: 4px; height: 34px; margin: 2px 0; }
 .obw-micbars b { width: 5px; background: var(--ink2); border-radius: 2px; animation: obw-mic 1.1s var(--ease-out, ease) infinite; }
+/* live variant — heights come from the real mic level, not an animation */
+.obw-micbars.live b { animation: none; height: 22%; opacity: 0.35; transition: height 90ms linear, opacity 90ms linear, background 90ms linear; }
+.obw-micbars.live b.on { height: 92%; opacity: 1; background: var(--ok); }
 .obw-miccheck { margin-top: 13px; display: flex; align-items: center; gap: 13px; padding: 11px 13px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; }
 .obw-wave { display: inline-flex; align-items: center; gap: 3px; height: 22px; }
 .obw-wave b { width: 3px; background: var(--speak); border-radius: 2px; animation: obw-mic 1s var(--ease-out, ease) infinite; }

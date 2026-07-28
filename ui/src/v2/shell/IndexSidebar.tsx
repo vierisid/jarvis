@@ -94,10 +94,13 @@ export function IndexSidebar({
     return tone;
   };
 
-  // ⌘1–9 room navigation.
+  // ⌘1–9 room navigation. Skipped in editable fields, and left to the browser
+  // (tab switching) unless the shell actually has a room bound to that digit.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
       const n = parseInt(e.key, 10);
       const target = n >= 1 && n <= 9 ? HOTKEYS[n - 1] : undefined;
       if (target) {

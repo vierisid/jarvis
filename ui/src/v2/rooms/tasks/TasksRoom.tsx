@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Search, X } from "lucide-react";
 import { Icon } from "../../ui";
-import { Tabs, StatusChip, FilterChip, Select, EmptyState, Toast, DeepLink, type Tone } from "../../ui/roomkit";
+import { Tabs, StatusChip, FilterChip, Select, EmptyState, Toast, DeepLink, Skeleton, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
@@ -117,10 +117,10 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
       <div className="rk-tasks__fbar">
         <span className="rk-tasks__flabel">status</span>
         <FilterChip on={statusFilter === "all"} onClick={() => setStatusFilter("all")}>all</FilterChip>
-        {(["pending", "active", "completed"] as TaskStatus[]).map((s) => <FilterChip key={s} on={statusFilter === s} onClick={() => setStatusFilter(s)}>{s}</FilterChip>)}
+        {TASK_STATUSES.map((s) => <FilterChip key={s} on={statusFilter === s} onClick={() => setStatusFilter(s)}>{s}</FilterChip>)}
         <span className="rk-tasks__flabel" style={{ marginLeft: 8 }}>priority</span>
         <FilterChip on={priorityFilter === "all"} onClick={() => setPriorityFilter("all")}>all</FilterChip>
-        {(["high", "critical"] as TaskPriority[]).map((p) => <FilterChip key={p} on={priorityFilter === p} onClick={() => setPriorityFilter(p)}>{p}</FilterChip>)}
+        {TASK_PRIORITIES.map((p) => <FilterChip key={p} on={priorityFilter === p} onClick={() => setPriorityFilter(p)}>{p}</FilterChip>)}
         {assignees.length > 1 && (
           <div style={{ marginLeft: "auto" }}>
             <Select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
@@ -132,7 +132,11 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
       </div>
 
       <div className="rk-tasks__body">
-        {kanban ? (
+        {data.error ? (
+          <div className="rk-tasks__msg">{data.error}</div>
+        ) : data.loading && data.tasks.length === 0 ? (
+          <div className="rk-tasks__empty"><Skeleton lines={6} /></div>
+        ) : kanban ? (
           <div className="rk-tasks__board">
             {columns.map((status) => {
               const items = byStatus.get(status) ?? [];
@@ -141,7 +145,7 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
                   <div className="rk-tasks__colh">{status}<span className="c">{items.length}</span></div>
                   <div className="rk-tasks__col-scroll">
                     {items.length === 0 ? <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--faint)", padding: "8px 11px" }}>—</div>
-                      : items.map((t) => <TaskCard key={t.id} task={t} selected={selectedId === t.id} onClick={() => setSelectedId(selectedId === t.id ? null : t.id)} onComplete={() => complete(t.id)} onFail={() => fail(t.id)} />)}
+                      : items.map((t) => <TaskCard key={t.id} task={t} selected={selectedId === t.id} onClick={() => setSelectedId(selectedId === t.id ? null : t.id)} onComplete={() => complete(t.id)} onFail={() => fail(t.id)} onPriority={async (p) => toastFrom(await data.updatePriority(t.id, p))} />)}
                   </div>
                 </div>
               );
@@ -199,13 +203,16 @@ function Stat({ k, n, amber }: { k: string; n: number; amber?: boolean }) {
   return <div className="rk-tasks__stat"><div className="rk-tasks__stat-k">{k}</div><div className={`rk-tasks__stat-n${amber ? " rk-tasks__stat-n--amber" : ""}`}>{n}</div></div>;
 }
 
-function TaskCard({ task, selected, onClick, onComplete, onFail }: { task: Task; selected: boolean; onClick: () => void; onComplete: () => void; onFail: () => void }) {
+function TaskCard({ task, selected, onClick, onComplete, onFail, onPriority }: { task: Task; selected: boolean; onClick: () => void; onComplete: () => void; onFail: () => void; onPriority: (p: TaskPriority) => void }) {
   const over = isOverdue(task);
   const terminal = task.status === "completed" || task.status === "failed";
   return (
     <div className={`rk-tasks__card${selected ? " rk-tasks__card--sel" : ""}${over ? " rk-tasks__card--over" : ""}${terminal ? " rk-tasks__card--terminal" : ""}`} onClick={onClick} role="button">
       {!terminal && (
         <div className="rk-tasks__card-acts">
+          <select className="rk-tasks__prio" value={task.priority} aria-label="Set priority" title="Set priority" onClick={(e) => e.stopPropagation()} onChange={(e) => { e.stopPropagation(); onPriority(e.target.value as TaskPriority); }}>
+            {TASK_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
           <button className="rk-tasks__act rk-tasks__act--no" title="Mark failed" onClick={(e) => { e.stopPropagation(); onFail(); }}>✕</button>
           <button className="rk-tasks__act rk-tasks__act--ok" title="Complete" onClick={(e) => { e.stopPropagation(); onComplete(); }}>✓</button>
         </div>

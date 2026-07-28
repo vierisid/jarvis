@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./BootSplash.css";
 
 /* ═══════════════════ Cold-start splash ═══════════════════
@@ -51,7 +51,9 @@ const Drop = ({ ring }: { ring?: boolean }) => (
 const Word = () => <div className="lword"><span className="u">use</span>jarvis</div>;
 
 export function BootSplash() {
-  const variant = useMemo(pickVariant, []);
+  // Lazy state init, not useMemo: pickVariant is impure (Math.random +
+  // localStorage write), and StrictMode double-invokes render-phase memos.
+  const [variant] = useState(pickVariant);
   const [done, setDone] = useState(variant === null);
   const [out, setOut] = useState(false);
   const [progress, setProgress] = useState(6);
@@ -61,24 +63,27 @@ export function BootSplash() {
   const mountRef = useRef(Date.now());
 
   useEffect(() => {
-    if (variant === null) return;
+    // `done` in the deps: after hand-off the component renders null forever —
+    // rerun the effect so its cleanup stops the progress/status intervals.
+    if (variant === null || done) return;
     const st = VARIANTS[variant].status;
     // real-ish progress, eased toward 90% and never past it until ready
     const prog = window.setInterval(() => setProgress((p) => (p < 90 ? p + (90 - p) * 0.09 + 0.5 : p)), 130);
     const statTimer = st.length > 1 ? window.setInterval(() => setStatusIdx((k) => (k + 1) % st.length), 1400) : 0;
     const ceil = window.setTimeout(() => setBlocked(true), CEILING);
 
+    const pending: number[] = [];
     const handOff = () => {
       if (readyRef.current) return;
       readyRef.current = true;
       const wait = Math.max(0, MIN_SHOW - (Date.now() - mountRef.current));
-      window.setTimeout(() => {
+      pending.push(window.setTimeout(() => {
         setProgress(100);
-        window.setTimeout(() => {
+        pending.push(window.setTimeout(() => {
           setOut(true);
-          window.setTimeout(() => setDone(true), 260);
-        }, 200);
-      }, wait);
+          pending.push(window.setTimeout(() => setDone(true), 260));
+        }, 200));
+      }, wait));
     };
     window.addEventListener("jarvis:boot-ready", handOff);
     // safety: never let the splash stick if the ready signal is missed
@@ -89,9 +94,10 @@ export function BootSplash() {
       if (statTimer) clearInterval(statTimer);
       clearTimeout(ceil);
       clearTimeout(safety);
+      for (const t of pending) clearTimeout(t);
       window.removeEventListener("jarvis:boot-ready", handOff);
     };
-  }, [variant]);
+  }, [variant, done]);
 
   if (done || variant === null) return null;
 

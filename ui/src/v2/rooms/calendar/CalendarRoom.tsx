@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw, Search, X } from "lucide-react";
 import { Icon } from "../../ui";
-import { Tabs, StatusChip, EmptyState, Toast, DeepLink, type Tone } from "../../ui/roomkit";
+import { Tabs, StatusChip, EmptyState, Toast, DeepLink, Skeleton, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
@@ -116,7 +116,11 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
         ))}
       </div>
 
-      {dayView ? (
+      {data.error ? (
+        <div className="rk-cal__msg">{data.error}</div>
+      ) : data.loading && data.events.length === 0 ? (
+        <div style={{ padding: 22, flex: 1 }}><Skeleton lines={6} /></div>
+      ) : dayView ? (
         <DayView weekStart={data.weekStart} idx={selectedDayIdx} events={dayEvents} selectedId={selectedEventId} onSelect={setSelectedEventId} selectedEvent={selectedEvent} />
       ) : (
         <div className="rk-cal__body">
@@ -240,6 +244,9 @@ function DayView({ weekStart, idx, events, selectedId, onSelect, selectedEvent }
   const today = isSameDay(dayTs, Date.now());
   const undated = events.filter((e) => e.has_due_date === false);
   const placed = events.filter((e) => e.has_due_date !== false);
+  // Events outside the 07:00–21:00 grid still exist — surface them in a tray
+  // instead of silently dropping them.
+  const offGrid = placed.filter((e) => { const h = new Date(e.timestamp).getHours(); return h < 7 || h > 21; });
   const now = new Date();
   const nowTop = today && now.getHours() >= 7 && now.getHours() <= 21 ? (now.getHours() - 7 + now.getMinutes() / 60) * 44 : null;
   const detail = selectedEvent ?? events[0] ?? null;
@@ -251,6 +258,12 @@ function DayView({ weekStart, idx, events, selectedId, onSelect, selectedEvent }
           <div className="rk-cal__tray">
             <span className="rk-cal__tray-lab">due today</span>
             {undated.map((e) => <button key={e.id} className={`rk-cal__card${selectedId === e.id ? " rk-cal__card--sel" : ""}`} style={{ padding: "5px 9px" }} onClick={() => onSelect(e.id)}><span className="rk-cal__card-title" style={{ fontSize: 11.5 }}>{e.title}</span></button>)}
+          </div>
+        )}
+        {offGrid.length > 0 && (
+          <div className="rk-cal__tray">
+            <span className="rk-cal__tray-lab">earlier / later</span>
+            {offGrid.map((e) => <button key={e.id} className={`rk-cal__card${selectedId === e.id ? " rk-cal__card--sel" : ""}`} style={{ padding: "5px 9px" }} onClick={() => onSelect(e.id)}><span className="rk-cal__card-title" style={{ fontSize: 11.5 }}>{formatTime(e.timestamp)} · {e.title}</span></button>)}
           </div>
         )}
         <div style={{ position: "relative" }}>
