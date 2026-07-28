@@ -20,6 +20,39 @@ export interface ChannelAdapter {
   isConnected(): boolean;
 }
 
+export class TelegramSendError extends Error {
+  readonly status?: number;
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, opts?: { status?: number; retryAfterMs?: number }) {
+    super(message);
+    this.name = 'TelegramSendError';
+    this.status = opts?.status;
+    this.retryAfterMs = opts?.retryAfterMs;
+  }
+}
+
+/**
+ * Map a Telegram sendMessage HTTP response to an error, or null on success.
+ * On 429 the retry_after from the response body (seconds) is surfaced as
+ * retryAfterMs, and the message always contains "429" so string-based
+ * transient-error classification still works after the error is stringified.
+ */
+export function telegramErrorFromResponse(status: number, body: unknown): TelegramSendError | null {
+  const data = body as { ok?: boolean; error_code?: number; description?: string; parameters?: { retry_after?: unknown } } | null;
+  if (data?.ok === true) return null;
+
+  const description = data?.description ?? `HTTP ${status}`;
+  if (status === 429 || data?.error_code === 429) {
+    const retryAfter = data?.parameters?.retry_after;
+    const retryAfterMs = typeof retryAfter === 'number' && Number.isFinite(retryAfter)
+      ? retryAfter * 1000
+      : undefined;
+    return new TelegramSendError(`Telegram API error 429: ${description}`, { status: 429, retryAfterMs });
+  }
+  return new TelegramSendError(`Telegram API error: ${description}`, { status });
+}
+
 type TelegramUpdate = {
   update_id: number;
   message?: {
@@ -133,13 +166,16 @@ export class TelegramAdapter implements ChannelAdapter {
         if (!data.ok) {
           // Retry without Markdown if parsing failed
           if (data.description?.includes('parse')) {
-            await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
+            const fallback = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: chatId, text: chunk }),
             }, 15_000);
+            const fallbackError = telegramErrorFromResponse(fallback.status, await fallback.json());
+            if (fallbackError) throw fallbackError;
           } else {
-            throw new Error(`Telegram API error: ${data.description}`);
+            const error = telegramErrorFromResponse(response.status, data);
+            if (error) throw error;
           }
         }
       } catch (error) {

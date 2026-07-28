@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { routePerChannel, type ChannelRouterServices } from "./channel-service";
+import { routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 
 class FakeAdapter implements ChannelAdapter {
@@ -138,5 +138,122 @@ describe("routePerChannel", () => {
     }));
     expect(res.delivered).toEqual(["telegram"]);
     expect(tg.sent).toHaveLength(1);
+  });
+});
+
+/** Adapter that fails with each scripted error in turn, then succeeds. */
+class ScriptedAdapter {
+  name = "scripted";
+  public sent: Array<{ to: string; text: string }> = [];
+  constructor(private failures: unknown[]) {}
+
+  async sendMessage(to: string, text: string): Promise<void> {
+    const failure = this.failures.shift();
+    if (failure) throw failure;
+    this.sent.push({ to, text });
+  }
+}
+
+function makeSleepRecorder(): { sleeps: number[]; sleep: (ms: number) => Promise<void> } {
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+    },
+  };
+}
+
+function rateLimitError(retryAfterMs?: number): Error & { retryAfterMs?: number } {
+  const err = new Error("Telegram API error 429: Too Many Requests") as Error & { retryAfterMs?: number };
+  if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
+  return err;
+}
+
+describe("sendWithRetry", () => {
+  test("first-try success makes one attempt and never sleeps", async () => {
+    const adapter = new ScriptedAdapter([]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep });
+
+    expect(res).toEqual({ ok: true, attempts: 1 });
+    expect(adapter.sent).toEqual([{ to: "user", text: "hi" }]);
+    expect(sleeps).toEqual([]);
+  });
+
+  test("retries transient failures with exponential backoff", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(), rateLimitError()]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 3 });
+    expect(sleeps).toEqual([2_000, 4_000]);
+  });
+
+  test("an explicit retryAfterMs larger than the backoff wins", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(7_000)]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(sleeps).toEqual([7_000]);
+  });
+
+  test("a retryAfterMs smaller than the backoff loses to the backoff", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(500)]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(sleeps).toEqual([2_000]);
+  });
+
+  test("non-transient errors are not retried", async () => {
+    const adapter = new ScriptedAdapter([new Error("Telegram API error: Bad Request: chat not found")]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep });
+
+    expect(res).toEqual({ ok: false, attempts: 1, error: "Telegram API error: Bad Request: chat not found" });
+    expect(sleeps).toEqual([]);
+    expect(adapter.sent).toEqual([]);
+  });
+
+  test("fails immediately when the provider demands a wait beyond the budget", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(120_000)]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, budgetMs: 60_000 });
+
+    expect(res.ok).toBe(false);
+    expect(res.attempts).toBe(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  test("gives up after maxAttempts on persistent transient failure", async () => {
+    const adapter = new ScriptedAdapter([
+      rateLimitError(), rateLimitError(), rateLimitError(), rateLimitError(),
+    ]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, maxAttempts: 4, baseDelayMs: 2_000 });
+
+    expect(res.ok).toBe(false);
+    expect(res.attempts).toBe(4);
+    expect(sleeps).toEqual([2_000, 4_000, 8_000]);
+  });
+
+  test("caps a single wait at maxDelayMs even when retryAfterMs asks for more", async () => {
+    const adapter = new ScriptedAdapter([rateLimitError(45_000)]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, maxDelayMs: 30_000 });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(sleeps).toEqual([30_000]);
   });
 });
