@@ -26,6 +26,8 @@ const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
 
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
+export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
+
 export class ChannelService implements Service {
   name = 'channels';
   private _status: ServiceStatus = 'stopped';
@@ -42,6 +44,8 @@ export class ChannelService implements Service {
   private lastRecipients = new Map<string, string>();
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
+  /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
+  private deliveryFailureHandler: DeliveryFailureHandler | null = null;
 
   constructor(config: JarvisConfig, agentService: AgentService) {
     this.config = config;
@@ -51,6 +55,19 @@ export class ChannelService implements Service {
 
   setApprovalHandler(handler: ApprovalCommandHandler): void {
     this.approvalHandler = handler;
+  }
+
+  setDeliveryFailureHandler(handler: DeliveryFailureHandler): void {
+    this.deliveryFailureHandler = handler;
+  }
+
+  private reportDeliveryFailure(channel: string, result: { attempts: number; error: string }): void {
+    console.error(`[ChannelService] Failed to send to ${channel} after ${result.attempts} attempt(s): ${result.error}`);
+    try {
+      this.deliveryFailureHandler?.({ channel, attempts: result.attempts, error: result.error });
+    } catch (err) {
+      console.error('[ChannelService] Delivery failure handler threw:', err);
+    }
   }
 
   async start(): Promise<void> {
@@ -147,7 +164,7 @@ export class ChannelService implements Service {
     }
     const result = await sendWithRetry(adapter, recipientId, text);
     if (!result.ok) {
-      console.error(`[ChannelService] Failed to send to ${channelName} after ${result.attempts} attempt(s): ${result.error}`);
+      this.reportDeliveryFailure(channelName, result);
     }
   }
 
@@ -173,7 +190,7 @@ export class ChannelService implements Service {
       sends.push(
         sendWithRetry(adapter, lastRecipient, text).then((result) => {
           if (!result.ok) {
-            console.error(`[ChannelService] Broadcast to ${name} failed after ${result.attempts} attempt(s): ${result.error}`);
+            this.reportDeliveryFailure(name, result);
           }
         }),
       );
@@ -391,10 +408,12 @@ function defaultIsTransient(err: unknown): boolean {
  * duration: if the required wait doesn't fit before the deadline, it fails
  * immediately instead of stalling the caller.
  *
- * Note: retrying re-runs the adapter's whole sendMessage, so a multi-chunk
- * (>4096 char) text that fails mid-way resends its leading chunks. Discord
- * rarely gets here at all — discord.js queues 429s internally, and the
- * adapter's own errors (not connected, invalid channel) are non-transient.
+ * If a thrown error carries a remainingText string (set by adapters whose
+ * sendMessage chunks long texts and fails mid-way), retries resume with
+ * only the unsent portion instead of duplicating already-sent chunks.
+ * Discord rarely gets here at all — discord.js queues 429s internally, and
+ * the adapter's own errors (not connected, invalid channel) are
+ * non-transient.
  */
 export async function sendWithRetry(
   adapter: Pick<ChannelAdapter, 'name' | 'sendMessage'>,
@@ -409,15 +428,20 @@ export async function sendWithRetry(
   const now = opts?.now ?? Date.now;
   const isTransient = opts?.isTransient ?? defaultIsTransient;
   const deadline = now() + (opts?.budgetMs ?? SEND_RETRY_BUDGET_MS);
+  let currentText = text;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await adapter.sendMessage(recipient, text);
+      await adapter.sendMessage(recipient, currentText);
       return { ok: true, attempts: attempt };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (attempt === maxAttempts || !isTransient(err)) {
         return { ok: false, attempts: attempt, error: message };
+      }
+      const remaining = (err as { remainingText?: unknown }).remainingText;
+      if (typeof remaining === 'string' && remaining.length > 0) {
+        currentText = remaining;
       }
 
       const retryAfterMs = (err as { retryAfterMs?: unknown }).retryAfterMs;

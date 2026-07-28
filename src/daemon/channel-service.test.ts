@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
+import { ChannelService, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 
 class FakeAdapter implements ChannelAdapter {
@@ -314,5 +314,80 @@ describe("sendWithRetry", () => {
 
     expect(res).toEqual({ ok: true, attempts: 2 });
     expect(sleeps).toEqual([2_000]);
+  });
+
+  test("resumes from the error's remainingText instead of resending sent chunks", async () => {
+    class ResumeAdapter {
+      name = "resume";
+      public sent: string[] = [];
+      private calls = 0;
+      async sendMessage(_to: string, text: string): Promise<void> {
+        this.calls++;
+        if (this.calls === 1) {
+          const err = rateLimitError() as Error & { remainingText?: string };
+          err.remainingText = "tail";
+          throw err;
+        }
+        this.sent.push(text);
+      }
+    }
+    const adapter = new ResumeAdapter();
+    const { sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "head-and-tail", { sleep });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(adapter.sent).toEqual(["tail"]);
+  });
+});
+
+describe("delivery failure handler", () => {
+  function makeService(adapter: ChannelAdapter): ChannelService {
+    // Constructor only stores deps and creates the manager; the live
+    // agent/STT stack is needed only by start(), which we don't call.
+    const svc = new ChannelService({} as never, {} as never);
+    svc.getManager().register(adapter);
+    return svc;
+  }
+
+  test("notifies the handler when a send exhausts its retries", async () => {
+    const failing = new FakeAdapter({
+      connected: true,
+      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+    });
+    const svc = makeService(failing);
+    const failures: Array<{ channel: string; attempts: number; error: string }> = [];
+    svc.setDeliveryFailureHandler((f) => failures.push(f));
+
+    await svc.sendToChannel("fake", "user", "hi");
+
+    expect(failures).toEqual([
+      { channel: "fake", attempts: 1, error: "Telegram API error: Bad Request: chat not found" },
+    ]);
+  });
+
+  test("does not notify the handler on success", async () => {
+    const healthy = new FakeAdapter({ connected: true });
+    const svc = makeService(healthy);
+    const failures: unknown[] = [];
+    svc.setDeliveryFailureHandler((f) => failures.push(f));
+
+    await svc.sendToChannel("fake", "user", "hi");
+
+    expect(failures).toEqual([]);
+    expect(healthy.sent).toEqual([{ to: "user", text: "hi" }]);
+  });
+
+  test("a throwing handler does not break the send path", async () => {
+    const failing = new FakeAdapter({
+      connected: true,
+      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+    });
+    const svc = makeService(failing);
+    svc.setDeliveryFailureHandler(() => {
+      throw new Error("handler boom");
+    });
+
+    await expect(svc.sendToChannel("fake", "user", "hi")).resolves.toBeUndefined();
   });
 });

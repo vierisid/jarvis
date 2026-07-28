@@ -149,7 +149,8 @@ export class TelegramAdapter implements ChannelAdapter {
   async sendMessage(chatId: string, text: string): Promise<void> {
     // Telegram has a 4096 char limit per message
     const chunks = splitText(text, 4096);
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]!;
       try {
         const response = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
           method: 'POST',
@@ -179,6 +180,12 @@ export class TelegramAdapter implements ChannelAdapter {
           }
         }
       } catch (error) {
+        // Tag the error with the not-yet-sent portion (splitText is lossless,
+        // so the slices concatenate back exactly) so a retrying caller can
+        // resume from the failed chunk instead of duplicating sent ones.
+        if (error instanceof Error && i > 0) {
+          (error as Error & { remainingText?: string }).remainingText = chunks.slice(i).join('');
+        }
         console.error('[TelegramAdapter] Error sending message:', error);
         throw error;
       }

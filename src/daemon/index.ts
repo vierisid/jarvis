@@ -3843,6 +3843,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
+    channelService.setDeliveryFailureHandler(({ channel, attempts, error }) => {
+      // 'normal', not 'urgent': urgent notifications are echoed back to
+      // external channels, which would loop the failure into the channel
+      // that just failed. The dashboard is the fallback the user still has.
+      wsService.broadcastNotification(
+        `Could not deliver message to ${channel} after ${attempts} attempt(s): ${error}`,
+        'normal',
+      );
+    });
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
       // Skip for intent-only approvals — they have no deferred execution.

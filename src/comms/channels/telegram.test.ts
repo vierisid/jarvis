@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { TelegramSendError, telegramErrorFromResponse } from './telegram.ts';
+import { TelegramAdapter, TelegramSendError, telegramErrorFromResponse } from './telegram.ts';
 
 describe('telegramErrorFromResponse', () => {
   test('returns null for a successful response', () => {
@@ -61,5 +61,47 @@ describe('telegramErrorFromResponse', () => {
 
     expect(error!.status).toBe(502);
     expect(error!.message).toBe('Telegram API error: HTTP 502');
+  });
+});
+
+describe('sendMessage chunking', () => {
+  test('tags a mid-chunk failure with the unsent remainder for resumable retries', async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return { status: 200, json: async () => ({ ok: true }) };
+      }
+      return {
+        status: 429,
+        json: async () => ({
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 3',
+          parameters: { retry_after: 3 },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    try {
+      const adapter = new TelegramAdapter('test-token');
+      // 5000 chars with no newlines splits into a 4096 chunk and a 904 chunk.
+      const text = 'a'.repeat(5000);
+
+      let thrown: unknown;
+      try {
+        await adapter.sendMessage('chat-1', text);
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(TelegramSendError);
+      const sendError = thrown as TelegramSendError & { remainingText?: string };
+      expect(sendError.retryAfterMs).toBe(3_000);
+      expect(sendError.remainingText).toBe('a'.repeat(904));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
