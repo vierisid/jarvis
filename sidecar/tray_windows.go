@@ -39,6 +39,7 @@ var (
 const (
 	trayCallbackMsg  = 0x0400 + 1 // WM_APP-ish (WM_USER+1) tray callback
 	trayMsgSetState  = 0x0400 + 2 // WM_APP+2: poll goroutine -> tray thread, swap icon (wParam=state)
+	trayMsgRefresh   = 0x0400 + 4 // WM_APP+4: tray.status changed -> tray thread, re-render icon (+3 is the balloon)
 	trayWmRButtonUp  = 0x0205
 	trayWmContextMnu = 0x007B
 	trayWmClose      = 0x0010
@@ -131,6 +132,14 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 			Priority:  "normal",
 			Payload:   p,
 		}, nil)
+	}
+	// Pebble-state changes (tray.status pushes) re-render the icon so the tray
+	// mirrors the pebble like the macOS status item. The render must happen on
+	// the tray thread (it owns trayNID), so just post it over.
+	trayRefresh = func() {
+		if h := trayHwnd.Load(); h != 0 {
+			procPostMessageW.Call(h, trayMsgRefresh, 0, 0)
+		}
 	}
 
 	// Poll the connection state; when it changes, ask the tray thread (which owns
@@ -251,21 +260,46 @@ func runTrayMessageLoop() {
 	}
 }
 
-// traySetIconForState swaps the notification-area icon to reflect the current
-// connection state. Must run on the tray thread (it owns trayNID), so it's
-// invoked via the trayMsgSetState window message posted by the poll goroutine.
+// Tray-thread-only icon state: the last connection state seen (so the render
+// can prioritise the error icon) and the previous dynamically synthesized
+// HICON (destroyed on swap — LoadIconW handles are shared and must NOT be).
+var (
+	trayLastConnState int32
+	trayDynIcon       uintptr
+)
+
+// traySetIconForState records the connection state and re-renders. Tray thread
+// only (invoked via the trayMsgSetState message posted by the poll goroutine).
 func traySetIconForState(state int32) {
+	trayLastConnState = state
+	trayRenderIcon()
+}
+
+// trayRenderIcon rebuilds the notification-area icon from connection state +
+// pebble state (tray.status): connection-error wins, then a synthesized
+// brand-icon-with-state-dot, then the plain brand icon. Tray thread only.
+func trayRenderIcon() {
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
-	id := uintptr(trayIconBrandID)
-	if state == connError {
-		id = uintptr(trayIconErrorID)
+	var hIcon, dyn uintptr
+	if trayLastConnState == connError {
+		hIcon, _, _ = procLoadIconW.Call(hInstance, uintptr(trayIconErrorID))
+	} else if code := trayStateCode(getTrayStatus().State); code != 0 {
+		dyn = traySynthesizeStateIcon(code)
+		hIcon = dyn
 	}
-	hIcon, _, _ := procLoadIconW.Call(hInstance, id)
+	if hIcon == 0 {
+		hIcon, _, _ = procLoadIconW.Call(hInstance, uintptr(trayIconBrandID))
+		dyn = 0
+	}
 	if hIcon == 0 {
 		return
 	}
 	trayNID.HIcon = hIcon
 	procShellNotifyIconW.Call(trayNimModify, uintptr(unsafe.Pointer(&trayNID)))
+	if trayDynIcon != 0 {
+		procDestroyIcon.Call(trayDynIcon) // the shell has its own copy after NIM_MODIFY
+	}
+	trayDynIcon = dyn
 }
 
 func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
@@ -282,6 +316,10 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 	case trayMsgSetState:
 		traySetIconForState(int32(wParam))
+		return 0
+
+	case trayMsgRefresh:
+		trayRenderIcon()
 		return 0
 
 	case trayMsgShowBalloon:
@@ -405,17 +443,25 @@ func showTrayMenu(hwnd uintptr) {
 		ts := getTrayStatus()
 		ts.Paused = !ts.Paused
 		setTrayStatus(ts)
-		if trayEmit != nil {
-			trayEmit("tray.set_pause", map[string]any{"paused": ts.Paused})
-		}
+		// WS write off the tray thread — a stalled brain must not freeze the
+		// message pump (icon, menu, WM_COPYDATA delivery).
+		go func(paused bool) {
+			if trayEmit != nil {
+				trayEmit("tray.set_pause", map[string]any{"paused": paused})
+			}
+		}(ts.Paused)
 	case trayMenuMuteID:
 		ts := getTrayStatus()
 		ts.Muted = !ts.Muted
 		setTrayStatus(ts)
-		trayApplyMute(ts.Muted) // gate the mic locally (sidecar owns mic control)
-		if trayEmit != nil {
-			trayEmit("tray.set_mute", map[string]any{"muted": ts.Muted})
-		}
+		// Mic gating tears down audio devices (blocking I/O) and the emit is a
+		// WS write — both off the tray thread, like the sibling menu items.
+		go func(muted bool) {
+			trayApplyMute(muted) // gate the mic locally (sidecar owns mic control)
+			if trayEmit != nil {
+				trayEmit("tray.set_mute", map[string]any{"muted": muted})
+			}
+		}(ts.Muted)
 	}
 }
 
