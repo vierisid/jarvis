@@ -214,6 +214,7 @@ func (r *realtimeVoice) Start() {
 		r.setStream(nil)
 		player.Stop()
 		r.player = nil
+		ambientSuppressed.Store(false) // Stop() won't run (active already false) — resume screen awareness here
 		r.resumeWake()
 		r.active.Store(false)
 		return

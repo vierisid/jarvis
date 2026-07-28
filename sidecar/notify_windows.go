@@ -21,15 +21,21 @@ package main
 // NIF_INFO) — buttonless, so a click only ever opens the app to review.
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -54,7 +60,58 @@ var (
 
 	pendingNotifyMu sync.Mutex
 	pendingNotify   Notification
+
+	// notifyNonces maps notification id → single-use secret embedded in that
+	// toast's button URIs. Protocol activation is world-invokable (any local
+	// process can launch a jarvis:// URI or send our WM_COPYDATA), so
+	// approve/deny must prove the URI came from a toast we minted.
+	notifyNonceMu sync.Mutex
+	notifyNonces  = map[string]notifyNonceEntry{}
 )
+
+const notifyNonceTTL = 10 * time.Minute
+
+type notifyNonceEntry struct {
+	nonce   string
+	expires time.Time
+}
+
+// mintNotifyNonce creates and stores the nonce for a notification id, pruning
+// expired entries. Returns "" on entropy failure — then approve/deny buttons
+// simply won't validate (fail closed).
+func mintNotifyNonce(id string) string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	n := hex.EncodeToString(b)
+	notifyNonceMu.Lock()
+	defer notifyNonceMu.Unlock()
+	now := time.Now()
+	for k, e := range notifyNonces {
+		if now.After(e.expires) {
+			delete(notifyNonces, k)
+		}
+	}
+	notifyNonces[id] = notifyNonceEntry{nonce: n, expires: now.Add(notifyNonceTTL)}
+	return n
+}
+
+// consumeNotifyNonce validates and burns the nonce for id (single use — the
+// first of Approve/Deny to arrive wins; a replay finds nothing).
+func consumeNotifyNonce(id, nonce string) bool {
+	if id == "" || nonce == "" {
+		return false
+	}
+	notifyNonceMu.Lock()
+	defer notifyNonceMu.Unlock()
+	e, ok := notifyNonces[id]
+	if !ok || time.Now().After(e.expires) || subtle.ConstantTimeCompare([]byte(e.nonce), []byte(nonce)) != 1 {
+		return false
+	}
+	delete(notifyNonces, id)
+	return true
+}
 
 type copyDataStruct struct {
 	dwData uintptr
@@ -130,6 +187,7 @@ func windowsForwardProtocolLaunch() bool {
 				lpData: uintptr(unsafe.Pointer(&b[0])),
 			}
 			procSendMessageW.Call(hwnd, trayWmCopyData, 0, uintptr(unsafe.Pointer(&cds)))
+			runtime.KeepAlive(b) // lpData is a bare uintptr — keep the buffer live across the syscall
 		}
 	}
 	return true
@@ -160,6 +218,15 @@ func handleNotifyURI(uri string) {
 	if action == "" {
 		return
 	}
+	// approve/deny act on the brain, and this entry point is world-invokable —
+	// require the single-use nonce minted into this toast's buttons. Everything
+	// else (review/view/reconnect/restart) only opens the app, so it stays open.
+	if action == "approve" || action == "deny" {
+		if !consumeNotifyNonce(vals.Get("id"), vals.Get("n")) {
+			log.Printf("[notify] dropped unauthenticated %q for %q", action, vals.Get("id"))
+			return
+		}
+	}
 	// Let the brain act on approve/deny; everything else (review/view/reconnect/
 	// restart) opens the app. Emit for all so the brain can mark-seen.
 	notifyEmitAction(vals.Get("id"), vals.Get("kind"), action)
@@ -189,8 +256,12 @@ func windowsShowNotification(n Notification) {
 	}()
 }
 
-func notifyURI(id, kind, action string) string {
-	return "jarvis://n?id=" + url.QueryEscape(id) + "&kind=" + url.QueryEscape(kind) + "&a=" + url.QueryEscape(action)
+func notifyURI(id, kind, action, nonce string) string {
+	u := "jarvis://n?id=" + url.QueryEscape(id) + "&kind=" + url.QueryEscape(kind) + "&a=" + url.QueryEscape(action)
+	if nonce != "" {
+		u += "&n=" + url.QueryEscape(nonce)
+	}
+	return u
 }
 
 func showToast(n Notification) error {
@@ -199,14 +270,16 @@ func showToast(n Notification) error {
 		body += " · " + n.Meta
 	}
 
+	nonce := mintNotifyNonce(n.ID)
+
 	var acts strings.Builder
 	for _, a := range n.Actions {
 		fmt.Fprintf(&acts, `<action content="%s" activationType="protocol" arguments="%s"/>`,
-			xmlEscape(a.Label), xmlEscape(notifyURI(n.ID, n.Kind, a.ID)))
+			xmlEscape(a.Label), xmlEscape(notifyURI(n.ID, n.Kind, a.ID, nonce)))
 	}
 
 	// launch (body click) always reviews in-app — never an approve.
-	xml := `<toast activationType="protocol" launch="` + xmlEscape(notifyURI(n.ID, n.Kind, "review")) + `">` +
+	xml := `<toast activationType="protocol" launch="` + xmlEscape(notifyURI(n.ID, n.Kind, "review", nonce)) + `">` +
 		`<visual><binding template="ToastGeneric">` +
 		`<text>` + xmlEscape(n.Title) + `</text>` +
 		`<text>` + xmlEscape(body) + `</text>` +
@@ -227,8 +300,12 @@ $d.LoadXml(@'
 $t=New-Object Windows.UI.Notifications.ToastNotification $d
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('` + notifyAUMID + `').Show($t)`
 
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", psEncode(script))
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	// Bounded: a hung PowerShell would otherwise leak a goroutine + process per
+	// notification and suppress the balloon fallback forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", psEncode(script))
+	hideSubprocessWindow(cmd)
 	return cmd.Run() // wait so a toast/AUMID failure surfaces for the balloon fallback
 }
 

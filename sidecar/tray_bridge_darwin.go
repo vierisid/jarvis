@@ -43,9 +43,12 @@ func goTrayPause() {
 	ts := getTrayStatus()
 	ts.Paused = !ts.Paused
 	setTrayStatus(ts) // triggers trayRefresh → menu/icon rebuild
-	if trayEmitDarwin != nil {
-		trayEmitDarwin("tray.set_pause", map[string]any{"paused": ts.Paused})
-	}
+	// WS write off the Cocoa main thread — a stalled brain must not block the run loop.
+	go func(paused bool) {
+		if trayEmitDarwin != nil {
+			trayEmitDarwin("tray.set_pause", map[string]any{"paused": paused})
+		}
+	}(ts.Paused)
 }
 
 //export goTrayMute
@@ -53,10 +56,14 @@ func goTrayMute() {
 	ts := getTrayStatus()
 	ts.Muted = !ts.Muted
 	setTrayStatus(ts)
-	trayApplyMute(ts.Muted) // gate the mic locally (sidecar owns mic control)
-	if trayEmitDarwin != nil {
-		trayEmitDarwin("tray.set_mute", map[string]any{"muted": ts.Muted})
-	}
+	// Mic gating tears down audio devices (blocking I/O) and the emit is a WS
+	// write — both off the Cocoa main thread, like the sibling handlers.
+	go func(muted bool) {
+		trayApplyMute(muted) // gate the mic locally (sidecar owns mic control)
+		if trayEmitDarwin != nil {
+			trayEmitDarwin("tray.set_mute", map[string]any{"muted": muted})
+		}
+	}(ts.Muted)
 }
 
 //export goTrayWaiting

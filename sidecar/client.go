@@ -74,9 +74,11 @@ type SidecarClient struct {
 
 	// Realtime voice (gpt-realtime). streamPlayer is the live PCM playback
 	// device, read by the readLoop's pebble.play_pcm fast-path; realtime is the
-	// per-connection controller (built in connectAndServe).
+	// per-connection controller (built in connectAndServe). atomic.Pointer
+	// because it's re-assigned on every reconnect while the tray/Cocoa/hotkey
+	// threads read it — a plain field is a data race.
 	streamPlayer atomic.Pointer[AudioStreamPlayer]
-	realtime     *realtimeVoice
+	realtime     atomic.Pointer[realtimeVoice]
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -653,9 +655,26 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 					case websocket.MessageBinary:
 						onBinary(data) // playback PCM
 					case websocket.MessageText:
-						if strings.Contains(string(data), "flush") {
+						// Control frames are JSON ({"t":"flush"}); parse rather
+						// than substring-match so unrelated text can't flush.
+						var ctl struct {
+							T string `json:"t"`
+						}
+						if json.Unmarshal(data, &ctl) == nil && ctl.T == "flush" {
 							onFlush() // barge-in
 						}
+					}
+				}
+			}()
+			// Keepalive: the brain's WS server reaps sockets idle >30 s, and an
+			// audio channel is legitimately silent between utterances. Ping until
+			// the conn dies (the write fails once closeFn has run).
+			go func() {
+				t := time.NewTicker(20 * time.Second)
+				defer t.Stop()
+				for range t.C {
+					if aconn.Write(context.Background(), websocket.MessageText, []byte(`{"t":"ping"}`)) != nil {
+						return
 					}
 				}
 			}()
@@ -666,19 +685,20 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			log.Printf("[realtime] dedicated audio channel open")
 			return writePCM, closeFn, true
 		}
-		c.realtime = newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio)
+		rt := newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio)
+		c.realtime.Store(rt)
 		// Tear the session down when this connection ends.
-		defer c.realtime.Stop(false)
+		defer rt.Stop(false)
 
 		// Tray "Mute microphone" toggle → gate the mic locally. Muting ends any
 		// live realtime session (which re-arms the wake listener), then releases
 		// the always-on wake mic and shows the muted pebble; unmuting re-arms the
 		// wake listener and clears the pebble. Note the Stop-then-Pause order:
 		// realtime.Stop() calls resumeWake internally, so Pause must come after.
-		trayApplyMute = func(muted bool) {
+		setTrayApplyMute(func(muted bool) {
 			if muted {
-				if c.realtime != nil {
-					c.realtime.Stop(true)
+				if rt := c.realtime.Load(); rt != nil {
+					rt.Stop(true)
 				}
 				if wakeListener != nil {
 					wakeListener.Pause()
@@ -690,8 +710,8 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				}
 				_ = c.pebble.SetState(PebbleIdle)
 			}
-		}
-		defer func() { trayApplyMute = func(bool) {} }()
+		})
+		defer setTrayApplyMute(func(bool) {})
 
 		// Long-answer overflow — click on the "open full ↗" button emits
 		// pebble.open_answer with the answer id stored via SetAnswerOverflow.
@@ -731,10 +751,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			// When realtime voice is enabled, the summon hotkey toggles a
 			// perpetual speech-to-speech session (press again to end) instead
 			// of the one-shot capture → STT → LLM → TTS loop.
-			rtEnabled := c.realtime != nil && c.realtime.enabled.Load()
+			rt := c.realtime.Load()
+			rtEnabled := rt != nil && rt.enabled.Load()
 			log.Printf("[pebble] summon (realtime_enabled=%v)", rtEnabled)
 			if rtEnabled {
-				c.realtime.Toggle()
+				rt.Toggle()
 				return
 			}
 			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
@@ -874,10 +895,10 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		c.handlers["pebble.configure_realtime"] = func(params map[string]any) (*RPCResult, error) {
 			enabled, _ := params["enabled"].(bool)
 			log.Printf("[realtime] configure_realtime enabled=%v", enabled)
-			if c.realtime != nil {
-				c.realtime.enabled.Store(enabled)
+			if rt := c.realtime.Load(); rt != nil {
+				rt.enabled.Store(enabled)
 				if !enabled {
-					c.realtime.Stop(true) // disabling mid-session ends it cleanly
+					rt.Stop(true) // disabling mid-session ends it cleanly
 				}
 			}
 			return &RPCResult{Result: map[string]any{"enabled": enabled}}, nil
@@ -896,20 +917,20 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			showNotification(notificationFromParams(params))
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil
 		}
-		notifyEmitAction = func(id, kind, action string) {
+		setNotifyEmitAction(func(id, kind, action string) {
 			_ = c.sendEvent(c.obsCtx, SidecarEvent{
 				EventType: "notify.action",
 				Timestamp: time.Now().UnixMilli(),
 				Priority:  "normal",
 				Payload:   map[string]any{"id": id, "kind": kind, "action": action},
 			}, nil)
-		}
+		})
 		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
 			state, _ := params["state"].(string)
 			// Daemon-initiated teardown (budget / timeout / error): stop the
 			// local audio without re-emitting realtime_stop (its side is gone).
-			if c.realtime != nil && (state == "closed" || state == "error") {
-				c.realtime.Stop(false)
+			if rt := c.realtime.Load(); rt != nil && (state == "closed" || state == "error") {
+				rt.Stop(false)
 			}
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil
 		}

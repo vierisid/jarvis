@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // TrayStatus is the live data the tray menu shows (design: usejarvis-tray-
 // FABLE5.html §00). The brain pushes it via the `tray.status` RPC; the tray
@@ -23,12 +26,23 @@ var (
 	// trayRefresh nudges the platform tray to update (icon/tooltip) when the
 	// status changes out of band. Set by the platform tray; no-op elsewhere.
 	trayRefresh = func() {}
-	// trayApplyMute gates the microphone locally when the tray "Mute microphone"
+	// trayApplyMuteV gates the microphone locally when the tray "Mute microphone"
 	// toggle flips. Mic control the sidecar owns (not the brain): it pauses the
 	// wake listener, ends any live realtime session, and reflects it on the
 	// pebble. Set by the client once its audio services exist; no-op until then.
-	trayApplyMute = func(muted bool) {}
+	// atomic.Value because connectAndServe re-assigns it on every reconnect while
+	// the tray (Windows) / Cocoa (macOS) threads read it — a plain var is a data
+	// race. Use trayApplyMute()/setTrayApplyMute(), never the var directly.
+	trayApplyMuteV atomic.Value // func(bool)
 )
+
+func trayApplyMute(muted bool) {
+	if f, ok := trayApplyMuteV.Load().(func(bool)); ok && f != nil {
+		f(muted)
+	}
+}
+
+func setTrayApplyMute(f func(bool)) { trayApplyMuteV.Store(f) }
 
 func setTrayStatus(s TrayStatus) {
 	trayStatusMu.Lock()

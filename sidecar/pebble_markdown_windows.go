@@ -174,7 +174,11 @@ func layoutMarkdown(memDC uintptr, fonts mdFonts, blocks []mdBlock, x0, x1, ySta
 		left := x0 + b.indent
 		prev, _, _ := procSelectObject.Call(memDC, font)
 
-		str, _ := syscall.UTF16PtrFromString(b.text)
+		str, serr := syscall.UTF16PtrFromString(b.text)
+		if serr != nil { // interior NUL in daemon text → skip, don't DrawTextW(NULL)
+			procSelectObject.Call(memDC, prev)
+			continue
+		}
 		// Measure wrapped height: CALCRECT keeps the width and returns Bottom.
 		m := pblRect{Left: left, Top: y, Right: x1, Bottom: y}
 		procDrawTextW.Call(memDC,

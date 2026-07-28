@@ -148,7 +148,7 @@ func (p *AudioStreamPlayer) Start() error {
 }
 
 // Write appends a PCM frame to the play queue. Bounded so a stalled device can't
-// grow the queue without limit (drops the oldest audio past ~5 s of backlog).
+// grow the queue without limit (drops the oldest audio past ~60 s of backlog).
 func (p *AudioStreamPlayer) Write(pcm []byte) {
 	if len(pcm) == 0 {
 		return

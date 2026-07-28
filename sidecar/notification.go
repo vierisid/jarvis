@@ -1,5 +1,7 @@
 package main
 
+import "sync/atomic"
+
 // Outbound OS notifications (design: usejarvis-tray-FABLE5.html §01). The brain
 // decides WHEN to interrupt — the four reasons Jarvis is allowed to: it needs
 // your OK (approval), it finished something (done), a machine dropped (sidecar),
@@ -33,9 +35,12 @@ var (
 	// showNotification renders a Notification natively. Set by the platform tray
 	// (Windows balloon / macOS card); no-op on platforms without a tray.
 	showNotification = func(n Notification) {}
-	// notifyEmitAction sends the user's choice back to the brain as a
+	// notifyEmitActionV sends the user's choice back to the brain as a
 	// `notify.action` event. Set by the client once its connection exists.
-	notifyEmitAction = func(id, kind, action string) {}
+	// atomic.Value because connectAndServe re-assigns it on every reconnect while
+	// the tray/Cocoa threads read it — a plain var is a data race. Use
+	// notifyEmitAction()/setNotifyEmitAction(), never the var directly.
+	notifyEmitActionV atomic.Value // func(id, kind, action string)
 	// setupNotifications registers the platform bits notifications need (Windows:
 	// the AUMID + jarvis:// URI scheme). Called once at startup; no-op elsewhere.
 	setupNotifications = func() {}
@@ -46,6 +51,14 @@ var (
 	// launch. No-op (false) on platforms without protocol-activated notifications.
 	maybeForwardProtocolLaunch = func() bool { return false }
 )
+
+func notifyEmitAction(id, kind, action string) {
+	if f, ok := notifyEmitActionV.Load().(func(string, string, string)); ok && f != nil {
+		f(id, kind, action)
+	}
+}
+
+func setNotifyEmitAction(f func(id, kind, action string)) { notifyEmitActionV.Store(f) }
 
 // notificationFromParams decodes a `notify.show` RPC payload.
 func notificationFromParams(params map[string]any) Notification {
