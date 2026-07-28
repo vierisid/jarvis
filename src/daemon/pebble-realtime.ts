@@ -26,8 +26,11 @@ export type PebbleRealtimeState = 'listening' | 'speaking' | 'thinking' | 'idle'
 export type PebbleRealtimeStatus = 'live' | 'closed' | 'error';
 
 export type PebbleRealtimeDeps = {
-  /** Dispatch an RPC to a specific sidecar (fire-and-forget for audio frames). */
+  /** Dispatch a tracked RPC to a specific sidecar. */
   dispatchRPC: (sidecarId: string, method: string, params?: Record<string, unknown>) => Promise<unknown>;
+  /** Fire-and-forget RPC (no response tracking) — for high-rate audio frames,
+   *  where a pending-tracker entry + timeout timer per PCM chunk is pure overhead. */
+  dispatchNotify: (sidecarId: string, method: string, params?: Record<string, unknown>) => void;
   /** The sidecar's dedicated audio pipe, if connected (preferred over RPC for PCM). */
   getAudioChannel: (sidecarId: string) => SidecarAudioChannel | null;
   /** Resolve realtime config (key cascade, model, budget, session cap). */
@@ -51,8 +54,48 @@ type Entry = {
   transport: PebbleAudioTransport;
   timeout: ReturnType<typeof setTimeout>;
   startedAt: number;
-  lastState?: PebbleRealtimeState; // dedupe set_state so transcript deltas don't flood RPCs
+  lastState?: PebbleRealtimeState; // dedupe textless set_state so repeats don't flood RPCs
+  transcript: TranscriptAccumulator;
 };
+
+/** Accumulator for assistant transcript deltas (incremental fragments). */
+export type TranscriptAccumulator = { buffer: string; lastEmitAt: number };
+
+export function newTranscriptAccumulator(): TranscriptAccumulator {
+  return { buffer: '', lastEmitAt: 0 };
+}
+
+/**
+ * Fold one transcript event into the accumulator and decide what (if anything)
+ * to push to the pebble. Assistant deltas are fragments, not cumulative text —
+ * they append to the buffer and surface at most every `throttleMs` (each push
+ * is a set_state RPC; unthrottled deltas flooded the sidecar dozens/sec). The
+ * assistant-final event carries the complete utterance and always emits, so the
+ * bubble ends on the full response. A user-final resets for the next turn and
+ * flips the pebble back to listening.
+ */
+export function foldTranscript(
+  acc: TranscriptAccumulator,
+  t: { role: 'user' | 'assistant'; text: string; final: boolean },
+  now: number,
+  throttleMs = 400,
+): { state: PebbleRealtimeState; text?: string } | null {
+  if (t.role === 'assistant') {
+    if (t.final) {
+      acc.buffer = '';
+      acc.lastEmitAt = 0;
+      return { state: 'speaking', text: t.text };
+    }
+    acc.buffer += t.text;
+    if (now - acc.lastEmitAt < throttleMs) return null;
+    acc.lastEmitAt = now;
+    return { state: 'speaking', text: acc.buffer };
+  }
+  if (!t.final) return null;
+  acc.buffer = '';
+  acc.lastEmitAt = 0;
+  return { state: 'listening' };
+}
 
 export class PebbleRealtimeManager {
   private sessions = new Map<string, Entry>(); // sidecarId -> entry
@@ -88,15 +131,13 @@ export class PebbleRealtimeManager {
       sendAudio: (chunk) => {
         const ch = this.deps.getAudioChannel(sidecarId);
         if (ch) { ch.sendPCM(chunk); return; }
-        void this.deps
-          .dispatchRPC(sidecarId, 'pebble.play_pcm', { data: chunk.toString('base64') })
-          .catch(() => {/* sidecar gone / mid-teardown */});
+        this.deps.dispatchNotify(sidecarId, 'pebble.play_pcm', { data: chunk.toString('base64') });
       },
       // Barge-in → flush the sidecar's playback immediately.
       signalStopPlayback: () => {
         const ch = this.deps.getAudioChannel(sidecarId);
         if (ch) { ch.sendFlush(); return; }
-        void this.deps.dispatchRPC(sidecarId, 'pebble.stop_audio', {}).catch(() => {});
+        this.deps.dispatchNotify(sidecarId, 'pebble.stop_audio', {});
       },
       inputSampleRate: 24000,
       outputSampleRate: 24000,
@@ -107,16 +148,17 @@ export class PebbleRealtimeManager {
       instructions: this.deps.instructions(),
       executeToolCall: (name, args) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories),
       onTranscript: (t) => {
-        // Drive the pebble: assistant turn → speaking, user turn → listening.
-        // Dedupe by state so a long response's many transcript deltas don't
-        // fire a set_state RPC each (that flooded the sidecar dozens/sec).
-        const next: PebbleRealtimeState | null =
-          t.role === 'assistant' ? 'speaking' : t.final ? 'listening' : null;
-        if (!next) return;
+        // Drive the pebble: assistant turn → speaking (with growing bubble
+        // text), user turn → listening. foldTranscript accumulates the delta
+        // fragments and throttles the pushes so RPCs stay bounded.
         const entry = this.sessions.get(sidecarId);
-        if (entry?.lastState === next) return;
-        if (entry) entry.lastState = next;
-        this.deps.onState?.(sidecarId, next, t.role === 'assistant' ? t.text : undefined);
+        if (!entry) return;
+        const out = foldTranscript(entry.transcript, t, Date.now());
+        if (!out) return;
+        // Textless pushes are only worth an RPC when the state actually flips.
+        if (out.text === undefined && entry.lastState === out.state) return;
+        entry.lastState = out.state;
+        this.deps.onState?.(sidecarId, out.state, out.text);
       },
       onError: (err) => {
         this.deps.onStatus?.(sidecarId, 'error', err);
@@ -131,7 +173,7 @@ export class PebbleRealtimeManager {
       this.stop(sidecarId);
     }, resolved.maxSessionMinutes * 60_000);
 
-    this.sessions.set(sidecarId, { session, transport, timeout, startedAt: Date.now() });
+    this.sessions.set(sidecarId, { session, transport, timeout, startedAt: Date.now(), transcript: newTranscriptAccumulator() });
 
     try {
       await session.connect();

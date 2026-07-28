@@ -57,8 +57,13 @@ export class EventScheduler {
       const handlers = this.handlers.get(event.event_type) ?? [];
       const wildcardHandlers = this.handlers.get('*') ?? [];
       for (const handler of [...handlers, ...wildcardHandlers]) {
+        // Handler starts synchronously (receive order); Promise.resolve routes
+        // async rejections into the same log — a bare try/catch around a
+        // void'ed call only sees synchronous throws.
         try {
-          void handler(sidecarId, event);
+          Promise.resolve(handler(sidecarId, event)).catch((err) => {
+            console.error(`[EventScheduler] Direct handler error for ${event.event_type}:`, err);
+          });
         } catch (err) {
           console.error(`[EventScheduler] Direct handler error for ${event.event_type}:`, err);
         }

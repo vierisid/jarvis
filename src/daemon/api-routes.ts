@@ -2237,7 +2237,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const cfg: Record<string, unknown> = { enabled: true, provider: body.provider === 'elevenlabs' ? 'elevenlabs' : 'edge' };
           if (body.provider === 'elevenlabs') {
             if (!body.api_key) return error('ElevenLabs API key required.', 400);
-            cfg.elevenlabs = { api_key: body.api_key, voice_id: body.voice_id, model: body.model };
+            cfg.elevenlabs = {
+              api_key: body.api_key,
+              voice_id: typeof body.voice_id === 'string' ? body.voice_id : undefined,
+              model: typeof body.model === 'string' ? body.model : undefined,
+            };
           } else {
             cfg.voice = body.voice || 'en-US-AriaNeural';
           }

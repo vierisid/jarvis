@@ -42,6 +42,7 @@ import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
+import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -667,6 +668,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // logic is reused from the dashboard realtime path.
       const pebbleRealtime = new PebbleRealtimeManager({
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
+        dispatchNotify: (sidecarId, method, params) => sidecarManager.dispatchNotify(sidecarId, method, params ?? {}),
         getAudioChannel: (sidecarId) => sidecarManager.getAudioChannel(sidecarId),
         resolve: () => resolveRealtimeVoice(agentService.getConfig()),
         // Agent tools + the nav tools (open_dashboard_room, …) so realtime voice
@@ -2781,7 +2783,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           .replace(/^\s*\d+[.)]\s+/gm, '')          // numbered markers
           .replace(/(\*\*|__)(.*?)\1/g, '$2')       // bold
           .replace(/(\*|_)(.*?)\1/g, '$2')          // italic
-          .replace(/~~(.*?)~~/g, '$2')              // strikethrough
+          .replace(/~~(.*?)~~/g, '$1')              // strikethrough
           .replace(/^\s*([-*_]\s*){3,}$/gm, ' ')    // horizontal rules
           .replace(/\|/g, ' ')                      // table pipes
           .replace(/\s+/g, ' ')
@@ -3672,20 +3674,42 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       }
     });
+    // Offline toasts ride a grace timer (a quick reconnect cancels it) plus a
+    // per-machine cooldown, so a flapping connection can't nag every flap.
+    const offlineNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const offlineNotifiedAt = new Map<string, number>();
+    const OFFLINE_NOTIFY_GRACE_MS = 15_000;
+    const OFFLINE_NOTIFY_COOLDOWN_MS = 5 * 60_000;
+    sidecarManager.onSidecarConnected((sc) => {
+      const t = offlineNotifyTimers.get(sc.id);
+      if (t) {
+        clearTimeout(t);
+        offlineNotifyTimers.delete(sc.id);
+      }
+    });
     sidecarManager.onSidecarDisconnected((id) => {
       const name = sidecarNameById.get(id) ?? 'A machine';
       sidecarNameById.delete(id);
-      notifyAll({
-        id: `sidecar:${id}`,
-        kind: 'sidecar',
-        title: 'Sidecar disconnected',
-        body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
-        destructive: false,
-        actions: [
-          { id: 'review', label: 'Open Jarvis', primary: true },
-          { id: 'dismiss', label: 'Dismiss' },
-        ],
-      });
+      if (offlineNotifyTimers.has(id)) return;
+      const last = offlineNotifiedAt.get(id) ?? 0;
+      if (Date.now() - last < OFFLINE_NOTIFY_COOLDOWN_MS) return;
+      const timer = setTimeout(() => {
+        offlineNotifyTimers.delete(id);
+        offlineNotifiedAt.set(id, Date.now());
+        notifyAll({
+          id: `sidecar:${id}`,
+          kind: 'sidecar',
+          title: 'Sidecar disconnected',
+          body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
+          destructive: false,
+          actions: [
+            { id: 'review', label: 'Open Jarvis', primary: true },
+            { id: 'dismiss', label: 'Dismiss' },
+          ],
+        });
+      }, OFFLINE_NOTIFY_GRACE_MS);
+      timer.unref?.();
+      offlineNotifyTimers.set(id, timer);
     });
 
     // The user's choice from a notification. Only the approval buttons act on the
@@ -3694,9 +3718,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sidecarManager.onEvent((_sidecarId, event) => {
       if (event.event_type !== 'notify.action') return;
       const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
-      if (p.kind === 'approval' && p.id) {
-        if (p.action === 'approve') approvalManager.approve(p.id, 'notification');
-        else if (p.action === 'deny') approvalManager.deny(p.id, 'notification');
+      if (p.kind === 'approval' && p.id && (p.action === 'approve' || p.action === 'deny')) {
+        const { id, action } = p;
+        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService })
+          .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
       }
     });
 
@@ -3729,29 +3754,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const request = approvalManager.findByShortId(shortId);
       if (!request) return `No pending approval found for ID ${shortId}`;
 
-      if (action === 'approve') {
-        const approved = approvalManager.approve(request.id, channel);
-        if (!approved) return 'Request already decided';
-        let reply: string;
-        if (approved.tool_name === 'request_approval' || approved.execution_mode === 'inline') {
-          // Intent-only and inline requests are executed by the blocked
-          // caller (request_approval tool / authority gate) once it sees
-          // the status flip — executing here would run the tool twice.
-          reply = 'Approved. The agent will continue and report back in chat.';
-        } else {
-          const result = await deferredExecutor.executeApproved(request.id);
-          reply = `Approved and executed. Result: ${result.slice(0, 200)}`;
-        }
-        const updated = approvalManager.getRequest(request.id);
-        if (updated) wsService.broadcastApprovalUpdate(updated);
-        return reply;
-      } else {
-        const denied = approvalManager.deny(request.id, channel);
-        if (!denied) return 'Request already decided';
-        deferredExecutor.recordDenial(denied);
-        wsService.broadcastApprovalUpdate(denied);
-        return `Denied: ${request.tool_name}`;
-      }
+      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
+      if (outcome.status === 'already_decided') return 'Request already decided';
+      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
+      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
+      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
+      return 'Approved. The agent will continue and report back in chat.';
     });
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);

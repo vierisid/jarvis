@@ -683,6 +683,17 @@ export class SidecarManager implements Service {
     return this.rpcTracker.dispatch(rpcId, sidecarId, method, timeouts);
   }
 
+  /**
+   * Send an RPC without tracking a response — for high-rate fire-and-forget
+   * calls (realtime PCM frames) where a pending-tracker entry + timeout timer
+   * per call is pure overhead. Silently drops if the sidecar isn't connected.
+   */
+  dispatchNotify(sidecarId: string, method: string, params: Record<string, unknown> = {}): void {
+    const connection = this.sidecarConnections.get(sidecarId);
+    if (!connection) return;
+    connection.sendRPC({ type: 'rpc_request', id: generateId(), method, params });
+  }
+
   /** Register a listener for RPC progress events */
   onProgress(listener: (sidecarId: string, rpcId: string, progress: number, message?: string) => void): void {
     this.progressListeners.add(listener);
