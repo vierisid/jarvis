@@ -162,17 +162,19 @@ export class TelegramAdapter implements ChannelAdapter {
           }),
         }, 15_000);
 
-        const data = await response.json() as any;
+        // A proxy/outage 5xx can carry a non-JSON body; map it through the
+        // status code instead of letting the parse error escape unclassified.
+        const data = await response.json().catch(() => null) as any;
 
-        if (!data.ok) {
+        if (!data?.ok) {
           // Retry without Markdown if parsing failed
-          if (data.description?.includes('parse')) {
+          if (data?.description?.includes('parse')) {
             const fallback = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: chatId, text: chunk }),
             }, 15_000);
-            const fallbackError = telegramErrorFromResponse(fallback.status, await fallback.json());
+            const fallbackError = telegramErrorFromResponse(fallback.status, await fallback.json().catch(() => null));
             if (fallbackError) throw fallbackError;
           } else {
             const error = telegramErrorFromResponse(response.status, data);

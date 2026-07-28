@@ -104,4 +104,31 @@ describe('sendMessage chunking', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('maps a 5xx with a non-JSON body through the status code so it stays retriable', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON');
+      },
+    })) as unknown as typeof fetch;
+
+    try {
+      const adapter = new TelegramAdapter('test-token');
+
+      let thrown: unknown;
+      try {
+        await adapter.sendMessage('chat-1', 'hi');
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(TelegramSendError);
+      expect((thrown as TelegramSendError).status).toBe(502);
+      expect((thrown as TelegramSendError).message).toBe('Telegram API error: HTTP 502');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

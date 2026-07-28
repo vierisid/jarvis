@@ -7,6 +7,8 @@
 import { describe, expect, test } from "bun:test";
 import { ChannelService, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
+import { initDatabase } from "../vault/schema";
+import { setSetting } from "../vault/settings";
 
 class FakeAdapter implements ChannelAdapter {
   name = "fake";
@@ -339,6 +341,25 @@ describe("sendWithRetry", () => {
     expect(res).toEqual({ ok: true, attempts: 2 });
     expect(adapter.sent).toEqual(["tail"]);
   });
+
+  test("resends the full text when the error carries no remainingText", async () => {
+    class RecordingAdapter {
+      name = "recording";
+      public sent: string[] = [];
+      private failures = 1;
+      async sendMessage(_to: string, text: string): Promise<void> {
+        if (this.failures-- > 0) throw rateLimitError();
+        this.sent.push(text);
+      }
+    }
+    const adapter = new RecordingAdapter();
+    const { sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "full message", { sleep });
+
+    expect(res).toEqual({ ok: true, attempts: 2 });
+    expect(adapter.sent).toEqual(["full message"]);
+  });
 });
 
 describe("delivery failure handler", () => {
@@ -349,6 +370,28 @@ describe("delivery failure handler", () => {
     svc.getManager().register(adapter);
     return svc;
   }
+
+  test("broadcastToAll notifies the handler when a channel exhausts its retries", async () => {
+    // broadcastToAll needs a last-known recipient, which is only loaded from
+    // the settings table during start() — seed it through an in-memory vault.
+    initDatabase(":memory:");
+    setSetting("channel.lastRecipient.fake", "user-1");
+    const svc = new ChannelService({} as never, {} as never);
+    await svc.start();
+    const failing = new FakeAdapter({
+      connected: true,
+      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+    });
+    svc.getManager().register(failing);
+    const failures: Array<{ channel: string; attempts: number; error: string }> = [];
+    svc.setDeliveryFailureHandler((f) => failures.push(f));
+
+    await svc.broadcastToAll("hi");
+
+    expect(failures).toEqual([
+      { channel: "fake", attempts: 1, error: "Telegram API error: Bad Request: chat not found" },
+    ]);
+  });
 
   test("notifies the handler when a send exhausts its retries", async () => {
     const failing = new FakeAdapter({
