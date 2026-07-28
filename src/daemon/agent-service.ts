@@ -349,6 +349,7 @@ export class AgentService implements Service, IAgentService {
       let fullText = '';
       try {
         const identity = self.buildUserIdentityBlock();
+        const userProfile = self.buildUserProfileBlock();
         const recentDialogue = await self.loadRecentDialogue(channel);
         const ambient = self.buildAmbientFactsBlock(text);
 
@@ -359,6 +360,7 @@ export class AgentService implements Service, IAgentService {
 
         for await (const event of self.convOrchestrator.streamTurn(text, {
           userIdentity: identity,
+          userProfile,
           recentDialogue,
           ambientFacts: ambient,
         }, taskListener)) {
@@ -516,6 +518,7 @@ export class AgentService implements Service, IAgentService {
       text,
       {
         userIdentity: identity,
+        userProfile: this.buildUserProfileBlock(),
         recentDialogue,
         ambientFacts: this.buildAmbientFactsBlock(text),
       },
@@ -554,29 +557,32 @@ export class AgentService implements Service, IAgentService {
     }
   }
 
-  /** User identity + full profile the conv LLM sees in every turn. */
+  /** One-line identity facts the conv LLM sees in every turn. */
   private buildUserIdentityBlock(): string {
     const parts: string[] = [];
     const name = this.config.user?.name;
     if (name) parts.push(`Name: ${name}`);
     parts.push(`Local time: ${new Date().toLocaleString()}`);
+    return parts.join('. ');
+  }
 
-    // Inject the full user profile (wizard answers + interview facts) so the
-    // conv LLM has the same rich context about the user that the classic path
-    // injects via buildPromptContext -> formatUserProfileForPrompt.
+  /**
+   * Full user profile (wizard answers + interview facts) for the conv LLM,
+   * giving it the same rich context about the user that the classic path
+   * injects via buildPromptContext -> formatUserProfileForPrompt. Rendered
+   * as its own cache-marked system block, so it stays out of the volatile
+   * identity line - keep anything that changes per turn out of here.
+   */
+  private buildUserProfileBlock(): string | undefined {
     try {
       const profile = getUserProfile();
       const profileContext = formatUserProfileForPrompt(profile);
-      if (profileContext) {
-        parts.push('');
-        parts.push('## User Profile');
-        parts.push(profileContext);
-      }
+      if (!profileContext) return undefined;
+      return `# User Profile\n${profileContext}`;
     } catch (err) {
-      console.warn('[AgentService] Error loading user profile for conv identity:', err);
+      console.warn('[AgentService] Error loading user profile for conv prompt:', err);
+      return undefined;
     }
-
-    return parts.join('\n');
   }
 
   /**
