@@ -248,7 +248,11 @@ export class OllamaProvider implements LLMProvider {
     // (['llama3', 'llama2', ...]) which was wrong twice over — those models
     // are usually not pulled, and the untagged ids resolve to ':latest',
     // which 404s on first use. Callers decide how to present the failure.
-    const response = await fetch(`${this.baseUrl}/api/tags`);
+    // The short timeout keeps probes of unroutable hosts (onboarding lets the
+    // user point this at any URL) from hanging for the OS connect timeout.
+    const response = await fetch(`${this.baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to list models: ${response.status}`);

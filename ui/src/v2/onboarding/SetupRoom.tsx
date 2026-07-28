@@ -230,37 +230,44 @@ export function SetupRoom({ onComplete }: { onComplete: () => void }) {
   // ("qwen2.5:3b"). The curated `provider.models` list is untagged, so picking
   // from it yields ":latest" — usually not pulled — and the first chat 404s.
   // Ask the daemon for the real list. Re-fetches when the base URL changes so
-  // pointing at a different host shows that host's models. Falls back to the
-  // curated list when the call fails (daemon down, Ollama not running).
+  // pointing at a different host shows that host's models — debounced, since
+  // the URL arrives one keystroke at a time and every probe of a half-typed
+  // host is a doomed network call. Falls back to the curated list when the
+  // call fails (daemon down, Ollama not running).
   const [ollamaModels, setOllamaModels] = useState<string[] | null>(null);
   const [ollamaLoading, setOllamaLoading] = useState(false);
   useEffect(() => {
     if (providerId !== "ollama") return;
     let cancelled = false;
     setOllamaLoading(true);
-    fetch(`/api/config/llm/ollama/models?base_url=${encodeURIComponent(baseUrl.trim())}`)
-      .then((r) => r.json())
-      .then((d: { ok: boolean; models?: string[] }) => {
-        if (cancelled) return;
-        setOllamaModels(d.ok && d.models && d.models.length > 0 ? d.models : []);
-      })
-      .catch(() => {
-        if (!cancelled) setOllamaModels([]);
-      })
-      .finally(() => {
-        if (!cancelled) setOllamaLoading(false);
-      });
+    const timer = setTimeout(() => {
+      fetch(`/api/config/llm/ollama/models?base_url=${encodeURIComponent(baseUrl.trim())}`)
+        .then((r) => r.json())
+        .then((d: { ok: boolean; models?: string[] }) => {
+          if (cancelled) return;
+          setOllamaModels(d.ok && d.models && d.models.length > 0 ? d.models : []);
+        })
+        .catch(() => {
+          if (!cancelled) setOllamaModels([]);
+        })
+        .finally(() => {
+          if (!cancelled) setOllamaLoading(false);
+        });
+    }, 400);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [providerId, baseUrl]);
 
   // Snap off the untagged curated default once the real list arrives, so the
-  // test button works without the user having to notice the mismatch.
+  // test button works without the user having to notice the mismatch. Only
+  // curated entries are snapped: a hand-typed custom id (say, a model the
+  // user is about to pull) must survive the list arriving or refreshing.
   useEffect(() => {
     if (providerId !== "ollama") return;
     if (!ollamaModels || ollamaModels.length === 0) return;
-    if (!ollamaModels.includes(model)) {
+    if (!ollamaModels.includes(model) && provider.models.includes(model)) {
       // Prefer a tagged variant of whatever was selected ("qwen2.5" ->
       // "qwen2.5:3b") before falling back to the first installed model.
       const sameFamily = ollamaModels.find((m) => m.split(":")[0] === model.split(":")[0]);

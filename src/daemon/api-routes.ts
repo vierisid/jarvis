@@ -1507,6 +1507,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const { OllamaProvider } = await import('../llm/ollama.ts');
           const typed = new URL(req.url).searchParams.get('base_url')?.trim();
+          if (typed && !/^https?:\/\//i.test(typed)) {
+            return json({ ok: false, error: 'base_url must be an http(s) URL', models: [] });
+          }
           const configured = Object.values(ctx.config.llm.providers ?? {})
             .find((e) => e?.kind === 'ollama')?.base_url;
           const baseUrl = typed || configured || 'http://localhost:11434';

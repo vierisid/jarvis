@@ -115,6 +115,13 @@ export function LLMTab({
   const llm = data.llm;
   const [switching, setSwitching] = useState(false);
 
+  // Read the installed Ollama models once for the whole tab. Every
+  // ModelSelector below (single mode, four tiers, fallback) shares this
+  // one fetch instead of each firing its own.
+  const ollamaModels = useOllamaModels(
+    Object.values(llm?.providers ?? {}).some((p) => p.kind === "ollama"),
+  );
+
   if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
 
   // The mode comes straight from the backend (persisted), so it's the single
@@ -167,9 +174,9 @@ export function LLMTab({
       </section>
 
       {mode === "single" ? (
-        <SingleModelSection data={data} onToast={onToast} />
+        <SingleModelSection data={data} onToast={onToast} ollamaModels={ollamaModels} />
       ) : (
-        <MultiTierSection data={data} onToast={onToast} />
+        <MultiTierSection data={data} onToast={onToast} ollamaModels={ollamaModels} />
       )}
     </div>
   );
@@ -534,9 +541,11 @@ function NewProviderRow({
 function SingleModelSection({
   data,
   onToast,
+  ollamaModels,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
+  ollamaModels: string[] | null;
 }) {
   const llm = data.llm!;
 
@@ -555,6 +564,7 @@ function SingleModelSection({
         label="Default model"
         value={llm.default}
         providers={llm.providers}
+        ollamaModels={ollamaModels}
         onChange={async (ref) => {
           const r = await data.setDefaultModel(ref);
           onToast(r.message, r.ok ? "ok" : "warn");
@@ -569,9 +579,11 @@ function SingleModelSection({
 function MultiTierSection({
   data,
   onToast,
+  ollamaModels,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
+  ollamaModels: string[] | null;
 }) {
   const llm = data.llm!;
 
@@ -618,6 +630,7 @@ function MultiTierSection({
             sub={t.sub}
             value={llm.tiers[t.id]}
             providers={llm.providers}
+            ollamaModels={ollamaModels}
             allowClear
             onChange={async (ref) => {
               const r = await data.setTierModel(t.id, ref);
@@ -636,6 +649,7 @@ function MultiTierSection({
           label=""
           value={llm.default}
           providers={llm.providers}
+          ollamaModels={ollamaModels}
           allowClear
           onChange={async (ref) => {
             const r = await data.setDefaultModel(ref);
@@ -654,6 +668,7 @@ function ModelSelector({
   sub,
   value,
   providers,
+  ollamaModels,
   allowClear,
   onChange,
 }: {
@@ -661,17 +676,13 @@ function ModelSelector({
   sub?: string;
   value: string | null;
   providers: Record<string, LLMConfigProviderView>;
+  /** Installed Ollama models, fetched once by LLMTab and shared here. */
+  ollamaModels: string[] | null;
   allowClear?: boolean;
   onChange: (ref: string | null) => void;
 }) {
   const parsed = useMemo(() => parseModelRef(value), [value]);
   const providerNames = Object.keys(providers).sort();
-
-  // Read the installed Ollama models whenever an Ollama provider exists, so
-  // the dropdown offers tagged ids that actually resolve.
-  const ollamaModels = useOllamaModels(
-    Object.values(providers).some((p) => p.kind === "ollama"),
-  );
 
   const [selectedProvider, setSelectedProvider] = useState<string>(
     parsed?.provider ?? providerNames[0] ?? "",
