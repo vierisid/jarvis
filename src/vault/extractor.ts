@@ -1,5 +1,5 @@
 import type { LLMManager } from '../llm/manager.ts';
-import { createEntity, findEntities, type Entity } from './entities.ts';
+import { createEntity, findEntities } from './entities.ts';
 import { createFact } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
@@ -129,6 +129,20 @@ function isValidEntityType(type: string): type is 'person' | 'project' | 'tool' 
   return ['person', 'project', 'tool', 'place', 'concept', 'event'].includes(type);
 }
 
+/** Placeholder names the extraction LLM uses for the user when it has no real name. */
+const GENERIC_USER_NAMES = new Set(['user', 'the user', 'current user', 'unknown user']);
+
+/**
+ * Whether an extracted entity stands for the user themselves rather than a
+ * distinct person: flagged via is_current_user/is_user (boolean or string,
+ * extraction output is loosely typed) or named with a generic placeholder.
+ */
+function representsUser(name: string, properties?: Record<string, unknown>): boolean {
+  if (GENERIC_USER_NAMES.has(name.toLowerCase())) return true;
+  const flag = (v: unknown) => v === true || v === 'true';
+  return flag(properties?.is_current_user) || flag(properties?.is_user);
+}
+
 /**
  * High-level: extract and store in vault
  */
@@ -166,15 +180,13 @@ export async function extractAndStore(
     // Store entities
     const entityMap = new Map<string, string>(); // name -> id
 
-    // Look up the existing user profile entity (if any) so extraction doesn't
+    // Look up the existing user profile entities (if any) so extraction doesn't
     // create a duplicate "User" entity that shadows the real profile. The user
     // profile is set via the onboarding wizard with source='user_profile' and
     // always takes precedence over any LLM extraction about "the user".
-    const profileEntities = findEntities({}) as Entity[];
-    const profileEntityNames = new Set(
-      profileEntities
-        .filter(e => e.source === USER_PROFILE_VAULT_SOURCE)
-        .map(e => e.name.toLowerCase())
+    const profileEntities = findEntities({ source: USER_PROFILE_VAULT_SOURCE });
+    const profileIdByName = new Map(
+      profileEntities.map(e => [e.name.toLowerCase(), e.id])
     );
 
     for (const entityData of extraction.entities) {
@@ -191,27 +203,26 @@ export async function extractAndStore(
       // "name_is_unknown: true" facts about a generic "User" entity when it
       // can't answer profile questions, creating confusion in the vault.
       const nameLower = name.toLowerCase();
-      if (profileEntityNames.has(nameLower)) {
+      const profileId = profileIdByName.get(nameLower);
+      if (profileId) {
         // Re-use the profile entity ID instead of creating a duplicate
-        const profileEntity = profileEntities.find(e => e.name.toLowerCase() === nameLower);
-        if (profileEntity) {
-          entityMap.set(name, profileEntity.id);
-          continue;
-        }
+        entityMap.set(name, profileId);
+        continue;
       }
 
-      // Also skip entities whose properties mark them as representing the
-      // user identity (extraction sometimes sets is_current_user or is_user).
-      if (properties) {
-        const props = properties as Record<string, unknown>;
-        if (props.is_current_user === true || props.is_user === true) {
-          // Try to map to the real profile entity instead
-          const profileEntity = profileEntities.find(e => e.source === USER_PROFILE_VAULT_SOURCE);
-          if (profileEntity) {
-            entityMap.set(name, profileEntity.id);
-            continue;
-          }
+      // Also catch entities that represent the user without sharing the
+      // profile name: extraction sometimes sets is_current_user/is_user
+      // (as boolean or string) or falls back to a generic placeholder name.
+      if (representsUser(name, properties)) {
+        if (profileEntities.length > 0) {
+          // Map to the real profile entity instead of creating a duplicate
+          entityMap.set(name, profileEntities[0]!.id);
+        } else {
+          // No profile to map to (wizard skipped): don't create a ghost
+          // entity. Its facts are dropped by the subject-lookup below.
+          console.warn(`Skipping user-representing entity "${name}": no user profile exists`);
         }
+        continue;
       }
 
       // Check if entity already exists
