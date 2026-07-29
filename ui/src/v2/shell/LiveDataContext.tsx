@@ -5,6 +5,7 @@ import type {
   PendingApproval,
   PendingClarifier,
   PendingRepeatBack,
+  SettingsAppliedEvent,
   SystemNotice,
   TaskEvent,
 } from "../../hooks/useWebSocket";
@@ -26,6 +27,13 @@ export interface LiveData {
   taskEvents: TaskEvent[];
   contentEvents: ContentEvent[];
   agentActivity: AgentActivityEvent[];
+  /**
+   * Settings hot-apply results broadcast by the daemon (`settings_applied`).
+   * The Settings Room reads the latest entry for its status card and toasts
+   * failures from applies that finish after the save request returned
+   * (debounced channel restarts, SIGHUP / reload-endpoint runs).
+   */
+  settingsEvents: SettingsAppliedEvent[];
   /**
    * Phase 6.5.5 — most-recent assistant reply, used by the RailReplyPreview
    * so users in a Room can see Jarvis's response without leaving. Null when
@@ -66,5 +74,6 @@ const EMPTY: LiveData = {
   taskEvents: [],
   contentEvents: [],
   agentActivity: [],
+  settingsEvents: [],
   latestAssistantReply: null,
 };

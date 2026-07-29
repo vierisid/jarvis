@@ -242,19 +242,20 @@ export class WebSocketService implements Service {
   }
 
   /**
-   * Set the TTS provider for voice responses.
+   * Set the TTS provider for voice responses. Null clears it (provider
+   * disabled or credentials removed via settings hot reload).
    */
-  setTTSProvider(provider: TTSProvider): void {
+  setTTSProvider(provider: TTSProvider | null): void {
     this.ttsProvider = provider;
-    console.log('[WSService] TTS provider set');
+    console.log(provider ? '[WSService] TTS provider set' : '[WSService] TTS provider cleared');
   }
 
   /**
-   * Set the STT provider for voice input transcription.
+   * Set the STT provider for voice input transcription. Null clears it.
    */
-  setSTTProvider(provider: STTProvider): void {
+  setSTTProvider(provider: STTProvider | null): void {
     this.sttProvider = provider;
-    console.log('[WSService] STT provider set');
+    console.log(provider ? '[WSService] STT provider set' : '[WSService] STT provider cleared');
   }
 
   /**
@@ -688,6 +689,23 @@ export class WebSocketService implements Service {
       timestamp: event.timestamp,
     };
     this.wsServer.broadcast(message);
+  }
+
+  /**
+   * Broadcast that DB-backed settings were hot-applied to the running
+   * daemon. Payload carries section names and error strings only — never
+   * setting values (channel tokens, API keys).
+   */
+  broadcastSettingsApplied(payload: {
+    sections: string[];
+    ok: boolean;
+    errors?: { section: string; error: string }[];
+  }): void {
+    this.wsServer.broadcast({
+      type: 'settings_applied',
+      payload,
+      timestamp: Date.now(),
+    });
   }
 
   /**
@@ -2493,16 +2511,16 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
     case 'test_provider':
       return a.provider ? `Testing ${String(a.provider)}.` : `Testing provider.`;
     case 'enable_telegram':
-      return `Enabling Telegram. Restart Jarvis to apply.`;
+      return `Enabling Telegram.`;
     case 'disable_telegram':
-      return `Disabling Telegram. Restart Jarvis to apply.`;
+      return `Disabling Telegram.`;
     case 'enable_discord':
-      return `Enabling Discord. Restart Jarvis to apply.`;
+      return `Enabling Discord.`;
     case 'disable_discord':
-      return `Disabling Discord. Restart Jarvis to apply.`;
+      return `Disabling Discord.`;
     case 'set_stt_provider':
       return a.provider
-        ? `Setting STT to ${String(a.provider)}. Restart Jarvis to apply.`
+        ? `Setting STT to ${String(a.provider)}.`
         : `Updating STT provider.`;
     case 'enable_tts':
       return `Turning on text to speech.`;

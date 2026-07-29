@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
-  AlertCircle,
   Bot,
   Cable,
   Cog,
@@ -16,6 +14,7 @@ import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
+import { useLiveData } from "../../shell/LiveDataContext";
 import { useSettingsData } from "./useSettingsData";
 import {
   resetOnboarding,
@@ -73,6 +72,26 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
     const id = window.setTimeout(() => setToast(null), 4500);
     return () => window.clearTimeout(id);
   }, [toast]);
+
+  // ── Settings hot-apply results (daemon `settings_applied` broadcast) ──
+  // Applies can finish AFTER a save request returned (debounced channel
+  // restarts, SIGHUP / POST /api/config/reload): surface those outcomes
+  // here — failures as a toast, and always refetch so the tabs show the
+  // actually-applied state.
+  const { settingsEvents } = useLiveData();
+  const lastApplied = settingsEvents.length > 0 ? settingsEvents[settingsEvents.length - 1]! : null;
+  useEffect(() => {
+    if (!lastApplied) return;
+    if (!lastApplied.ok) {
+      const detail = (lastApplied.errors ?? [])
+        .map((e) => `${e.section}: ${e.error}`)
+        .join("; ");
+      showToast(`Applying settings failed — ${detail || lastApplied.sections.join(", ")}`, "warn");
+    }
+    data.refresh();
+    // Keyed on the event object: useWebSocket appends a new array entry per
+    // broadcast, so this fires exactly once per apply batch.
+  }, [lastApplied]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Voice room actions ──
   useRoomActions("settings", (action, args) => {
@@ -321,42 +340,16 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
           tone={stats.sidecarsConnected > 0 ? "ok" : "neutral"}
         />
         <StatCard
-          label="Restart"
-          value={stats.restartPending ? "Pending" : "Clean"}
-          sub={stats.restartPending ? "save needs apply" : "all changes live"}
-          tone={stats.restartPending ? "warn" : "ok"}
+          label="Changes"
+          value={lastApplied ? (lastApplied.ok ? "Applied" : "Failed") : "Live"}
+          sub={
+            lastApplied
+              ? `last: ${lastApplied.sections.join(", ")}`
+              : "settings hot-applied"
+          }
+          tone={lastApplied && !lastApplied.ok ? "warn" : "ok"}
         />
       </div>
-
-      {/* Restart banner — only when there's a pending restart-required change */}
-      {stats.restartPending && (
-        <div className="v2-set__banner" role="alert">
-          <Icon icon={AlertCircle} size="sm" />
-          <span>
-            Some recent changes (channels, STT, integrations) only take effect after a daemon restart.
-          </span>
-          <button
-            type="button"
-            className="v2-set__banner-btn"
-            onClick={async () => {
-              if (!await confirmDialog("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
-              const r = await data.restartDaemon();
-              showToast(r.message, r.ok ? "ok" : "warn");
-            }}
-          >
-            Restart now
-          </button>
-          <button
-            type="button"
-            className="v2-set__banner-dismiss"
-            onClick={() => data.setRestartPending(false)}
-            aria-label="Dismiss"
-            title="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* Tab bar */}
       <nav

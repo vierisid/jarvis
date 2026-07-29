@@ -96,6 +96,7 @@ let triggerManager: TriggerManager | null = null;
 let workflowEngineShutdown: (() => Promise<void>) | null = null;
 let systemCron: import('./system-cron.ts').SystemCronService | null = null;
 let timerScheduler: TimerWaitpointScheduler | null = null;
+let settingsReload: import('./settings-reload.ts').SettingsReloadCoordinator | null = null;
 /** Graceful-drain deadline (ms), set from config at boot. Default 75s. */
 let drainDeadlineMs = 75_000;
 
@@ -477,6 +478,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 3. Create service registry
     registry = new ServiceRegistry();
 
+    // 3a. Settings hot reload: constructed right after DB hydration so every
+    // later block can register per-section appliers as its targets come into
+    // scope (pebble providers, channels, observers, ...). The choke-point
+    // listener makes EVERY saveUserSection/saveGoogleSettings — HTTP route,
+    // voice intent, pebble toggle — schedule the section's appliers.
+    const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
+    const { setSectionSavedListener } = await import('./user-settings.ts');
+    settingsReload = new SettingsReloadCoordinator(jarvisConfig);
+    setSectionSavedListener((section) => settingsReload?.sectionChanged(section));
+
     // 3b. Anonymous usage telemetry (opt-out). Constructed here so it can be
     //     registered before the LLM-dependent services and counts installs
     //     even while the daemon is still in onboarding/setup mode.
@@ -837,6 +848,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.warn('[ambient-ui] failed to init TTS provider:', err);
         }
       }
+
+      // Settings hot reload: rebuild the pebble's providers whenever the
+      // stt/tts sections change (dashboard save, voice command, reloadAll).
+      // The dashboard-side wsService providers have their own appliers in
+      // the main registration block.
+      settingsReload?.registerApplier('stt', async (cfg) => {
+        const { createSTTProvider } = await import('../comms/voice.ts');
+        pebbleSTT = cfg.stt ? createSTTProvider(cfg.stt) : null;
+        console.log(`[ambient-ui] STT provider ${pebbleSTT ? `set to ${cfg.stt?.provider}` : 'cleared'} (settings reload)`);
+      });
+      settingsReload?.registerApplier('tts', async (cfg) => {
+        pebbleTTS = null;
+        if (cfg.tts?.enabled) {
+          const { createTTSProvider } = await import('../comms/voice.ts');
+          pebbleTTS = createTTSProvider(cfg.tts);
+        }
+        console.log(`[ambient-ui] TTS provider ${pebbleTTS ? 'rebuilt' : 'cleared'} (settings reload)`);
+      });
 
       // ttsMimeType maps the configured TTS provider to a MIME hint the
       // sidecar uses when sniffing audio bytes. (The sidecar primarily
@@ -1439,43 +1468,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // pipeline (capture done → transcribe → think → speak), not timers.
       const audioSessions = new (await import('./audio-sessions.ts')).AudioSessionRegistry();
       audioSessions.attach((cb) => sidecarManager.onEvent(cb));
-      // T20 — voice-driven settings mutation. Patches `jarvisConfig`,
-      // persists via the DB settings store, and rebuilds the live providers so
-      // the next response uses the new setting without a daemon
-      // restart. The user explicitly hit this with "turn off TTS in
-      // the settings" — the panel opened but the toggle didn't flip
-      // because no handler was wired to the request. This closes that
-      // gap. New providers added to `jarvisConfig` (e.g. Groq STT)
-      // become voice-switchable too.
+      // T20 — voice-driven settings mutation. Patches `jarvisConfig` and
+      // persists via the DB settings store; the saveUserSection choke-point
+      // hook then runs the stt/tts appliers (pebble + dashboard providers),
+      // so the next response uses the new setting without a daemon restart.
       const applyTTSEnabled = async (enabled: boolean): Promise<void> => {
         const { saveUserSection } = await import('./user-settings.ts');
         if (!jarvisConfig.tts) jarvisConfig.tts = { enabled, provider: 'edge' };
         else jarvisConfig.tts.enabled = enabled;
         saveUserSection('tts', jarvisConfig.tts);
-        const fresh = { tts: jarvisConfig.tts };
-        // Rebuild the pebble's TTS provider so the next response cycle
-        // either uses the new provider or skips TTS entirely.
-        if (enabled) {
-          try {
-            const { createTTSProvider } = await import('../comms/voice.ts');
-            pebbleTTS = createTTSProvider(fresh.tts);
-            if (pebbleTTS) console.log('[ambient-ui] TTS re-enabled via voice command');
-          } catch (err) {
-            console.warn('[ambient-ui] failed to re-init TTS provider:', err);
-            pebbleTTS = null;
-          }
-        } else {
-          pebbleTTS = null;
-          console.log('[ambient-ui] TTS disabled via voice command');
-        }
-        // Hot-reload dashboard TTS too so the WSService stays in sync.
-        if (wsService && fresh.tts) {
-          try {
-            const { createTTSProvider } = await import('../comms/voice.ts');
-            const provider = createTTSProvider(fresh.tts);
-            if (provider && enabled) wsService.setTTSProvider(provider);
-          } catch { /* dashboard fallback */ }
-        }
+        // Await the applier (vs the save hook's scheduled run) so pebbleTTS
+        // is already rebuilt when the confirmation reply is spoken — "turn
+        // on text to speech" must be audible in the SAME response cycle.
+        await settingsReload?.applyNow('tts');
+        console.log(`[ambient-ui] TTS ${enabled ? 'enabled' : 'disabled'} via voice command`);
       };
 
       const applySTTProvider = async (provider: 'openai' | 'groq' | 'sarvam' | 'local'): Promise<boolean> => {
@@ -1491,14 +1497,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!hasKey) return false;
         jarvisConfig.stt.provider = provider;
         saveUserSection('stt', jarvisConfig.stt);
-        const fresh = { stt: jarvisConfig.stt };
-        try {
-          const { createSTTProvider } = await import('../comms/voice.ts');
-          pebbleSTT = createSTTProvider(fresh.stt);
-          console.log(`[ambient-ui] STT provider switched to ${provider} via voice command`);
-        } catch (err) {
-          console.warn('[ambient-ui] failed to re-init STT provider:', err);
-        }
+        // Deterministic swap: the next transcription must already use the
+        // new provider when we confirm the switch to the user.
+        await settingsReload?.applyNow('stt');
+        console.log(`[ambient-ui] STT provider switched to ${provider} via voice command`);
         return true;
       };
 
@@ -3570,6 +3572,94 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     });
 
+    // 8f. Settings hot reload: per-section appliers. Everything they need
+    // (wsService, channelService, registry, observers, authority) is in
+    // scope here. Appliers are idempotent — routes that already apply a
+    // change by hand (LLM, TTS) can keep doing so; a second run is harmless.
+    settingsReload.setBroadcast((p) => wsService.broadcastSettingsApplied(p));
+
+    // channels — Telegram/Discord adapters bake tokens (and the STT
+    // provider) into their constructors, so restart-in-place is the apply.
+    // Debounced so back-to-back saves reconnect the bots once.
+    settingsReload.registerApplier('channels', async () => {
+      await registry!.stopService('channels');
+      await registry!.startService('channels');
+    }, { debounceMs: 400 });
+
+    // stt — swap the dashboard voice-input provider; live channel adapters
+    // captured the old provider at construction, so chain a channels
+    // restart when any channel is connected.
+    settingsReload.registerApplier('stt', async (cfg) => {
+      const { createSTTProvider } = await import('../comms/voice.ts');
+      wsService.setSTTProvider(cfg.stt ? createSTTProvider(cfg.stt) : null);
+      if (Object.values(channelService.getChannelStatus()).some(Boolean)) {
+        settingsReload!.sectionChanged('channels');
+      }
+    });
+
+    // tts — same swap the /api/config/tts route already does by hand; this
+    // also covers voice-command toggles and reloadAll, and clears the
+    // provider on disable.
+    settingsReload.registerApplier('tts', async (cfg) => {
+      const { createTTSProvider } = await import('../comms/voice.ts');
+      wsService.setTTSProvider(cfg.tts?.enabled ? createTTSProvider(cfg.tts) : null);
+    });
+
+    // google — refresh the auth (disconnect unlinks the tokens file; the
+    // null-first reload drops the stale in-memory tokens), hand it to the
+    // observers and restart them so EmailSync/CalendarSync re-capture it.
+    let lastGoogleCreds = jarvisConfig.google?.client_id && jarvisConfig.google?.client_secret
+      ? `${jarvisConfig.google.client_id}\n${jarvisConfig.google.client_secret}`
+      : null;
+    settingsReload.registerApplier('google', async (cfg) => {
+      const g = cfg.google;
+      const creds = g?.client_id && g?.client_secret ? `${g.client_id}\n${g.client_secret}` : null;
+      if (!creds) {
+        googleAuth = null;
+      } else if (googleAuth && creds === lastGoogleCreds) {
+        googleAuth.reloadTokensFromDisk();
+      } else {
+        googleAuth = new GoogleAuth(g!.client_id!, g!.client_secret!);
+      }
+      lastGoogleCreds = creds;
+      if (observerService) {
+        observerService.setGoogleAuth(googleAuth);
+        await registry!.stopService('observers');
+        await registry!.startService('observers');
+      }
+    });
+
+    // llm — routes keep their synchronous hotReloadLLMProviders call for an
+    // accurate response; this covers reloadAll/SIGHUP (external DB edits).
+    settingsReload.registerApplier('llm', async (cfg) => {
+      const { hotReloadLLMProviders } = await import('./llm-settings.ts');
+      hotReloadLLMProviders(cfg, agentService.getLLMManager());
+    });
+
+    // authority — keep the engine's construction-time snapshot in sync on a
+    // full reload (mirror of the POST /api/authority/config mapping).
+    // emergency_state is excluded: EmergencyController owns it.
+    settingsReload.registerApplier('authority', async (cfg) => {
+      const a = cfg.authority;
+      if (!a) return;
+      const current = authorityEngine.getConfig();
+      authorityEngine.updateConfig({
+        ...current,
+        default_level: a.default_level ?? current.default_level,
+        governed_categories: (a.governed_categories ?? current.governed_categories) as any,
+        overrides: (a.overrides ?? current.overrides) as any,
+        context_rules: (a.context_rules ?? current.context_rules) as any,
+        learning: a.learning ?? current.learning,
+      });
+    });
+
+    // awareness — the service snapshots its sub-config at construction; the
+    // enabled flag is the one knob with a live setter today.
+    settingsReload.registerApplier('awareness', async (cfg) => {
+      awarenessService?.toggle(cfg.awareness?.enabled !== false);
+    });
+    // voice needs no applier: resolveRealtimeVoice reads live config per call.
+
     // ── Tray menu live data (design: usejarvis-tray §00) ──
     // Push a status snapshot to each connected sidecar every few seconds so the
     // tray menu (read on open) shows pending approvals, pause state, health, and
@@ -3874,6 +3964,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       awarenessService: null as any,
       goalService: undefined,
       sidecarManager,
+      settingsReload,
     };
     setCorsOrigin(jarvisConfig.daemon.port);
 
@@ -3920,11 +4011,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // matching source; non-prefixed ids fall through to the `app_connection`
     // repo (encrypted at rest).
     const credentialResolver = new CredentialResolver();
-    if (googleAuth) {
+    {
+      // Registered unconditionally with a getter reading the live
+      // `googleAuth` binding: the settings hot-reload google applier
+      // reassigns it (connect mid-run, cred rotation, disconnect), and the
+      // source resolves to null while it's absent/unauthenticated.
       const { JarvisGoogleConnectionSource } = await import(
         "../workflows/credentials/google-source.ts"
       );
-      credentialResolver.register(new JarvisGoogleConnectionSource(googleAuth));
+      credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
@@ -4561,7 +4656,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               }
             }
           },
-          googleAuth,
+          // Delegating wrapper (not the instance): the settings hot-reload
+          // google applier reassigns `googleAuth`, and the suggestion engine
+          // holds this reference for the service's whole lifetime.
+          {
+            isAuthenticated: () => googleAuth?.isAuthenticated() ?? false,
+            getAccessToken: () => {
+              if (!googleAuth) return Promise.reject(new Error('Google not configured'));
+              return googleAuth.getAccessToken();
+            },
+          },
           async (sidecarId: string, imagePath: string) => {
             try {
               const result = await sidecarManager.dispatchRPC(sidecarId, 'fetch_capture', { path: imagePath }) as
@@ -4922,6 +5026,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 // Register signal handlers
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+
+// SIGHUP = reload settings from the DB (daemon convention). Covers settings
+// edited outside the daemon process (sqlite3 CLI, hosted control plane);
+// same path as POST /api/config/reload. Registering the handler also stops
+// the default terminate-on-HUP, which is what we want for a daemon.
+if (process.platform !== 'win32') {
+  process.on('SIGHUP', () => {
+    if (!settingsReload) {
+      console.log('[Daemon] SIGHUP received before boot finished — ignoring');
+      return;
+    }
+    console.log('[Daemon] SIGHUP — reloading settings from DB');
+    settingsReload.reloadAll()
+      .then((r) => {
+        const changed = r.changed.length > 0 ? r.changed.join(', ') : 'nothing';
+        console.log(`[Daemon] SIGHUP reload done — changed: ${changed}${r.errors.length ? `, errors: ${r.errors.length}` : ''}`);
+      })
+      .catch((err) => console.error('[Daemon] SIGHUP reload failed:', err));
+  });
+}
 
 // Handle uncaught errors
 process.on('uncaughtException', (error) => {

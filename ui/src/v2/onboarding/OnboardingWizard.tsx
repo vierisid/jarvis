@@ -376,7 +376,12 @@ export function OnboardingWizard({
     setConnectErr(null);
     try {
       const r = await fetch("/api/config/channels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ telegram: { bot_token: tgToken.trim(), enabled: true } }) });
-      if (r.ok) { setConnected((c) => new Set(c).add("telegram")); setTgOpen(false); setTgToken(""); }
+      // The route hot-applies the config and can return HTTP 200 with
+      // ok:false when the save succeeded but connecting the bot failed —
+      // treat that as a failure so the wizard doesn't claim "connected".
+      const body = r.ok ? await r.json().catch(() => null) as { ok?: boolean; message?: string } | null : null;
+      if (r.ok && body?.ok !== false) { setConnected((c) => new Set(c).add("telegram")); setTgOpen(false); setTgToken(""); }
+      else if (r.ok) setConnectErr((body?.message || "Telegram token saved, but the bot couldn't connect.").slice(0, 120));
       else setConnectErr(((await r.text().catch(() => "")) || `Couldn't save the Telegram token (HTTP ${r.status}).`).slice(0, 120));
     } catch { setConnectErr("Couldn't reach the daemon to save the Telegram token."); }
     finally { setTgBusy(false); }

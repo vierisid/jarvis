@@ -9,6 +9,7 @@ import {
   importLegacyUserSettings,
   mergeUserSettingsIntoConfig,
   saveGoogleSettings,
+  setSectionSavedListener,
 } from './user-settings.ts';
 
 function freshConfig(): JarvisConfig {
@@ -21,6 +22,7 @@ describe('user-settings', () => {
   });
 
   afterEach(() => {
+    setSectionSavedListener(null);
     closeDb();
   });
 
@@ -127,6 +129,45 @@ describe('user-settings', () => {
 
   test('null rawYaml (no config file) imports nothing', () => {
     expect(importLegacyUserSettings(null)).toEqual([]);
+  });
+
+  test('section-saved listener fires AFTER the write, with the section name', () => {
+    const events: string[] = [];
+    setSectionSavedListener((section) => {
+      events.push(section);
+      // The DB write must already be visible when the listener runs.
+      expect(loadUserSection('stt')).toEqual({ provider: 'groq' });
+    });
+
+    saveUserSection('stt', { provider: 'groq' });
+    expect(events).toEqual(['stt']);
+  });
+
+  test("saveGoogleSettings notifies the listener with 'google'", () => {
+    const events: string[] = [];
+    setSectionSavedListener((section) => events.push(section));
+
+    saveGoogleSettings({ client_id: 'id', client_secret: 'secret' });
+    expect(events).toEqual(['google']);
+  });
+
+  test('a throwing listener never fails the save', () => {
+    setSectionSavedListener(() => {
+      throw new Error('listener boom');
+    });
+
+    expect(() => saveUserSection('active_role', 'researcher')).not.toThrow();
+    expect(loadUserSection('active_role')).toBe('researcher');
+  });
+
+  test('setSectionSavedListener(null) detaches', () => {
+    const events: string[] = [];
+    setSectionSavedListener((section) => events.push(section));
+    saveUserSection('active_role', 'a');
+    setSectionSavedListener(null);
+    saveUserSection('active_role', 'b');
+
+    expect(events).toEqual(['active_role']);
   });
 
   test('google: DB is only a fallback - a file-provided client always wins', () => {

@@ -97,6 +97,16 @@ export class ObserverService implements Service {
     this.forwardCallback = cb;
   }
 
+  /**
+   * Swap the Google auth used by the email/calendar observers (settings hot
+   * reload). Takes effect on the next start(): EmailSync/CalendarSync are
+   * constructed there and capture the auth reference, so callers should
+   * stop() + start() the service after swapping.
+   */
+  setGoogleAuth(auth: GoogleAuth | null): void {
+    this.googleAuth = auth;
+  }
+
   async start(): Promise<void> {
     this._status = 'starting';
 

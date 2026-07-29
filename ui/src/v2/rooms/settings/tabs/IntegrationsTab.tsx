@@ -24,7 +24,7 @@ export function IntegrationsTab({
           pollRef.current = null;
         }
         setPhase("idle");
-        onToast("Connected. Restart Jarvis to activate Gmail and Calendar observers.", "ok");
+        onToast("Connected. Gmail and Calendar observers are starting.", "ok");
         data.refresh();
       }
     },
@@ -88,7 +88,7 @@ export function IntegrationsTab({
           pollRef.current = null;
           setPhase("idle");
           onToast(
-            "Connected. Restart Jarvis to activate Gmail and Calendar observers.",
+            "Connected. Gmail and Calendar observers are starting.",
             "ok",
           );
           data.refresh();

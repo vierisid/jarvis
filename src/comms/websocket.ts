@@ -56,7 +56,12 @@ export type WSMessage = {
       // Emitted when a pending voice confirmation (clarifier / repeat-back)
       // expires from the server-side TTL sweep. Payload: { id: string }.
       // Clients should dismiss the corresponding card from their UI.
-      | 'voice_confirmation_expired';
+      | 'voice_confirmation_expired'
+      // Emitted after DB-backed settings are hot-applied to the running
+      // daemon (per-section apply or POST /api/config/reload / SIGHUP).
+      // Payload: { sections: string[], ok: boolean, errors?: { section, error }[] }
+      // — section names and error strings only, never setting values.
+      | 'settings_applied';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

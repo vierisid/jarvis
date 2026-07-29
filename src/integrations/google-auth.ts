@@ -59,6 +59,18 @@ export class GoogleAuth {
   }
 
   /**
+   * Drop the in-memory tokens and re-read from disk. loadTokens() alone
+   * keeps stale in-memory tokens when the file is gone — this null-first
+   * reset is what makes a dashboard "disconnect" (which unlinks the tokens
+   * file) actually deactivate a running instance without a restart.
+   * Returns whether tokens now exist.
+   */
+  reloadTokensFromDisk(): boolean {
+    this.tokens = null;
+    return this.loadTokens() !== null;
+  }
+
+  /**
    * Save tokens to disk.
    */
   async saveTokens(tokens: GoogleTokens): Promise<void> {

@@ -362,6 +362,27 @@ describe("sendWithRetry", () => {
   });
 });
 
+describe("stop() drops adapters (settings hot reload restart-in-place)", () => {
+  test("a disabled channel's adapter does not survive a stop/start cycle", async () => {
+    initDatabase(":memory:");
+    const svc = new ChannelService({} as never, {} as never);
+    const adapter = new FakeAdapter({ connected: true });
+    svc.getManager().register(adapter);
+
+    await svc.stop();
+
+    // Regression: stop() used to only disconnect, so connectAll() in the
+    // next start() reconnected the stale adapter even though the channel
+    // was disabled in the fresh config.
+    expect(adapter.isConnected()).toBe(false);
+    expect(svc.getManager().listChannels()).toEqual([]);
+
+    // start() with a config that enables no channels stays empty.
+    await svc.start();
+    expect(svc.getManager().listChannels()).toEqual([]);
+  });
+});
+
 describe("delivery failure handler", () => {
   function makeService(adapter: ChannelAdapter): ChannelService {
     // Constructor only stores deps and creates the manager; the live

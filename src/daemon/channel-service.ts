@@ -134,6 +134,12 @@ export class ChannelService implements Service {
   async stop(): Promise<void> {
     this._status = 'stopping';
     await this.manager.disconnectAll();
+    // Drop the adapters, not just their connections: start() only registers
+    // adapters for channels that are ENABLED in the current config, so a
+    // stop/start cycle (settings hot reload) must not leave a stale adapter
+    // for a now-disabled channel in the map — connectAll() would reconnect
+    // it with the old token, allowlist, and STT provider.
+    this.manager.unregisterAll();
     this._status = 'stopped';
     console.log('[ChannelService] Stopped');
   }

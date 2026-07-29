@@ -103,6 +103,17 @@ export class ChannelManager {
   }
 
   /**
+   * Remove every registered adapter. Callers must disconnectAll() first —
+   * this only drops the references so a later register/connect cycle starts
+   * from a clean slate. Without it, an adapter for a channel the user just
+   * DISABLED would survive in the map and connectAll() would happily
+   * reconnect it with the old token/allowlist.
+   */
+  unregisterAll(): void {
+    this.channels.clear();
+  }
+
+  /**
    * Get a specific channel adapter by name
    */
   getChannel(name: string): import('./channels/telegram.ts').ChannelAdapter | undefined {

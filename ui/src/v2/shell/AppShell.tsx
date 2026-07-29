@@ -499,6 +499,7 @@ function AppShellLive() {
         taskEvents: live.taskEvents,
         contentEvents: live.contentEvents,
         agentActivity: live.agentActivity,
+        settingsEvents: live.settingsEvents,
         latestAssistantReply,
       }}
     >

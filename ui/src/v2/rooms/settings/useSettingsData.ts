@@ -290,7 +290,7 @@ export interface UserProfileResponse {
 }
 
 export type ActionResult =
-  | { ok: true; message: string; restartRequired?: boolean }
+  | { ok: true; message: string }
   | { ok: false; message: string };
 
 async function getJson<T>(url: string): Promise<T | null> {
@@ -348,8 +348,8 @@ function preserveRef<T>(prev: T, next: T): T {
  *
  * Polls the 8 read endpoints in parallel every 10s (paused while tab
  * hidden). Exposes lifecycle actions that all return ActionResult so the
- * UI can show a per-action toast and bubble up `restartRequired` to the
- * room-level restart banner.
+ * UI can show a per-action toast. Settings are hot-applied by the daemon
+ * (channels, STT, TTS, Google observers), so no restart tracking.
  *
  * Voice actions land on the same lifecycle methods through the room
  * action bus, so behaviour is identical for clicks vs voice.
@@ -368,7 +368,6 @@ export function useSettingsData() {
   const [google, setGoogle] = useState<GoogleStatus | null>(null);
   const [sidecars, setSidecars] = useState<SidecarInfo[]>([]);
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
-  const [restartPending, setRestartPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const inFlightRef = useRef(false);
 
@@ -456,9 +455,8 @@ export function useSettingsData() {
       channelsEnabled,
       sidecarsConnected,
       sidecarsTotal: sidecars.length,
-      restartPending,
     };
-  }, [llm, channelCfg, ttsCfg, sidecars, restartPending]);
+  }, [llm, channelCfg, ttsCfg, sidecars]);
 
   // ── LLM actions (hot-reloaded) ──────────────────────────────────────
 
@@ -623,7 +621,7 @@ export function useSettingsData() {
     [],
   );
 
-  // ── Channels (restart required) ─────────────────────────────────────
+  // ── Channels (hot-applied by the daemon) ────────────────────────────
   const setTelegram = useCallback(
     async (input: {
       enabled?: boolean;
@@ -631,14 +629,14 @@ export function useSettingsData() {
       allowed_users?: number[];
     }): Promise<ActionResult> => {
       try {
-        await postJson("/api/config/channels", { telegram: input });
-        setRestartPending(true);
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/channels",
+          { telegram: input },
+        );
         await refresh();
-        return {
-          ok: true,
-          message: "Telegram saved. Restart Jarvis to apply.",
-          restartRequired: true,
-        };
+        return r.ok
+          ? { ok: true, message: r.message || "Telegram saved and applied." }
+          : { ok: false, message: r.message || "Failed to apply Telegram config." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
@@ -654,14 +652,14 @@ export function useSettingsData() {
       guild_id?: string;
     }): Promise<ActionResult> => {
       try {
-        await postJson("/api/config/channels", { discord: input });
-        setRestartPending(true);
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/channels",
+          { discord: input },
+        );
         await refresh();
-        return {
-          ok: true,
-          message: "Discord saved. Restart Jarvis to apply.",
-          restartRequired: true,
-        };
+        return r.ok
+          ? { ok: true, message: r.message || "Discord saved and applied." }
+          : { ok: false, message: r.message || "Failed to apply Discord config." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
@@ -688,14 +686,14 @@ export function useSettingsData() {
         } else if (extras?.api_key) {
           body[provider] = { api_key: extras.api_key };
         }
-        await postJson("/api/config/stt", body);
-        setRestartPending(true);
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/stt",
+          body,
+        );
         await refresh();
-        return {
-          ok: true,
-          message: `STT set to ${provider}. Restart Jarvis to apply.`,
-          restartRequired: true,
-        };
+        return r.ok
+          ? { ok: true, message: r.message || `STT set to ${provider}.` }
+          : { ok: false, message: r.message || "Failed to apply STT config." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
@@ -789,7 +787,6 @@ export function useSettingsData() {
         "/api/system/autostart/restart",
         {},
       );
-      setRestartPending(false);
       // Refetch later — daemon may be down briefly
       window.setTimeout(refresh, 3000);
       return { ok: true, message: r.message || "Restart scheduled." };
@@ -858,14 +855,14 @@ export function useSettingsData() {
 
   const disconnectGoogle = useCallback(async (): Promise<ActionResult> => {
     try {
-      await postJson("/api/auth/google/disconnect", {});
-      setRestartPending(true);
+      const r = await postJson<{ ok: boolean; message: string }>(
+        "/api/auth/google/disconnect",
+        {},
+      );
       await refresh();
-      return {
-        ok: true,
-        message: "Disconnected. Restart Jarvis to deactivate observers.",
-        restartRequired: true,
-      };
+      return r.ok
+        ? { ok: true, message: r.message || "Google disconnected. Observers stopped." }
+        : { ok: false, message: r.message || "Disconnect failed." };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Failed" };
     }
@@ -933,8 +930,6 @@ export function useSettingsData() {
     // derived
     stats,
     loading,
-    restartPending,
-    setRestartPending,
 
     // actions
     refresh,

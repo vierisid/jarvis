@@ -308,6 +308,8 @@ export function useLiveThread() {
     contentEvents: ws.contentEvents,
     /** Live agent delegation events (drives Logs Room live tail). */
     agentActivity: ws.agentActivity,
+    /** Settings hot-apply results (drives the Settings Room status card + toasts). */
+    settingsEvents: ws.settingsEvents,
     /** Phase 5A: palette pushes synthetic cards into the thread via this. */
     injectCard,
     /** Phase 6.1.5: room-window helpers. */

@@ -84,6 +84,18 @@ export type AgentActivityEvent = {
   timestamp: number;
 };
 
+/**
+ * Daemon broadcast after DB-backed settings were hot-applied (per-section
+ * save, POST /api/config/reload, or SIGHUP). Carries section names and
+ * error strings only — never setting values.
+ */
+export type SettingsAppliedEvent = {
+  sections: string[];
+  ok: boolean;
+  errors?: { section: string; error: string }[];
+  timestamp: number;
+};
+
 export type VoiceCallbacks = {
   onTTSBinary: (data: ArrayBuffer) => void;
   /** `containsWake` — true if the TTS sentence about to play contains
@@ -363,6 +375,7 @@ export function useWebSocket() {
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEvent[]>([]);
   const [goalEvents, setGoalEvents] = useState<GoalEvent[]>([]);
   const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
+  const [settingsEvents, setSettingsEvents] = useState<SettingsAppliedEvent[]>([]);
   const [notices, setNotices] = useState<SystemNotice[]>([]);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [clarifiers, setClarifiers] = useState<PendingClarifier[]>([]);
@@ -717,6 +730,10 @@ export function useWebSocket() {
     } else if (msg.type === "site_event") {
       const siteEvent = msg.payload as SiteEvent;
       setSiteEvents((prev) => [...prev.slice(-100), siteEvent]);
+    } else if (msg.type === "settings_applied") {
+      const payload = msg.payload as Omit<SettingsAppliedEvent, "timestamp">;
+      const event: SettingsAppliedEvent = { ...payload, timestamp: msg.timestamp };
+      setSettingsEvents((prev) => [...prev.slice(-20), event]);
     } else if (msg.type === "notification") {
       const payload = msg.payload as {
         source?: string;
@@ -1015,7 +1032,7 @@ export function useWebSocket() {
   }, []);
 
   return {
-    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, notices, dismissNotice,
+    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, settingsEvents, notices, dismissNotice,
     approvals,
     clarifiers,
     repeatBacks,

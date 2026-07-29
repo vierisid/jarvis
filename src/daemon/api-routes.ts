@@ -159,6 +159,12 @@ export type ApiContext = {
    * show the "Restart Jarvis" fallback banner.
    */
   isPostSetupServicesReady?: () => boolean;
+  /**
+   * Settings hot reload coordinator. Wired by the daemon at boot; runs
+   * per-section appliers so DB-backed settings (channels, STT, Google
+   * observers, ...) apply to the running process without a restart.
+   */
+  settingsReload?: import('./settings-reload.ts').SettingsReloadCoordinator;
 };
 
 // CORS headers — scoped to the dashboard origin, not wildcard
@@ -1309,8 +1315,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
           const fresh = ctx.config;
           if (body.stt) {
-            // Mirrors /api/config/stt POST semantics. STT is consumed at
-            // the next transcription request, so no hot-swap is needed.
+            // Mirrors /api/config/stt POST semantics. The saveUserSection
+            // below triggers the stt hot-reload applier.
             fresh.stt = mergeSTTConfig(fresh.stt, body.stt);
           }
           if (body.tts) {
@@ -1397,6 +1403,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           active_role: config.active_role,
           voice: config.voice ?? { wake_engine: 'openwakeword' },
         });
+      },
+    },
+
+    // Force a full re-read of the DB-backed settings into the running
+    // daemon. Covers edits made outside the process (sqlite3 CLI, another
+    // tool); same path as SIGHUP. In-process saves don't need this — the
+    // saveUserSection choke point already runs the appliers.
+    '/api/config/reload': {
+      POST: async () => {
+        if (!ctx.settingsReload) return error('Settings hot reload not available', 503);
+        try {
+          const result = await ctx.settingsReload.reloadAll();
+          return json({ ok: result.errors.length === 0, ...result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return error(`Settings reload failed: ${msg}`, 500);
+        }
       },
     },
 
@@ -1898,6 +1921,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret);
           await auth.exchangeCode(code);
 
+          // The exchange above used a throwaway GoogleAuth that saved the
+          // tokens to disk; nudge the hot-reload applier so the daemon's
+          // long-lived auth re-reads them and the observers start now
+          // (no saveGoogleSettings fires here, so this is explicit).
+          ctx.settingsReload?.sectionChanged('google');
+
           return new Response(
             `<html><body style="font-family:system-ui;text-align:center;padding:60px">
               <h1>JARVIS Google Authorization Complete!</h1>
@@ -2004,7 +2033,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             const { unlinkSync } = await import('node:fs');
             unlinkSync(tokensPath);
           }
-          return json({ ok: true, message: 'Disconnected. Restart JARVIS to deactivate observers.' });
+          // The google applier drops the daemon's in-memory tokens and
+          // restarts the observers, so the disconnect takes effect now.
+          if (!ctx.settingsReload) {
+            return json({ ok: true, message: 'Disconnected. Restart to deactivate observers (hot reload unavailable).' });
+          }
+          const applyErr = await ctx.settingsReload.applyNow('google');
+          if (applyErr) {
+            return json({ ok: false, message: `Disconnected, but deactivating observers failed: ${applyErr.error}` });
+          }
+          return json({ ok: true, message: 'Disconnected. Google observers deactivated.' });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           return error(`Failed to disconnect: ${msg}`, 500);
@@ -2064,7 +2102,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           saveUserSection('channels', freshConfig.channels);
           ctx.config.channels = freshConfig.channels;
 
-          return json({ ok: true, message: 'Channel config saved. Restart JARVIS to apply changes.' });
+          if (!ctx.settingsReload) {
+            return json({ ok: true, message: 'Channel config saved. Restart to apply (hot reload unavailable).' });
+          }
+          const applyErr = await ctx.settingsReload.applyNow('channels');
+          if (applyErr) {
+            return json({ ok: false, message: `Channel config saved, but applying it failed: ${applyErr.error}` });
+          }
+          return json({ ok: true, message: 'Channel config saved and applied.' });
         } catch (err) {
           console.error('[API] Error saving channels config:', err);
           return error('Invalid request body');
@@ -2095,7 +2140,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           freshConfig.stt = mergeSTTConfig(freshConfig.stt, body);
           saveUserSection('stt', freshConfig.stt);
           ctx.config.stt = freshConfig.stt;
-          return json({ ok: true, message: 'STT config saved. Restart JARVIS to apply changes.' });
+
+          if (!ctx.settingsReload) {
+            return json({ ok: true, message: 'STT config saved. Restart to apply (hot reload unavailable).' });
+          }
+          const applyErr = await ctx.settingsReload.applyNow('stt');
+          if (applyErr) {
+            return json({ ok: false, message: `STT config saved, but applying it failed: ${applyErr.error}` });
+          }
+          return json({ ok: true, message: 'STT config saved and applied.' });
         } catch (err) {
           console.error('[API] Error saving STT config:', err);
           return error('Invalid request body');

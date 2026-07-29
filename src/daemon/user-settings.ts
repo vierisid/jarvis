@@ -34,6 +34,30 @@ function settingKey(section: UserOwnedSection): string {
 }
 
 /**
+ * Write choke point for hot reload: every saveUserSection/saveGoogleSettings
+ * notifies this listener AFTER the DB write, so the daemon's
+ * SettingsReloadCoordinator can run the section's appliers regardless of who
+ * saved (HTTP route, voice intent, pebble toggle). The daemon injects it at
+ * boot; tests and CLI tools leave it null. Listener errors never fail the
+ * save.
+ */
+let sectionSavedListener: ((section: UserOwnedSection | 'google') => void) | null = null;
+
+export function setSectionSavedListener(
+  fn: ((section: UserOwnedSection | 'google') => void) | null,
+): void {
+  sectionSavedListener = fn;
+}
+
+function notifySectionSaved(section: UserOwnedSection | 'google'): void {
+  try {
+    sectionSavedListener?.(section);
+  } catch (err) {
+    console.error(`[UserSettings] Section-saved listener failed for '${section}':`, err);
+  }
+}
+
+/**
  * Persist one section to the DB. Callers mutate the in-memory config first,
  * then persist that section — the write is per-section, so there is no
  * load-modify-save race across unrelated sections (which is what the old
@@ -44,6 +68,7 @@ export function saveUserSection<K extends UserOwnedSection>(
   value: JarvisConfig[K],
 ): void {
   setSetting(settingKey(section), JSON.stringify(value ?? null));
+  notifySectionSaved(section);
 }
 
 /** Read one stored section; undefined when absent or unparseable. */
@@ -152,6 +177,7 @@ const GOOGLE_KEY = `${CFG_PREFIX}google`;
 
 export function saveGoogleSettings(value: JarvisConfig['google']): void {
   setSetting(GOOGLE_KEY, JSON.stringify(value ?? null));
+  notifySectionSaved('google');
 }
 
 function mergeGoogleSettingsIntoConfig(config: JarvisConfig): void {
