@@ -9,10 +9,9 @@
  *      flows running and returning final messages, even if the "agent" can't
  *      take actions yet. Tool trace is empty.
  *
- *   M7-backed delegator -- TODO. The full version spawns a sub-agent through
- *      AgentTaskManager + assignPersistentAgentTask, polls its task status
- *      until completion, then returns the final message + tool trace. Lands
- *      when M7's task surface is reachable from this adapter.
+ *   M7-backed delegator -- see `m7-agent-delegator.ts` for the full
+ *      implementation (spawns sub-agents through orchestrator.spawnSubAgent,
+ *      runs them through runSubAgent, extracts tool-call trace).
  *
  * The piece-side type doesn't expose a "tool trace" concept beyond an array
  * of `{name, args?, result?}` objects; both impls satisfy the same contract.
