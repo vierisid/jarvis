@@ -355,13 +355,6 @@ func darwinRebuildTray() {
 	)
 }
 
-func boolToCInt(b bool) C.int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // itoaTray is a tiny int→string without pulling strconv into the cgo file's
 // imports for one call.
 func itoaTray(n int) string {
