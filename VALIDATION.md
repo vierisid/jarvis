@@ -10,6 +10,19 @@ and send it back.
 
 Do these in order; each step gates the next.
 
+> **Status (2026-07-30): branch REBASED onto main** (which now includes the
+> webapp-templates PR #275 and the Ollama catalog fix #277). Both `sidecar/`
+> exes are from the pre-rebase 07-17 build and are **stale again — rebuild on
+> Windows (§1) before re-running §3**. Merge notes: `sidecar/browser.go`
+> navigate/click/type now use main's snapshot-parity implementations (navigate
+> returns the formatted snapshot string, clicks resolve snapshot coordinates
+> via trusted CDP input); the dead-host `errorText` check and `evalJSON`
+> (used by `browser_ax.go`) were preserved. Daemon side: message-time webapp
+> template injection is gone (main delivers templates by browsed URL); the
+> skill index now injects via its own `skillIndex` prompt channel. Full suite
+> (1,867 tests), typecheck, and the Linux sidecar build/tests pass post-rebase.
+> Windows cross-compile still unverifiable from WSL (webview cgo).
+
 > **Status (2026-07-17):** acceptance suite at **15/16** on real Windows hardware.
 > The one failure is "AX-set To field" — compose editable fields missing from the
 > AX snapshot. Root cause fixed in `c9dde52` (interactive elements were being
