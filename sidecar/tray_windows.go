@@ -67,6 +67,7 @@ const (
 	trayMenuWaitingID  = 5
 	trayMenuPauseID    = 6
 	trayMenuMuteID     = 7
+	trayMenuAccountID  = 8
 	// Brand icon resources compiled into rsrc_windows_amd64.syso from jarvis.rc.
 	// ID 2 is also the .exe / taskbar application icon (lowest-numbered group
 	// icon). ID 3 is the vermilion drop shown when the connection drops.
@@ -108,6 +109,7 @@ var (
 	trayOnClose      func()
 	trayConnState    func() int32 // brain-connection state (connConnecting/connConnected/connError)
 	trayOpenChat     func()
+	trayOpenAccount  func()
 	trayOpenSettings func()
 	trayOpenLogs     func()
 	trayEmit         func(eventType string, payload map[string]any) // tray → brain (pause/mute)
@@ -123,6 +125,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	client.SetShutdown(trayOnClose)
 	trayConnState = client.ConnState
 	trayOpenChat = client.OpenChat
+	trayOpenAccount = client.OpenAccount
 	trayOpenSettings = client.OpenSettings
 	trayOpenLogs = client.OpenLogViewer
 	trayEmit = func(et string, p map[string]any) {
@@ -394,6 +397,7 @@ func showTrayMenu(hwnd uintptr) {
 	// combos we won't hijack globally. A deliberate global "open dashboard"
 	// hotkey would be a separate opt-in, on an uncommon combo.)
 	appendTrayItem(hMenu, "Open dashboard", trayMenuChatID)
+	appendTrayItem(hMenu, "Account", trayMenuAccountID)
 	appendTrayItem(hMenu, "Settings", trayMenuSettingsID)
 	appendTrayItem(hMenu, "Logs", trayMenuLogsID)
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
@@ -426,6 +430,10 @@ func showTrayMenu(hwnd uintptr) {
 	case trayMenuChatID:
 		if trayOpenChat != nil {
 			go trayOpenChat()
+		}
+	case trayMenuAccountID:
+		if trayOpenAccount != nil {
+			go trayOpenAccount()
 		}
 	case trayMenuSettingsID:
 		if trayOpenSettings != nil {

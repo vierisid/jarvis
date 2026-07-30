@@ -24,6 +24,13 @@ func goTrayOpenChat() {
 	}
 }
 
+//export goTrayOpenAccount
+func goTrayOpenAccount() {
+	if trayOpenAccountDarwin != nil {
+		go trayOpenAccountDarwin()
+	}
+}
+
 //export goTrayOpenSettings
 func goTrayOpenSettings() {
 	if trayOpenSettingsDarwin != nil {

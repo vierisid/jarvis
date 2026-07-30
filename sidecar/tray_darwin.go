@@ -34,6 +34,7 @@ package main
 
 extern void goTrayClose(void);
 extern void goTrayOpenChat(void);
+extern void goTrayOpenAccount(void);
 extern void goTrayOpenSettings(void);
 extern void goTrayOpenLogs(void);
 extern void goTrayPause(void);
@@ -49,6 +50,7 @@ extern void goTrayWaiting(void);
 @interface JarvisTrayTarget : NSObject <NSApplicationDelegate>
 - (void)onClose:(id)sender;
 - (void)onChat:(id)sender;
+- (void)onAccount:(id)sender;
 - (void)onSettings:(id)sender;
 - (void)onLogs:(id)sender;
 - (void)onPause:(id)sender;
@@ -58,6 +60,7 @@ extern void goTrayWaiting(void);
 @implementation JarvisTrayTarget
 - (void)onClose:(id)sender    { (void)sender; goTrayClose(); }
 - (void)onChat:(id)sender     { (void)sender; goTrayOpenChat(); }
+- (void)onAccount:(id)sender  { (void)sender; goTrayOpenAccount(); }
 - (void)onSettings:(id)sender { (void)sender; goTrayOpenSettings(); }
 - (void)onLogs:(id)sender     { (void)sender; goTrayOpenLogs(); }
 - (void)onPause:(id)sender    { (void)sender; goTrayPause(); }
@@ -232,6 +235,7 @@ static void jarvisTrayRebuild(const char* header, int waiting, int paused, int m
         }
 
         jarvisAddItem(menu, @"Open dashboard", @selector(onChat:));
+        jarvisAddItem(menu, @"Account", @selector(onAccount:));
         jarvisAddItem(menu, @"Settings", @selector(onSettings:));
         jarvisAddItem(menu, @"Logs", @selector(onLogs:));
         [menu addItem:[NSMenuItem separatorItem]];
@@ -301,6 +305,7 @@ func init() { runtime.LockOSThread() }
 var (
 	trayOnCloseDarwin      func()
 	trayOpenChatDarwin     func()
+	trayOpenAccountDarwin  func()
 	trayOpenSettingsDarwin func()
 	trayOpenLogsDarwin     func()
 	trayEmitDarwin         func(eventType string, payload map[string]any) // tray → brain (pause/mute)
@@ -388,6 +393,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	}
 	client.SetShutdown(trayOnCloseDarwin)
 	trayOpenChatDarwin = client.OpenChat
+	trayOpenAccountDarwin = client.OpenAccount
 	trayOpenSettingsDarwin = client.OpenSettings
 	trayOpenLogsDarwin = client.OpenLogViewer
 	trayClientDarwin = client
