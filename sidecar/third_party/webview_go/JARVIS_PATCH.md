@@ -24,8 +24,9 @@ In `libs/webview/include/webview.h`, the win32 `win32_edge_engine` constructor:
 ```
 
 The host (sidecar) now creates the window hidden and reveals it itself once the
-page has loaded — see `revealWebviewOnLoad` (`webview_reveal.go`) for the setup
-window + log viewer, and the inline reveal in `panels_runtime.go` for panels.
+page has loaded — see `revealWebviewOnLoad` (`webview_reveal.go`) for the local
+windows (settings, logs, account) and the hosted first-run window, and the
+inline reveal in `panels_runtime.go` for panels.
 Non-`delayShow` overlay panels are shown immediately.
 
 ## The Cocoa patch (macOS main-thread window creation)

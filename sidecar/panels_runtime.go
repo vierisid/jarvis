@@ -114,6 +114,32 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
+		// Windows/Linux own the loop and Destroy the webview after Run()
+		// returns. Declared FIRST so defer LIFO runs it LAST: hotkey teardown,
+		// follower shutdown, close(impl.done), and registry removal all happen
+		// before the engine is freed — with Destroy first (the old order), the
+		// still-registered summon hotkey could Dispatch into freed memory, and
+		// a Close()/reopen could reach the dead entry. The delayShow reveal
+		// timer and the close watcher are joined here too, for the same reason
+		// (same fix as webview_reveal.go's stop). On macOS (shared loop) the
+		// window closes under the tray's [NSApp run], and webview's own
+		// on_window_will_close dispatch still references the engine; destroying
+		// it here frees the engine out from under it -> use-after-free crash.
+		// Leak the engine on macOS instead (panels open rarely; the timer and
+		// watcher are joined either way). TODO: cancellable teardown to
+		// reclaim. wv/stopReveal/stopCloseWatch are populated later; they stay
+		// nil/no-op on the webview.New failure path.
+		var wv webview.WebView
+		stopReveal := func() {}
+		stopCloseWatch := func() {}
+		defer func() {
+			stopCloseWatch()
+			stopReveal()
+			if wv != nil && !panelSharedLoop {
+				wv.Destroy()
+			}
+		}()
+
 		defer s.reg.delete(spec.ID)
 		defer close(impl.done)
 		defer func() {
@@ -130,24 +156,12 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
-		wv := webview.New(debug)
+		wv = webview.New(debug)
 		if wv == nil {
 			log.Printf("[panels] spawn(%s): webview.New returned nil — WebView2 runtime missing?", spec.ID)
 			close(impl.ready)
 			return
 		}
-		// Windows/Linux own the loop and Destroy the webview safely after Run()
-		// returns. On macOS (shared loop) the window closes under the tray's
-		// [NSApp run], but pending webview callbacks still reference the engine
-		// (the delayShow reveal-timeout goroutine, webview's own
-		// on_window_will_close dispatch); destroying it here frees the engine out
-		// from under them -> use-after-free crash. Leak the engine on macOS
-		// instead (panels open rarely). TODO: cancellable teardown to reclaim.
-		defer func() {
-			if !panelSharedLoop {
-				wv.Destroy()
-			}
-		}()
 		impl.setWV(wv)
 		log.Printf("[panels] spawn(%s): webview created", spec.ID)
 
@@ -256,7 +270,24 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				// window (its SetWindowPos uses SWP_SHOWWINDOW for always-on-top).
 				_ = platformSetWindowVisible(earlyHandle, false)
 				var panelShown atomic.Bool
+				var revealStopped atomic.Bool
 				showPanel := func() {
+					if revealStopped.Load() {
+						return // teardown won the race; the handle may be dead
+					}
+					select {
+					case <-impl.uiClosed:
+						// macOS: the window already closed under the shared
+						// loop. uiClosed is closed inside the will-close
+						// notification ON THE MAIN THREAD, so a reveal closure
+						// queued behind it reliably sees this and bails —
+						// otherwise it would re-show and focus the closed
+						// (frameless, registry-deleted) panel as an
+						// unreachable zombie. revealStopped can't cover this:
+						// the spawn goroutine sets it only after it wakes.
+						return
+					default:
+					}
 					if panelShown.CompareAndSwap(false, true) {
 						_ = platformSetWindowVisible(earlyHandle, true)
 						_ = platformFocusWindow(earlyHandle)
@@ -268,12 +299,28 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					`if(document.readyState==='complete'){setTimeout(r,120);}` +
 					`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`)
 				_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
+				// Timeout fallback, cancellable: stopReveal (joined by the defer
+				// above before Destroy) keeps the Dispatch CALL off a freed
+				// engine, and revealStopped keeps an already-queued closure off
+				// a dead window handle (GTK idle sources survive gtk_main_quit).
+				revealDone := make(chan struct{})
+				revealFinished := make(chan struct{})
 				go func() {
-					time.Sleep(6 * time.Second)
-					if wv := impl.loadWV(); wv != nil {
+					defer close(revealFinished)
+					select {
+					case <-time.After(6 * time.Second):
 						wv.Dispatch(func() { showPanel() })
+					case <-revealDone:
 					}
 				}()
+				var stopOnce sync.Once
+				stopReveal = func() {
+					stopOnce.Do(func() {
+						revealStopped.Store(true)
+						close(revealDone)
+					})
+					<-revealFinished
+				}
 			}
 
 			if spec.URL != "" {
@@ -456,11 +503,21 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		// panel can't be reopened. Watch the HWND; when it's destroyed, force the
 		// loop to return so cleanup runs. No-op on platforms where
 		// platformWindowAlive can't probe the handle.
+		//
+		// Joined (stopCloseWatch, in the Destroy defer) before the engine is
+		// freed: teardown closes impl.done only AFTER Destroy (defer LIFO), so
+		// the done check alone leaves a gap where a tick could see the window
+		// dead, pass the check, and Dispatch into freed memory.
+		watchStop := make(chan struct{})
+		watchFinished := make(chan struct{})
 		go func() {
+			defer close(watchFinished)
 			t := time.NewTicker(250 * time.Millisecond)
 			defer t.Stop()
 			for {
 				select {
+				case <-watchStop:
+					return // teardown is joining us
 				case <-impl.done:
 					return
 				case <-t.C:
@@ -468,6 +525,8 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 						continue
 					}
 					select {
+					case <-watchStop:
+						return // teardown is joining us
 					case <-impl.done:
 						return // already tearing down (webview terminated it)
 					default:
@@ -486,6 +545,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				}
 			}
 		}()
+		var watchOnce sync.Once
+		stopCloseWatch = func() {
+			watchOnce.Do(func() { close(watchStop) })
+			<-watchFinished
+		}
 
 		close(impl.ready)
 		if panelSharedLoop {

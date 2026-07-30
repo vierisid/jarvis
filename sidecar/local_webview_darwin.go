@@ -29,18 +29,29 @@ func runLocalWebview(title string, width, height int, hint webview.Hint, build f
 	}
 
 	closed := make(chan struct{})
-	uiSync(wv, func() {
+	var stopReveal func()
+	uiSync(wv, func() { // synchronous: stopReveal is assigned before watchWindowClose can fire
 		wv.SetTitle(title)
 		wv.SetSize(width, height, hint)
+		stopReveal = revealWebviewOnLoad(wv)
 		build(wv)
-		watchWindowClose(wv.Window(), func() { close(closed) })
+		watchWindowClose(wv.Window(), func() {
+			// Stopping HERE (main thread), not after <-closed: AppKit releases
+			// the window on close, and a reveal closure already queued on the
+			// main queue would otherwise run against the freed handle before
+			// our goroutine even wakes. Main-queue ordering makes the stop
+			// flag visible to any closure that drains after this callback.
+			stopReveal()
+			close(closed)
+		})
 	})
 
 	<-closed
 	// Intentionally do NOT wv.Destroy() here. Under the tray's shared loop the
-	// window closes via AppKit, but pending callbacks still reference the engine
-	// — webview's own on_window_will_close -> dispatch(on_window_destroyed) and
-	// revealWebviewOnLoad's reveal-timeout goroutine. Destroying now frees the
-	// engine out from under them -> use-after-free crash. We leak the engine
-	// instead (these windows open rarely). TODO: cancellable teardown to reclaim.
+	// window closes via AppKit, but webview's own on_window_will_close ->
+	// dispatch(on_window_destroyed) callback still references the engine.
+	// Destroying now frees the engine out from under it -> use-after-free
+	// crash. We leak the engine instead (these windows open rarely; the reveal
+	// timer, the other dangling reference this leak used to cover, is joined
+	// above). TODO: cancellable teardown to reclaim.
 }
