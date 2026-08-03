@@ -4,7 +4,8 @@ package main
 // lets the user change the enrollment token, and edit sidecar preferences.
 // Entirely local: it is NOT a dashboard room and never talks to the brain
 // (the old "Settings" entry opened the remote settings room). Mirrors the log
-// viewer pattern; UI is plain HTML, to be branded later.
+// viewer pattern; UI is local HTML in the shared Monochrome Lab brand
+// (brand_css.go).
 
 import (
 	"fmt"
@@ -151,25 +152,13 @@ const settingsWindowHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  /* Monochrome Lab (Brand Book III) — sidecar settings. Forced light;
-     row grammar from the room-13 settings design: label + consequence left,
-     control right, inside raised panels with the asymmetric corner. */
-  :root {
-    color-scheme: light;
-    --bg:#FAFBFC; --raise:#FFFFFF; --panel:#EFF2F5; --panel2:#F6F8FA;
-    --rule:#E2E7EC; --rule2:#EDF0F3; --rule-hi:#D2D9E0;
-    --ink:#13161A; --ink2:#535B63; --ink3:#677077; --faint:#9AA2AB;
-    --listen:#E63B2E; --listen-tx:#C2301F; --speak:#2D78FF;
-    --hold:#EAA40E; --ok:#2FA45E; --ok-tx:#1F7A43;
-    --sans:'Familjen Grotesk', system-ui, -apple-system, "Segoe UI", sans-serif;
-    --mono:'Spline Sans Mono', ui-monospace, "Cascadia Code", Consolas, monospace;
-    --corner:14px 3px 14px 14px; --corner-sm:9px 2px 9px 9px; --ease:cubic-bezier(.2,.7,.2,1);
-    --sh-sm:0 1px 2px rgba(20,30,45,.06),0 1px 1px rgba(20,30,45,.04);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body { font-family: var(--sans); background: var(--bg); color: var(--ink); padding: 24px 22px 28px; overflow-y: auto; font-size: 13px; }
+<style>` + brandTokensCSS + `
+  /* Monochrome Lab (Brand Book III) — sidecar settings, shared tokens from
+     brand_css.go (dark follows the OS); row grammar from the room-13 settings
+     design: label + consequence left, control right, inside raised panels
+     with the asymmetric corner. */
+  html, body { height: 100%; }
+  body { padding: 24px 22px 28px; overflow-y: auto; font-size: 13px; }
   h1 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 3px; }
   .sub { font-size: 12px; color: var(--ink3); margin: 0 0 18px; }
   .sec { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); margin: 20px 4px 8px; }
@@ -207,8 +196,8 @@ const settingsWindowHTML = `<!doctype html>
   /* buttons */
   .sbtn { appearance: none; font-family: var(--sans); font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: var(--corner-sm); border: 1px solid var(--rule); color: var(--ink); background: var(--raise); cursor: pointer; transition: background .12s, border-color .12s; }
   .sbtn:hover { background: var(--panel); border-color: var(--rule-hi); }
-  .sbtn.pri { background: var(--ink); color: #fff; border-color: var(--ink); }
-  .sbtn.pri:hover { background: #272C33; }
+  .sbtn.pri { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .sbtn.pri:hover { filter: brightness(1.08); }
   .sbtn:disabled { opacity: .5; cursor: default; }
   /* number input */
   .num { width: 62px; padding: 6px 9px; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); font-family: var(--mono); font-size: 12px; outline: none; text-align: center; }

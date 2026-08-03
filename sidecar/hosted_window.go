@@ -32,71 +32,86 @@ import (
 )
 
 // hostedShellHTML is the local page shown while the handshake registers (and
-// as the fallback surface for errors). Styled like the token form. The
-// /*__BOOT__*/ placeholder lets hostedShellWithError bake an error into the
-// document itself - an Eval racing a fresh SetHtml can silently lose the
-// message, a baked-in script cannot.
+// as the fallback surface for errors). Monochrome Lab (brand_css.go): a
+// centered status screen whose Pebble mirrors the machine's state — breathing
+// red while contacting usejarvis, white think-ring while sign-in runs in the
+// browser, fast red on error. The /*__BOOT__*/ placeholder lets
+// hostedShellWithError bake an error into the document itself - an Eval
+// racing a fresh SetHtml can silently lose the message, a baked-in script
+// cannot.
 const hostedShellHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 40px 36px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-    background: #f5f2eb; color: #1a1a1a;
-    display: flex; flex-direction: column; min-height: 92vh;
+<style>` + brandTokensCSS + brandPebbleCSS + `
+  body { min-height: 100vh; display: flex; flex-direction: column; padding: 26px 30px; }
+  .bhead .word { font-size: 16px; }
+  .center { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .statusbox { width: 100%; max-width: 380px; text-align: center; position: relative; }
+  .dropwrap { display: flex; justify-content: center; margin-bottom: 20px; position: relative; }
+  .dropwrap .bbloom { width: 150px; height: 150px; left: 50%; top: 50%; transform: translate(-50%,-52%); }
+  .statephase {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink3); margin-bottom: 9px;
   }
-  h1 { font-size: 20px; margin: 0 0 8px; }
-  .sub { font-size: 13px; margin: 0 0 24px; opacity: 0.8; line-height: 1.5; }
-  #status { font-size: 13px; color: #6a675f; min-height: 18px; }
-  #err { color: #c23a2a; font-size: 13px; min-height: 18px; margin-top: 6px; }
-  .spinner {
-    width: 22px; height: 22px; margin: 18px 0;
-    border: 3px solid #cbc3b2; border-top-color: #c23a2a; border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .footer { margin-top: auto; font-size: 12px; color: #6a675f; }
-  .footer a { color: #c23a2a; cursor: pointer; text-decoration: underline; }
-  #reopen { display: none; margin-top: 6px; font-size: 13px; }
-  #reopen a { color: #c23a2a; cursor: pointer; text-decoration: underline; }
+  h2 { font-size: 19px; font-weight: 700; letter-spacing: -.025em; margin: 0; }
+  #status { font-size: 12.5px; color: var(--ink3); line-height: 1.55; margin-top: 6px; min-height: 18px; }
+  #err { font-size: 12px; color: var(--listen-tx); line-height: 1.5; margin-top: 8px; min-height: 18px; }
+  #reopen { display: none; margin-top: 8px; font-size: 12.5px; }
+  #reopen a { color: var(--listen-tx); cursor: pointer; text-decoration: underline; }
   #url {
-    display: none; margin-top: 10px; padding: 8px 10px;
-    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
-    background: #ece8dd; border-radius: 6px; word-break: break-all; user-select: all;
+    display: none; margin-top: 12px; padding: 9px 11px; text-align: left;
+    font-family: var(--mono); font-size: 11px; line-height: 1.5;
+    background: var(--panel2); border: 1px solid var(--rule);
+    border-radius: var(--corner-sm); color: var(--ink2);
+    word-break: break-all; user-select: all;
   }
-  #retry { display: none; margin-top: 12px; }
-  button {
-    appearance: none; border: 0; border-radius: 8px; padding: 9px 16px;
-    background: #c23a2a; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  #retry { display: none; margin-top: 16px; }
+  .btn {
+    appearance: none; height: 40px; padding: 0 18px; border: 1px solid transparent;
+    border-radius: var(--corner-sm); font-family: var(--sans); font-size: 13.5px;
+    font-weight: 600; cursor: pointer; background: var(--ink); color: var(--bg);
+    transition: filter 150ms var(--ease);
   }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+  .footer { margin: 0; font-size: 11.5px; color: var(--faint); text-align: center; }
+  .footer a { color: var(--listen-tx); cursor: pointer; text-decoration: underline; }
 </style>
 </head>
 <body>
-  <h1>Connect this device</h1>
-  <p class="sub">Sign in to your usejarvis account to link this machine to your Jarvis.</p>
-  <div class="spinner" id="spin"></div>
-  <div id="status">Contacting usejarvis&hellip;</div>
-  <div id="err"></div>
-  <div id="reopen"><a onclick="window.openConnectPage()">Open the sign-in page again</a></div>
-  <div id="url"></div>
-  <div id="retry"><button onclick="window.retryHosted()">Try again</button></div>
+  <div class="bhead"><span class="word"><span class="u">use</span>jarvis</span></div>
+  <div class="center">
+    <div class="statusbox">
+      <div class="dropwrap">
+        <span class="bbloom" id="bloom"></span>
+        <span class="bdrop" id="drop" style="width:64px;height:64px"><span class="in"></span><span class="ring"></span></span>
+      </div>
+      <div class="statephase" id="phase">Connecting</div>
+      <h2>Connect this device</h2>
+      <div id="status">Contacting usejarvis&hellip;</div>
+      <div id="err"></div>
+      <div id="reopen"><a onclick="window.openConnectPage()">Open the sign-in page again</a></div>
+      <div id="url"></div>
+      <div id="retry"><button class="btn" onclick="window.retryHosted()">Try again</button></div>
+    </div>
+  </div>
   <p class="footer">Self-hosting your own brain? <a onclick="window.chooseSelfHost()">Paste your enrollment token</a></p>
 <script>
   window.__setStatus = function (text) { document.getElementById('status').textContent = text; };
   window.__setError = function (text) {
+    document.getElementById('drop').className = text ? 'bdrop s-err' : 'bdrop';
+    document.getElementById('phase').textContent = text ? 'Setup failed' : 'Connecting';
     document.getElementById('status').textContent = '';
     document.getElementById('err').textContent = text;
-    document.getElementById('spin').style.display = text ? 'none' : '';
     document.getElementById('retry').style.display = text ? 'block' : 'none';
     document.getElementById('reopen').style.display = 'none';
     document.getElementById('url').style.display = 'none';
   };
   window.__browserOpened = function (ok, url) {
+    document.getElementById('drop').className = ok ? 'bdrop s-think' : 'bdrop';
+    document.getElementById('phase').textContent = ok ? 'Waiting for sign-in' : 'Open the link below';
     document.getElementById('status').textContent = ok
       ? 'We opened usejarvis in your browser — finish signing in there. This window will continue on its own.'
       : 'Could not open your browser automatically. Open this link yourself:';

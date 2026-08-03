@@ -3,8 +3,8 @@ package main
 // Local log viewer — a small webview window that shows the sidecar's own log
 // file (~/.jarvis/sidecar.log) with search, copy, and export. Entirely local:
 // it is NOT a dashboard room and never talks to the brain. Reuses the webview_go
-// dependency (same as the setup window / panels); the UI is plain HTML, to be
-// branded later.
+// dependency (same as the setup window / panels); the UI is local HTML in the
+// shared Monochrome Lab brand (brand_css.go).
 
 import (
 	"fmt"
@@ -58,25 +58,11 @@ const logViewerHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  /* Monochrome Lab (Brand Book III). Force light regardless of OS appearance. */
-  :root {
-    color-scheme: light;
-    --bg:#FAFBFC; --raise:#FFFFFF; --panel:#EFF2F5; --panel2:#F6F8FA;
-    --rule:#E2E7EC; --rule-hi:#D2D9E0;
-    --ink:#13161A; --ink2:#535B63; --ink3:#677077; --faint:#9AA2AB;
-    --speak:#2D78FF;
-    --sans:'Familjen Grotesk', system-ui, -apple-system, "Segoe UI", sans-serif;
-    --mono:'Spline Sans Mono', ui-monospace, "Cascadia Code", Consolas, monospace;
-    --corner-sm: 9px 2px 9px 9px;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    display: flex; flex-direction: column;
-    font-family: var(--sans); font-size: 13px;
-    background: var(--bg); color: var(--ink);
-  }
+<style>` + brandTokensCSS + `
+  /* Monochrome Lab (Brand Book III) — shared tokens from brand_css.go,
+     dark follows the OS. */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; font-size: 13px; }
   .bar {
     display: flex; align-items: center; gap: 8px; padding: 10px 12px;
     background: var(--raise); border-bottom: 1px solid var(--rule); flex: 0 0 auto;
@@ -104,8 +90,8 @@ const logViewerHTML = `<!doctype html>
     transition: background .12s, border-color .12s, color .12s;
   }
   button:hover { background: var(--panel); color: var(--ink); border-color: var(--rule-hi); }
-  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
-  button.primary:hover { background: #272C33; }
+  button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button.primary:hover { filter: brightness(1.08); }
   pre {
     flex: 1 1 auto; margin: 0; padding: 12px 14px; overflow: auto;
     font-family: var(--mono); font-size: 12px; line-height: 1.5;

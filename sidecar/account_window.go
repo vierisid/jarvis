@@ -21,36 +21,41 @@ import (
 )
 
 // accountShellHTML is the local first document, shown while the hosted page
-// loads. The window is created hidden and revealed on document load — without
-// a local shell an unreachable origin would keep the window invisible until
-// the reveal timeout, then surface a raw platform error page with no context.
-// Deliberately static (no retry, no bindings): if the remote navigation
-// fails, the platform error page replaces this shell in an already-visible
-// window the user can simply close and reopen.
+// loads — a Monochrome Lab loading moment (brand_css.go): centered Pebble in
+// the think state under a mono eyebrow. The window is created hidden and
+// revealed on document load — without a local shell an unreachable origin
+// would keep the window invisible until the reveal timeout, then surface a
+// raw platform error page with no context. Deliberately static (no retry, no
+// bindings): if the remote navigation fails, the platform error page replaces
+// this shell in an already-visible window the user can simply close and
+// reopen.
 const accountShellHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<style>
-  body {
-    margin: 0; padding: 40px 36px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-    background: #f5f2eb; color: #1a1a1a;
+<style>` + brandTokensCSS + brandPebbleCSS + `
+  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .statusbox { text-align: center; position: relative; }
+  .dropwrap { display: flex; justify-content: center; margin-bottom: 20px; position: relative; }
+  .dropwrap .bbloom { width: 150px; height: 150px; left: 50%; top: 50%; transform: translate(-50%,-52%); }
+  .statephase {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink3); margin-bottom: 9px;
   }
-  h1 { font-size: 20px; margin: 0 0 8px; }
-  .sub { font-size: 13px; margin: 0 0 24px; opacity: 0.8; }
-  .spinner {
-    width: 22px; height: 22px; margin: 18px 0;
-    border: 3px solid #cbc3b2; border-top-color: #c23a2a; border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 19px; font-weight: 700; letter-spacing: -.025em; margin: 0; }
+  .sub { font-size: 12.5px; color: var(--ink3); margin-top: 6px; }
 </style>
 </head>
 <body>
-  <h1>Your account</h1>
-  <p class="sub">Contacting usejarvis&hellip;</p>
-  <div class="spinner"></div>
+  <div class="statusbox">
+    <div class="dropwrap">
+      <span class="bbloom"></span>
+      <span class="bdrop s-think" style="width:64px;height:64px"><span class="in"></span><span class="ring"></span></span>
+    </div>
+    <div class="statephase">Account</div>
+    <h1>Your account</h1>
+    <p class="sub">Contacting usejarvis&hellip;</p>
+  </div>
 </body>
 </html>`
 
