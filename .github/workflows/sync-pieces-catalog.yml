@@ -46,6 +46,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
+      actions: write
     steps:
       - uses: actions/checkout@v5
 
@@ -95,3 +97,17 @@ jobs:
             pieces-catalog
             dependencies
           delete-branch: true
+
+      # PRs authored by github-actions[bot] with GITHUB_TOKEN don't get their
+      # `pull_request` CI started automatically -- the runs sit "awaiting
+      # approval" until a maintainer clicks through. GitHub's suppression rule
+      # explicitly exempts workflow_dispatch, so kick the test workflow at the
+      # PR branch ourselves; its check runs attach to the same head commit and
+      # show up on the PR. (Alternative if this ever breaks: create the PR with
+      # a fine-grained PAT via the `token:` input above, which makes CI trigger
+      # natively.)
+      - name: Trigger tests on the PR branch
+        if: steps.sync.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run test.yml --ref chore/sync-pieces-catalog -R "$GITHUB_REPOSITORY"
