@@ -154,6 +154,17 @@ export interface ReportOptions {
   fileLabel: string;
   /** Resolve an id to its 1-based line in the generated file, or null. */
   lineOf: (id: string) => number | null;
+  /**
+   * Pieces whose npm lookup failed transiently this run, so the previously
+   * committed latestVersion was reused (metadata still comes from the pinned
+   * SHA, like every other entry). On a routine run -- SHA unchanged -- the
+   * whole entry is therefore identical to the previous catalog and produces
+   * no diff; on a SHA-bump run metadata changes surface in their own diff
+   * sections as usual. Carried-forward status itself never affects the
+   * verdict; the reviewer just needs to know these versions may lag npm
+   * until the next successful run.
+   */
+  carriedForward?: Array<{ id: string; version: string }>;
 }
 
 /** Collapse a list into a `<details>` block once it gets long. */
@@ -224,6 +235,10 @@ export function renderReport(
   p(`| Version bumps | ${diff.versionChanged.length} |`);
   p(`| License changes | ${diff.licenseChanged.length} |`);
   p(`| Other metadata | ${diff.otherChanged.length} |`);
+  const carried = opts.carriedForward ?? [];
+  if (carried.length > 0) {
+    p(`| Carried forward (stale) | ${carried.length} |`);
+  }
   p();
 
   if (diff.shaChanged) {
@@ -257,13 +272,41 @@ export function renderReport(
     p("### Removed pieces");
     p();
     p(
-      "A piece leaving the catalog means it was unpublished from npm (or the npm " +
-        "retry budget was exhausted during sync). Confirm this is intentional and " +
-        "not a transient failure:",
+      "A piece leaving the catalog means npm answered 404 for its latest release " +
+        "(unpublished upstream), or the piece left the monorepo at the pinned SHA " +
+        "(renamed or deleted -- a rename shows up as one removal plus one addition). " +
+        "Transient npm failures do NOT remove pieces; those are carried forward and " +
+        "listed separately. Confirm each removal is intentional:",
     );
     p();
     for (const e of diff.removed) {
       p(`- \`${e.id}\` -- was \`${e.npmPackage}\``);
+    }
+    p();
+  }
+
+  if (carried.length > 0) {
+    p("### Stale entries (carried forward)");
+    p();
+    p(
+      "npm could not be reached for these pieces during this run (rate limit or " +
+        "outage), so each kept its previously committed version instead of being " +
+        "removed; the next successful sync catches them up. Any metadata change " +
+        "from the pinned SHA still appears in the sections above. Listed for " +
+        "transparency -- staleness alone needs no action:",
+    );
+    p();
+    const rows = carried.map(
+      (c) => `- \`${codeSafe(c.id)}\` -- kept at \`${codeSafe(c.version)}\``,
+    );
+    if (rows.length > COLLAPSE_THRESHOLD) {
+      p(`<details><summary>Show ${rows.length} carried-forward pieces</summary>`);
+      p();
+      for (const r of rows) p(r);
+      p();
+      p("</details>");
+    } else {
+      for (const r of rows) p(r);
     }
     p();
   }

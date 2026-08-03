@@ -165,6 +165,67 @@ describe("renderReport", () => {
     expect(markdown).toContain("MIT' injected");
   });
 
+  test("carried-forward pieces render the stale section and summary row", () => {
+    const a = [entry({ id: "gmail" }), entry({ id: "spotify", latestVersion: "0.4.4" })];
+    const { verdict, markdown } = renderReport(diffCatalogs(a, a, meta), {
+      ...reportOpts,
+      carriedForward: [{ id: "spotify", version: "0.4.4" }],
+    });
+    expect(markdown).toContain("| Carried forward (stale) | 1 |");
+    expect(markdown).toContain("### Stale entries (carried forward)");
+    expect(markdown).toContain("`spotify` -- kept at `0.4.4`");
+    // On an unchanged SHA a carried-forward entry produces no diff, so it
+    // must not flip the verdict on its own.
+    expect(verdict).toBe("safe");
+  });
+
+  test("a long carried-forward list collapses into a details block", () => {
+    const carried = Array.from({ length: 20 }, (_, i) => ({
+      id: `piece-${String(i).padStart(2, "0")}`,
+      version: "1.0.0",
+    }));
+    const a = carried.map((c) => entry({ id: c.id }));
+    const { markdown } = renderReport(diffCatalogs(a, a, meta), {
+      ...reportOpts,
+      carriedForward: carried,
+    });
+    expect(markdown).toContain("<details><summary>Show 20 carried-forward pieces</summary>");
+    expect(markdown).toContain("| Carried forward (stale) | 20 |");
+  });
+
+  test("a backtick in a carried-forward version can't break out of the code span", () => {
+    const a = [entry({ id: "gmail" })];
+    const { markdown } = renderReport(diffCatalogs(a, a, meta), {
+      ...reportOpts,
+      carriedForward: [{ id: "gmail", version: "1.0.0` injected" }],
+    });
+    expect(markdown).not.toContain("1.0.0` injected");
+    expect(markdown).toContain("1.0.0' injected");
+  });
+
+  test("carried-forward alone does not make the diff a change", () => {
+    const a = [entry({ id: "spotify" })];
+    expect(hasChanges(diffCatalogs(a, a, meta))).toBe(false);
+  });
+
+  test("no carriedForward option renders neither section nor summary row", () => {
+    const a = [entry({ id: "gmail" })];
+    const oldE = [entry({ id: "gmail", latestVersion: "0.9.0" })];
+    const { markdown } = renderReport(diffCatalogs(oldE, a, meta), reportOpts);
+    expect(markdown).not.toContain("Carried forward");
+    expect(markdown).not.toContain("Stale entries");
+  });
+
+  test("empty carriedForward list renders neither section nor summary row", () => {
+    const a = [entry({ id: "gmail" })];
+    const { markdown } = renderReport(diffCatalogs(a, a, meta), {
+      ...reportOpts,
+      carriedForward: [],
+    });
+    expect(markdown).not.toContain("Carried forward");
+    expect(markdown).not.toContain("Stale entries");
+  });
+
   test("no em dashes or fancy arrows leak into the body", () => {
     const oldE = [entry({ id: "gmail", latestVersion: "1.0.0", licenseSpdx: "MIT" })];
     const newE = [

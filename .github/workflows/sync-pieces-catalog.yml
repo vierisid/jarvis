@@ -4,6 +4,9 @@
 #   1. `bun run scripts/sync-pieces-catalog.ts` -- walks the activepieces
 #      monorepo at the pinned SHA, queries npm for the latest version of
 #      every piece, and writes `src/workflows/pieces-library/catalog-generated.ts`.
+#      Transient npm failures (429/5xx) carry the previous entry forward
+#      instead of dropping the piece; if npm fails for >10% of pieces the
+#      script exits non-zero and this job fails without opening a PR.
 #      It also diffs against the committed catalog and emits two step outputs:
 #      `verdict` (safe | review) and `has_changes` (whether any entry moved).
 #   2. `bun test` and `tsc --noEmit` -- the catalog tests in
@@ -35,6 +38,11 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # A healthy run finishes in a few minutes. The ceiling guards the
+    # pathological case where npm throttles every request with a long
+    # Retry-After: better to kill the job than burn hours of runner time
+    # (the >10% transient-failure abort usually fires long before this).
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
