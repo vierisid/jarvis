@@ -136,6 +136,9 @@ Usage:
 	go func() {
 		<-sigCh
 		log.Println("\n[sidecar] Shutting down...")
+		// The browser runs in its own process group (Setpgid), so terminal
+		// signals no longer reach it — close it explicitly or it outlives us.
+		closeActiveCDP()
 		client.Stop()
 		cancel()
 	}()

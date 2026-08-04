@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"syscall"
@@ -62,7 +63,9 @@ func startBrowserPipe(exe string, args []string) (*browserProc, error) {
 			// closeActiveCDP rely on the browser being GONE when this
 			// returns — the parity test's profile TempDir is removed right
 			// after, and a still-dying Chrome racing that removal is a
-			// "directory not empty" flake.
+			// "directory not empty" flake. On timeout the waiter goroutine
+			// lingers until the process is eventually reaped (one bounded
+			// goroutine per launch).
 			done := make(chan struct{})
 			go func() {
 				cmd.Wait()
@@ -71,6 +74,7 @@ func startBrowserPipe(exe string, args []string) (*browserProc, error) {
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
+				log.Printf("[browser] kill: process %d not reaped after 5s; proceeding anyway", proc.Pid)
 			}
 		},
 	}, nil
