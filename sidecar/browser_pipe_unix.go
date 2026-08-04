@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 // startBrowserPipe launches the browser with its CDP pipe wired to inherited
@@ -27,6 +29,10 @@ func startBrowserPipe(exe string, args []string) (*browserProc, error) {
 
 	cmd := exec.Command(exe, args...)
 	cmd.ExtraFiles = []*os.File{cmdR, respW} // -> fd 3, fd 4
+	// Own process group so kill() can take out the whole browser tree:
+	// SIGKILL to the main process alone leaves renderer/GPU/crashpad
+	// children running, still writing to the profile dir.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		cmdR.Close()
@@ -45,9 +51,26 @@ func startBrowserPipe(exe string, args []string) (*browserProc, error) {
 		write: cmdW,
 		read:  respR,
 		kill: func() {
-			if proc != nil {
-				proc.Kill()
-				go cmd.Wait() // reap
+			if proc == nil {
+				return
+			}
+			// Group kill first (negative pid), then the direct kill as a
+			// fallback in case the group signal failed.
+			syscall.Kill(-proc.Pid, syscall.SIGKILL)
+			proc.Kill()
+			// Block until the process is reaped (bounded): callers like
+			// closeActiveCDP rely on the browser being GONE when this
+			// returns — the parity test's profile TempDir is removed right
+			// after, and a still-dying Chrome racing that removal is a
+			// "directory not empty" flake.
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
 			}
 		},
 	}, nil
