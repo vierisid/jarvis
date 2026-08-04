@@ -165,6 +165,28 @@ function ensureDataDir(dataDir: string): void {
 /**
  * Log timestamp helper
  */
+/**
+ * Warm-engine idle TTL: JARVIS_ENGINE_IDLE_TTL_MS env var wins over the
+ * `workflows.engineIdleTtlMs` setting — `workflows` is a USER-owned config
+ * section, so managed hosts can't reach it through the system config file;
+ * the env var lets them tune the fleet from the unit file. Non-positive or
+ * non-numeric values fall back to the runtime default (5 min) with a warn:
+ * 0 would mean "never evict the ~100MB engine", the opposite of what a
+ * host lowering the TTL wants.
+ */
+function resolveEngineIdleTtlMs(configured: number | undefined): number | undefined {
+  const envRaw = process.env['JARVIS_ENGINE_IDLE_TTL_MS'];
+  const raw = envRaw !== undefined ? Number(envRaw) : configured;
+  if (raw === undefined) return undefined;
+  if (!Number.isFinite(raw) || raw <= 0) {
+    console.warn(
+      `[Daemon] Ignoring engine idle TTL ${JSON.stringify(envRaw ?? configured)} (${envRaw !== undefined ? 'JARVIS_ENGINE_IDLE_TTL_MS' : 'workflows.engineIdleTtlMs'}): must be a positive number of ms; using default`,
+    );
+    return undefined;
+  }
+  return raw;
+}
+
 function logWithTimestamp(message: string): void {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${message}`);
@@ -4063,7 +4085,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           },
         },
         log: (line) => console.log(`[Daemon] ${line}`),
-        engineIdleTtlMs: jarvisConfig.workflows?.engineIdleTtlMs,
+        engineIdleTtlMs: resolveEngineIdleTtlMs(jarvisConfig.workflows?.engineIdleTtlMs),
       });
       workflowEngineShutdown = engineBoot.shutdown;
       logWithTimestamp(

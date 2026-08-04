@@ -21,9 +21,9 @@ import type {
 } from './types.ts';
 import type { RPCRequest, RPCTimeouts, SidecarEvent, RPCResultPayload, RPCErrorPayload, RPCProgressPayload } from './protocol.ts';
 import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
-import { EventScheduler } from './scheduler.ts';
+import { EventScheduler, type DroppedEventsStats } from './scheduler.ts';
 import { RPCTracker } from './rpc.ts';
-import { BinarySpool } from './binary-spool.ts';
+import { BinarySpool, type BinarySpoolStats } from './binary-spool.ts';
 import { SidecarConnection } from './connection.ts';
 import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
@@ -114,6 +114,14 @@ export class SidecarManager implements Service {
     this.scheduler = new EventScheduler();
     this.rpcTracker = new RPCTracker();
     this.binarySpool = new BinarySpool(dataDir);
+  }
+
+  /**
+   * Event-pressure counters: queue-overflow drops and disk-spool activity.
+   * For dashboards/health surfaces, mirroring WorkflowEventBuffer.dropped().
+   */
+  getEventStats(): { dropped: DroppedEventsStats; spool: BinarySpoolStats } {
+    return { dropped: this.scheduler.dropped(), spool: this.binarySpool.stats() };
   }
 
   /**

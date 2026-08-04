@@ -72,6 +72,46 @@ describe('EventScheduler queue bounds', () => {
     expect(seen.filter((s) => s === 'sc-b').length).toBe(5);
   });
 
+  test('rpc_result is never evicted and never dropped on overflow', () => {
+    const scheduler = new EventScheduler();
+    for (let i = 0; i < MAX_QUEUE_PER_SIDECAR; i++) {
+      scheduler.enqueue('sc-1', makeEvent('rpc_result', 'critical'));
+    }
+    // Queue is full of undroppable events: an incoming rpc_result must
+    // still be accepted (cap overflows), a plain event must be dropped.
+    scheduler.enqueue('sc-1', makeEvent('rpc_result', 'low'));
+    scheduler.enqueue('sc-1', makeEvent('sidecar_event', 'critical'));
+    const queues = (scheduler as unknown as { queues: Map<string, Array<{ event: SidecarEvent }>> }).queues;
+    const queue = queues.get('sc-1')!;
+    expect(queue.length).toBe(MAX_QUEUE_PER_SIDECAR + 1);
+    expect(queue.every((q) => q.event.event_type === 'rpc_result')).toBe(true);
+    expect(scheduler.dropped().count).toBe(1);
+  });
+
+  test('overflow evicts a droppable event, not a queued rpc_result', () => {
+    const scheduler = new EventScheduler();
+    scheduler.enqueue('sc-1', makeEvent('rpc_result', 'low'));
+    for (let i = 0; i < MAX_QUEUE_PER_SIDECAR - 1; i++) {
+      scheduler.enqueue('sc-1', makeEvent('sidecar_event', 'low'));
+    }
+    scheduler.enqueue('sc-1', makeEvent('sidecar_event', 'normal'));
+    const queues = (scheduler as unknown as { queues: Map<string, Array<{ event: SidecarEvent }>> }).queues;
+    const queue = queues.get('sc-1')!;
+    expect(queue.length).toBe(MAX_QUEUE_PER_SIDECAR);
+    expect(queue.some((q) => q.event.event_type === 'rpc_result')).toBe(true);
+  });
+
+  test('dropped() reports count, timestamp, and per-sidecar attribution', () => {
+    const scheduler = new EventScheduler();
+    for (let i = 0; i < MAX_QUEUE_PER_SIDECAR + 3; i++) {
+      scheduler.enqueue('sc-1', makeEvent());
+    }
+    const stats = scheduler.dropped();
+    expect(stats.count).toBe(3);
+    expect(stats.lastDroppedAt).toBeGreaterThan(0);
+    expect(stats.bySidecar['sc-1']).toBe(3);
+  });
+
   test('priority order is preserved with FIFO within a class', async () => {
     const scheduler = new EventScheduler();
     scheduler.enqueue('sc-1', makeEvent('n1', 'normal'));

@@ -61,12 +61,45 @@ describe('BinarySpool', () => {
     }
   });
 
-  test('missing spool file degrades to empty data instead of throwing', () => {
+  test('missing spool file degrades to null so typeof-string guards reject it', () => {
     const { spool, dataDir } = makeSpool();
     try {
       const descriptor = spool.spool(Buffer.alloc(64), 'image/png')!;
       rmSync(path.join(dataDir, 'cache', 'sidecar-spool'), { recursive: true, force: true });
-      expect(descriptor.data).toBe('');
+      expect(descriptor.data as string | null).toBeNull();
+      expect(typeof descriptor.data === 'string').toBe(false);
+      expect(spool.stats().expiredReads).toBeGreaterThan(0);
+    } finally {
+      spool.stop();
+    }
+  });
+
+  test('double read within one synchronous block hits the cache, then releases', async () => {
+    const { spool, dataDir } = makeSpool();
+    try {
+      const payload = Buffer.alloc(2048, 3);
+      const descriptor = spool.spool(payload, 'image/png')!;
+      // Same synchronous block: typeof guard + use, like real consumers
+      expect(typeof descriptor.data === 'string').toBe(true);
+      const first = descriptor.data;
+      rmSync(path.join(dataDir, 'cache', 'sidecar-spool'), { recursive: true, force: true });
+      // File is gone but the cache still serves the same block
+      expect(descriptor.data).toBe(first);
+      // After a microtask the cache is released — next read misses
+      await Promise.resolve();
+      expect(descriptor.data as string | null).toBeNull();
+    } finally {
+      spool.stop();
+    }
+  });
+
+  test('stats counts spooled payloads and bytes', () => {
+    const { spool } = makeSpool();
+    try {
+      spool.spool(Buffer.alloc(100), 'a/b');
+      spool.spool(Buffer.alloc(50), 'a/b');
+      expect(spool.stats().spooled).toBe(2);
+      expect(spool.stats().spooledBytes).toBe(150);
     } finally {
       spool.stop();
     }

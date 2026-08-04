@@ -1,6 +1,6 @@
 import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMMessage } from '../llm/provider.ts';
-import { compactHistory } from '../llm/history.ts';
+import { compactHistory, measureMessage } from '../llm/history.ts';
 
 /**
  * In-memory retention budget for an agent's message history, in estimated
@@ -11,6 +11,13 @@ import { compactHistory } from '../llm/history.ts';
  * growing without limit.
  */
 const HISTORY_RETENTION_TOKENS = 200_000;
+
+/**
+ * Compaction only runs once the running estimate exceeds this multiple of
+ * the budget, and trims back to the budget. Amortizes the O(history)
+ * compaction pass instead of paying it on every append.
+ */
+const HISTORY_COMPACT_TRIGGER = 1.1;
 
 export type AgentStatus = 'active' | 'idle' | 'terminated';
 
@@ -84,6 +91,8 @@ function mergeAuthority(
 export class AgentInstance {
   public readonly agent: Agent;
   private messageHistory: LLMMessage[];
+  /** Running measureMessage total; recomputed after each compaction. */
+  private historyTokenEstimate = 0;
 
   constructor(
     role: RoleDefinition,
@@ -135,8 +144,13 @@ export class AgentInstance {
       // request may still hold a reference to the original message object.
       this.releaseImagePayloads();
     }
-    this.messageHistory.push({ role, content });
-    this.messageHistory = compactHistory(this.messageHistory, HISTORY_RETENTION_TOKENS);
+    const message: LLMMessage = { role, content };
+    this.messageHistory.push(message);
+    this.historyTokenEstimate += measureMessage(message);
+    if (this.historyTokenEstimate > HISTORY_RETENTION_TOKENS * HISTORY_COMPACT_TRIGGER) {
+      this.messageHistory = compactHistory(this.messageHistory, HISTORY_RETENTION_TOKENS);
+      this.historyTokenEstimate = this.messageHistory.reduce((sum, m) => sum + measureMessage(m), 0);
+    }
   }
 
   private releaseImagePayloads(): void {

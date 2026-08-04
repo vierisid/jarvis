@@ -26,16 +26,44 @@ const FILE_TTL_MS = 10 * 60_000;
 export interface SpooledBinaryDescriptor {
   type: 'inline';
   mime_type: string;
-  /** Lazy getter: reads the spool file and base64-encodes on access. */
+  /**
+   * Lazy getter: reads the spool file and base64-encodes on access. If the
+   * file is gone (TTL sweep, manager restart) it yields `null` at runtime —
+   * deliberately failing consumers' `typeof data === 'string'` guards so
+   * they take their missing-binary path rather than serving a payload that
+   * decodes to zero bytes. Declared `string` to match BinaryDataInline.
+   */
   data: string;
+}
+
+/** Counters for observability — see BinarySpool.stats(). */
+export interface BinarySpoolStats {
+  /** Payloads written to disk since start(). */
+  spooled: number;
+  /** Total raw bytes written since start(). */
+  spooledBytes: number;
+  /** Accesses that found the spool file already deleted. */
+  expiredReads: number;
 }
 
 export class BinarySpool {
   private readonly dir: string;
   private sweepTimer: Timer | null = null;
+  private spooledCount = 0;
+  private spooledBytes = 0;
+  private expiredReads = 0;
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, 'cache', 'sidecar-spool');
+  }
+
+  /** Counters since start(). Not persisted; resets on construction. */
+  stats(): BinarySpoolStats {
+    return {
+      spooled: this.spooledCount,
+      spooledBytes: this.spooledBytes,
+      expiredReads: this.expiredReads,
+    };
   }
 
   /** Wipe leftovers from a previous run and start the TTL sweep. */
@@ -66,18 +94,31 @@ export class BinarySpool {
       console.warn('[BinarySpool] Write failed, keeping payload in memory:', err);
       return null;
     }
+    this.spooledCount++;
+    this.spooledBytes += payload.length;
 
+    // Consumers read `data` twice in one synchronous block (a typeof guard,
+    // then the actual use). Cache the encoded string across those reads and
+    // release it on the next microtask, so a 50MB capture is read+encoded
+    // once per consumption without pinning ~66MB for the descriptor's
+    // (potentially long) lifetime.
+    let cached: string | null = null;
+    const spoolRef = this;
     const descriptor = { type: 'inline', mime_type: mimeType } as SpooledBinaryDescriptor;
     Object.defineProperty(descriptor, 'data', {
       enumerable: true,
       configurable: true,
-      get(): string {
+      get(): string | null {
+        if (cached !== null) return cached;
         try {
-          return readFileSync(filePath).toString('base64');
+          cached = readFileSync(filePath).toString('base64');
         } catch (err) {
+          spoolRef.expiredReads++;
           console.warn(`[BinarySpool] Spool file gone (TTL ${FILE_TTL_MS}ms exceeded?):`, err);
-          return '';
+          return null;
         }
+        queueMicrotask(() => { cached = null; });
+        return cached;
       },
     });
     return descriptor;

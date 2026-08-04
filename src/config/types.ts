@@ -183,7 +183,10 @@ export type WorkflowConfig = {
   /**
    * How long an idle warm engine subprocess stays parked before being
    * killed, in ms. The parked engine holds ~100MB RSS; hosts that prefer
-   * RAM over the respawn cost can lower this. Default 5 minutes.
+   * RAM over the respawn cost can lower this. Default 5 minutes. Must be
+   * positive — non-positive values are ignored with a warning. The
+   * JARVIS_ENGINE_IDLE_TTL_MS env var overrides this setting (workflows is
+   * a user-owned section, so fleet operators tune via env instead).
    */
   engineIdleTtlMs?: number;
 };

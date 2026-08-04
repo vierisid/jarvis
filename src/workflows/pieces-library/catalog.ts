@@ -140,7 +140,8 @@ export function findCatalogEntry(id: string): CatalogEntry | null {
 /**
  * Stable map keyed by id, useful in callers that look up entries repeatedly
  * (the API route handlers, the reconciler). Memoized -- CATALOG is immutable
- * after module load, so one Map serves every caller.
+ * after module load, so one Map serves every caller. Do not mutate the
+ * returned Map; it is shared.
  */
 let catalogByIdCache: Map<string, CatalogEntry> | null = null;
 export function catalogById(): Map<string, CatalogEntry> {

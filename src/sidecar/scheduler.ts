@@ -31,6 +31,27 @@ export const MAX_QUEUE_PER_SIDECAR = 500;
  */
 const DRAIN_BATCH_PER_TICK = 10;
 
+/**
+ * Event types the drop policy must never evict: an RPC caller is awaiting
+ * these, and dropping one converts a deliverable result into an opaque
+ * timeout. When the queue is full of undroppable events the cap is allowed
+ * to overflow — pending-RPC tracking bounds how many can exist at once.
+ */
+const UNDROPPABLE_TYPES = new Set(['rpc_result', 'rpc_progress']);
+
+/** Minimum interval between queue-overflow warn lines, per sidecar. */
+const DROP_LOG_INTERVAL_MS = 5_000;
+
+/** Drop counters for observability (mirrors WorkflowEventBuffer.dropped()). */
+export interface DroppedEventsStats {
+  /** Total events dropped by the overflow policy since construction. */
+  count: number;
+  /** Timestamp (ms) of the most recent drop. 0 when nothing was dropped. */
+  lastDroppedAt: number;
+  /** Per-sidecar drop counts. */
+  bySidecar: Record<string, number>;
+}
+
 export class EventScheduler {
   private queues = new Map<string, QueuedEvent[]>();
   private sidecarIds: string[] = [];
@@ -41,6 +62,11 @@ export class EventScheduler {
   private processing = false;
   private drainTimer: Timer | null = null;
   private readonly drainIntervalMs: number;
+  private droppedCount = 0;
+  private droppedLastAt = 0;
+  private droppedBySidecar = new Map<string, number>();
+  private dropLogLastAt = new Map<string, number>();
+  private dropLogSuppressed = new Map<string, number>();
 
   constructor(drainIntervalMs = 50) {
     this.drainIntervalMs = drainIntervalMs;
@@ -102,18 +128,31 @@ export class EventScheduler {
     const weight = priorityWeight(item.priority);
 
     if (queue.length >= MAX_QUEUE_PER_SIDECAR) {
-      // Tail of the (priority-sorted) queue is the lowest priority present.
-      const tailWeight = priorityWeight(queue[queue.length - 1]!.priority);
-      if (weight > tailWeight) {
-        // Incoming is lower priority than everything queued — drop it.
-        console.warn(`[EventScheduler] Queue full for ${sidecarId}, dropping incoming ${item.priority} ${event.event_type}`);
-        return;
+      // Candidates for eviction exclude RPC events — a caller awaits those.
+      const droppable = queue.filter((q) => !UNDROPPABLE_TYPES.has(q.event.event_type));
+      if (droppable.length === 0) {
+        // Queue is entirely undroppable: let the cap overflow rather than
+        // lose an awaited result. Pending-RPC tracking bounds this.
+        if (!UNDROPPABLE_TYPES.has(event.event_type)) {
+          this.recordDrop(sidecarId, item.priority, event.event_type, 'incoming');
+          return;
+        }
+      } else {
+        // Tail of the (priority-sorted) droppable set is the lowest
+        // priority present.
+        const tailWeight = priorityWeight(droppable[droppable.length - 1]!.priority);
+        if (weight > tailWeight && !UNDROPPABLE_TYPES.has(event.event_type)) {
+          // Incoming is lower priority than everything evictable — drop it.
+          this.recordDrop(sidecarId, item.priority, event.event_type, 'incoming');
+          return;
+        }
+        // Drop the oldest droppable event of the lowest priority class
+        // (stale data — e.g. an old capture — is worth less than what just
+        // arrived).
+        const victim = droppable.find((q) => priorityWeight(q.priority) === tailWeight)!;
+        queue.splice(queue.indexOf(victim), 1);
+        this.recordDrop(sidecarId, victim.priority, victim.event.event_type, 'queued');
       }
-      // Drop the oldest event of the lowest priority class (stale data —
-      // e.g. an old capture — is worth less than what just arrived).
-      const dropIdx = queue.findIndex((q) => priorityWeight(q.priority) === tailWeight);
-      const dropped = queue.splice(dropIdx, 1)[0]!;
-      console.warn(`[EventScheduler] Queue full for ${sidecarId}, dropped ${dropped.priority} ${dropped.event.event_type}`);
     }
 
     // Insert in priority order, after existing items of the same priority
@@ -126,8 +165,46 @@ export class EventScheduler {
     queue.splice(insertAt, 0, item);
   }
 
+  /** Drop counters since construction. Not persisted. */
+  dropped(): DroppedEventsStats {
+    return {
+      count: this.droppedCount,
+      lastDroppedAt: this.droppedLastAt,
+      bySidecar: Object.fromEntries(this.droppedBySidecar),
+    };
+  }
+
+  private recordDrop(
+    sidecarId: string,
+    priority: EventPriority,
+    eventType: string,
+    which: 'incoming' | 'queued',
+  ): void {
+    this.droppedCount++;
+    this.droppedLastAt = Date.now();
+    this.droppedBySidecar.set(sidecarId, (this.droppedBySidecar.get(sidecarId) ?? 0) + 1);
+
+    // Rate-limit the log: an overflow burst is hundreds of drops per second,
+    // and one warn per drop would flood the journal.
+    const now = Date.now();
+    const lastLog = this.dropLogLastAt.get(sidecarId) ?? 0;
+    if (now - lastLog < DROP_LOG_INTERVAL_MS) {
+      this.dropLogSuppressed.set(sidecarId, (this.dropLogSuppressed.get(sidecarId) ?? 0) + 1);
+      return;
+    }
+    const suppressed = this.dropLogSuppressed.get(sidecarId) ?? 0;
+    this.dropLogLastAt.set(sidecarId, now);
+    this.dropLogSuppressed.set(sidecarId, 0);
+    const suffix = suppressed > 0 ? ` (+${suppressed} more since last log)` : '';
+    console.warn(
+      `[EventScheduler] Queue full for ${sidecarId}, dropped ${which} ${priority} ${eventType}${suffix}`,
+    );
+  }
+
   /** Remove a sidecar's queue (on disconnect) */
   removeSidecar(sidecarId: string): void {
+    this.dropLogLastAt.delete(sidecarId);
+    this.dropLogSuppressed.delete(sidecarId);
     this.queues.delete(sidecarId);
     this.sidecarIds = this.sidecarIds.filter(id => id !== sidecarId);
     if (this.roundRobinIndex >= this.sidecarIds.length) {

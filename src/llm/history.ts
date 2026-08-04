@@ -126,8 +126,10 @@ function chunkMessages(messages: LLMMessage[]): LLMMessage[][] {
 /**
  * Estimate token count for a message (rough heuristic).
  * 1 token ≈ 4 characters + fixed overhead per message
+ * Exported so history holders (AgentInstance) can keep a running total
+ * with the same arithmetic compactHistory uses to enforce its budget.
  */
-function measureMessage(message: LLMMessage): number {
+export function measureMessage(message: LLMMessage): number {
   const contentStr = typeof message.content === 'string'
     ? message.content
     : message.content.map(b => b.type === 'text' ? b.text : '[image]').join('\n');
