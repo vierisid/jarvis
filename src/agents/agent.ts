@@ -1,5 +1,16 @@
 import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMMessage } from '../llm/provider.ts';
+import { compactHistory } from '../llm/history.ts';
+
+/**
+ * In-memory retention budget for an agent's message history, in estimated
+ * tokens. Matches the largest request-time compaction budget (Anthropic,
+ * 200k context) so this bound never drops context a provider could still
+ * send — request-time compactHistory stays the binding constraint for what
+ * goes on the wire; this one only stops the daemon-lifetime array from
+ * growing without limit.
+ */
+const HISTORY_RETENTION_TOKENS = 200_000;
 
 export type AgentStatus = 'active' | 'idle' | 'terminated';
 
@@ -117,7 +128,31 @@ export class AgentInstance {
   }
 
   addMessage(role: 'user' | 'assistant' | 'system', content: string | import('../llm/provider.ts').ContentBlock[]): void {
+    if (role === 'assistant') {
+      // An assistant message closes the turn: any image the LLM needed this
+      // turn has been sent, so stop pinning its base64 payload (up to 5MB
+      // each) in the heap. Entries are replaced, not mutated — an in-flight
+      // request may still hold a reference to the original message object.
+      this.releaseImagePayloads();
+    }
     this.messageHistory.push({ role, content });
+    this.messageHistory = compactHistory(this.messageHistory, HISTORY_RETENTION_TOKENS);
+  }
+
+  private releaseImagePayloads(): void {
+    for (let i = 0; i < this.messageHistory.length; i++) {
+      const entry = this.messageHistory[i]!;
+      if (typeof entry.content === 'string') continue;
+      if (!entry.content.some((b) => b.type === 'image')) continue;
+      this.messageHistory[i] = {
+        ...entry,
+        content: entry.content.map((b) =>
+          b.type === 'image'
+            ? { type: 'text' as const, text: '[screenshot from an earlier turn — no longer available]' }
+            : b
+        ),
+      };
+    }
   }
 
   getMessages(): LLMMessage[] {
