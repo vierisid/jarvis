@@ -93,6 +93,17 @@ describe('BinarySpool', () => {
     }
   });
 
+  test('write failure returns null so the caller keeps the payload inline', () => {
+    const { spool, dataDir } = makeSpool();
+    try {
+      rmSync(path.join(dataDir, 'cache', 'sidecar-spool'), { recursive: true, force: true });
+      expect(spool.spool(Buffer.alloc(64), 'image/png')).toBeNull();
+      expect(spool.stats().spooled).toBe(0);
+    } finally {
+      spool.stop();
+    }
+  });
+
   test('stats counts spooled payloads and bytes', () => {
     const { spool } = makeSpool();
     try {

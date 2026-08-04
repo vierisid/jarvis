@@ -14,6 +14,7 @@ import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
+import { resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
@@ -165,28 +166,6 @@ function ensureDataDir(dataDir: string): void {
 /**
  * Log timestamp helper
  */
-/**
- * Warm-engine idle TTL: JARVIS_ENGINE_IDLE_TTL_MS env var wins over the
- * `workflows.engineIdleTtlMs` setting — `workflows` is a USER-owned config
- * section, so managed hosts can't reach it through the system config file;
- * the env var lets them tune the fleet from the unit file. Non-positive or
- * non-numeric values fall back to the runtime default (5 min) with a warn:
- * 0 would mean "never evict the ~100MB engine", the opposite of what a
- * host lowering the TTL wants.
- */
-function resolveEngineIdleTtlMs(configured: number | undefined): number | undefined {
-  const envRaw = process.env['JARVIS_ENGINE_IDLE_TTL_MS'];
-  const raw = envRaw !== undefined ? Number(envRaw) : configured;
-  if (raw === undefined) return undefined;
-  if (!Number.isFinite(raw) || raw <= 0) {
-    console.warn(
-      `[Daemon] Ignoring engine idle TTL ${JSON.stringify(envRaw ?? configured)} (${envRaw !== undefined ? 'JARVIS_ENGINE_IDLE_TTL_MS' : 'workflows.engineIdleTtlMs'}): must be a positive number of ms; using default`,
-    );
-    return undefined;
-  }
-  return raw;
-}
-
 function logWithTimestamp(message: string): void {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${message}`);
@@ -840,7 +819,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (n === 1 || n % 125 === 0) console.log(`[pebble-realtime] mic frames (audio channel) from ${sidecarId}: ${n}`);
         pebbleRealtime.pushMicChunk(sidecarId, frame);
       });
-      sidecarManager.onSidecarDisconnected((sidecarId) => pebbleRealtime.stop(sidecarId));
+      sidecarManager.onSidecarDisconnected((sidecarId) => {
+        pebbleRealtime.stop(sidecarId);
+        // Per-sidecar transient state — drop with the connection so the maps
+        // stay bounded by connected sidecars, not lifetime-distinct ones.
+        clearListenTimer(sidecarId);
+        lastTrayState.delete(sidecarId);
+        pebbleMicFrames.delete(sidecarId);
+      });
 
       // STT + TTS providers for the pebble's voice loop. Both built from
       // the same jarvisConfig.* the dashboard uses so API keys / provider

@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig, validateVoicePatch } from './config-merge.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig, validateVoicePatch, resolveEngineIdleTtlMs } from './config-merge.ts';
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 describe('mergeSTTConfig', () => {
@@ -227,5 +227,29 @@ describe('validateVoicePatch', () => {
   test('rejects wrong-typed enabled / realtime', () => {
     expect(validateVoicePatch({ realtime: { enabled: 'yes' } }).ok).toBe(false);
     expect(validateVoicePatch({ realtime: 'nope' }).ok).toBe(false);
+  });
+});
+
+describe('resolveEngineIdleTtlMs', () => {
+  test('env var wins over configured value', () => {
+    expect(resolveEngineIdleTtlMs(60_000, { JARVIS_ENGINE_IDLE_TTL_MS: '30000' })).toBe(30_000);
+  });
+
+  test('falls back to configured value without env', () => {
+    expect(resolveEngineIdleTtlMs(60_000, {})).toBe(60_000);
+  });
+
+  test('undefined everywhere yields undefined (runtime default)', () => {
+    expect(resolveEngineIdleTtlMs(undefined, {})).toBeUndefined();
+  });
+
+  test('rejects zero and negative values (0 would disable eviction)', () => {
+    expect(resolveEngineIdleTtlMs(0, {})).toBeUndefined();
+    expect(resolveEngineIdleTtlMs(-5, {})).toBeUndefined();
+    expect(resolveEngineIdleTtlMs(60_000, { JARVIS_ENGINE_IDLE_TTL_MS: '0' })).toBeUndefined();
+  });
+
+  test('rejects non-numeric env values', () => {
+    expect(resolveEngineIdleTtlMs(60_000, { JARVIS_ENGINE_IDLE_TTL_MS: 'fast' })).toBeUndefined();
   });
 });

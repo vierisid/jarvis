@@ -35,9 +35,15 @@ export type StruggleAnalysis = {
 type Snapshot = {
   timestamp: number;
   ocrHash: string;
-  ocrText: string;
   appName: string;
   outputHash: string; // hash of bottom 500 chars (terminal/compiler output area)
+  /**
+   * Edit distance to the immediately preceding capture, computed at push
+   * time. Stored so raw OCR text (easily tens of KB per capture) doesn't
+   * have to stay resident for the low-progress signal — only the newest
+   * capture's text is kept, in `lastOcrText`.
+   */
+  distFromPrev: number;
 };
 
 // ── Constants ──
@@ -67,6 +73,8 @@ const PUZZLE_INDICATORS = /\b(score|level|moves|timer|puzzle|sudoku|wordle|cross
 
 export class StruggleDetector {
   private snapshots: Snapshot[] = [];
+  /** Raw OCR text of the newest capture only — see Snapshot.distFromPrev. */
+  private lastOcrText: string | null = null;
   private lastStruggleEmitAt = 0;
   private struggleStartedAt: number | null = null;
   private graceMs: number;
@@ -85,7 +93,9 @@ export class StruggleDetector {
     const ocrHash = simpleHash(ocrText);
     const outputHash = simpleHash(ocrText.slice(-500));
 
-    this.snapshots.push({ timestamp, ocrHash, ocrText, appName, outputHash });
+    const distFromPrev = this.lastOcrText !== null ? cheapEditDistance(this.lastOcrText, ocrText) : 0;
+    this.snapshots.push({ timestamp, ocrHash, appName, outputHash, distFromPrev });
+    this.lastOcrText = ocrText;
 
     // Evict old entries
     const cutoff = timestamp - WINDOW_MS;
@@ -183,6 +193,7 @@ export class StruggleDetector {
    */
   reset(): void {
     this.snapshots = [];
+    this.lastOcrText = null;
     this.struggleStartedAt = null;
   }
 
@@ -285,12 +296,10 @@ export class StruggleDetector {
     let totalDist = 0;
     let comparisons = 0;
 
+    // Starting at 1 skips snapshots[0].distFromPrev, whose counterpart
+    // capture has been evicted — same pairs the old full-text diff compared.
     for (let i = 1; i < this.snapshots.length; i++) {
-      const dist = cheapEditDistance(
-        this.snapshots[i - 1]!.ocrText,
-        this.snapshots[i]!.ocrText
-      );
-      totalDist += dist;
+      totalDist += this.snapshots[i]!.distFromPrev;
       comparisons++;
     }
 
