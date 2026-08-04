@@ -109,6 +109,16 @@ const hostedShellHTML = `<!doctype html>
     document.getElementById('reopen').style.display = 'none';
     document.getElementById('url').style.display = 'none';
   };
+  window.__setSelfHostHint = function () {
+    document.getElementById('drop').className = 'bdrop';
+    document.getElementById('phase').textContent = 'Manual setup';
+    document.getElementById('status').textContent =
+      'usejarvis is not reachable from this machine. Use the "Paste your enrollment token" link below to connect this device.';
+    document.getElementById('err').textContent = '';
+    document.getElementById('retry').style.display = 'none';
+    document.getElementById('reopen').style.display = 'none';
+    document.getElementById('url').style.display = 'none';
+  };
   window.__browserOpened = function (ok, url) {
     document.getElementById('drop').className = ok ? 'bdrop s-think' : 'bdrop';
     document.getElementById('phase').textContent = ok ? 'Waiting for sign-in' : 'Open the link below';
@@ -130,6 +140,13 @@ const hostedShellHTML = `<!doctype html>
 func hostedShellWithError(msg string) string {
 	boot := "window.__setError('" + jsEscape(msg) + "');"
 	return strings.Replace(hostedShellHTML, "/*__BOOT__*/", boot, 1)
+}
+
+// hostedShellWithSelfHostHint renders the shell pointing the user at the
+// footer's paste-a-token link instead of an error: shown when the hosted
+// origin doesn't resolve at all (likely a self-hosted / offline machine).
+func hostedShellWithSelfHostHint() string {
+	return strings.Replace(hostedShellHTML, "/*__BOOT__*/", "window.__setSelfHostHint();", 1)
 }
 
 // runFirstRunWindow drives the no-token first run: hosted connect by default,
@@ -284,6 +301,15 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 					w.SetHtml(hostedShellWithError(text))
 				})
 			}
+			showSelfHostHint := func() {
+				w.Dispatch(func() {
+					if ctx.Err() != nil {
+						return
+					}
+					connectURL = "" // the nonce died with the handshake
+					w.SetHtml(hostedShellWithSelfHostHint())
+				})
+			}
 
 			nonce, err := generateHandshakeNonce()
 			if err != nil {
@@ -297,6 +323,13 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 					return
 				}
 				log.Printf("[hosted] handshake register failed: %v", err)
+				if isNoSuchHostErr(err) {
+					// The hosted origin doesn't resolve at all — almost
+					// certainly a self-hosted/offline machine, not a blip.
+					// Point at the paste-a-token link instead of erroring.
+					showSelfHostHint()
+					return
+				}
 				showShellError("Could not reach usejarvis. Check your connection and try again.")
 				return
 			}

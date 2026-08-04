@@ -78,7 +78,7 @@ silently downgrade to sending tokens in the clear.
 
 ### First-time setup escape hatch
 
-Enrollment normally happens from a working dashboard or the CLI. If you are
+Enrollment normally happens from the CLI (`jarvis enroll`). If you are
 setting up without a sidecar and need the dashboard open before any device
 exists, `config.yaml` accepts:
 

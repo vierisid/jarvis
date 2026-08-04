@@ -214,7 +214,7 @@ func (c *SidecarClient) Start(ctx context.Context) {
 			c.alertOnce.Do(func() {
 				platformShowAlert("JARVIS Sidecar",
 					"This machine's enrollment token is not valid — the brain rejected it.\n\n"+
-						"Re-enroll the sidecar from the dashboard, update the token in the config, then restart.")
+						"Re-enroll it by running 'jarvis enroll \"<device-name>\"' on the brain machine, update the token in the config, then restart.")
 			})
 			<-ctx.Done()
 			return

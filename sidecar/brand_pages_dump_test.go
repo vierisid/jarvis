@@ -23,11 +23,12 @@ func TestDumpBrandPages(t *testing.T) {
 		"hosted.html": hostedShellHTML,
 		"hosted-browser.html": strings.Replace(hostedShellHTML, "/*__BOOT__*/",
 			"window.__browserOpened(true, '"+demoURL+"');", 1),
-		"hosted-err.html": hostedShellWithError("Could not reach usejarvis. Check your connection and try again."),
-		"setup.html":      setupWindowHTML,
-		"account.html":    accountShellHTML,
-		"settings.html":   settingsWindowHTML,
-		"logs.html":       logViewerHTML,
+		"hosted-err.html":           hostedShellWithError("Could not reach usejarvis. Check your connection and try again."),
+		"hosted-selfhost-hint.html": hostedShellWithSelfHostHint(),
+		"setup.html":                setupWindowHTML,
+		"account.html":              accountShellHTML,
+		"settings.html":             settingsWindowHTML,
+		"logs.html":                 logViewerHTML,
 	}
 	for name, html := range pages {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(html), 0644); err != nil {

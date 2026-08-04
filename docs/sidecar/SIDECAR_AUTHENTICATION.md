@@ -82,11 +82,25 @@ Asymmetric signing (ES256) allows sidecars to **verify** that a token was genuin
 
 ## Enrollment Flow
 
-### Step 1: User Initiates Enrollment (Dashboard)
+### Step 1: User Initiates Enrollment (CLI)
 
-On the Jarvis dashboard, the user clicks **"Add Sidecar"** and provides:
+On the machine running the brain, the user runs:
 
-- **Sidecar name** — a human-readable identifier (e.g., `home-desktop`, `work-laptop`)
+```
+jarvis enroll "<device-name>"
+```
+
+- **`<device-name>`** — a human-readable identifier (e.g., `home-desktop`, `work-laptop`). Enrolling an existing name re-mints its token (upsert); add `--rotate` to also invalidate all previously issued tokens for that device.
+
+The CLI opens the database directly, so it works without a running daemon — including over SSH. Related commands:
+
+```
+jarvis enroll "<name>" [--json] [--rotate]   # mint (or re-mint) a device token
+jarvis sidecars list [--json]                # list enrolled devices
+jarvis revoke <sid>                          # revoke a device
+```
+
+(An authenticated `POST /api/sidecars/enroll` endpoint also exists for programmatic use, but the CLI is the normal path.)
 
 ### Step 2: Brain Generates JWT
 
@@ -114,7 +128,7 @@ The brain creates a signed JWT containing:
 | `jwks` | URL to fetch the brain's public key for token verification |
 | `iat`  | Issued-at timestamp                                      |
 
-**Note:** There is no `exp` (expiration) claim. Tokens are long-lived and revoked explicitly via the dashboard.
+**Note:** There is no `exp` (expiration) claim. Tokens are long-lived and revoked explicitly (`jarvis revoke <sid>`).
 
 The `brain` and `jwks` claims are operational, not informational:
 
@@ -125,7 +139,7 @@ If those claims point at the wrong domain, an old ingress, or a host unreachable
 
 ### Step 3: User Copies Token to Sidecar
 
-The dashboard displays the JWT as a copyable string. The user pastes it into the sidecar process configuration (e.g., `~/.jarvis-sidecar/config.yaml`).
+`jarvis enroll` prints the JWT to the terminal. The user pastes it into the sidecar's token form (the desktop app asks for it on first run; it is also accepted in Settings), which stores it in the sidecar configuration at `~/.jarvis/sidecar.yaml`.
 
 ### Step 4: Sidecar Verifies Token
 
@@ -170,10 +184,10 @@ The brain:
 
 ## Token Revocation
 
-Tokens can be revoked from the dashboard by deleting the sidecar. The brain maintains a registry of enrolled sidecars in the database. When a sidecar is deleted:
+Tokens are revoked by deleting the sidecar with `jarvis revoke <sid>` (find the `sid` with `jarvis sidecars list`). The brain maintains a registry of enrolled sidecars in the database. When a sidecar is deleted:
 
 - Its record is removed from the registry
-- Any active WebSocket connection is terminated
+- Any active WebSocket connection is terminated (a running daemon sweeps and severs live sessions of revoked devices within ~30 seconds; new connections and token mints are rejected immediately)
 - The JWT token becomes invalid (the `sid` is no longer recognized), even though the signature still verifies
 
 ## JWKS Endpoint
@@ -206,7 +220,7 @@ This endpoint requires no authentication — public keys are safe to expose.
 Symptoms:
 
 - the JWT payload shows `brain` or `jwks` pointing at `localhost`, an outdated hostname, or an internal-only address
-- enrollment looked fine in the dashboard, but the sidecar is on another machine
+- enrollment looked fine on the brain machine, but the sidecar is on another machine (`jarvis enroll` warns when the token falls back to `localhost:<port>`)
 
 Fix:
 
@@ -250,7 +264,7 @@ Fix:
 
 ## Security Considerations
 
-1. **Token transport:** The JWT is displayed once on the dashboard and must be securely transferred to the sidecar machine by the user. Treat it like a password.
+1. **Token transport:** The JWT is printed to the terminal by `jarvis enroll` and must be securely transferred to the sidecar machine by the user. Treat it like a password.
 2. **TLS required:** Both the JWKS fetch and the WebSocket connection must use HTTPS/WSS in production.
 3. **No expiration:** Tokens don't expire. Revocation is handled by removing the sidecar from the brain's registry.
 4. **Single key pair:** One ES256 key pair signs all sidecar tokens. Rotation requires re-enrollment of all sidecars.

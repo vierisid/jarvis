@@ -69,7 +69,7 @@ func (c *SidecarClient) runSettingsWindow() {
 				return fmt.Errorf("Paste a token to save.")
 			}
 			if _, err := DecodeJWTPayload(raw); err != nil {
-				return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
+				return fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'.")
 			}
 			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
 				return fmt.Errorf("Could not save the token: %v", err)

@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -256,5 +259,32 @@ func TestHostedShellWithErrorBakesTheMessageIn(t *testing.T) {
 	}
 	if strings.Contains(html, "/*__BOOT__*/") {
 		t.Fatal("placeholder was not replaced")
+	}
+}
+
+func TestHostedShellWithSelfHostHintBakesTheBootIn(t *testing.T) {
+	html := hostedShellWithSelfHostHint()
+	if !strings.Contains(html, "window.__setSelfHostHint();") {
+		t.Fatalf("boot script missing:\n%s", html)
+	}
+	if strings.Contains(html, "/*__BOOT__*/") {
+		t.Fatal("placeholder was not replaced")
+	}
+}
+
+func TestIsNoSuchHostErr(t *testing.T) {
+	// The wrapped shape url.Error{Op:"Post"} -> net.OpError -> net.DNSError is
+	// what hostedHTTPClient.Do returns when the hosted origin doesn't resolve.
+	dns := &net.DNSError{Err: "no such host", Name: "app.usejarvis.dev", IsNotFound: true}
+	wrapped := &url.Error{Op: "Post", URL: "https://app.usejarvis.dev/api/handshake/register",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: dns}}
+	if !isNoSuchHostErr(wrapped) {
+		t.Fatal("wrapped DNS not-found error not detected")
+	}
+	if isNoSuchHostErr(&net.DNSError{Err: "server misbehaving", Name: "app.usejarvis.dev"}) {
+		t.Fatal("transient DNS error must not count as no-such-host")
+	}
+	if isNoSuchHostErr(errors.New("connection refused")) {
+		t.Fatal("non-DNS error must not count as no-such-host")
 	}
 }

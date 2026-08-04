@@ -68,9 +68,10 @@ const setupWindowHTML = `<!doctype html>
     <div class="formbox">
       <div class="eyebrow">Self-hosted</div>
       <h1>Connect this machine to Jarvis</h1>
-      <p class="sub">Paste the enrollment token from the dashboard
-        (<b>Settings &rarr; Sidecar &rarr; Enroll</b>). It connects this sidecar to
-        your brain and authenticates it.</p>
+      <p class="sub">On the machine running your brain, run
+        <b>jarvis enroll "&lt;device-name&gt;"</b> in a terminal and paste the
+        token it prints below. It connects this sidecar to your brain and
+        authenticates it.</p>
       <label for="tok">Enrollment token</label>
       <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false" autofocus></textarea>
       <p class="hint">The token is stored locally at ~/.jarvis/sidecar.yaml. Press Cmd/Ctrl+Enter to connect.</p>

@@ -16,9 +16,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,7 +69,7 @@ func submitTokenHandler(isActive func() bool, accept func(token string)) func(st
 			return fmt.Errorf("Paste your enrollment token to continue.")
 		}
 		if _, err := DecodeJWTPayload(raw); err != nil {
-			return fmt.Errorf("That doesn't look like a valid token. Copy the full token from the dashboard.")
+			return fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'.")
 		}
 		accept(raw)
 		return nil
@@ -96,6 +98,14 @@ var hostedHTTPClient = &http.Client{Timeout: 75 * time.Second}
 // buffers instead of holding, or a simple server), wait out the remainder -
 // verified without the floor: ~2900 requests/second.
 const minPendingPollInterval = 2 * time.Second
+
+// isNoSuchHostErr reports whether err is a DNS "no such host" failure —
+// the hosted origin does not resolve from this machine (offline, or an
+// air-gapped/self-hosted network that will never see usejarvis).
+func isNoSuchHostErr(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
 
 // registerHandshake announces the nonce (+ this machine's hostname) so the
 // connect page can claim it after Clerk login.
