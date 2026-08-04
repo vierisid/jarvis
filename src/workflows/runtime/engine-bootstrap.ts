@@ -65,6 +65,11 @@ export interface BootstrapWorkflowEngineOptions {
    * will be added here.
    */
   pieceRoots?: string[];
+  /**
+   * Idle TTL for the warm engine subprocess (see EngineRuntimeOptions.
+   * poolIdleTtlMs). Default: EngineRuntime's own 5-minute default.
+   */
+  engineIdleTtlMs?: number;
 }
 
 export interface BootstrapWorkflowEngineResult {
@@ -170,6 +175,7 @@ export async function bootstrapWorkflowEngine(
     api,
     bundlePath: cached.bundlePath,
     pool: true,
+    poolIdleTtlMs: opts.engineIdleTtlMs,
     customPiecesPaths: [
       resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"),
       piecesBaseDir(),

@@ -90,7 +90,10 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   }
 
   const runtime = opts.runtime ?? process.execPath;
-  const child = spawn(runtime, [opts.bundlePath], {
+  // --smol: the engine is a short-lived-to-parked sandbox that grows to
+  // ~100MB under default JSC heap growth; the smaller-heap GC profile is the
+  // right trade for a subprocess whose CPU time is dominated by piece I/O.
+  const child = spawn(runtime, ["--smol", opts.bundlePath], {
     env,
     cwd: opts.cwd,
     stdio: ["ignore", "pipe", "pipe"],

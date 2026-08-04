@@ -180,6 +180,12 @@ export type WorkflowConfig = {
   defaultTimeoutMs: number;
   selfHealEnabled: boolean;
   autoSuggestEnabled: boolean;
+  /**
+   * How long an idle warm engine subprocess stays parked before being
+   * killed, in ms. The parked engine holds ~100MB RSS; hosts that prefer
+   * RAM over the respawn cost can lower this. Default 5 minutes.
+   */
+  engineIdleTtlMs?: number;
 };
 
 export type GoalConfig = {

@@ -4063,6 +4063,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           },
         },
         log: (line) => console.log(`[Daemon] ${line}`),
+        engineIdleTtlMs: jarvisConfig.workflows?.engineIdleTtlMs,
       });
       workflowEngineShutdown = engineBoot.shutdown;
       logWithTimestamp(
