@@ -15,7 +15,6 @@ import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
 import { TelegramAdapter } from '../comms/channels/telegram.ts';
-import { DiscordAdapter } from '../comms/channels/discord.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
@@ -101,6 +100,9 @@ export class ChannelService implements Service {
       }
 
       if (channels?.discord?.enabled && channels.discord.bot_token) {
+        // Lazy-loaded: discord.js costs ~38MB RSS, only pay it when the
+        // Discord channel is actually enabled.
+        const { DiscordAdapter } = await import('../comms/channels/discord.ts');
         const discord = new DiscordAdapter(channels.discord.bot_token, {
           sttProvider: this.sttProvider ?? undefined,
           allowedUsers: channels.discord.allowed_users,

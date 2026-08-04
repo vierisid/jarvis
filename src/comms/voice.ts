@@ -1,5 +1,4 @@
 import type { STTConfig, TTSConfig } from '../config/types.ts';
-import { Communicate } from 'edge-tts-universal';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -236,6 +235,9 @@ export class EdgeTTSProvider implements TTSProvider {
   }
 
   async synthesize(text: string): Promise<Buffer> {
+    // Lazy-loaded: edge-tts-universal costs ~27MB RSS, only pay it when
+    // Edge TTS is actually used, not on daemon boot.
+    const { Communicate } = await import('edge-tts-universal');
     const comm = new Communicate(text, {
       voice: this.voice,
       rate: this.rate,

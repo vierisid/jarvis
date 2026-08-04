@@ -25,7 +25,9 @@ export {
   type ChannelAdapter,
 } from './channels/telegram.ts';
 export { WhatsAppAdapter } from './channels/whatsapp.ts';
-export { DiscordAdapter } from './channels/discord.ts';
+// DiscordAdapter is deliberately NOT re-exported here: discord.js costs
+// ~38MB RSS at import time. Import it lazily from './channels/discord.ts'
+// only when the Discord channel is enabled.
 export { SignalAdapter } from './channels/signal.ts';
 
 // Channel Manager
