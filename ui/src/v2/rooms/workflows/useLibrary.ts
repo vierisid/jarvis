@@ -35,6 +35,12 @@ export interface LibraryEntry {
   installed: {
     resolvedVersion: string;
     installedAt: number;
+    /**
+     * "user"   -- installed into ~/.jarvis/pieces by this user.
+     * "shared" -- included in the host's read-only shared catalog: usable
+     *             with no install, not uninstallable (installedAt is 0).
+     */
+    source: "user" | "shared";
   } | null;
 }
 

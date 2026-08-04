@@ -7,15 +7,60 @@
  * deps and takes a few seconds. CI opts in.
  */
 
-import { test, expect, describe } from "bun:test";
-import { existsSync, statSync } from "node:fs";
+import { test, expect, describe, afterEach } from "bun:test";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { buildEngineBundle, ENGINE_BUILD_PATHS } from "./build";
+import { buildEngineBundle, bundleHash, findCachedBundle, ENGINE_BUILD_PATHS } from "./build";
 
 describe("engine bundle build", () => {
   test("staging dir lives outside the repo", () => {
     expect(ENGINE_BUILD_PATHS.STAGING_DIR.startsWith(ENGINE_BUILD_PATHS.REPO_ROOT)).toBe(false);
     expect(ENGINE_BUILD_PATHS.BUNDLE_ROOT.startsWith(ENGINE_BUILD_PATHS.REPO_ROOT)).toBe(false);
+  });
+
+  describe("shared bundle root (JARVIS_ENGINE_CACHE_ROOT)", () => {
+    afterEach(() => {
+      delete process.env.JARVIS_ENGINE_CACHE_ROOT;
+    });
+
+    test("a prebuilt shared bundle is found WITHOUT any staging dir precondition", async () => {
+      // Multi-tenant hosting seeds the bundle read-only under the shared
+      // root; discovery must not require the per-user 47MB staging install.
+      const root = resolve(tmpdir(), `shared-engine-${Date.now()}`);
+      const hash = bundleHash();
+      const bundleDir = resolve(root, hash);
+      mkdirSync(bundleDir, { recursive: true });
+      writeFileSync(resolve(bundleDir, "main.js"), "// prebuilt");
+      try {
+        process.env.JARVIS_ENGINE_CACHE_ROOT = root;
+        const found = findCachedBundle();
+        expect(found?.hash).toBe(hash);
+        expect(found?.bundlePath).toBe(resolve(bundleDir, "main.js"));
+        // buildEngineBundle short-circuits on it too (no staging install).
+        const built = await buildEngineBundle();
+        expect(built.bundlePath).toBe(resolve(bundleDir, "main.js"));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("a shared root with no matching hash falls through to the per-user cache path", () => {
+      const root = resolve(tmpdir(), `shared-engine-miss-${Date.now()}`);
+      mkdirSync(root, { recursive: true });
+      try {
+        process.env.JARVIS_ENGINE_CACHE_ROOT = root;
+        const found = findCachedBundle();
+        // Either the developer machine has a warm per-user cache (found from
+        // BUNDLE_ROOT) or nothing at all — never a hit under the shared root.
+        if (found) {
+          expect(found.bundlePath.startsWith(root)).toBe(false);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   test("vendored engine source exists at the expected path", () => {

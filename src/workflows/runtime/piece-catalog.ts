@@ -262,18 +262,6 @@ export function discoverPieces(rootDirs: string[]): {
 }
 
 /**
- * Build a deterministic cache-invalidation key from the engine bundle and
- * every piece's compiled `dist/src/index.js`. An edit to any of those forces
- * a catalog rebuild even when the engine bundle is unchanged.
- *
- * We hash content (not mtime+size) because mtime resolution on common
- * filesystems is too coarse to detect successive writes within ~1ms (e.g.
- * dev loops where you edit and rebuild back-to-back, or tests). Reading and
- * hashing each bundle is O(bytes) but only happens at daemon startup and
- * cache-rebuild time -- the on-disk catalog cache absorbs the cost across
- * subsequent boots.
- */
-/**
  * Catalog projection schema version. Mixed into the cache key so any
  * daemon-side change to the projected `PieceCatalogEntry` shape (new
  * fields, reshaped existing fields, anything that `metadataToCatalogEntry`
@@ -306,19 +294,20 @@ export function discoverPieces(rootDirs: string[]): {
  */
 export const CATALOG_SCHEMA_VERSION = "6";
 
-export function computeCatalogCacheKey(opts: {
-  bundlePath: string;
-  pieceRoots: string[];
-}): string {
+/**
+ * GLOBAL cache invalidators only — the projection schema, the engine bundle,
+ * and the event-type registry. Per-piece source changes deliberately do NOT
+ * feed this key anymore: each cached entry carries its own content hash
+ * (`pieceContentHash`), so one changed/added piece invalidates one entry
+ * instead of the whole catalog. That is what makes a large SHARED read-only
+ * cache usable — a user installing a single community piece re-extracts that
+ * piece, not all 650+.
+ */
+export function computeCatalogCacheKey(opts: { bundlePath: string }): string {
   const h = createHash("sha256");
   h.update(`schema\0${CATALOG_SCHEMA_VERSION}\0`);
   h.update("bundle\0");
   hashFileContents(h, opts.bundlePath);
-  const { entries } = discoverPieces(opts.pieceRoots);
-  for (const e of entries) {
-    h.update(`piece\0${e.name}\0${e.version}\0`);
-    hashFileContents(h, resolve(e.dir, "dist/src/index.js"));
-  }
   // Mix in the event-type registry so adding/removing an entry in
   // `WORKFLOW_EVENT_TYPES` invalidates caches automatically. The
   // jarvis-trigger:on_event projection synthesizes its
@@ -339,6 +328,18 @@ export function computeCatalogCacheKey(opts: {
       [...WORKFLOW_EVENT_TYPES].sort((a, b) => a.type.localeCompare(b.type)),
     ),
   );
+  return h.digest("hex");
+}
+
+/**
+ * Per-piece cache validity: the compiled bundle's content hash ("absent" when
+ * there is no dist — npm-published community pieces ship src/index.js only,
+ * which degenerates the check to name@version, exactly what makes one shared
+ * cache file valid for every user of the same shared pieces tree).
+ */
+export function pieceContentHash(dir: string): string {
+  const h = createHash("sha256");
+  hashFileContents(h, resolve(dir, "dist/src/index.js"));
   return h.digest("hex");
 }
 
@@ -372,15 +373,24 @@ export interface BuildCatalogOptions {
   pieceRoots: string[];
   /**
    * Path to the on-disk cache file. When set together with `cacheKey`, the
-   * builder reads from this file if `cacheKey` matches; on miss it extracts
-   * fresh and writes back. Default: no caching.
+   * builder reuses per-piece entries whose content hash still matches and
+   * extracts only the misses, writing the result back. Default: no caching.
    */
   cacheFile?: string;
   /**
-   * Cache invalidation key -- typically `computeCatalogCacheKey({...})`.
-   * Stored alongside the cached entries; mismatch forces a rebuild.
+   * GLOBAL cache invalidation key -- `computeCatalogCacheKey({...})`
+   * (projection schema + engine bundle + event-type registry). Mismatch
+   * invalidates every entry; per-piece changes are handled per entry.
    */
   cacheKey?: string;
+  /**
+   * Additional READ-ONLY cache files consulted for entries the user's own
+   * cache doesn't satisfy (multi-tenant hosting: one prebuilt file for the
+   * shared pieces tree, generated at version-install time). Never written;
+   * entries served from here are not copied into the user's cache file, so
+   * per-user caches stay small (only the user's own installs).
+   */
+  sharedCacheFiles?: string[];
   /** projectId for the synthetic extraction sandbox. Default: DEFAULT_IDS.project. */
   projectId?: string;
   /**
@@ -406,28 +416,65 @@ export interface BuildCatalogResult {
   failures: PieceExtractionFailure[];
 }
 
+export interface CachedPieceEntry {
+  /** `pieceContentHash(dir)` at extraction time; entry valid while it matches. */
+  contentHash: string;
+  entry: PieceCatalogEntry;
+}
+
 export interface CacheFileShape {
+  /** Global invalidators (schema + bundle + event types); see computeCatalogCacheKey. */
   cacheKey: string;
-  entries: PieceCatalogEntry[];
+  /** Keyed by `${name}@${version}`. */
+  pieces: Record<string, CachedPieceEntry>;
 }
 
 /**
- * Read the cache file if `cacheKey` matches; otherwise return null. Exposed
- * separately from the full builder for tests + readability.
+ * Read a cache file's per-piece entry map if its global `cacheKey` matches;
+ * otherwise null. Pre-per-entry cache files (the old `entries[]` array shape)
+ * fail the `pieces` check and read as a full miss — a one-time re-extraction
+ * on upgrade, never a crash. Exposed separately from the full builder for
+ * tests + readability.
  */
-export function readCachedCatalog(
+export function readCachedEntries(
   cacheFile: string,
   cacheKey: string,
-): PieceCatalog | null {
+): Map<string, CachedPieceEntry> | null {
   if (!existsSync(cacheFile)) return null;
+  // Size cap: the whole file is parsed in every tenant process — a runaway
+  // producer must degrade to extraction, not to an OOM at JSON.parse.
+  try {
+    if (statSync(cacheFile).size > 256 * 1024 * 1024) return null;
+  } catch {
+    return null;
+  }
   let cached: CacheFileShape;
   try {
     cached = JSON.parse(readFileSync(cacheFile, "utf8")) as CacheFileShape;
   } catch {
     return null;
   }
-  if (cached.cacheKey !== cacheKey || !Array.isArray(cached.entries)) return null;
-  return new PieceCatalog(cached.entries);
+  if (cached.cacheKey !== cacheKey) return null;
+  if (typeof cached.pieces !== "object" || cached.pieces === null || Array.isArray(cached.pieces)) {
+    return null;
+  }
+  // Validate VALUES, not just the container: a shared cache is a root-supplied
+  // file the tenant can't repair — one null/garbage entry must drop THAT entry
+  // (degrading to extraction for that piece), never crash daemon boot.
+  const out = new Map<string, CachedPieceEntry>();
+  for (const [key, value] of Object.entries(cached.pieces)) {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      typeof (value as CachedPieceEntry).contentHash === "string" &&
+      (value as CachedPieceEntry).entry !== null &&
+      typeof (value as CachedPieceEntry).entry === "object" &&
+      typeof (value as CachedPieceEntry).entry.name === "string"
+    ) {
+      out.set(key, value as CachedPieceEntry);
+    }
+  }
+  return out;
 }
 
 /**
@@ -448,11 +495,6 @@ export async function buildPieceCatalog(
   const pieceTimeoutMs = opts.pieceTimeoutMs ?? 10_000;
   const overallTimeoutMs = opts.overallTimeoutMs ?? 60_000;
 
-  if (opts.cacheFile && opts.cacheKey) {
-    const fromCache = readCachedCatalog(opts.cacheFile, opts.cacheKey);
-    if (fromCache) return { catalog: fromCache, failures: [] };
-  }
-
   const { entries: discovered, conflicts } = discoverPieces(opts.pieceRoots);
   for (const c of conflicts) {
     reporter(
@@ -460,53 +502,97 @@ export async function buildPieceCatalog(
     );
   }
 
-  const projectId = opts.projectId ?? DEFAULT_IDS.project;
-  const runId = "metadata-extract-" + SandboxRegistry.newSandboxId();
+  // Per-entry cache lookup: the user's own cache first, then any read-only
+  // shared files. Every source is gated on the GLOBAL key (schema + bundle +
+  // event types) and each hit on the piece's own content hash.
+  const userCache =
+    opts.cacheFile && opts.cacheKey ? readCachedEntries(opts.cacheFile, opts.cacheKey) : null;
+  const sharedCaches = (opts.sharedCacheFiles ?? [])
+    .map((f) => (opts.cacheKey ? readCachedEntries(f, opts.cacheKey) : null))
+    .filter((m): m is Map<string, CachedPieceEntry> => m !== null);
 
-  const handle = await opts.runtime.acquire({ runId, projectId });
   const out: PieceCatalogEntry[] = [];
   const failures: PieceExtractionFailure[] = [];
-  const overallDeadline = Date.now() + overallTimeoutMs;
-  try {
-    for (const piece of discovered) {
-      if (Date.now() > overallDeadline) {
-        const pending = discovered.length - out.length - failures.length;
-        if (pending > 0) {
-          reporter(
-            `overall extraction deadline (${overallTimeoutMs}ms) exceeded; ${pending} piece(s) skipped`,
-          );
-          for (const skipped of discovered.slice(out.length + failures.length)) {
-            failures.push({
-              pieceName: skipped.name,
-              pieceVersion: skipped.version,
-              reason: "overall extraction deadline exceeded",
-            });
+  /** Entries the USER cache file should contain after this build (its own
+   * previous hits + fresh extractions; shared-served entries excluded so
+   * per-user files stay small). */
+  const userEntries: Record<string, CachedPieceEntry> = {};
+  const misses: Array<{ piece: PieceDiscoveryEntry; contentHash: string }> = [];
+
+  for (const piece of discovered) {
+    const key = `${piece.name}@${piece.version}`;
+    const contentHash = pieceContentHash(piece.dir);
+    const own = userCache?.get(key);
+    if (own && own.contentHash === contentHash) {
+      out.push(own.entry);
+      userEntries[key] = own;
+      continue;
+    }
+    const shared = sharedCaches
+      .map((m) => m.get(key))
+      .find((e) => e != null && e.contentHash === contentHash);
+    if (shared) {
+      out.push(shared.entry);
+      continue;
+    }
+    misses.push({ piece, contentHash });
+  }
+
+  // Full cache hit: no engine spawn at all (the common warm-boot path — and,
+  // with a prebuilt shared cache, the common FIRST-boot path too).
+  let extracted = 0;
+  if (misses.length > 0) {
+    const projectId = opts.projectId ?? DEFAULT_IDS.project;
+    const runId = "metadata-extract-" + SandboxRegistry.newSandboxId();
+
+    const handle = await opts.runtime.acquire({ runId, projectId });
+    const overallDeadline = Date.now() + overallTimeoutMs;
+    let processed = 0;
+    try {
+      for (const { piece, contentHash } of misses) {
+        if (Date.now() > overallDeadline) {
+          const pending = misses.length - processed;
+          if (pending > 0) {
+            reporter(
+              `overall extraction deadline (${overallTimeoutMs}ms) exceeded; ${pending} piece(s) skipped`,
+            );
+            for (const skipped of misses.slice(processed)) {
+              failures.push({
+                pieceName: skipped.piece.name,
+                pieceVersion: skipped.piece.version,
+                reason: "overall extraction deadline exceeded",
+              });
+            }
           }
+          break;
         }
-        break;
-      }
-      try {
-        const meta = await withTimeout(
-          handle.extractPieceMetadata({
+        processed++;
+        try {
+          const meta = await withTimeout(
+            handle.extractPieceMetadata({
+              pieceName: piece.name,
+              pieceVersion: piece.version,
+            }),
+            pieceTimeoutMs,
+            `extract ${piece.name}@${piece.version} timed out after ${pieceTimeoutMs}ms`,
+          );
+          const entry = metadataToCatalogEntry(meta);
+          out.push(entry);
+          userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
+          extracted++;
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          failures.push({
             pieceName: piece.name,
             pieceVersion: piece.version,
-          }),
-          pieceTimeoutMs,
-          `extract ${piece.name}@${piece.version} timed out after ${pieceTimeoutMs}ms`,
-        );
-        out.push(metadataToCatalogEntry(meta));
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        failures.push({
-          pieceName: piece.name,
-          pieceVersion: piece.version,
-          reason,
-        });
-        reporter(`extract ${piece.name}@${piece.version} failed: ${reason}`);
+            reason,
+          });
+          reporter(`extract ${piece.name}@${piece.version} failed: ${reason}`);
+        }
       }
+    } finally {
+      await handle.release();
     }
-  } finally {
-    await handle.release();
   }
 
   // Cache write policy: persist the successful entries even when some
@@ -516,11 +602,12 @@ export async function buildPieceCatalog(
   // one was uninstalled. The catalog endpoint already returns only
   // successes (failures are surfaced via the daemon log + audit
   // script), so persisting the partial set is strictly better than
-  // discarding it. We still skip the write when zero pieces succeeded
-  // -- there's nothing useful to cache.
-  if (opts.cacheFile && opts.cacheKey && out.length > 0) {
+  // discarding it. Written only when something was freshly extracted —
+  // a pure cache-hit boot (or a pure shared-cache boot) leaves the
+  // user's file untouched.
+  if (opts.cacheFile && opts.cacheKey && extracted > 0) {
     mkdirSync(dirname(opts.cacheFile), { recursive: true });
-    const payload: CacheFileShape = { cacheKey: opts.cacheKey, entries: out };
+    const payload: CacheFileShape = { cacheKey: opts.cacheKey, pieces: userEntries };
     writeFileSync(opts.cacheFile, JSON.stringify(payload, null, 2) + "\n");
   }
   return { catalog: new PieceCatalog(out), failures };

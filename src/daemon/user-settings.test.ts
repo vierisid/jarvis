@@ -26,6 +26,34 @@ describe('user-settings', () => {
     closeDb();
   });
 
+  test('workflows: file-provided SYSTEM path keys win over a saved user section', () => {
+    // A dashboard save of the user-tunable workflow fields (which may carry
+    // stale/absent path keys) must never strip the deployment-written
+    // artifact paths that loadConfig preserved from the FILE.
+    saveUserSection('workflows', {
+      enabled: true,
+      maxConcurrentExecutions: 2,
+      defaultRetries: 0,
+      defaultTimeoutMs: 1000,
+      selfHealEnabled: false,
+      autoSuggestEnabled: false,
+    });
+
+    const config = freshConfig();
+    (config as Record<string, unknown>)['workflows'] = {
+      engine_dir: '/opt/jarvis-engine/${version}',
+      pieces_dir: '/srv/pieces',
+      piece_metadata_cache: '/srv/piece-metadata.json',
+    };
+    mergeUserSettingsIntoConfig(config);
+
+    expect(config.workflows?.enabled).toBe(true);
+    expect(config.workflows?.maxConcurrentExecutions).toBe(2);
+    expect(config.workflows?.engine_dir).toBe('/opt/jarvis-engine/${version}');
+    expect(config.workflows?.pieces_dir).toBe('/srv/pieces');
+    expect(config.workflows?.piece_metadata_cache).toBe('/srv/piece-metadata.json');
+  });
+
   test('save -> merge round-trips a section into the config', () => {
     saveUserSection('stt', { provider: 'groq', groq: { api_key: 'gk-1' } });
     saveUserSection('active_role', 'researcher');

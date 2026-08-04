@@ -68,7 +68,20 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // process.env into the engine because that leaks secrets into a sandboxed
   // process; the engine only needs PATH / HOME / TMPDIR for child-process
   // sandboxing of CODE actions.
-  for (const key of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]) {
+  // BUN_RUNTIME_TRANSPILER_CACHE_PATH: not a secret — forwarding it lets the
+  // engine child hit the host's shared read-only transpiler cache when it
+  // parses large piece SDK files (multi-tenant hosting warms it per version).
+  // Bun is fail-open on an unreadable/unwritable cache dir, so this can never
+  // break a spawn.
+  for (const key of [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+  ]) {
     const v = process.env[key];
     if (v !== undefined) env[key] = v;
   }

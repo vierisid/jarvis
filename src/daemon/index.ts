@@ -68,6 +68,8 @@ import {
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
 import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
+import { sharedPieceVersions } from "../workflows/pieces-library/shared.ts";
+import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { apId } from "../workflows/db/ids.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
@@ -4050,6 +4052,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         "Workflow credential resolver: registered jarvis:telegram source",
       );
     }
+    // Ready-made workflow-runtime artifact paths (workflows.engine_dir /
+    // pieces_dir / piece_metadata_cache, with ${version} expansion; env vars
+    // as fallback). Resolved ONCE and passed everywhere (bootstrap, Library
+    // routes, uninstall revert) so the whole daemon agrees on the paths.
+    const sharedRuntime = resolveSharedRuntimePaths(jarvisConfig);
+    for (const w of sharedRuntime.warnings) {
+      logWithTimestamp(`[shared-runtime] WARNING: ${w}`);
+    }
     try {
       engineBoot = await bootstrapWorkflowEngine({
         services: {
@@ -4072,6 +4082,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
         log: (line) => console.log(`[Daemon] ${line}`),
         engineIdleTtlMs: resolveEngineIdleTtlMs(jarvisConfig.workflows?.engineIdleTtlMs),
+        sharedPiecesDir: sharedRuntime.piecesDir,
+        sharedCacheFile: sharedRuntime.metadataCacheFile,
+        engineCacheRoot: sharedRuntime.engineCacheRoot,
       });
       workflowEngineShutdown = engineBoot.shutdown;
       logWithTimestamp(
@@ -4129,10 +4142,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             kind: "installed" | "uninstalled";
             piece: { npmPackage: string; resolvedVersion: string };
           }) => {
-            if (event.kind === "uninstalled") {
+            // Uninstalling a piece the SHARED catalog also provides reverts
+            // to the shared copy (that's what the next restart would produce
+            // via discoverPieces, and what the Library reports as Included) —
+            // so re-extract at the shared version instead of dropping the
+            // entry and leaving the live catalog disagreeing with the
+            // Library until restart.
+            const sharedVersion =
+              event.kind === "uninstalled"
+                ? sharedPieceVersions(sharedRuntime.piecesDir).get(event.piece.npmPackage)
+                : undefined;
+            if (event.kind === "uninstalled" && sharedVersion === undefined) {
               workflowPieceCatalog.remove(event.piece.npmPackage);
               return;
             }
+            const extractVersion =
+              event.kind === "uninstalled" ? sharedVersion! : event.piece.resolvedVersion;
             // Unique runId per acquire so any future parallel installs
             // (today serialized by the API's library mutex) don't collide on
             // the engine's runId-keyed state.
@@ -4143,7 +4168,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             try {
               const meta = await handle.extractPieceMetadata({
                 pieceName: event.piece.npmPackage,
-                pieceVersion: event.piece.resolvedVersion,
+                pieceVersion: extractVersion,
               });
               workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
             } finally {
@@ -4158,6 +4183,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         triggerManager,
         credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),
+        sharedPiecesDir: sharedRuntime.piecesDir,
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
         getEventBufferDropped: () => workflowEventBuffer.dropped(),
       }),

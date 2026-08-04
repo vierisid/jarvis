@@ -71,6 +71,7 @@ import type { CredentialResolver } from "../credentials/adapter";
 import type { TriggerManager } from "../runner/triggers/manager";
 import type { PieceLookup } from "../runtime/piece-catalog";
 import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
+import { sharedPieceVersions } from "../pieces-library/shared";
 import {
   installPiece,
   readManifest,
@@ -140,6 +141,12 @@ export interface CreateWorkflowRoutesOptions {
    * picker. Without it, the catalog endpoint returns an empty list.
    */
   pieceRegistry?: PieceLookup;
+  /**
+   * Config-resolved ready-made pieces dir (workflows.pieces_dir, ${version}
+   * expanded). `undefined` falls back to the env var inside
+   * sharedPieceVersions; `null` = definitively none.
+   */
+  sharedPiecesDir?: string | null;
   /**
    * Optional credential resolver. When provided, the connections route can
    * report which `JarvisConnectionSource` adapters are registered (e.g.
@@ -273,8 +280,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const installedById = new Map(
             manifest.pieces.map((p) => [p.id, p]),
           );
+          // Shared read-only catalog (multi-tenant hosting): pieces present
+          // there work with NO installation, so the Library reports them as
+          // included (`source: "shared"`). A user install shadows the shared
+          // copy (engine-bootstrap orders roots user-first), so the user's
+          // manifest wins when both exist.
+          const shared = sharedPieceVersions(opts.sharedPiecesDir);
           const entries = CATALOG.map((entry) => {
             const installed = installedById.get(entry.id) ?? null;
+            const sharedVersion = shared.get(entry.npmPackage) ?? null;
             return {
               id: entry.id,
               npmPackage: entry.npmPackage,
@@ -292,8 +306,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                 ? {
                     resolvedVersion: installed.resolvedVersion,
                     installedAt: installed.installedAt,
+                    source: "user" as const,
                   }
-                : null,
+                : sharedVersion
+                  ? {
+                      resolvedVersion: sharedVersion,
+                      installedAt: 0,
+                      source: "shared" as const,
+                    }
+                  : null,
             };
           });
           return ok({ entries });

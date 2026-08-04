@@ -238,12 +238,16 @@ function LibraryRow({
   onUninstall: () => void;
 }): React.ReactElement {
   const isInstalled = entry.installed !== null;
+  // Shared-catalog pieces are managed by the host, not the user: no install
+  // (it already works), no uninstall (the tree is read-only), no update chip
+  // (updates arrive with the host's version upgrades).
+  const isShared = entry.installed?.source === "shared";
   const busy = actionState !== "idle";
   // Compare resolved vs vetted to surface the right hint:
   //   resolved < vetted -> "Update available" (we vetted a newer version)
   //   resolved > vetted -> "Newer than vetted" (user upgraded past our audit)
   //   resolved == vetted -> no chip
-  const versionRel = isInstalled
+  const versionRel = isInstalled && !isShared
     ? compareSemver(entry.installed!.resolvedVersion, entry.vettedVersion)
     : 0;
   const updateAvailable = versionRel < 0;
@@ -254,7 +258,11 @@ function LibraryRow({
       <div className="wf-lib__row-main">
         <div className="wf-lib__row-title">
           <span className="wf-lib__row-name">{entry.displayName}</span>
-          {isInstalled ? (
+          {isShared ? (
+            <Chip tone="ok" title="Included with this Jarvis install — ready to use, nothing to manage">
+              Included {entry.installed!.resolvedVersion}
+            </Chip>
+          ) : isInstalled ? (
             <Chip tone="ok">Installed {entry.installed!.resolvedVersion}</Chip>
           ) : (
             <Chip tone="neutral">{entry.versionRange}</Chip>
@@ -296,7 +304,7 @@ function LibraryRow({
         </div>
       </div>
       <div className="wf-lib__row-actions">
-        {isInstalled ? (
+        {isShared ? null : isInstalled ? (
           <>
             {updateAvailable ? (
               <Button variant="primary" size="sm" onClick={onInstall} disabled={busy}>

@@ -2,7 +2,7 @@ import YAML from 'yaml';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { JarvisConfig } from './types.ts';
-import { DEFAULT_CONFIG, USER_OWNED_SECTIONS } from './types.ts';
+import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith('~/')) {
@@ -150,10 +150,31 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   // daemon after the DB merge.
   for (const section of USER_OWNED_SECTIONS) {
     const def = (DEFAULT_CONFIG as Record<string, unknown>)[section];
+    // `workflows` is user-owned EXCEPT its system path keys (ready-made
+    // artifact locations a deployment writes into the file): those survive
+    // the discard, and user-settings' merge keeps them file-authoritative.
+    let preserved: Record<string, unknown> | null = null;
+    if (section === "workflows") {
+      const current = (config as Record<string, unknown>)[section];
+      if (current && typeof current === "object") {
+        for (const key of WORKFLOW_SYSTEM_KEYS) {
+          const v = (current as Record<string, unknown>)[key];
+          if (typeof v === "string" && v.trim()) {
+            (preserved ??= {})[key] = v;
+          }
+        }
+      }
+    }
     if (def === undefined) {
       delete (config as Record<string, unknown>)[section];
     } else {
       (config as Record<string, unknown>)[section] = structuredClone(def);
+    }
+    if (preserved) {
+      (config as Record<string, unknown>)[section] = {
+        ...((config as Record<string, unknown>)[section] as object | undefined),
+        ...preserved,
+      };
     }
   }
   applyEnvOverrides(config); // env wins over the discard (e.g. JARVIS_WAKE_ENGINE)

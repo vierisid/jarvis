@@ -23,6 +23,7 @@ import { deepMerge } from '../config/loader.ts';
 import {
   DEFAULT_CONFIG,
   USER_OWNED_SECTIONS,
+  WORKFLOW_SYSTEM_KEYS,
   type JarvisConfig,
   type UserOwnedSection,
 } from '../config/types.ts';
@@ -157,10 +158,27 @@ export function mergeUserSettingsIntoConfig(config: JarvisConfig): void {
     if (stored === undefined) continue;
     const def = (DEFAULT_CONFIG as Record<string, unknown>)[section];
     const target = config as Record<string, unknown>;
+    // `workflows` system path keys are FILE-owned (loadConfig preserved them
+    // through the user-section discard): re-apply them over whatever the DB
+    // row carries, so a dashboard save of the user-tunable workflow fields
+    // can never strip the deployment-written artifact paths.
+    let filePaths: Record<string, unknown> | null = null;
+    if (section === 'workflows') {
+      const current = target[section];
+      if (current && typeof current === 'object') {
+        for (const key of WORKFLOW_SYSTEM_KEYS) {
+          const v = (current as Record<string, unknown>)[key];
+          if (typeof v === 'string' && v.trim()) (filePaths ??= {})[key] = v;
+        }
+      }
+    }
     if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
       target[section] = deepMerge(def !== undefined ? structuredClone(def) : {}, stored);
     } else {
       target[section] = stored;
+    }
+    if (filePaths) {
+      target[section] = { ...(target[section] as object), ...filePaths };
     }
   }
   mergeGoogleSettingsIntoConfig(config);

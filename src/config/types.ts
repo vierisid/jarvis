@@ -189,6 +189,26 @@ export type WorkflowConfig = {
    * a user-owned section, so fleet operators tune via env instead).
    */
   engineIdleTtlMs?: number;
+  /**
+   * Where the workflow runtime finds READY-MADE artifacts instead of
+   * building/installing its own. All optional; each path may contain a
+   * `${version}` placeholder expanded from the `JARVIS_VERSION` env var
+   * (useful when one machine keeps artifacts per installed version). Any
+   * unset/missing path just means jarvis does the work itself, as usual.
+   * The JARVIS_ENGINE_CACHE_ROOT / JARVIS_SHARED_PIECES_DIR /
+   * JARVIS_PIECE_METADATA_CACHE env vars are honored as fallbacks; config
+   * wins when both are set.
+   */
+  /** Dir holding prebuilt engine bundles as `<hash>/main.js` — consulted
+   * before building into `~/.jarvis/cache/engine`. */
+  engine_dir?: string;
+  /** Dir with a ready-made pieces catalog (`node_modules/@activepieces/...`).
+   * Pieces here are usable without installing; a piece installed via the
+   * Library into `~/.jarvis/pieces` shadows the copy found here. */
+  pieces_dir?: string;
+  /** A prebuilt piece-metadata cache FILE (the per-entry JSON the catalog
+   * builder writes) — boots skip extraction for every piece it covers. */
+  piece_metadata_cache?: string;
 };
 
 export type GoalConfig = {
@@ -559,3 +579,12 @@ export const USER_OWNED_SECTIONS = [
 ] as const satisfies readonly (keyof JarvisConfig)[];
 
 export type UserOwnedSection = (typeof USER_OWNED_SECTIONS)[number];
+
+/**
+ * The SYSTEM-owned keys of the otherwise user-owned `workflows` section:
+ * ready-made artifact paths a deployment (e.g. a managed host) writes into
+ * config.yaml. The FILE wins for these — loadConfig preserves them through
+ * the user-section discard and the DB merge re-applies them on top, so a
+ * dashboard save of the user-tunable workflow fields can never strip them.
+ */
+export const WORKFLOW_SYSTEM_KEYS = ["engine_dir", "pieces_dir", "piece_metadata_cache"] as const;

@@ -23,6 +23,17 @@ daemon:
 # browser:
 #   local: false
 
+# The workflow runtime can use READY-MADE artifacts instead of building its
+# own: a dir of prebuilt engine bundles (<hash>/main.js), a ready-made pieces
+# catalog (usable without installing; your own installs shadow it), and a
+# prebuilt piece-metadata cache file. Paths may contain ${version}, expanded
+# from the JARVIS_VERSION env var, for machines that keep artifacts per
+# installed version. Omit any of them and jarvis does that work itself.
+# workflows:
+#   engine_dir: /opt/jarvis-engine/${version}
+#   pieces_dir: /opt/jarvis-pieces/${version}
+#   piece_metadata_cache: /opt/jarvis-cache/${version}/piece-metadata.json
+
 # Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
 # require a token from an enrolled device. Correct setup order:
 #   1. jarvis enroll "my-desktop"     (prints the device's enrollment token)

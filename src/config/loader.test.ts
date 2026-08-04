@@ -22,6 +22,26 @@ describe('Config Loader', () => {
     await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
   });
 
+  test('workflows SYSTEM path keys survive the user-section discard; user fields do not', async () => {
+    // A hosted/system config carries only the ready-made artifact paths;
+    // any user-tunable workflow fields in the FILE have no authority (they
+    // live in the DB) — but the paths are file-owned and must survive.
+    const yaml = `
+workflows:
+  enabled: false
+  engine_dir: /opt/jarvis-engine/\${version}
+  pieces_dir: /srv/pieces
+  piece_metadata_cache: /srv/piece-metadata.json
+`;
+    await Bun.write(TEST_CONFIG_PATH, yaml);
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.workflows?.engine_dir).toBe('/opt/jarvis-engine/\${version}');
+    expect(loaded.workflows?.pieces_dir).toBe('/srv/pieces');
+    expect(loaded.workflows?.piece_metadata_cache).toBe('/srv/piece-metadata.json');
+    // The file's `enabled: false` was discarded with the user section.
+    expect(loaded.workflows?.enabled).toBeUndefined();
+  });
+
   test('returns default config when file does not exist', async () => {
     const config = await loadConfig('/tmp/nonexistent-config.yaml');
     // Paths should be tilde-expanded, but all other fields match defaults

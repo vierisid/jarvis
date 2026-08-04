@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -18,8 +18,9 @@ import {
   computeCatalogCacheKey,
   discoverPieces,
   metadataToCatalogEntry,
+  pieceContentHash,
   propsToInputSchema,
-  readCachedCatalog,
+  readCachedEntries,
   type CacheFileShape,
   type PieceLookup,
 } from "./piece-catalog";
@@ -383,56 +384,135 @@ describe("PieceCatalog (unit)", () => {
     }
   });
 
-  test("computeCatalogCacheKey changes when bundle or piece source changes", () => {
+  test("computeCatalogCacheKey tracks the bundle; piece source moves pieceContentHash instead", () => {
     const { path: root, cleanup } = tmp("cache-key");
     const bundlePath = resolve(root, "engine.js");
     writeFileSync(bundlePath, "v1");
-    mkdirSync(resolve(root, "pieces/p/dist/src"), { recursive: true });
+    const pieceDir = resolve(root, "pieces/p");
+    mkdirSync(resolve(pieceDir, "dist/src"), { recursive: true });
     writeFileSync(
-      resolve(root, "pieces/p/package.json"),
+      resolve(pieceDir, "package.json"),
       JSON.stringify({ name: "@scope/piece-p", version: "0.0.1" }),
     );
-    writeFileSync(resolve(root, "pieces/p/dist/src/index.js"), "v1");
+    writeFileSync(resolve(pieceDir, "dist/src/index.js"), "v1");
     try {
-      const k1 = computeCatalogCacheKey({ bundlePath, pieceRoots: [resolve(root, "pieces")] });
-      // Bundle change -> new key.
+      const k1 = computeCatalogCacheKey({ bundlePath });
+      // Bundle change -> new GLOBAL key (invalidates everything).
       writeFileSync(bundlePath, "v2");
-      const k2 = computeCatalogCacheKey({ bundlePath, pieceRoots: [resolve(root, "pieces")] });
+      const k2 = computeCatalogCacheKey({ bundlePath });
       expect(k2).not.toBe(k1);
-      // Piece source change without bundle change -> new key (the bug we fixed in review #2).
-      writeFileSync(resolve(root, "pieces/p/dist/src/index.js"), "edited");
-      const k3 = computeCatalogCacheKey({ bundlePath, pieceRoots: [resolve(root, "pieces")] });
-      expect(k3).not.toBe(k2);
+      // Piece source change is PER-ENTRY now: the global key must NOT move
+      // (that's what keeps one changed piece from invalidating 650 others),
+      // the piece's own content hash must.
+      const h1 = pieceContentHash(pieceDir);
+      writeFileSync(resolve(pieceDir, "dist/src/index.js"), "edited");
+      expect(computeCatalogCacheKey({ bundlePath })).toBe(k2);
+      expect(pieceContentHash(pieceDir)).not.toBe(h1);
     } finally {
       cleanup();
     }
   });
 
-  test("readCachedCatalog returns null when cacheKey doesn't match", () => {
+  test("readCachedEntries: key mismatch, malformed file, and the PRE-per-entry shape all read as a miss", () => {
     const { path: dir, cleanup } = tmp("cache-mismatch");
     const file = resolve(dir, "cache.json");
+    const entry = { name: "p", displayName: "P", description: "", actions: {} };
     const payload: CacheFileShape = {
       cacheKey: "v1",
-      entries: [{ name: "p", displayName: "P", description: "", actions: {} }],
+      pieces: { "p@0.0.1": { contentHash: "h", entry } },
     };
     writeFileSync(file, JSON.stringify(payload));
     try {
-      expect(readCachedCatalog(file, "v1")?.list().length).toBe(1);
-      expect(readCachedCatalog(file, "v2")).toBeNull();
+      expect(readCachedEntries(file, "v1")?.get("p@0.0.1")?.entry.name).toBe("p");
+      expect(readCachedEntries(file, "v2")).toBeNull();
+      expect(readCachedEntries("/no/such/path", "v1")).toBeNull();
+      // Old array-shaped cache (pre-per-entry): a clean one-time miss, not a crash.
+      writeFileSync(file, JSON.stringify({ cacheKey: "v1", entries: [entry] }));
+      expect(readCachedEntries(file, "v1")).toBeNull();
+      writeFileSync(file, "{not json");
+      expect(readCachedEntries(file, "v1")).toBeNull();
     } finally {
       cleanup();
     }
   });
 
-  test("readCachedCatalog returns null when file is missing or malformed", () => {
-    expect(readCachedCatalog("/no/such/path", "v1")).toBeNull();
-    const { path: dir, cleanup } = tmp("cache-bad");
-    const file = resolve(dir, "cache.json");
-    writeFileSync(file, "{not json");
+  test("per-entry cache: shared file serves hits without an engine spawn; only misses extract; user file excludes shared-served entries", async () => {
+    const { path: root, cleanup } = tmp("shared-cache");
+    const { path: cacheDir, cleanup: cleanupCache } = tmp("shared-cache-files");
+    const userFile = resolve(cacheDir, "user.json");
+    const sharedFile = resolve(cacheDir, "shared.json");
+    // Two pieces on disk: "shared" (covered by the shared cache) and "mine"
+    // (a user install the shared cache knows nothing about).
+    for (const [sub, name] of [
+      ["shared", "@scope/piece-shared"],
+      ["mine", "@scope/piece-mine"],
+    ] as const) {
+      mkdirSync(resolve(root, sub), { recursive: true });
+      writeFileSync(
+        resolve(root, sub, "package.json"),
+        JSON.stringify({ name, version: "0.0.1" }),
+      );
+    }
+    const sharedEntry = {
+      name: "@scope/piece-shared", displayName: "Shared", description: "", actions: {},
+    };
+    writeFileSync(
+      sharedFile,
+      JSON.stringify({
+        cacheKey: "v1",
+        pieces: {
+          "@scope/piece-shared@0.0.1": {
+            contentHash: pieceContentHash(resolve(root, "shared")),
+            entry: sharedEntry,
+          },
+        },
+      } satisfies CacheFileShape),
+    );
+    let acquires = 0;
+    const extractedNames: string[] = [];
+    const fakeHandle = {
+      async extractPieceMetadata(o: { pieceName: string }) {
+        extractedNames.push(o.pieceName);
+        return { name: o.pieceName, displayName: "Mine", description: "", actions: {} };
+      },
+      async release() { /* noop */ },
+    } as unknown as EngineHandle;
+    const fakeRuntime = {
+      acquire: async () => (acquires++, fakeHandle),
+    } as unknown as EngineRuntime;
     try {
-      expect(readCachedCatalog(file, "v1")).toBeNull();
+      const { catalog, failures } = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        cacheFile: userFile,
+        cacheKey: "v1",
+        sharedCacheFiles: [sharedFile],
+        reporter: () => {},
+      });
+      expect(failures).toEqual([]);
+      expect(catalog.list().length).toBe(2);
+      // Only the user's own piece was extracted.
+      expect(extractedNames).toEqual(["@scope/piece-mine"]);
+      expect(acquires).toBe(1);
+      // The user cache holds ONLY the user's piece (shared-served entries are
+      // not copied — per-user files stay small).
+      const written = JSON.parse(readFileSync(userFile, "utf8")) as CacheFileShape;
+      expect(Object.keys(written.pieces)).toEqual(["@scope/piece-mine@0.0.1"]);
+
+      // Second build: everything is a cache hit — the engine is NEVER acquired.
+      const second = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        cacheFile: userFile,
+        cacheKey: "v1",
+        sharedCacheFiles: [sharedFile],
+        reporter: () => {},
+      });
+      expect(second.catalog.list().length).toBe(2);
+      expect(acquires).toBe(1);
     } finally {
       cleanup();
+      cleanupCache();
     }
   });
 

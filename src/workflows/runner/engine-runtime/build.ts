@@ -44,6 +44,21 @@ const CACHE_ROOT = resolve(homedir(), ".jarvis/cache");
 const STAGING_DIR = resolve(CACHE_ROOT, "engine-build");
 const BUNDLE_ROOT = resolve(CACHE_ROOT, "engine");
 
+/**
+ * Optional read-only SHARED bundle root (multi-tenant hosting): the host
+ * builds the bundle once per installed version and points every instance at
+ * it via this env var. Consulted before the per-user BUNDLE_ROOT; never
+ * written to — builds always land in the user's own cache, so a shared-root
+ * miss degrades to a local build instead of an EACCES on a root-owned tree.
+ */
+function sharedBundleRoot(explicit?: string | null): string | null {
+  // `undefined` = caller didn't resolve one (env fallback); `null` = the
+  // caller resolved "no shared root" (don't consult the env).
+  if (explicit !== undefined) return explicit ? resolve(explicit) : null;
+  const dir = process.env.JARVIS_ENGINE_CACHE_ROOT?.trim();
+  return dir ? resolve(dir) : null;
+}
+
 /** esbuild version pinned to match what activepieces uses upstream. */
 const ESBUILD_VERSION = "0.24.0";
 
@@ -158,7 +173,9 @@ function buildStagingPackageJson(): string {
       continue;
     }
     if (versionMeetsFloor(declared, floor)) {
-      console.log(
+      // stderr: build tooling stdout may be captured as machine-readable
+      // output (build-shared-runtime's summary) — diagnostics never go there.
+      console.warn(
         `[engine-build] SECURITY_FLOOR '${name}@${floor}' satisfied by upstream '${declared}'; remove entry.`,
       );
       continue;
@@ -270,7 +287,18 @@ export function ensureStagingInstalled(): Promise<void> {
   return stagingInstallInFlight;
 }
 
-export async function buildEngineBundle(opts?: { force?: boolean }): Promise<EngineBundle> {
+export async function buildEngineBundle(opts?: {
+  force?: boolean;
+  sharedRoot?: string | null;
+}): Promise<EngineBundle> {
+  // A shared prebuilt bundle short-circuits the whole build — including the
+  // staging install, which would otherwise cost every tenant a ~47 MB
+  // node_modules just to discover the bundle already exists.
+  if (!opts?.force) {
+    const shared = findSharedBundle(opts?.sharedRoot);
+    if (shared) return shared;
+  }
+
   await ensureStagingInstalled();
 
   const hash = bundleHash();
@@ -333,15 +361,49 @@ export const ENGINE_BUILD_PATHS = {
   BUNDLE_ROOT,
 } as const;
 
+/** The shared-root bundle for the current source hash, if present.
+ *
+ * When the builder shipped a content manifest (main.js.sha256), the bytes we
+ * are about to execute are verified against it — the directory NAME hashes
+ * build inputs, not output, so without this check the store would be
+ * content-addressed in name only. Mismatch/missing-manifest handling: a bad
+ * manifest is a MISS (fall back to the local build), never a crash. */
+function findSharedBundle(sharedRoot?: string | null): EngineBundle | null {
+  const root = sharedBundleRoot(sharedRoot);
+  if (!root) return null;
+  const hash = bundleHash();
+  const bundleDir = resolve(root, hash);
+  const bundlePath = resolve(bundleDir, "main.js");
+  if (!existsSync(bundlePath)) return null;
+  const manifestPath = bundlePath + ".sha256";
+  if (existsSync(manifestPath)) {
+    try {
+      const want = readFileSync(manifestPath, "utf8").trim();
+      const got = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+      if (want !== got) return null;
+    } catch {
+      return null;
+    }
+  }
+  return { bundlePath, hash, bundleDir };
+}
+
 /**
- * Locate an already-built engine bundle for the current source state.
- * Returns null if no matching bundle is on disk -- callers can either
+ * Locate an already-built engine bundle for the current source state —
+ * the shared root (if configured) first, then the per-user cache. Returns
+ * null if no matching bundle is on disk -- callers can either
  * `buildEngineBundle()` (slow on cold start) or skip the work entirely.
+ *
+ * Note: NO staging-dir precondition. `bundleHash()` is computed purely from
+ * the install tree + compiled-in constants; the old `STAGING_DIR/package.json`
+ * guard was unsound and forced a pointless per-user staging install before a
+ * prebuilt bundle could even be discovered.
  */
-export function findCachedBundle(): { bundlePath: string; hash: string } | null {
-  // Recompute the hash from current sources; if the staging dir doesn't
-  // exist yet, we have no cached bundle to find.
-  if (!existsSync(resolve(STAGING_DIR, "package.json"))) return null;
+export function findCachedBundle(opts?: {
+  sharedRoot?: string | null;
+}): { bundlePath: string; hash: string } | null {
+  const shared = findSharedBundle(opts?.sharedRoot);
+  if (shared) return { bundlePath: shared.bundlePath, hash: shared.hash };
   const hash = bundleHash();
   const bundlePath = resolve(BUNDLE_ROOT, hash, "main.js");
   return existsSync(bundlePath) ? { bundlePath, hash } : null;
