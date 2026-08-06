@@ -3,6 +3,7 @@ import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import type { JarvisLanguage } from "../language";
 import { useI18n } from "../i18n/I18nProvider";
+import { ONBOARDING_COPY } from "./onboardingCopy";
 import "./OnboardingWizard.css";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
@@ -20,10 +21,8 @@ const LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
   { id: "es", label: "Español" },
 ];
 
-const STEPS: ReadonlyArray<[StepKey, string]> = [
-  ["welcome", "Welcome"], ["perms", "Permissions"], ["brain", "The brain"],
-  ["hear", "Hearing"], ["speak", "Speaking"], ["connect", "Connect"],
-  ["interview", "The interview"], ["tour", "The tour"], ["allset", "All set"],
+const STEPS: ReadonlyArray<StepKey> = [
+  "welcome", "perms", "brain", "hear", "speak", "connect", "interview", "tour", "allset",
 ];
 
 /* — inline SVG glyphs (design I{}) — */
@@ -92,6 +91,15 @@ const ELEVEN_PREMADE = [
   { voice_id: "TxGEqnHWrfWFTfGW9XjX", name: "Josh · deep" },
 ];
 
+const ELEVEN_STYLE_ES: Record<string, string> = {
+  "21m00Tcm4TlvDq8ikWAM": "Rachel · tranquila",
+  AZnzlk1XvdvUeBnXmlld: "Domi · potente",
+  EXAVITQu4vr4xnSDxMaL: "Bella · suave",
+  ErXwobaYiN019PkySvjV: "Antoni · cálido",
+  MF3mGyEYCl7XYWbV9V6O: "Elli · expresiva",
+  TxGEqnHWrfWFTfGW9XjX: "Josh · profundo",
+};
+
 const IS_MAC = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.userAgent || (navigator as { platform?: string }).platform || "");
 // Deep links to the OS privacy pane per permission. The app can't self-grant
 // (the OS forbids it), but it can open the exact place you grant it.
@@ -111,12 +119,9 @@ async function playPreviewAudio(res: Response): Promise<void> {
   await a.play().catch(() => URL.revokeObjectURL(url));
 }
 
-const TOUR = [
-  { sm: "This is the Pebble, your companion. It lives at your cursor. Click it any time to talk to me.", t: "→ Click the Pebble to try", pos: { right: 18, bottom: 50 } },
-  { sm: "Press ⌘J to summon Talk, the conversation panel. Everything we say lives there, across sessions.", t: "→ Press ⌘J", pos: { right: 18, top: 60 } },
-  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: 130, top: 58 } },
-  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: 130, top: 104 } },
-  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
+const TOUR_POS: React.CSSProperties[] = [
+  { right: 18, bottom: 50 }, { right: 18, top: 60 }, { left: 130, top: 58 },
+  { left: 130, top: 104 }, { left: 130, top: 150 },
 ];
 
 type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string };
@@ -128,7 +133,7 @@ export function OnboardingWizard({
   status: OnboardingStatus | null;
   onComplete: () => void;
 }) {
-  const { setLocale } = useI18n();
+  const { setLocale, t } = useI18n();
   const startStep = useMemo<number>(() => {
     if (!status?.setup_completed) return 0;
     if (!status.profile_completed && !status.setup_skipped_profile) return 6;
@@ -137,7 +142,7 @@ export function OnboardingWizard({
   }, [status]);
 
   const [step, setStep] = useState(startStep);
-  const key = STEPS[step]![0];
+  const key = STEPS[step]!;
   // True when the wizard is running the setup steps in this session (fresh
   // start) — a resume at the interview/tour never touched brain/voice state,
   // so the recap must not print those defaults as if they were saved.
@@ -148,6 +153,7 @@ export function OnboardingWizard({
     () => (document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"),
   );
   const [language, setLanguage] = useState<JarvisLanguage>(status?.language ?? "en");
+  const copy = ONBOARDING_COPY[language];
   const applyTheme = (t: "light" | "dark") => {
     setTheme(t);
     document.documentElement.setAttribute("data-theme", t);
@@ -265,17 +271,17 @@ export function OnboardingWizard({
     setTest({ status: "testing" });
     try {
       const body: Record<string, unknown> = { provider: provId, model };
-      if (prov.needsKey) { if (!apiKey) { setTest({ status: "err", msg: "Enter an API key first." }); return; } body.api_key = apiKey; }
-      if (prov.needsBaseUrl) { if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a base URL first." }); return; } body.base_url = baseUrl.trim(); }
+      if (prov.needsKey) { if (!apiKey) { setTest({ status: "err", msg: copy.errors.enterKey }); return; } body.api_key = apiKey; }
+      if (prov.needsBaseUrl) { if (!baseUrl.trim()) { setTest({ status: "err", msg: copy.errors.enterUrl }); return; } body.base_url = baseUrl.trim(); }
       if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = (await r.json()) as { ok: boolean; model?: string; error?: string };
       if (data.ok) setTest({ status: "ok", msg: data.model ?? model });
-      else setTest({ status: "err", msg: data.error ?? "Test failed." });
+      else setTest({ status: "err", msg: data.error ?? copy.errors.testFailed });
     } catch (e) {
-      setTest({ status: "err", msg: e instanceof Error ? e.message : "Test failed." });
+      setTest({ status: "err", msg: e instanceof Error ? e.message : copy.errors.testFailed });
     }
-  }, [provId, model, apiKey, baseUrl, prov]);
+  }, [provId, model, apiKey, baseUrl, prov, copy]);
 
   const brainReady = !prov.soon && (prov.noConfig || test.status === "ok");
 
@@ -303,9 +309,9 @@ export function OnboardingWizard({
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
       go(5);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Setup failed.");
+      setError(e instanceof Error ? e.message : copy.errors.setupFailed!);
     } finally { setBusy(false); }
-  }, [language, prov, provId, apiKey, baseUrl, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [language, prov, provId, apiKey, baseUrl, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, copy]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -319,31 +325,31 @@ export function OnboardingWizard({
       onComplete();
     } catch (e) {
       // Closing anyway would replay onboarding next launch — surface it instead.
-      setError(e instanceof Error && e.message ? `Couldn't save the skip: ${e.message}` : "Couldn't reach the daemon — try again.");
+      setError(e instanceof Error && e.message ? `${copy.errors.skipSave!}: ${e.message}` : copy.errors.daemon!);
     } finally { setBusy(false); }
-  }, [language, onComplete]);
+  }, [language, onComplete, copy]);
 
   /* — speaking: ElevenLabs test via real synthesis — */
   // A synthesis call exercises the exact TTS path the app uses (and plays the
   // sample), so it validates the key without depending on the voices-list
   // scope. If it 401s, the key is genuinely bad.
   const testElevenLabs = useCallback(async () => {
-    if (!elevenKey.trim()) { setTtsTest({ status: "err", msg: "Paste your ElevenLabs key first." }); return; }
+    if (!elevenKey.trim()) { setTtsTest({ status: "err", msg: copy.errors.pasteEleven }); return; }
     setTtsTest({ status: "testing" });
     try {
       const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "elevenlabs", api_key: elevenKey.trim(), voice_id: elevenVoice, model: elevenModel, text: language === "es" ? "Hola, soy Jarvis. Así es como voy a sonar." : undefined }) });
       if (!r.ok) {
         const t = await r.json().catch(() => ({ error: "" })) as { error?: string };
-        const m = (t.error || "").includes("401") ? "ElevenLabs rejected this key. Check it's valid and has text-to-speech access." : (t.error || "Test failed.").slice(0, 90);
+        const m = (t.error || "").includes("401") ? copy.errors.elevenRejected! : (t.error || copy.errors.testFailed!).slice(0, 90);
         setTtsTest({ status: "err", msg: m });
         return;
       }
       await playPreviewAudio(r);
-      setTtsTest({ status: "ok", msg: "voice ready" });
+      setTtsTest({ status: "ok", msg: copy.errors.voiceReady });
     } catch (e) {
-      setTtsTest({ status: "err", msg: e instanceof Error ? e.message : "Test failed." });
+      setTtsTest({ status: "err", msg: e instanceof Error ? e.message : copy.errors.testFailed });
     }
-  }, [language, elevenKey, elevenVoice, elevenModel]);
+  }, [language, elevenKey, elevenVoice, elevenModel, copy]);
 
   /* — connect actions — */
   // Google: real OAuth. Open the consent URL, then poll status until the
@@ -359,8 +365,8 @@ export function OnboardingWizard({
         setGoogleState("idle");
         setConnectErr(
           (d.error || "").toLowerCase().includes("credential")
-            ? "Google needs its API credentials first. Add them in Settings → Integrations, then connect here."
-            : (d.error || "Couldn't start Google sign-in.").slice(0, 120),
+            ? copy.errors.googleCredentials!
+            : (d.error || copy.errors.googleStart!).slice(0, 120),
         );
         return;
       }
@@ -368,12 +374,12 @@ export function OnboardingWizard({
       if (!win) {
         // No popup → no sign-in in flight; don't sit in "Connecting…" polling.
         setGoogleState("idle");
-        setConnectErr("Your browser blocked the sign-in window. Allow pop-ups, or open Settings → Integrations to connect.");
+        setConnectErr(copy.errors.popup!);
         return;
       }
     } catch {
       setGoogleState("idle");
-      setConnectErr("Couldn't reach the daemon to start Google sign-in.");
+      setConnectErr(copy.errors.googleDaemon!);
       return;
     }
     let tries = 0;
@@ -391,7 +397,7 @@ export function OnboardingWizard({
       } catch { /* ignore */ }
       if (tries > 150) { stopGooglePoll(); setGoogleState((g) => (g === "pending" ? "idle" : g)); } // ~5 min cap
     }, 2000);
-  }, [stopGooglePoll]);
+  }, [stopGooglePoll, copy]);
 
   const cancelGoogle = useCallback(() => {
     stopGooglePoll();
@@ -410,11 +416,11 @@ export function OnboardingWizard({
       // treat that as a failure so the wizard doesn't claim "connected".
       const body = r.ok ? await r.json().catch(() => null) as { ok?: boolean; message?: string } | null : null;
       if (r.ok && body?.ok !== false) { setConnected((c) => new Set(c).add("telegram")); setTgOpen(false); setTgToken(""); }
-      else if (r.ok) setConnectErr((body?.message || "Telegram token saved, but the bot couldn't connect.").slice(0, 120));
-      else setConnectErr(((await r.text().catch(() => "")) || `Couldn't save the Telegram token (HTTP ${r.status}).`).slice(0, 120));
-    } catch { setConnectErr("Couldn't reach the daemon to save the Telegram token."); }
+      else if (r.ok) setConnectErr((body?.message || copy.errors.telegramConnect!).slice(0, 120));
+      else setConnectErr(((await r.text().catch(() => "")) || `${copy.errors.telegramSave} (HTTP ${r.status}).`).slice(0, 120));
+    } catch { setConnectErr(copy.errors.telegramDaemon!); }
     finally { setTgBusy(false); }
-  }, [tgToken]);
+  }, [tgToken, copy]);
 
   /* — tour + finish — */
   // Both check the response: silently swallowing a failed POST would replay
@@ -425,10 +431,10 @@ export function OnboardingWizard({
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       go(8);
     } catch {
-      setError("Couldn't reach the daemon to save your progress — try again.");
+      setError(copy.errors.progress!);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [copy]);
   const finishTour = useCallback(() => endTour("/api/onboarding/tutorial/complete"), [endTour]);
   const skipTour = useCallback(() => endTour("/api/onboarding/tutorial/dismiss"), [endTour]);
 
@@ -449,6 +455,7 @@ export function OnboardingWizard({
   }, [language, previewing, tts, edgeVoice, elevenKey, elevenVoice, elevenModel]);
 
   const speakReady = tts !== "elevenlabs" || ttsTest.status === "ok";
+  const edgeVoices = EDGE_VOICES.filter((voice) => voice.id.startsWith(language === "es" ? "es-" : "en-"));
 
   /* — progress bar (steps 1..5 only) — */
   const showProgress = step >= 1 && step <= 5;
@@ -457,7 +464,7 @@ export function OnboardingWizard({
       <div className="obw-steps">
         {STEPS.map((_, i) => <i key={i} className={i < step ? "done" : i === step ? "cur" : ""} />)}
       </div>
-      <div className="obw-steplab">Step {step + 1} of 9 · {STEPS[step]![1]}</div>
+      <div className="obw-steplab">{copy.stepProgress(step + 1, STEPS.length, copy.steps[key]!)}</div>
     </>
   );
 
@@ -471,12 +478,12 @@ export function OnboardingWizard({
     <div className="obw">
       <div className="obw-bar">
         <i /><i /><i />
-        <span className="obw-wt">{key === "welcome" || key === "interview" || key === "tour" || key === "allset" ? "Jarvis" : "Jarvis · Setup"}</span>
+        <span className="obw-wt">{key === "welcome" || key === "interview" || key === "tour" || key === "allset" ? "Jarvis" : copy.setupTitle}</span>
       </div>
       {progress}
 
       {key === "interview" ? (
-        <InterviewStep ttsDisabled={tts === "off"} onComplete={() => go(7)} />
+        <InterviewStep language={language} ttsDisabled={tts === "off"} onComplete={() => go(7)} />
       ) : key === "tour" ? (
         renderTour()
       ) : (
@@ -495,13 +502,13 @@ export function OnboardingWizard({
             {drop("", 60)}
           </div>
           <div className="obw-word" style={{ fontSize: 15, marginBottom: 11 }}><span className="u">use</span>jarvis</div>
-          <h2>This is your Jarvis.</h2>
+          <h2>{copy.welcome.title}</h2>
           <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>
-            Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later.
+            {copy.welcome.subtitle}
           </div>
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 11, alignItems: "center" }}>
-            <div className="obw-themelab">Language · Idioma</div>
-            <div className="obw-themeseg" aria-label="Jarvis response language">
+            <div className="obw-themelab">{copy.welcome.language}</div>
+            <div className="obw-themeseg" aria-label={copy.welcome.languageLabel}>
               {LANGUAGES.map((option) => (
                 <button
                   key={option.id}
@@ -513,49 +520,47 @@ export function OnboardingWizard({
                 </button>
               ))}
             </div>
-            <div className="obw-themelab">Choose your look</div>
+            <div className="obw-themelab">{copy.welcome.look}</div>
             <div className="obw-themeseg">
-              <button className={theme === "light" ? "on" : ""} onClick={() => applyTheme("light")}>Light</button>
-              <button className={theme === "dark" ? "on" : ""} onClick={() => applyTheme("dark")}>Dark</button>
+              <button className={theme === "light" ? "on" : ""} onClick={() => applyTheme("light")}>{copy.welcome.light}</button>
+              <button className={theme === "dark" ? "on" : ""} onClick={() => applyTheme("dark")}>{copy.welcome.dark}</button>
             </div>
-            <button className="obw-btn obw-btn-pri" style={{ minWidth: 208, marginTop: 8 }} onClick={next}>Set up Jarvis</button>
-            <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>
+            <button className="obw-btn obw-btn-pri" style={{ minWidth: 208, marginTop: 8 }} onClick={next}>{copy.welcome.setup}</button>
+            <button className="obw-skip" disabled={busy} onClick={skipAll}>{copy.welcome.later}</button>
             {error && <div className="obw-hint" style={{ color: "var(--listen)" }}>{error}</div>}
           </div>
         </div></div>
       );
 
       case "perms": {
-        const rows: Array<[string, string, string, boolean]> = [
-          ["access", "Accessibility", "Click, type, and read on-screen controls so Jarvis can operate your apps.", true],
-          ["screen", "Screen Recording", "See your screen for Awareness: OCR, and noticing when you’re stuck.", false],
-          ["auto", "Automation", "Drive other apps directly: your calendar, browser, and mail.", false],
-          ["files", "Files & Folders", "Read and write the files and folders you point it at.", false],
-        ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Let Jarvis reach your machine.</h2>
-            <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your {IS_MAC ? "Mac" : "PC"} asks.</div>
+            <h2>{copy.permissions.title}</h2>
+            <div className="obw-sub">{copy.permissions.subtitle(IS_MAC ? "Mac" : "PC")}</div>
             <div className="obw-rows" style={{ marginTop: 16 }}>
-              {rows.map(([id, name, body, req]) => (
-                <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
-                  onClick={() => { try { window.open((IS_MAC ? PERM_PANE[id]?.mac : PERM_PANE[id]?.win) || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
-                  <span className="pg"><Glyph k={id} /></span>
-                  <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
-                  <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
+              {copy.permissions.rows.map((row) => (
+                <button key={row.id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
+                  onClick={() => { try { window.open((IS_MAC ? PERM_PANE[row.id]?.mac : PERM_PANE[row.id]?.win) || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
+                  <span className="pg"><Glyph k={row.icon} /></span>
+                  <div className="pt"><div className="pn">{row.name}{row.required && <span className="req">{copy.common.required}</span>}</div><div className="pb">{row.body}</div></div>
+                  <span className="obw-grant" style={{ pointerEvents: "none" }}>{copy.common.openSettings}</span>
                 </button>
               ))}
             </div>
-            <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in {IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security"}, or from Settings → Permissions.</div>
-            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            <div className="obw-hint" style={{ marginTop: 12 }}>{copy.permissions.review(
+              language === "es"
+                ? IS_MAC ? "Ajustes del Sistema → Privacidad y seguridad" : "Configuración de Windows → Privacidad y seguridad"
+                : IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security",
+            )}</div>
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>{copy.common.back}</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>{copy.common.continue}</button></div>
           </div></div>
         );
       }
 
       case "brain": return (
         <div className="obw-body"><div className="obw-wrap wide">
-          <h2>Pick a brain for Jarvis.</h2>
-          <div className="obw-sub">Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings.</div>
+          <h2>{copy.brain.title}</h2>
+          <div className="obw-sub">{copy.brain.subtitle}</div>
           <div className="obw-provgrid" style={{ marginTop: 14 }}>
             {PROVIDERS.map((p) => (
               <button
@@ -567,65 +572,54 @@ export function OnboardingWizard({
               >
                 <span className="pd">{p.abbr}</span>
                 <div>
-                  <div className="pn">{p.name}{p.soon && <span className="obw-soon">Soon</span>}</div>
-                  <div className="pk">{p.soon ? "coming soon" : p.kind}</div>
+                  <div className="pn">{p.name}{p.soon && <span className="obw-soon">{copy.common.soon}</span>}</div>
+                  <div className="pk">{p.soon ? copy.common.comingSoon : (copy.provider[p.kind] ?? p.kind)}</div>
                 </div>
               </button>
             ))}
           </div>
           <div className="obw-provdetail">{renderProvDetail()}</div>
-          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>Continue</button></div>
-          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>Test the connection to continue.</div>}
+          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>{copy.common.back}</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>{copy.common.continue}</button></div>
+          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>{copy.brain.testHint}</div>}
         </div></div>
       );
 
       case "hear": {
-        const opts: Array<["skip" | "openai" | "groq" | "local", string, string, string]> = [
-          ["skip", "micoff", "Skip for now", "Text only. Wire up speech later from Settings."],
-          ["openai", "mic", "OpenAI Whisper", "Cloud Whisper. Accurate, needs an OpenAI key."],
-          ["groq", "mic", "Groq Whisper", "Fastest hosted Whisper. Needs a Groq key."],
-          ["local", "mic", "Local Whisper.cpp", "Runs on your machine. No key needed."],
-        ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>How should Jarvis hear you?</h2>
-            <div className="obw-sub">Speech to text powers voice messages and the mic button. Skip if you only plan to type; wire it up later in Settings.</div>
+            <h2>{copy.hearing.title}</h2>
+            <div className="obw-sub">{copy.hearing.subtitle}</div>
             <div className="obw-choices" style={{ marginTop: 14 }}>
-              {opts.map(([v, ic, nm, bd]) => (
-                <button key={v} className={`obw-choice ${stt === v ? "on" : ""}`} onClick={() => setStt(v)}>
-                  <span className="gi"><Glyph k={ic} /></span>
-                  <div className="ct"><div className="cn">{nm}</div><div className="cb">{bd}</div></div>
+              {copy.hearing.choices.map((option) => (
+                <button key={option.id} className={`obw-choice ${stt === option.id ? "on" : ""}`} onClick={() => setStt(option.id as typeof stt)}>
+                  <span className="gi"><Glyph k={option.icon} /></span>
+                  <div className="ct"><div className="cn">{option.name}</div><div className="cb">{option.body}</div></div>
                   <span className="rad" />
                 </button>
               ))}
             </div>
             {(stt === "openai" || stt === "groq") && (
-              <div className="obw-subctl"><input className="obw-inp" type="password" placeholder={`paste your ${stt === "openai" ? "OpenAI" : "Groq"} key`} value={sttKey} onChange={(e) => setSttKey(e.target.value)} /></div>
+              <div className="obw-subctl"><input className="obw-inp" type="password" placeholder={`${copy.common.pasteKey} · ${stt === "openai" ? "OpenAI" : "Groq"}`} value={sttKey} onChange={(e) => setSttKey(e.target.value)} /></div>
             )}
             {stt === "local" && (
               <div className="obw-subctl"><input className="obw-inp" placeholder="http://localhost:8080" value={sttEndpoint} onChange={(e) => setSttEndpoint(e.target.value)} /></div>
             )}
-            {stt !== "skip" && <MicLevelCheck />}
-            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            {stt !== "skip" && <MicLevelCheck language={language} />}
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>{copy.common.back}</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>{copy.common.continue}</button></div>
           </div></div>
         );
       }
 
       case "speak": {
-        const opts: Array<["off" | "edge" | "elevenlabs", string, string, string]> = [
-          ["off", "voloff", "No voice", "Text replies only. Lightest option."],
-          ["edge", "vol", "Edge TTS", "Free, clean, ships with Jarvis. Pick a voice below."],
-          ["elevenlabs", "vol", "ElevenLabs", "Higher fidelity. Needs an ElevenLabs key."],
-        ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Should Jarvis speak to you?</h2>
-            <div className="obw-sub">Voice replies are optional. Hear a voice before you choose; you can change this in Settings later.</div>
+            <h2>{copy.speaking.title}</h2>
+            <div className="obw-sub">{copy.speaking.subtitle}</div>
             <div className="obw-choices" style={{ marginTop: 14 }}>
-              {opts.map(([v, ic, nm, bd]) => (
-                <button key={v} className={`obw-choice ${tts === v ? "on" : ""}`} onClick={() => setTts(v)}>
-                  <span className="gi"><Glyph k={ic} /></span>
-                  <div className="ct"><div className="cn">{nm}</div><div className="cb">{bd}</div></div>
+              {copy.speaking.choices.map((option) => (
+                <button key={option.id} className={`obw-choice ${tts === option.id ? "on" : ""}`} onClick={() => setTts(option.id as typeof tts)}>
+                  <span className="gi"><Glyph k={option.icon} /></span>
+                  <div className="ct"><div className="cn">{option.name}</div><div className="cb">{option.body}</div></div>
                   <span className="rad" />
                 </button>
               ))}
@@ -633,10 +627,10 @@ export function OnboardingWizard({
             {tts === "edge" && (
               <div className="obw-subctl">
                 <select className="obw-inp" style={{ flex: 1 }} value={edgeVoice} onChange={(e) => setEdgeVoice(e.target.value)}>
-                  {EDGE_VOICES.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                  {edgeVoices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
                 </select>
                 <span className={`obw-drop ${previewing ? "s-speak" : ""}`} style={{ width: 24, height: 24, flexShrink: 0 }}><span className="in" /></span>
-                <button className="obw-btn obw-btn-ghost sm" disabled={previewing} onClick={preview}>{previewing ? "Playing…" : "Preview"}</button>
+                <button className="obw-btn obw-btn-ghost sm" disabled={previewing} onClick={preview}>{previewing ? copy.common.playing : copy.common.preview}</button>
                 {previewing && <span className="obw-wave">{Array.from({ length: 5 }, (_, i) => <b key={i} style={{ animationDelay: `${(i * 0.12).toFixed(2)}s` }} />)}</span>}
               </div>
             )}
@@ -644,63 +638,56 @@ export function OnboardingWizard({
               <div style={{ marginTop: 9 }}>
                 <div className="obw-subctl" style={{ flexWrap: "wrap" }}>
                   <select className="obw-inp" style={{ flex: 1, minWidth: 150 }} value={elevenVoice} onChange={(e) => setElevenVoice(e.target.value)}>
-                    {ELEVEN_PREMADE.map((v) => <option key={v.voice_id} value={v.voice_id}>{v.name}</option>)}
+                    {ELEVEN_PREMADE.map((v) => <option key={v.voice_id} value={v.voice_id}>{language === "es" ? ELEVEN_STYLE_ES[v.voice_id] ?? v.name : v.name}</option>)}
                   </select>
                   <select className="obw-inp" style={{ width: 148 }} value={elevenModel} onChange={(e) => setElevenModel(e.target.value)}>
-                    <option value="eleven_flash_v2_5">Flash v2.5 (fast)</option>
+                    <option value="eleven_flash_v2_5">Flash v2.5 ({language === "es" ? "rápido" : "fast"})</option>
                     <option value="eleven_multilingual_v2">Multilingual v2</option>
                     <option value="eleven_turbo_v2_5">Turbo v2.5</option>
                   </select>
                 </div>
                 <div className="obw-subctl" style={{ flexWrap: "wrap" }}>
-                  <input className="obw-inp" type="password" style={{ flex: 1, minWidth: 180 }} placeholder="paste your ElevenLabs key" value={elevenKey} onChange={(e) => setElevenKey(e.target.value)} />
-                  <button className="obw-btn obw-btn-ghost sm" disabled={ttsTest.status === "testing" || !elevenKey.trim()} onClick={testElevenLabs}>{ttsTest.status === "testing" ? "Testing…" : "Test & hear"}</button>
+                  <input className="obw-inp" type="password" style={{ flex: 1, minWidth: 180 }} placeholder={`${copy.common.pasteKey} · ElevenLabs`} value={elevenKey} onChange={(e) => setElevenKey(e.target.value)} />
+                  <button className="obw-btn obw-btn-ghost sm" disabled={ttsTest.status === "testing" || !elevenKey.trim()} onClick={testElevenLabs}>{ttsTest.status === "testing" ? copy.common.testing : copy.common.testHear}</button>
                   <span className={`obw-drop ${previewing ? "s-speak" : ""}`} style={{ width: 24, height: 24, flexShrink: 0 }}><span className="in" /></span>
-                  {ttsTest.status === "ok" && <span className="obw-testres ok"><span className="dot" />Connected · {ttsTest.msg}</span>}
+                  {ttsTest.status === "ok" && <span className="obw-testres ok"><span className="dot" />{copy.common.connected} · {ttsTest.msg}</span>}
                   {ttsTest.status === "err" && <span className="obw-testres err"><span className="dot" />{ttsTest.msg}</span>}
                 </div>
               </div>
             )}
             {error && <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 10 }}>{error}</div>}
-            {!speakReady && <div className="obw-hint" style={{ marginTop: 10 }}>Test your ElevenLabs key and pick a voice to continue.</div>}
-            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={busy || !speakReady} onClick={saveSetup}>{busy ? "Setting up…" : "Continue"}</button></div>
+            {!speakReady && <div className="obw-hint" style={{ marginTop: 10 }}>{copy.errors.elevenHint}</div>}
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>{copy.common.back}</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={busy || !speakReady} onClick={saveSetup}>{busy ? copy.common.settingUp : copy.common.continue}</button></div>
           </div></div>
         );
       }
 
       case "connect": {
-        const rows: Array<[string, string, string, string, boolean]> = [
-          ["google", "calendar", "Google Calendar", "Read your schedule and add holds.", false],
-          ["gmail", "mail", "Gmail", "Triage and draft, with your approval.", false],
-          ["telegram", "send", "Telegram", "Talk to Jarvis from your phone.", false],
-          ["discord", "chat", "Discord", "In the code as a stub today.", true],
-          ["whatsapp", "chat", "WhatsApp", "In the code as a stub today.", true],
-        ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Connect your world.</h2>
-            <div className="obw-sub">Hook up the apps Jarvis should know about. All optional, all revocable from Settings.</div>
+            <h2>{copy.connect.title}</h2>
+            <div className="obw-sub">{copy.connect.subtitle}</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
-              {rows.map(([id, ic, nm, bd, soon]) => {
-                const isGoogle = id === "google" || id === "gmail";
-                const isConnected = connected.has(id);
+              {copy.connect.rows.map((row) => {
+                const isGoogle = row.id === "google" || row.id === "gmail";
+                const isConnected = connected.has(row.id);
                 return (
-                  <div key={id} className="obw-prow" style={{ flexWrap: "wrap" }}>
-                    <span className="pg"><Glyph k={ic} /></span>
-                    <div className="pt"><div className="pn">{nm}</div><div className="pb">{bd}</div></div>
-                    {soon ? <span className="obw-pill">Soon</span>
-                      : isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
+                  <div key={row.id} className="obw-prow" style={{ flexWrap: "wrap" }}>
+                    <span className="pg"><Glyph k={row.icon} /></span>
+                    <div className="pt"><div className="pn">{row.name}</div><div className="pb">{row.body}</div></div>
+                    {row.soon ? <span className="obw-pill">{copy.common.soon}</span>
+                      : isConnected ? <span className="obw-granted"><Glyph k="check" />{copy.common.connected}</span>
                       : isGoogle ? (
                         googleState === "pending"
-                          ? <button className="obw-grant" onClick={cancelGoogle} title="Stop waiting for the sign-in">Connecting… ✕</button>
-                          : <button className="obw-grant" onClick={connectGoogle}>Connect</button>
+                          ? <button className="obw-grant" onClick={cancelGoogle} title={copy.errors.stopSignin}>{copy.common.connecting} ✕</button>
+                          : <button className="obw-grant" onClick={connectGoogle}>{copy.common.connect}</button>
                       )
-                      : id === "telegram" ? <button className="obw-grant" onClick={() => setTgOpen((o) => !o)}>Connect</button>
-                      : <span className="obw-pill">Soon</span>}
-                    {id === "telegram" && tgOpen && !isConnected && (
+                      : row.id === "telegram" ? <button className="obw-grant" onClick={() => setTgOpen((o) => !o)}>{copy.common.connect}</button>
+                      : <span className="obw-pill">{copy.common.soon}</span>}
+                    {row.id === "telegram" && tgOpen && !isConnected && (
                       <div style={{ flexBasis: "100%", display: "flex", gap: 8, marginTop: 10 }}>
-                        <input className="obw-inp" style={{ flex: 1 }} placeholder="Bot token from @BotFather" value={tgToken} onChange={(e) => setTgToken(e.target.value)} />
-                        <button className="obw-btn obw-btn-pri sm" disabled={tgBusy || !tgToken.trim()} onClick={saveTelegram}>{tgBusy ? "Saving…" : "Save"}</button>
+                        <input className="obw-inp" style={{ flex: 1 }} placeholder={copy.connect.botToken} value={tgToken} onChange={(e) => setTgToken(e.target.value)} />
+                        <button className="obw-btn obw-btn-pri sm" disabled={tgBusy || !tgToken.trim()} onClick={saveTelegram}>{tgBusy ? copy.common.saving : copy.common.save}</button>
                       </div>
                     )}
                   </div>
@@ -708,7 +695,7 @@ export function OnboardingWizard({
               })}
             </div>
             {connectErr && <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 12 }}>{connectErr}</div>}
-            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><button className="obw-skip grow" onClick={next} style={{ textAlign: "left", marginLeft: 8 }}>Skip for now</button><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>{copy.common.back}</button><button className="obw-skip grow" onClick={next} style={{ textAlign: "left", marginLeft: 8 }}>{copy.common.skipNow}</button><button className="obw-btn obw-btn-pri" onClick={next}>{copy.common.continue}</button></div>
           </div></div>
         );
       }
@@ -719,24 +706,24 @@ export function OnboardingWizard({
             <span className="obw-bloom ok" style={{ width: 150, height: 150, left: "50%", top: "50%", transform: "translate(-50%,-52%)" }} />
             <span className="obw-drop s-done" style={{ width: 58, height: 58 }}><span className="in" /></span>
           </div>
-          <h2>You’re all set.</h2>
+          <h2>{copy.allSet.title}</h2>
           <div className="obw-sub" style={{ maxWidth: "33ch", margin: "9px auto 0" }}>
-            {recapLine()} Bringing your dashboard online now.
+            {recapLine()} {copy.allSet.online}
           </div>
           <div className="obw-recap">
             {configuredThisSession ? (
               <>
-                <div><span className="ok">✓</span> brain · {prov.name}</div>
-                <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
-                <div><span className="ok">✓</span> profile saved to your Vault</div>
+                <div><span className="ok">✓</span> {copy.allSet.brain} · {prov.name}</div>
+                <div><span className="ok">✓</span> {copy.allSet.voice} · {tts === "off" ? copy.allSet.textOnly : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
+                <div><span className="ok">✓</span> {copy.allSet.profile}</div>
               </>
             ) : (
               // Resumed past the setup steps: this session never touched
               // brain/voice, so don't print their defaults as saved config.
-              <div><span className="ok">✓</span> profile saved to your Vault</div>
+              <div><span className="ok">✓</span> {copy.allSet.profile}</div>
             )}
           </div>
-          <div style={{ marginTop: 22 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 208 }} onClick={onComplete}>Open Jarvis</button></div>
+          <div style={{ marginTop: 22 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 208 }} onClick={onComplete}>{copy.allSet.open}</button></div>
         </div></div>
       );
 
@@ -745,60 +732,60 @@ export function OnboardingWizard({
   }
 
   function recapLine() {
-    if (!configuredThisSession) return "Your brain is wired up, and I know a little about you.";
-    return `${prov.name} is wired up${tts !== "off" ? ", voice is on" : ""}, and I know a little about you.`;
+    if (!configuredThisSession) return copy.allSet.resumed;
+    return `${prov.name} ${copy.allSet.wired}${tts !== "off" ? copy.allSet.voiceOn : ""}${copy.allSet.knowYou}`;
   }
 
   function renderProvDetail() {
-    if (prov.noConfig) return <div className="obw-testres ok" style={{ fontSize: 12 }}><span className="dot" />Jarvis AI is included with your plan. Nothing to configure.</div>;
+    if (prov.noConfig) return <div className="obw-testres ok" style={{ fontSize: 12 }}><span className="dot" />{copy.brain.included}</div>;
     // The live Ollama catalog when we have one, the curated list otherwise.
     const pickerModels = provId === "ollama" && ollamaModels && ollamaModels.length > 0 ? ollamaModels : (prov.models ?? []);
     return (
       <>
-        {prov.needsBaseUrl && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
-        {prov.needsKey && <div className="obw-field"><label>API key</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
+        {prov.needsBaseUrl && <div className="obw-field"><label>{provId === "ollama" ? copy.provider.ollamaUrl : provId === "litellm" ? copy.provider.proxyUrl : copy.provider.baseUrl}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
+        {prov.needsKey && <div className="obw-field"><label>{copy.common.apiKey}</label><input className="obw-inp" type="password" placeholder={copy.common.pasteKey} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
         {prov.freeModel
-          ? <div className="obw-field"><label>Model</label><input className="obw-inp" placeholder="model id" value={model} onChange={(e) => setModel(e.target.value)} /></div>
-          : <div className="obw-field"><label>Model</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}
-        {provId === "ollama" && ollamaLoading && <div className="obw-hint">Reading installed models from Ollama…</div>}
-        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. llama3.1:8b).</div>}
+          ? <div className="obw-field"><label>{copy.common.model}</label><input className="obw-inp" placeholder={copy.common.modelId} value={model} onChange={(e) => setModel(e.target.value)} /></div>
+          : <div className="obw-field"><label>{copy.common.model}</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}
+        {provId === "ollama" && ollamaLoading && <div className="obw-hint">{copy.brain.readingOllama}</div>}
+        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">{copy.brain.ollamaError}</div>}
         <div className="obw-testrow">
-          <button className="obw-btn obw-btn-ghost sm" disabled={test.status === "testing"} onClick={runTest}>{test.status === "testing" ? "Testing…" : "Test connection"}</button>
-          {test.status === "ok" && <span className="obw-testres ok"><span className="dot" />Connected · {test.msg}</span>}
+          <button className="obw-btn obw-btn-ghost sm" disabled={test.status === "testing"} onClick={runTest}>{test.status === "testing" ? copy.common.testing : copy.common.testConnection}</button>
+          {test.status === "ok" && <span className="obw-testres ok"><span className="dot" />{copy.common.connected} · {test.msg}</span>}
           {test.status === "err" && <span className="obw-testres err"><span className="dot" />{test.msg}</span>}
         </div>
-        {prov.hint && <div className="obw-hint">{prov.hint}</div>}
+        {prov.hint && <div className="obw-hint">{provId === "nvidia" ? copy.brain.liveCatalog : provId === "openai_compatible" ? copy.brain.compatibleHint : provId === "litellm" ? copy.brain.proxyHint : prov.hint}</div>}
       </>
     );
   }
 
   function renderTour() {
-    const T = TOUR[tourI]!;
-    const pos = T.pos as React.CSSProperties;
+    const card = copy.tour.cards[tourI]!;
+    const pos = TOUR_POS[tourI]!;
     return (
       <div className="obw-tourstage">
         <div className="obw-tourframe">
           <div className="obw-miniapp">
             <div className="mrail">
-              <div className="mh">Run</div><div className="mr">Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
-              <div className="mh">Know</div><div className="mr">Memory</div><div className="mr">Goals</div>
-              <div className="mh">Guard</div><div className="mr">Authority <span className="bd">2</span></div><div className="mr on">Now</div>
+              <div className="mh">{t("nav.run")}</div><div className="mr">{t("room.workflows")}</div><div className="mr">{t("room.agents")}</div><div className="mr">{t("room.tasks")}</div>
+              <div className="mh">{t("nav.know")}</div><div className="mr">{t("room.memory")}</div><div className="mr">{t("room.goals")}</div>
+              <div className="mh">{t("nav.guard")}</div><div className="mr">{t("room.authority")} <span className="bd">2</span></div><div className="mr on">{t("nav.now")}</div>
             </div>
             <div className="mmain">
-              <div className="mtop">Now · good morning</div>
+              <div className="mtop">{t("nav.now")} · {copy.tour.morning}</div>
               <div className="mgrid"><div className="mcard" /><div className="mcard" /><div className="mcard" /><div className="mcard" /></div>
               <span className="mpeb obw-drop" style={{ width: 26, height: 26 }}><span className="in" /></span>
             </div>
           </div>
           <div className="obw-tourdim" />
           <div className="obw-spot" style={pos}>
-            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of 5</span></div>
-            <div className="sm">{T.sm}</div>
-            {T.t && <div className="stry">{T.t}</div>}
+            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">{copy.tour.title}</span><span className="sc">{copy.tour.count(tourI + 1, copy.tour.cards.length)}</span></div>
+            <div className="sm">{card.text}</div>
+            {card.tryText && <div className="stry">{card.tryText}</div>}
             {error && <div className="stry" style={{ color: "var(--listen)" }}>{error}</div>}
             <div className="sb">
-              <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
-              <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === TOUR.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
+              <button className="obw-skip" onClick={skipTour}>{copy.common.skipTour}</button><span className="grow" />
+              <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === copy.tour.cards.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === copy.tour.cards.length - 1 ? copy.common.finish : copy.common.next}</button>
             </div>
           </div>
         </div>
@@ -811,7 +798,8 @@ export function OnboardingWizard({
    A REAL meter: getUserMedia + AnalyserNode drive the bars. Mounted only when
    an STT option is selected, so text-only users never see a mic prompt. Falls
    back to honest copy when access is denied/unavailable. */
-function MicLevelCheck() {
+function MicLevelCheck({ language }: { language: JarvisLanguage }) {
+  const copy = ONBOARDING_COPY[language];
   const [level, setLevel] = useState(0); // 0..1 RMS, boosted for visibility
   const [micState, setMicState] = useState<"requesting" | "live" | "denied">("requesting");
   useEffect(() => {
@@ -855,11 +843,11 @@ function MicLevelCheck() {
         {Array.from({ length: BARS }, (_, i) => <b key={i} className={micState === "live" && level * BARS >= i + 0.5 ? "on" : ""} />)}
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>Default microphone</div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>{copy.mic.title}</div>
         <div style={{ fontSize: 11, color: "var(--ink3)" }}>
           {micState === "denied"
-            ? "Couldn't access the microphone — you can test it later in Settings."
-            : micState === "live" ? "Say something to check your level" : "Requesting microphone access…"}
+            ? copy.mic.denied
+            : micState === "live" ? copy.mic.live : copy.mic.requesting}
         </div>
       </div>
     </div>
@@ -871,9 +859,9 @@ function MicLevelCheck() {
    lifecycle, TTS playback, live STT, facts counter, skip and done are all
    preserved; only the presentation is rebuilt to Monochrome Lab. */
 const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", speaking: "s-speak", done: "s-done" };
-const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "ready", error: "reconnecting…", thinking: "thinking", speaking: "speaking", listening: "listening", done: "done" };
 
-function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onComplete: () => void }) {
+function InterviewStep({ language, ttsDisabled, onComplete }: { language: JarvisLanguage; ttsDisabled: boolean; onComplete: () => void }) {
+  const copy = ONBOARDING_COPY[language];
   const session = useInterviewSession({ ttsDisabled });
   const [composerText, setComposerText] = useState("");
   const recognizerRef = useRef<{ stop: () => void } | null>(null);
@@ -894,7 +882,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
       onresult: (e: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void;
       onend: () => void; onerror: () => void; start: () => void; stop: () => void;
     })();
-    rec.continuous = false; rec.interimResults = true; rec.lang = "en-US";
+    rec.continuous = false; rec.interimResults = true; rec.lang = language === "es" ? "es-ES" : "en-US";
     let finalText = "";
     rec.onresult = (event) => {
       let interim = "", captured = "";
@@ -910,7 +898,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
     try { rec.start(); recognizerRef.current = rec; } catch { /* ignore */ }
     return () => { try { rec.stop(); } catch { /* ignore */ } recognizerRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.phase, session.textOnly]);
+  }, [language, session.phase, session.textOnly]);
 
   const sendTyped = () => { const t = composerText.trim(); if (!t) return; setComposerText(""); session.sendUserMessage(t); };
   const [skipErr, setSkipErr] = useState<string | null>(null);
@@ -922,7 +910,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
       onComplete();
     } catch {
       // Completing anyway would replay the interview next launch.
-      setSkipErr("Couldn't reach the daemon — try again.");
+      setSkipErr(copy.errors.daemon!);
     }
   };
 
@@ -933,27 +921,27 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
           <span className="obw-bloom ok" style={{ width: 140, height: 140, left: "50%", top: "50%", transform: "translate(-50%,-52%)" }} />
           <span className="obw-drop s-done" style={{ width: 52, height: 52 }}><span className="in" /></span>
         </div>
-        <h2>Got it.</h2>
-        <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>{session.farewell || "I have plenty to start with. Welcome to Jarvis."}</div>
-        <div className="obw-recap" style={{ marginTop: 10 }}><div>{session.factsRecorded} {session.factsRecorded === 1 ? "fact" : "facts"} in your Vault</div></div>
-        <div style={{ marginTop: 20 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 180 }} onClick={onComplete}>Continue</button></div>
+        <h2>{copy.interview.done}</h2>
+        <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>{session.farewell || copy.interview.farewell}</div>
+        <div className="obw-recap" style={{ marginTop: 10 }}><div>{session.factsRecorded} {session.factsRecorded === 1 ? copy.interview.fact : copy.interview.facts} {copy.interview.vault}</div></div>
+        <div style={{ marginTop: 20 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 180 }} onClick={onComplete}>{copy.interview.continue}</button></div>
       </div></div></div>
     );
   }
 
   const msgs = session.messages;
   const lastAsstIdx = msgs.map((m) => m.role).lastIndexOf("assistant");
-  const currentQ = lastAsstIdx >= 0 ? msgs[lastAsstIdx]!.text : (session.phase === "connecting" ? "Getting ready to chat…" : "…");
+  const currentQ = lastAsstIdx >= 0 ? msgs[lastAsstIdx]!.text : (session.phase === "connecting" ? copy.interview.ready : "…");
   const history = (lastAsstIdx >= 0 ? msgs.slice(0, lastAsstIdx) : msgs).slice(-4);
 
   return (
     <div className="obw-iv">
       <div className="obw-ivhead">
-        <span className="l">Jarvis · getting to know you</span>
+        <span className="l">{copy.interview.title}</span>
         <span className="r">
-          <span className="facts"><b>{session.factsRecorded}</b> facts</span>
+          <span className="facts"><b>{session.factsRecorded}</b> {session.factsRecorded === 1 ? copy.interview.fact : copy.interview.facts}</span>
           {skipErr && <span className="obw-hint" style={{ color: "var(--listen)" }}>{skipErr}</span>}
-          <button type="button" className="obw-skip" onClick={skip}>Skip</button>
+          <button type="button" className="obw-skip" onClick={skip}>{copy.interview.skip}</button>
         </span>
       </div>
       <div className="obw-ivstage">
@@ -961,7 +949,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
         <span className={`obw-drop iv-peb ${IV_PHASE_CLASS[session.phase] ?? ""}`} style={{ width: 54, height: 54 }}>
           <span className="in" /><span className="ring" />
         </span>
-        <div className="obw-ivphase">{IV_PHASE_LABEL[session.phase] ?? session.phase}</div>
+        <div className="obw-ivphase">{copy.phases[session.phase] ?? session.phase}</div>
         <div className="obw-ivq">{currentQ}</div>
         {history.length > 0 && (
           <div className="obw-ivtrans">
@@ -973,11 +961,11 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
         )}
       </div>
       <div className="obw-ivcomposer">
-        <input className="obw-inp" placeholder="Type your answer, or just talk" value={composerText}
+        <input className="obw-inp" placeholder={copy.interview.placeholder} value={composerText}
           onChange={(e) => setComposerText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") sendTyped(); }} />
-        {session.phase === "listening" && !session.textOnly && <span className="obw-voicepill"><span className="ld" />Listening</span>}
-        <button type="button" className="obw-btn obw-btn-pri sm" onClick={sendTyped}>Send</button>
+        {session.phase === "listening" && !session.textOnly && <span className="obw-voicepill"><span className="ld" />{copy.interview.listening}</span>}
+        <button type="button" className="obw-btn obw-btn-pri sm" onClick={sendTyped}>{copy.interview.send}</button>
       </div>
     </div>
   );
