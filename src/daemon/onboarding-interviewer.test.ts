@@ -68,6 +68,13 @@ describe('createInterviewSession', () => {
     expect(session.done).toBe(false);
     expect(session.factsRecorded).toBe(0);
     expect(session.farewell).toBeUndefined();
+    expect(session.language).toBe('en');
+  });
+
+  test('adds the selected language contract to the interviewer prompt', () => {
+    const session = createInterviewSession('es-MX');
+    expect(session.language).toBe('es');
+    expect(session.messages[0]?.content).toContain('Use Spanish for every user-facing response.');
   });
 });
 
@@ -219,5 +226,17 @@ describe('runInterviewTurn — MAX_INTERVIEW_TURNS safeguard', () => {
     expect(session.done).toBe(true);
     expect(result.farewell).toBeDefined();
     expect(result.farewell!.length).toBeGreaterThan(0);
+  });
+
+  test('the turn-cap safeguard respects the selected Spanish language', async () => {
+    const session = createInterviewSession('es');
+    session.turnCount = MAX_INTERVIEW_TURNS;
+    const llm = fakeLLM([]);
+
+    const result = await runInterviewTurn(session, llm, 'una cosa más');
+
+    expect(result.done).toBe(true);
+    expect(result.farewell).toContain('Hemos cubierto bastante');
+    expect(result.farewell).not.toContain("We've covered");
   });
 });

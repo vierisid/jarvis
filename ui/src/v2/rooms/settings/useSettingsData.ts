@@ -72,6 +72,7 @@ export const LLM_PROVIDER_LABELS = LLM_PROVIDER_KIND_LABELS;
 
 export type STTProvider = "openai" | "groq" | "sarvam" | "local";
 export type TTSProvider = "edge" | "elevenlabs" | "sarvam";
+export type JarvisLanguage = "en" | "es";
 
 /**
  * Per-provider summary returned by GET /api/config/llm. The credential value
@@ -203,6 +204,10 @@ export interface AutostartStatus {
 }
 
 export interface RootConfig {
+  user?: {
+    name: string;
+    language: JarvisLanguage;
+  };
   heartbeat?: {
     interval_minutes: number;
     active_hours: { start: number; end: number };
@@ -780,6 +785,22 @@ export function useSettingsData() {
     [],
   );
 
+  const setResponseLanguage = useCallback(
+    async (language: JarvisLanguage): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/user",
+          { language },
+        );
+        await refresh();
+        return { ok: true, message: r.message || "Language preference saved." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
   // ── Service control ─────────────────────────────────────────────────
   const restartDaemon = useCallback(async (): Promise<ActionResult> => {
     try {
@@ -948,6 +969,7 @@ export function useSettingsData() {
     setVoiceConfig,
     setHeartbeatInterval,
     setHeartbeatAggressiveness,
+    setResponseLanguage,
     restartDaemon,
     saveProfile,
     clearProfile,

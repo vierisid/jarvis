@@ -28,6 +28,8 @@
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMTool, LLMToolCall } from '../llm/provider.ts';
 import { appendUserProfileFact, markInterviewWrapped } from '../vault/user-profile.ts';
+import { buildResponseLanguageInstruction, resolveJarvisLanguage } from '../config/language.ts';
+import type { JarvisLanguage } from '../config/types.ts';
 
 /** Hard cap on agent turns per session — defends against forget-to-wrap loops. */
 export const MAX_INTERVIEW_TURNS = 30;
@@ -132,16 +134,23 @@ export interface InterviewSession {
   farewell?: string;
   /** Count of facts recorded so far — surfaced to the UI for progress. */
   factsRecorded: number;
+  /** Selected response language, used by safeguards as well as the LLM. */
+  language: JarvisLanguage;
 }
 
-export function createInterviewSession(): InterviewSession {
+export function createInterviewSession(languageValue: unknown = 'en'): InterviewSession {
+  const language = resolveJarvisLanguage(languageValue);
   return {
     messages: [
-      { role: 'system', content: INTERVIEWER_SYSTEM_PROMPT },
+      {
+        role: 'system',
+        content: `${INTERVIEWER_SYSTEM_PROMPT}\n\n${buildResponseLanguageInstruction(language)}`,
+      },
     ],
     turnCount: 0,
     done: false,
     factsRecorded: 0,
+    language,
   };
 }
 
@@ -202,8 +211,9 @@ export async function runInterviewTurn(
   if (session.turnCount > MAX_INTERVIEW_TURNS) {
     // Safeguard: stop the loop if the agent never wrapped on its own.
     session.done = true;
-    session.farewell =
-      "We've covered a lot. Let me wrap here — I have plenty to start with. Welcome aboard.";
+    session.farewell = session.language === 'es'
+      ? 'Hemos cubierto bastante. Lo dejamos aquí; ya tengo mucho con lo que empezar. Bienvenido a bordo.'
+      : "We've covered a lot. Let me wrap here — I have plenty to start with. Welcome aboard.";
     markInterviewWrapped();
     return {
       assistantText: session.farewell,
@@ -256,7 +266,7 @@ export async function runInterviewTurn(
     if (wrappedThisTurn) {
       session.done = true;
       return {
-        assistantText: response.content || session.farewell || 'Done.',
+        assistantText: response.content || session.farewell || (session.language === 'es' ? 'Listo.' : 'Done.'),
         done: true,
         farewell: session.farewell,
         factsRecorded: session.factsRecorded,

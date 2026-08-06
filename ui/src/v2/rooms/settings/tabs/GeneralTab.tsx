@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
+import type { JarvisLanguage } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import {
   resetOnboarding,
@@ -7,6 +8,10 @@ import {
 } from "../../../onboarding/resetClient";
 
 const HEARTBEAT_LEVELS = ["passive", "moderate", "aggressive"] as const;
+const RESPONSE_LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
+  { id: "en", label: "English" },
+  { id: "es", label: "Español" },
+];
 
 export function GeneralTab({
   data,
@@ -28,6 +33,41 @@ export function GeneralTab({
 
   return (
     <div>
+      {/* Response language */}
+      <section className="v2-set__section">
+        <div className="v2-set__section-head">
+          <div>
+            <h3 className="v2-set__section-title">Jarvis language</h3>
+            <div className="v2-set__section-sub">
+              Pins chat, delegated work, onboarding interview, and voice replies to one language.
+            </div>
+          </div>
+          <span className="v2-set__chip">
+            {rootCfg?.user?.language === "es" ? "Español" : "English"}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
+          {RESPONSE_LANGUAGES.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={`v2-set__btn ${(rootCfg?.user?.language ?? "en") === option.id ? "v2-set__btn--primary" : ""}`}
+              data-active={(rootCfg?.user?.language ?? "en") === option.id}
+              aria-pressed={(rootCfg?.user?.language ?? "en") === option.id}
+              onClick={async () => {
+                const r = await data.setResponseLanguage(option.id);
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="v2-set__hint">
+          Jarvis keeps this language unless you explicitly ask for another language in your current message.
+        </p>
+      </section>
+
       {/* Service / Restart */}
       <section className="v2-set__section">
         <div className="v2-set__section-head">

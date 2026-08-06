@@ -233,8 +233,12 @@ export type AuthConfig = {
   insecure_open_access?: boolean;
 };
 
+export type JarvisLanguage = 'en' | 'es';
+
 export type UserConfig = {
   name?: string;
+  /** Default language for every user-facing Jarvis response. */
+  language?: JarvisLanguage;
 };
 
 /**
@@ -451,6 +455,7 @@ export type JarvisConfig = {
 export const DEFAULT_CONFIG: JarvisConfig = {
   user: {
     name: '',
+    language: 'en',
   },
   telemetry: {
     enabled: true,

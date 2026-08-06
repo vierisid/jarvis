@@ -74,6 +74,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { buildResponseLanguageInstruction, resolveJarvisLanguage } from '../config/language.ts';
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -358,6 +359,7 @@ export class AgentService implements Service, IAgentService {
         const taskListener = self.convTaskEventListener ?? undefined;
 
         for await (const event of self.convOrchestrator.streamTurn(text, {
+          responseLanguage: resolveJarvisLanguage(self.config.user?.language),
           userIdentity: identity,
           userProfile,
           recentDialogue,
@@ -516,6 +518,7 @@ export class AgentService implements Service, IAgentService {
     const result = await this.convOrchestrator.processTurn(
       text,
       {
+        responseLanguage: resolveJarvisLanguage(this.config.user?.language),
         userIdentity: identity,
         userProfile: this.buildUserProfileBlock(),
         recentDialogue,
@@ -777,6 +780,7 @@ export class AgentService implements Service, IAgentService {
     const traits = (this.config.personality?.core_traits ?? []).slice(0, 6).join(', ');
     return [
       `You are ${name}${userName ? `, ${userName}'s personal AI assistant` : ', a personal AI assistant'}, in a live, real-time voice conversation.`,
+      buildResponseLanguageInstruction(this.config.user?.language),
       'Speak naturally and conversationally, the way a person talks out loud.',
       traits ? `Your character: ${traits}.` : '',
       'You can take real actions with your tools whenever the user asks.',
@@ -838,6 +842,7 @@ export class AgentService implements Service, IAgentService {
 
     const context: PromptContext = {
       userName: this.config.user?.name || undefined,
+      responseLanguage: resolveJarvisLanguage(this.config.user?.language),
       currentTime: new Date().toISOString(),
       availableSpecialists: this.specialistListText || undefined,
       hasSidecars,

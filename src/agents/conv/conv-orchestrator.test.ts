@@ -182,7 +182,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: sunny' });
+    await conv.processTurn('Hi', { responseLanguage: 'es', userIdentity: 'Name: Alice', ambientFacts: 'Weather: sunny' });
     await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: rainy' });
 
     expect(captured).toHaveLength(2);
@@ -198,6 +198,9 @@ describe('ConvOrchestrator', () => {
       expect(messages[1]!.role).toBe('system');
       expect(messages[1]!.cache).toBeUndefined();
       const dynamicText = String(messages[1]!.content);
+      if (messages === captured[0]) {
+        expect(dynamicText).toContain('Use Spanish for every user-facing response.');
+      }
       expect(dynamicText).toContain('Alice');
       expect(dynamicText).toContain('Weather');
     }

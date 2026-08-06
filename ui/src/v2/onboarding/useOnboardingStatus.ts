@@ -34,6 +34,8 @@ export interface OnboardingStatus {
   tutorial_dismissed: boolean;
   tutorial_progress_step: string | null;
   last_reset_at: number | null;
+  /** User-facing response language selected during first-run setup. */
+  language?: "en" | "es";
   /** Daemon process boot time (ms). Used in tandem with
    *  `post_setup_services_ready` to detect a stale daemon that needs a
    *  restart. */

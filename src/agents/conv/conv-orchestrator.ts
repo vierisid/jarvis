@@ -25,10 +25,14 @@ import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
 import { TaskDispatcher } from './task-dispatcher.ts';
 import { TaskRegistry } from './task-registry.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope } from './task-envelope.ts';
+import { buildResponseLanguageInstruction } from '../../config/language.ts';
+import type { JarvisLanguage } from '../../config/types.ts';
 
 const MAX_CONV_ITERATIONS = 8;
 
 export type ConvSystemContext = {
+  /** Live user preference; kept dynamic so a settings change applies now. */
+  responseLanguage?: JarvisLanguage;
   /** User persona (name, timezone, role, etc.) - short identity block. */
   userIdentity?: string;
   /**
@@ -416,6 +420,11 @@ export class ConvOrchestrator {
    */
   private buildDynamicSystemPrompt(context: ConvSystemContext): string {
     const parts: string[] = [];
+
+    if (context.responseLanguage) {
+      parts.push(buildResponseLanguageInstruction(context.responseLanguage));
+      parts.push('');
+    }
 
     if (context.userIdentity) {
       parts.push('# User');

@@ -13,6 +13,13 @@ import "./OnboardingWizard.css";
 type StepKey =
   | "welcome" | "perms" | "brain" | "hear" | "speak" | "connect" | "interview" | "tour" | "allset";
 
+type JarvisLanguage = "en" | "es";
+
+const LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
+  { id: "en", label: "English" },
+  { id: "es", label: "Español" },
+];
+
 const STEPS: ReadonlyArray<[StepKey, string]> = [
   ["welcome", "Welcome"], ["perms", "Permissions"], ["brain", "The brain"],
   ["hear", "Hearing"], ["speak", "Speaking"], ["connect", "Connect"],
@@ -63,7 +70,16 @@ const EDGE_VOICES = [
   { label: "Natasha · AU Female", id: "en-AU-NatashaNeural" },
   { label: "Jenny · US Female", id: "en-US-JennyNeural" },
   { label: "Davis · US Male", id: "en-US-DavisNeural" },
+  { label: "Elvira · España · Femenina", id: "es-ES-ElviraNeural" },
+  { label: "Álvaro · España · Masculina", id: "es-ES-AlvaroNeural" },
+  { label: "Dalia · México · Femenina", id: "es-MX-DaliaNeural" },
+  { label: "Jorge · México · Masculina", id: "es-MX-JorgeNeural" },
 ];
+
+const DEFAULT_EDGE_VOICE: Record<JarvisLanguage, string> = {
+  en: "en-US-AriaNeural",
+  es: "es-ES-ElviraNeural",
+};
 
 // ElevenLabs premade voice ids — stable, no /voices call needed (so a key
 // that can synthesize but lacks the voices_read scope still works).
@@ -130,11 +146,15 @@ export function OnboardingWizard({
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"),
   );
+  const [language, setLanguage] = useState<JarvisLanguage>(status?.language ?? "en");
   const applyTheme = (t: "light" | "dark") => {
     setTheme(t);
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem("jarvis-theme", t); } catch { /* ignore */ }
   };
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   // permissions
   // brain
@@ -150,7 +170,7 @@ export function OnboardingWizard({
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
   // speaking
   const [tts, setTts] = useState<"off" | "edge" | "elevenlabs">("edge");
-  const [edgeVoice, setEdgeVoice] = useState(EDGE_VOICES[0]!.id);
+  const [edgeVoice, setEdgeVoice] = useState(DEFAULT_EDGE_VOICE[language]);
   const [elevenKey, setElevenKey] = useState("");
   const [elevenVoice, setElevenVoice] = useState(ELEVEN_PREMADE[0]!.voice_id);
   const [elevenModel, setElevenModel] = useState("eleven_flash_v2_5");
@@ -171,6 +191,10 @@ export function OnboardingWizard({
 
   // Reset the ElevenLabs test whenever the key changes or the provider flips.
   useEffect(() => { setTtsTest({ status: "idle" }); }, [elevenKey, tts]);
+
+  // Keep first-run voice output aligned with the selected response language.
+  // Users can still choose any voice manually after reaching the Speaking step.
+  useEffect(() => { setEdgeVoice(DEFAULT_EDGE_VOICE[language]); }, [language]);
 
   useEffect(() => {
     const p = PROVIDERS.find((x) => x.id === provId)!;
@@ -267,7 +291,7 @@ export function OnboardingWizard({
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 
-      const payload: Record<string, unknown> = { llm, tts: ttsBlock };
+      const payload: Record<string, unknown> = { user: { language }, llm, tts: ttsBlock };
       if (stt !== "skip") {
         const sttBlock: Record<string, unknown> = { provider: stt };
         if ((stt === "openai" || stt === "groq") && sttKey) sttBlock[stt] = { api_key: sttKey };
@@ -280,19 +304,23 @@ export function OnboardingWizard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [prov, provId, apiKey, baseUrl, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [language, prov, provId, apiKey, baseUrl, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await fetch("/api/onboarding/skip", { method: "POST" });
+      const r = await fetch("/api/onboarding/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language }),
+      });
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
       onComplete();
     } catch (e) {
       // Closing anyway would replay onboarding next launch — surface it instead.
       setError(e instanceof Error && e.message ? `Couldn't save the skip: ${e.message}` : "Couldn't reach the daemon — try again.");
     } finally { setBusy(false); }
-  }, [onComplete]);
+  }, [language, onComplete]);
 
   /* — speaking: ElevenLabs test via real synthesis — */
   // A synthesis call exercises the exact TTS path the app uses (and plays the
@@ -302,7 +330,7 @@ export function OnboardingWizard({
     if (!elevenKey.trim()) { setTtsTest({ status: "err", msg: "Paste your ElevenLabs key first." }); return; }
     setTtsTest({ status: "testing" });
     try {
-      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "elevenlabs", api_key: elevenKey.trim(), voice_id: elevenVoice, model: elevenModel }) });
+      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "elevenlabs", api_key: elevenKey.trim(), voice_id: elevenVoice, model: elevenModel, text: language === "es" ? "Hola, soy Jarvis. Así es como voy a sonar." : undefined }) });
       if (!r.ok) {
         const t = await r.json().catch(() => ({ error: "" })) as { error?: string };
         const m = (t.error || "").includes("401") ? "ElevenLabs rejected this key. Check it's valid and has text-to-speech access." : (t.error || "Test failed.").slice(0, 90);
@@ -314,7 +342,7 @@ export function OnboardingWizard({
     } catch (e) {
       setTtsTest({ status: "err", msg: e instanceof Error ? e.message : "Test failed." });
     }
-  }, [elevenKey, elevenVoice, elevenModel]);
+  }, [language, elevenKey, elevenVoice, elevenModel]);
 
   /* — connect actions — */
   // Google: real OAuth. Open the consent URL, then poll status until the
@@ -412,11 +440,12 @@ export function OnboardingWizard({
       const body: Record<string, unknown> = { provider: tts === "elevenlabs" ? "elevenlabs" : "edge" };
       if (tts === "elevenlabs") { body.api_key = elevenKey.trim(); body.voice_id = elevenVoice; body.model = elevenModel; }
       else body.voice = edgeVoice;
+      if (language === "es") body.text = "Hola, soy Jarvis. Así es como voy a sonar.";
       const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (r.ok) await playPreviewAudio(r);
     } catch { /* best-effort */ }
     window.setTimeout(() => setPreviewing(false), 2000);
-  }, [previewing, tts, edgeVoice, elevenKey, elevenVoice, elevenModel]);
+  }, [language, previewing, tts, edgeVoice, elevenKey, elevenVoice, elevenModel]);
 
   const speakReady = tts !== "elevenlabs" || ttsTest.status === "ok";
 
@@ -470,6 +499,19 @@ export function OnboardingWizard({
             Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later.
           </div>
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 11, alignItems: "center" }}>
+            <div className="obw-themelab">Language · Idioma</div>
+            <div className="obw-themeseg" aria-label="Jarvis response language">
+              {LANGUAGES.map((option) => (
+                <button
+                  key={option.id}
+                  className={language === option.id ? "on" : ""}
+                  onClick={() => setLanguage(option.id)}
+                  aria-pressed={language === option.id}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
             <div className="obw-themelab">Choose your look</div>
             <div className="obw-themeseg">
               <button className={theme === "light" ? "on" : ""} onClick={() => applyTheme("light")}>Light</button>

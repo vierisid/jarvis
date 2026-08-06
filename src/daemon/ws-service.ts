@@ -46,6 +46,7 @@ import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
+import { resolveJarvisLanguage } from '../config/language.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -1440,7 +1441,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   ): Promise<void> {
     let session = this.interviewSessions.get(ws);
     if (!session) {
-      session = createInterviewSession();
+      session = createInterviewSession(
+        resolveJarvisLanguage(this.agentService.getConfig().user?.language),
+      );
       this.interviewSessions.set(ws, session);
     }
 

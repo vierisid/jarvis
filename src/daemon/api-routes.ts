@@ -10,6 +10,7 @@ import { applyApprovalDecision } from './approval-decision.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
+import { isJarvisLanguage, resolveJarvisLanguage } from '../config/language.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -997,6 +998,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_dismissed: o?.tutorial_dismissed_at != null,
             tutorial_progress_step: o?.tutorial_progress_step ?? null,
             last_reset_at: o?.last_reset_at ?? null,
+            language: resolveJarvisLanguage(ctx.config.user?.language),
             // Boot timestamp + post-setup readiness let the dashboard
             // detect whether the background services (bgAgent, commitment
             // executor, awareness) are actually running. With in-process
@@ -1086,11 +1088,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      * regresses state.
      */
     '/api/onboarding/skip': {
-      POST: async () => {
+      POST: async (req: Request) => {
         try {
+          const body = (await req.json().catch(() => ({}))) as { language?: unknown };
+          if (body.language !== undefined && !isJarvisLanguage(body.language)) {
+            return error('Unsupported language. Choose "en" or "es".', 400);
+          }
           const { saveUserSection } = await import('./user-settings.ts');
           const fresh = ctx.config;
           const now = Date.now();
+          if (body.language !== undefined) {
+            fresh.user = { ...fresh.user, language: body.language };
+            saveUserSection('user', fresh.user);
+            ctx.config.user = fresh.user;
+          }
           fresh.onboarding = {
             ...fresh.onboarding,
             setup_completed_at: fresh.onboarding?.setup_completed_at ?? now,
@@ -1262,6 +1273,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      *
      * Body shape:
      *   {
+     *     user: { language: "en" | "es" },
      *     llm: {
      *       primary: "anthropic" | "openai" | ... ,
      *       <provider>: { api_key?: string, model?: string, base_url?: string }
@@ -1294,10 +1306,17 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = (await req.json()) as {
+            user?: { language?: unknown };
             llm?: Record<string, unknown>;
             stt?: Record<string, unknown>;
             tts?: Record<string, unknown>;
           };
+
+          // Validate the preference before any provider/settings writes so an
+          // unsupported value cannot leave first-run setup half-applied.
+          if (body.user?.language !== undefined && !isJarvisLanguage(body.user.language)) {
+            return error('Unsupported language. Choose "en" or "es".', 400);
+          }
 
           // 1. LLM settings — same path as /api/config/llm POST.
           if (body.llm && Object.keys(body.llm).length > 0) {
@@ -1314,6 +1333,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
           const fresh = ctx.config;
+          if (body.user?.language !== undefined) {
+            fresh.user = { ...fresh.user, language: body.user.language };
+          }
           if (body.stt) {
             // Mirrors /api/config/stt POST semantics. The saveUserSection
             // below triggers the stt hot-reload applier.
@@ -1333,9 +1355,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           };
           if (body.stt) saveUserSection('stt', fresh.stt);
           if (body.tts) saveUserSection('tts', fresh.tts);
+          if (body.user?.language !== undefined) saveUserSection('user', fresh.user);
           saveUserSection('onboarding', fresh.onboarding);
           if (body.stt) ctx.config.stt = fresh.stt;
           if (body.tts) ctx.config.tts = fresh.tts;
+          if (body.user?.language !== undefined) ctx.config.user = fresh.user;
           ctx.config.onboarding = fresh.onboarding;
 
           // 3. Hot-reload the TTS provider when possible so the post-setup
@@ -1389,6 +1413,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const config = ctx.config;
         return json({
           daemon: config.daemon,
+          user: {
+            name: config.user?.name ?? '',
+            language: resolveJarvisLanguage(config.user?.language),
+          },
           // LLM config is DB/keychain-managed (dashboard). Report a sanitized
           // canonical summary - provider names, single-LLM default, and the
           // tier map. The dedicated dashboard endpoint is /api/config/llm.
@@ -1403,6 +1431,42 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           active_role: config.active_role,
           voice: config.voice ?? { wake_engine: 'openwakeword' },
         });
+      },
+    },
+
+    '/api/config/user': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as {
+            name?: unknown;
+            language?: unknown;
+          };
+          if (body.language !== undefined && !isJarvisLanguage(body.language)) {
+            return error('Unsupported language. Choose "en" or "es".', 400);
+          }
+          if (body.name !== undefined && typeof body.name !== 'string') {
+            return error('User name must be a string.', 400);
+          }
+
+          const next = {
+            ...ctx.config.user,
+            ...(typeof body.name === 'string' ? { name: body.name.trim() } : {}),
+            ...(body.language !== undefined ? { language: body.language } : {}),
+          };
+          const { saveUserSection } = await import('./user-settings.ts');
+          ctx.config.user = next;
+          saveUserSection('user', next);
+          return json({
+            ok: true,
+            user: {
+              name: next.name ?? '',
+              language: resolveJarvisLanguage(next.language),
+            },
+            message: 'Language preference saved. New Jarvis responses will use it immediately.',
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
       },
     },
 
@@ -2296,6 +2360,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           { voice_id: 'en-AU-NatashaNeural', name: 'Natasha (AU Female)', category: 'neural' },
           { voice_id: 'en-US-JennyNeural', name: 'Jenny (US Female)', category: 'neural' },
           { voice_id: 'en-US-DavisNeural', name: 'Davis (US Male)', category: 'neural' },
+          { voice_id: 'es-ES-ElviraNeural', name: 'Elvira (Spain Female)', category: 'neural' },
+          { voice_id: 'es-ES-AlvaroNeural', name: 'Álvaro (Spain Male)', category: 'neural' },
+          { voice_id: 'es-MX-DaliaNeural', name: 'Dalia (Mexico Female)', category: 'neural' },
+          { voice_id: 'es-MX-JorgeNeural', name: 'Jorge (Mexico Male)', category: 'neural' },
         ]);
       },
     },

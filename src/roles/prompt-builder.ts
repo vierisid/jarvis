@@ -1,5 +1,7 @@
 import type { RoleDefinition } from './types.ts';
 import { buildToolGuide } from './tool-guide.ts';
+import { buildResponseLanguageInstruction } from '../config/language.ts';
+import type { JarvisLanguage } from '../config/types.ts';
 
 export type PromptContext = {
   userName?: string;
@@ -15,6 +17,8 @@ export type PromptContext = {
   activeGoals?: string;
   hasSidecars?: boolean;
   effectiveAuthorityLevel?: number;
+  /** Language Jarvis must use for all user-facing output. */
+  responseLanguage?: JarvisLanguage;
 };
 
 /**
@@ -81,6 +85,13 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
     sections.push(`Tone: ${role.communication_style.tone}. Verbosity: ${role.communication_style.verbosity}. Formality: ${role.communication_style.formality}.`);
     sections.push('');
   }
+
+  // Output language is a user-owned, process-stable preference. Keep it in
+  // the static/cacheable prefix and state it explicitly: without this, models
+  // tend to drift back to the English used by the rest of the system prompt.
+  sections.push(buildResponseLanguageInstruction(context?.responseLanguage));
+  sections.push('');
+
   // Task-acknowledgment rule is universal (not role-specific) - keep it.
   sections.push('**Task Acknowledgment**: When asked to perform a task that requires tool use, ALWAYS give a brief acknowledgment first (e.g., "On it.", "Let me check.", "I\'ll look into that.") before using any tools. Never silently start executing tools — the user should know you understood their request.');
   sections.push('');

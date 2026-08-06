@@ -31,6 +31,7 @@ import { buildSystemPromptParts, type PromptContext, type SystemPromptParts } fr
 import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { getRecentObservations } from '../vault/observations.ts';
 import { findContent } from '../vault/content-pipeline.ts';
+import { resolveJarvisLanguage } from '../config/language.ts';
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -165,6 +166,7 @@ export class BackgroundAgentService implements Service, IAgentService {
 
   private buildPromptContext(): PromptContext {
     const context: PromptContext = {
+      responseLanguage: resolveJarvisLanguage(this.config.user?.language),
       currentTime: new Date().toISOString(),
     };
 

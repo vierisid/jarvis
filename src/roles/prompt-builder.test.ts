@@ -33,6 +33,14 @@ describe('buildSystemPromptParts', () => {
     expect(parts.static).not.toContain('User opened the dashboard');
   });
 
+  it('pins the selected response language in the static prompt', () => {
+    const spanish = buildSystemPromptParts(role, makeContext({ responseLanguage: 'es' }));
+    expect(spanish.static).toContain('# Response Language');
+    expect(spanish.static).toContain('Use Spanish for every user-facing response.');
+    expect(spanish.static).toContain('Do not switch languages unless the user explicitly asks');
+    expect(spanish.dynamic).not.toContain('# Response Language');
+  });
+
   it('puts all volatile context in the dynamic part', () => {
     const context = makeContext();
     const parts = buildSystemPromptParts(role, context);
