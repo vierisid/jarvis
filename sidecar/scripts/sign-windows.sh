@@ -115,55 +115,96 @@ printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d >"$p12" ||
 	fail "SM_CLIENT_CERT_FILE_B64 is not valid base64"
 
 # verify_signature asserts, after the fact, that the signature actually landed
-# on THESE bytes and came from US. Assertions are made on osslsigncode's OUTPUT,
-# not its exit status: a correctly signed binary exits 1 whenever the chain
-# cannot be built (an untrusted demo root, a runner without the CA, an
-# OpenSSL/osslsigncode version skew), so `verify || fail` would break releases
-# for reasons unrelated to the signature. Observed behaviour of osslsigncode
-# 2.9 drives every string matched here.
+# on THESE bytes and came from US.
+#
+# The correctness assertions read osslsigncode's OUTPUT rather than its exit
+# status, because a perfectly good signature exits 1 whenever the chain cannot
+# be built (an untrusted demo root, a runner without the CA, an
+# OpenSSL/osslsigncode version skew) — so a bare `verify || fail` would break
+# releases for reasons unrelated to the signature. Exit status is used only for
+# the chain-trust verdict, where 0 genuinely means "everything verified".
+#
+# Every string matched below was observed from osslsigncode 2.9 signing a real
+# mingw-built PE; in particular a cryptographically BROKEN signature still
+# reports "Number of verified signatures: 1", so that line proves only that a
+# signature exists — the CMS errors are what prove it is sound.
 verify_signature() {
-	local f="$1" out cn
+	local f="$1" out rc cn bundle
 	if ! command -v osslsigncode >/dev/null 2>&1; then
 		echo "warning: osslsigncode not installed — skipping post-sign verification of $f" >&2
 		return 0
 	fi
-	out="$(osslsigncode verify -CAfile "${CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}" "$f" 2>&1 || true)"
 
-	# The digest covers the file's bytes; a mismatch means the signature does
-	# not belong to what we are about to ship.
+	# Distro-dependent CA bundle; without one osslsigncode can bail before it
+	# prints anything useful. If none is found, verify without -CAfile: the
+	# chain simply won't build, which the trust branch below already tolerates.
+	bundle="${CA_BUNDLE:-}"
+	if [ -z "$bundle" ]; then
+		for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+			/etc/ssl/cert.pem /usr/local/etc/openssl/cert.pem; do
+			[ -f "$candidate" ] && bundle="$candidate" && break
+		done
+	fi
+	if [ -n "$bundle" ]; then
+		out="$(osslsigncode verify -CAfile "$bundle" "$f" 2>&1)" && rc=0 || rc=$?
+	else
+		out="$(osslsigncode verify "$f" 2>&1)" && rc=0 || rc=$?
+	fi
+
+	# A signature must exist at all. NOTE: "Number of verified signatures" is a
+	# count of signature SLOTS, not a verification result — a cryptographically
+	# broken signature still reports 1 (verified against osslsigncode 2.9), so
+	# this only rules out "unsigned", never "badly signed".
 	case "$out" in
-	*MISMATCH*) fail "signature on $f does not match its contents (osslsigncode reported a digest MISMATCH)" ;;
-	esac
-	case "$out" in
-	*"Number of verified signatures"*) ;;
+	*"Number of verified signatures: "[1-9]*) ;;
 	*) fail "no Authenticode signature found on $f after signing" ;;
 	esac
 
-	# An untimestamped signature stops validating the day the certificate
-	# expires — and we always pass --tsaurl, so its absence means the timestamp
-	# silently did not happen.
+	# Real failure markers, each observed from osslsigncode 2.9:
+	#   MISMATCH                  digest does not cover these bytes (tampered)
+	#   CMS_verify error          signature blob does not verify cryptographically
+	#   verification: failed      ditto, including the timestamp countersignature
 	case "$out" in
-	*"Timestamp is not available"*) fail "$f was signed WITHOUT a trusted timestamp — it would stop validating when the certificate expires" ;;
+	*MISMATCH*)
+		fail "signature on $f does not cover its contents (digest MISMATCH)"
+		;;
+	*"CMS_verify error"* | *"verification: failed"* | *"verification failure"*)
+		fail "signature on $f does not verify cryptographically — refusing to ship it"
+		;;
 	esac
 
-	# Publisher: the same identity the installer pins at runtime.
-	cn="$(printf '%s\n' "$out" | sed -n 's|.*Subject:.*/CN=\([^/]*\).*|\1|p' | head -1 | sed 's/[[:space:]]*$//')"
+	# An untimestamped signature stops validating the day the certificate
+	# expires. Allowlist rather than denylist: require the positive marker, so
+	# a future osslsigncode that simply omits the "not available" line cannot
+	# produce a silent pass.
+	case "$out" in
+	*"Timestamp time:"*) ;;
+	*) fail "$f carries no trusted timestamp — it would stop validating when the certificate expires" ;;
+	esac
+
+	# Publisher: the same identity the installer pins at runtime. Take the
+	# FIRST CN on the Subject line, matching installer/certsubject.go — a
+	# greedy match would anchor on the LAST /CN=, letting a DN that embeds
+	# "/CN=<expected>" in a later RDN spoof the check.
+	# awk exits after the first Subject line; no `head` in the pipeline, whose
+	# early exit would return 141 under `set -o pipefail` and abort a release.
+	cn="$(printf '%s\n' "$out" | awk -F'/CN=' '/Subject:/ {split($2, a, "/"); sub(/[ \t]+$/, "", a[1]); print a[1]; exit}')"
 	if [ -n "${SIGNING_PUBLISHER_CN:-}" ]; then
 		[ "$cn" = "$SIGNING_PUBLISHER_CN" ] ||
 			fail "$f is signed by '${cn:-<unknown>}', expected '${SIGNING_PUBLISHER_CN}'"
 	fi
 
-	case "$out" in
-	*"Signing certificate chain verified"*)
+	# Exit 0 means everything verified INCLUDING the certificate chain. That is
+	# the strongest available assertion, but it cannot be required against a
+	# demo account (its root is not publicly trusted) or on a machine without
+	# the issuing CA — hence the opt-in.
+	if [ "$rc" -eq 0 ]; then
 		echo "verified $f — signed by '${cn:-?}', timestamped, chain trusted"
-		;;
-	*)
-		# Expected against a demo account (its root is not publicly trusted).
-		echo "verified $f — signed by '${cn:-?}', timestamped; chain NOT trusted by this machine" >&2
+	else
+		echo "verified $f — signed by '${cn:-?}', timestamped; chain NOT trusted by this machine (osslsigncode exit ${rc})" >&2
 		[ "${SIGN_REQUIRE_TRUSTED_CHAIN:-0}" = "1" ] &&
-			fail "SIGN_REQUIRE_TRUSTED_CHAIN=1 and the certificate chain did not verify"
-		;;
-	esac
+			fail "SIGN_REQUIRE_TRUSTED_CHAIN=1 but osslsigncode did not fully verify $f (exit ${rc})"
+	fi
 	return 0
 }
 

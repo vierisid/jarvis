@@ -152,6 +152,10 @@ jobs:
           # Asserted post-sign: the installer must carry OUR publisher — the
           # same identity it then pins in the payloads it downloads.
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # Production certs chain to a public root, so demand the full
+          # verification. Unset this only when signing against a DEMO
+          # account, whose root is deliberately untrusted.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: scripts/sign-windows.sh Jarvis-Setup.exe
 
       - name: Warn — unsigned installer

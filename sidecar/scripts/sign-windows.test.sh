@@ -55,6 +55,7 @@ run_sign() {
 		SM_KEYPAIR_ALIAS="${SM_ALIAS_OVERRIDE-jarvis-keypair}" \
 		SM_HOST="${SM_HOST_OVERRIDE-}" \
 		STUB_JAVA_EXIT="${STUB_JAVA_EXIT:-0}" \
+		VERIFY_LOG="${VERIFY_LOG:-/dev/null}" \
 		bash "$SCRIPT" "$@"
 }
 
@@ -263,6 +264,7 @@ fi
 make_osslsigncode() { # make_osslsigncode <digest-state> <cn> <timestamp> <chain>
 	cat >"$WORK/bin/osslsigncode" <<STUB
 #!/usr/bin/env bash
+printf '%s\0' "\$@" >> "\${VERIFY_LOG:-/dev/null}"
 cat <<'OUT'
 PE checksum   : 0001FB65
 
@@ -285,7 +287,7 @@ STUB
 }
 
 GOOD_DIGEST="C40CC1ABF65CC1E86B6090E9E6DBC3FB6FA36D2CB82B8ECB987F2BEFC49086A1"
-TS_OK="Timestamp: Aug  6 10:47:31 2026 GMT"
+TS_OK="\tTimestamp time: Aug  6 10:47:31 2026 GMT"
 CHAIN_OK="Signing certificate chain verified using:"
 
 # happy path: digests match, timestamped, trusted chain, expected publisher
@@ -297,10 +299,21 @@ else
 	no "verifies the signature after signing" "$out"
 fi
 
+# A corrupted signature blob: the file's digest still matches (the bytes were
+# not touched) and the slot count still reads 1 — verified against real
+# osslsigncode 2.9 output — so ONLY the CMS error distinguishes it.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "CMS_verify error" 1
+out="$(run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"does not verify cryptographically"* ]]; then
+	ok "refuses a signature that does not verify cryptographically"
+else
+	no "refuses a cryptographically broken signature" "$out"
+fi
+
 # a digest mismatch means the signature does not cover these bytes
 make_osslsigncode "DEADBEEF     MISMATCH!!!" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 1
 out="$(run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"does not match its contents"* ]]; then
+if [ $? -ne 0 ] && [[ "$out" == *"does not cover its contents"* ]]; then
 	ok "fails when the signature does not match the file's contents"
 else
 	no "fails on a digest MISMATCH" "$out"
@@ -318,7 +331,7 @@ fi
 # an untimestamped signature dies when the certificate expires
 make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "Timestamp is not available" "$CHAIN_OK" 0
 out="$(run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"WITHOUT a trusted timestamp"* ]]; then
+if [ $? -ne 0 ] && [[ "$out" == *"carries no trusted timestamp"* ]]; then
 	ok "fails when the signature carries no timestamp"
 else
 	no "fails on a missing timestamp" "$out"
@@ -335,11 +348,30 @@ fi
 
 # ...unless explicitly required
 out="$(SIGN_REQUIRE_TRUSTED_CHAIN=1 run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"did not verify"* ]]; then
+if [ $? -ne 0 ] && [[ "$out" == *"did not fully verify"* ]]; then
 	ok "enforces chain trust when SIGN_REQUIRE_TRUSTED_CHAIN=1"
 else
 	no "enforces chain trust on demand" "$out"
 fi
+
+# Verification must run per file, against the file just signed, with a CA
+# bundle. Without argv logging these three could all regress unnoticed.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
+: >"$WORK/verify.log"
+VERIFY_LOG="$WORK/verify.log" run_sign "$WORK/app.exe" "$WORK/second.exe" >/dev/null 2>&1
+verifications="$(grep -zc -- 'verify' "$WORK/verify.log" 2>/dev/null || true)"
+[ "${verifications:-0}" -eq 2 ] &&
+	ok "verifies every file, not just the last one" ||
+	no "verifies every file" "expected 2 verify invocations, got ${verifications:-0}"
+
+if grep -qz -- "$WORK/app.exe" "$WORK/verify.log" && grep -qz -- "$WORK/second.exe" "$WORK/verify.log"; then
+	ok "verifies the exact files that were signed"
+else
+	no "verifies the exact files that were signed"
+fi
+
+grep -qz -- '-CAfile' "$WORK/verify.log" &&
+	ok "passes a CA bundle to osslsigncode" || no "passes a CA bundle to osslsigncode"
 
 # an unsigned file produces no signature block at all
 cat >"$WORK/bin/osslsigncode" <<'STUB'
@@ -355,9 +387,16 @@ else
 	no "fails when no signature is present" "$out"
 fi
 
-# absent tooling degrades to a warning rather than blocking a local run
+# absent tooling degrades to a warning rather than blocking a local run.
+# Build a minimal PATH holding only what the script needs, so this still
+# exercises the absent case on a machine that HAS osslsigncode installed.
 rm -f "$WORK/bin/osslsigncode"
-out="$(PATH="$WORK/bin:/usr/bin:/bin" run_sign "$WORK/app.exe" 2>&1)"
+mkdir -p "$WORK/nopath"
+for b in bash env printf mktemp chmod rm base64 sed awk cat curl sha256sum head tr dirname basename; do
+	src="$(command -v "$b" 2>/dev/null || true)"
+	[ -n "$src" ] && ln -sf "$src" "$WORK/nopath/$b"
+done
+out="$(PATH="$WORK/bin:$WORK/nopath" run_sign "$WORK/app.exe" 2>&1)"
 if [ $? -eq 0 ] && [[ "$out" == *"skipping post-sign verification"* ]]; then
 	ok "warns (not fails) when osslsigncode is unavailable"
 else
