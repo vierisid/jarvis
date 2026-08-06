@@ -16,7 +16,8 @@ export type LLMProviderKind =
   | "openrouter"
   | "nvidia"
   | "openai_compatible"
-  | "litellm";
+  | "litellm"
+  | "omniroute";
 
 export const LLM_PROVIDER_KINDS: readonly LLMProviderKind[] = [
   "anthropic",
@@ -28,6 +29,7 @@ export const LLM_PROVIDER_KINDS: readonly LLMProviderKind[] = [
   "nvidia",
   "openai_compatible",
   "litellm",
+  "omniroute",
 ] as const;
 
 export const LLM_PROVIDER_KIND_LABELS: Record<LLMProviderKind, string> = {
@@ -40,6 +42,7 @@ export const LLM_PROVIDER_KIND_LABELS: Record<LLMProviderKind, string> = {
   nvidia: "NVIDIA NIM",
   openai_compatible: "OpenAI-compatible",
   litellm: "LiteLLM",
+  omniroute: "OmniRoute",
 };
 
 /**
@@ -53,6 +56,7 @@ export const KEY_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "gemini",
   "openrouter",
   "nvidia",
+  "omniroute",
 ]);
 
 /** Provider kinds that need a base_url. */
@@ -60,6 +64,7 @@ export const URL_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "ollama",
   "openai_compatible",
   "litellm",
+  "omniroute",
 ]);
 
 /** Tier slot identifiers. */
@@ -440,7 +445,9 @@ export function useSettingsData() {
     let providersWithKey = 0;
     if (llm) {
       for (const entry of Object.values(llm.providers ?? {})) {
-        if (URL_BASED_KINDS.has(entry.kind) ? entry.base_url : entry.has_api_key) {
+        const usesUrl = URL_BASED_KINDS.has(entry.kind);
+        const usesKey = KEY_BASED_KINDS.has(entry.kind);
+        if ((!usesUrl || !!entry.base_url) && (!usesKey || entry.has_api_key)) {
           providersWithKey++;
         }
       }

@@ -31,6 +31,14 @@ A unified abstraction layer for multiple LLM providers with automatic fallback s
 - **Features**: Local inference, streaming, tool use
 - **API**: http://localhost:11434/api/chat
 
+### 4. OmniRoute
+- **Routes**: Every model, free route, automatic route, and combo returned by the configured gateway
+- **Default route**: `auto`
+- **Features**: Text and multimodal messages, streaming, function/tool calling, live route discovery
+- **Default API**: http://localhost:20128/v1
+
+Jarvis also includes first-class adapters for Groq, Gemini, OpenRouter, NVIDIA NIM, LiteLLM, and generic OpenAI-compatible endpoints.
+
 ## Usage
 
 ### Basic Setup

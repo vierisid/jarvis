@@ -18,6 +18,7 @@ export { GeminiProvider } from './gemini.ts';
 export { OllamaProvider } from './ollama.ts';
 export { OpenRouterProvider } from './openrouter.ts';
 export { LiteLLMProvider } from './litellm.ts';
+export { OmniRouteProvider } from './omniroute.ts';
 
 // Manager
 export { LLMManager } from './manager.ts';

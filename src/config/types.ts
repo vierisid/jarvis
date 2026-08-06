@@ -285,7 +285,8 @@ export type LLMProviderKind =
   | 'openrouter'
   | 'nvidia'
   | 'openai_compatible'
-  | 'litellm';
+  | 'litellm'
+  | 'omniroute';
 
 /**
  * Credentials + endpoint for one provider instance. The `kind` field is
@@ -299,7 +300,7 @@ export type LLMProviderEntry = {
   kind?: LLMProviderKind;
   /** API key for cloud providers. */
   api_key?: string;
-  /** Base URL for self-hosted / local providers (ollama, openai-compatible, litellm). */
+  /** Base URL for self-hosted / local providers (ollama, OpenAI-compatible gateways, OmniRoute). */
   base_url?: string;
 };
 

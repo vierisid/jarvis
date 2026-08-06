@@ -69,7 +69,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
 | Voice with wake word | No | Yes — streaming TTS + openwakeword |
 | Goal pursuit (OKRs) | No | Yes — drill sergeant accountability |
 | Authority gating | No | Yes — runtime enforcement + audit trail |
-| LLM provider choice | Usually locked to one | 5 providers: Anthropic, OpenAI, Gemini, Ollama, Groq |
+| LLM provider choice | Usually locked to one | Anthropic, OpenAI, Gemini, Ollama, Groq, OpenRouter, OmniRoute, and more |
 
 ---
 

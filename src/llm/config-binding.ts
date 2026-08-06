@@ -26,6 +26,7 @@ import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { OpenAICompatibleProvider } from './openai-compatible.ts';
 import { LiteLLMProvider } from './litellm.ts';
+import { OmniRouteProvider } from './omniroute.ts';
 
 /**
  * Instantiate a provider class from a single entry. Returns null when the
@@ -90,6 +91,10 @@ export function instantiateProvider(
     case 'litellm':
       if (!entry.base_url) return null;
       provider = new LiteLLMProvider(entry.base_url, undefined, entry.api_key);
+      break;
+    case 'omniroute':
+      if (!entry.base_url) return null;
+      provider = new OmniRouteProvider(entry.base_url, undefined, entry.api_key);
       break;
     default:
       console.warn(`[LLM] Unknown provider kind '${kind}' for '${name}' - skipping.`);

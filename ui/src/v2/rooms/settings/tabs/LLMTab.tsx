@@ -17,7 +17,8 @@ import {
 /**
  * Curated model lists per provider class. Each key is a kind (not a name)
  * so multiple instances of the same kind share the same dropdown. Empty
- * arrays mean "type any model id" (openai_compatible / litellm proxies).
+ * arrays mean "type any model id" (OpenAI-compatible gateways). OmniRoute's
+ * routes are loaded live because its catalog includes user-defined combos.
  */
 const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   anthropic: [
@@ -86,6 +87,14 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   ],
   openai_compatible: [],
   litellm: [],
+  omniroute: [],
+};
+
+const DEFAULT_BASE_URLS: Partial<Record<LLMProviderKind, string>> = {
+  ollama: "http://localhost:11434",
+  openai_compatible: "http://localhost:8080/v1",
+  litellm: "http://localhost:4000/v1",
+  omniroute: "http://localhost:20128/v1",
 };
 
 /**
@@ -123,6 +132,7 @@ export function LLMTab({
   const ollamaModels = useOllamaModels(
     Object.values(llm?.providers ?? {}).some((p) => p.kind === "ollama"),
   );
+  const providerCatalogs = useLiveProviderCatalogs(llm?.providers ?? {});
 
   if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
 
@@ -176,9 +186,9 @@ export function LLMTab({
       </section>
 
       {mode === "single" ? (
-        <SingleModelSection data={data} onToast={onToast} ollamaModels={ollamaModels} />
+        <SingleModelSection data={data} onToast={onToast} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
       ) : (
-        <MultiTierSection data={data} onToast={onToast} ollamaModels={ollamaModels} />
+        <MultiTierSection data={data} onToast={onToast} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
       )}
     </div>
   );
@@ -305,7 +315,7 @@ function ProviderRow({
 }) {
   const usesUrl = URL_BASED_KINDS.has(entry.kind);
   const usesKey = KEY_BASED_KINDS.has(entry.kind);
-  const configured = usesUrl ? !!entry.base_url : entry.has_api_key;
+  const configured = (!usesUrl || !!entry.base_url) && (!usesKey || entry.has_api_key);
 
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(entry.base_url ?? "");
@@ -360,7 +370,7 @@ function ProviderRow({
               <input
                 type="text"
                 className="v2-set__input"
-                placeholder="http://localhost:11434"
+                placeholder={DEFAULT_BASE_URLS[entry.kind] ?? "https://gateway.example/v1"}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
               />
@@ -459,7 +469,11 @@ function NewProviderRow({
           <select
             className="v2-set__select"
             value={kind}
-            onChange={(e) => setKind(e.target.value as LLMProviderKind)}
+            onChange={(e) => {
+              const next = e.target.value as LLMProviderKind;
+              setKind(next);
+              setBaseUrl(DEFAULT_BASE_URLS[next] ?? "");
+            }}
           >
             {LLM_PROVIDER_KINDS.map((k) => (
               <option key={k} value={k}>
@@ -504,7 +518,7 @@ function NewProviderRow({
             <input
               type="text"
               className="v2-set__input"
-              placeholder="http://localhost:11434"
+              placeholder={DEFAULT_BASE_URLS[kind] ?? "https://gateway.example/v1"}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
@@ -544,10 +558,12 @@ function SingleModelSection({
   data,
   onToast,
   ollamaModels,
+  providerCatalogs,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
   ollamaModels: string[] | null;
+  providerCatalogs: Record<string, string[]>;
 }) {
   const llm = data.llm!;
 
@@ -567,6 +583,7 @@ function SingleModelSection({
         value={llm.default}
         providers={llm.providers}
         ollamaModels={ollamaModels}
+        providerCatalogs={providerCatalogs}
         onChange={async (ref) => {
           const r = await data.setDefaultModel(ref);
           onToast(r.message, r.ok ? "ok" : "warn");
@@ -582,10 +599,12 @@ function MultiTierSection({
   data,
   onToast,
   ollamaModels,
+  providerCatalogs,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
   ollamaModels: string[] | null;
+  providerCatalogs: Record<string, string[]>;
 }) {
   const llm = data.llm!;
 
@@ -633,6 +652,7 @@ function MultiTierSection({
             value={llm.tiers[t.id]}
             providers={llm.providers}
             ollamaModels={ollamaModels}
+            providerCatalogs={providerCatalogs}
             allowClear
             onChange={async (ref) => {
               const r = await data.setTierModel(t.id, ref);
@@ -652,6 +672,7 @@ function MultiTierSection({
           value={llm.default}
           providers={llm.providers}
           ollamaModels={ollamaModels}
+          providerCatalogs={providerCatalogs}
           allowClear
           onChange={async (ref) => {
             const r = await data.setDefaultModel(ref);
@@ -671,6 +692,7 @@ function ModelSelector({
   value,
   providers,
   ollamaModels,
+  providerCatalogs,
   allowClear,
   onChange,
 }: {
@@ -680,6 +702,8 @@ function ModelSelector({
   providers: Record<string, LLMConfigProviderView>;
   /** Installed Ollama models, fetched once by LLMTab and shared here. */
   ollamaModels: string[] | null;
+  /** Live model/route catalogs keyed by configured provider name. */
+  providerCatalogs: Record<string, string[]>;
   allowClear?: boolean;
   onChange: (ref: string | null) => void;
 }) {
@@ -691,7 +715,7 @@ function ModelSelector({
   );
   const [selectedModel, setSelectedModel] = useState<string>(parsed?.model ?? "");
   const [customModel, setCustomModel] = useState<string>(
-    parsed?.model && !providerModels(providers, parsed.provider, ollamaModels).includes(parsed.model)
+    parsed?.model && !providerModels(providers, parsed.provider, ollamaModels, providerCatalogs).includes(parsed.model)
       ? parsed.model
       : "",
   );
@@ -700,7 +724,7 @@ function ModelSelector({
   useEffect(() => {
     if (parsed) {
       setSelectedProvider(parsed.provider);
-      const known = providerModels(providers, parsed.provider, ollamaModels);
+      const known = providerModels(providers, parsed.provider, ollamaModels, providerCatalogs);
       if (known.includes(parsed.model)) {
         setSelectedModel(parsed.model);
         setCustomModel("");
@@ -718,9 +742,9 @@ function ModelSelector({
     // `ollamaModels` participates: until the live catalog lands, a tagged id
     // looks unknown and would be parked in the custom field. Re-run when it
     // arrives so the dropdown snaps to the real entry.
-  }, [value, ollamaModels]);
+  }, [value, ollamaModels, providerCatalogs]);
 
-  const models = providerModels(providers, selectedProvider, ollamaModels);
+  const models = providerModels(providers, selectedProvider, ollamaModels, providerCatalogs);
   const usesCustomOnly = models.length === 0;
   const effectiveModel = selectedModel === "__custom__" ? customModel.trim() : selectedModel;
 
@@ -753,7 +777,7 @@ function ModelSelector({
             const next = e.target.value;
             setSelectedProvider(next);
             // Reset model when provider changes - the model list is now different.
-            const nextModels = providerModels(providers, next, ollamaModels);
+            const nextModels = providerModels(providers, next, ollamaModels, providerCatalogs);
             const defaultModel = nextModels[0] ?? "__custom__";
             setSelectedModel(defaultModel);
             setCustomModel("");
@@ -835,6 +859,7 @@ function providerModels(
   providers: Record<string, LLMConfigProviderView>,
   name: string,
   live?: string[] | null,
+  providerCatalogs: Record<string, string[]> = {},
 ): string[] {
   const entry = providers[name];
   if (!entry) return [];
@@ -842,6 +867,9 @@ function providerModels(
   // The curated list is untagged guesswork, so prefer the real catalog when
   // the daemon could read it; fall back to the guesses when it could not.
   if (entry.kind === "ollama" && live && live.length > 0) return live;
+  if (entry.kind === "omniroute" && providerCatalogs[name]?.length) {
+    return providerCatalogs[name]!;
+  }
   return MODELS_BY_KIND[entry.kind] ?? [];
 }
 
@@ -868,4 +896,43 @@ function useOllamaModels(enabled: boolean): string[] | null {
     };
   }, [enabled]);
   return models;
+}
+
+/** Load volatile catalogs for gateways/providers whose IDs change frequently. */
+function useLiveProviderCatalogs(
+  providers: Record<string, LLMConfigProviderView>,
+): Record<string, string[]> {
+  const names = Object.entries(providers)
+    .filter(([, entry]) => entry.kind === "omniroute" && !!entry.base_url)
+    .map(([name]) => name)
+    .sort();
+  const signature = names.join("\u0000");
+  const [catalogs, setCatalogs] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (names.length === 0) {
+      setCatalogs({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(names.map(async (name) => {
+      try {
+        const kind = providers[name]!.kind;
+        const response = await fetch(`/api/config/llm/${kind}/models`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const data = await response.json() as { ok: boolean; models?: string[] };
+        return [name, data.ok && data.models ? data.models : []] as const;
+      } catch {
+        return [name, []] as const;
+      }
+    })).then((entries) => {
+      if (!cancelled) setCatalogs(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [signature]); // names are represented by the stable signature
+
+  return catalogs;
 }

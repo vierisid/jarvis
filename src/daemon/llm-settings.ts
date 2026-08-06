@@ -101,6 +101,7 @@ export const AVAILABLE_KINDS: LLMProviderKind[] = [
   'nvidia',
   'openai_compatible',
   'litellm',
+  'omniroute',
 ];
 
 // ── getLLMSettings ───────────────────────────────────────────────────────
@@ -344,6 +345,7 @@ function migrateLegacyDBSettings(config: JarvisConfig): void {
     { kind: 'ollama', secretKey: '', modelKey: 'llm.ollama.model', baseUrlKey: 'llm.ollama.base_url' },
     { kind: 'openai_compatible', secretKey: 'llm.openai_compatible.api_key', modelKey: 'llm.openai_compatible.model', baseUrlKey: 'llm.openai_compatible.base_url' },
     { kind: 'litellm', secretKey: 'llm.litellm.api_key', modelKey: 'llm.litellm.model', baseUrlKey: 'llm.litellm.base_url' },
+    { kind: 'omniroute', secretKey: 'llm.omniroute.api_key', modelKey: 'llm.omniroute.model', baseUrlKey: 'llm.omniroute.base_url' },
   ];
 
   // Capture legacy per-kind models for building model-ref strings later.
