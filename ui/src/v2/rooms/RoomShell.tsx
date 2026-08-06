@@ -36,6 +36,8 @@ export interface RoomShellAction {
 
 export interface RoomShellProps {
   title: string;
+  /** Optional hook for room-specific responsive/layout styling. */
+  className?: string;
   /** Optional breadcrumb fragments shown above the title (e.g. ["Memory"]). */
   breadcrumb?: string[];
   /** Optional short subtitle / count line ("5 workflows · 4 active"). */
@@ -58,6 +60,7 @@ export interface RoomShellProps {
  */
 export function RoomShell({
   title,
+  className,
   breadcrumb,
   subtitle,
   actions = [],
@@ -162,7 +165,12 @@ export function RoomShell({
   const leadingGhosts = actions.slice(0, Math.max(0, actions.length - 1));
 
   return (
-    <div className="v2-room-overlay" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className={["v2-room-overlay", className].filter(Boolean).join(" ")}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div
         className="v2-room"
         ref={rootRef}

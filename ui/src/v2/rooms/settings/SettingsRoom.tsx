@@ -73,6 +73,22 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  // A phone-width tab strip cannot show every settings section at once.
+  // Keep the active tab visible after taps, keyboard navigation, and voice
+  // actions without moving the vertically scrolling settings panel.
+  useEffect(() => {
+    const activeTab = tabsApi.tablistRef.current?.querySelector<HTMLElement>(
+      `[data-roving-tab="${tab}"]`,
+    );
+    if (!activeTab) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    activeTab.scrollIntoView({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  }, [tab, tabsApi.tablistRef]);
+
   // ── Settings hot-apply results (daemon `settings_applied` broadcast) ──
   // Applies can finish AFTER a save request returned (debounced channel
   // restarts, SIGHUP / POST /api/config/reload): surface those outcomes
@@ -401,7 +417,12 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
 
 export function SettingsRoom() {
   return (
-    <RoomShell title="Settings" subtitle="providers · channels · integrations · sidecar" breadcrumb={["Settings"]}>
+    <RoomShell
+      title="Settings"
+      subtitle="providers · channels · integrations · sidecar"
+      breadcrumb={["Settings"]}
+      className="v2-room-overlay--settings"
+    >
       <SettingsRoomBody mode="expanded" />
     </RoomShell>
   );

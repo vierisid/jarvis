@@ -778,3 +778,272 @@
 .v2-set__stat-value, .v2-set__section-title { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
 .v2-set :focus-visible { outline-color: var(--speak); }
 
+/* ── Phone layout ──
+   Settings is control-dense, so the mobile treatment prioritizes usable
+   touch targets and one-dimensional flows over preserving the desktop grid. */
+
+@media (max-width: 720px) {
+  .v2-room-overlay--settings {
+    inset: 0;
+  }
+
+  .v2-room-overlay--settings .v2-room__header {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: var(--s-2);
+    min-height: 56px;
+    padding:
+      max(var(--s-2), env(safe-area-inset-top))
+      max(var(--s-2), env(safe-area-inset-right))
+      var(--s-2)
+      max(var(--s-2), env(safe-area-inset-left));
+  }
+
+  .v2-room-overlay--settings .v2-room__header-left,
+  .v2-room-overlay--settings .v2-room__header-right {
+    min-width: 44px;
+  }
+
+  .v2-room-overlay--settings .v2-room__header-right {
+    justify-content: flex-end;
+  }
+
+  .v2-room-overlay--settings .v2-room__back,
+  .v2-room-overlay--settings .v2-room__close {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .v2-room-overlay--settings .v2-room__back > span,
+  .v2-room-overlay--settings .v2-room__breadcrumb,
+  .v2-room-overlay--settings .v2-room__subtitle {
+    display: none;
+  }
+
+  .v2-room-overlay--settings .v2-room__title {
+    font-size: var(--text-lg);
+  }
+
+  .v2-room-overlay--settings .v2-room__body,
+  .v2-set {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .v2-set__stats {
+    display: flex;
+    gap: var(--s-2);
+    padding: var(--s-3) var(--s-3) var(--s-2);
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline proximity;
+    scrollbar-width: none;
+  }
+
+  .v2-set__stats::-webkit-scrollbar,
+  .v2-set__tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .v2-set__stat {
+    flex: 0 0 116px;
+    min-height: 68px;
+    padding: var(--s-2) var(--s-3);
+    scroll-snap-align: start;
+  }
+
+  .v2-set__stat-value {
+    font-size: var(--text-lg);
+  }
+
+  .v2-set__tabs {
+    gap: var(--s-1);
+    padding: 0 var(--s-3);
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: var(--s-3);
+    scrollbar-width: none;
+  }
+
+  .v2-set__tab {
+    min-height: 44px;
+    padding: var(--s-2) var(--s-3);
+    scroll-margin-inline: var(--s-3);
+    touch-action: manipulation;
+  }
+
+  .v2-set__body {
+    overscroll-behavior-y: contain;
+    padding:
+      var(--s-3)
+      max(var(--s-3), env(safe-area-inset-right))
+      max(var(--s-8), env(safe-area-inset-bottom))
+      max(var(--s-3), env(safe-area-inset-left));
+  }
+
+  .v2-set__section {
+    gap: var(--s-3);
+    margin-bottom: var(--s-3);
+    padding: var(--s-3);
+  }
+
+  .v2-set__section-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .v2-set__section-head > .v2-set__btn {
+    align-self: stretch;
+  }
+
+  .v2-set__row {
+    align-items: stretch;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .v2-set__row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    width: 100%;
+    min-height: 44px;
+    padding: var(--s-2) 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+  }
+
+  .v2-set__row-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .v2-set__row-state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    flex: 0 0 auto;
+  }
+
+  .v2-set__row-body {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .v2-set__input,
+  .v2-set__textarea,
+  .v2-set__select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .v2-set__btn {
+    min-height: 44px;
+    padding: 8px 14px;
+    touch-action: manipulation;
+  }
+
+  .v2-set__toggle {
+    width: 44px;
+    height: 26px;
+    border-radius: 13px;
+    touch-action: manipulation;
+  }
+
+  .v2-set__toggle::after {
+    width: 22px;
+    height: 22px;
+  }
+
+  .v2-set__toggle[data-checked="true"]::after {
+    left: 20px;
+  }
+
+  .v2-set__toggle-row {
+    min-height: 44px;
+  }
+
+  .v2-set__mode {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-set__mode-card {
+    min-height: 72px;
+  }
+
+  .v2-set__provider-actions,
+  .v2-set__row-actions,
+  .v2-set__sidecar-actions,
+  .v2-set__dialog-foot {
+    display: grid !important;
+    grid-template-columns: 1fr;
+    gap: var(--s-2) !important;
+    width: 100%;
+  }
+
+  .v2-set__provider-actions-spacer {
+    display: none;
+  }
+
+  .v2-set__provider-actions .v2-set__btn,
+  .v2-set__row-actions .v2-set__btn,
+  .v2-set__sidecar-actions .v2-set__btn,
+  .v2-set__dialog-foot .v2-set__btn {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .v2-set__sidecar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .v2-set__sidecar-meta {
+    overflow-wrap: anywhere;
+  }
+
+  .v2-set__code--block {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .v2-set__toast {
+    position: fixed;
+    right: max(var(--s-3), env(safe-area-inset-right));
+    bottom: max(var(--s-3), env(safe-area-inset-bottom));
+    left: max(var(--s-3), env(safe-area-inset-left));
+    max-width: none;
+  }
+
+  .v2-set__overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .v2-set__dialog {
+    max-width: none;
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--r-2) var(--r-2) 0 0;
+  }
+
+  .v2-set__dialog-head,
+  .v2-set__dialog-body,
+  .v2-set__dialog-foot {
+    padding-right: max(var(--s-3), env(safe-area-inset-right));
+    padding-left: max(var(--s-3), env(safe-area-inset-left));
+  }
+
+  .v2-set__dialog-foot {
+    padding-bottom: max(var(--s-3), env(safe-area-inset-bottom));
+  }
+}
