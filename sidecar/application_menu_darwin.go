@@ -24,10 +24,21 @@ static void jarvisAddEditCommand(NSMenu* menu, NSString* title, SEL action,
     [menu addItem:item];
 }
 
+// Identify an existing Edit-equivalent menu by responder-chain actions, not
+// its display title. macOS localizes "Edit", and embedding hosts can choose a
+// different title while still providing the standard commands.
 static BOOL jarvisHasEditMenu(NSMenu* mainMenu) {
     for (NSMenuItem* item in mainMenu.itemArray) {
-        if ([item.submenu.title isEqualToString:@"Edit"]) {
-            return YES;
+        NSMenu* submenu = item.submenu;
+        if (submenu == nil) {
+            continue;
+        }
+        for (NSMenuItem* command in submenu.itemArray) {
+            SEL action = command.action;
+            if (action == @selector(cut:) || action == @selector(copy:) ||
+                action == @selector(paste:) || action == @selector(selectAll:)) {
+                return YES;
+            }
         }
     }
     return NO;
@@ -67,12 +78,10 @@ static void jarvisInstallApplicationMenusOnMain(void) {
 }
 
 static void jarvisInstallApplicationMenus(void) {
-    // Startup calls this before the first Cocoa run loop. Queueing the work
-    // guarantees AppKit mutation happens on the main thread; the block drains
-    // before the asynchronously loaded token form can become interactive.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        jarvisInstallApplicationMenusOnMain();
-    });
+    // tray_darwin.go pins main() to the process's main OS thread in init().
+    // Install synchronously so Command-X/C/V/A exist before startup can create
+    // or focus the first WKWebView token field.
+    jarvisInstallApplicationMenusOnMain();
 }
 */
 import "C"
