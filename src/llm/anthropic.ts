@@ -360,10 +360,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    // Anthropic doesn't have a models endpoint, so return known models
-    // (current family first). Keep in sync with the UI model pickers in
-    // ui/src/v2/rooms/settings/tabs/LLMTab.tsx + the onboarding wizard.
-    return [
+    const knownModels = [
       'claude-fable-5',
       'claude-opus-4-8',
       'claude-sonnet-5',
@@ -371,6 +368,21 @@ export class AnthropicProvider implements LLMProvider {
       'claude-sonnet-4-6',
       'claude-haiku-4-5-20251001',
     ];
+    if (!this.bearerAuth) return knownModels;
+
+    try {
+      const response = await fetch(this.apiUrl.replace(/\/messages$/, '/models'), {
+        headers: { authorization: `Bearer ${this.apiKey}` },
+      });
+      if (!response.ok) return knownModels;
+      const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+      const models = payload.data
+        ?.map((entry) => entry.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      return models?.length ? [...new Set(models)].sort() : knownModels;
+    } catch {
+      return knownModels;
+    }
   }
 
   private convertMessages(messages: LLMMessage[]): {

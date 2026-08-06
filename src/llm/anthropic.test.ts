@@ -60,9 +60,9 @@ describe('AnthropicProvider custom endpoint', () => {
   });
 
   it('normalizes base URLs to the Messages API endpoint', () => {
-    expect(anthropicMessagesUrl('https://myrellms.xyz')).toBe('https://myrellms.xyz/v1/messages');
-    expect(anthropicMessagesUrl('https://myrellms.xyz/v1/')).toBe('https://myrellms.xyz/v1/messages');
-    expect(anthropicMessagesUrl('https://myrellms.xyz/v1/messages')).toBe('https://myrellms.xyz/v1/messages');
+    expect(anthropicMessagesUrl('https://gateway.example.com')).toBe('https://gateway.example.com/v1/messages');
+    expect(anthropicMessagesUrl('https://gateway.example.com/v1/')).toBe('https://gateway.example.com/v1/messages');
+    expect(anthropicMessagesUrl('https://gateway.example.com/v1/messages')).toBe('https://gateway.example.com/v1/messages');
   });
 
   it('uses bearer authentication for a custom base URL', async () => {
@@ -75,11 +75,11 @@ describe('AnthropicProvider custom endpoint', () => {
     }) as unknown as typeof fetch;
 
     const provider = new AnthropicProvider('custom-token', undefined, {
-      baseUrl: 'https://myrellms.xyz',
+      baseUrl: 'https://gateway.example.com',
     });
     await provider.chat([{ role: 'user', content: 'hi' }]);
 
-    expect(requestUrl).toBe('https://myrellms.xyz/v1/messages');
+    expect(requestUrl).toBe('https://gateway.example.com/v1/messages');
     expect(requestHeaders.get('authorization')).toBe('Bearer custom-token');
     expect(requestHeaders.get('x-api-key')).toBeNull();
     expect(requestHeaders.get('anthropic-version')).toBe('2023-06-01');
@@ -96,6 +96,26 @@ describe('AnthropicProvider custom endpoint', () => {
 
     expect(requestHeaders.get('x-api-key')).toBe('sk-ant-test');
     expect(requestHeaders.get('authorization')).toBeNull();
+  });
+
+  it('discovers models from a custom endpoint', async () => {
+    let requestUrl = '';
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({
+        data: [{ id: 'claude-custom-large' }, { id: 'claude-custom-fast' }],
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const models = await new AnthropicProvider('custom-token', undefined, {
+      baseUrl: 'https://gateway.example.com',
+    }).listModels();
+
+    expect(requestUrl).toBe('https://gateway.example.com/v1/models');
+    expect(requestHeaders.get('authorization')).toBe('Bearer custom-token');
+    expect(models).toEqual(['claude-custom-fast', 'claude-custom-large']);
   });
 });
 

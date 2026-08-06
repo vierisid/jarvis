@@ -311,6 +311,8 @@ export type ActionResult =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
+export type ProviderTestResult = ActionResult & { models?: string[] };
+
 async function getJson<T>(url: string): Promise<T | null> {
   try {
     const r = await fetch(url);
@@ -485,7 +487,7 @@ export function useSettingsData() {
     async (
       name: string,
       input: { kind?: LLMProviderKind; api_key?: string; base_url?: string },
-    ): Promise<ActionResult> => {
+    ): Promise<ProviderTestResult> => {
       try {
         const r = await postJson<{ ok: boolean; message: string }>(
           "/api/config/llm",
@@ -619,19 +621,19 @@ export function useSettingsData() {
     async (
       name: string,
       overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string },
-    ): Promise<ActionResult> => {
+    ): Promise<ProviderTestResult> => {
       try {
         const body: Record<string, unknown> = { name };
         if (overrides?.kind) body.kind = overrides.kind;
         if (overrides?.model) body.model = overrides.model;
         if (overrides?.baseUrl) body.base_url = overrides.baseUrl;
         if (overrides?.apiKey) body.api_key = overrides.apiKey;
-        const r = await postJson<{ ok: boolean; model?: string; error?: string }>(
+        const r = await postJson<{ ok: boolean; model?: string; models?: string[]; error?: string }>(
           "/api/config/llm/test",
           body,
         );
         if (r.ok) {
-          return { ok: true, message: `${name}: ${r.model ?? "connected"}.` };
+          return { ok: true, message: `${name}: ${r.model ?? "connected"}.`, models: r.models };
         }
         return { ok: false, message: r.error ?? "Test failed." };
       } catch (err) {

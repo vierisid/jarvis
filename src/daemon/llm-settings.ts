@@ -447,7 +447,7 @@ export async function testLLMProvider(
     model?: string;
   },
   config: JarvisConfig,
-): Promise<{ ok: boolean; model?: string; error?: string }> {
+): Promise<{ ok: boolean; model?: string; models?: string[]; error?: string }> {
   // Resolve effective name + kind. Legacy `provider` is treated as `name`.
   const name = opts.name ?? opts.provider ?? opts.kind;
   if (!name) return { ok: false, error: 'provider name required' };
@@ -472,11 +472,13 @@ export async function testLLMProvider(
   }
 
   try {
+    const models = await instance.listModels().catch(() => []);
+    const testModel = opts.model || (baseUrl ? models[0] : undefined);
     const resp = await instance.chat(
       [{ role: 'user', content: 'Say OK' }],
-      { max_tokens: 5, ...(opts.model ? { model: opts.model } : {}) },
+      { max_tokens: 5, ...(testModel ? { model: testModel } : {}) },
     );
-    return { ok: true, model: resp.model };
+    return { ok: true, model: resp.model, models };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

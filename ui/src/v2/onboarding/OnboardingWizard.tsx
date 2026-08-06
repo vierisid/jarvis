@@ -45,7 +45,7 @@ type Provider = {
 };
 const PROVIDERS: Provider[] = [
   { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", soon: true, noConfig: true },
-  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key or auth token", urlLabel: "Custom base URL (optional)", urlPh: "https://myrellms.xyz", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Leave the URL blank for Anthropic. Custom URLs use bearer-token authentication, matching ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN." },
+  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
   { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
   { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
   { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
@@ -104,7 +104,7 @@ const TOUR = [
   { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
 ];
 
-type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string };
+type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; models?: string[] };
 
 export function OnboardingWizard({
   status,
@@ -143,6 +143,7 @@ export function OnboardingWizard({
   const prov = PROVIDERS.find((p) => p.id === provId)!;
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [customEndpoint, setCustomEndpoint] = useState(false);
   const [model, setModel] = useState("");
   const [test, setTest] = useState<TestState>({ status: "idle" });
   // hearing
@@ -179,13 +180,16 @@ export function OnboardingWizard({
   useEffect(() => {
     const p = PROVIDERS.find((x) => x.id === provId)!;
     setModel(p.models?.[0] ?? "");
-    setBaseUrl(urlByProvider.current[provId] ?? (provId === "omniroute" ? "http://localhost:20128/v1" : ""));
+    const nextBaseUrl = urlByProvider.current[provId]
+      ?? (provId === "omniroute" ? "http://localhost:20128/v1" : "");
+    setBaseUrl(nextBaseUrl);
+    setCustomEndpoint(provId === "anthropic" && Boolean(nextBaseUrl));
     setTest({ status: "idle" });
   }, [provId]);
 
   // Same for the brain test: a changed key, base URL, or model invalidates a
   // previous "Connected" verdict.
-  useEffect(() => { setTest((t) => (t.status === "idle" ? t : { status: "idle" })); }, [apiKey, baseUrl, model]);
+  useEffect(() => { setTest((t) => (t.status === "idle" ? t : { status: "idle" })); }, [apiKey, baseUrl, customEndpoint, model]);
 
   // Ollama serves only what the operator pulled, and every id carries a tag
   // ("qwen2.5:3b"). The curated list is untagged guesswork — picking from it
@@ -283,16 +287,19 @@ export function OnboardingWizard({
         if (apiKey) body.api_key = apiKey;
       }
       if (prov.needsBaseUrl) { if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a base URL first." }); return; } body.base_url = baseUrl.trim(); }
-      if (prov.optionalBaseUrl && baseUrl.trim()) body.base_url = baseUrl.trim();
+      if (prov.optionalBaseUrl && customEndpoint) {
+        if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a custom endpoint URL first." }); return; }
+        body.base_url = baseUrl.trim();
+      }
       if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = (await r.json()) as { ok: boolean; model?: string; error?: string };
-      if (data.ok) setTest({ status: "ok", msg: data.model ?? model });
+      const data = (await r.json()) as { ok: boolean; model?: string; models?: string[]; error?: string };
+      if (data.ok) setTest({ status: "ok", msg: data.model ?? model, models: data.models });
       else setTest({ status: "err", msg: data.error ?? "Test failed." });
     } catch (e) {
       setTest({ status: "err", msg: e instanceof Error ? e.message : "Test failed." });
     }
-  }, [provId, model, apiKey, baseUrl, prov]);
+  }, [provId, model, apiKey, baseUrl, customEndpoint, prov]);
 
   const brainReady = !prov.soon && (prov.noConfig || test.status === "ok");
 
@@ -303,7 +310,7 @@ export function OnboardingWizard({
       const entry: Record<string, unknown> = { kind: prov.kind === "no key" ? "jarvis" : provId };
       if (prov.needsKey && apiKey) entry.api_key = apiKey;
       if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
-      if (prov.optionalBaseUrl && baseUrl.trim()) entry.base_url = baseUrl.trim();
+      if (prov.optionalBaseUrl && customEndpoint && baseUrl.trim()) entry.base_url = baseUrl.trim();
       const llm: Record<string, unknown> = { providers: { [provId]: entry }, default: `${provId}:${model || "default"}` };
 
       const ttsBlock: Record<string, unknown> = { enabled: tts !== "off", provider: tts === "off" ? "edge" : tts };
@@ -323,7 +330,7 @@ export function OnboardingWizard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [prov, provId, apiKey, baseUrl, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [prov, provId, apiKey, baseUrl, customEndpoint, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -759,8 +766,25 @@ export function OnboardingWizard({
         : (prov.models ?? []);
     return (
       <>
-        {(prov.needsBaseUrl || prov.optionalBaseUrl) && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => { urlByProvider.current[provId] = e.target.value; setBaseUrl(e.target.value); }} /></div>}
-        {prov.needsKey && <div className="obw-field"><label>{prov.keyLabel ?? `API key${prov.keyOptional ? " (optional)" : ""}`}</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
+        {prov.optionalBaseUrl && (
+          <label className="obw-toggle-row">
+            <button
+              type="button"
+              className="obw-toggle"
+              data-checked={customEndpoint}
+              aria-checked={customEndpoint}
+              role="switch"
+              onClick={() => {
+                setCustomEndpoint((enabled) => !enabled);
+                urlByProvider.current[provId] = "";
+                setBaseUrl("");
+              }}
+            />
+            <span>Use a custom Anthropic endpoint</span>
+          </label>
+        )}
+        {(prov.needsBaseUrl || (prov.optionalBaseUrl && customEndpoint)) && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => { urlByProvider.current[provId] = e.target.value; setBaseUrl(e.target.value); }} /></div>}
+        {prov.needsKey && <div className="obw-field"><label>{prov.optionalBaseUrl && customEndpoint ? "Auth token" : (prov.keyLabel ?? `API key${prov.keyOptional ? " (optional)" : ""}`)}</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
         {prov.freeModel
           ? <div className="obw-field"><label>Model</label><input className="obw-inp" placeholder="model id" value={model} onChange={(e) => setModel(e.target.value)} /></div>
           : <div className="obw-field"><label>Model</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}
@@ -773,6 +797,11 @@ export function OnboardingWizard({
           {test.status === "ok" && <span className="obw-testres ok"><span className="dot" />Connected · {test.msg}</span>}
           {test.status === "err" && <span className="obw-testres err"><span className="dot" />{test.msg}</span>}
         </div>
+        {test.status === "ok" && test.models && test.models.length > 0 && (
+          <div className="obw-models" aria-label="Models discovered">
+            {test.models.map((discoveredModel) => <span key={discoveredModel}>{discoveredModel}</span>)}
+          </div>
+        )}
         {prov.hint && <div className="obw-hint">{prov.hint}</div>}
       </>
     );
