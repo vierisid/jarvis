@@ -85,6 +85,9 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/sidecar-release.yml
+    # The signing credentials (APPLE_*, ASC_*, SM_*) must reach the reusable
+    # workflow — without inherit its signing steps silently skip.
+    secrets: inherit
     with:
       dry_run: ${{ inputs.dry_run || false }}
 
@@ -167,13 +170,6 @@ jobs:
           path: artifacts
           pattern: sidecar-*
 
-      - name: Download macOS OCR helper
-        if: needs.sidecar.outputs.released == 'true'
-        uses: actions/download-artifact@v5
-        with:
-          name: ocr-helper-darwin
-          path: artifacts/ocr-helper-darwin
-
       - name: Package sidecar assets
         if: needs.sidecar.outputs.released == 'true'
         env:
@@ -182,33 +178,30 @@ jobs:
           set -euo pipefail
           mkdir -p release
 
-          # Bundle the helper alongside the darwin sidecar binaries so a single
-          # tarball contains everything a macOS install needs for OCR to work.
-          for platform in darwin-arm64 darwin-x64; do
-            cp artifacts/ocr-helper-darwin/ocr-helper "artifacts/sidecar-${platform}/"
-            chmod +x "artifacts/sidecar-${platform}/ocr-helper"
-          done
-
           # Tarballs are named for the sidecar's own version.
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            chmod +x "artifacts/sidecar-${platform}/${{ env.SIDECAR_BIN }}"
-            case "${platform}" in
-              darwin-*)
-                tar -czf "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz" \
-                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}" "ocr-helper"
-                ;;
-              *)
-                tar -czf "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz" \
-                  -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
-                ;;
-            esac
+          # darwin: the artifact is already a tar.gz of Jarvis.app (signed +
+          # notarized when CI has the Apple credentials, ocr-helper inside) —
+          # attach it under the release name.
+          for platform in darwin-arm64 darwin-x64; do
+            cp "artifacts/sidecar-${platform}/jarvis-app.tar.gz" \
+              "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz"
           done
 
-          # Windows gets a zip
+          for platform in linux-x64 linux-arm64; do
+            chmod +x "artifacts/sidecar-${platform}/${{ env.SIDECAR_BIN }}"
+            tar -czf "release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-${platform}.tar.gz" \
+              -C "artifacts/sidecar-${platform}" "${{ env.SIDECAR_BIN }}"
+          done
+
+          # Windows gets a zip (the .exe is Authenticode-signed at build time
+          # when CI has the DigiCert KeyLocker credentials)
           cd "artifacts/sidecar-win32-x64"
           zip "../../release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-win32-x64.zip" \
             "${{ env.SIDECAR_BIN }}.exe"
           cd "$GITHUB_WORKSPACE"
+
+          # Checksums for every attached asset
+          (cd release && sha256sum * > SHA256SUMS)
 
       - name: Create GitHub Release
         if: env.DRY_RUN != 'true'
@@ -224,6 +217,7 @@ jobs:
           files: |
             release/*.tar.gz
             release/*.zip
+            release/SHA256SUMS
 
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'

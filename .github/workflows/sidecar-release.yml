@@ -33,9 +33,11 @@ on:
         type: boolean
         default: true
 
+# Least privilege at the workflow level: only publish-sidecar needs OIDC (npm
+# Trusted Publishing) and it declares that itself. build-sidecar — the job
+# holding the DigiCert and Apple signing credentials — gets no token at all.
 permissions:
   contents: read
-  id-token: write
 
 env:
   GO_VERSION: "1.25"
@@ -80,6 +82,11 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
+    env:
+      # secrets can't be referenced in step `if:` conditions — surface their
+      # presence as env flags so the signing steps can gate on them.
+      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+      HAVE_WINDOWS_SIGNING: ${{ secrets.SM_API_KEY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +148,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          # osslsigncode: post-sign verification inside sign-windows.sh
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 osslsigncode
 
       - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: sidecar
@@ -167,22 +175,35 @@ jobs:
           go build -ldflags "$LDFLAGS" \
             -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
 
-      - name: Upload binary
-        uses: actions/upload-artifact@v5
-        with:
-          name: sidecar-${{ matrix.npm_pkg }}
-          path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
+      # ─── Windows: Authenticode signature (DigiCert KeyLocker) ─────────
+      # scripts/sign-windows.sh is the single signing code path, shared with
+      # installer-release.yml and runnable locally (see its header), so a local
+      # test exercises exactly what CI runs. Gated on SM_API_KEY: absent
+      # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
+      - name: Sign Windows binary (DigiCert KeyLocker)
+        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING == 'true'
+        working-directory: sidecar
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          # Asserted post-sign: the binary must carry OUR publisher, the same
+          # identity the installer pins at runtime.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+        run: scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
 
-  # ─── Build the macOS Vision OCR helper (universal arm64+amd64) ─
-  # Bundled into the two darwin npm packages so macOS OCR works out of the box.
-  build-ocr-helper:
-    needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v5
+      - name: Warn — unsigned Windows build
+        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING != 'true'
+        run: echo "::warning::DigiCert KeyLocker credentials not configured — shipping an unsigned ${{ env.SIDECAR_BIN }}.exe (SmartScreen will warn users)."
 
+      # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
+      # Notifications (UNUserNotification) and stable TCC grants require a
+      # bundle, so darwin ships Jarvis.app — not a bare binary. The Vision OCR
+      # helper is built here (universal) and sealed inside the bundle.
       - name: Build universal ocr-helper
+        if: matrix.setup == 'darwin'
         working-directory: sidecar
         run: |
           set -euo pipefail
@@ -190,18 +211,115 @@ jobs:
           swiftc -O -target x86_64-apple-macos11 -o /tmp/ocr-helper-amd64 helpers/ocr-helper.swift
           mkdir -p helpers
           lipo -create -output helpers/ocr-helper /tmp/ocr-helper-arm64 /tmp/ocr-helper-amd64
-          file helpers/ocr-helper
           lipo -info helpers/ocr-helper
 
-      - name: Upload helper binary
+      - name: Assemble Jarvis.app
+        if: matrix.setup == 'darwin'
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          packaging/macos/make-icns.sh
+          make app-macos BIN=./${{ env.SIDECAR_BIN }} APP_DIR=dist/Jarvis.app
+
+      # Gated on the Apple credentials: absent (forks, pre-onboarding) the
+      # bundle ships unsigned, exactly as before. Signing is inside-out
+      # (nested Mach-Os first, never --deep) with the hardened runtime, then
+      # notarized and stapled so Gatekeeper approves offline.
+      - name: Sign and notarize (Developer ID)
+        if: matrix.setup == 'darwin' && env.HAVE_APPLE_SIGNING == 'true'
+        working-directory: sidecar
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          for v in APPLE_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is required when APPLE_CERT_P12 is set"; exit 1; }
+          done
+
+          # Ephemeral keychain holding the Developer ID certificate
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          printf '%s' "$APPLE_CERT_P12" | base64 -d > /tmp/cert.p12
+          security import /tmp/cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm /tmp/cert.p12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
+          security list-keychains -d user -s build.keychain login.keychain
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          test -n "$IDENTITY" || { echo "::error::no 'Developer ID Application' identity in APPLE_CERT_P12"; exit 1; }
+          echo "Signing as: $IDENTITY"
+
+          if [ -f dist/Jarvis.app/Contents/MacOS/ocr-helper ]; then
+            codesign --force --options runtime --timestamp \
+              --sign "$IDENTITY" dist/Jarvis.app/Contents/MacOS/ocr-helper
+          fi
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/macos/entitlements.plist \
+            --sign "$IDENTITY" dist/Jarvis.app
+          codesign --verify --strict --verbose=2 dist/Jarvis.app
+
+          # trap, not a trailing rm: `set -e` means any failure between here
+          # and the rm would leave the private key on the runner.
+          trap 'rm -f /tmp/asc_key.p8' EXIT
+          (umask 077; printf '%s' "$ASC_API_KEY_P8" > /tmp/asc_key.p8)
+          ditto -c -k --keepParent dist/Jarvis.app /tmp/Jarvis.zip
+          # notarytool's exit code is not reliable on an Invalid verdict —
+          # check the JSON status and dump the notarization log on failure
+          # (the submission id is unrecoverable once this runner is gone).
+          SUBMIT_JSON="$(xcrun notarytool submit /tmp/Jarvis.zip \
+            --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json)" || true
+          echo "$SUBMIT_JSON"
+          SUBMISSION_ID="$(echo "$SUBMIT_JSON" | jq -r '.id // empty')"
+          NOTARY_STATUS="$(echo "$SUBMIT_JSON" | jq -r '.status // empty')"
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo "::error::notarization failed (status: ${NOTARY_STATUS:-unknown})"
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            fi
+            exit 1
+          fi
+          xcrun stapler staple dist/Jarvis.app
+          spctl --assess --type execute -vv dist/Jarvis.app
+
+      - name: Warn — unsigned macOS build
+        if: matrix.setup == 'darwin' && env.HAVE_APPLE_SIGNING != 'true'
+        run: echo "::warning::Apple signing credentials not configured — shipping an unsigned Jarvis.app (Gatekeeper will block it on other machines; notifications unreliable)."
+
+      # tar the bundle before upload — upload-artifact strips exec bits and
+      # symlinks, which would corrupt the signed bundle.
+      - name: Package Jarvis.app
+        if: matrix.setup == 'darwin'
+        working-directory: sidecar
+        # COPYFILE_DISABLE + --no-mac-metadata: keep bsdtar from archiving
+        # xattrs as AppleDouble (._*) entries — GNU tar on the publish runner
+        # would extract them as literal files inside the bundle and break the
+        # codesign seal.
+        run: COPYFILE_DISABLE=1 tar --no-mac-metadata -C dist -czf jarvis-app.tar.gz Jarvis.app
+
+      - name: Upload bundle (darwin)
+        if: matrix.setup == 'darwin'
         uses: actions/upload-artifact@v5
         with:
-          name: ocr-helper-darwin
-          path: sidecar/helpers/ocr-helper
+          name: sidecar-${{ matrix.npm_pkg }}
+          path: sidecar/jarvis-app.tar.gz
+
+      - name: Upload binary
+        if: matrix.setup != 'darwin'
+        uses: actions/upload-artifact@v5
+        with:
+          name: sidecar-${{ matrix.npm_pkg }}
+          path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
 
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
-    needs: [resolve, build-sidecar, build-ocr-helper]
+    needs: [resolve, build-sidecar]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -228,12 +346,6 @@ jobs:
           path: artifacts
           pattern: sidecar-*
 
-      - name: Download macOS OCR helper
-        uses: actions/download-artifact@v5
-        with:
-          name: ocr-helper-darwin
-          path: artifacts/ocr-helper-darwin
-
       - name: Resolve version
         id: version
         run: echo "VERSION=${{ needs.resolve.outputs.version }}" >> "$GITHUB_OUTPUT"
@@ -246,15 +358,17 @@ jobs:
             pkg_dir="sidecar/npm/${platform}"
             mkdir -p "${pkg_dir}/bin"
 
-            # Copy binary
-            cp "artifacts/sidecar-${platform}/"* "${pkg_dir}/bin/"
-            chmod +x "${pkg_dir}/bin/"*
-
-            # Bundle the macOS Vision OCR helper alongside the darwin sidecar binaries
             case "${platform}" in
-              darwin-arm64|darwin-x64)
-                cp artifacts/ocr-helper-darwin/ocr-helper "${pkg_dir}/bin/"
-                chmod +x "${pkg_dir}/bin/ocr-helper"
+              darwin-*)
+                # The darwin artifact is a tarred Jarvis.app (signed + notarized
+                # when CI has the Apple credentials) with ocr-helper sealed
+                # inside; the launcher prefers bin/Jarvis.app/Contents/MacOS/jarvis.
+                # tar preserves exec bits and the stapled notarization ticket.
+                tar -xzf "artifacts/sidecar-${platform}/jarvis-app.tar.gz" -C "${pkg_dir}/bin/"
+                ;;
+              *)
+                cp "artifacts/sidecar-${platform}/"* "${pkg_dir}/bin/"
+                chmod +x "${pkg_dir}/bin/"*
                 ;;
             esac
 

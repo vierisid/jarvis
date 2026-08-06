@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened-runtime entitlements for the notarized bundle. Notarization
+	     requires --options runtime, and the hardened runtime denies these
+	     capabilities unless they are declared here (the TCC usage strings in
+	     Info.plist are still required on top). Keep this list minimal: every
+	     entitlement is attack surface and shows up in security review. -->
+
+	<!-- Microphone capture (malgo) — voice commands + wake word. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+
+	<!-- Sending AppleEvents to other apps (NSAppleEventsUsageDescription). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>
