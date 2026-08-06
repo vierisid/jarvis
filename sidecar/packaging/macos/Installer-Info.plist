@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Install Jarvis</string>
+	<key>CFBundleDisplayName</key>
+	<string>Install Jarvis</string>
+	<!-- Its own identity, distinct from com.jarvis.sidecar: TCC grants and
+	     notarization history must never blur between installer and app. -->
+	<key>CFBundleIdentifier</key>
+	<string>com.jarvis.installer</string>
+	<key>CFBundleExecutable</key>
+	<string>install-jarvis</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!-- Regular Dock app (unlike the sidecar's LSUIElement menu-bar agent):
+	     an installer the user double-clicked should be visible and quittable. -->
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- No TCC usage strings on purpose: the installer never requests
+	     permissions — the installed Jarvis.app does, in its --setup wizard. -->
+</dict>
+</plist>

@@ -3,6 +3,10 @@ MODULE   := github.com/jarvis/sidecar
 # VERSION file is read here and injected into the binary via -X; CI asserts the
 # `sidecar-v*` release tag matches it.
 VERSION  := $(shell cat VERSION 2>/dev/null || echo dev)
+# The installer is INDEPENDENT software: it resolves whichever sidecar the npm
+# registry currently tags `latest` at run time and embeds no sidecar version,
+# so it versions and ships on its own cadence. Never reuse VERSION here.
+INSTALLER_VERSION := $(shell cat installer/VERSION 2>/dev/null || echo dev)
 BIN_NAME := jarvis
 LDFLAGS  := -s -w -X main.sidecarVersion=$(VERSION)
 
@@ -27,7 +31,8 @@ PLATFORMS := \
 # Map Go os/arch to npm package names
 npm_dir = $(subst darwin/arm64,darwin-arm64,$(subst darwin/amd64,darwin-x64,$(subst linux/amd64,linux-x64,$(subst linux/arm64,linux-arm64,$(subst windows/amd64,win32-x64,$1)))))
 
-.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test manifest app-macos
+.PHONY: all build test vet clean dist npm-pack build-ocr-helper build-test dist-test manifest app-macos \
+	build-installer manifest-installer app-macos-installer dmg-installer
 
 # macOS .app bundle. Run on a Mac (cgo needs the macOS SDK). Wraps a built
 # darwin binary so UNUserNotification works (unavailable to a bare binary) and
@@ -45,7 +50,32 @@ app-macos:
 	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist > "$(APP_DIR)/Contents/Info.plist"
 	@if [ -f packaging/macos/AppIcon.icns ]; then cp packaging/macos/AppIcon.icns "$(APP_DIR)/Contents/Resources/AppIcon.icns"; else echo "note: AppIcon.icns absent — run packaging/macos/make-icns.sh on a Mac for a branded icon"; fi
 	@printf 'APPL????' > "$(APP_DIR)/Contents/PkgInfo"
-	@echo "Built $(APP_DIR) (version $(VERSION)). Sign: codesign --deep --force --options runtime --sign \"Developer ID Application: <you>\" \"$(APP_DIR)\""
+	@echo "Built $(APP_DIR) (version $(VERSION)). For distribution, sign inside-out (never --deep) + notarize — see packaging/macos/README.md"
+
+# macOS installer app bundle: wraps a built installer binary (BIN_INSTALLER)
+# as "Install Jarvis.app" with its own bundle id (com.jarvis.installer) so TCC
+# and notarization identities never blur with the sidecar's. CI signs and
+# notarizes the result, then wraps it in a DMG via dmg-installer.
+BIN_INSTALLER     ?= ./jarvis-setup
+INSTALLER_APP_DIR ?= dist/macos/Install Jarvis.app
+app-macos-installer:
+	@test -f "$(BIN_INSTALLER)" || { echo "binary '$(BIN_INSTALLER)' not found — run 'make build-installer' on a Mac first"; exit 1; }
+	rm -rf "$(INSTALLER_APP_DIR)"
+	mkdir -p "$(INSTALLER_APP_DIR)/Contents/MacOS" "$(INSTALLER_APP_DIR)/Contents/Resources"
+	cp "$(BIN_INSTALLER)" "$(INSTALLER_APP_DIR)/Contents/MacOS/install-jarvis"
+	sed 's/__VERSION__/$(INSTALLER_VERSION)/g' packaging/macos/Installer-Info.plist > "$(INSTALLER_APP_DIR)/Contents/Info.plist"
+	@if [ -f packaging/macos/AppIcon.icns ]; then cp packaging/macos/AppIcon.icns "$(INSTALLER_APP_DIR)/Contents/Resources/AppIcon.icns"; else echo "note: AppIcon.icns absent — run packaging/macos/make-icns.sh for a branded icon"; fi
+	@printf 'APPL????' > "$(INSTALLER_APP_DIR)/Contents/PkgInfo"
+	@echo "Built $(INSTALLER_APP_DIR) (installer version $(INSTALLER_VERSION))"
+
+# Wrap the (signed) installer app in a compressed DMG. CI signs + notarizes
+# + staples the DMG afterwards; this target only assembles.
+INSTALLER_DMG ?= dist/macos/Install-Jarvis.dmg
+dmg-installer:
+	@test -d "$(INSTALLER_APP_DIR)" || { echo "'$(INSTALLER_APP_DIR)' not found — run 'make app-macos-installer' first"; exit 1; }
+	rm -f "$(INSTALLER_DMG)"
+	hdiutil create -volname "Install Jarvis" -srcfolder "$(INSTALLER_APP_DIR)" -format UDZO -ov "$(INSTALLER_DMG)"
+	@echo "Built $(INSTALLER_DMG)"
 
 all: test build
 
@@ -55,6 +85,16 @@ all: test build
 # Assistant doesn't flag the app as a (failed) installer. Requires mingw windres.
 manifest:
 	x86_64-w64-mingw32-windres --input jarvis.rc --output rsrc_windows_amd64.syso --output-format=coff
+
+# Same, for the installer binary (icon + asInvoker manifest). CI runs this in
+# the windows-cross job before building the installer.
+manifest-installer:
+	cd installer && x86_64-w64-mingw32-windres --input installer.rc --output rsrc_windows_amd64.syso --output-format=coff
+
+# Build the installer for the host platform: ./jarvis-setup(.exe), stamped
+# with installer/VERSION (its own, independent of the sidecar's).
+build-installer:
+	go build -ldflags "-s -w -X main.installerVersion=$(INSTALLER_VERSION)" -o jarvis-setup$(shell go env GOEXE) ./installer/
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_NAME) .

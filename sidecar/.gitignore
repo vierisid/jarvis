@@ -19,3 +19,8 @@ tester/bin/tester_*
 
 # macOS Vision OCR helper (built by `make build-ocr-helper` on a Mac)
 helpers/ocr-helper
+
+# Installer build output (make build-installer / manifest-installer)
+jarvis-setup
+jarvis-setup.exe
+installer/rsrc_windows_amd64.syso
