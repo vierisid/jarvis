@@ -22,6 +22,11 @@
 #                            the pipeline works, never ship what they sign)
 #
 # Knobs (environment):
+#   SIGNING_PUBLISHER_CN         if set, every signature must carry this CN
+#   SIGN_REQUIRE_TRUSTED_CHAIN   1 = also require the chain to verify locally
+#                                (leave off for demo accounts: their root is
+#                                not publicly trusted, so it never will)
+#   CA_BUNDLE      CA file for verification (default: system bundle)
 #   JSIGN_JAR      use this jar instead of downloading (local runs / tests)
 #   JSIGN_VERSION  version to download                 (default below)
 #   JSIGN_SHA256   pinned checksum of that download
@@ -51,9 +56,11 @@ fail() {
 # credentials on the runner.
 CLEANUP=()
 cleanup() {
-	if [ "${#CLEANUP[@]}" -gt 0 ]; then
-		rm -f "${CLEANUP[@]}"
-	fi
+	# ${arr[@]+"${arr[@]}"} rather than a length test: bash 3.2 (still
+	# /bin/bash on macOS) treats an empty array as unset under `set -u`, and a
+	# local run should not die with "unbound variable" instead of the real
+	# error. `return 0` keeps a no-op cleanup from touching the exit status.
+	rm -f ${CLEANUP[@]+"${CLEANUP[@]}"}
 	return 0
 }
 trap cleanup EXIT
@@ -85,7 +92,8 @@ if [ -n "${JSIGN_JAR:-}" ]; then
 else
 	jar="$(mktemp "${TMPDIR:-/tmp}/jsign-XXXXXX.jar")"
 	CLEANUP+=("$jar")
-	curl -fsSL -o "$jar" \
+	# Retry: a CDN blip must not fail a release whose binaries are already built.
+	curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 -o "$jar" \
 		"https://github.com/ebourg/jsign/releases/download/${JSIGN_VERSION}/jsign-${JSIGN_VERSION}.jar"
 	echo "${JSIGN_SHA256}  ${jar}" | sha256sum -c - >/dev/null ||
 		fail "jsign ${JSIGN_VERSION} checksum mismatch — refusing to run it"
@@ -97,8 +105,67 @@ fi
 p12="$(mktemp "${TMPDIR:-/tmp}/sm_client_cert-XXXXXX.p12")"
 CLEANUP+=("$p12")
 chmod 600 "$p12"
+# The path becomes the middle storepass field, so it is subject to the same
+# separator constraint as the credentials — a TMPDIR containing '|' would
+# corrupt the split with an error as opaque as the one guarded above.
+case "$p12" in
+*"|"*) fail "temp directory path contains '|' ($p12) — set TMPDIR somewhere without it" ;;
+esac
 printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d >"$p12" ||
 	fail "SM_CLIENT_CERT_FILE_B64 is not valid base64"
+
+# verify_signature asserts, after the fact, that the signature actually landed
+# on THESE bytes and came from US. Assertions are made on osslsigncode's OUTPUT,
+# not its exit status: a correctly signed binary exits 1 whenever the chain
+# cannot be built (an untrusted demo root, a runner without the CA, an
+# OpenSSL/osslsigncode version skew), so `verify || fail` would break releases
+# for reasons unrelated to the signature. Observed behaviour of osslsigncode
+# 2.9 drives every string matched here.
+verify_signature() {
+	local f="$1" out cn
+	if ! command -v osslsigncode >/dev/null 2>&1; then
+		echo "warning: osslsigncode not installed — skipping post-sign verification of $f" >&2
+		return 0
+	fi
+	out="$(osslsigncode verify -CAfile "${CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}" "$f" 2>&1 || true)"
+
+	# The digest covers the file's bytes; a mismatch means the signature does
+	# not belong to what we are about to ship.
+	case "$out" in
+	*MISMATCH*) fail "signature on $f does not match its contents (osslsigncode reported a digest MISMATCH)" ;;
+	esac
+	case "$out" in
+	*"Number of verified signatures"*) ;;
+	*) fail "no Authenticode signature found on $f after signing" ;;
+	esac
+
+	# An untimestamped signature stops validating the day the certificate
+	# expires — and we always pass --tsaurl, so its absence means the timestamp
+	# silently did not happen.
+	case "$out" in
+	*"Timestamp is not available"*) fail "$f was signed WITHOUT a trusted timestamp — it would stop validating when the certificate expires" ;;
+	esac
+
+	# Publisher: the same identity the installer pins at runtime.
+	cn="$(printf '%s\n' "$out" | sed -n 's|.*Subject:.*/CN=\([^/]*\).*|\1|p' | head -1 | sed 's/[[:space:]]*$//')"
+	if [ -n "${SIGNING_PUBLISHER_CN:-}" ]; then
+		[ "$cn" = "$SIGNING_PUBLISHER_CN" ] ||
+			fail "$f is signed by '${cn:-<unknown>}', expected '${SIGNING_PUBLISHER_CN}'"
+	fi
+
+	case "$out" in
+	*"Signing certificate chain verified"*)
+		echo "verified $f — signed by '${cn:-?}', timestamped, chain trusted"
+		;;
+	*)
+		# Expected against a demo account (its root is not publicly trusted).
+		echo "verified $f — signed by '${cn:-?}', timestamped; chain NOT trusted by this machine" >&2
+		[ "${SIGN_REQUIRE_TRUSTED_CHAIN:-0}" = "1" ] &&
+			fail "SIGN_REQUIRE_TRUSTED_CHAIN=1 and the certificate chain did not verify"
+		;;
+	esac
+	return 0
+}
 
 for f in "$@"; do
 	echo "signing $f"
@@ -113,6 +180,7 @@ for f in "$@"; do
 		--tsaurl "$TSA_URL" \
 		--tsmode RFC3161 \
 		"$f"
+	verify_signature "$f"
 done
 
 echo "signed $# file(s) as '${SM_KEYPAIR_ALIAS}' via ${SM_HOST}"
