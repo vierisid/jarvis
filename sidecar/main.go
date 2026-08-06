@@ -36,6 +36,7 @@ func main() {
 	help := flag.Bool("help", false, "Show help")
 	showVersion := flag.Bool("version", false, "Print the sidecar version and exit")
 	testMode := flag.Bool("test", false, "Run built-in platform tests (requires build with -tags sidecartest)")
+	setupMode := flag.Bool("setup", false, "Run first-launch onboarding (permissions, autostart), then start")
 	flag.Parse()
 
 	if *showVersion {
@@ -49,6 +50,7 @@ func main() {
 Usage:
   jarvis --token <jwt>    Enroll and start (saves token to config)
   jarvis                  Start using saved token
+  jarvis --setup          Run first-launch onboarding (permissions, autostart), then start
   jarvis --test <cmd>     Run a built-in platform test (test build only)
   jarvis --version        Print the sidecar version and exit
   jarvis --help           Show this help`)
@@ -127,6 +129,19 @@ Usage:
 	if !ensureWebView2Runtime() {
 		log.Println("[sidecar] WebView2 runtime not installed — JARVIS can't show its windows. Exiting.")
 		os.Exit(0)
+	}
+
+	// First-launch onboarding (the installer hands off with `--setup`): walk the
+	// user through OS permissions + autostart BEFORE anything connects. Must run
+	// pre-tray — the wizard owns the process's UI loop. Afterwards re-exec into
+	// a plain launch: on Unix so the overlays don't share a process with the
+	// wizard's webview (GTK main-loop conflict), and because restartAfterSetup
+	// re-execs with no args, the --setup flag is dropped and can't loop. On
+	// Windows it's a no-op and we simply continue below (WebView2 tolerates
+	// multiple instances in one process).
+	if *setupMode {
+		runOnboarding(cfg)
+		restartAfterSetup()
 	}
 
 	if cfg.Token == "" {
