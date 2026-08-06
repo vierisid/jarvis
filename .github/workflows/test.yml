@@ -84,8 +84,8 @@ jobs:
           done
 
       # The Windows signing path is shell, and shell is where signing bugs
-      # live (credential assembly, temp-file cleanup, fail-fast). A stub
-      # `java` exercises all of it with no DigiCert account.
+      # live (credential resolution, temp-file cleanup, fail-fast). A stub
+      # `java` exercises all of it with no GCP project and no certificate.
       - name: Test the Windows signing script
         working-directory: sidecar
         run: scripts/sign-windows.test.sh

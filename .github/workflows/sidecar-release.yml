@@ -33,9 +33,9 @@ on:
         type: boolean
         default: true
 
-# Least privilege at the workflow level: only publish-sidecar needs OIDC (npm
-# Trusted Publishing) and it declares that itself. build-sidecar — the job
-# holding the DigiCert and Apple signing credentials — gets no token at all.
+# Least privilege at the workflow level: the jobs that need OIDC declare it
+# themselves — publish-sidecar for npm Trusted Publishing, build-sidecar to
+# federate into Google Cloud KMS for Windows signing.
 permissions:
   contents: read
 
@@ -82,11 +82,19 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
+    # OIDC, for google-github-actions/auth: Windows signing federates into
+    # Google Cloud KMS with no stored credential at all. Declared here rather
+    # than at the workflow level so no other job can mint a token.
+    permissions:
+      contents: read
+      id-token: write
     env:
       # secrets can't be referenced in step `if:` conditions — surface their
       # presence as env flags so the signing steps can gate on them.
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
-      HAVE_WINDOWS_SIGNING: ${{ secrets.SM_API_KEY != '' }}
+      # Windows signing is keyless: there is no secret to sentinel on, so the
+      # gate is the keyring variable — nothing can be signed without it.
+      HAVE_WINDOWS_SIGNING: ${{ vars.GCP_KMS_KEYRING != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -175,29 +183,37 @@ jobs:
           go build -ldflags "$LDFLAGS" \
             -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
 
-      # ─── Windows: Authenticode signature (DigiCert KeyLocker) ─────────
+      # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
+      # Keyless: OIDC → Workload Identity Federation → a short-lived access
+      # token for the Cloud HSM key. Nothing is stored in this repository, so
+      # there is no signing secret to leak or rotate.
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
+          token_format: "access_token"
+
       # scripts/sign-windows.sh is the single signing code path, shared with
       # installer-release.yml and runnable locally (see its header), so a local
-      # test exercises exactly what CI runs. Gated on SM_API_KEY: absent
+      # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
       # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
-      - name: Sign Windows binary (DigiCert KeyLocker)
+      - name: Sign Windows binary (Cloud KMS)
         if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING == 'true'
         working-directory: sidecar
         env:
-          SM_API_KEY: ${{ secrets.SM_API_KEY }}
-          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
-          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
-          SM_HOST: ${{ vars.SM_HOST }}
-          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
           # Asserted post-sign: the binary must carry OUR publisher, the same
           # identity the installer pins at runtime.
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Production certs chain to a public root, so demand the FULL
-          # verification (osslsigncode exit 0). Auto-relaxed when SM_HOST
-          # points at a DigiCert demo account, whose root is deliberately not
-          # publicly trusted and therefore can never chain — otherwise a demo
-          # dry run would fail for a reason that is not a defect.
-          SIGN_REQUIRE_TRUSTED_CHAIN: ${{ contains(vars.SM_HOST, 'demo') && '0' || '1' }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0). This is the script's default
+          # too; stated here so the release posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: |
           if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
             echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
@@ -206,7 +222,7 @@ jobs:
 
       - name: Warn — unsigned Windows build
         if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING != 'true'
-        run: echo "::warning::DigiCert KeyLocker credentials not configured — shipping an unsigned ${{ env.SIDECAR_BIN }}.exe (SmartScreen will warn users)."
+        run: echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned ${{ env.SIDECAR_BIN }}.exe (SmartScreen will warn users)."
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
       # Notifications (UNUserNotification) and stable TCC grants require a

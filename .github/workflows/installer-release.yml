@@ -90,13 +90,21 @@ jobs:
             echo "Installer v${VERSION} is not yet released — building."
           fi
 
-  # ─── Windows: mingw cross-build + Authenticode via DigiCert ───
+  # ─── Windows: mingw cross-build + Authenticode via Cloud KMS ───
   build-windows:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    # OIDC, for google-github-actions/auth: signing federates into Google
+    # Cloud KMS with no stored credential. Only this job gets a token — the
+    # workflow default stays contents: read.
+    permissions:
+      contents: read
+      id-token: write
     env:
-      HAVE_WINDOWS_SIGNING: ${{ secrets.SM_API_KEY != '' }}
+      # Keyless signing has no secret to sentinel on, so the gate is the
+      # keyring variable — nothing can be signed without it.
+      HAVE_WINDOWS_SIGNING: ${{ vars.GCP_KMS_KEYRING != '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -140,29 +148,34 @@ jobs:
             exit 1
           fi
 
-      - name: Sign installer (DigiCert KeyLocker)
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        if: env.HAVE_WINDOWS_SIGNING == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
+          token_format: "access_token"
+
+      - name: Sign installer (Cloud KMS)
         if: env.HAVE_WINDOWS_SIGNING == 'true'
         working-directory: sidecar
         env:
-          SM_API_KEY: ${{ secrets.SM_API_KEY }}
-          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
-          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
-          SM_HOST: ${{ vars.SM_HOST }}
-          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
           # Asserted post-sign: the installer must carry OUR publisher — the
           # same identity it then pins in the payloads it downloads.
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Production certs chain to a public root, so demand the FULL
-          # verification (osslsigncode exit 0). Auto-relaxed when SM_HOST
-          # points at a DigiCert demo account, whose root is deliberately not
-          # publicly trusted and therefore can never chain — otherwise a demo
-          # dry run would fail for a reason that is not a defect.
-          SIGN_REQUIRE_TRUSTED_CHAIN: ${{ contains(vars.SM_HOST, 'demo') && '0' || '1' }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0). This is the script's default
+          # too; stated here so the release posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: scripts/sign-windows.sh Jarvis-Setup.exe
 
       - name: Warn — unsigned installer
         if: env.HAVE_WINDOWS_SIGNING != 'true'
-        run: echo "::warning::DigiCert KeyLocker credentials not configured — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
+        run: echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
 
       - uses: actions/upload-artifact@v5
         with:

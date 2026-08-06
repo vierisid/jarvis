@@ -85,8 +85,11 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/sidecar-release.yml
-    # The signing credentials (APPLE_*, ASC_*, SM_*) must reach the reusable
-    # workflow — without inherit its signing steps silently skip.
+    # The Apple signing credentials (APPLE_*, ASC_*) must reach the reusable
+    # workflow — without inherit its macOS signing steps silently skip.
+    # Windows signing needs no secret at all: it federates into Google Cloud
+    # with the id-token granted above (repository *variables* are visible to
+    # called workflows without inherit).
     secrets: inherit
     with:
       dry_run: ${{ inputs.dry_run || false }}
@@ -194,7 +197,7 @@ jobs:
           done
 
           # Windows gets a zip (the .exe is Authenticode-signed at build time
-          # when CI has the DigiCert KeyLocker credentials)
+          # when Windows signing is configured — see sidecar-release.yml)
           cd "artifacts/sidecar-win32-x64"
           zip "../../release/${{ env.SIDECAR_BIN }}-v${SIDECAR_VERSION}-win32-x64.zip" \
             "${{ env.SIDECAR_BIN }}.exe"
