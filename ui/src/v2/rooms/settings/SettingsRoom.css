@@ -298,9 +298,15 @@
 
 @media (forced-colors: active) {
   .v2-set__select {
+    -webkit-appearance: auto;
     appearance: auto;
-    background-image: none;
+    background: Canvas;
+    border-radius: 0;
+    box-shadow: none;
+    color: CanvasText;
+    color-scheme: normal;
     padding-right: 12px;
+    transition: none;
   }
 }
 
