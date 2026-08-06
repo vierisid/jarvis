@@ -192,10 +192,12 @@ jobs:
           # Asserted post-sign: the binary must carry OUR publisher, the same
           # identity the installer pins at runtime.
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Production certs chain to a public root, so demand the full
-          # verification. Unset this only when signing against a DEMO
-          # account, whose root is deliberately untrusted.
-          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
+          # Production certs chain to a public root, so demand the FULL
+          # verification (osslsigncode exit 0). Auto-relaxed when SM_HOST
+          # points at a DigiCert demo account, whose root is deliberately not
+          # publicly trusted and therefore can never chain — otherwise a demo
+          # dry run would fail for a reason that is not a defect.
+          SIGN_REQUIRE_TRUSTED_CHAIN: ${{ contains(vars.SM_HOST, 'demo') && '0' || '1' }}
         run: |
           if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
             echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
