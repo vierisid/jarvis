@@ -48,8 +48,8 @@ jarvis
 ```
 
 On first launch, the local Connect window opens the usejarvis sign-in page in
-the system browser. Finish signing in there; the Connect window receives,
-verifies, and stores the enrollment token automatically.
+the system browser. Finish signing in there; the Connect window receives the
+enrollment token from the hosted handshake and stores it automatically.
 
 ### Self-hosted brain
 
