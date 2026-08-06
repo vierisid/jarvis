@@ -486,7 +486,10 @@ func (s *pebbleServiceWindows) createRenderSurface() error {
 	}
 
 	oldBitmap, _, _ := procSelectObject.Call(memDC, dib)
-	if oldBitmap == 0 {
+	// SelectObject has two failure sentinels depending on object type:
+	// NULL and HGDI_ERROR ((HGDIOBJ)-1). Never retain HGDI_ERROR as the
+	// bitmap to restore during cleanup or the DIB/DC can leak.
+	if oldBitmap == 0 || oldBitmap == ^uintptr(0) {
 		procDeleteObjectGdi.Call(dib)
 		procDeleteDC.Call(memDC)
 		return fmt.Errorf("SelectObject failed")
