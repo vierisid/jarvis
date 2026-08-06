@@ -92,13 +92,7 @@ func fakeHandshakeServer(t *testing.T, poll func(n int, w http.ResponseWriter)) 
 // A structurally valid unsigned-looking JWT for DecodeJWTPayload.
 func testJWT(t *testing.T) string {
 	t.Helper()
-	header := `{"alg":"ES256"}`
-	payload := `{"sid":"s1","name":"desktop","brain":"wss://x/sidecar/connect","jwks":"https://x/jwks.json","iat":1}`
-	enc := func(s string) string {
-		return strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(
-			base64StdNoPad(s)), "=")
-	}
-	return enc(header) + "." + enc(payload) + ".sig"
+	return enrollJWT(t, "wss://x/sidecar/connect")
 }
 
 func base64StdNoPad(s string) string {

@@ -8,8 +8,12 @@ package main
 // (brand_css.go).
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"sync"
+	"sync/atomic"
 
 	webview "github.com/webview/webview_go"
 )
@@ -44,7 +48,17 @@ func connStateString(s int32) string {
 }
 
 func (c *SidecarClient) runSettingsWindow() {
-	runLocalWebview("JARVIS — Sidecar Settings", 520, 560, webview.HintNone, func(w webview.WebView) {
+	runLocalWebview("JARVIS — Sidecar Settings", 520, 560, webview.HintNone, func(w webview.WebView) func() {
+		// Lifecycle plumbing for the async token check (bindings run on the
+		// webview main thread, so the network probe must not run inline —
+		// it would freeze the window for up to the probe timeout).
+		// verifyCtx aborts an in-flight probe when the window closes; the
+		// returned cleanup joins the goroutine before the engine is freed;
+		// torndown stops its Dispatch closure from touching a dead document.
+		verifyCtx, verifyCancel := context.WithCancel(context.Background())
+		var verifyWG sync.WaitGroup
+		var torndown atomic.Bool
+		var checkInFlight atomic.Bool
 
 		// getState returns the live connection status + current preferences.
 		_ = w.Bind("getState", func() settingsState {
@@ -61,8 +75,12 @@ func (c *SidecarClient) runSettingsWindow() {
 			return st
 		})
 
-		// saveToken validates + persists a new enrollment token. It applies on the
-		// next reconnect attempt; a restart guarantees a clean reconnect.
+		// saveToken checks + persists a new enrollment token. A malformed paste
+		// rejects the promise immediately; a well-formed one resolves it with
+		// the brain check STARTED (the page shows "checking") and the verdict —
+		// saved, or why not — lands async via window.__tokenVerdict. Only a
+		// token the brain accepted is written to the config; it applies on the
+		// next reconnect attempt, and a restart guarantees a clean reconnect.
 		_ = w.Bind("saveToken", func(raw string) error {
 			raw = trimToken(raw)
 			if raw == "" {
@@ -71,10 +89,35 @@ func (c *SidecarClient) runSettingsWindow() {
 			if _, err := DecodeJWTPayload(raw); err != nil {
 				return fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'.")
 			}
-			if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
-				return fmt.Errorf("Could not save the token: %v", err)
+			if !checkInFlight.CompareAndSwap(false, true) {
+				return fmt.Errorf("A token check is already running.")
 			}
-			log.Printf("[settings] enrollment token updated")
+			verifyWG.Add(1)
+			go func() {
+				defer verifyWG.Done()
+				defer checkInFlight.Store(false)
+				verr := verifyBrainToken(verifyCtx, raw, c.BrainOverride())
+				if verr == nil {
+					if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
+						verr = fmt.Errorf("Could not save the token: %v", err)
+					} else {
+						log.Printf("[settings] enrollment token verified with the brain and updated")
+					}
+				}
+				if errors.Is(verr, context.Canceled) {
+					return // window closed mid-check; no document to report to
+				}
+				msg := ""
+				if verr != nil {
+					msg = verr.Error()
+				}
+				w.Dispatch(func() {
+					if torndown.Load() {
+						return
+					}
+					w.Eval("window.__tokenVerdict && window.__tokenVerdict('" + jsEscape(msg) + "')")
+				})
+			}()
 			return nil
 		})
 
@@ -132,6 +175,11 @@ func (c *SidecarClient) runSettingsWindow() {
 		})
 
 		w.SetHtml(settingsWindowHTML)
+		return func() {
+			torndown.Store(true)
+			verifyCancel()
+			verifyWG.Wait()
+		}
 	})
 }
 
@@ -302,7 +350,14 @@ const settingsWindowHTML = `<!doctype html>
     setInterval(pollStatus, 2000);
   }
 
+  // True from Save-click until the async verdict lands; suppresses the
+  // input-driven button reset so typing during a check can't re-enable Save,
+  // and remembers what was submitted so the verdict never wipes newer input.
+  var tokenChecking = false;
+  var submittedTok = '';
+
   function resetTokenButton() {
+    if (tokenChecking) return;
     var btn = document.getElementById('saveTok');
     if (btn.textContent !== 'Save token') {
       btn.textContent = 'Save token';
@@ -329,25 +384,46 @@ const settingsWindowHTML = `<!doctype html>
 
   // Note: the JS handler must NOT be named the same as the Go binding
   // (window.saveToken) — a same-named top-level function shadows the binding.
+  // The promise resolving means the brain check STARTED; the verdict (saved,
+  // or why not) arrives async via __tokenVerdict below.
   async function doSaveToken() {
     var btn = document.getElementById('saveTok');
     var msg = document.getElementById('tokMsg');
     var tok = document.getElementById('tok');
     msg.className = 'msg'; msg.textContent = '';
     btn.disabled = true;
+    tokenChecking = true;
+    submittedTok = tok.value;
     try {
       await window.saveToken(tok.value);
-      msg.className = 'msg ok';
-      msg.textContent = 'Saved — restart to reconnect with the new token.';
-      tok.value = '';
-      // Morph Save -> Restart for a one-click apply.
-      btn.textContent = 'Restart Jarvis';
-      btn.onclick = doRestart;
+      msg.textContent = 'Checking the token with your brain…';
     } catch (e) {
+      tokenChecking = false;
       msg.className = 'msg err';
       msg.textContent = (e && e.message) ? e.message : String(e);
+      btn.disabled = false;
     }
+  }
+
+  window.__tokenVerdict = function (errMsg) {
+    var btn = document.getElementById('saveTok');
+    var msg = document.getElementById('tokMsg');
+    var tok = document.getElementById('tok');
+    tokenChecking = false;
     btn.disabled = false;
+    if (errMsg) {
+      msg.className = 'msg err';
+      msg.textContent = errMsg;
+      return;
+    }
+    msg.className = 'msg ok';
+    msg.textContent = 'Saved — restart to reconnect with the new token.';
+    // Only clear what was actually saved — never a newer token typed while
+    // the check was running.
+    if (tok.value === submittedTok) tok.value = '';
+    // Morph Save -> Restart for a one-click apply.
+    btn.textContent = 'Restart Jarvis';
+    btn.onclick = doRestart;
   }
 
   async function togglePref(el) {

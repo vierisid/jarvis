@@ -139,7 +139,7 @@ If those claims point at the wrong domain, an old ingress, or a host unreachable
 
 ### Step 3: User Copies Token to Sidecar
 
-`jarvis enroll` prints the JWT to the terminal. The user pastes it into the sidecar's token form (the desktop app asks for it on first run; it is also accepted in Settings), which stores it in the sidecar configuration at `~/.jarvis/sidecar.yaml`.
+`jarvis enroll` prints the JWT to the terminal. The user pastes it into the sidecar's token form (the desktop app asks for it on first run; it is also accepted in Settings, and headlessly via `--token`). Before the token is stored, the sidecar verifies it against the brain it names by requesting an access token (`POST {brain}/sidecar/token` with the enrollment JWT as bearer): an unreachable brain URL, a rejected token, and a server that isn't a Jarvis brain each produce a distinct inline error, and nothing is saved. Only a token the brain accepted is written to the sidecar configuration at `~/.jarvis/sidecar.yaml`.
 
 ### Step 4: Sidecar Verifies Token
 

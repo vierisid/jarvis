@@ -70,7 +70,7 @@ func (c *SidecarClient) runAccountWindow() {
 	base := resolveHostedBaseURL(c.config.HostedBaseURL)
 	c.mu.Unlock()
 
-	runLocalWebview("JARVIS — Account", 920, 720, webview.HintNone, func(w webview.WebView) {
+	runLocalWebview("JARVIS — Account", 920, 720, webview.HintNone, func(w webview.WebView) func() {
 		w.SetHtml(accountShellHTML)
 		// Dispatch rather than a direct call: the dispatch queue runs after
 		// SetHtml's string navigation has been issued, so the shell is the
@@ -78,5 +78,6 @@ func (c *SidecarClient) runAccountWindow() {
 		// navigations racing in the engine. If the shell still loses the
 		// race, the reveal's timeout fallback covers us as before.
 		w.Dispatch(func() { w.Navigate(base + "/account") })
+		return nil
 	})
 }

@@ -267,6 +267,15 @@ func (c *SidecarClient) editConfig(fn func(cfg *SidecarConfig)) error {
 	return SaveConfig(c.config)
 }
 
+// BrainOverride returns the config's manual brain-URL override (lock-protected;
+// "" when unset). Used by the settings window's token check so a pasted token
+// is verified against the URL the client will actually dial.
+func (c *SidecarClient) BrainOverride() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config.Brain
+}
+
 // Preferences returns a copy of the current preferences (lock-protected).
 func (c *SidecarClient) Preferences() PreferencesConfig {
 	c.mu.Lock()

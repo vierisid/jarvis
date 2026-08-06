@@ -57,7 +57,8 @@ func resolveHostedBaseURLWith(overrideAllowed bool, cfgValue, envValue string) s
 // the gate, any page in the Clerk/Stripe redirect chain could silently
 // enroll this sidecar to an attacker-controlled brain (enrollment JWTs are
 // self-describing via their brain/jwks claims). accept receives a
-// structurally valid JWT and closes the window.
+// structurally valid JWT; the caller then verifies it against its brain
+// (verify_token.go) and closes the window only on success.
 func submitTokenHandler(isActive func() bool, accept func(token string)) func(string) error {
 	return func(raw string) error {
 		if !isActive() {

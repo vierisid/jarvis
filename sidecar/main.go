@@ -68,11 +68,28 @@ Usage:
 	}
 
 	if *token != "" {
-		cfg.Token = *token
+		// Same contract as the setup/settings forms (verify_token.go): prove
+		// the token works against the brain it names BEFORE persisting it. A
+		// wrong-URL token used to be saved blind and fail invisibly in the
+		// reconnect loop. Errors go to stderr as well as the log — --token is
+		// typically run from a terminal, and logs already go to the file.
+		tok := trimToken(*token)
+		if err := verifyBrainToken(context.Background(), tok, cfg.Brain); err != nil {
+			log.Printf("[sidecar] enrollment token check failed: %v", err)
+			fmt.Fprintf(os.Stderr, "Error: %v\nThe token was not saved.\n", err)
+			// The Windows build is a GUI-subsystem binary — stderr goes
+			// nowhere — so surface the failure in a native message box there
+			// (MessageBoxW blocks until dismissed). Elsewhere this logs
+			// (Linux) or no-ops before exit (macOS, no run loop yet); the
+			// stderr line above covers those terminals.
+			platformShowAlert("JARVIS Sidecar", fmt.Sprintf("%v\n\nThe token was not saved.", err))
+			os.Exit(1)
+		}
+		cfg.Token = tok
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("[sidecar] Failed to save config: %v", err)
 		}
-		log.Println("[sidecar] Token saved to config")
+		log.Println("[sidecar] Token verified with the brain and saved to config")
 	}
 
 	// Reconcile OS autostart with the saved preference: re-register with the

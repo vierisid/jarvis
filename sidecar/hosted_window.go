@@ -177,6 +177,13 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	defer handshakeWG.Wait()
 	defer cancel()
 
+	// Brain-check of a pasted token, on its own context: chooseSelfHost cancels
+	// ctx to stop the hosted handshake, but a verification started afterwards
+	// must keep running. Cancelled before the WaitGroup join (LIFO with the
+	// defers above) so closing the window never blocks on a slow probe.
+	verifyCtx, verifyCancel := context.WithCancel(context.Background())
+	defer verifyCancel()
+
 	// Unlike the main-thread-only locals below, this is written by the handshake
 	// goroutine and read after Run() returns, so it needs real synchronisation.
 	// It deliberately does NOT live behind a Dispatch closure: see the capture
@@ -194,6 +201,11 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	// All reads/writes happen on the webview main thread (bindings and
 	// Dispatch closures both run there), so a plain bool is race-free.
 	selfHostFormActive := false
+
+	// True while a pasted token is being verified against its brain; gates
+	// submitToken so a second paste can't race the in-flight check. Main-thread
+	// only, like selfHostFormActive.
+	verifyInFlight := false
 
 	// Connect page URL for the CURRENT handshake nonce, and a guard against
 	// overlapping handshakes (double-clicked "Try again"). Main-thread only,
@@ -232,10 +244,34 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	}
 
 	if err := w.Bind("submitToken", submitTokenHandler(
-		func() bool { return selfHostFormActive },
+		func() bool { return selfHostFormActive && !verifyInFlight },
 		func(tok string) {
-			token = tok
-			w.Terminate()
+			// Structurally valid — now prove it works against the brain it
+			// names before it is persisted. A wrong-URL token used to be saved
+			// blind: the window closed and the only trace of the failure was
+			// the reconnect loop in the log. The form shows "checking" while
+			// this runs; the verdict lands via window.__tokenVerdict, and
+			// success closes the window as before.
+			verifyInFlight = true
+			handshakeWG.Add(1)
+			go func() {
+				defer handshakeWG.Done()
+				verr := verifyBrainToken(verifyCtx, tok, cfg.Brain)
+				w.Dispatch(func() {
+					if torndown.Load() || verifyCtx.Err() != nil {
+						return
+					}
+					verifyInFlight = false
+					if verr != nil {
+						w.Eval("window.__tokenVerdict && window.__tokenVerdict('" + jsEscape(verr.Error()) + "')")
+						return
+					}
+					tokenMu.Lock()
+					token = tok
+					tokenMu.Unlock()
+					w.Terminate()
+				})
+			}()
 		},
 	)); err != nil {
 		return "", fmt.Errorf("bind setup handler: %w", err)
@@ -436,6 +472,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	// otherwise be dropped on the floor. Both calls are idempotent, so the
 	// deferred cancel/Wait stay as backstops for the early-return paths.
 	cancel()
+	verifyCancel()
 	handshakeWG.Wait()
 	tokenMu.Lock()
 	defer tokenMu.Unlock()

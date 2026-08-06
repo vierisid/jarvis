@@ -9,14 +9,19 @@ package main
 // local HTML in the shared Monochrome Lab brand (brand_css.go).
 //
 // Flow: main() calls runSetupWindow() when cfg.Token == ""; the window blocks
-// until the user submits a valid-looking token (closing the window cancels).
-// The token is validated only as a well-formed JWT here — the brain still does
-// the real cryptographic verification on connect.
+// until the user submits a working token (closing the window cancels). The
+// submit is two-stage: a malformed JWT rejects the submitToken promise
+// immediately, and a well-formed one is then verified against the brain it
+// names (verify_token.go) while the form shows a checking state — the verdict
+// arrives via window.__tokenVerdict, and only a token the brain accepted is
+// saved and closes the window.
 
 // setupWindowHTML is the self-host first-run form, Monochrome Lab
 // (brand_css.go): a centered raised card with the signature corner.
 // `window.submitToken(value)` is the Go binding installed below; it rejects with
-// a message when the token is empty/malformed so the form can show it inline.
+// a message when the token is empty/malformed so the form can show it inline,
+// and resolves when the brain check has STARTED (not passed) — the async
+// verdict lands in window.__tokenVerdict with an empty message on success.
 const setupWindowHTML = `<!doctype html>
 <html>
 <head>
@@ -51,6 +56,7 @@ const setupWindowHTML = `<!doctype html>
   .hint { font-size: 11px; color: var(--faint); margin: 8px 0 0; line-height: 1.5; }
   .row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
   #err { color: var(--listen-tx); font-size: 12px; line-height: 1.5; min-height: 16px; flex: 1; text-align: left; }
+  #err.checking { color: var(--ink3); }
   button {
     appearance: none; height: 40px; padding: 0 18px; border: 1px solid transparent;
     border-radius: var(--corner-sm); font-family: var(--sans); font-size: 13.5px;
@@ -86,17 +92,29 @@ const setupWindowHTML = `<!doctype html>
   var err = document.getElementById('err');
   var btn = document.getElementById('go');
   async function submit() {
+    if (btn.disabled) return; // Cmd/Ctrl+Enter during an in-flight check
+    err.className = '';
     err.textContent = '';
     btn.disabled = true;
     try {
       await window.submitToken(tok.value);
-      // On success the window closes; nothing more to do.
+      // Structurally valid: Go is now checking it against the brain. The
+      // verdict arrives via __tokenVerdict below; success closes the window.
+      err.className = 'checking';
+      err.textContent = 'Checking the token with your brain…';
     } catch (e) {
       err.textContent = (e && e.message) ? e.message : String(e);
       btn.disabled = false;
       tok.focus();
     }
   }
+  window.__tokenVerdict = function (msg) {
+    if (!msg) return; // verified: the window is closing
+    err.className = '';
+    err.textContent = msg;
+    btn.disabled = false;
+    tok.focus();
+  };
   tok.addEventListener('keydown', function (e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
   });

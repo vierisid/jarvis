@@ -23,7 +23,7 @@ func (c *SidecarClient) OpenLogViewer() {
 }
 
 func runLogViewer(logPath string) {
-	runLocalWebview("JARVIS — Logs", 900, 600, webview.HintNone, func(w webview.WebView) {
+	runLocalWebview("JARVIS — Logs", 900, 600, webview.HintNone, func(w webview.WebView) func() {
 
 		// loadLogs returns the current log file contents.
 		_ = w.Bind("loadLogs", func() string {
@@ -50,6 +50,7 @@ func runLogViewer(logPath string) {
 		})
 
 		w.SetHtml(logViewerHTML)
+		return nil
 	})
 }
 
