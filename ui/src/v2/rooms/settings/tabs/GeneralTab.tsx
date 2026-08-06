@@ -6,6 +6,7 @@ import {
   resetOnboarding,
   type OnboardingResetScope,
 } from "../../../onboarding/resetClient";
+import { useI18n } from "../../../i18n/I18nProvider";
 
 const HEARTBEAT_LEVELS = ["passive", "moderate", "aggressive"] as const;
 const RESPONSE_LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
@@ -21,6 +22,7 @@ export function GeneralTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const { autostart, rootCfg, personality, role } = data;
+  const { setLocale, t } = useI18n();
   const [restarting, setRestarting] = useState(false);
 
   const handleRestart = async () => {
@@ -37,9 +39,9 @@ export function GeneralTab({
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">Jarvis language</h3>
+            <h3 className="v2-set__section-title">{t("settings.languageTitle")}</h3>
             <div className="v2-set__section-sub">
-              Pins chat, delegated work, onboarding interview, and voice replies to one language.
+              {t("settings.languageDescription")}
             </div>
           </div>
           <span className="v2-set__chip">
@@ -56,6 +58,7 @@ export function GeneralTab({
               aria-pressed={(rootCfg?.user?.language ?? "en") === option.id}
               onClick={async () => {
                 const r = await data.setResponseLanguage(option.id);
+                if (r.ok) setLocale(option.id);
                 onToast(r.message, r.ok ? "ok" : "warn");
               }}
             >
@@ -64,7 +67,7 @@ export function GeneralTab({
           ))}
         </div>
         <p className="v2-set__hint">
-          Jarvis keeps this language unless you explicitly ask for another language in your current message.
+          {t("settings.languageHint")}
         </p>
       </section>
 

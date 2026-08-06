@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { Icon } from "../ui";
 import type { NotificationItem, NotificationKind } from "../../hooks/useNotificationCenter";
+import { useI18n } from "../i18n/I18nProvider";
+import type { DashboardLocale, MessageKey } from "../i18n/translations";
 import "./NotificationDrawer.css";
 
 export interface NotificationDrawerProps {
@@ -26,11 +28,11 @@ export interface NotificationDrawerProps {
   onPick: (id: string) => void;
 }
 
-const KIND_LABEL: Record<NotificationKind, string> = {
-  approval: "Approval",
-  clarifier: "Clarify",
-  "repeat-back": "Confirm",
-  system: "System",
+const KIND_LABEL: Record<NotificationKind, MessageKey> = {
+  approval: "notifications.approval",
+  clarifier: "notifications.clarify",
+  "repeat-back": "notifications.confirm",
+  system: "notifications.system",
 };
 
 const KIND_ICON: Record<NotificationKind, LucideIcon> = {
@@ -47,6 +49,7 @@ export function NotificationDrawer({
   onMarkAllRead,
   onPick,
 }: NotificationDrawerProps) {
+  const { locale, t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Esc closes; click-outside closes. Both attached only while open.
@@ -98,29 +101,29 @@ export function NotificationDrawer({
       ref={rootRef}
       className="v2-notif-drawer"
       role="dialog"
-      aria-label="Notifications"
+      aria-label={t("notifications.title")}
       aria-modal="false"
     >
       <div className="v2-notif-drawer__head">
-        <span className="v2-notif-drawer__title">Notifications</span>
+        <span className="v2-notif-drawer__title">{t("notifications.title")}</span>
         <button
           type="button"
           className="v2-notif-drawer__markall"
           onClick={onMarkAllRead}
           disabled={unreadCount === 0}
-          aria-label="Mark all as read"
+          aria-label={t("notifications.markAll")}
         >
           <Icon icon={Check} size="sm" />
-          Mark all read
+          {t("notifications.markAll")}
         </button>
       </div>
 
       {items.length === 0 ? (
         <div className="v2-notif-drawer__empty">
           <Icon icon={Bell} size="md" />
-          <p>You're all caught up.</p>
+          <p>{t("notifications.empty")}</p>
           <p className="v2-notif-drawer__empty-hint">
-            Approvals, voice confirmations, and system warnings will appear here.
+            {t("notifications.emptyHint")}
           </p>
         </div>
       ) : (
@@ -141,10 +144,10 @@ export function NotificationDrawer({
                 <span className="v2-notif-drawer__row-body">
                   <span className="v2-notif-drawer__row-meta">
                     <span className="v2-notif-drawer__row-kind">
-                      {KIND_LABEL[item.kind]}
+                      {t(KIND_LABEL[item.kind])}
                     </span>
                     <span className="v2-notif-drawer__row-time">
-                      {formatRelative(item.timestamp)}
+                      {formatRelative(item.timestamp, locale, t)}
                     </span>
                   </span>
                   <span className="v2-notif-drawer__row-title">{item.title}</span>
@@ -169,18 +172,22 @@ export function NotificationDrawer({
  * "5m ago", "2h ago", "yesterday". Falls back to a date string after a week
  * so the drawer doesn't grow ambiguous "weeks ago" labels.
  */
-function formatRelative(ts: number): string {
+function formatRelative(
+  ts: number,
+  locale: DashboardLocale,
+  t: (key: MessageKey, values?: Record<string, string | number>) => string,
+): string {
   const now = Date.now();
   const diff = now - ts;
-  if (diff < 0) return "just now";
+  if (diff < 0) return t("notifications.justNow");
   const sec = Math.floor(diff / 1000);
-  if (sec < 45) return "just now";
+  if (sec < 45) return t("notifications.justNow");
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return t("notifications.minutesAgo", { count: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return t("notifications.hoursAgo", { count: hr });
   const day = Math.floor(hr / 24);
-  if (day === 1) return "yesterday";
-  if (day < 7) return `${day}d ago`;
-  return new Date(ts).toLocaleDateString();
+  if (day === 1) return t("notifications.yesterday");
+  if (day < 7) return t("notifications.daysAgo", { count: day });
+  return new Date(ts).toLocaleDateString(locale);
 }

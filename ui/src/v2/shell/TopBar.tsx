@@ -4,6 +4,8 @@ import { ROOM_NAV_ENTRIES } from "../palette/types";
 import type { ConnectionState } from "./Header";
 import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
+import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n/translations";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
@@ -11,17 +13,17 @@ import { useTheme } from "./useTheme";
  * Quick open (⌘K), and the bell. The state chip is the only live colour.
  */
 
-const ROOM_TITLES: Record<string, string> = Object.fromEntries(
-  ROOM_NAV_ENTRIES.map((e) => [e.key, e.label]),
+const ROOM_TITLE_KEYS: Record<string, MessageKey> = Object.fromEntries(
+  ROOM_NAV_ENTRIES.map((e) => [e.key, `room.${e.key}` as MessageKey]),
 );
 
-const STATE_LABEL: Record<VoiceState, string> = {
-  idle: "idle",
-  listening: "listening",
-  thinking: "thinking",
-  speaking: "speaking",
-  "awaiting-approval": "asking",
-  muted: "muted",
+const STATE_LABEL: Record<VoiceState, MessageKey> = {
+  idle: "top.idle",
+  listening: "top.listening",
+  thinking: "top.thinking",
+  speaking: "top.speaking",
+  "awaiting-approval": "top.asking",
+  muted: "top.muted",
 };
 
 const STATE_HUE: Record<VoiceState, string> = {
@@ -33,10 +35,10 @@ const STATE_HUE: Record<VoiceState, string> = {
   muted: "var(--faint)",
 };
 
-const DAEMON: Record<ConnectionState, { cls: string; hue: string; label: string }> = {
-  live: { cls: "", hue: "var(--ok)", label: "daemon · online" },
-  degraded: { cls: "hold", hue: "var(--hold)", label: "daemon · degraded · reconnecting" },
-  offline: { cls: "bad", hue: "var(--listen)", label: "offline" },
+const DAEMON: Record<ConnectionState, { cls: string; hue: string; labelKey: MessageKey }> = {
+  live: { cls: "", hue: "var(--ok)", labelKey: "top.daemonOnline" },
+  degraded: { cls: "hold", hue: "var(--hold)", labelKey: "top.daemonDegraded" },
+  offline: { cls: "bad", hue: "var(--listen)", labelKey: "top.offline" },
 };
 
 export function TopBar({
@@ -60,8 +62,10 @@ export function TopBar({
 }) {
   const route = useV2Route();
   const [theme, toggleTheme] = useTheme();
+  const { t } = useI18n();
   const isNow = route.kind !== "room";
-  const title = route.kind === "room" ? ROOM_TITLES[route.key] ?? route.key : "Now";
+  const titleKey = route.kind === "room" ? ROOM_TITLE_KEYS[route.key] : "nav.now";
+  const title = titleKey ? t(titleKey) : route.kind === "room" ? route.key : t("nav.now");
   const daemon = DAEMON[connection];
   const count = notificationCount ?? 0;
 
@@ -70,39 +74,39 @@ export function TopBar({
       <span className="rm">{title}</span>
       {isNow && (
         <button className={`rs-abtn${arranging ? " on" : ""}`} onClick={onArrange} aria-pressed={arranging}>
-          {arranging ? "Done" : "Arrange"}
+          {t(arranging ? "top.done" : "top.arrange")}
         </button>
       )}
 
       <div className="right">
         <span className={`rs-chip ${daemon.cls}`}>
           <span className="rs-dot" style={{ background: daemon.hue }} />
-          {daemon.label}
+          {t(daemon.labelKey)}
         </span>
 
         {connection !== "offline" && (
           <span className="rs-chip hold" aria-live="polite">
             <span className="rs-dot" style={{ background: STATE_HUE[voiceState] }} />
-            <span className="rs-stl">{STATE_LABEL[voiceState]}</span>
+            <span className="rs-stl">{t(STATE_LABEL[voiceState])}</span>
           </span>
         )}
 
         <button
           className="rs-chip"
           onClick={() => toggleTheme()}
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          aria-label={t(theme === "dark" ? "top.switchLight" : "top.switchDark")}
+          title={t(theme === "dark" ? "top.switchLight" : "top.switchDark")}
         >
-          {theme === "dark" ? "● dark" : "○ light"}
+          {theme === "dark" ? `● ${t("top.dark")}` : `○ ${t("top.light")}`}
         </button>
 
-        <button className="rs-chip" onClick={onOpenPalette} aria-label="Quick open">⌘K</button>
+        <button className="rs-chip" onClick={onOpenPalette} aria-label={t("top.quickOpen")}>⌘K</button>
 
         {onToggleNotifications && (
           <button
             className={`rs-bell${notificationsOpen ? " on" : ""}`}
             onClick={onToggleNotifications}
-            aria-label={`Notifications${count > 0 ? `, ${count} unread` : ""}`}
+            aria-label={`${t("notifications.title")}${count > 0 ? `, ${t("notifications.unread", { count })}` : ""}`}
             aria-expanded={notificationsOpen}
           >
             <span className="bb">⌥N</span>

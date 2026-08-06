@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import type { JarvisLanguage } from "../language";
+import { useI18n } from "../i18n/I18nProvider";
 import "./OnboardingWizard.css";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
@@ -127,6 +128,7 @@ export function OnboardingWizard({
   status: OnboardingStatus | null;
   onComplete: () => void;
 }) {
+  const { setLocale } = useI18n();
   const startStep = useMemo<number>(() => {
     if (!status?.setup_completed) return 0;
     if (!status.profile_completed && !status.setup_skipped_profile) return 6;
@@ -151,6 +153,10 @@ export function OnboardingWizard({
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem("jarvis-theme", t); } catch { /* ignore */ }
   };
+  useEffect(() => {
+    setLocale(language);
+  }, [language, setLocale]);
+
   // permissions
   // brain
   const [provId, setProvId] = useState("anthropic");

@@ -28,6 +28,8 @@ import {
 } from "./types";
 import { usePaletteRecent } from "./usePaletteRecent";
 import { usePaletteSearch } from "./usePaletteSearch";
+import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n/translations";
 
 const TYPE_ICON: Record<PaletteResultType, LucideIcon> = {
   workflow: Workflow,
@@ -60,13 +62,13 @@ const NAV_ICON: Record<PaletteNavEntry["key"], LucideIcon> = {
   settings: Cog,
 };
 
-const TYPE_LABEL: Record<PaletteResultType, string> = {
-  workflow: "Workflow",
-  memory: "Memory",
-  tool: "Tool",
-  agent: "Agent",
-  authority: "Authority",
-  log: "Log",
+const TYPE_LABEL: Record<PaletteResultType, MessageKey> = {
+  workflow: "object.workflow",
+  memory: "object.memory",
+  tool: "object.tool",
+  agent: "object.agent",
+  authority: "object.authority",
+  log: "object.log",
 };
 
 export interface CommandPaletteProps {
@@ -106,6 +108,7 @@ export function CommandPalette({
   onPickObject,
   onPickRoom,
 }: CommandPaletteProps) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -116,13 +119,20 @@ export function CommandPalette({
 
   // Filter Room nav entries client-side. Always keep all 10 visible when
   // the query is empty — the panel doubles as a "go anywhere" affordance.
+  const localizedNavEntries = useMemo<PaletteNavEntry[]>(() =>
+    ROOM_NAV_ENTRIES.map((entry) => ({
+      ...entry,
+      label: t(`room.${entry.key}` as MessageKey),
+      hint: t(`roomHint.${entry.key}` as MessageKey),
+    })), [t]);
+
   const navEntries: PaletteNavEntry[] = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return ROOM_NAV_ENTRIES;
-    return ROOM_NAV_ENTRIES.filter(
+    if (!q) return localizedNavEntries;
+    return localizedNavEntries.filter(
       (e) => e.label.toLowerCase().includes(q) || e.hint.toLowerCase().includes(q) || e.key.includes(q),
     );
-  }, [query]);
+  }, [localizedNavEntries, query]);
 
   // Recent objects only show on empty query.
   const recentResults: PaletteResult[] = useMemo(() => {
@@ -209,7 +219,7 @@ export function CommandPalette({
   if (!open) return null;
 
   return (
-    <div className="v2-palette__scrim" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div className="v2-palette__scrim" role="dialog" aria-modal="true" aria-label={t("palette.title")}>
       <div className="v2-palette" onClick={(e) => e.stopPropagation()}>
         <div className="v2-palette__head">
           <Icon icon={Search} size="sm" />
@@ -223,8 +233,8 @@ export function CommandPalette({
               setActiveIdx(0);
             }}
             onKeyDown={onKeyDown}
-            placeholder="Search workflows, memory, tools, agents, authority, logs…"
-            aria-label="Palette search"
+            placeholder={t("palette.search")}
+            aria-label={t("palette.searchLabel")}
           />
           <KBD>Esc</KBD>
         </div>
@@ -232,13 +242,13 @@ export function CommandPalette({
         <div className="v2-palette__list" ref={listRef}>
           {flatItems.length === 0 && !loading && (
             <div className="v2-palette__empty">
-              Nothing matches &ldquo;{query}&rdquo;. Try a different word.
+              {t("palette.noMatch", { query })}
             </div>
           )}
 
           {/* Rooms group */}
           {navEntries.length > 0 && (
-            <Group label="Rooms">
+            <Group label={t("palette.rooms")}>
               {navEntries.map((entry, i) => {
                 const idx = i;
                 return (
@@ -251,7 +261,7 @@ export function CommandPalette({
                     icon={NAV_ICON[entry.key]}
                     title={entry.label}
                     hint={entry.hint}
-                    typeLabel="Open Room"
+                    typeLabel={t("palette.openRoom")}
                   />
                 );
               })}
@@ -260,7 +270,7 @@ export function CommandPalette({
 
           {/* Recent group (only on empty query) */}
           {recentResults.length > 0 && (
-            <Group label="Recent">
+            <Group label={t("palette.recent")}>
               {recentResults.map((r, i) => {
                 const idx = navEntries.length + i;
                 return (
@@ -279,7 +289,7 @@ export function CommandPalette({
 
           {/* Live results group */}
           {objectResults.length > 0 && (
-            <Group label={query.trim() ? "Results" : "Suggested"}>
+            <Group label={t(query.trim() ? "palette.results" : "palette.suggested")}>
               {objectResults.map((r, i) => {
                 const idx = navEntries.length + recentResults.length + i;
                 return (
@@ -300,16 +310,16 @@ export function CommandPalette({
         <div className="v2-palette__foot">
           <span className="v2-palette__hint">
             <KBD>↑</KBD>
-            <KBD>↓</KBD> navigate
+            <KBD>↓</KBD> {t("palette.navigate")}
           </span>
           <span className="v2-palette__hint">
-            <KBD>↵</KBD> insert as card
+            <KBD>↵</KBD> {t("palette.insertCard")}
           </span>
           <span className="v2-palette__hint">
-            <KBD>⇧↵</KBD> open Room
+            <KBD>⇧↵</KBD> {t("palette.openRoom")}
           </span>
           <span className="v2-palette__hint v2-palette__hint--right">
-            <KBD>Esc</KBD> close
+            <KBD>Esc</KBD> {t("palette.close")}
           </span>
         </div>
       </div>
@@ -319,7 +329,7 @@ export function CommandPalette({
         type="button"
         className="v2-palette__scrim-catcher"
         onClick={onClose}
-        aria-label="Close palette"
+        aria-label={t("palette.closeLabel")}
       />
     </div>
   );
@@ -390,6 +400,7 @@ function ResultRow({
   onClick: (e: React.MouseEvent) => void;
   result: PaletteResult;
 }) {
+  const { t } = useI18n();
   const I = TYPE_ICON[result.type];
   return (
     <Row
@@ -400,7 +411,7 @@ function ResultRow({
       icon={I}
       title={result.title}
       hint={result.summary ?? result.meta}
-      typeLabel={TYPE_LABEL[result.type]}
+      typeLabel={t(TYPE_LABEL[result.type])}
     />
   );
 }

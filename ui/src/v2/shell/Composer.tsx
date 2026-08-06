@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { Icon } from "../ui";
+import { useI18n } from "../i18n/I18nProvider";
 import "./Composer.css";
 
 export interface ComposerProps {
@@ -13,9 +14,10 @@ export interface ComposerProps {
 export function Composer({
   onSubmit,
   onSlash,
-  placeholder = "Ask Jarvis, or press / to summon a tool…",
+  placeholder,
   disabled,
 }: ComposerProps) {
+  const { t } = useI18n();
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -72,7 +74,7 @@ export function Composer({
           ref={inputRef}
           rows={1}
           className="v2-composer__input"
-          placeholder={placeholder}
+          placeholder={placeholder ?? t("composer.placeholder")}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onInput={autoGrow}
@@ -99,13 +101,13 @@ export function Composer({
             }
           }}
           disabled={disabled}
-          aria-label="Message Jarvis"
+          aria-label={t("composer.messageLabel")}
         />
         <button
           type="button"
           className="v2-composer__slash"
           onClick={onSlash}
-          aria-label="Open command palette"
+          aria-label={t("composer.openPalette")}
         >
           /
         </button>
@@ -113,7 +115,7 @@ export function Composer({
           type="submit"
           className="v2-composer__send"
           disabled={disabled || value.trim().length === 0}
-          aria-label="Send"
+          aria-label={t("composer.send")}
         >
           <Icon icon={ArrowRight} size={12} strokeWidth={2} />
         </button>

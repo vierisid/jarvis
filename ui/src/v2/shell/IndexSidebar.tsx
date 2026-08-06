@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
 import { useLiveData } from "./LiveDataContext";
+import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n/translations";
 
 /**
  * The Index — Brand Book III room-centric sidebar. Three states:
@@ -13,43 +15,43 @@ import { useLiveData } from "./LiveDataContext";
  */
 
 type Row =
-  | { kind: "heading"; label: string }
-  | { kind: "room"; key: RoomKey; label: string; kbd?: string; spaced?: boolean }
-  | { kind: "now"; label: string; kbd: string };
+  | { kind: "heading"; labelKey: MessageKey }
+  | { kind: "room"; key: RoomKey; labelKey: MessageKey; kbd?: string; spaced?: boolean }
+  | { kind: "now"; labelKey: MessageKey; kbd: string };
 
 const ROWS: Row[] = [
-  { kind: "now", label: "Now", kbd: "⌘1" },
-  { kind: "heading", label: "run" },
-  { kind: "room", key: "workflows", label: "Workflows", kbd: "⌘2" },
-  { kind: "room", key: "agents", label: "Agents", kbd: "⌘3" },
-  { kind: "room", key: "tasks", label: "Tasks", kbd: "⌘4" },
-  { kind: "heading", label: "know" },
-  { kind: "room", key: "memory", label: "Memory", kbd: "⌘5" },
-  { kind: "room", key: "goals", label: "Goals", kbd: "⌘6" },
-  { kind: "room", key: "calendar", label: "Calendar", kbd: "⌘7" },
-  { kind: "room", key: "content", label: "Content", kbd: "⌘8" },
-  { kind: "heading", label: "guard" },
-  { kind: "room", key: "authority", label: "Authority" },
-  { kind: "room", key: "logs", label: "Logs" },
-  { kind: "room", key: "usage", label: "Usage" },
-  { kind: "heading", label: "build" },
-  { kind: "room", key: "workspaces", label: "Workspaces" },
-  { kind: "room", key: "tools", label: "Tools" },
-  { kind: "room", key: "settings", label: "Settings", kbd: "⌘9", spaced: true },
+  { kind: "now", labelKey: "nav.now", kbd: "⌘1" },
+  { kind: "heading", labelKey: "nav.run" },
+  { kind: "room", key: "workflows", labelKey: "room.workflows", kbd: "⌘2" },
+  { kind: "room", key: "agents", labelKey: "room.agents", kbd: "⌘3" },
+  { kind: "room", key: "tasks", labelKey: "room.tasks", kbd: "⌘4" },
+  { kind: "heading", labelKey: "nav.know" },
+  { kind: "room", key: "memory", labelKey: "room.memory", kbd: "⌘5" },
+  { kind: "room", key: "goals", labelKey: "room.goals", kbd: "⌘6" },
+  { kind: "room", key: "calendar", labelKey: "room.calendar", kbd: "⌘7" },
+  { kind: "room", key: "content", labelKey: "room.content", kbd: "⌘8" },
+  { kind: "heading", labelKey: "nav.guard" },
+  { kind: "room", key: "authority", labelKey: "room.authority" },
+  { kind: "room", key: "logs", labelKey: "room.logs" },
+  { kind: "room", key: "usage", labelKey: "room.usage" },
+  { kind: "heading", labelKey: "nav.build" },
+  { kind: "room", key: "workspaces", labelKey: "room.workspaces" },
+  { kind: "room", key: "tools", labelKey: "room.tools" },
+  { kind: "room", key: "settings", labelKey: "room.settings", kbd: "⌘9", spaced: true },
 ];
 
 /** Cluster → its rooms, for collapsed tiles + hover-peek. */
-const CLUSTERS: { id: string; ic: string; label: string; lead: RoomKey | "now"; rooms: { key: RoomKey; label: string }[] }[] = [
-  { id: "now", ic: "◉", label: "Now", lead: "now", rooms: [] },
-  { id: "run", ic: "▶", label: "Run", lead: "workflows", rooms: [
-    { key: "workflows", label: "Workflows" }, { key: "agents", label: "Agents" }, { key: "tasks", label: "Tasks" } ] },
-  { id: "know", ic: "◆", label: "Know", lead: "memory", rooms: [
-    { key: "memory", label: "Memory" }, { key: "goals", label: "Goals" }, { key: "calendar", label: "Calendar" }, { key: "content", label: "Content" } ] },
-  { id: "guard", ic: "▣", label: "Guard", lead: "authority", rooms: [
-    { key: "authority", label: "Authority" }, { key: "logs", label: "Logs" }, { key: "usage", label: "Usage" } ] },
-  { id: "build", ic: "⌗", label: "Build", lead: "workspaces", rooms: [
-    { key: "workspaces", label: "Workspaces" }, { key: "tools", label: "Tools" } ] },
-  { id: "sys", ic: "⚙", label: "Sys", lead: "settings", rooms: [{ key: "settings", label: "Settings" }] },
+const CLUSTERS: { id: string; ic: string; labelKey: MessageKey; lead: RoomKey | "now"; rooms: { key: RoomKey; labelKey: MessageKey }[] }[] = [
+  { id: "now", ic: "◉", labelKey: "nav.now", lead: "now", rooms: [] },
+  { id: "run", ic: "▶", labelKey: "nav.run", lead: "workflows", rooms: [
+    { key: "workflows", labelKey: "room.workflows" }, { key: "agents", labelKey: "room.agents" }, { key: "tasks", labelKey: "room.tasks" } ] },
+  { id: "know", ic: "◆", labelKey: "nav.know", lead: "memory", rooms: [
+    { key: "memory", labelKey: "room.memory" }, { key: "goals", labelKey: "room.goals" }, { key: "calendar", labelKey: "room.calendar" }, { key: "content", labelKey: "room.content" } ] },
+  { id: "guard", ic: "▣", labelKey: "nav.guard", lead: "authority", rooms: [
+    { key: "authority", labelKey: "room.authority" }, { key: "logs", labelKey: "room.logs" }, { key: "usage", labelKey: "room.usage" } ] },
+  { id: "build", ic: "⌗", labelKey: "nav.build", lead: "workspaces", rooms: [
+    { key: "workspaces", labelKey: "room.workspaces" }, { key: "tools", labelKey: "room.tools" } ] },
+  { id: "sys", ic: "⚙", labelKey: "nav.system", lead: "settings", rooms: [{ key: "settings", labelKey: "room.settings" }] },
 ];
 
 // ⌘1–9 → navigation target, in row order.
@@ -73,6 +75,7 @@ export function IndexSidebar({
 }) {
   const route = useV2Route();
   const live = useLiveData();
+  const { t } = useI18n();
   const activeKey: RoomKey | "now" = route.kind === "room" ? route.key : "now";
 
   // Live badges: pending approvals → Authority (amber); system failures → Logs (red).
@@ -149,7 +152,7 @@ export function IndexSidebar({
   const peekCluster = peek ? CLUSTERS.find((c) => c.id === peek.id) : null;
 
   return (
-    <nav className="rs-side" aria-label="Index">
+    <nav className="rs-side" aria-label={t("nav.index")}>
       {/* Expanded */}
       <div className="rs-full">
         <div className="rs-brand">
@@ -157,10 +160,11 @@ export function IndexSidebar({
           <span className="w"><span>use</span>jarvis</span>
         </div>
         {ROWS.map((row, i) => {
-          if (row.kind === "heading") return <div className="rs-gh" key={`h${i}`}>{row.label}</div>;
+          if (row.kind === "heading") return <div className="rs-gh" key={`h${i}`}>{t(row.labelKey).toLocaleLowerCase()}</div>;
           const target: RoomKey | "now" = row.kind === "now" ? "now" : row.key;
           const isOn = activeKey === target;
           const badge = row.kind === "room" ? badgeFor(row.key) : null;
+          const label = t(row.labelKey);
           return (
             <button
               key={target}
@@ -169,9 +173,9 @@ export function IndexSidebar({
               aria-current={isOn ? "page" : undefined}
               onClick={() => navTo(target)}
             >
-              {row.label}
+              {label}
               {badge ? (
-                <span className={`rs-badge ${badge.tone}`} aria-label={`${row.label}, ${badge.count} ${badge.tone === "amber" ? "waiting" : "failing"}`}>
+                <span className={`rs-badge ${badge.tone}`} aria-label={`${label}, ${badge.count} ${t(badge.tone === "amber" ? "nav.waiting" : "nav.failing")}`}>
                   {badge.count}
                 </span>
               ) : (
@@ -181,7 +185,7 @@ export function IndexSidebar({
           );
         })}
         <div style={{ flex: 1 }} />
-        <button className="rs-clps" onClick={onToggleCollapse}>« collapse</button>
+        <button className="rs-clps" onClick={onToggleCollapse}>« {t("nav.collapse").toLocaleLowerCase()}</button>
       </div>
 
       {/* Collapsed cluster tiles */}
@@ -201,21 +205,21 @@ export function IndexSidebar({
               aria-current={isOn ? "page" : undefined}
             >
               <span className="ic">{c.ic}</span>
-              <span className="lb">{c.label}</span>
+              <span className="lb">{t(c.labelKey)}</span>
               {tone && <span className={`bd ${tone}`} />}
             </button>
           );
         })}
         <div style={{ flex: 1 }} />
-        <button className="rs-clps" onClick={onToggleCollapse} aria-label="Expand sidebar">»</button>
+        <button className="rs-clps" onClick={onToggleCollapse} aria-label={t("nav.expand")}>»</button>
       </div>
 
       {/* Hover peek */}
       {collapsed && peekCluster && peek && (
         <div className="rs-peek" style={{ top: peek.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
-          <div className="fh">{peekCluster.label.toLowerCase()}</div>
+          <div className="fh">{t(peekCluster.labelKey).toLocaleLowerCase()}</div>
           {peekCluster.rooms.map((r) => (
-            <button key={r.key} onClick={() => { navTo(r.key); setPeek(null); }}>{r.label}</button>
+            <button key={r.key} onClick={() => { navTo(r.key); setPeek(null); }}>{t(r.labelKey)}</button>
           ))}
         </div>
       )}

@@ -29,6 +29,8 @@ import { IntegrationsTab } from "./tabs/IntegrationsTab";
 import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import "./SettingsRoom.css";
+import { useI18n } from "../../i18n/I18nProvider";
+import type { MessageKey } from "../../i18n/translations";
 
 export type SettingsTab =
   | "general"
@@ -40,15 +42,15 @@ export type SettingsTab =
   | "billing"
   | "sidecar";
 
-const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> = [
-  { key: "general", label: "General", icon: Cog },
-  { key: "profile", label: "Profile", icon: UserCircle2 },
-  { key: "llm", label: "LLM", icon: Bot },
-  { key: "channels", label: "Channels", icon: MessagesSquare },
-  { key: "voice", label: "Voice", icon: Mic },
-  { key: "integrations", label: "Integrations", icon: Cable },
-  { key: "billing", label: "Billing", icon: CreditCard },
-  { key: "sidecar", label: "Sidecar", icon: Server },
+const TABS: ReadonlyArray<{ key: SettingsTab; labelKey: MessageKey; icon: LucideIcon }> = [
+  { key: "general", labelKey: "settings.general", icon: Cog },
+  { key: "profile", labelKey: "settings.profile", icon: UserCircle2 },
+  { key: "llm", labelKey: "settings.llm", icon: Bot },
+  { key: "channels", labelKey: "settings.channels", icon: MessagesSquare },
+  { key: "voice", labelKey: "settings.voice", icon: Mic },
+  { key: "integrations", labelKey: "settings.integrations", icon: Cable },
+  { key: "billing", labelKey: "settings.billing", icon: CreditCard },
+  { key: "sidecar", labelKey: "settings.sidecar", icon: Server },
 ];
 
 const VALID_TABS = new Set<SettingsTab>(TABS.map((t) => t.key));
@@ -58,6 +60,7 @@ export type RoomBodyMode = "inline" | "expanded";
 const TAB_KEYS = TABS.map((t) => t.key) as ReadonlyArray<SettingsTab>;
 
 export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
+  const { t } = useI18n();
   const data = useSettingsData();
   const [tab, setTab] = useState<SettingsTab>("general");
   const tabsApi = useRovingTabs<SettingsTab>(TAB_KEYS, tab, setTab, "v2-set");
@@ -355,19 +358,19 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       <nav
         className="v2-set__tabs"
         role="tablist"
-        aria-label="Settings sections"
+        aria-label={t("settings.sections")}
         ref={tabsApi.tablistRef}
       >
-        {TABS.map((t) => (
+        {TABS.map((item) => (
           <button
-            key={t.key}
+            key={item.key}
             type="button"
-            data-active={tab === t.key}
+            data-active={tab === item.key}
             className="v2-set__tab"
-            {...tabsApi.getTabProps(t.key)}
+            {...tabsApi.getTabProps(item.key)}
           >
-            <Icon icon={t.icon} size="sm" />
-            <span>{t.label}</span>
+            <Icon icon={item.icon} size="sm" />
+            <span>{t(item.labelKey)}</span>
           </button>
         ))}
       </nav>
@@ -375,7 +378,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {/* Tab body */}
       <div className="v2-set__body" {...tabsApi.getPanelProps()}>
         {data.loading && !data.llm ? (
-          <div className="v2-set__empty">Loading settings…</div>
+          <div className="v2-set__empty">{t("settings.loading")}</div>
         ) : (
           <>
             {tab === "general" && <GeneralTab data={data} onToast={showToast} />}
@@ -400,8 +403,9 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
 }
 
 export function SettingsRoom() {
+  const { t } = useI18n();
   return (
-    <RoomShell title="Settings" subtitle="providers · channels · integrations · sidecar" breadcrumb={["Settings"]}>
+    <RoomShell title={t("room.settings")} subtitle={t("settings.subtitle")} breadcrumb={[t("room.settings")]}>
       <SettingsRoomBody mode="expanded" />
     </RoomShell>
   );

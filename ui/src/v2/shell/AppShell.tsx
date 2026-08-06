@@ -29,6 +29,8 @@ import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
+import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n/translations";
 import "./AppShell.css";
 import "./roomShell.css";
 
@@ -127,6 +129,7 @@ export function AppShell() {
 /* ─────────── Live shell — Phase 3B + Phase 4A ─────────── */
 
 function AppShellLive() {
+  const { t } = useI18n();
   const live = useLiveThread();
   // Phase 6.7.C — feed the voice hook a getter that reads the current
   // Room from the URL hash on each utterance. Stable identity (no
@@ -511,8 +514,8 @@ function AppShellLive() {
         composerDisabled={!live.isConnected}
         composerPlaceholder={
           live.isConnected
-            ? "Ask Jarvis, or press / to summon a tool…"
-            : "Waiting for daemon…"
+            ? t("composer.placeholder")
+            : t("composer.waiting")
         }
         onSubmit={(text) =>
           live.send(text, { currentRoom: getCurrentRoom() })
@@ -802,13 +805,13 @@ function RoomSurface({ roomKey }: { roomKey: RoomKey }) {
 }
 
 /** Live-state microcopy on the Talk hint line — the old rail's lines, verbatim. */
-const TALK_HINT: Record<VoiceState, string> = {
-  idle: "Tap the pebble, or say “Hey Jarvis.”",
-  listening: "Listening. Pause to send.",
-  thinking: "Thinking through that…",
-  speaking: "Speaking — the reply is in the thread.",
-  "awaiting-approval": "Answer here, or say “yes.”",
-  muted: "Mic is muted. Tap mute to resume.",
+const TALK_HINT: Record<VoiceState, MessageKey> = {
+  idle: "talk.idleHint",
+  listening: "talk.listeningHint",
+  thinking: "talk.thinkingHint",
+  speaking: "talk.speakingHint",
+  "awaiting-approval": "talk.approvalHint",
+  muted: "talk.mutedHint",
 };
 
 function ShellLayout({
@@ -842,6 +845,7 @@ function ShellLayout({
   onToggleNotifications,
   notificationsSlot,
 }: ShellLayoutProps) {
+  const { t } = useI18n();
   const route = useV2Route();
   const [collapsed, toggleCollapse] = useIndexCollapsed();
   const [arranging, setArranging] = useState(false);
@@ -936,34 +940,34 @@ function ShellLayout({
           mic only engages from the pebble inside the Talk panel (or PTT). */}
       <button
         className="rs-peb"
-        aria-label={talkOpen ? "Close Talk" : "Open Talk"}
+        aria-label={t(talkOpen ? "talk.close" : "talk.open")}
         aria-expanded={talkOpen}
         onClick={() => setTalkOpen((o) => !o)}
       >
         <span className="gdrop live"><span className="in" /><span className="ring" /></span>
-        <span className="rs-stl">{dataState}</span>
+        <span className="rs-stl">{t(`top.${dataState}` as MessageKey)}</span>
       </button>
 
       {/* Talk — everything the VoiceRail + thread + composer did, summoned. */}
       {talkOpen && (
-        <div className={`rs-talk${talkIn ? " in" : ""}`} role="dialog" aria-label="Talk to Jarvis">
+        <div className={`rs-talk${talkIn ? " in" : ""}`} role="dialog" aria-label={t("talk.dialog")}>
           <div className="th">
             <button
               className="rs-talk-mic"
               onClick={onTapOrb}
-              aria-label={voiceState === "idle" || voiceState === "muted" ? "Start talking" : "Stop"}
+              aria-label={t(voiceState === "idle" || voiceState === "muted" ? "talk.start" : "talk.stop")}
               aria-pressed={voiceState !== "idle" && voiceState !== "muted"}
-              title="Tap to talk"
+              title={t("talk.tapTitle")}
             >
               <span className="gdrop live"><span className="in" /><span className="ring" /></span>
             </button>
             <div className="rs-talk-title">
-              <span className="tt">Talk</span>
+              <span className="tt">{t("talk.title")}</span>
               <span className="rs-talk-sub">
-                {voiceState === "idle" ? "tap the pebble to talk" : TALK_HINT[voiceState]}
+                {voiceState === "idle" ? t("talk.tap") : t(TALK_HINT[voiceState])}
               </span>
             </div>
-            <button className="esc" onClick={() => setTalkOpen(false)} aria-label="Close Talk">⌘J · esc</button>
+            <button className="esc" onClick={() => setTalkOpen(false)} aria-label={t("talk.close")}>⌘J · esc</button>
           </div>
 
           <div className="rs-talk-thread">

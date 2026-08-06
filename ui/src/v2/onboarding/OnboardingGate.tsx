@@ -2,6 +2,7 @@ import React from "react";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequiredBanner";
+import { useI18n } from "../i18n/I18nProvider";
 
 /**
  * Phase A + B onboarding gate. Sits between AppShellV2's render and
@@ -19,6 +20,14 @@ import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequire
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
+  const { setLocale } = useI18n();
+
+  // The daemon config is authoritative after setup. Synchronizing here also
+  // means returning users get their chosen dashboard language before the
+  // persistent shell is rendered.
+  React.useEffect(() => {
+    if (status?.language) setLocale(status.language);
+  }, [setLocale, status?.language]);
 
   // Tell the cold-start splash the app has booted, the first time the status
   // resolves (to the wizard or the shell — either way boot is done).
