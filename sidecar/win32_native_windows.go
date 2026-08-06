@@ -326,7 +326,9 @@ var extendedKeys = map[uint16]bool{
 	vkInsert: true, vkDelete: true, vkLWin: true,
 }
 
-var namedKeys = map[string]uint16{
+// winNamedKeys maps key names to Windows virtual-key codes. Distinct from the
+// CDP-oriented namedKeys in browser_input.go, which carries keyDef metadata.
+var winNamedKeys = map[string]uint16{
 	"enter": vkReturn, "return": vkReturn,
 	"tab":       vkTab,
 	"escape":    vkEscape,
@@ -351,7 +353,7 @@ var modifierKeys = map[string]uint16{
 // resolveVk maps a key name to a virtual-key code.
 func resolveVk(key string) (uint16, error) {
 	k := strings.ToLower(strings.TrimSpace(key))
-	if vk, ok := namedKeys[k]; ok {
+	if vk, ok := winNamedKeys[k]; ok {
 		return vk, nil
 	}
 	if len(k) >= 2 && k[0] == 'f' {
@@ -367,8 +369,8 @@ func resolveVk(key string) (uint16, error) {
 		}
 		return 0, fmt.Errorf("no virtual key for character %q on the current keyboard layout", key)
 	}
-	known := make([]string, 0, len(namedKeys))
-	for name := range namedKeys {
+	known := make([]string, 0, len(winNamedKeys))
+	for name := range winNamedKeys {
 		known = append(known, name)
 	}
 	return 0, fmt.Errorf("unknown key %q — use a single character, f1-f24, or one of: %s", key, strings.Join(known, ", "))
