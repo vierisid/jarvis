@@ -92,12 +92,25 @@ trap cleanup EXIT
 
 # The access token is the one credential, and it is derivable locally: a
 # developer with gcloud logged in should not have to export anything.
+# gcloud's own stderr is kept: the overwhelmingly common local failure is
+# "no active account", and reporting only "GCP_ACCESS_TOKEN is required" would
+# send someone to set a variable when the fix is `gcloud auth login`.
+gcloud_err=""
 if [ -z "${GCP_ACCESS_TOKEN:-}" ] && command -v gcloud >/dev/null 2>&1; then
-	GCP_ACCESS_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
+	if ! GCP_ACCESS_TOKEN="$(gcloud auth print-access-token 2>"${TMPDIR:-/tmp}/gcloud-err.$$")"; then
+		GCP_ACCESS_TOKEN=""
+		gcloud_err="$(cat "${TMPDIR:-/tmp}/gcloud-err.$$" 2>/dev/null || true)"
+	fi
+	rm -f "${TMPDIR:-/tmp}/gcloud-err.$$"
 fi
 
 for v in GCP_KMS_KEYRING GCP_KMS_KEY_ALIAS GCP_ACCESS_TOKEN; do
-	[ -n "${!v:-}" ] || fail "$v is required (see the internal code-signing runbook)"
+	if [ -z "${!v:-}" ]; then
+		if [ "$v" = "GCP_ACCESS_TOKEN" ] && [ -n "$gcloud_err" ]; then
+			fail "GCP_ACCESS_TOKEN is required and \`gcloud auth print-access-token\` failed: ${gcloud_err}"
+		fi
+		fail "$v is required (see the internal code-signing runbook)"
+	fi
 done
 
 # jsign rejects a keyring that is not exactly projects/<p>/locations/<l>/keyRings/<r>,

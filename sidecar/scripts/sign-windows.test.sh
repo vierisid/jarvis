@@ -144,8 +144,11 @@ exit 1
 STUB
 chmod +x "$WORK/bin/gcloud"
 out="$(TOKEN_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *GCP_ACCESS_TOKEN* ]]; then
-	ok "fails fast and names the token when gcloud cannot mint one"
+# gcloud's OWN message must survive: the overwhelmingly common local failure is
+# "no active account", and reporting only "GCP_ACCESS_TOKEN is required" sends
+# someone to set a variable when the fix is `gcloud auth login`.
+if [ $? -ne 0 ] && [[ "$out" == *GCP_ACCESS_TOKEN* && "$out" == *"active account"* ]]; then
+	ok "fails fast and surfaces gcloud's reason when it cannot mint a token"
 else
 	no "fails fast when gcloud cannot mint a token" "$out"
 fi
@@ -232,6 +235,16 @@ if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEYRING* ]]; then
 	ok "rejects a bare keyring name"
 else
 	no "rejects a bare keyring name" "$out"
+fi
+
+# The anchor at the end of the pattern: a copy-pasted trailing slash is the
+# other shape people paste, and jsign's own matches() rejects it too — so
+# without this the guard would silently stop pre-empting the JVM error.
+out="$(KEYRING_OVERRIDE="${KEYRING}/" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEYRING* ]]; then
+	ok "rejects a keyring path with a trailing slash"
+else
+	no "rejects a trailing slash" "$out"
 fi
 
 # Before the certificate is issued this is the EXPECTED state, so it has to
@@ -356,6 +369,18 @@ else
 fi
 
 # wrong publisher — the same identity the installer pins at runtime
+# A DN that embeds our expected CN in a LATER RDN must not satisfy the pin —
+# that is why the extraction takes the FIRST /CN=, matching
+# installer/certsubject.go. Without this case, changing $2 to $NF passes the
+# entire suite while silently accepting an attacker-issued certificate.
+make_osslsigncode "$GOOD_DIGEST" "Attacker Ltd/OU=x/CN=Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
+out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"Attacker Ltd"* ]]; then
+	ok "rejects a DN hiding the expected CN in a later RDN"
+else
+	no "rejects a CN-spoofing DN" "$out"
+fi
+
 make_osslsigncode "$GOOD_DIGEST" "Someone Else Ltd" "$TS_OK" "$CHAIN_OK" 0
 out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_sign "$WORK/app.exe" 2>&1)"
 if [ $? -ne 0 ] && [[ "$out" == *"Someone Else Ltd"* ]]; then
@@ -395,7 +420,9 @@ fi
 # bundle. Without argv logging these three could all regress unnoticed.
 make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
 : >"$WORK/verify.log"
-VERIFY_LOG="$WORK/verify.log" run_sign "$WORK/app.exe" "$WORK/second.exe" >/dev/null 2>&1
+printf 'placeholder\n' >"$WORK/ca-bundle.pem"
+CA_BUNDLE="$WORK/ca-bundle.pem" VERIFY_LOG="$WORK/verify.log" \
+	run_sign "$WORK/app.exe" "$WORK/second.exe" >/dev/null 2>&1
 verifications="$(grep -zc -- 'verify' "$WORK/verify.log" 2>/dev/null || true)"
 [ "${verifications:-0}" -eq 2 ] &&
 	ok "verifies every file, not just the last one" ||
@@ -407,8 +434,22 @@ else
 	no "verifies the exact files that were signed"
 fi
 
+# CA_BUNDLE is set explicitly: otherwise this depends on the host having a
+# bundle at one of the probed paths, and fails for environmental reasons.
 grep -qz -- '-CAfile' "$WORK/verify.log" &&
 	ok "passes a CA bundle to osslsigncode" || no "passes a CA bundle to osslsigncode"
+
+# Zero signature slots must not read as "a signature exists". The unsigned-file
+# case below exercises a DIFFERENT osslsigncode output, so without this the
+# [1-9] floor could be widened to [0-9] unnoticed.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 1
+sed -i 's/Number of verified signatures: 1/Number of verified signatures: 0/' "$WORK/bin/osslsigncode"
+out="$(run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"no Authenticode signature found"* ]]; then
+	ok "rejects an output reporting zero verified signatures"
+else
+	no "rejects zero verified signatures" "$out"
+fi
 
 # an unsigned file produces no signature block at all
 cat >"$WORK/bin/osslsigncode" <<'STUB'

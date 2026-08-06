@@ -91,6 +91,7 @@ jobs:
           fi
 
   # ─── Windows: mingw cross-build + Authenticode via Cloud KMS ───
+
   build-windows:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
@@ -101,16 +102,32 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      # Keyless signing has no secret to sentinel on, so the gate is the
-      # keyring variable — nothing can be signed without it.
-      HAVE_WINDOWS_SIGNING: ${{ vars.GCP_KMS_KEYRING != '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
+
+      # Windows signing needs BOTH the KMS keyring variable AND the issued
+      # certificate chain in the repo. They arrive at DIFFERENT times: the
+      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
+      # exists days before the certificate does. Gating on the variable alone
+      # would turn that window into hard release failures instead of unsigned
+      # builds — so check the chain file too.
+      - name: Windows signing readiness
+        id: winsign
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
+          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so Jarvis-Setup.exe ships UNSIGNED."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install mingw-w64
         run: |
@@ -150,7 +167,7 @@ jobs:
 
       - name: Authenticate to Google Cloud
         id: gcp-auth
-        if: env.HAVE_WINDOWS_SIGNING == 'true'
+        if: steps.winsign.outputs.ready == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -158,7 +175,7 @@ jobs:
           token_format: "access_token"
 
       - name: Sign installer (Cloud KMS)
-        if: env.HAVE_WINDOWS_SIGNING == 'true'
+        if: steps.winsign.outputs.ready == 'true'
         working-directory: sidecar
         env:
           GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
@@ -172,10 +189,6 @@ jobs:
           # too; stated here so the release posture is visible at the workflow.
           SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: scripts/sign-windows.sh Jarvis-Setup.exe
-
-      - name: Warn — unsigned installer
-        if: env.HAVE_WINDOWS_SIGNING != 'true'
-        run: echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
 
       - uses: actions/upload-artifact@v5
         with:

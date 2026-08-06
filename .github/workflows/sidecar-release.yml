@@ -94,7 +94,6 @@ jobs:
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
       # Windows signing is keyless: there is no secret to sentinel on, so the
       # gate is the keyring variable — nothing can be signed without it.
-      HAVE_WINDOWS_SIGNING: ${{ vars.GCP_KMS_KEYRING != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -183,13 +182,34 @@ jobs:
           go build -ldflags "$LDFLAGS" \
             -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
 
+      # Windows signing needs BOTH the KMS keyring variable AND the issued
+      # certificate chain in the repo. They arrive at DIFFERENT times: the
+      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
+      # exists days before the certificate does. Gating on the variable alone
+      # would turn that window into hard release failures instead of unsigned
+      # builds — so check the chain file too.
+      - name: Windows signing readiness
+        id: winsign
+        if: matrix.setup == 'windows-cross'
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned binary (SmartScreen will warn users)."
+          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so this binary ships UNSIGNED."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
       # Keyless: OIDC → Workload Identity Federation → a short-lived access
       # token for the Cloud HSM key. Nothing is stored in this repository, so
       # there is no signing secret to leak or rotate.
       - name: Authenticate to Google Cloud
         id: gcp-auth
-        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING == 'true'
+        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -201,7 +221,7 @@ jobs:
       # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
       # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
       - name: Sign Windows binary (Cloud KMS)
-        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING == 'true'
+        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
         working-directory: sidecar
         env:
           GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
@@ -220,9 +240,6 @@ jobs:
           fi
           scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
 
-      - name: Warn — unsigned Windows build
-        if: matrix.setup == 'windows-cross' && env.HAVE_WINDOWS_SIGNING != 'true'
-        run: echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned ${{ env.SIDECAR_BIN }}.exe (SmartScreen will warn users)."
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
       # Notifications (UNUserNotification) and stable TCC grants require a
