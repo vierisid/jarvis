@@ -47,6 +47,7 @@ const (
 	trayNifInfo         = 0x00000010       // NIF_INFO — this NIM_MODIFY carries a balloon
 	trayNiifUser        = 0x00000004       // NIIF_USER — show our brand icon in the balloon
 	notifyCopyDataMagic = 0x4A415256       // 'JARV' — tags our WM_COPYDATA so we ignore others
+	quitCopyDataMagic   = 0x4A565154       // 'JVQT' — external graceful-quit request (installer/updater)
 	// createNoWindow (CREATE_NO_WINDOW) is declared in subprocess_windows.go —
 	// reused here to keep the PowerShell toast call headless.
 )

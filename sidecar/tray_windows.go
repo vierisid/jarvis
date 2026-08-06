@@ -330,7 +330,17 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case trayWmCopyData:
-		// A notification-button click, forwarded from the launched instance.
+		// Tagged external messages. A quit request (installer/updater about to
+		// replace the binary) takes the same path as the tray menu's Close so
+		// the client tears down cleanly (mic released, websocket closed);
+		// anything else is a notification-button click forwarded from the
+		// launched instance.
+		if cds := (*copyDataStruct)(unsafe.Pointer(lParam)); cds != nil && cds.dwData == quitCopyDataMagic {
+			if trayOnClose != nil {
+				go trayOnClose()
+			}
+			return 1
+		}
 		onNotifyCopyData(lParam)
 		return 1
 
