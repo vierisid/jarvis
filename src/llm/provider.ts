@@ -63,7 +63,19 @@ export type LLMStreamEvent =
   | { type: 'text'; text: string; segmentEnd?: boolean }
   | { type: 'tool_call'; tool_call: LLMToolCall }
   | { type: 'done'; response: LLMResponse }
-  | { type: 'error'; error: string; code?: LLMErrorCode };
+  | { type: 'error'; error: string; code?: LLMErrorCode; retry_after_ms?: number };
+
+/** HTTP-aware provider failure used to carry Retry-After into the router. */
+export class LLMProviderError extends Error {
+  constructor(
+    message: string,
+    readonly code: LLMErrorCode,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'LLMProviderError';
+  }
+}
 
 /**
  * Map an HTTP status code returned by a provider to a canonical error code.
@@ -73,6 +85,7 @@ export type LLMStreamEvent =
 export function classifyHttpStatus(status: number): LLMErrorCode {
   if (status === 401 || status === 403) return 'auth';
   if (status === 429) return 'rate_limit';
+  if (status === 498) return 'network';
   if (status === 404) return 'not_found';
   if (status === 400 || status === 422) return 'bad_request';
   if (status === 502 || status === 503 || status === 504) return 'network';

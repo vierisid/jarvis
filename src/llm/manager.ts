@@ -6,7 +6,7 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { classifyErrorString } from './provider.ts';
+import { classifyErrorString, LLMProviderError } from './provider.ts';
 import {
   type Tier,
   type TierAssignment,
@@ -24,6 +24,8 @@ export class LLMManager {
   private tierMap: TierMap = {};
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
   private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
+  /** Never park an interactive request for a very long quota reset. */
+  private static readonly MAX_RETRY_AFTER_MS = 60000;
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
   constructor() {}
@@ -171,6 +173,10 @@ export class LLMManager {
   private shouldRetry(error: unknown): boolean {
     if (!(error instanceof Error)) return false;
 
+    if (error instanceof LLMProviderError) {
+      return this.shouldRetryCode(error.code);
+    }
+
     const msg = error.message.toLowerCase();
     // Retry on network/timeout errors, not on auth/validation errors
     return msg.includes('timeout') ||
@@ -180,6 +186,18 @@ export class LLMManager {
       msg.includes('temporarily unavailable') ||
       msg.includes('429') ||  // rate limit
       msg.includes('503');    // service unavailable
+  }
+
+  private shouldRetryCode(code: LLMErrorCode | undefined): boolean {
+    return code === 'rate_limit' || code === 'network' || code === 'server';
+  }
+
+  /** Honor provider Retry-After; oversized waits should fail over immediately. */
+  private async waitForRetry(retryAfterMs: number | undefined): Promise<boolean> {
+    if (retryAfterMs === undefined || retryAfterMs <= 0) return true;
+    if (retryAfterMs > LLMManager.MAX_RETRY_AFTER_MS) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
+    return true;
   }
 
   /**
@@ -205,6 +223,35 @@ export class LLMManager {
   }
 
   /**
+   * Ordered failover candidates for a tier. Besides configured tier models,
+   * include each provider's current default. That lets a provider recover
+   * from a model decommission (for example an old Groq model saved in the DB)
+   * without requiring the dashboard to load first.
+   */
+  private tierCandidates(tier: Tier): Array<{ resolution: TierResolution; provider: LLMProvider }> {
+    const first = this.resolveTierOrThrow(tier);
+    const out = [first];
+    const seen = new Set([`${first.provider.name}\u0000${first.resolution.assignment.model ?? ''}`]);
+    const add = (resolution: TierResolution) => {
+      const provider = this.providers.get(resolution.assignment.provider);
+      if (!provider) return;
+      const key = `${provider.name}\u0000${resolution.assignment.model ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ resolution, provider });
+    };
+
+    for (const candidateTier of TIERS) {
+      const assignment = this.tierMap[candidateTier];
+      if (assignment) add({ tier: candidateTier, assignment });
+    }
+    for (const provider of this.providers.values()) {
+      add({ tier, assignment: { provider: provider.name } });
+    }
+    return out;
+  }
+
+  /**
    * Tier-aware chat. Routes to the resolved provider for the requested tier,
    * records usage labeled by subsystem.
    */
@@ -214,41 +261,46 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): Promise<LLMResponse> {
-    const { resolution, provider } = this.resolveTierOrThrow(tier);
-    const model = options?.model ?? resolution.assignment.model;
-    const mergedOptions: LLMOptions = { ...options, ...(model ? { model } : {}) };
-
-    const started = Date.now();
-    try {
-      const response = await this.invokeWithRetry(provider, messages, mergedOptions);
-      recordUsage({
-        tier,
-        resolved_tier: resolution.tier,
-        subsystem,
-        provider: provider.name,
-        model: response.model || model || '',
-        input_tokens: response.usage?.input_tokens ?? 0,
-        output_tokens: response.usage?.output_tokens ?? 0,
-        cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? 0,
-        cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? 0,
-        latency_ms: Date.now() - started,
-      });
-      return response;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      recordUsage({
-        tier,
-        resolved_tier: resolution.tier,
-        subsystem,
-        provider: provider.name,
-        model: model || '',
-        input_tokens: 0,
-        output_tokens: 0,
-        latency_ms: Date.now() - started,
-        error_code: classifyErrorString(msg),
-      });
-      throw err;
+    const failures: string[] = [];
+    let lastFailureCode: LLMErrorCode = 'unknown';
+    const exhaustedProviders = new Set<string>();
+    const candidates = this.tierCandidates(tier);
+    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+      const { resolution, provider } = candidates[candidateIndex]!;
+      if (exhaustedProviders.has(provider.name)) continue;
+      const model = candidateIndex === 0
+        ? options?.model ?? resolution.assignment.model
+        : resolution.assignment.model;
+      const mergedOptions: LLMOptions = { ...options };
+      if (model) mergedOptions.model = model;
+      else delete mergedOptions.model;
+      const started = Date.now();
+      try {
+        const response = await this.invokeWithRetry(provider, messages, mergedOptions);
+        recordUsage({
+          tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
+          model: response.model || model || '',
+          input_tokens: response.usage?.input_tokens ?? 0,
+          output_tokens: response.usage?.output_tokens ?? 0,
+          cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? 0,
+          latency_ms: Date.now() - started,
+        });
+        return response;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const code = err instanceof LLMProviderError ? err.code : classifyErrorString(msg);
+        lastFailureCode = code;
+        if (code === 'rate_limit' || code === 'auth') exhaustedProviders.add(provider.name);
+        failures.push(msg);
+        recordUsage({
+          tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
+          model: model || '', input_tokens: 0, output_tokens: 0,
+          latency_ms: Date.now() - started, error_code: code,
+        });
+      }
     }
+    throw new LLMProviderError(failures.join('\n\n'), lastFailureCode);
   }
 
   /**
@@ -260,45 +312,66 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): AsyncIterable<LLMStreamEvent> {
-    const { resolution, provider } = this.resolveTierOrThrow(tier);
-    const model = options?.model ?? resolution.assignment.model;
-    const mergedOptions: LLMOptions = { ...options, ...(model ? { model } : {}) };
+    const failures: Array<Extract<LLMStreamEvent, { type: 'error' }>> = [];
+    const exhaustedProviders = new Set<string>();
+    const candidates = this.tierCandidates(tier);
+    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+      const { resolution, provider } = candidates[candidateIndex]!;
+      if (exhaustedProviders.has(provider.name)) continue;
+      const model = candidateIndex === 0
+        ? options?.model ?? resolution.assignment.model
+        : resolution.assignment.model;
+      const mergedOptions: LLMOptions = { ...options };
+      if (model) mergedOptions.model = model;
+      else delete mergedOptions.model;
+      const started = Date.now();
+      let finalResponse: LLMResponse | null = null;
+      let terminalError: Extract<LLMStreamEvent, { type: 'error' }> | null = null;
+      let emittedContent = false;
 
-    const started = Date.now();
-    let finalResponse: LLMResponse | null = null;
-    let errored: string | null = null;
-
-    try {
       for await (const event of this.streamWithRetry(provider, messages, mergedOptions)) {
         if (event.type === 'done') finalResponse = event.response;
-        if (event.type === 'error') errored = event.error;
+        if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
+        if (event.type === 'error') {
+          terminalError = event;
+          continue; // hold it while a clean failover is still possible
+        }
         yield event;
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errored = msg;
-      throw err;
-    } finally {
+
       recordUsage({
-        tier,
-        resolved_tier: resolution.tier,
-        subsystem,
-        provider: provider.name,
+        tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
         model: finalResponse?.model || model || '',
         input_tokens: finalResponse?.usage?.input_tokens ?? 0,
         output_tokens: finalResponse?.usage?.output_tokens ?? 0,
         cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
         cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
         latency_ms: Date.now() - started,
-        error_code: errored ? classifyErrorString(errored) : undefined,
+        error_code: terminalError?.code,
       });
+
+      if (!terminalError) return;
+      if (emittedContent) {
+        yield terminalError;
+        return;
+      }
+      if (terminalError.code === 'rate_limit' || terminalError.code === 'auth') {
+        exhaustedProviders.add(provider.name);
+      }
+      failures.push(terminalError);
     }
+
+    const error = failures.map((event) => event.error).join('\n\n');
+    yield {
+      type: 'error',
+      error,
+      code: failures.at(-1)?.code ?? classifyErrorString(error),
+    };
   }
 
   /**
-   * Single-provider chat with retry. Used by tier-aware paths after the tier
-   * has resolved to a concrete provider. No legacy fallback chain logic - tier
-   * fall-up replaces it.
+   * Single-provider chat with retry. Tier-aware callers layer model/provider
+   * failover around this method after local retries are exhausted.
    */
   private async invokeWithRetry(
     provider: LLMProvider,
@@ -306,6 +379,8 @@ export class LLMManager {
     options?: LLMOptions,
   ): Promise<LLMResponse> {
     const errors: string[] = [];
+    let lastCode: LLMErrorCode = 'unknown';
+    let lastRetryAfterMs: number | undefined;
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       try {
         const result = await this.withTimeout(provider.chat(messages, options), provider.name);
@@ -316,14 +391,22 @@ export class LLMManager {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
+        lastCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
+        lastRetryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         const shouldRetry = this.shouldRetry(err);
         console.error(
           `[LLM] Provider ${provider.name} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
         );
-        if (!shouldRetry) break;
+        if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+        if (!await this.waitForRetry(retryAfterMs)) break;
       }
     }
-    throw new Error(this.formatFailure(provider.name, errors));
+    throw new LLMProviderError(
+      this.formatFailure(provider.name, errors),
+      lastCode,
+      lastRetryAfterMs,
+    );
   }
 
   private async *streamWithRetry(
@@ -335,6 +418,8 @@ export class LLMManager {
     let lastErrorCode: LLMErrorCode | undefined;
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       let emittedContent = false;
+      let retryableEvent = true;
+      let eventRetryAfterMs: number | undefined;
       try {
         let hasError = false;
         for await (const event of provider.stream(messages, options)) {
@@ -342,6 +427,8 @@ export class LLMManager {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
+            retryableEvent = this.shouldRetryCode(lastErrorCode);
+            eventRetryAfterMs = event.retry_after_ms;
             console.error(
               `[LLM] Provider ${provider.name} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
             );
@@ -361,6 +448,8 @@ export class LLMManager {
           yield event;
         }
         if (!hasError) return;
+        if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        if (!await this.waitForRetry(eventRetryAfterMs)) break;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -377,7 +466,9 @@ export class LLMManager {
           };
           return;
         }
-        if (!shouldRetry) break;
+        if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+        if (!await this.waitForRetry(retryAfterMs)) break;
       }
     }
     yield {
@@ -426,6 +517,8 @@ export class LLMManager {
           );
 
           if (!shouldRetry) break;
+          const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs)) break;
         }
       }
 
@@ -472,6 +565,8 @@ export class LLMManager {
       const errors: string[] = [];
       for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
         let emittedContent = false;
+        let retryableEvent = true;
+        let eventRetryAfterMs: number | undefined;
         try {
           let hasError = false;
           for await (const event of provider.stream(messages, options)) {
@@ -479,6 +574,8 @@ export class LLMManager {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
               lastErrorCode = event.code ?? classifyErrorString(event.error);
+              retryableEvent = this.shouldRetryCode(lastErrorCode);
+              eventRetryAfterMs = event.retry_after_ms;
               console.error(
                 `[LLM] Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
               );
@@ -501,6 +598,8 @@ export class LLMManager {
           if (!hasError) {
             return;
           }
+          if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+          if (!await this.waitForRetry(eventRetryAfterMs)) break;
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -520,7 +619,9 @@ export class LLMManager {
             return;
           }
 
-          if (!shouldRetry) break;
+          if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+          const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+          if (!await this.waitForRetry(retryAfterMs)) break;
         }
       }
 

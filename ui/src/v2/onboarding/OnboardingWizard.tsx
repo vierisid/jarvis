@@ -48,7 +48,7 @@ const PROVIDERS: Provider[] = [
   { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", soon: true, noConfig: true },
   { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
   { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
-  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
+  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"], hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
   { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
   { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: ["llama3.1", "llama3.2", "mistral", "qwen2.5"] },
   { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: ["anthropic/claude-opus-4", "openai/gpt-5.4", "google/gemini-2.5-pro"] },
@@ -286,6 +286,33 @@ export function OnboardingWizard({
     if (provId !== "omniroute" || !omniRouteModels?.length) return;
     if (!omniRouteModels.includes(model)) setModel(omniRouteModels.includes("auto") ? "auto" : omniRouteModels[0]!);
   }, [omniRouteModels, provId]); // model intentionally snaps when the catalog arrives
+
+  const [groqModels, setGroqModels] = useState<string[] | null>(null);
+  const [groqLoading, setGroqLoading] = useState(false);
+  useEffect(() => {
+    if (provId !== "groq" || !apiKey) return;
+    let cancelled = false;
+    setGroqLoading(true);
+    const timer = window.setTimeout(() => {
+      fetch("/api/config/llm/groq/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey }),
+      })
+        .then((r) => r.json())
+        .then((d: { ok: boolean; models?: string[] }) => {
+          if (!cancelled) setGroqModels(d.ok && d.models ? d.models : []);
+        })
+        .catch(() => { if (!cancelled) setGroqModels([]); })
+        .finally(() => { if (!cancelled) setGroqLoading(false); });
+    }, 400);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [provId, apiKey]);
+
+  useEffect(() => {
+    if (provId !== "groq" || !groqModels?.length) return;
+    if (!groqModels.includes(model)) setModel(groqModels.includes("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : groqModels[0]!);
+  }, [groqModels, provId]);
 
   // The Google OAuth poll outlives the click handler — keep its id in a ref so
   // finishing/unmounting the wizard stops it (it ran for up to 5 min after).
@@ -811,9 +838,11 @@ export function OnboardingWizard({
       ? ollamaModels
       : provId === "omniroute" && omniRouteModels && omniRouteModels.length > 0
         ? omniRouteModels
-        : customAnthropic
-          ? (discoveredModels ?? [])
-          : (prov.models ?? []);
+        : provId === "groq" && groqModels && groqModels.length > 0
+          ? groqModels
+          : customAnthropic
+            ? (discoveredModels ?? [])
+            : (prov.models ?? []);
     return (
       <>
         {prov.optionalBaseUrl && (
@@ -844,6 +873,8 @@ export function OnboardingWizard({
         {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. llama3.1:8b).</div>}
         {provId === "omniroute" && omniRouteLoading && <div className="obw-hint">Loading every OmniRoute model and combo…</div>}
         {provId === "omniroute" && !omniRouteLoading && omniRouteModels?.length === 0 && <div className="obw-hint">Could not read this OmniRoute catalog. Check the URL and API key; you can still test the auto route.</div>}
+        {provId === "groq" && groqLoading && <div className="obw-hint">Loading currently supported Groq models…</div>}
+        {provId === "groq" && !groqLoading && groqModels?.length === 0 && <div className="obw-hint">Could not read Groq’s live catalog — showing current fallback models.</div>}
         <div className="obw-testrow">
           <button className="obw-btn obw-btn-ghost sm" disabled={test.status === "testing"} onClick={runTest}>{test.status === "testing" ? "Testing…" : "Test connection"}</button>
           {test.status === "ok" && <span className="obw-testres ok"><span className="dot" />Connected · {test.msg}</span>}

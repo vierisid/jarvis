@@ -1630,6 +1630,34 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Keep Groq's changing model catalog out of hard-coded UI lists.
+    '/api/config/llm/groq/models': {
+      POST: async (req: Request) => {
+        try {
+          const body = await req.json() as { name?: string; api_key?: string };
+          const configured = body.name
+            ? ctx.config.llm.providers?.[body.name]
+            : Object.values(ctx.config.llm.providers ?? {}).find((entry) => entry?.kind === 'groq');
+          if (body.name && configured?.kind !== 'groq') {
+            return json({ ok: false, error: 'Groq provider not found', models: [] });
+          }
+          const { getSecret } = await import('../vault/keychain.ts');
+          const apiKey = body.api_key
+            || (body.name ? getSecret(`llm.provider.${body.name}.api_key`) : null)
+            || configured?.api_key
+            || '';
+          if (!apiKey) return json({ ok: false, error: 'Groq API key required', models: [] });
+
+          const { GroqProvider } = await import('../llm/groq.ts');
+          const models = await new GroqProvider(apiKey).listModels();
+          return json({ ok: true, models });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ ok: false, error: msg, models: [] });
+        }
+      },
+    },
+
     // --- Usage telemetry ---
     /**
      * Filterable LLM usage query. All query params are optional:

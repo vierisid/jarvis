@@ -1,13 +1,13 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider, modelRejectsCustomTemperature } from './openai.ts';
-import { GroqProvider, relaxOptionalFieldsToNullable } from './groq.ts';
+import { GroqProvider, isGroqJarvisModel, relaxOptionalFieldsToNullable } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
-import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
+import { guardImageSize, classifyHttpStatus, classifyErrorString, LLMProviderError, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
 describe('LLM Provider Types', () => {
@@ -211,6 +211,97 @@ describe('LLMManager', () => {
     expect(events.some((event) => event.type === 'done')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
   });
+
+  test('does not retry a permanent streamed 400 before falling back', async () => {
+    const manager = new LLMManager();
+    let badCalls = 0;
+    const bad = {
+      name: 'bad',
+      listModels: async () => [],
+      async chat() { throw new Error('unused'); },
+      async *stream() {
+        badCalls++;
+        yield { type: 'error' as const, error: 'Groq API error (400): model_decommissioned', code: 'bad_request' as const };
+      },
+    };
+    const good = {
+      name: 'good',
+      listModels: async () => ['current'],
+      async chat() { throw new Error('unused'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'recovered' };
+        yield { type: 'done' as const, response: {
+          content: 'recovered', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'current', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(bad);
+    manager.registerProvider(good);
+    manager.setFallbackChain(['good']);
+
+    const events = [];
+    for await (const event of manager.stream(sampleMessages)) events.push(event);
+    expect(badCalls).toBe(1);
+    expect(events.some((event) => event.type === 'text' && event.text === 'recovered')).toBe(true);
+  });
+
+  test('tier routing recovers a decommissioned saved model with the provider default', async () => {
+    const manager = new LLMManager();
+    const seenModels: Array<string | undefined> = [];
+    const groq = {
+      name: 'groq',
+      listModels: async () => ['openai/gpt-oss-20b'],
+      async chat(_messages: LLMMessage[], options?: { model?: string }) {
+        seenModels.push(options?.model);
+        if (options?.model === 'deepseek-r1-distill-llama-70b') {
+          throw new LLMProviderError('Groq API error (400): model_decommissioned', 'bad_request');
+        }
+        return {
+          content: 'current model ok', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'openai/gpt-oss-20b', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(groq);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'deepseek-r1-distill-llama-70b' } });
+
+    const response = await manager.chatTier('medium', 'test', sampleMessages);
+    expect(response.content).toBe('current model ok');
+    expect(seenModels).toEqual(['deepseek-r1-distill-llama-70b', undefined]);
+  });
+
+  test('tier routing skips a rate-limited provider and fails over immediately', async () => {
+    const manager = new LLMManager();
+    let groqCalls = 0;
+    const groq = {
+      name: 'groq', listModels: async () => ['openai/gpt-oss-20b'],
+      async chat() {
+        groqCalls++;
+        throw new LLMProviderError('Groq API error (429): rate limit', 'rate_limit', 120_000);
+      },
+      async *stream() { /* not used */ },
+    };
+    const fallback = {
+      name: 'openai', listModels: async () => ['gpt-5-mini'],
+      async chat() { return {
+        content: 'provider fallback', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+        model: 'gpt-5-mini', finish_reason: 'stop' as const,
+      }; },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(groq);
+    manager.registerProvider(fallback);
+    manager.setTierMap({
+      medium: { provider: 'groq', model: 'openai/gpt-oss-20b' },
+      high: { provider: 'openai', model: 'gpt-5-mini' },
+    });
+
+    const response = await manager.chatTier('medium', 'test', sampleMessages);
+    expect(response.content).toBe('provider fallback');
+    expect(groqCalls).toBe(1);
+  });
 });
 
 describe('Message Types', () => {
@@ -293,7 +384,7 @@ describe('Default Models', () => {
 
   test('GroqProvider has correct default model', () => {
     const provider = new GroqProvider('test-key') as any;
-    expect(provider.defaultModel).toBe('llama-3.3-70b-versatile');
+    expect(provider.defaultModel).toBe('openai/gpt-oss-20b');
   });
 
   test('OpenRouterProvider has correct default model', () => {
@@ -536,6 +627,14 @@ describe('Groq request shaping', () => {
     expect(out.properties.nested.properties.optional_inner.type).toEqual(['number', 'null']);
   });
 
+  test('live catalog filtering excludes decommissioned and non-chat routes', () => {
+    expect(isGroqJarvisModel('openai/gpt-oss-20b')).toBe(true);
+    expect(isGroqJarvisModel('qwen/qwen3.6-27b')).toBe(true);
+    expect(isGroqJarvisModel('deepseek-r1-distill-llama-70b')).toBe(false);
+    expect(isGroqJarvisModel('whisper-large-v3')).toBe(false);
+    expect(isGroqJarvisModel('groq/compound')).toBe(false);
+  });
+
   test('GroqProvider relaxes optional tool params to accept null before sending', async () => {
     const provider = new GroqProvider('test-key') as any;
     await provider.chat(
@@ -694,6 +793,23 @@ describe('Groq request shaping', () => {
     expect(response.content).toContain('retry ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+
+  test('GroqProvider preserves Retry-After on 429 errors', async () => {
+    globalThis.fetch = mock(async () => new Response(
+      JSON.stringify({ error: { message: 'rate limit exceeded' } }),
+      { status: 429, headers: { 'retry-after': '2.5' } },
+    )) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    try {
+      await provider.chat([{ role: 'user', content: 'hi' }]);
+      throw new Error('expected Groq to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(LLMProviderError);
+      expect((error as LLMProviderError).code).toBe('rate_limit');
+      expect((error as LLMProviderError).retryAfterMs).toBe(2500);
+    }
   });
 
   test('GroqProvider compaction never orphans a tool message from its assistant tool_call', async () => {

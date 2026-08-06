@@ -48,10 +48,9 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
     "o4-mini",
   ],
   groq: [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "qwen/qwen3-32b",
-    "deepseek-r1-distill-llama-70b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
   ],
   gemini: [
     "gemini-3.1-pro-preview",
@@ -1000,7 +999,7 @@ function providerModels(
   // The curated list is untagged guesswork, so prefer the real catalog when
   // the daemon could read it; fall back to the guesses when it could not.
   if (entry.kind === "ollama" && live && live.length > 0) return live;
-  if (entry.kind === "omniroute" && providerCatalogs[name]?.length) {
+  if ((entry.kind === "omniroute" || entry.kind === "groq") && providerCatalogs[name]?.length) {
     return providerCatalogs[name]!;
   }
   return MODELS_BY_KIND[entry.kind] ?? [];
@@ -1036,9 +1035,10 @@ function useLiveProviderCatalogs(
   providers: Record<string, LLMConfigProviderView>,
 ): Record<string, string[]> {
   const targets = Object.entries(providers)
-    .filter(([, entry]) => entry.kind === "omniroute")
+    .filter(([, entry]) => entry.kind === "omniroute" || (entry.kind === "groq" && entry.has_api_key))
     .map(([name, entry]) => ({
       name,
+      kind: entry.kind,
       baseUrl: entry.base_url?.trim() || "http://localhost:20128/v1",
       hasApiKey: entry.has_api_key,
     }))
@@ -1055,7 +1055,8 @@ function useLiveProviderCatalogs(
     let cancelled = false;
     Promise.all(names.map(async (name) => {
       try {
-        const response = await fetch('/api/config/llm/omniroute/models', {
+        const kind = providers[name]!.kind;
+        const response = await fetch(`/api/config/llm/${kind}/models`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),

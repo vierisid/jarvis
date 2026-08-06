@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus } from './provider.ts';
+import { classifyHttpStatus, LLMProviderError } from './provider.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -87,6 +87,23 @@ type GroqStreamChunk = {
   }>;
 };
 
+const GROQ_DEPRECATED_CHAT_MODELS = new Set([
+  'deepseek-r1-distill-llama-70b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'qwen/qwen3-32b',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'meta-llama/llama-4-maverick-17b-128e-instruct',
+]);
+
+/** Models suitable for Jarvis chat + local function calling. */
+export function isGroqJarvisModel(id: string): boolean {
+  if (GROQ_DEPRECATED_CHAT_MODELS.has(id)) return false;
+  // These active catalog entries use audio/moderation endpoints, or (for
+  // Compound) reject user-provided local tools.
+  return !/(whisper|orpheus|prompt-guard|safeguard|^groq\/compound)/i.test(id);
+}
+
 /**
  * Groq strict-validates tool call arguments server-side against the
  * tool's JSON Schema. The Llama/Kimi/etc. models it hosts have a
@@ -138,16 +155,19 @@ export class GroqProvider implements LLMProvider {
   private apiKey: string;
   private defaultModel: string;
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-  private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
+  // Groq's free/developer limits are token-per-minute constrained. Keep a
+  // single request comfortably below the common 8K TPM ceiling so normal
+  // output still has headroom instead of triggering a guaranteed 429.
+  private static readonly SAFE_PROMPT_CHAR_BUDGET = 16_000;
   private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
-  private static readonly RETRY_PROMPT_CHAR_BUDGET = 12_000;
+  private static readonly RETRY_PROMPT_CHAR_BUDGET = 8_000;
   private static readonly MAX_SYSTEM_MESSAGE_CHARS = 8_000;
   private static readonly MAX_USER_MESSAGE_CHARS = 3_500;
   private static readonly MAX_ASSISTANT_MESSAGE_CHARS = 3_500;
   private static readonly MAX_TOOL_MESSAGE_CHARS = 2_000;
   private static readonly MIN_RECENT_MESSAGES = 6;
 
-  constructor(apiKey: string, defaultModel = 'llama-3.3-70b-versatile') {
+  constructor(apiKey: string, defaultModel = 'openai/gpt-oss-20b') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
   }
@@ -160,14 +180,14 @@ export class GroqProvider implements LLMProvider {
     if (!response.ok) {
       const errorText = await response.text();
       if (!this.isRequestTooLargeError(response.status, errorText)) {
-        throw new Error(`Groq API error (${response.status}): ${errorText}`);
+        throw this.httpError(response, errorText);
       }
       response = await this.sendRequest(
         this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
       );
       if (!response.ok) {
         const retryError = await response.text();
-        throw new Error(`Groq API error after retry (${response.status}): ${retryError}`);
+        throw this.httpError(response, retryError);
       }
     }
 
@@ -193,6 +213,8 @@ export class GroqProvider implements LLMProvider {
           type: 'error',
           error: `Groq API error (${response.status}): ${errorText}`,
           code: classifyHttpStatus(response.status),
+          ...(this.retryAfterMs(response) !== undefined
+            ? { retry_after_ms: this.retryAfterMs(response) } : {}),
         };
         return;
       }
@@ -210,6 +232,8 @@ export class GroqProvider implements LLMProvider {
           type: 'error',
           error: `Groq API error after retry (${response.status}): ${retryError}`,
           code: classifyHttpStatus(response.status),
+          ...(this.retryAfterMs(response) !== undefined
+            ? { retry_after_ms: this.retryAfterMs(response) } : {}),
         };
         return;
       }
@@ -333,13 +357,12 @@ export class GroqProvider implements LLMProvider {
       }
 
       const data = await response.json() as { data: Array<{ id: string }> };
-      return data.data.map(m => m.id).sort();
+      return data.data.map(m => m.id).filter(isGroqJarvisModel).sort();
     } catch (_err) {
       return [
-        'llama-3.3-70b-versatile',
-        'llama-3.1-8b-instant',
-        'qwen/qwen3-32b',
-        'deepseek-r1-distill-llama-70b',
+        'openai/gpt-oss-20b',
+        'openai/gpt-oss-120b',
+        'qwen/qwen3.6-27b',
       ];
     }
   }
@@ -377,6 +400,23 @@ export class GroqProvider implements LLMProvider {
       },
       body: JSON.stringify(body),
     });
+  }
+
+  private retryAfterMs(response: Response): number | undefined {
+    const raw = response.headers.get('retry-after');
+    if (!raw) return undefined;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+    const dateMs = Date.parse(raw);
+    return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : undefined;
+  }
+
+  private httpError(response: Response, detail: string): LLMProviderError {
+    return new LLMProviderError(
+      `Groq API error (${response.status}): ${detail}`,
+      classifyHttpStatus(response.status),
+      this.retryAfterMs(response),
+    );
   }
 
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
