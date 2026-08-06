@@ -302,6 +302,33 @@ describe('LLMManager', () => {
     expect(response.content).toBe('provider fallback');
     expect(groqCalls).toBe(1);
   });
+
+  test('tier streaming preserves Retry-After when every candidate is exhausted', async () => {
+    const manager = new LLMManager();
+    const groq = {
+      name: 'groq', listModels: async () => ['openai/gpt-oss-20b'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield {
+          type: 'error' as const,
+          error: 'Groq API error (429): rate limit',
+          code: 'rate_limit' as const,
+          retry_after_ms: 120_000,
+        };
+      },
+    };
+    manager.registerProvider(groq);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'openai/gpt-oss-20b' } });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'rate_limit',
+      retry_after_ms: 120_000,
+    });
+  });
 });
 
 describe('Message Types', () => {

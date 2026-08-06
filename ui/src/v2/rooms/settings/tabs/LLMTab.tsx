@@ -1055,8 +1055,7 @@ function useLiveProviderCatalogs(
     let cancelled = false;
     Promise.all(names.map(async (name) => {
       try {
-        const kind = providers[name]!.kind;
-        const response = await fetch(`/api/config/llm/${kind}/models`, {
+        const response = await fetch('/api/config/llm/groq/models', {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),

@@ -347,7 +347,8 @@ export class LLMManager {
         cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
         cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
         latency_ms: Date.now() - started,
-        error_code: terminalError?.code,
+        error_code: terminalError?.code
+          ?? (terminalError ? classifyErrorString(terminalError.error) : undefined),
       });
 
       if (!terminalError) return;
@@ -362,10 +363,14 @@ export class LLMManager {
     }
 
     const error = failures.map((event) => event.error).join('\n\n');
+    const finalFailure = failures.at(-1);
     yield {
       type: 'error',
       error,
-      code: failures.at(-1)?.code ?? classifyErrorString(error),
+      code: finalFailure?.code ?? classifyErrorString(error),
+      ...(finalFailure?.retry_after_ms !== undefined
+        ? { retry_after_ms: finalFailure.retry_after_ms }
+        : {}),
     };
   }
 
@@ -416,6 +421,7 @@ export class LLMManager {
   ): AsyncIterable<LLMStreamEvent> {
     const errors: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
+    let lastRetryAfterMs: number | undefined;
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       let emittedContent = false;
       let retryableEvent = true;
@@ -429,6 +435,7 @@ export class LLMManager {
             lastErrorCode = event.code ?? classifyErrorString(event.error);
             retryableEvent = this.shouldRetryCode(lastErrorCode);
             eventRetryAfterMs = event.retry_after_ms;
+            lastRetryAfterMs = event.retry_after_ms;
             console.error(
               `[LLM] Provider ${provider.name} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
             );
@@ -437,6 +444,7 @@ export class LLMManager {
                 type: 'error',
                 error: this.formatFailure(provider.name, errors),
                 code: lastErrorCode,
+                ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
               };
               return;
             }
@@ -454,6 +462,8 @@ export class LLMManager {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastErrorCode = classifyErrorString(errorMsg);
+        const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+        lastRetryAfterMs = retryAfterMs;
         const shouldRetry = this.shouldRetry(err);
         console.error(
           `[LLM] Provider ${provider.name} stream failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
@@ -463,11 +473,11 @@ export class LLMManager {
             type: 'error',
             error: this.formatFailure(provider.name, errors),
             code: lastErrorCode,
+            ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
           };
           return;
         }
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-        const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (!await this.waitForRetry(retryAfterMs)) break;
       }
     }
@@ -475,6 +485,7 @@ export class LLMManager {
       type: 'error',
       error: this.formatFailure(provider.name, errors),
       code: lastErrorCode ?? classifyErrorString(errors.join('\n')),
+      ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
     };
   }
 
@@ -554,6 +565,7 @@ export class LLMManager {
     // Legacy multi-provider fallback stream (no tier map configured).
     const failures: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
+    let lastRetryAfterMs: number | undefined;
 
     for (const providerName of this.getProviderSequence()) {
       const provider = this.providers.get(providerName);
@@ -576,6 +588,7 @@ export class LLMManager {
               lastErrorCode = event.code ?? classifyErrorString(event.error);
               retryableEvent = this.shouldRetryCode(lastErrorCode);
               eventRetryAfterMs = event.retry_after_ms;
+              lastRetryAfterMs = event.retry_after_ms;
               console.error(
                 `[LLM] Provider ${providerName} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
               );
@@ -584,6 +597,7 @@ export class LLMManager {
                   type: 'error',
                   error: this.formatFailure(providerName, errors),
                   code: lastErrorCode,
+                  ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
                 };
                 return;
               }
@@ -604,6 +618,8 @@ export class LLMManager {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
           lastErrorCode = classifyErrorString(errorMsg);
+          const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+          lastRetryAfterMs = retryAfterMs;
 
           const shouldRetry = this.shouldRetry(err);
           console.error(
@@ -615,12 +631,12 @@ export class LLMManager {
               type: 'error',
               error: this.formatFailure(providerName, errors),
               code: lastErrorCode,
+              ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
             };
             return;
           }
 
           if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-          const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
           if (!await this.waitForRetry(retryAfterMs)) break;
         }
       }
@@ -633,6 +649,7 @@ export class LLMManager {
       type: 'error',
       error: aggregated,
       code: lastErrorCode ?? classifyErrorString(aggregated),
+      ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
     };
   }
 }

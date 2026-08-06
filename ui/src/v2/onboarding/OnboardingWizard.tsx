@@ -312,7 +312,7 @@ export function OnboardingWizard({
   useEffect(() => {
     if (provId !== "groq" || !groqModels?.length) return;
     if (!groqModels.includes(model)) setModel(groqModels.includes("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : groqModels[0]!);
-  }, [groqModels, provId]);
+  }, [groqModels, model, provId]);
 
   // The Google OAuth poll outlives the click handler — keep its id in a ref so
   // finishing/unmounting the wizard stops it (it ran for up to 5 min after).
