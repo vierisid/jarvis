@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Tests for sign-windows.sh — no DigiCert account required.
+# Tests for sign-windows.sh — no GCP project and no certificate required.
 #
 # The signing call itself is one line; everything around it (credential
-# assembly, temp-file hygiene, fail-fast validation) is where the bugs live,
-# and all of it is testable by putting a stub `java` on PATH that records its
-# argv instead of signing. Two release-breaking quoting bugs on this branch
-# were of exactly this shape, so these assertions are not ceremony.
+# resolution, argument assembly, temp-file hygiene, fail-fast validation) is
+# where the bugs live, and all of it is testable by putting a stub `java` on
+# PATH that records its argv instead of signing. Two release-breaking quoting
+# bugs on this branch were of exactly this shape, so these assertions are not
+# ceremony.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,24 +43,30 @@ export JSIGN_JAR="$WORK/fake-jsign.jar"
 # (tests that exercise the download branch pass JSIGN_JAR= to blank it; the
 #  script checks ${JSIGN_JAR:-} so empty behaves as unset)
 
-# A .p12 whose bytes we can recognise, and credentials with characters that
-# have historically broken naive shell quoting.
-CERT_PLAIN='PKCS12-CONTENT-$(whoami)-`id`-done'
-CERT_B64="$(printf '%s' "$CERT_PLAIN" | base64 -w0)"
+# A stand-in certificate chain. Only its existence and the PEM marker matter to
+# the script — Cloud KMS holds the key, this file holds the public chain.
+printf -- '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n' >"$WORK/chain.pem"
+
+# An OAuth access token containing characters that have historically broken
+# naive shell quoting — including '|', which the DigiCert storetype used as a
+# field separator and GOOGLECLOUD does not (jsign 7.1 hands --storepass to
+# GoogleCloudSigningService whole; verified by decompiling the pinned jar).
+TOKEN='ya29.a0-token $X `y` |not|a|separator| end'
+KEYRING='projects/jarvis-signing/locations/global/keyRings/codesign'
+ALIAS='jarvis-authenticode/cryptoKeyVersions/1'
 
 run_sign() {
 	STUB_JAVA_LOG="$WORK/argv.log" \
-		SM_API_KEY="${SM_API_KEY_OVERRIDE:-api-key-123}" \
-		SM_CLIENT_CERT_FILE_B64="${SM_CERT_B64_OVERRIDE:-$CERT_B64}" \
-		SM_CLIENT_CERT_PASSWORD="${SM_PW_OVERRIDE:-p@ss w0rd \$X \`y\`}" \
-		SM_KEYPAIR_ALIAS="${SM_ALIAS_OVERRIDE-jarvis-keypair}" \
-		SM_HOST="${SM_HOST_OVERRIDE-}" \
+		GCP_KMS_KEYRING="${KEYRING_OVERRIDE-$KEYRING}" \
+		GCP_KMS_KEY_ALIAS="${ALIAS_OVERRIDE-$ALIAS}" \
+		GCP_ACCESS_TOKEN="${TOKEN_OVERRIDE-$TOKEN}" \
+		CODESIGN_CERT_FILE="${CERTFILE_OVERRIDE-$WORK/chain.pem}" \
 		STUB_JAVA_EXIT="${STUB_JAVA_EXIT:-0}" \
 		VERIFY_LOG="${VERIFY_LOG:-/dev/null}" \
 		bash "$SCRIPT" "$@"
 }
 
-argv_field() { # argv_field <index-of-flag> -> value following that flag
+argv_field() { # argv_field <flag> -> value following that flag
 	local want="$1" prev="" cur
 	while IFS= read -r -d '' cur; do
 		if [ "$prev" = "$want" ]; then
@@ -82,142 +89,72 @@ else
 	no "signs a file successfully" "$out"
 fi
 
-[ "$(argv_field --storetype)" = "DIGICERTONE" ] &&
-	ok "uses the DIGICERTONE storetype" || no "uses the DIGICERTONE storetype"
+[ "$(argv_field --storetype)" = "GOOGLECLOUD" ] &&
+	ok "uses the GOOGLECLOUD storetype" ||
+	no "uses the GOOGLECLOUD storetype" "got: $(argv_field --storetype)"
 
-[ "$(argv_field --keystore)" = "https://clientauth.one.digicert.com" ] &&
-	ok "defaults SM_HOST to the US production client-auth host" ||
-	no "defaults SM_HOST to production" "got: $(argv_field --keystore)"
+[ "$(argv_field --keystore)" = "$KEYRING" ] &&
+	ok "passes the KMS keyring as the keystore" ||
+	no "passes the KMS keyring as the keystore" "got: $(argv_field --keystore)"
 
-[ "$(argv_field --alias)" = "jarvis-keypair" ] &&
-	ok "passes the keypair alias" || no "passes the keypair alias"
+[ "$(argv_field --alias)" = "$ALIAS" ] &&
+	ok "passes the key alias, version suffix intact" ||
+	no "passes the key alias" "got: $(argv_field --alias)"
 
-[ "$(argv_field --tsaurl)" = "http://timestamp.digicert.com" ] &&
-	ok "timestamps against DigiCert's TSA" || no "timestamps against DigiCert's TSA"
+# Cloud KMS stores only the private key: without --certfile jsign has no
+# certificate to embed and the signature cannot be built at all.
+[ "$(argv_field --certfile)" = "$WORK/chain.pem" ] &&
+	ok "passes the certificate chain with --certfile" ||
+	no "passes the certificate chain with --certfile" "got: $(argv_field --certfile)"
+
+# The whole token, verbatim: GOOGLECLOUD's storepass is a single value, so a
+# token containing spaces, '$', backticks or '|' must arrive unmangled.
+storepass="$(argv_field --storepass)"
+[ "$storepass" = "$TOKEN" ] &&
+	ok "passes the access token as storepass, unmangled" ||
+	no "passes the access token as storepass" "got: $storepass"
+
+[ "$(argv_field --tsaurl)" = "http://timestamp.sectigo.com" ] &&
+	ok "timestamps against Sectigo's TSA" ||
+	no "timestamps against Sectigo's TSA" "got: $(argv_field --tsaurl)"
 
 [ "$(argv_field --tsmode)" = "RFC3161" ] &&
 	ok "uses RFC3161 timestamping" || no "uses RFC3161 timestamping"
 
-# storepass = <api-key>|<p12 path>|<password>. The password here contains
-# spaces, a $ and backticks; if any layer re-evaluated it, this breaks.
-storepass="$(argv_field --storepass)"
-case "$storepass" in
-'api-key-123|'*'|p@ss w0rd $X `y`')
-	ok "assembles storepass with a shell-hostile password intact"
-	;;
-*)
-	no "assembles storepass correctly" "got: $storepass"
-	;;
-esac
+# ── credential resolution ─────────────────────────────────────────────────
+# A developer with gcloud logged in should not have to export anything.
+cat >"$WORK/bin/gcloud" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = "auth print-access-token" ] || exit 2
+printf 'ya29.from-gcloud\n'
+STUB
+chmod +x "$WORK/bin/gcloud"
+: >"$WORK/argv.log"
+TOKEN_OVERRIDE= run_sign "$WORK/app.exe" >/dev/null 2>&1
+[ "$(argv_field --storepass)" = "ya29.from-gcloud" ] &&
+	ok "falls back to 'gcloud auth print-access-token'" ||
+	no "falls back to gcloud for the token" "got: $(argv_field --storepass)"
 
-# The middle field must be a real file at signing time, holding the decoded
-# certificate — this is what proves the base64 round-trip.
-p12_path="${storepass#*|}"
-p12_path="${p12_path%|*}"
-case "$p12_path" in
-*/sm_client_cert-*.p12) ok "points jsign at the decoded client certificate" ;;
-*) no "points jsign at the decoded client certificate" "got: $p12_path" ;;
-esac
+# ...and a gcloud that cannot mint one must fail by NAME, not with a raw
+# gcloud error or an empty Bearer token.
+cat >"$WORK/bin/gcloud" <<'STUB'
+#!/usr/bin/env bash
+echo "ERROR: (gcloud.auth) You do not currently have an active account" >&2
+exit 1
+STUB
+chmod +x "$WORK/bin/gcloud"
+out="$(TOKEN_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_ACCESS_TOKEN* ]]; then
+	ok "fails fast and names the token when gcloud cannot mint one"
+else
+	no "fails fast when gcloud cannot mint a token" "$out"
+fi
+rm -f "$WORK/bin/gcloud"
 
 # ── temp-file hygiene ─────────────────────────────────────────────────────
-[ ! -e "$p12_path" ] &&
-	ok "removes the client certificate after a successful run" ||
-	no "removes the client certificate after a successful run" "$p12_path still exists"
-
-: >"$WORK/argv.log"
-STUB_JAVA_EXIT=9 run_sign "$WORK/app.exe" >/dev/null 2>&1
-sp="$(argv_field --storepass)"
-leaked="${sp#*|}"
-leaked="${leaked%|*}"
-[ ! -e "$leaked" ] &&
-	ok "removes the client certificate even when signing FAILS" ||
-	no "removes the client certificate when signing fails" "$leaked still exists"
-
-# The decoded certificate must never be world-readable while it exists. Verify
-# by having the stub record the mode it sees.
-cat >"$WORK/bin/java" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\0' "$@" >> "${STUB_JAVA_LOG}"
-sp=""
-while [ $# -gt 0 ]; do
-  if [ "$1" = "--storepass" ]; then sp="$2"; fi
-  shift
-done
-p12="${sp#*|}"; p12="${p12%|*}"
-stat -c '%a' "$p12" > "${STUB_JAVA_LOG}.mode"
-exit 0
-STUB
-chmod +x "$WORK/bin/java"
-: >"$WORK/argv.log"
-run_sign "$WORK/app.exe" >/dev/null 2>&1
-[ "$(cat "$WORK/argv.log.mode" 2>/dev/null)" = "600" ] &&
-	ok "writes the client certificate 0600" ||
-	no "writes the client certificate 0600" "mode: $(cat "$WORK/argv.log.mode" 2>/dev/null)"
-
-cat >"$WORK/bin/java" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\0' "$@" >> "${STUB_JAVA_LOG}"
-exit "${STUB_JAVA_EXIT:-0}"
-STUB
-chmod +x "$WORK/bin/java"
-
-# ── exit status ───────────────────────────────────────────────────────────
-STUB_JAVA_EXIT=9 run_sign "$WORK/app.exe" >/dev/null 2>&1
-[ "$?" -ne 0 ] && ok "propagates a signing failure" || no "propagates a signing failure"
-
-# ── fail-fast validation ──────────────────────────────────────────────────
-out="$(SM_ALIAS_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *SM_KEYPAIR_ALIAS* ]]; then
-	ok "fails fast and names the missing credential"
-else
-	no "fails fast on a missing credential" "$out"
-fi
-
-out="$(SM_PW_OVERRIDE='has|pipe' run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"separator"* ]]; then
-	ok "rejects a credential containing jsign's '|' field separator"
-else
-	no "rejects a credential containing '|'" "$out"
-fi
-
-out="$(run_sign "$WORK/does-not-exist.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"file not found"* ]]; then
-	ok "refuses a missing input file before touching credentials"
-else
-	no "refuses a missing input file" "$out"
-fi
-
-out="$(run_sign 2>&1)"
-[ $? -ne 0 ] && ok "requires at least one file argument" || no "requires at least one file argument"
-
-# ── demo host + multiple files ────────────────────────────────────────────
-: >"$WORK/argv.log"
-printf 'MZ' >"$WORK/second.exe"
-SM_HOST_OVERRIDE="https://clientauth.demo.one.digicert.com" \
-	run_sign "$WORK/app.exe" "$WORK/second.exe" >/dev/null 2>&1
-[ "$(argv_field --keystore)" = "https://clientauth.demo.one.digicert.com" ] &&
-	ok "honours SM_HOST (demo account)" || no "honours SM_HOST (demo account)"
-
-# One jsign invocation per file — each consumes one KeyLocker signature, so a
-# regression here silently ships an unsigned second binary. Count invocations
-# by counting --storetype occurrences; a NUL-byte count would be satisfied by
-# a single invocation and could never fail.
-invocations="$(grep -zc -- '--storetype' "$WORK/argv.log" 2>/dev/null || true)"
-[ "${invocations:-0}" -eq 2 ] &&
-	ok "signs every file passed (one jsign invocation each)" ||
-	no "signs every file passed" "expected 2 jsign invocations, got ${invocations:-0}"
-
-# ── payload / download integrity ──────────────────────────────────────────
-out="$(SM_CERT_B64_OVERRIDE='!!!not base64!!!' run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"base64"* ]]; then
-	ok "rejects a client certificate that is not valid base64"
-else
-	no "rejects invalid base64" "$out"
-fi
-
-# The jar download branch is skipped whenever JSIGN_JAR is set, so exercise it
-# explicitly with a stub curl — the pinned checksum is the security control on
-# an artifact we then execute with live credentials in hand.
+# Only the downloaded jar hits disk now (the key is in Cloud HSM, the token
+# stays in the environment) — but it is executed with a live token in hand, so
+# it must not survive the run.
 cat >"$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 out=""
@@ -236,6 +173,21 @@ if [ $? -eq 0 ]; then
 else
 	no "downloads jsign and accepts a matching checksum" "$out"
 fi
+downloaded="$(argv_field -jar)"
+case "$downloaded" in
+*/jsign-*.jar) ok "runs the jar it just downloaded" ;;
+*) no "runs the downloaded jar" "got: $downloaded" ;;
+esac
+[ ! -e "$downloaded" ] &&
+	ok "removes the downloaded jar after a successful run" ||
+	no "removes the downloaded jar" "$downloaded still exists"
+
+: >"$WORK/argv.log"
+STUB_JAVA_EXIT=9 JSIGN_JAR= JSIGN_SHA256="$GOOD_SHA" run_sign "$WORK/app.exe" >/dev/null 2>&1
+leaked="$(argv_field -jar)"
+[ -n "$leaked" ] && [ ! -e "$leaked" ] &&
+	ok "removes the downloaded jar even when signing FAILS" ||
+	no "removes the downloaded jar when signing fails" "${leaked:-<no jar recorded>} still exists"
 
 out="$(JSIGN_JAR= JSIGN_SHA256="0000000000000000000000000000000000000000000000000000000000000000" \
 	run_sign "$WORK/app.exe" 2>&1)"
@@ -246,13 +198,97 @@ else
 fi
 rm -f "$WORK/bin/curl"
 
-# Credentials must never reach the logs — CI output is retained and often public.
+# ── exit status ───────────────────────────────────────────────────────────
+STUB_JAVA_EXIT=9 run_sign "$WORK/app.exe" >/dev/null 2>&1
+[ "$?" -ne 0 ] && ok "propagates a signing failure" || no "propagates a signing failure"
+
+# ── fail-fast validation ──────────────────────────────────────────────────
+out="$(ALIAS_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEY_ALIAS* ]]; then
+	ok "fails fast and names the missing key alias"
+else
+	no "fails fast on a missing key alias" "$out"
+fi
+
+out="$(KEYRING_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEYRING* ]]; then
+	ok "fails fast and names the missing keyring"
+else
+	no "fails fast on a missing keyring" "$out"
+fi
+
+# jsign only rejects a malformed keyring after a JVM start, with a message that
+# reads like a jsign bug rather than a mistyped repo variable. The two shapes
+# people actually paste: a full cryptoKey path, and the bare keyring name.
+out="$(KEYRING_OVERRIDE="${KEYRING}/cryptoKeys/jarvis-authenticode" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEYRING* ]]; then
+	ok "rejects a keyring path that reaches down to the key"
+else
+	no "rejects an over-specified keyring path" "$out"
+fi
+
+out="$(KEYRING_OVERRIDE="codesign" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *GCP_KMS_KEYRING* ]]; then
+	ok "rejects a bare keyring name"
+else
+	no "rejects a bare keyring name" "$out"
+fi
+
+# Before the certificate is issued this is the EXPECTED state, so it has to
+# read as "the cert isn't there yet" rather than a Java stack trace. Run from
+# another directory: the default path is resolved relative to the script, not
+# the caller's cwd.
+# The "No such file" clause also asserts the existence check runs BEFORE the
+# PEM sniff: reading a file that isn't there would spray a raw grep error into
+# the release log next to our own message.
+out="$(cd / && CERTFILE_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"certificate chain not found"* ]] &&
+	[[ "$out" == *"packaging/windows/codesign-chain.pem"* ]] &&
+	[[ "$out" != *"No such file or directory"* ]]; then
+	ok "names the default chain path when the certificate is not installed yet"
+else
+	no "names the default chain path when the cert is missing" "$out"
+fi
+
+printf 'TODO: paste the Sectigo chain here\n' >"$WORK/placeholder.pem"
+out="$(CERTFILE_OVERRIDE="$WORK/placeholder.pem" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"no PEM certificate"* ]]; then
+	ok "rejects a chain file that holds no certificate"
+else
+	no "rejects a placeholder chain file" "$out"
+fi
+
+out="$(run_sign "$WORK/does-not-exist.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"file not found"* ]]; then
+	ok "refuses a missing input file before touching credentials"
+else
+	no "refuses a missing input file" "$out"
+fi
+
+out="$(run_sign 2>&1)"
+[ $? -ne 0 ] && ok "requires at least one file argument" || no "requires at least one file argument"
+
+# ── multiple files ────────────────────────────────────────────────────────
+: >"$WORK/argv.log"
+printf 'MZ' >"$WORK/second.exe"
+run_sign "$WORK/app.exe" "$WORK/second.exe" >/dev/null 2>&1
+
+# One jsign invocation per file — a regression here silently ships an unsigned
+# second binary. Count invocations by counting --storetype occurrences; a
+# NUL-byte count would be satisfied by a single invocation and could never fail.
+invocations="$(grep -zc -- '--storetype' "$WORK/argv.log" 2>/dev/null || true)"
+[ "${invocations:-0}" -eq 2 ] &&
+	ok "signs every file passed (one jsign invocation each)" ||
+	no "signs every file passed" "expected 2 jsign invocations, got ${invocations:-0}"
+
+# The access token must never reach the logs — CI output is retained and often
+# public, and this token is live for the next hour.
 : >"$WORK/argv.log"
 out="$(run_sign "$WORK/app.exe" 2>&1)"
-if [[ "$out" != *"api-key-123"* && "$out" != *"p@ss w0rd"* ]]; then
-	ok "keeps credentials out of stdout/stderr"
+if [[ "$out" != *"ya29.a0-token"* ]]; then
+	ok "keeps the access token out of stdout/stderr"
 else
-	no "keeps credentials out of stdout/stderr" "$out"
+	no "keeps the access token out of stdout/stderr" "$out"
 fi
 
 # ── post-sign verification ────────────────────────────────────────────────
@@ -261,7 +297,7 @@ fi
 # format rather than a guess. Note osslsigncode exits 1 for an untrusted
 # chain even when the signature is perfect — hence verify_signature asserts
 # on output, not exit status.
-make_osslsigncode() { # make_osslsigncode <digest-state> <cn> <timestamp> <chain>
+make_osslsigncode() { # make_osslsigncode <digest-state> <cn> <timestamp> <chain> <exit>
 	cat >"$WORK/bin/osslsigncode" <<STUB
 #!/usr/bin/env bash
 printf '%s\0' "\$@" >> "\${VERIFY_LOG:-/dev/null}"
@@ -276,7 +312,7 @@ Calculated message digest : ${1}
 Signer's certificate:
 	Signer #0:
 		Subject: /C=US/O=Jarvis Technologies Inc/CN=${2}
-		Issuer : /CN=DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1
+		Issuer : /C=GB/O=Sectigo Limited/CN=Sectigo Public Code Signing CA R36
 ${3}
 Number of verified signatures: 1
 ${4}
@@ -337,21 +373,22 @@ else
 	no "fails on a missing timestamp" "$out"
 fi
 
-# untrusted chain (a demo account, by design) must NOT fail the run...
+# Sectigo's roots are publicly trusted, so a chain that does not verify is a
+# real defect: strict is the DEFAULT now, with no demo account to excuse it.
 make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "" 1
 out="$(run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -eq 0 ] && [[ "$out" == *"chain NOT trusted"* ]]; then
-	ok "tolerates an untrusted chain (demo accounts) but says so"
+if [ $? -ne 0 ] && [[ "$out" == *"did not fully verify"* ]]; then
+	ok "rejects an untrusted chain by default"
 else
-	no "tolerates an untrusted chain" "$out"
+	no "rejects an untrusted chain by default" "$out"
 fi
 
-# ...unless explicitly required
-out="$(SIGN_REQUIRE_TRUSTED_CHAIN=1 run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -ne 0 ] && [[ "$out" == *"did not fully verify"* ]]; then
-	ok "enforces chain trust when SIGN_REQUIRE_TRUSTED_CHAIN=1"
+# ...opt-out only, for a self-signed cert on a laptop
+out="$(SIGN_REQUIRE_TRUSTED_CHAIN=0 run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -eq 0 ] && [[ "$out" == *"chain NOT trusted"* ]]; then
+	ok "tolerates an untrusted chain under SIGN_REQUIRE_TRUSTED_CHAIN=0, but says so"
 else
-	no "enforces chain trust on demand" "$out"
+	no "tolerates an untrusted chain on request" "$out"
 fi
 
 # Verification must run per file, against the file just signed, with a CA
@@ -392,7 +429,7 @@ fi
 # exercises the absent case on a machine that HAS osslsigncode installed.
 rm -f "$WORK/bin/osslsigncode"
 mkdir -p "$WORK/nopath"
-for b in bash env printf mktemp chmod rm base64 sed awk cat curl sha256sum head tr dirname basename; do
+for b in bash env printf mktemp chmod rm grep sed awk cat curl sha256sum tr dirname basename; do
 	src="$(command -v "$b" 2>/dev/null || true)"
 	[ -n "$src" ] && ln -sf "$src" "$WORK/nopath/$b"
 done
