@@ -27,7 +27,9 @@ jobs:
   # The sidecar is a cgo program (webview_go + GTK overlays). The local
   # pre-commit hook does NOT run Go, so this is the only automated guard that
   # the sidecar still builds. Linux native + Windows mingw cross-build cover the
-  # two toolchains verifiable on a Linux runner; darwin builds on release.
+  # two toolchains verifiable on a Linux runner; darwin compiles in its own
+  # macos job below (previously it first compiled inside the RELEASE workflow,
+  # so an ObjC error failed a release instead of the PR).
   sidecar-build:
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +75,27 @@ jobs:
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           go build -o /tmp/jarvis-sidecar.exe .
+
+  # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
+  # bridges): build tags hide them from the linux job, so without this their
+  # first compile happens on a release runner. Build + vet only — the UI
+  # can't run on a headless runner and the logic tests are covered on linux.
+  sidecar-build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+      - name: Build + vet (darwin, cgo)
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go build ./...
 
   # NOTE: the sidecar VERSION-bump PR gate is intentionally OFF during the
   # current development phase — the sidecar is frozen at sidecar/VERSION = 0.1.0
