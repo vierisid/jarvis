@@ -2,7 +2,7 @@ import { test, expect, describe } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { WindowsAppController, escapeSendKeysText, mapKeysToSendKeys } from './windows.ts';
+import { WindowsAppController, escapeSendKeysText, mapKeysToSendKeys, toAsciiJson } from './windows.ts';
 import type { NativeExec, NativeExecResult } from './native-exec.ts';
 
 const SCRIPT_PATH = join(import.meta.dir, 'scripts', 'desktop.ps1');
@@ -63,6 +63,21 @@ describe('mapKeysToSendKeys', () => {
     expect(() => mapKeysToSendKeys(['NotAKey'])).toThrow(/Unsupported key/);
     expect(() => mapKeysToSendKeys(['Control'])).toThrow(/no non-modifier key/);
   });
+
+  test('rejects multiple non-modifier keys, matching macOS/Linux chord semantics', () => {
+    expect(() => mapKeysToSendKeys(['A', 'B'])).toThrow(/more than one non-modifier key/);
+  });
+});
+
+describe('toAsciiJson', () => {
+  test('escapes all non-ASCII characters while round-tripping via JSON', () => {
+    const payload = { keys: 'café — “smart” ünïcode ✓' };
+    const json = toAsciiJson(payload);
+    for (const ch of json) {
+      expect(ch.charCodeAt(0)).toBeLessThan(128);
+    }
+    expect(JSON.parse(json)).toEqual(payload);
+  });
 });
 
 describe('WindowsAppController fallback', () => {
@@ -110,6 +125,18 @@ describe('WindowsAppController fallback', () => {
     expect(call.cmd.join(' ')).not.toContain('Start-Process');
     const payload = JSON.parse(call.input) as { keys: string };
     expect(payload.keys).toBe(escapeSendKeysText(hostile));
+  });
+
+  test('typeText payload is ASCII-safe for the OEM-code-page stdin', async () => {
+    // Regression: powershell.exe decodes redirected stdin with the OEM code
+    // page, so raw UTF-8 payloads arrive as mojibake.
+    const { ctrl, calls } = controller(() => ({}));
+    await ctrl.typeText('café ünïcode ✓');
+    const input = calls[0]!.input;
+    for (const ch of input) {
+      expect(ch.charCodeAt(0)).toBeLessThan(128);
+    }
+    expect((JSON.parse(input) as { keys: string }).keys).toBe('café ünïcode ✓');
   });
 
   test('clickElement clicks at the element center via click-at', async () => {

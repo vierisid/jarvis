@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import type { DesktopController } from './desktop-controller.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { SidecarProbe } from './sidecar-probe.ts';
 
 /**
  * Windows App Controller.
@@ -18,9 +19,6 @@ import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
  */
 
 const SCRIPT_PATH = join(import.meta.dir, 'scripts', 'desktop.ps1');
-
-// How long to wait before re-probing for a sidecar after a failed attempt.
-const SIDECAR_RETRY_MS = 30_000;
 
 /** SendKeys metacharacters, each escaped by wrapping in braces. */
 const SENDKEYS_SPECIAL = /([+^%~(){}[\]])/g;
@@ -75,15 +73,27 @@ const SENDKEYS_KEYS: Record<string, string> = {
   f10: '{F10}',
   f11: '{F11}',
   f12: '{F12}',
+  f13: '{F13}',
+  f14: '{F14}',
+  f15: '{F15}',
+  f16: '{F16}',
+  printscreen: '{PRTSC}',
+  prtsc: '{PRTSC}',
+  capslock: '{CAPSLOCK}',
+  numlock: '{NUMLOCK}',
+  scrolllock: '{SCROLLLOCK}',
+  help: '{HELP}',
 };
 
 /**
  * Map a key chord like ["Control", "Shift", "S"] to a SendKeys string ("^+s").
- * Throws on keys SendKeys cannot synthesize (e.g. the Windows key).
+ * A chord is modifiers plus exactly one main key — matching the macOS and
+ * Linux controllers. Throws on keys SendKeys cannot synthesize (e.g. the
+ * Windows key).
  */
 export function mapKeysToSendKeys(keys: string[]): string {
   let modifiers = '';
-  const rest: string[] = [];
+  let mainKey: string | null = null;
 
   for (const raw of keys) {
     const lower = raw.toLowerCase();
@@ -95,24 +105,25 @@ export function mapKeysToSendKeys(keys: string[]): string {
     if (lower === 'win' || lower === 'meta' || lower === 'super' || lower === 'command' || lower === 'cmd') {
       throw new Error(`SendKeys cannot press the ${raw} key; Windows-key shortcuts need the desktop sidecar`);
     }
+    if (mainKey !== null) {
+      throw new Error(`Key combination [${keys.join('+')}] has more than one non-modifier key`);
+    }
     const named = SENDKEYS_KEYS[lower];
     if (named) {
-      rest.push(named);
+      mainKey = named;
       continue;
     }
     if ([...raw].length === 1) {
-      rest.push(escapeSendKeysText(raw.toLowerCase()));
+      mainKey = escapeSendKeysText(raw.toLowerCase());
       continue;
     }
     throw new Error(`Unsupported key "${raw}" for the SendKeys fallback`);
   }
 
-  if (rest.length === 0) {
+  if (mainKey === null) {
     throw new Error(`Key combination [${keys.join('+')}] has no non-modifier key to press`);
   }
-  const body = rest.join('');
-  if (modifiers && rest.length > 1) return `${modifiers}(${body})`;
-  return modifiers + body;
+  return modifiers + mainKey;
 }
 
 type ScriptWindow = {
@@ -136,42 +147,41 @@ function toWindowInfo(raw: ScriptWindow): WindowInfo {
   };
 }
 
+/**
+ * powershell.exe decodes redirected stdin with the OEM code page, not UTF-8,
+ * so the payload must be pure ASCII: escape everything past 0x7F as \uXXXX
+ * (valid JSON, decoded back to the original characters by ConvertFrom-Json).
+ */
+export function toAsciiJson(payload: Record<string, unknown>): string {
+  return JSON.stringify(payload).replace(
+    /[\u0080-\uffff]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
 export class WindowsAppController implements AppController {
   private exec: NativeExec;
-  private useSidecar: boolean;
-  private sidecar: DesktopController | null = null;
-  private sidecarRetryAt = 0;
+  private sidecarProbe: SidecarProbe;
 
   constructor(opts: { exec?: NativeExec; useSidecar?: boolean } = {}) {
     this.exec = opts.exec ?? defaultExec;
-    this.useSidecar = opts.useSidecar ?? true;
+    this.sidecarProbe = new SidecarProbe(opts.useSidecar ?? true);
   }
 
-  private async getSidecar(): Promise<DesktopController | null> {
-    if (!this.useSidecar) return null;
-    if (this.sidecar?.connected) return this.sidecar;
-    if (Date.now() < this.sidecarRetryAt) return null;
-    try {
-      const { DesktopController } = await import('./desktop-controller.ts');
-      const sidecar = this.sidecar ?? new DesktopController();
-      await sidecar.connect();
-      this.sidecar = sidecar;
-      return sidecar;
-    } catch {
-      this.sidecarRetryAt = Date.now() + SIDECAR_RETRY_MS;
-      return null;
-    }
+  private getSidecar(): Promise<DesktopController | null> {
+    return this.sidecarProbe.get();
   }
 
   /**
    * Run a command of the fixed helper script. The payload travels on stdin
-   * as JSON — never on the command line, never interpolated into script text.
+   * as ASCII-safe JSON — never on the command line, never interpolated into
+   * script text.
    */
   private runScript(command: string, payload?: Record<string, unknown>): string {
     const stdout = runNative(
       this.exec,
       ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
-      payload === undefined ? '' : JSON.stringify(payload),
+      payload === undefined ? '' : toAsciiJson(payload),
       `desktop.ps1 ${command}`,
     );
     return stdout.trim();
@@ -256,8 +266,9 @@ export class WindowsAppController implements AppController {
     if (!executable.trim()) throw new Error('Executable is required');
     const sc = await this.getSidecar();
     if (sc) return sc.launchApp(executable, args);
-    const result = this.runScriptJson<{ pid: number }>('launch-app', { executable, args: args ?? '' });
-    return { pid: result.pid, executable, args: args ?? '' };
+    // pid is null when the shell reuses an existing process (documents, URLs).
+    const result = this.runScriptJson<{ pid: number | null }>('launch-app', { executable, args: args ?? '' });
+    return { pid: result.pid ?? null, executable, args: args ?? '' };
   }
 
   async closeWindow(pid: number): Promise<void> {

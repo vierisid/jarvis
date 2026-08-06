@@ -97,6 +97,29 @@ jobs:
           go vet ./...
           go build ./...
 
+  # The desktop-automation fallback scripts can't be exercised from the linux
+  # job: bun test's pwsh check covers desktop.ps1, but AppleScript terminology
+  # bugs (dictionary terms shadowing variables) only surface on a real macOS
+  # interpreter at runtime — osacompile alone won't catch them, hence the
+  # event-free `probe` command.
+  applescript-check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile + probe desktop.applescript
+        run: |
+          set -euo pipefail
+          SCRIPT=src/actions/app-control/scripts/desktop.applescript
+          osacompile -o /tmp/desktop-syntax-check.scpt "$SCRIPT"
+          OUT=$(osascript "$SCRIPT" probe)
+          echo "probe: $OUT"
+          test "$OUT" = "mods=2;code=36"
+          # Unknown commands must fail loudly (stderr + non-zero exit)
+          if osascript "$SCRIPT" no-such-command 2>/dev/null; then
+            echo "expected non-zero exit for unknown command" >&2
+            exit 1
+          fi
+
   # NOTE: the sidecar VERSION-bump PR gate is intentionally OFF during the
   # current development phase — the sidecar is frozen at sidecar/VERSION = 0.1.0
   # and ships as a single version, so per-change bumps aren't wanted. Reinstate a

@@ -36,7 +36,18 @@ export interface AppController {
   dragElement?(from: UIElement, to: UIElement): Promise<void>;
 }
 
+// Cached per process: the Windows/macOS controllers keep sidecar probe
+// backoff state and a live sidecar TCP connection on the instance, so a
+// fresh controller per tool call would re-probe every time and leak sockets.
+let cachedController: AppController | null = null;
+
 export function getAppController(): AppController {
+  if (cachedController) return cachedController;
+  cachedController = createAppController();
+  return cachedController;
+}
+
+function createAppController(): AppController {
   const platform = process.platform;
 
   switch (platform) {

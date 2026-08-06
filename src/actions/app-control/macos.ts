@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import type { DesktopController } from './desktop-controller.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { SidecarProbe } from './sidecar-probe.ts';
 
 /**
  * macOS App Controller.
@@ -23,9 +24,6 @@ import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
  */
 
 const SCRIPT_PATH = join(import.meta.dir, 'scripts', 'desktop.applescript');
-
-// How long to wait before re-probing for a sidecar after a failed attempt.
-const SIDECAR_RETRY_MS = 30_000;
 
 const MAC_MODIFIERS: Record<string, string> = {
   command: 'command',
@@ -131,29 +129,15 @@ function parseWindowLine(line: string): WindowInfo | null {
 
 export class MacAppController implements AppController {
   private exec: NativeExec;
-  private useSidecar: boolean;
-  private sidecar: DesktopController | null = null;
-  private sidecarRetryAt = 0;
+  private sidecarProbe: SidecarProbe;
 
   constructor(opts: { exec?: NativeExec; useSidecar?: boolean } = {}) {
     this.exec = opts.exec ?? defaultExec;
-    this.useSidecar = opts.useSidecar ?? true;
+    this.sidecarProbe = new SidecarProbe(opts.useSidecar ?? true);
   }
 
-  private async getSidecar(): Promise<DesktopController | null> {
-    if (!this.useSidecar) return null;
-    if (this.sidecar?.connected) return this.sidecar;
-    if (Date.now() < this.sidecarRetryAt) return null;
-    try {
-      const { DesktopController } = await import('./desktop-controller.ts');
-      const sidecar = this.sidecar ?? new DesktopController();
-      await sidecar.connect();
-      this.sidecar = sidecar;
-      return sidecar;
-    } catch {
-      this.sidecarRetryAt = Date.now() + SIDECAR_RETRY_MS;
-      return null;
-    }
+  private getSidecar(): Promise<DesktopController | null> {
+    return this.sidecarProbe.get();
   }
 
   /**
@@ -260,15 +244,15 @@ export class MacAppController implements AppController {
     if (sc) return sc.launchApp(executable, args);
 
     // `open -a` resolves app names and .app bundles; fall back to opening the
-    // argument as a path. Arguments are passed as an argv array — no shell.
+    // argument as a path. Arguments are passed as an argv array — no shell —
+    // and survive the fallback attempt.
     const extraArgs = parseCommandArgs(args);
+    const argsTail = extraArgs.length > 0 ? ['--args', ...extraArgs] : [];
     try {
-      const openArgs = ['-a', executable];
-      if (extraArgs.length > 0) openArgs.push('--args', ...extraArgs);
-      runNative(this.exec, ['open', ...openArgs], '', `open -a ${executable}`);
+      runNative(this.exec, ['open', '-a', executable, ...argsTail], '', `open -a ${executable}`);
     } catch (appError) {
       try {
-        runNative(this.exec, ['open', executable], '', `open ${executable}`);
+        runNative(this.exec, ['open', executable, ...argsTail], '', `open ${executable}`);
       } catch {
         throw appError;
       }
@@ -286,6 +270,8 @@ export class MacAppController implements AppController {
   }
 }
 
+// Naive splitter (same as linux.ts): whole-token quotes only. Tokens like
+// --flag="a b" are not un-quoted mid-token; acceptable for launch arguments.
 function parseCommandArgs(args?: string): string[] {
   if (!args?.trim()) return [];
   const parts = args.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];

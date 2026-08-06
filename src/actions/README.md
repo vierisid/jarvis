@@ -9,8 +9,9 @@ src/actions/
 ├── app-control/      # Cross-platform application control
 │   ├── interface.ts  # Common interface & platform factory
 │   ├── linux.ts      # Linux/X11 implementation
-│   ├── windows.ts    # Windows stub (UI Automation)
-│   └── macos.ts      # macOS stub (AXUIElement)
+│   ├── windows.ts    # Windows: sidecar-first + PowerShell fallback
+│   ├── macos.ts      # macOS: sidecar-first + AppleScript fallback
+│   └── scripts/      # Fixed script assets (desktop.ps1, desktop.applescript)
 ├── browser/          # Chrome DevTools Protocol
 │   ├── cdp.ts        # CDP client implementation
 │   └── session.ts    # Browser session management
@@ -60,9 +61,10 @@ Uses X11 tools (xdotool, xprop, wmctrl, ImageMagick):
 - Geometry and property inspection
 
 **Status:**
-- ✅ Linux: Fully implemented
-- ⏳ Windows: Stub (needs UI Automation API)
-- ⏳ macOS: Stub (needs AXUIElement API)
+- ✅ Linux: Fully implemented (X11 tools)
+- ✅ Windows: Sidecar-first (desktop-bridge, full UI Automation); PowerShell/Win32 fallback for windows, input, screenshots
+- ✅ macOS: Sidecar-first; AppleScript/screencapture fallback for windows, input, screenshots
+- ⏳ UI element trees (getWindowTree) require the sidecar on Windows/macOS
 
 ### Browser Control
 

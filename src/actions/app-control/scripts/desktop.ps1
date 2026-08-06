@@ -19,6 +19,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Redirected stdout/stderr default to the OEM code page on Windows PowerShell;
+# emit UTF-8 so non-ASCII window titles survive the trip back to Node. The
+# inbound payload is ASCII-safe JSON (see toAsciiJson in windows.ts), so the
+# stdin encoding does not matter.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 Add-Type -TypeDefinition @"
 using System;
 using System.Collections.Generic;
@@ -37,6 +43,7 @@ public static class JarvisWin32 {
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -141,8 +148,19 @@ public static class JarvisWin32 {
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
     }
+
+    // Without this, powershell.exe is DPI-virtualized on scaled displays:
+    // window rects, cursor coordinates, and captures come back in scaled
+    // (non-native) pixels.
+    public static void MakeDpiAware() {
+        SetProcessDPIAware();
+    }
 }
 "@
+
+# Best-effort: SetProcessDPIAware never throws on Windows; the catch only
+# fires where user32 is absent (the linux-CI pwsh syntax probe).
+try { [JarvisWin32]::MakeDpiAware() } catch { }
 
 function Read-Payload {
   $raw = [Console]::In.ReadToEnd()
@@ -171,12 +189,14 @@ function Get-RectCaptureBase64 {
   Add-Type -AssemblyName System.Drawing
   $bmp = New-Object System.Drawing.Bitmap($Width, $Height)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $ms = $null
   try {
     $g.CopyFromScreen($X, $Y, 0, 0, (New-Object System.Drawing.Size($Width, $Height)))
     $ms = New-Object System.IO.MemoryStream
     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
     return [Convert]::ToBase64String($ms.ToArray())
   } finally {
+    if ($null -ne $ms) { $ms.Dispose() }
     $g.Dispose()
     $bmp.Dispose()
   }
@@ -227,7 +247,11 @@ try {
       } else {
         $proc = Start-Process -FilePath ([string]$p.executable) -ArgumentList ([string]$p.args) -PassThru
       }
-      Write-Output (ConvertTo-Json -InputObject @{ pid = $proc.Id } -Compress)
+      # -PassThru returns nothing when the shell reuses an existing process
+      # (documents, URLs) — report pid null rather than failing the launch.
+      $launchedPid = $null
+      if ($null -ne $proc) { $launchedPid = $proc.Id }
+      Write-Output (ConvertTo-Json -InputObject @{ pid = $launchedPid } -Compress)
     }
     default {
       throw "Unknown command: $Command"

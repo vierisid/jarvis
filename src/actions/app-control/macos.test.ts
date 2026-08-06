@@ -136,6 +136,15 @@ describe('MacAppController fallback', () => {
     expect(cmd).toEqual(['open', '-a', `App'; reboot; '`, '--args', '--flag', 'a b']);
   });
 
+  test('launchApp path-fallback keeps the arguments', async () => {
+    // Regression (review): the retry after a failed `open -a` dropped --args.
+    const { ctrl, calls } = controller((cmd) =>
+      cmd[1] === '-a' ? { status: 1, stderr: 'Unable to find application' } : {},
+    );
+    await ctrl.launchApp('/opt/tool.app', '--flag');
+    expect(calls[1]!.cmd).toEqual(['open', '/opt/tool.app', '--args', '--flag']);
+  });
+
   test('closeWindow and getWindowTree without sidecar throw instead of pretending', async () => {
     const { ctrl } = controller(() => ({}));
     expect(ctrl.closeWindow(1)).rejects.toThrow(/sidecar/);
@@ -162,6 +171,23 @@ describe('desktop.applescript script asset', () => {
     expect(script).toContain('key code (keyValue as integer)');
   });
 
+  test('avoids System Events dictionary terms as identifiers in tell blocks', () => {
+    // Regression (review): a pressKeys parameter named `kind` collided with
+    // System Events terminology, breaking every press-keys invocation.
+    expect(script).toContain('on pressKeys(modsCsv, keyKind, keyValue)');
+    expect(script).toContain('set useCode to (keyKind is "code")');
+    // The CI probe command exercises the terminology-sensitive constructs.
+    expect(script).toContain('on probeTerminology()');
+  });
+
+  test('sanitizes tabs/newlines in titles and process names', () => {
+    // Regression (review): un-sanitized fields break the tab-separated,
+    // line-per-window format (the ps1 side already squashed them).
+    expect(script).toContain('on sanitizeField(theValue)');
+    expect(script).toContain('my sanitizeField(winTitle)');
+    expect(script).toContain('my sanitizeField(procName)');
+  });
+
   test('coerces numeric window fields to text before concatenation', () => {
     // Regression: PR #279 concatenated integers with &, producing AppleScript
     // list concatenation and corrupted window metadata.
@@ -171,7 +197,8 @@ describe('desktop.applescript script asset', () => {
 
   const hasOsacompile = spawnSync('which', ['osacompile'], { encoding: 'utf-8', timeout: 10_000 }).status === 0;
 
-  // Only runs on macOS dev machines; proves the script compiles.
+  // Only runs on macOS dev machines; proves the script compiles. CI runs the
+  // same checks in the applescript-check job of test.yml.
   test.skipIf(!hasOsacompile)('compiles under osacompile', () => {
     const out = join(tmpdir(), `jarvis-desktop-syntax-${process.pid}.scpt`);
     try {
@@ -181,5 +208,14 @@ describe('desktop.applescript script asset', () => {
     } finally {
       try { unlinkSync(out); } catch {}
     }
+  }, 60_000);
+
+  // Executes the event-free probe command on the real interpreter, catching
+  // runtime terminology collisions that osacompile accepts.
+  test.skipIf(!hasOsacompile)('terminology probe runs on the real interpreter', () => {
+    const result = spawnSync('osascript', [SCRIPT_PATH, 'probe'], { encoding: 'utf-8', timeout: 60_000 });
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim()).toBe('mods=2;code=36');
+    expect(result.status).toBe(0);
   }, 60_000);
 });
