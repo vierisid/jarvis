@@ -19,6 +19,10 @@ A unified abstraction layer for multiple LLM providers with automatic fallback s
 - **Features**: Text generation, streaming, tool use
 - **API**: https://api.anthropic.com/v1/messages
 
+Anthropic providers can also use a Claude-compatible gateway. In onboarding or **Settings > LLM**, enter the gateway origin (for example, `https://myrellms.xyz`) as the optional base URL and put the value normally used for `ANTHROPIC_AUTH_TOKEN` in the credential field. Jarvis appends `/v1/messages` and sends the token as `Authorization: Bearer …`.
+
+Leaving the base URL blank keeps the standard Anthropic endpoint and `x-api-key` authentication.
+
 ### 2. OpenAI GPT
 - **Models**: GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo
 - **Default**: `gpt-4o`

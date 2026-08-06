@@ -109,21 +109,32 @@ type AnthropicSystemBlock = {
   cache_control?: { type: 'ephemeral' };
 };
 
+export function anthropicMessagesUrl(baseUrl?: string): string {
+  if (!baseUrl?.trim()) return 'https://api.anthropic.com/v1/messages';
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  if (normalized.endsWith('/v1/messages')) return normalized;
+  if (normalized.endsWith('/v1')) return `${normalized}/messages`;
+  return `${normalized}/v1/messages`;
+}
+
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic';
   private apiKey: string;
   private defaultModel: string;
   private promptCache: boolean;
-  private apiUrl = 'https://api.anthropic.com/v1/messages';
+  private apiUrl: string;
+  private bearerAuth: boolean;
 
   constructor(
     apiKey: string,
     defaultModel = 'claude-sonnet-4-5-20250929',
-    opts?: { promptCache?: boolean },
+    opts?: { promptCache?: boolean; baseUrl?: string },
   ) {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
     this.promptCache = opts?.promptCache !== false;
+    this.apiUrl = anthropicMessagesUrl(opts?.baseUrl);
+    this.bearerAuth = Boolean(opts?.baseUrl?.trim());
   }
 
   /**
@@ -131,10 +142,11 @@ export class AnthropicProvider implements LLMProvider {
    */
   private async fetchWithRetry(body: string, stream: boolean = false): Promise<Response> {
     const headers: Record<string, string> = {
-      'x-api-key': this.apiKey,
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     };
+    if (this.bearerAuth) headers.authorization = `Bearer ${this.apiKey}`;
+    else headers['x-api-key'] = this.apiKey;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const response = await fetch(this.apiUrl, {

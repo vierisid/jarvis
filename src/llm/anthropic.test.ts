@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'bun:test';
-import { AnthropicProvider } from './anthropic.ts';
+import { AnthropicProvider, anthropicMessagesUrl } from './anthropic.ts';
 import type { LLMMessage, LLMStreamEvent } from './provider.ts';
 
 const originalFetch = globalThis.fetch;
@@ -53,6 +53,51 @@ function countCacheControls(body: CapturedBody): number {
   }
   return n;
 }
+
+describe('AnthropicProvider custom endpoint', () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('normalizes base URLs to the Messages API endpoint', () => {
+    expect(anthropicMessagesUrl('https://myrellms.xyz')).toBe('https://myrellms.xyz/v1/messages');
+    expect(anthropicMessagesUrl('https://myrellms.xyz/v1/')).toBe('https://myrellms.xyz/v1/messages');
+    expect(anthropicMessagesUrl('https://myrellms.xyz/v1/messages')).toBe('https://myrellms.xyz/v1/messages');
+  });
+
+  it('uses bearer authentication for a custom base URL', async () => {
+    let requestUrl = '';
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify(anthropicResponse()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider('custom-token', undefined, {
+      baseUrl: 'https://myrellms.xyz',
+    });
+    await provider.chat([{ role: 'user', content: 'hi' }]);
+
+    expect(requestUrl).toBe('https://myrellms.xyz/v1/messages');
+    expect(requestHeaders.get('authorization')).toBe('Bearer custom-token');
+    expect(requestHeaders.get('x-api-key')).toBeNull();
+    expect(requestHeaders.get('anthropic-version')).toBe('2023-06-01');
+  });
+
+  it('keeps x-api-key authentication on Anthropic by default', async () => {
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify(anthropicResponse()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await new AnthropicProvider('sk-ant-test').chat([{ role: 'user', content: 'hi' }]);
+
+    expect(requestHeaders.get('x-api-key')).toBe('sk-ant-test');
+    expect(requestHeaders.get('authorization')).toBeNull();
+  });
+});
 
 describe('AnthropicProvider cache_control placement', () => {
   afterEach(() => {

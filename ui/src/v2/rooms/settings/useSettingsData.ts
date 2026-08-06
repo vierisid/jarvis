@@ -75,6 +75,11 @@ export const URL_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "omniroute",
 ]);
 
+/** Cloud providers that may use a compatible gateway instead of their default API. */
+export const OPTIONAL_BASE_URL_KINDS: ReadonlySet<LLMProviderKind> = new Set([
+  "anthropic",
+]);
+
 /** Tier slot identifiers. */
 export type LLMTier = "conversation" | "high" | "medium" | "low";
 

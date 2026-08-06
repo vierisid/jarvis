@@ -300,7 +300,7 @@ export type LLMProviderEntry = {
   kind?: LLMProviderKind;
   /** API key for cloud providers. */
   api_key?: string;
-  /** Base URL for self-hosted / local providers (ollama, OpenAI-compatible gateways, OmniRoute). */
+  /** Base URL for local providers and compatible API gateways. */
   base_url?: string;
 };
 

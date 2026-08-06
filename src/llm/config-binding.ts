@@ -56,6 +56,7 @@ export function instantiateProvider(
       if (!entry.api_key) return null;
       provider = new AnthropicProvider(entry.api_key, undefined, {
         promptCache: globals?.promptCache !== false,
+        baseUrl: entry.base_url,
       });
       break;
     case 'openai':

@@ -40,12 +40,12 @@ const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html:
 /* — providers (backend kind ids); model lists per the design — */
 type Provider = {
   id: string; name: string; abbr: string; kind: string; reco?: boolean; soon?: boolean;
-  noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; freeModel?: boolean;
-  urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
+  noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
+  keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const PROVIDERS: Provider[] = [
   { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", soon: true, noConfig: true },
-  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"] },
+  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key or auth token", urlLabel: "Custom base URL (optional)", urlPh: "https://myrellms.xyz", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Leave the URL blank for Anthropic. Custom URLs use bearer-token authentication, matching ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN." },
   { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
   { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
   { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
@@ -283,6 +283,7 @@ export function OnboardingWizard({
         if (apiKey) body.api_key = apiKey;
       }
       if (prov.needsBaseUrl) { if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a base URL first." }); return; } body.base_url = baseUrl.trim(); }
+      if (prov.optionalBaseUrl && baseUrl.trim()) body.base_url = baseUrl.trim();
       if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = (await r.json()) as { ok: boolean; model?: string; error?: string };
@@ -302,6 +303,7 @@ export function OnboardingWizard({
       const entry: Record<string, unknown> = { kind: prov.kind === "no key" ? "jarvis" : provId };
       if (prov.needsKey && apiKey) entry.api_key = apiKey;
       if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
+      if (prov.optionalBaseUrl && baseUrl.trim()) entry.base_url = baseUrl.trim();
       const llm: Record<string, unknown> = { providers: { [provId]: entry }, default: `${provId}:${model || "default"}` };
 
       const ttsBlock: Record<string, unknown> = { enabled: tts !== "off", provider: tts === "off" ? "edge" : tts };
@@ -757,8 +759,8 @@ export function OnboardingWizard({
         : (prov.models ?? []);
     return (
       <>
-        {prov.needsBaseUrl && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => { urlByProvider.current[provId] = e.target.value; setBaseUrl(e.target.value); }} /></div>}
-        {prov.needsKey && <div className="obw-field"><label>API key{prov.keyOptional ? " (optional)" : ""}</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
+        {(prov.needsBaseUrl || prov.optionalBaseUrl) && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => { urlByProvider.current[provId] = e.target.value; setBaseUrl(e.target.value); }} /></div>}
+        {prov.needsKey && <div className="obw-field"><label>{prov.keyLabel ?? `API key${prov.keyOptional ? " (optional)" : ""}`}</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
         {prov.freeModel
           ? <div className="obw-field"><label>Model</label><input className="obw-inp" placeholder="model id" value={model} onChange={(e) => setModel(e.target.value)} /></div>
           : <div className="obw-field"><label>Model</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}
