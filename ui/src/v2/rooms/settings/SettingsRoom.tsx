@@ -89,7 +89,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       const detail = (lastApplied.errors ?? [])
         .map((e) => `${e.section}: ${e.error}`)
         .join("; ");
-      showToast(`Applying settings failed — ${detail || lastApplied.sections.join(", ")}`, "warn");
+      showToast(t("settings.applyFailed", { detail: detail || lastApplied.sections.join(", ") }), "warn");
     }
     data.refresh();
     // Keyed on the event object: useWebSocket appends a new array entry per
@@ -111,35 +111,50 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         const lines: string[] = [];
         if (tab === "general" && data.autostart) {
           lines.push(
-            `${data.autostart.installed ? "Service installed" : "Service not installed"} on ${data.autostart.platform} (${data.autostart.manager}).`,
+            t("settings.status.onPlatform", {
+              status: t(data.autostart.installed ? "settings.status.serviceInstalled" : "settings.status.serviceNotInstalled"),
+              platform: data.autostart.platform,
+              manager: data.autostart.manager,
+            }),
           );
         }
         if (tab === "llm" && data.llm) {
           const names = Object.keys(data.llm.providers);
           const desc = names.length === 0
-            ? "no providers configured"
-            : `${names.length} provider${names.length === 1 ? "" : "s"} configured (${names.join(", ")})`;
+            ? t("settings.status.noProviders")
+            : t(names.length === 1 ? "settings.status.oneProvider" : "settings.status.manyProviders", {
+                count: names.length,
+                names: names.join(", "),
+              });
           const model = data.llm.default
-            ? `Default model: ${data.llm.default}.`
+            ? t("settings.status.defaultModel", { model: data.llm.default })
             : data.llm.tiers.conversation
-              ? "Router-first mode (per-tier models configured)."
-              : "No model selected.";
+              ? t("settings.status.routerFirst")
+              : t("settings.status.noModel");
           lines.push(`${desc}. ${model}`);
         }
         if (tab === "channels" && data.channelCfg && data.ttsCfg) {
           lines.push(
-            `Telegram ${data.channelCfg.telegram.enabled ? "on" : "off"}, Discord ${data.channelCfg.discord.enabled ? "on" : "off"}, TTS ${data.ttsCfg.enabled ? "on" : "off"} (${data.ttsCfg.provider}).`,
+            t("settings.status.channelSummary", {
+              telegram: t(data.channelCfg.telegram.enabled ? "settings.status.on" : "settings.status.off"),
+              discord: t(data.channelCfg.discord.enabled ? "settings.status.on" : "settings.status.off"),
+              tts: t(data.ttsCfg.enabled ? "settings.status.on" : "settings.status.off"),
+              provider: data.ttsCfg.provider,
+            }),
           );
         }
         if (tab === "integrations" && data.google) {
-          lines.push(`Google: ${data.google.status.replace(/_/g, " ")}.`);
+          lines.push(t("settings.status.google", { status: data.google.status.replace(/_/g, " ") }));
         }
         if (tab === "sidecar") {
           lines.push(
-            `${data.sidecars.length} sidecar${data.sidecars.length === 1 ? "" : "s"} enrolled, ${data.stats.sidecarsConnected} connected.`,
+            t(data.sidecars.length === 1 ? "settings.status.oneSidecar" : "settings.status.manySidecars", {
+              count: data.sidecars.length,
+              connected: data.stats.sidecarsConnected,
+            }),
           );
         }
-        showToast(lines.join(" ") || "Nothing to report on this tab.", "ok");
+        showToast(lines.join(" ") || t("settings.status.nothing"), "ok");
         return true;
       }
 
@@ -298,13 +313,13 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
           rawScope === "all"
             ? rawScope
             : "all";
-        showToast("Replaying onboarding — reloading…", "ok");
+        showToast(t("settings.replaying"), "ok");
         (async () => {
           try {
             await resetOnboarding(scope);
           } catch (err) {
             showToast(
-              err instanceof Error ? err.message : "Reset failed",
+              err instanceof Error ? err.message : t("settings.resetFailed"),
               "warn",
             );
           }
@@ -325,30 +340,30 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {/* Stats ribbon */}
       <div className="v2-set__stats">
         <StatCard
-          label="Providers"
+          label={t("settings.stats.providers")}
           value={stats.providersWithKey}
-          sub="with API key"
+          sub={t("settings.stats.withApiKey")}
           tone={stats.providersWithKey > 0 ? "ok" : "neutral"}
         />
         <StatCard
-          label="Channels"
+          label={t("settings.stats.channels")}
           value={stats.channelsEnabled}
-          sub="enabled"
+          sub={t("settings.stats.enabled")}
           tone={stats.channelsEnabled > 0 ? "ok" : "neutral"}
         />
         <StatCard
-          label="Sidecars"
+          label={t("settings.stats.sidecars")}
           value={`${stats.sidecarsConnected}/${stats.sidecarsTotal}`}
-          sub="connected"
+          sub={t("settings.stats.connected")}
           tone={stats.sidecarsConnected > 0 ? "ok" : "neutral"}
         />
         <StatCard
-          label="Changes"
-          value={lastApplied ? (lastApplied.ok ? "Applied" : "Failed") : "Live"}
+          label={t("settings.stats.changes")}
+          value={lastApplied ? t(lastApplied.ok ? "settings.stats.applied" : "settings.stats.failed") : t("settings.stats.live")}
           sub={
             lastApplied
-              ? `last: ${lastApplied.sections.join(", ")}`
-              : "settings hot-applied"
+              ? t("settings.stats.last", { sections: lastApplied.sections.join(", ") })
+              : t("settings.stats.hotApplied")
           }
           tone={lastApplied && !lastApplied.ok ? "warn" : "ok"}
         />

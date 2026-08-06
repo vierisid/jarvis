@@ -15,5 +15,8 @@ describe("dashboard translations", () => {
   test("interpolates values in either catalog", () => {
     expect(translate("en", "notifications.unread", { count: 3 })).toBe("3 unread");
     expect(translate("es", "notifications.unread", { count: 3 })).toBe("3 sin leer");
+    expect(translate("es", "settings.general.specialists", { count: 2 })).toBe(
+      "Especialistas disponibles (2)",
+    );
   });
 });

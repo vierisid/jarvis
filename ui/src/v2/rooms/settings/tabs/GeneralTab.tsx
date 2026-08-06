@@ -7,8 +7,14 @@ import {
   type OnboardingResetScope,
 } from "../../../onboarding/resetClient";
 import { useI18n } from "../../../i18n/I18nProvider";
+import type { MessageKey } from "../../../i18n/translations";
 
 const HEARTBEAT_LEVELS = ["passive", "moderate", "aggressive"] as const;
+const HEARTBEAT_LABEL_KEYS: Record<string, MessageKey> = {
+  passive: "settings.general.passive",
+  moderate: "settings.general.moderate",
+  aggressive: "settings.general.aggressive",
+} as const;
 const RESPONSE_LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
   { id: "en", label: "English" },
   { id: "es", label: "Español" },
@@ -22,11 +28,11 @@ export function GeneralTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const { autostart, rootCfg, personality, role } = data;
-  const { setLocale, t } = useI18n();
+  const { locale, setLocale, t } = useI18n();
   const [restarting, setRestarting] = useState(false);
 
   const handleRestart = async () => {
-    if (!await confirmDialog("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
+    if (!await confirmDialog(t("settings.general.restartConfirm"))) return;
     setRestarting(true);
     const r = await data.restartDaemon();
     onToast(r.message, r.ok ? "ok" : "warn");
@@ -75,9 +81,9 @@ export function GeneralTab({
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">24/7 Service</h3>
+            <h3 className="v2-set__section-title">{t("settings.general.serviceTitle")}</h3>
             <div className="v2-set__section-sub">
-              Keepalive that runs Jarvis in the background after the terminal closes.
+              {t("settings.general.serviceDescription")}
             </div>
           </div>
           {autostart && (
@@ -86,7 +92,7 @@ export function GeneralTab({
                 "v2-set__chip " + (autostart.installed ? "v2-set__chip--ok" : "")
               }
             >
-              {autostart.installed ? "Installed" : "Not installed"}
+              {t(autostart.installed ? "settings.general.installed" : "settings.general.notInstalled")}
             </span>
           )}
         </div>
@@ -94,21 +100,21 @@ export function GeneralTab({
         {autostart ? (
           <>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Manager</span>
+              <span className="v2-set__row-label">{t("settings.general.manager")}</span>
               <span className="v2-set__row-value">{autostart.manager}</span>
             </div>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Platform</span>
+              <span className="v2-set__row-label">{t("settings.general.platform")}</span>
               <span className="v2-set__row-value">{autostart.platform}</span>
             </div>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Restart</span>
+              <span className="v2-set__row-label">{t("settings.general.restart")}</span>
               <span className="v2-set__row-value">
                 {autostart.restart_supported
-                  ? "Available"
+                  ? t("settings.general.available")
                   : autostart.keepalive_supported
-                    ? "Install keepalive first"
-                    : "Not supported"}
+                    ? t("settings.general.installKeepalive")
+                    : t("settings.general.notSupported")}
               </span>
             </div>
             <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
@@ -118,19 +124,19 @@ export function GeneralTab({
                 disabled={!autostart.restart_supported || restarting}
                 onClick={handleRestart}
               >
-                {restarting ? "Restarting…" : "Restart Jarvis"}
+                {restarting ? t("settings.general.restarting") : t("settings.general.restartJarvis")}
               </button>
               <button
                 type="button"
                 className="v2-set__btn"
                 onClick={() => data.refresh()}
               >
-                Refresh status
+                {t("settings.general.refreshStatus")}
               </button>
             </div>
           </>
         ) : (
-          <div className="v2-set__empty">Service controls unavailable.</div>
+          <div className="v2-set__empty">{t("settings.general.serviceUnavailable")}</div>
         )}
       </section>
 
@@ -138,9 +144,9 @@ export function GeneralTab({
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">Heartbeat</h3>
+            <h3 className="v2-set__section-title">{t("settings.general.heartbeat")}</h3>
             <div className="v2-set__section-sub">
-              How often Jarvis checks in with you proactively.
+              {t("settings.general.heartbeatDescription")}
             </div>
           </div>
         </div>
@@ -148,26 +154,26 @@ export function GeneralTab({
         {rootCfg?.heartbeat ? (
           <>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Interval</span>
+              <span className="v2-set__row-label">{t("settings.general.interval")}</span>
               <span className="v2-set__row-value">
                 {rootCfg.heartbeat.interval_minutes} min
               </span>
             </div>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Active hours</span>
+              <span className="v2-set__row-label">{t("settings.general.activeHours")}</span>
               <span className="v2-set__row-value">
                 {rootCfg.heartbeat.active_hours.start}:00 –{" "}
                 {rootCfg.heartbeat.active_hours.end}:00
               </span>
             </div>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Aggressiveness</span>
+              <span className="v2-set__row-label">{t("settings.general.aggressiveness")}</span>
               <span className="v2-set__row-value" style={{ textTransform: "capitalize" }}>
-                {rootCfg.heartbeat.aggressiveness}
+                {t(HEARTBEAT_LABEL_KEYS[rootCfg.heartbeat.aggressiveness] ?? "settings.general.moderate")}
               </span>
             </div>
             <div className="v2-set__field">
-              <label className="v2-set__field-label">Set aggressiveness (write)</label>
+              <label className="v2-set__field-label">{t("settings.general.setAggressiveness")}</label>
               <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
                 {HEARTBEAT_LEVELS.map((lv) => (
                   <button
@@ -180,19 +186,17 @@ export function GeneralTab({
                       onToast(r.message, r.ok ? "ok" : "warn");
                     }}
                   >
-                    {lv}
+                    {t(HEARTBEAT_LABEL_KEYS[lv]!)}
                   </button>
                 ))}
               </div>
               <p className="v2-set__hint">
-                Note: heartbeat write endpoint is not yet wired in the daemon — these buttons
-                surface the capability for parity with voice actions but currently return a
-                "not implemented" message.
+                {t("settings.general.heartbeatWriteNote")}
               </p>
             </div>
           </>
         ) : (
-          <div className="v2-set__empty">No heartbeat config loaded.</div>
+          <div className="v2-set__empty">{t("settings.general.noHeartbeat")}</div>
         )}
       </section>
 
@@ -200,9 +204,9 @@ export function GeneralTab({
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">Personality</h3>
+            <h3 className="v2-set__section-title">{t("settings.general.personality")}</h3>
             <div className="v2-set__section-sub">
-              Learned from interactions over time. Read-only.
+              {t("settings.general.personalityDescription")}
             </div>
           </div>
         </div>
@@ -210,7 +214,7 @@ export function GeneralTab({
         {personality ? (
           <>
             <div className="v2-set__field">
-              <span className="v2-set__field-label">Core traits</span>
+              <span className="v2-set__field-label">{t("settings.general.coreTraits")}</span>
               <div className="v2-set__chip-row">
                 {personality.core_traits.map((t) => (
                   <span key={t} className="v2-set__chip">
@@ -220,42 +224,42 @@ export function GeneralTab({
               </div>
             </div>
             <div className="v2-set__field">
-              <span className="v2-set__field-label">Learned preferences</span>
-              <PrefBar label="Verbosity" value={personality.learned_preferences.verbosity} />
-              <PrefBar label="Formality" value={personality.learned_preferences.formality} />
-              <PrefBar label="Humor" value={personality.learned_preferences.humor_level} />
+              <span className="v2-set__field-label">{t("settings.general.learnedPreferences")}</span>
+              <PrefBar label={t("settings.general.verbosity")} value={personality.learned_preferences.verbosity} />
+              <PrefBar label={t("settings.general.formality")} value={personality.learned_preferences.formality} />
+              <PrefBar label={t("settings.general.humor")} value={personality.learned_preferences.humor_level} />
               <div className="v2-set__row">
-                <span className="v2-set__row-label">Emoji usage</span>
+                <span className="v2-set__row-label">{t("settings.general.emojiUsage")}</span>
                 <span className="v2-set__row-value">
-                  {personality.learned_preferences.emoji_usage ? "Enabled" : "Disabled"}
+                  {t(personality.learned_preferences.emoji_usage ? "settings.general.enabled" : "settings.general.disabled")}
                 </span>
               </div>
               <div className="v2-set__row">
-                <span className="v2-set__row-label">Preferred format</span>
+                <span className="v2-set__row-label">{t("settings.general.preferredFormat")}</span>
                 <span className="v2-set__row-value" style={{ textTransform: "capitalize" }}>
                   {personality.learned_preferences.preferred_format}
                 </span>
               </div>
             </div>
             <div className="v2-set__field">
-              <span className="v2-set__field-label">Relationship</span>
+              <span className="v2-set__field-label">{t("settings.general.relationship")}</span>
               <div className="v2-set__row">
-                <span className="v2-set__row-label">Messages exchanged</span>
+                <span className="v2-set__row-label">{t("settings.general.messagesExchanged")}</span>
                 <span className="v2-set__row-value">
                   {personality.relationship.message_count}
                 </span>
               </div>
-              <PrefBar label="Trust level" value={personality.relationship.trust_level} />
+              <PrefBar label={t("settings.general.trustLevel")} value={personality.relationship.trust_level} />
               <div className="v2-set__row">
-                <span className="v2-set__row-label">First interaction</span>
+                <span className="v2-set__row-label">{t("settings.general.firstInteraction")}</span>
                 <span className="v2-set__row-value">
-                  {new Date(personality.relationship.first_interaction).toLocaleDateString()}
+                  {new Date(personality.relationship.first_interaction).toLocaleDateString(locale)}
                 </span>
               </div>
             </div>
           </>
         ) : (
-          <div className="v2-set__empty">Personality data unavailable.</div>
+          <div className="v2-set__empty">{t("settings.general.personalityUnavailable")}</div>
         )}
       </section>
 
@@ -263,24 +267,24 @@ export function GeneralTab({
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
-            <h3 className="v2-set__section-title">Active Role</h3>
+            <h3 className="v2-set__section-title">{t("settings.general.activeRole")}</h3>
             <div className="v2-set__section-sub">
-              Authority and tools available to the orchestrator.
+              {t("settings.general.roleDescription")}
             </div>
           </div>
         </div>
         {role?.role ? (
           <>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Role</span>
+              <span className="v2-set__row-label">{t("settings.general.role")}</span>
               <span className="v2-set__row-value">{role.role.name}</span>
             </div>
             <div className="v2-set__row">
-              <span className="v2-set__row-label">Authority</span>
+              <span className="v2-set__row-label">{t("settings.general.authority")}</span>
               <span className="v2-set__row-value">{role.role.authority_level}/10</span>
             </div>
             <div className="v2-set__field">
-              <span className="v2-set__field-label">Tools</span>
+              <span className="v2-set__field-label">{t("settings.general.tools")}</span>
               <div className="v2-set__chip-row">
                 {role.role.tools.map((t) => (
                   <span key={t} className="v2-set__chip">
@@ -292,7 +296,7 @@ export function GeneralTab({
             {(role.role.sub_roles?.length ?? 0) > 0 && (
               <div className="v2-set__field">
                 <span className="v2-set__field-label">
-                  Available specialists ({role.role.sub_roles?.length ?? 0})
+                  {t("settings.general.specialists", { count: role.role.sub_roles?.length ?? 0 })}
                 </span>
                 <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
                   {(role.role.sub_roles ?? []).map((sr) => (
@@ -320,7 +324,7 @@ export function GeneralTab({
             )}
           </>
         ) : (
-          <div className="v2-set__empty">Role data unavailable.</div>
+          <div className="v2-set__empty">{t("settings.general.roleUnavailable")}</div>
         )}
       </section>
 
@@ -342,19 +346,20 @@ function RerunSetupSection({
 }: {
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
 
   const handleRerun = async () => {
     if (
       !await confirmDialog(
-        "Re-run first-time setup? You'll be sent back to the LLM provider + TTS picker. Your saved profile and tutorial state are preserved. The page will reload.",
+        t("settings.general.rerunConfirm"),
       )
     )
       return;
     setBusy(true);
     try {
       await resetOnboarding("setup");
-      onToast("Re-running setup — reloading…", "ok");
+      onToast(t("settings.general.rerunToast"), "ok");
     } catch (err) {
       onToast(err instanceof Error ? err.message : String(err), "warn");
       setBusy(false);
@@ -365,11 +370,9 @@ function RerunSetupSection({
     <section className="v2-set__section">
       <div className="v2-set__section-head">
         <div>
-          <h3 className="v2-set__section-title">Re-run first-time setup</h3>
+          <h3 className="v2-set__section-title">{t("settings.general.rerunTitle")}</h3>
           <div className="v2-set__section-sub">
-            Send yourself back through the LLM provider + TTS pickers — useful
-            after switching providers or rotating an API key. Your profile and
-            tutorial progress stay intact.
+            {t("settings.general.rerunDescription")}
           </div>
         </div>
         <button
@@ -378,7 +381,7 @@ function RerunSetupSection({
           onClick={handleRerun}
           disabled={busy}
         >
-          {busy ? "Restarting…" : "Re-run setup"}
+          {busy ? t("settings.general.restarting") : t("settings.general.rerunButton")}
         </button>
       </div>
     </section>
@@ -414,6 +417,7 @@ function OnboardingDebugSection({
 }: {
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
+  const { t } = useI18n();
   const [scope, setScope] = useState<OnboardingResetScope | "">("");
   const [busy, setBusy] = useState(false);
 
@@ -421,20 +425,20 @@ function OnboardingDebugSection({
     if (!scope) return;
     const label =
       scope === "all"
-        ? "all onboarding phases"
+        ? t("settings.general.scopeAll")
         : scope === "setup"
-          ? "the LLM/TTS setup screens"
+          ? t("settings.general.scopeSetup")
           : scope === "profile"
-            ? "the profile interview (your saved profile will be cleared)"
-            : "the dashboard tutorial";
-    if (!await confirmDialog(`Replay ${label}? The page will reload.`)) return;
+            ? t("settings.general.scopeProfile")
+            : t("settings.general.scopeTutorial");
+    if (!await confirmDialog(t("settings.general.replayConfirm", { scope: label }))) return;
     setBusy(true);
     try {
       // resetOnboarding triggers a full page reload on success, so the
       // toast below only fires if reload is somehow skipped (e.g. test
       // harness).
       await resetOnboarding(scope);
-      onToast(`Reset queued — reloading…`, "ok");
+      onToast(t("settings.general.resetQueued"), "ok");
     } catch (err) {
       onToast(err instanceof Error ? err.message : String(err), "warn");
       setBusy(false);
@@ -445,17 +449,16 @@ function OnboardingDebugSection({
     <section className="v2-set__section">
       <div className="v2-set__section-head">
         <div>
-          <h3 className="v2-set__section-title">Onboarding</h3>
+          <h3 className="v2-set__section-title">{t("settings.general.onboarding")}</h3>
           <div className="v2-set__section-sub">
-            Replay any phase of first-run onboarding. Useful after Jarvis
-            updates or for testing. Page reloads after the reset fires.
+            {t("settings.general.onboardingDescription")}
           </div>
         </div>
       </div>
 
       <div className="v2-set__field">
         <label className="v2-set__field-label" htmlFor="onboarding-scope">
-          Replay scope
+          {t("settings.general.replayScope")}
         </label>
         <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
           <select
@@ -465,11 +468,11 @@ function OnboardingDebugSection({
             onChange={(e) => setScope(e.target.value as OnboardingResetScope | "")}
             style={{ flex: 1 }}
           >
-            <option value="">Pick a phase…</option>
-            <option value="all">All phases (full reset)</option>
-            <option value="setup">Setup only (LLM + TTS picker)</option>
-            <option value="profile">Profile interview (clears your saved profile)</option>
-            <option value="tutorial">Dashboard tutorial</option>
+            <option value="">{t("settings.general.pickPhase")}</option>
+            <option value="all">{t("settings.general.allPhases")}</option>
+            <option value="setup">{t("settings.general.setupOnly")}</option>
+            <option value="profile">{t("settings.general.profileInterview")}</option>
+            <option value="tutorial">{t("settings.general.dashboardTutorial")}</option>
           </select>
           <button
             type="button"
@@ -477,13 +480,13 @@ function OnboardingDebugSection({
             onClick={handleReset}
             disabled={!scope || busy}
           >
-            {busy ? "Resetting…" : "Replay"}
+            {busy ? t("settings.general.resetting") : t("settings.general.replay")}
           </button>
         </div>
         <p className="v2-set__hint">
-          You can also visit{" "}
-          <code className="v2-set__code">?onboarding=reset</code> on the
-          dashboard URL, or say <strong>"replay onboarding"</strong> by voice.
+          {t("settings.general.onboardingHintBefore")}{" "}
+          <code className="v2-set__code">?onboarding=reset</code>
+          {" "}{t("settings.general.onboardingHintAfter")}
         </p>
       </div>
     </section>
