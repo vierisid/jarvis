@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -207,6 +208,19 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	// only, like selfHostFormActive.
 	verifyInFlight := false
 
+	// The ACTIVE handshake's nonce (set once registered server-side), read by
+	// the deep-link handler off-thread — a jarvis://enroll link only counts
+	// when it names this exact nonce. Any page can fire deep links; only the
+	// real connect page knows the 256-bit nonce.
+	var nonceMu sync.Mutex
+	currentNonce := ""
+	setNonce := func(n string) { nonceMu.Lock(); currentNonce = n; nonceMu.Unlock() }
+	getNonce := func() string { nonceMu.Lock(); defer nonceMu.Unlock(); return currentNonce }
+
+	// Serializes deep-link verifications (the browser row can be re-clicked
+	// while a probe is in flight; verify_token.go bounds each at ~12s).
+	var deepLinkBusy atomic.Bool
+
 	// Connect page URL for the CURRENT handshake nonce, and a guard against
 	// overlapping handshakes (double-clicked "Try again"). Main-thread only,
 	// like selfHostFormActive/token: bindings and Dispatch closures both run
@@ -370,6 +384,13 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 				return
 			}
 
+			// Registered: from here the connect page can hand a self-host
+			// token straight back to us by deep link, keyed by this nonce.
+			// Never cleared on later errors — the page for this nonce may
+			// still be open in the browser, and a deep link doesn't need the
+			// long-poll to be alive; a fresh handshake overwrites it.
+			setNonce(nonce)
+
 			// Sign-in happens in the SYSTEM browser (nonce in the URL; the
 			// connect page claims it after Clerk login) — see the header
 			// comment for why not this webview. The shell stays up as the
@@ -410,6 +431,12 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 			if err != nil {
 				if ctx.Err() != nil {
 					return // window closed or self-host chosen
+				}
+				if errors.Is(err, errHandshakeResolvedLocally) {
+					// The deep-link goroutine owns the outcome (it verified,
+					// stored the token, and is closing the window) — painting
+					// an error over its success would be a lie.
+					return
 				}
 				log.Printf("[hosted] handshake failed: %v", err)
 				showShellError("Setup did not complete: " + err.Error())
@@ -457,6 +484,62 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 		return "", fmt.Errorf("bind retryHosted: %w", err)
 	}
 
+	// Enrollment deep links (jarvis://enroll — the connect page's free door):
+	// the OS-launched forwarder dials our socket with the URI; nonce-match,
+	// verify against the brain, report ONLY the verdict, and on success take
+	// the token exactly like the hosted path. Listener failure is not fatal —
+	// the page's copy-token fallback and the local paste form both still work.
+	// dl.Close() joins in-flight callbacks; each callback joins its own work
+	// into handshakeWG, so the explicit post-Run teardown below stays ordered:
+	// close listener -> Wait -> read token -> (deferred) Destroy.
+	dl, dlErr := listenEnrollDeepLinks(func(uri string) {
+		nonce, tok, perr := parseEnrollDeepLink(uri)
+		if perr != nil {
+			log.Printf("[hosted] enroll deep link dropped: %v", perr)
+			return
+		}
+		want := getNonce()
+		if want == "" || nonce != want {
+			log.Printf("[hosted] enroll deep link dropped: nonce mismatch")
+			return
+		}
+		if !deepLinkBusy.CompareAndSwap(false, true) {
+			log.Printf("[hosted] enroll deep link dropped: a verification is already running")
+			return
+		}
+		handshakeWG.Add(1)
+		go func() {
+			defer handshakeWG.Done()
+			defer deepLinkBusy.Store(false)
+			if _, derr := DecodeJWTPayload(tok); derr != nil {
+				reportSelfHostResult(verifyCtx, base, nonce, fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'."))
+				return
+			}
+			verr := verifyBrainToken(verifyCtx, tok, cfg.Brain)
+			// The page is the feedback surface either way: it shows the reason
+			// on failure and flips to "connected" on success.
+			reportSelfHostResult(verifyCtx, base, nonce, verr)
+			if verr != nil {
+				log.Printf("[hosted] deep-linked token rejected: %v", verr)
+				return
+			}
+			log.Printf("[hosted] enrollment token received via deep link and verified")
+			tokenMu.Lock()
+			token = tok
+			tokenMu.Unlock()
+			w.Dispatch(func() {
+				if torndown.Load() {
+					return
+				}
+				w.Terminate()
+			})
+		}()
+	})
+	if dlErr != nil {
+		log.Printf("[hosted] enroll deep-link listener unavailable: %v", dlErr)
+	}
+	defer dl.Close() // idempotent backstop for early returns (nil-safe)
+
 	stopReveal := revealWebviewOnLoad(w)
 	// LIFO with the deferred Destroy at the top: joining the reveal-timeout
 	// goroutine before the engine is freed prevents its pending Dispatch from
@@ -466,6 +549,9 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	startHandshake()
 	w.Run() // blocks until Terminate() or the window is closed
 	torndown.Store(true)
+	// No further deep links, and no callback mid-flight past this line (Close
+	// joins them) — so the Add-into-handshakeWG below cannot race the Wait.
+	dl.Close()
 	// Join the handshake goroutine BEFORE reading the token, rather than
 	// leaving it to the deferred Wait: defers run after the return value is
 	// evaluated, so a token that lands in the instant the window closes would

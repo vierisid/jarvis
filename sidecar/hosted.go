@@ -77,6 +77,89 @@ func submitTokenHandler(isActive func() bool, accept func(token string)) func(st
 	}
 }
 
+// reportSelfHostResult posts the verdict of a LOCALLY-verified self-host
+// enroll (jarvis:// deep link) so the connect page can show success or the
+// reason for rejection: {nonce, ok, error?} — the token itself never leaves
+// this machine. Nonce-authed server-side; the error string is user-ready
+// (verify_token.go messages) and the server caps it at 300 chars. Bounded
+// retries: losing the verdict leaves the page waiting on a spinner even
+// though this side already moved on.
+func reportSelfHostResult(ctx context.Context, base, nonce string, verr error) {
+	if ctx.Err() != nil || errors.Is(verr, context.Canceled) {
+		return // window tearing down — not a verdict
+	}
+	payload := map[string]any{"nonce": nonce, "ok": verr == nil}
+	if verr != nil {
+		// Cap in UTF-16 CODE UNITS, not runes — the server's zod .max counts
+		// UTF-16, and a rune-capped astral-plane message (host names ride in
+		// from the token's own claims) would be rejected there, losing the
+		// verdict entirely.
+		payload["error"] = capUTF16(verr.Error(), 300)
+	}
+	body, _ := json.Marshal(payload)
+	for attempt := 1; attempt <= 3; attempt++ {
+		rctx, rcancel := context.WithTimeout(ctx, 10*time.Second)
+		err := postSelfHostResultOnce(rctx, base, body)
+		rcancel()
+		if err == nil {
+			return
+		}
+		log.Printf("[hosted] self-host verdict report failed (attempt %d/3): %v", attempt, err)
+		var pe *permanentReportError
+		if errors.As(err, &pe) {
+			return // a 4xx repeats identically — retrying is noise
+		}
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// capUTF16 truncates s to at most max UTF-16 code units, never splitting a
+// rune (a surrogate pair either fits whole or is dropped).
+func capUTF16(s string, max int) string {
+	units := 0
+	for i, r := range s {
+		w := 1
+		if r > 0xFFFF {
+			w = 2
+		}
+		if units+w > max {
+			return s[:i]
+		}
+		units += w
+	}
+	return s
+}
+
+// permanentReportError marks a server verdict rejection (4xx) that retries
+// cannot fix.
+type permanentReportError struct{ status string }
+
+func (e *permanentReportError) Error() string { return "server returned " + e.status }
+
+func postSelfHostResultOnce(ctx context.Context, base string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/handshake/self-host-result", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := hostedHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 && res.StatusCode < 500 {
+		return &permanentReportError{status: res.Status}
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("server returned %s", res.Status)
+	}
+	return nil
+}
+
 // generateHandshakeNonce returns a 256-bit unguessable correlation id.
 func generateHandshakeNonce() (string, error) {
 	buf := make([]byte, 32)
@@ -148,6 +231,13 @@ type errHandshakeFailed struct{ reason string }
 
 func (e *errHandshakeFailed) Error() string { return e.reason }
 
+// errHandshakeResolvedLocally: the handshake completed with NO token — a
+// self-host verdict resolved it, meaning the deep-link path on THIS machine
+// (or none at all, for a stranger's report) owns the outcome. Not an error to
+// paint on the shell: the deep-link goroutine already accepted the token and
+// is closing the window, or there is nothing for the hosted path to do.
+var errHandshakeResolvedLocally = errors.New("handshake resolved by a local self-host enroll")
+
 func pollHandshakeOnce(ctx context.Context, base, nonce string) (*handshakePollResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/handshake/poll?nonce="+url.QueryEscape(nonce), nil)
 	if err != nil {
@@ -201,6 +291,9 @@ func awaitHandshakeToken(ctx context.Context, base, nonce string, onProgress fun
 
 		switch res.Status {
 		case "complete":
+			if res.Token == "" {
+				return "", errHandshakeResolvedLocally
+			}
 			if _, err := DecodeJWTPayload(res.Token); err != nil {
 				return "", fmt.Errorf("handshake returned an invalid token: %w", err)
 			}

@@ -12,10 +12,23 @@ import (
 )
 
 func main() {
-	// A notification button was clicked: the OS launched us with a jarvis:// URI.
-	// Forward the action to the already-running sidecar and exit before any heavy
-	// init (so we never boot a second instance that would grab the mic / tray).
+	// The OS launched us with a jarvis:// URI — forward it to the already-running
+	// sidecar and exit before any heavy init (so we never boot a second instance
+	// that would grab the mic / tray). Enroll links (the connect page's self-host
+	// door) are checked FIRST: the Windows notification forwarder below matches
+	// any jarvis:// URI and would swallow them into the tray path, which doesn't
+	// even exist during first-run onboarding.
+	if maybeForwardEnrollLaunch() {
+		return
+	}
+	// A notification button was clicked (Windows protocol activation).
 	if maybeForwardProtocolLaunch() {
+		return
+	}
+	// Any OTHER jarvis:// URI: drop and exit. A URI launch must never boot a
+	// full sidecar — on Linux the scheme registration makes this reachable by
+	// any web page.
+	if maybeDropProtocolLaunch() {
 		return
 	}
 
@@ -53,6 +66,11 @@ Usage:
 	// Register the AUMID + jarvis:// URI scheme notifications need (Windows-only;
 	// no-op elsewhere). Idempotent, cheap, safe to run every launch.
 	setupNotifications()
+
+	// Claim the jarvis:// scheme for enroll deep links where the OS lets a bare
+	// binary do it (Linux desktop entry; Windows rides the registration above;
+	// macOS needs the .app bundle's Info.plist). Idempotent, best-effort.
+	registerURLSchemeHandler()
 
 	// When relaunched by an in-app restart (settings token change), wait briefly
 	// for the previous instance to exit and release the mic / hotkeys / tray icon
