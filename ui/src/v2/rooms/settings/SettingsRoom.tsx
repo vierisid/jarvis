@@ -75,17 +75,23 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   // A phone-width tab strip cannot show every settings section at once.
   // Keep the active tab visible after taps, keyboard navigation, and voice
-  // actions without moving the vertically scrolling settings panel.
+  // actions by scrolling the strip itself, never the surrounding panel.
   useEffect(() => {
-    const activeTab = tabsApi.tablistRef.current?.querySelector<HTMLElement>(
+    const tablist = tabsApi.tablistRef.current;
+    const activeTab = tablist?.querySelector<HTMLElement>(
       `[data-roving-tab="${tab}"]`,
     );
-    if (!activeTab) return;
+    if (!tablist || !activeTab || tablist.scrollWidth <= tablist.clientWidth) return;
+    const stripRect = tablist.getBoundingClientRect();
+    const tabRect = activeTab.getBoundingClientRect();
+    const maxLeft = tablist.scrollWidth - tablist.clientWidth;
+    const centeredLeft = tablist.scrollLeft
+      + tabRect.left - stripRect.left
+      - (tablist.clientWidth - tabRect.width) / 2;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    activeTab.scrollIntoView({
+    tablist.scrollTo({
+      left: Math.max(0, Math.min(centeredLeft, maxLeft)),
       behavior: reduceMotion ? "auto" : "smooth",
-      block: "nearest",
-      inline: "center",
     });
   }, [tab, tabsApi.tablistRef]);
 

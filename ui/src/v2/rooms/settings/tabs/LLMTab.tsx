@@ -367,7 +367,7 @@ function ProviderRow({
             </div>
           )}
 
-          <div className="v2-set__row-actions" style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+          <div className="v2-set__row-actions">
             <button
               type="button"
               className="v2-set__btn"
@@ -405,8 +405,7 @@ function ProviderRow({
             </button>
             <button
               type="button"
-              className="v2-set__btn v2-set__btn--danger"
-              style={{ marginLeft: "auto" }}
+              className="v2-set__btn v2-set__btn--danger v2-set__btn--push-end"
               onClick={async () => {
                 if (!await confirmDialog(`Remove provider '${name}'? This deletes the stored API key.`)) return;
                 const r = await data.removeProvider(name);
@@ -511,7 +510,7 @@ function NewProviderRow({
           </div>
         )}
 
-        <div className="v2-set__row-actions" style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+        <div className="v2-set__row-actions">
           <button type="button" className="v2-set__btn" onClick={onDone}>
             Cancel
           </button>

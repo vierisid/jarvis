@@ -460,6 +460,16 @@
 
 .v2-set__provider-actions-spacer { flex: 1; }
 
+.v2-set__row-actions {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.v2-set__btn--push-end {
+  margin-left: auto;
+}
+
 .v2-set__test-result {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -982,9 +992,9 @@
   .v2-set__row-actions,
   .v2-set__sidecar-actions,
   .v2-set__dialog-foot {
-    display: grid !important;
+    display: grid;
     grid-template-columns: 1fr;
-    gap: var(--s-2) !important;
+    gap: var(--s-2);
     width: 100%;
   }
 
@@ -997,7 +1007,10 @@
   .v2-set__sidecar-actions .v2-set__btn,
   .v2-set__dialog-foot .v2-set__btn {
     width: 100%;
-    margin-left: 0 !important;
+  }
+
+  .v2-set__btn--push-end {
+    margin-left: 0;
   }
 
   .v2-set__sidecar {
@@ -1029,6 +1042,7 @@
 
   .v2-set__dialog {
     max-width: none;
+    max-height: calc(100vh - max(24px, env(safe-area-inset-top)));
     max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
     border-right: 0;
     border-bottom: 0;
