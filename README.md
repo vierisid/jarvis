@@ -41,8 +41,8 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
     - [Removing JARVIS](#removing-jarvis)
   - [🖥️ Sidecar Setup](#️-sidecar-setup)
     - [1. Install the sidecar](#1-install-the-sidecar)
-    - [2. Enroll in the dashboard](#2-enroll-in-the-dashboard)
-    - [3. Run the sidecar](#3-run-the-sidecar)
+    - [2. Start the sidecar](#2-start-the-sidecar)
+    - [3. Connect the device](#3-connect-the-device)
   - [🧠 Core Capabilities](#-core-capabilities)
   - [⚙️ Configuration](#️-configuration)
   - [🏗️ Architecture](#️-architecture)
@@ -259,26 +259,32 @@ This means you can run the daemon on an always-on server and still interact with
 bun install -g @usejarvis/sidecar
 ```
 
-**Or download the binary** from [GitHub Releases](https://github.com/vierisid/jarvis/releases) for your platform (macOS, Linux, Windows).
+**Or download a Sidecar archive** from [GitHub Releases](https://github.com/vierisid/jarvis/releases) for your platform (macOS, Linux, Windows). Sidecar archives are attached when a Jarvis release includes a new Sidecar build, and their filenames contain the independent Sidecar version.
 
-### 2. Enroll in the dashboard
+### 2. Start the sidecar
 
-1. Open the JARVIS dashboard at `http://localhost:3142`
-2. Go to **Settings** → **Sidecar**
-3. Enter a friendly name for this machine (e.g. "work laptop") and click **Enroll**
-4. Click **Copy** to copy the token command
-
-### 3. Run the sidecar
-
-Just start it:
+Start it with no arguments:
 
 ```bash
 jarvis
 ```
 
-The first time it runs unconfigured, a small **setup window** pops up asking for
-the enrollment token — paste the token you copied and click **Connect**. The
-sidecar saves it locally (`~/.jarvis/sidecar.yaml`) and connects.
+The first time it runs unconfigured, a local **Connect window** opens. Hosted
+users finish signing in through the system browser and enrollment completes
+automatically.
+
+### 3. Connect the device
+
+For a self-hosted brain:
+
+1. Configure `daemon.brain_domain` or `JARVIS_BRAIN_DOMAIN` with an origin this machine can reach.
+2. Open the dashboard and go to **Settings** → **Sidecar**, or run `jarvis enroll "work-laptop"` on the brain.
+3. Choose **Self-hosting? Paste your enrollment token** in the Sidecar Connect window.
+4. Paste the raw enrollment token and click **Connect**.
+
+The Sidecar verifies the token against its brain before saving it to
+`~/.jarvis/sidecar.yaml`. An invalid token or unreachable brain does not replace
+the saved configuration.
 
 Prefer the terminal / a headless box? Pass the token on the CLI instead (no
 window):
@@ -287,13 +293,15 @@ window):
 jarvis --token <your-token>
 ```
 
-Either way, subsequent runs are just `jarvis` (the saved token is reused).
+Either way, subsequent runs are just `jarvis` (the saved token is reused). See
+the [complete Sidecar guide](sidecar/README.md) for platform prerequisites,
+permissions, local settings, logs, and troubleshooting.
 
 Once connected, the sidecar appears as online in the Settings page where you can configure its capabilities (terminal, filesystem, desktop, browser, clipboard, screenshot, awareness, file watch, processes, notifications). The host-sensing observers (clipboard, file watch, process monitor, desktop notifications) run inside the sidecar on your machine and stream to the brain - the brain no longer observes its own host.
 
 ### Versioning & updates
 
-The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer binary from [GitHub Releases](https://github.com/vierisid/jarvis/releases) -- the `sidecar-vX.Y.Z` releases). Run `jarvis --version` to see what you have.
+The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer archive from a [GitHub Release](https://github.com/vierisid/jarvis/releases) that includes Sidecar assets). It is published through npm without separate `sidecar-v*` Git tags. Run `jarvis --version` to see what you have.
 
 On connect, the brain checks the sidecar's version against its compatibility floors and surfaces the result in **Settings -> Sidecar**:
 
