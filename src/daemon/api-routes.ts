@@ -1563,14 +1563,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (body.name && configured?.kind !== 'omniroute') {
             return json({ ok: false, error: 'OmniRoute provider not found', models: [] });
           }
-          const baseUrl = body.base_url?.trim() || configured?.base_url || 'http://localhost:20128/v1';
+          const requestedBaseUrl = body.base_url?.trim();
+          const baseUrl = requestedBaseUrl || configured?.base_url?.trim() || 'http://localhost:20128/v1';
           if (!/^https?:\/\//i.test(baseUrl)) {
             return json({ ok: false, error: 'base_url must be an http(s) URL', models: [] });
           }
 
           const { getSecret } = await import('../vault/keychain.ts');
           const apiKey = body.api_key
-            || (body.name && !body.base_url ? getSecret(`llm.provider.${body.name}.api_key`) : null)
+            || (body.name && !requestedBaseUrl ? getSecret(`llm.provider.${body.name}.api_key`) : null)
             || configured?.api_key
             || '';
           const { OmniRouteProvider } = await import('../llm/omniroute.ts');

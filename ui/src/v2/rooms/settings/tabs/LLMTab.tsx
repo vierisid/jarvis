@@ -315,7 +315,7 @@ function ProviderRow({
 }) {
   const usesUrl = URL_BASED_KINDS.has(entry.kind);
   const usesKey = KEY_BASED_KINDS.has(entry.kind);
-  const configured = (!usesUrl || !!entry.base_url) && (!usesKey || entry.has_api_key);
+  const configured = (!usesUrl || !!entry.base_url?.trim()) && (!usesKey || entry.has_api_key);
 
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(entry.base_url ?? "");
@@ -902,11 +902,16 @@ function useOllamaModels(enabled: boolean): string[] | null {
 function useLiveProviderCatalogs(
   providers: Record<string, LLMConfigProviderView>,
 ): Record<string, string[]> {
-  const names = Object.entries(providers)
-    .filter(([, entry]) => entry.kind === "omniroute" && !!entry.base_url)
-    .map(([name]) => name)
-    .sort();
-  const signature = names.join("\u0000");
+  const targets = Object.entries(providers)
+    .filter(([, entry]) => entry.kind === "omniroute")
+    .map(([name, entry]) => ({
+      name,
+      baseUrl: entry.base_url?.trim() || "http://localhost:20128/v1",
+      hasApiKey: entry.has_api_key,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const signature = JSON.stringify(targets);
+  const names = targets.map((target) => target.name);
   const [catalogs, setCatalogs] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
@@ -917,8 +922,7 @@ function useLiveProviderCatalogs(
     let cancelled = false;
     Promise.all(names.map(async (name) => {
       try {
-        const kind = providers[name]!.kind;
-        const response = await fetch(`/api/config/llm/${kind}/models`, {
+        const response = await fetch('/api/config/llm/omniroute/models', {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),

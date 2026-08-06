@@ -93,8 +93,7 @@ export function instantiateProvider(
       provider = new LiteLLMProvider(entry.base_url, undefined, entry.api_key);
       break;
     case 'omniroute':
-      if (!entry.base_url) return null;
-      provider = new OmniRouteProvider(entry.base_url, undefined, entry.api_key);
+      provider = new OmniRouteProvider(entry.base_url?.trim() || undefined, undefined, entry.api_key);
       break;
     default:
       console.warn(`[LLM] Unknown provider kind '${kind}' for '${name}' - skipping.`);

@@ -447,7 +447,7 @@ export function useSettingsData() {
       for (const entry of Object.values(llm.providers ?? {})) {
         const usesUrl = URL_BASED_KINDS.has(entry.kind);
         const usesKey = KEY_BASED_KINDS.has(entry.kind);
-        if ((!usesUrl || !!entry.base_url) && (!usesKey || entry.has_api_key)) {
+        if ((!usesUrl || !!entry.base_url?.trim()) && (!usesKey || entry.has_api_key)) {
           providersWithKey++;
         }
       }

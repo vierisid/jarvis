@@ -25,6 +25,15 @@ describe('OmniRouteProvider', () => {
     expect(provider?.name).toBe('omni-free');
   });
 
+  it('uses the local default when config omits the base URL', () => {
+    const provider = instantiateProvider('omni-local', {
+      kind: 'omniroute',
+      api_key: 'sk-omni',
+    });
+    expect(provider).toBeInstanceOf(OmniRouteProvider);
+    expect((provider as any).apiUrl).toBe('http://localhost:20128/v1/chat/completions');
+  });
+
   it('sends OpenAI function tools and parses returned tool calls', async () => {
     let requestUrl = '';
     let requestHeaders: Headers | undefined;
