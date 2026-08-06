@@ -121,6 +121,9 @@ jobs:
   # first compile happens on a release runner. Build + vet only — the UI
   # can't run on a headless runner and the logic tests are covered on linux.
   sidecar-build-darwin:
+    needs: changes
+    # macOS minutes bill at 10x — skip on docs/TypeScript-only changes.
+    if: needs.changes.outputs.sidecar == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -166,10 +169,10 @@ jobs:
   # "shipping sidecar change must bump sidecar/VERSION" job here when independent
   # per-change versioning resumes (design in docs/PEBBLE_REVIEW... §7.4.C).
 
-  # Validate the macOS Vision OCR helper compiles, and publish the universal
-  # Mach-O binary as an artifact so operators can grab it without cutting a
-  # release tag. The artifact is attached to every run and can also be built
-  # on demand via the Actions "Run workflow" button (workflow_dispatch).
+  # Validates that the Vision OCR helper compiles, and publishes the universal
+  # Mach-O as an artifact so operators can grab it without cutting a release
+  # tag. (The sidecar's darwin cgo is covered by sidecar-build-darwin above.)
+  # Can also be built on demand via the Actions "Run workflow" button.
   ocr-helper:
     needs: changes
     # macOS minutes bill at 10x — never spend them on a docs or TypeScript
