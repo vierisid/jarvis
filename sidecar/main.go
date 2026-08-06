@@ -72,6 +72,12 @@ Usage:
 	// macOS needs the .app bundle's Info.plist). Idempotent, best-effort.
 	registerURLSchemeHandler()
 
+	// WKWebView text fields rely on the responder-chain Edit commands for
+	// Command-X/C/V/A. A programmatic macOS app has no main menu by default, so
+	// install those commands before the first-run token field can receive focus.
+	// No-op on other platforms.
+	installApplicationMenus()
+
 	// When relaunched by an in-app restart (settings token change), wait briefly
 	// for the previous instance to exit and release the mic / hotkeys / tray icon
 	// before we grab them.
