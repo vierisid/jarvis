@@ -1,0 +1,346 @@
+name: Installer Release
+
+# Builds, signs and publishes the desktop installer (Jarvis-Setup.exe /
+# Install-Jarvis.dmg) on its OWN cadence, versioned from
+# sidecar/installer/VERSION.
+#
+# The installer is independent software: it resolves whichever sidecar version
+# the npm registry tags `latest` at run time and embeds no sidecar version at
+# all. So it ships when the INSTALLER changes — a sidecar release does not
+# require a new installer, and an installer release does not require the
+# sidecar to have changed. (A sidecar rework may of course imply installer
+# work; that is a judgement call, not an automatic coupling.)
+#
+# Driven two ways:
+#   * workflow_dispatch — the normal path (dry_run defaults to true).
+#   * pushing an `installer-v*` tag.
+# Idempotent: if a release for the current installer/VERSION already exists it
+# stops as a no-op success.
+#
+# Assets are published TWICE, both with make_latest=false so the repo's
+# /releases/latest keeps pointing at the brain:
+#   * installer-v<VERSION> — immutable, per-version, for history + rollback.
+#   * installer-latest     — rolling; its ASSETS are replaced every release,
+#                            giving the website permanently stable URLs:
+#                            releases/download/installer-latest/Jarvis-Setup.exe
+#                            releases/download/installer-latest/Install-Jarvis.dmg
+#                            (Only the assets roll: the underlying git tag is
+#                            created on the first publish and is not moved
+#                            afterwards, so that release's "Source code"
+#                            archives stay pinned to that first commit. Use the
+#                            installer-v<VERSION> releases to reason about
+#                            source, and the rolling one only for downloads.)
+
+on:
+  push:
+    tags:
+      - "installer-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, sign and validate without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Two runs in flight would race on the rolling installer-latest release.
+concurrency:
+  group: installer-release
+  cancel-in-progress: false
+
+env:
+  DRY_RUN: ${{ inputs.dry_run || false }}
+
+jobs:
+  # ─── Resolve version + idempotency gate ────────────────────────
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(cat sidecar/installer/VERSION)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # A tag push must agree with the version file, or the run silently
+          # does the wrong thing: a stale file no-ops the whole workflow with a
+          # green check, and a mistyped tag publishes under a DIFFERENT tag
+          # than the one pushed.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME}" != "installer-v${VERSION}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match sidecar/installer/VERSION (${VERSION}) — bump the file or retag as installer-v${VERSION}"
+            exit 1
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dry run — building/signing installer v${VERSION} without publishing."
+            exit 0
+          fi
+          if gh release view "installer-v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::installer-v${VERSION} is already released — nothing to do (bump sidecar/installer/VERSION to ship a new installer)."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Installer v${VERSION} is not yet released — building."
+          fi
+
+  # ─── Windows: mingw cross-build + Authenticode via DigiCert ───
+  build-windows:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      HAVE_WINDOWS_SIGNING: ${{ secrets.SM_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+
+      - name: Install mingw-w64
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # osslsigncode: post-sign verification inside sign-windows.sh
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 osslsigncode
+
+      - name: Build installer
+        working-directory: sidecar
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          # Pins the publisher whose payloads this installer will accept —
+          # chain validity alone would accept ANY signed exe. Set it together
+          # with the signing credentials; empty means chain-only + a warning.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+        run: |
+          set -euo pipefail
+          export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
+          export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
+          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
+            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the installer will accept any validly signed payload."
+          fi
+          make manifest-installer
+          # The go tool splits -ldflags on whitespace, so the CN (a company
+          # name — always contains spaces) must carry its own quotes through
+          # to the linker.
+          LDFLAGS="-s -w -H windowsgui -X main.installerVersion=$(cat installer/VERSION)"
+          LDFLAGS="$LDFLAGS -X 'main.expectedPublisherCN=${SIGNING_PUBLISHER_CN}'"
+          go build -ldflags "$LDFLAGS" -o Jarvis-Setup.exe ./installer/
+          if [ -n "${SIGNING_PUBLISHER_CN}" ] && ! strings Jarvis-Setup.exe | grep -qF "${SIGNING_PUBLISHER_CN}"; then
+            echo "::error::publisher pin '${SIGNING_PUBLISHER_CN}' is not present in Jarvis-Setup.exe — check the -ldflags quoting"
+            exit 1
+          fi
+
+      - name: Sign installer (DigiCert KeyLocker)
+        if: env.HAVE_WINDOWS_SIGNING == 'true'
+        working-directory: sidecar
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          # Asserted post-sign: the installer must carry OUR publisher — the
+          # same identity it then pins in the payloads it downloads.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+        run: scripts/sign-windows.sh Jarvis-Setup.exe
+
+      - name: Warn — unsigned installer
+        if: env.HAVE_WINDOWS_SIGNING != 'true'
+        run: echo "::warning::DigiCert KeyLocker credentials not configured — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: installer-win32-x64
+          path: sidecar/Jarvis-Setup.exe
+
+  # ─── macOS: universal binary → Install Jarvis.app → signed DMG ──
+  build-macos:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: macos-latest
+    env:
+      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+
+      - name: Build universal installer app
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+          # Pins the Developer ID team whose payloads this installer accepts.
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::warning::APPLE_TEAM_ID repo variable is unset — the installer will accept any Apple-anchored payload."
+          fi
+          LDFLAGS="-s -w -X main.installerVersion=$(cat installer/VERSION)"
+          LDFLAGS="$LDFLAGS -X 'main.expectedTeamID=${APPLE_TEAM_ID}'"
+          CC="clang -target arm64-apple-macos11"  CXX="clang++ -target arm64-apple-macos11" \
+            GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /tmp/installer-arm64 ./installer/
+          CC="clang -target x86_64-apple-macos11" CXX="clang++ -target x86_64-apple-macos11" \
+            GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /tmp/installer-amd64 ./installer/
+          lipo -create -output jarvis-setup /tmp/installer-arm64 /tmp/installer-amd64
+          lipo -info jarvis-setup
+          packaging/macos/make-icns.sh
+          make app-macos-installer BIN_INSTALLER=./jarvis-setup
+
+      - name: Sign, notarize and staple
+        if: env.HAVE_APPLE_SIGNING == 'true'
+        working-directory: sidecar
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          for v in APPLE_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is required when APPLE_CERT_P12 is set"; exit 1; }
+          done
+
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          printf '%s' "$APPLE_CERT_P12" | base64 -d > /tmp/cert.p12
+          security import /tmp/cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm /tmp/cert.p12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
+          security list-keychains -d user -s build.keychain login.keychain
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          test -n "$IDENTITY" || { echo "::error::no 'Developer ID Application' identity in APPLE_CERT_P12"; exit 1; }
+
+          trap 'rm -f /tmp/asc_key.p8' EXIT
+          (umask 077; printf '%s' "$ASC_API_KEY_P8" > /tmp/asc_key.p8)
+          APP="dist/macos/Install Jarvis.app"
+
+          # No --entitlements: the installer needs no hardened-runtime
+          # capabilities (it never captures audio/screen — see the sidecar's
+          # entitlements.plist, which is deliberately NOT reused here).
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" /tmp/InstallJarvis.zip
+          xcrun notarytool submit /tmp/InstallJarvis.zip \
+            --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee /tmp/notary-app.json
+          APP_ID="$(jq -r '.id // empty' /tmp/notary-app.json)"
+          if [ "$(jq -r '.status // empty' /tmp/notary-app.json)" != "Accepted" ]; then
+            [ -n "$APP_ID" ] && xcrun notarytool log "$APP_ID" \
+              --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            echo "::error::installer app notarization failed"; exit 1
+          fi
+          xcrun stapler staple "$APP"
+
+          # The DMG is what users download, so it is signed, notarized and
+          # stapled in its own right — a stapled ticket inside is not enough.
+          make dmg-installer
+          DMG="dist/macos/Install-Jarvis.dmg"
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee /tmp/notary-dmg.json
+          DMG_ID="$(jq -r '.id // empty' /tmp/notary-dmg.json)"
+          if [ "$(jq -r '.status // empty' /tmp/notary-dmg.json)" != "Accepted" ]; then
+            [ -n "$DMG_ID" ] && xcrun notarytool log "$DMG_ID" \
+              --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            echo "::error::installer DMG notarization failed"; exit 1
+          fi
+          xcrun stapler staple "$DMG"
+          spctl --assess --type open --context context:primary-signature -vv "$DMG"
+
+      - name: Build unsigned DMG
+        if: env.HAVE_APPLE_SIGNING != 'true'
+        working-directory: sidecar
+        run: |
+          echo "::warning::Apple signing credentials not configured — shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
+          make dmg-installer
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: installer-darwin
+          path: sidecar/dist/macos/Install-Jarvis.dmg
+
+  # ─── Publish ───────────────────────────────────────────────────
+  publish:
+    needs: [resolve, build-windows, build-macos]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built installers
+        uses: actions/download-artifact@v5
+        with:
+          pattern: installer-*
+          path: artifacts
+
+      - name: Stage release assets
+        env:
+          INSTALLER_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # Unversioned asset names: the website links to
+          # releases/download/installer-latest/<name>, which must never change.
+          cp artifacts/installer-win32-x64/Jarvis-Setup.exe release/
+          cp artifacts/installer-darwin/Install-Jarvis.dmg release/
+          (cd release && sha256sum * > SHA256SUMS)
+          ls -lh release/
+
+      # Immutable, per-version — history and rollback.
+      - name: Publish versioned release
+        if: env.DRY_RUN != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: installer-v${{ needs.resolve.outputs.version }}
+          name: Installer v${{ needs.resolve.outputs.version }}
+          # Never displace the brain's release as the repo's "Latest".
+          make_latest: "false"
+          draft: false
+          files: |
+            release/Jarvis-Setup.exe
+            release/Install-Jarvis.dmg
+            release/SHA256SUMS
+
+      # Rolling pointer — the website's permanent download URLs.
+      - name: Update installer-latest
+        if: env.DRY_RUN != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: installer-latest
+          name: Installer (latest)
+          body: |
+            Rolling release: always the newest Jarvis desktop installer.
+            Currently **v${{ needs.resolve.outputs.version }}**.
+
+            Permanent download URLs (safe to link from the website):
+            - `releases/download/installer-latest/Jarvis-Setup.exe`
+            - `releases/download/installer-latest/Install-Jarvis.dmg`
+          make_latest: "false"
+          draft: false
+          files: |
+            release/Jarvis-Setup.exe
+            release/Install-Jarvis.dmg
+            release/SHA256SUMS
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == 'true'
+        run: |
+          echo "::notice::DRY RUN — built and signed installer v${{ needs.resolve.outputs.version }} without publishing"
+          ls -lh release/

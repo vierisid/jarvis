@@ -10,6 +10,34 @@ env:
   GO_VERSION: "1.25"
 
 jobs:
+  # ─── Which areas did this push/PR touch? ───────────────────────
+  # The Go jobs below are expensive (GTK + mingw apt install; a macOS runner
+  # billed at 10x) and only guard sidecar code, so they run only when the
+  # sidecar tree actually changed. Gating is per JOB, not via a workflow-level
+  # `paths:` filter — a path-filtered workflow never reports its checks, which
+  # leaves required status checks pending forever on unrelated PRs.
+  #
+  # The filter is `sidecar/**`, not `sidecar/installer/**`: the installer
+  # imports sidecar/internal/* (brand, webviewui, autostart, webview2), so a
+  # change anywhere in the sidecar tree can break its build.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      sidecar: ${{ steps.filter.outputs.sidecar }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            sidecar:
+              - 'sidecar/**'
+              - '.github/workflows/test.yml'
+              # The release workflows call sidecar/scripts/sign-windows.sh —
+              # a change to how they invoke it must re-run its tests.
+              - '.github/workflows/sidecar-release.yml'
+              - '.github/workflows/installer-release.yml'
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -31,6 +59,8 @@ jobs:
   # macos job below (previously it first compiled inside the RELEASE workflow,
   # so an ObjC error failed a release instead of the PR).
   sidecar-build:
+    needs: changes
+    if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -52,6 +82,13 @@ jobs:
             [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
             [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
           done
+
+      # The Windows signing path is shell, and shell is where signing bugs
+      # live (credential assembly, temp-file cleanup, fail-fast). A stub
+      # `java` exercises all of it with no DigiCert account.
+      - name: Test the Windows signing script
+        working-directory: sidecar
+        run: scripts/sign-windows.test.sh
 
       - name: Build + vet + test (linux/amd64, cgo)
         working-directory: sidecar
@@ -75,6 +112,9 @@ jobs:
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           go build -o /tmp/jarvis-sidecar.exe .
+          # The installer's wizard is webview-backed (cgo, same toolchain as
+          # the sidecar) — cross-build it too so it can't rot unchecked.
+          go build -o /tmp/jarvis-setup.exe ./installer/
 
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
@@ -131,6 +171,11 @@ jobs:
   # release tag. The artifact is attached to every run and can also be built
   # on demand via the Actions "Run workflow" button (workflow_dispatch).
   ocr-helper:
+    needs: changes
+    # macOS minutes bill at 10x — never spend them on a docs or TypeScript
+    # change. workflow_dispatch always runs it (that's the "build me one"
+    # button this job also exists for).
+    if: needs.changes.outputs.sidecar == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
