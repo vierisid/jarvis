@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { JarvisLanguage } from "../../language";
+
+export type { JarvisLanguage } from "../../language";
 
 const POLL_INTERVAL_MS = 10000;
 
@@ -72,8 +75,6 @@ export const LLM_PROVIDER_LABELS = LLM_PROVIDER_KIND_LABELS;
 
 export type STTProvider = "openai" | "groq" | "sarvam" | "local";
 export type TTSProvider = "edge" | "elevenlabs" | "sarvam";
-export type JarvisLanguage = "en" | "es";
-
 /**
  * Per-provider summary returned by GET /api/config/llm. The credential value
  * (api_key) is never sent to the client - we only expose `has_api_key`. The

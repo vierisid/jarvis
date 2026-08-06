@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { JarvisLanguage } from "../language";
 
 /** Phase E — same-origin BroadcastChannel name for cross-tab onboarding
  *  state sync. When one tab finishes a phase (or fires a reset), it
@@ -35,7 +36,7 @@ export interface OnboardingStatus {
   tutorial_progress_step: string | null;
   last_reset_at: number | null;
   /** User-facing response language selected during first-run setup. */
-  language?: "en" | "es";
+  language?: JarvisLanguage;
   /** Daemon process boot time (ms). Used in tandem with
    *  `post_setup_services_ready` to detect a stale daemon that needs a
    *  restart. */

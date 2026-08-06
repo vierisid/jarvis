@@ -1462,7 +1462,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               name: next.name ?? '',
               language: resolveJarvisLanguage(next.language),
             },
-            message: 'Language preference saved. New Jarvis responses will use it immediately.',
+            message: 'User settings saved. Changes apply immediately.',
           });
         } catch (err) {
           return errorFromException(err);

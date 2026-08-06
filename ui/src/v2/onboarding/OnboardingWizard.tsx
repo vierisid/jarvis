@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
+import type { JarvisLanguage } from "../language";
 import "./OnboardingWizard.css";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
@@ -12,8 +13,6 @@ import "./OnboardingWizard.css";
 
 type StepKey =
   | "welcome" | "perms" | "brain" | "hear" | "speak" | "connect" | "interview" | "tour" | "allset";
-
-type JarvisLanguage = "en" | "es";
 
 const LANGUAGES: ReadonlyArray<{ id: JarvisLanguage; label: string }> = [
   { id: "en", label: "English" },
@@ -152,10 +151,6 @@ export function OnboardingWizard({
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem("jarvis-theme", t); } catch { /* ignore */ }
   };
-  useEffect(() => {
-    document.documentElement.lang = language;
-  }, [language]);
-
   // permissions
   // brain
   const [provId, setProvId] = useState("anthropic");
