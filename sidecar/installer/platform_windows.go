@@ -165,6 +165,16 @@ func findTrayWindow() uintptr {
 	return hwnd
 }
 
+// checkPayloadLayout rejects a package missing the executable we install, so
+// a malformed publish does not surface as a signature failure.
+func checkPayloadLayout(stagedBin, version string) error {
+	if _, err := os.Stat(filepath.Join(stagedBin, sidecarExeName)); err != nil {
+		return fmt.Errorf("sidecar %s should contain %s but does not — the published package looks malformed",
+			version, sidecarExeName)
+	}
+	return nil
+}
+
 // swapInstall replaces jarvis.exe in installDir (the only file the win32
 // package ships) with a rename-based rollback: the running instance was
 // already stopped, so the file lock is released.

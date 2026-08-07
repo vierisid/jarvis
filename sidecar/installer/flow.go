@@ -12,6 +12,13 @@ import (
 	"strings"
 )
 
+// minBundledSidecarVersion is the first sidecar release whose darwin npm
+// package ships the Jarvis.app bundle rather than a bare binary. Earlier
+// packages cannot be installed: macOS notifications are unavailable to a bare
+// binary, and TCC grants bind to a bundle identity, so installing one would
+// produce a sidecar that silently cannot notify or hold permissions.
+const minBundledSidecarVersion = "0.9.1"
+
 // minSetupSidecarVersion is the first sidecar release whose flag.Parse knows
 // --setup. Older sidecars hard-exit on unknown flags with a dead stderr under
 // -H windowsgui, so the handoff is version-gated.
@@ -99,6 +106,12 @@ func performInstall(registryURL string, silent bool, progress progressFn) instal
 		return fail(exitFilesystem, fmt.Errorf("could not unpack the payload: %w", err))
 	}
 	stagedBin := filepath.Join(staged, "bin")
+	// Layout before signature: a package that predates the current layout would
+	// otherwise surface as "code-signature verification failed", sending the
+	// reader after a signing problem that does not exist.
+	if err := checkPayloadLayout(stagedBin, rel.Version); err != nil {
+		return fail(exitVerification, err)
+	}
 	if err := verifyPayloadSignature(stagedBin); err != nil {
 		return fail(exitVerification, fmt.Errorf("code-signature verification failed (refusing to install an unverified sidecar): %w", err))
 	}

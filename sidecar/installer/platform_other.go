@@ -27,6 +27,8 @@ func installedBinaryVersion(string) (string, error) {
 
 func stopRunningSidecar(installedSidecar, bool) error { return nil }
 
+func checkPayloadLayout(string, string) error { return nil }
+
 func verifyPayloadSignature(string) error {
 	return fmt.Errorf("code-signature verification is not available on this platform")
 }

@@ -143,11 +143,24 @@ func pidsForExecutable(binPath string) ([]int, error) {
 // verifyPayloadSignature runs Gatekeeper's own checks on the staged bundle.
 // With expectedTeamID set (release builds) the codesign requirement pins the
 // Developer ID team, so a valid-but-foreign signature is refused.
+// checkPayloadLayout rejects a package that predates the Jarvis.app bundle.
+func checkPayloadLayout(stagedBin, version string) error {
+	if _, err := os.Stat(filepath.Join(stagedBin, appBundleName)); err == nil {
+		return nil
+	}
+	if versionLess(version, minBundledSidecarVersion) {
+		return fmt.Errorf(
+			"sidecar %s ships a bare binary, not the %s bundle this installer requires "+
+				"(macOS notifications and permission grants both need the bundle). "+
+				"The npm 'latest' tag has to reach %s or newer before this installer can be used",
+			version, appBundleName, minBundledSidecarVersion)
+	}
+	return fmt.Errorf("sidecar %s should contain %s but does not — the published package looks malformed",
+		version, appBundleName)
+}
+
 func verifyPayloadSignature(stagedBin string) error {
 	app := filepath.Join(stagedBin, appBundleName)
-	if _, err := os.Stat(app); err != nil {
-		return fmt.Errorf("payload lacks %s: %w", appBundleName, err)
-	}
 	args := []string{"--verify", "--deep", "--strict", app}
 	if expectedTeamID != "" {
 		req := fmt.Sprintf(`anchor apple generic and certificate leaf[subject.OU] = "%s"`, expectedTeamID)

@@ -27,3 +27,22 @@ func TestShouldApplyAutostart(t *testing.T) {
 		}
 	}
 }
+
+// The darwin npm package only started shipping Jarvis.app at
+// minBundledSidecarVersion; earlier ones carry a bare binary that cannot
+// notify or hold TCC grants. The installer must refuse those — and must say so
+// in terms of the PACKAGE rather than blaming the signature. The first real
+// macOS test run reported "code-signature verification failed" for exactly
+// this case, which sends the reader after a signing bug that does not exist.
+func TestBundledSidecarVersionFloor(t *testing.T) {
+	for _, v := range []string{"0.8.0", "0.9.0"} {
+		if !versionLess(v, minBundledSidecarVersion) {
+			t.Errorf("%s predates the Jarvis.app bundle and must be refused", v)
+		}
+	}
+	for _, v := range []string{minBundledSidecarVersion, "0.9.2", "1.0.0"} {
+		if versionLess(v, minBundledSidecarVersion) {
+			t.Errorf("%s ships the bundle and must be accepted", v)
+		}
+	}
+}
