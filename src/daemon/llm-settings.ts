@@ -26,6 +26,7 @@ import {
   configureLLMTiers,
 } from '../llm/config-binding.ts';
 import { isAnthropicCustomBaseUrl } from '../llm/anthropic.ts';
+import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
 
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
@@ -307,7 +308,10 @@ export function stripSecretsFromProviders(
  * pre-rework installs and migrates them in-memory so users upgrading don't
  * lose their saved credentials.
  */
-export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
+export function mergeLLMSettingsIntoConfig(
+  config: JarvisConfig,
+  options: { persistMigrations?: boolean } = {},
+): void {
   // Replace, don't merge: the DB is authoritative for every LLM setting.
   config.llm.providers = {};
   config.llm.tiers = {};
@@ -352,7 +356,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
   // are present and no new-shape providers exist for them. This is the
   // upgrade path for installs that pre-date the provider/model split.
   migrateLegacyDBSettings(config);
-  migrateDeprecatedGroqModels(config);
+  migrateDeprecatedGroqModels(config, options.persistMigrations !== false);
 
   // 3. Pull API keys from the keychain into provider entries. We do NOT
   // surface them in `config.llm.providers.<name>.api_key` (that would risk
@@ -372,13 +376,7 @@ export function mergeLLMSettingsIntoConfig(config: JarvisConfig): void {
 }
 
 /** Replace known retired Groq IDs before runtime starts. */
-function migrateDeprecatedGroqModels(config: JarvisConfig): void {
-  const replacements: Record<string, string> = {
-    'deepseek-r1-distill-llama-70b': 'openai/gpt-oss-120b',
-    'llama-3.3-70b-versatile': 'openai/gpt-oss-120b',
-    'llama-3.1-8b-instant': 'openai/gpt-oss-20b',
-    'qwen/qwen3-32b': 'openai/gpt-oss-120b',
-  };
+function migrateDeprecatedGroqModels(config: JarvisConfig, persist = true): void {
   const migrateRef = (ref: string | undefined): string | undefined => {
     if (!ref) return ref;
     const separator = ref.indexOf(':');
@@ -386,7 +384,7 @@ function migrateDeprecatedGroqModels(config: JarvisConfig): void {
     const providerName = ref.slice(0, separator);
     const entry = config.llm.providers?.[providerName];
     if ((entry?.kind ?? providerName) !== 'groq') return ref;
-    const replacement = replacements[ref.slice(separator + 1)];
+    const replacement = GROQ_DEPRECATED_MODEL_REPLACEMENTS[ref.slice(separator + 1)];
     return replacement ? `${providerName}:${replacement}` : ref;
   };
 
@@ -405,6 +403,8 @@ function migrateDeprecatedGroqModels(config: JarvisConfig): void {
     }
   }
   if (!changed) return;
+
+  if (!persist) return;
 
   setSetting(SETTING_DEFAULT, config.llm.default ?? '');
   setSetting(SETTING_TIER_CONVERSATION, config.llm.tiers?.conversation ?? '');

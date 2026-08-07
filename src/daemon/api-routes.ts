@@ -1635,15 +1635,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as { name?: string; api_key?: string };
-          const configured = body.name
-            ? ctx.config.llm.providers?.[body.name]
-            : Object.values(ctx.config.llm.providers ?? {}).find((entry) => entry?.kind === 'groq');
-          if (body.name && configured?.kind !== 'groq') {
+          const providers = ctx.config.llm.providers ?? {};
+          const providerName = body.name
+            ?? Object.keys(providers).find((name) => (providers[name]?.kind ?? name) === 'groq');
+          const configured = providerName ? providers[providerName] : undefined;
+          if (body.name && (!configured || (configured.kind ?? body.name) !== 'groq')) {
             return json({ ok: false, error: 'Groq provider not found', models: [] });
           }
           const { getSecret } = await import('../vault/keychain.ts');
           const apiKey = body.api_key
-            || (body.name ? getSecret(`llm.provider.${body.name}.api_key`) : null)
+            || (providerName ? getSecret(`llm.provider.${providerName}.api_key`) : null)
             || configured?.api_key
             || '';
           if (!apiKey) return json({ ok: false, error: 'Groq API key required', models: [] });

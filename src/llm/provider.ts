@@ -85,6 +85,8 @@ export class LLMProviderError extends Error {
 export function classifyHttpStatus(status: number): LLMErrorCode {
   if (status === 401 || status === 403) return 'auth';
   if (status === 429) return 'rate_limit';
+  // Some OpenAI-compatible gateways use non-standard 498 for an upstream
+  // connection/token expiry and expect clients to retry it as a network fault.
   if (status === 498) return 'network';
   if (status === 404) return 'not_found';
   if (status === 400 || status === 422) return 'bad_request';

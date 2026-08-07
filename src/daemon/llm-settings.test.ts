@@ -21,4 +21,16 @@ describe('LLM settings model migrations', () => {
     expect(getSetting('llm.default')).toBe('groq:openai/gpt-oss-120b');
     expect(getSetting('llm.tiers.medium')).toBe('groq:openai/gpt-oss-20b');
   });
+
+  it('can hydrate repaired references without mutating settings', () => {
+    initDatabase(':memory:');
+    setSetting('llm.providers', JSON.stringify({ groq: { kind: 'groq' } }));
+    setSetting('llm.default', 'groq:deepseek-r1-distill-llama-70b');
+    const config = structuredClone(DEFAULT_CONFIG);
+
+    mergeLLMSettingsIntoConfig(config, { persistMigrations: false });
+
+    expect(config.llm.default).toBe('groq:openai/gpt-oss-120b');
+    expect(getSetting('llm.default')).toBe('groq:deepseek-r1-distill-llama-70b');
+  });
 });

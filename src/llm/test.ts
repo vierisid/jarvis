@@ -24,7 +24,7 @@ async function testProviders() {
   // uses at runtime.
   const db = initDatabase(config.daemon.db_path);
   setUsageDatabase(() => db);
-  mergeLLMSettingsIntoConfig(config);
+  mergeLLMSettingsIntoConfig(config, { persistMigrations: false });
 
   const manager = new LLMManager();
   const hasProvider = registerLLMProviders(manager, config.llm.providers ?? {}, {

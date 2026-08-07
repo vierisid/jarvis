@@ -303,6 +303,183 @@ describe('LLMManager', () => {
     expect(groqCalls).toBe(1);
   });
 
+  test('tier routing does not send content to providers that have no tier assignment', async () => {
+    const manager = new LLMManager();
+    let unmappedCalls = 0;
+    const mapped = {
+      name: 'mapped', listModels: async () => ['retired'],
+      async chat() { throw new LLMProviderError('model_not_found', 'not_found'); },
+      async *stream() { /* not used */ },
+    };
+    const unmapped = {
+      name: 'unmapped', listModels: async () => ['available'],
+      async chat() {
+        unmappedCalls++;
+        return {
+          content: 'must not run', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'available', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(mapped);
+    manager.registerProvider(unmapped);
+    manager.setTierMap({ medium: { provider: 'mapped', model: 'retired' } });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toBeInstanceOf(LLMProviderError);
+    expect(unmappedCalls).toBe(0);
+  });
+
+  test('tier routing does not fail over malformed requests', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const malformed = {
+      name: 'malformed', listModels: async () => ['model-a'],
+      async chat() { throw new LLMProviderError('invalid tool schema', 'bad_request'); },
+      async *stream() { /* not used */ },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() {
+        fallbackCalls++;
+        return {
+          content: 'must not run', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'model-b', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(malformed);
+    manager.registerProvider(fallback);
+    manager.setTierMap({
+      medium: { provider: 'malformed', model: 'model-a' },
+      high: { provider: 'fallback', model: 'model-b' },
+    });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toMatchObject({
+      code: 'bad_request',
+    });
+    expect(fallbackCalls).toBe(0);
+  });
+
+  test('tier routing fails over before a short Retry-After sleep', async () => {
+    const manager = new LLMManager();
+    let limitedCalls = 0;
+    const limited = {
+      name: 'limited', listModels: async () => ['model-a'],
+      async chat() {
+        limitedCalls++;
+        throw new LLMProviderError('quota exhausted', 'rate_limit', 30_000);
+      },
+      async *stream() { /* not used */ },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() { return {
+        content: 'immediate fallback', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+        model: 'model-b', finish_reason: 'stop' as const,
+      }; },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(limited);
+    manager.registerProvider(fallback);
+    manager.setTierMap({
+      medium: { provider: 'limited', model: 'model-a' },
+      high: { provider: 'fallback', model: 'model-b' },
+    });
+
+    const started = Date.now();
+    const response = await manager.chatTier('medium', 'test', sampleMessages);
+    expect(response.content).toBe('immediate fallback');
+    expect(limitedCalls).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test('tier chat preserves Retry-After when every candidate is exhausted', async () => {
+    const manager = new LLMManager();
+    const groq = {
+      name: 'groq', listModels: async () => ['openai/gpt-oss-20b'],
+      async chat() { throw new LLMProviderError('quota exhausted', 'rate_limit', 120_000); },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(groq);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'openai/gpt-oss-20b' } });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toMatchObject({
+      code: 'rate_limit',
+      retryAfterMs: 120_000,
+    });
+  });
+
+  test('tier streaming preserves typed codes from thrown provider errors', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('not used'); },
+      async *stream() { throw new LLMProviderError('opaque failure', 'auth'); },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() { throw new Error('not used'); },
+      async *stream() { fallbackCalls++; },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    manager.setTierMap({
+      medium: { provider: 'primary', model: 'model-a' },
+      high: { provider: 'fallback', model: 'model-b' },
+    });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'auth' });
+    expect(fallbackCalls).toBe(0);
+  });
+
+  test('tier streaming fails over before a short Retry-After sleep', async () => {
+    const manager = new LLMManager();
+    let limitedCalls = 0;
+    const limited = {
+      name: 'limited', listModels: async () => ['model-a'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        limitedCalls++;
+        yield {
+          type: 'error' as const,
+          error: 'quota exhausted',
+          code: 'rate_limit' as const,
+          retry_after_ms: 30_000,
+        };
+      },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'immediate fallback' };
+        yield { type: 'done' as const, response: {
+          content: 'immediate fallback', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'model-b', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(limited);
+    manager.registerProvider(fallback);
+    manager.setTierMap({
+      medium: { provider: 'limited', model: 'model-a' },
+      high: { provider: 'fallback', model: 'model-b' },
+    });
+
+    const started = Date.now();
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'immediate fallback')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(limitedCalls).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   test('tier streaming preserves Retry-After when every candidate is exhausted', async () => {
     const manager = new LLMManager();
     const groq = {

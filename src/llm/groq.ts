@@ -8,6 +8,7 @@ import type {
   LLMToolCall,
 } from './provider.ts';
 import { classifyHttpStatus, LLMProviderError } from './provider.ts';
+import { isDeprecatedGroqModel } from './groq-models.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -87,18 +88,9 @@ type GroqStreamChunk = {
   }>;
 };
 
-const GROQ_DEPRECATED_CHAT_MODELS = new Set([
-  'deepseek-r1-distill-llama-70b',
-  'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
-  'qwen/qwen3-32b',
-  'meta-llama/llama-4-scout-17b-16e-instruct',
-  'meta-llama/llama-4-maverick-17b-128e-instruct',
-]);
-
 /** Models suitable for Jarvis chat + local function calling. */
 export function isGroqJarvisModel(id: string): boolean {
-  if (GROQ_DEPRECATED_CHAT_MODELS.has(id)) return false;
+  if (isDeprecatedGroqModel(id)) return false;
   // These active catalog entries use audio/moderation endpoints, or (for
   // Compound) reject user-provided local tools.
   return !/(whisper|orpheus|prompt-guard|safeguard|^groq\/compound)/i.test(id);
@@ -155,12 +147,11 @@ export class GroqProvider implements LLMProvider {
   private apiKey: string;
   private defaultModel: string;
   private apiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-  // Groq's free/developer limits are token-per-minute constrained. Keep a
-  // single request comfortably below the common 8K TPM ceiling so normal
-  // output still has headroom instead of triggering a guaranteed 429.
-  private static readonly SAFE_PROMPT_CHAR_BUDGET = 16_000;
+  // Keep enough context for paid accounts. Free-tier quota failures carry a
+  // typed rate-limit error and are handled by the manager's retry/failover.
+  private static readonly SAFE_PROMPT_CHAR_BUDGET = 24_000;
   private static readonly SAFE_TOOL_OVERHEAD_CHARS = 8_000;
-  private static readonly RETRY_PROMPT_CHAR_BUDGET = 8_000;
+  private static readonly RETRY_PROMPT_CHAR_BUDGET = 12_000;
   private static readonly MAX_SYSTEM_MESSAGE_CHARS = 8_000;
   private static readonly MAX_USER_MESSAGE_CHARS = 3_500;
   private static readonly MAX_ASSISTANT_MESSAGE_CHARS = 3_500;

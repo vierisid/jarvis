@@ -85,7 +85,7 @@ export async function runDoctor(): Promise<void> {
     const { mergeLLMSettingsIntoConfig } = await import('../daemon/llm-settings.ts');
     llmConfig = await loadConfig();
     initDatabase(llmConfig.daemon.db_path);
-    mergeLLMSettingsIntoConfig(llmConfig);
+    mergeLLMSettingsIntoConfig(llmConfig, { persistMigrations: false });
     llmProviderNames = Object.keys(llmConfig.llm.providers ?? {});
   } catch (err) {
     results.push({ name: 'LLM Provider', status: 'fail', message: `Could not load LLM settings: ${String(err).slice(0, 80)}` });
