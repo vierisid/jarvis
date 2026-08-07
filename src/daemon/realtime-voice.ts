@@ -103,6 +103,11 @@ export class RealtimeVoiceSession {
     return this.session.connect();
   }
 
+  /** Stop the current spoken response without closing the conversation. */
+  interrupt(): void {
+    if (!this.closed) this.session.interrupt();
+  }
+
   close(): void {
     this.closed = true;
     this.session.close();

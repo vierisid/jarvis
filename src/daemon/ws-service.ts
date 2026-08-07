@@ -135,6 +135,24 @@ export function sweepExpiredVoiceConfirmations<W>(
   return expired;
 }
 
+/** Voice-only hard interrupt; never forward these phrases to the LLM. */
+export function isVoiceStopCommand(transcript: string): boolean {
+  const normalized = transcript
+    .toLowerCase()
+    .replace(/[.,!?;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return new Set([
+    'stop',
+    'jarvis stop',
+    'hey jarvis stop',
+    'jarvis be quiet',
+    'hey jarvis be quiet',
+    'jarvis quiet',
+    'hey jarvis quiet',
+  ]).has(normalized);
+}
+
 export class WebSocketService implements Service {
   name = 'websocket';
   private _status: ServiceStatus = 'stopped';
@@ -149,6 +167,11 @@ export class WebSocketService implements Service {
   private ttsProvider: TTSProvider | null = null;
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
+  /** One foreground chat turn per dashboard socket. A new turn supersedes it. */
+  private activeChats = new Map<
+    ServerWebSocket<unknown>,
+    { requestId: string; controller: AbortController }
+  >();
   private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
   /**
    * Premium realtime voice (gpt-realtime-2) sessions, keyed by socket. Present
@@ -321,6 +344,7 @@ export class WebSocketService implements Service {
           console.log('[WSService] Client connected');
         },
         onDisconnect: (ws) => {
+          this.cancelActiveChat(ws, 'disconnect', false);
           // Tear down any realtime voice session (closes the OpenAI WS + timer).
           this.closeRealtimeVoice(ws);
           // Clean up every per-socket map so a long-running daemon doesn't
@@ -768,10 +792,55 @@ export class WebSocketService implements Service {
   /**
    * Route incoming WebSocket messages to the appropriate handler.
    */
+  private cancelActiveChat(
+    ws: ServerWebSocket<unknown>,
+    reason: 'user' | 'superseded' | 'voice' | 'disconnect',
+    notify = true,
+    expectedRequestId?: string,
+  ): boolean {
+    const active = this.activeChats.get(ws);
+    if (!active) return false;
+    if (expectedRequestId && active.requestId !== expectedRequestId) return false;
+    this.activeChats.delete(ws);
+    active.controller.abort(reason);
+    if (notify) {
+      this.wsServer.sendToClient(ws, {
+        type: 'status',
+        payload: { status: 'cancelled', requestId: active.requestId, reason },
+        id: active.requestId,
+        timestamp: Date.now(),
+      });
+      // Flush both the browser audio queue and its speaking/thinking state now;
+      // the provider stream may need another network chunk before its iterator
+      // observes the AbortSignal.
+      this.wsServer.sendToClient(ws, {
+        type: 'tts_end',
+        payload: { requestId: active.requestId, cancelled: true },
+        id: active.requestId,
+        timestamp: Date.now(),
+      });
+      this.wsServer.sendToClient(ws, {
+        type: 'thinking_end',
+        payload: { requestId: active.requestId, cancelled: true },
+        id: active.requestId,
+        timestamp: Date.now(),
+      });
+    }
+    return true;
+  }
+
   private async routeMessage(msg: WSMessage, ws: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     switch (msg.type) {
       case 'chat':
         return this.handleChat(msg, ws);
+
+      case 'cancel': {
+        const requestId = (msg.payload as { requestId?: string } | undefined)?.requestId;
+        this.cancelActiveChat(ws, 'user', true, requestId);
+        this.realtimeSessions.get(ws)?.session.interrupt();
+        this.voiceSessions.delete(ws);
+        return undefined;
+      }
 
       case 'command':
         return this.handleCommand(msg);
@@ -893,6 +962,11 @@ export class WebSocketService implements Service {
 
     const channel = payload.channel ?? 'websocket';
     const requestId = msg.id ?? crypto.randomUUID();
+
+    // A dashboard socket owns at most one foreground turn. This is the
+    // server-side half of typed barge-in: cancel old generation/TTS before
+    // classifying or starting the replacement message.
+    if (ws) this.cancelActiveChat(ws, 'superseded');
 
     // Text-driven Room navigation + room actions. Run the same intent
     // classifier the voice path uses on the typed text. If it parses
@@ -1017,6 +1091,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
 
+    const activeChat = ws
+      ? { requestId, controller: new AbortController() }
+      : null;
+    if (ws && activeChat) this.activeChats.set(ws, activeChat);
+    let retainActiveForTTS = false;
+
     // Persist user message
     try {
       const conversation = getOrCreateConversation(channel);
@@ -1042,6 +1122,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       let ttsChunkCount = 0;
 
       const speakNextSentence = async () => {
+        if (activeChat?.controller.signal.aborted) {
+          ttsSentenceQueue = [];
+          return;
+        }
         if (ttsSpeaking || !ttsActive || !ws) return;
         const sentence = ttsSentenceQueue.shift();
         if (!sentence) {
@@ -1055,6 +1139,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
               timestamp: Date.now(),
             });
             ttsStartSent = false; // prevent duplicate tts_end
+            retainActiveForTTS = false;
+            if (activeChat && this.activeChats.get(ws) === activeChat) {
+              this.activeChats.delete(ws);
+            }
           }
           return;
         }
@@ -1092,6 +1180,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         try {
           if (this.ttsProvider) {
             for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
+              if (activeChat?.controller.signal.aborted) break;
               ttsChunkCount++;
               this.wsServer.sendBinary(ws, chunk);
             }
@@ -1107,12 +1196,32 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // onSentence fires for each complete sentence during streaming.
       // NOTE: onTextDone fires per LLM turn (tool loop), NOT once at the end.
       // We ignore onTextDone and use the relayStream return to mark stream completion.
-      const fullText = await this.streamRelay.relayStream(stream, requestId, ttsActive ? {
-        onSentence: (sentence) => {
-          ttsSentenceQueue.push(sentence);
-          speakNextSentence();
-        },
-      } : undefined);
+      const fullText = await this.streamRelay.relayStream(stream, requestId, {
+        signal: activeChat?.controller.signal,
+        ...(ttsActive ? {
+          onSentence: (sentence: string) => {
+            if (activeChat?.controller.signal.aborted) return;
+            ttsSentenceQueue.push(sentence);
+            speakNextSentence();
+          },
+        } : {}),
+      });
+
+      if (activeChat?.controller.signal.aborted) {
+        ttsSentenceQueue = [];
+        setDefaultCwd(null);
+        if (taskCommitment) {
+          try {
+            const updated = updateCommitmentStatus(taskCommitment.id, 'failed', 'Stopped by user');
+            if (updated) this.broadcastTaskUpdate(updated, 'updated');
+          } catch (err) {
+            console.error('[WSService] Failed to cancel task:', err);
+          } finally {
+            this.activeTaskId = null;
+          }
+        }
+        return undefined;
+      }
 
       // Stream is now fully done (all tool loop turns complete)
       ttsStreamFullyDone = true;
@@ -1128,6 +1237,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           ttsStartSent = false;
         }
         // Otherwise speakNextSentence will send tts_end when queue drains
+        retainActiveForTTS = ttsSpeaking || ttsSentenceQueue.length > 0 || ttsStartSent;
       }
 
       // Persist assistant response
@@ -1217,6 +1327,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         id: requestId,
         timestamp: Date.now(),
       };
+    } finally {
+      if (ws && activeChat && !retainActiveForTTS && this.activeChats.get(ws) === activeChat) {
+        this.activeChats.delete(ws);
+      }
     }
   }
 
@@ -1643,6 +1757,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (!trimmed) return;
 
     console.log('[WSService] Voice transcript:', trimmed);
+
+    // Hard interrupt is transport control, not a conversational turn. Do it
+    // before transcript echo/classification so "Jarvis stop" never produces a
+    // user bubble, an LLM answer, or another overlapping TTS stream.
+    if (isVoiceStopCommand(trimmed)) {
+      this.cancelActiveChat(ws, 'voice');
+      this.realtimeSessions.get(ws)?.session.interrupt();
+      this.wsServer.sendToClient(ws, {
+        type: 'tts_end',
+        payload: { requestId, cancelled: true },
+        id: requestId,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
     // Echo transcript back so the UI shows it as a user message immediately,
     // regardless of which routing path the classifier picks.

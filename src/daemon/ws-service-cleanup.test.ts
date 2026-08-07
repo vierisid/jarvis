@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   cleanupPerSocketMaps,
+  isVoiceStopCommand,
   sweepExpiredVoiceConfirmations,
 } from './ws-service.ts';
 
@@ -8,6 +9,16 @@ import {
 // objects as fake sockets so identity equality (===) matches what the
 // real ServerWebSocket comparison does in cleanupPerSocketMaps.
 const makeFakeSocket = (label: string) => Object.freeze({ __socket: label });
+
+describe('isVoiceStopCommand', () => {
+  test('accepts stop-only voice controls without matching ordinary requests', () => {
+    expect(isVoiceStopCommand('Jarvis stop')).toBe(true);
+    expect(isVoiceStopCommand('HEY JARVIS, BE QUIET!')).toBe(true);
+    expect(isVoiceStopCommand('stop')).toBe(true);
+    expect(isVoiceStopCommand('Jarvis stop the timer')).toBe(false);
+    expect(isVoiceStopCommand('Can you stop talking eventually?')).toBe(false);
+  });
+});
 
 describe('cleanupPerSocketMaps', () => {
   test('removes the disconnecting socket from voiceSessions and interviewSessions, and sweeps pendingVoiceConfirmations entries that reference it', () => {

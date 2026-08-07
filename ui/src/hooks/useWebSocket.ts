@@ -106,7 +106,7 @@ export type VoiceCallbacks = {
   onTTSContainsWake?: () => void;
   /** `bargeIn` — realtime voice sends tts_end{bargeIn:true} when the user
    *  starts speaking, so the player can flush queued output immediately. */
-  onTTSEnd: (bargeIn?: boolean) => void;
+  onTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
   onError: (message?: string) => void;
   /** Realtime session ended server-side (max_session_minutes timeout or
    *  server close). The client must stop the mic — it's otherwise streaming
@@ -381,6 +381,7 @@ export function useWebSocket() {
   const [clarifiers, setClarifiers] = useState<PendingClarifier[]>([]);
   const [repeatBacks, setRepeatBacks] = useState<PendingRepeatBack[]>([]);
   const [thinking, setThinking] = useState(false);
+  const [isResponding, setIsResponding] = useState(false);
   const [roomNavRequest, setRoomNavRequest] = useState<{ key: string; ts: number } | null>(null);
   const [windowControlRequest, setWindowControlRequest] = useState<{
     action: "close" | "minimize" | "expand" | "restore" | "reorder";
@@ -401,6 +402,8 @@ export function useWebSocket() {
   const subAgentEventsRef = useRef<SubAgentEvent[]>([]);
   const voiceCallbacksRef = useRef<VoiceCallbacks | null>(null);
   const pendingChatIdsRef = useRef<Set<string>>(new Set());
+  /** Request whose chunks currently own the single foreground composer turn. */
+  const currentChatRequestIdRef = useRef<string | null>(null);
 
   const connect = useCallback(() => {
     // A manual "Retry now" or the scheduled backoff can fire while a socket is
@@ -474,6 +477,8 @@ export function useWebSocket() {
 
     ws.onclose = () => {
       setIsConnected(false);
+      setIsResponding(false);
+      currentChatRequestIdRef.current = null;
       console.log("[WS] Disconnected, reconnecting in 2s...");
       reconnectTimerRef.current = setTimeout(connect, 2000);
     };
@@ -511,7 +516,10 @@ export function useWebSocket() {
           return;
         }
         if (msg.type === "tts_end") {
-          voiceCallbacksRef.current?.onTTSEnd(Boolean(msg.payload?.bargeIn));
+          voiceCallbacksRef.current?.onTTSEnd(
+            msg.payload?.requestId,
+            Boolean(msg.payload?.bargeIn),
+          );
           return;
         }
         // Premium realtime voice (gpt-realtime-2) status + live captions.
@@ -553,9 +561,17 @@ export function useWebSocket() {
         }
         if (msg.type === "thinking_start") {
           setThinking(true);
+          setIsResponding(true);
+          if (msg.id) currentChatRequestIdRef.current = msg.id;
           return;
         }
         if (msg.type === "thinking_end") {
+          const requestId = String(msg.payload?.requestId ?? msg.id ?? "");
+          if (
+            currentChatRequestIdRef.current
+            && requestId
+            && requestId !== currentChatRequestIdRef.current
+          ) return;
           setThinking(false);
           return;
         }
@@ -599,6 +615,14 @@ export function useWebSocket() {
         },
       ]);
     } else if (msg.type === "stream") {
+      const requestId = String(msg.payload?.requestId ?? msg.id ?? "");
+      const currentRequestId = currentChatRequestIdRef.current;
+      // A cancelled/superseded provider can deliver one final network chunk
+      // while its async iterator unwinds. Never append it to the replacement
+      // response (the old single-buffer behavior caused overlapping answers).
+      if (currentRequestId && requestId && requestId !== currentRequestId) return;
+      if (!currentRequestId && requestId) currentChatRequestIdRef.current = requestId;
+      setIsResponding(true);
       if (msg.payload?.source === "sub-agent") {
         // Sub-agent progress event
         const event: SubAgentEvent = {
@@ -677,8 +701,18 @@ export function useWebSocket() {
           );
         }
       }
-    } else if (msg.type === "status" && msg.payload?.status === "done") {
-      // Stream complete
+    } else if (
+      msg.type === "status"
+      && (msg.payload?.status === "done" || msg.payload?.status === "cancelled")
+    ) {
+      const requestId = String(msg.payload?.requestId ?? msg.id ?? "");
+      if (
+        currentChatRequestIdRef.current
+        && requestId
+        && requestId !== currentChatRequestIdRef.current
+      ) return;
+      // Stream complete or explicitly stopped. Keep partial text visible but
+      // remove its speaking/streaming state immediately.
       if (streamIdRef.current) {
         const finalId = streamIdRef.current;
         const finalToolCalls = toolCallsRef.current;
@@ -707,6 +741,9 @@ export function useWebSocket() {
       subAgentEventsRef.current = [];
       // A successful completion ends any in-flight chat request correlation.
       pendingChatIdsRef.current.clear();
+      currentChatRequestIdRef.current = null;
+      setIsResponding(false);
+      setThinking(false);
     } else if (msg.type === "goal_event") {
       const goalEvent = msg.payload as GoalEvent;
       setGoalEvents((prev) => [...prev.slice(-100), goalEvent]);
@@ -957,6 +994,9 @@ export function useWebSocket() {
       streamIdRef.current = null;
       toolCallsRef.current = [];
       subAgentEventsRef.current = [];
+      currentChatRequestIdRef.current = null;
+      setIsResponding(false);
+      setThinking(false);
     }
   }, []);
 
@@ -973,11 +1013,46 @@ export function useWebSocket() {
     };
   }, [connect]);
 
+  const cancelResponse = useCallback(() => {
+    const requestId = currentChatRequestIdRef.current;
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "cancel",
+        payload: requestId ? { requestId } : {},
+        id: requestId ?? undefined,
+        timestamp: Date.now(),
+      }));
+    }
+
+    if (streamIdRef.current) {
+      const finalId = streamIdRef.current;
+      setMessages((prev) => prev.map((message) =>
+        message.id === finalId ? { ...message, isStreaming: false } : message
+      ));
+    }
+    streamBufferRef.current = "";
+    streamIdRef.current = null;
+    toolCallsRef.current = [];
+    subAgentEventsRef.current = [];
+    pendingChatIdsRef.current.clear();
+    currentChatRequestIdRef.current = null;
+    setThinking(false);
+    setIsResponding(false);
+  }, []);
+
   const sendMessage = useCallback(
     (text: string, options?: { projectId?: string; currentRoom?: string }) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
+      // Typed barge-in: the replacement turn owns the composer immediately.
+      // The daemon also enforces this, but doing it here prevents even a single
+      // late chunk from the old request flashing into the new response.
+      if (currentChatRequestIdRef.current || isResponding) cancelResponse();
+
       const id = uuid();
+      currentChatRequestIdRef.current = id;
+      setIsResponding(true);
 
       // Add user message to local state
       setMessages((prev) => [
@@ -1024,7 +1099,7 @@ export function useWebSocket() {
         setNotices((prev) => [notice, ...prev.filter((item) => item.text !== notice.text)].slice(0, 3));
       }
     },
-    []
+    [cancelResponse, isResponding]
   );
 
   const dismissNotice = useCallback((noticeId: string) => {
@@ -1032,7 +1107,7 @@ export function useWebSocket() {
   }, []);
 
   return {
-    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, settingsEvents, notices, dismissNotice,
+    messages, isConnected, sendMessage, cancelResponse, isResponding, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, settingsEvents, notices, dismissNotice,
     approvals,
     clarifiers,
     repeatBacks,

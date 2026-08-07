@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Square } from "lucide-react";
 import { Icon } from "../ui";
 import "./Composer.css";
 
@@ -8,6 +8,8 @@ export interface ComposerProps {
   onSlash?: () => void;
   placeholder?: string;
   disabled?: boolean;
+  responding?: boolean;
+  onStop?: () => void;
 }
 
 export function Composer({
@@ -15,6 +17,8 @@ export function Composer({
   onSlash,
   placeholder = "Ask Jarvis, or press / to summon a tool…",
   disabled,
+  responding = false,
+  onStop,
 }: ComposerProps) {
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -110,12 +114,14 @@ export function Composer({
           /
         </button>
         <button
-          type="submit"
-          className="v2-composer__send"
-          disabled={disabled || value.trim().length === 0}
-          aria-label="Send"
+          type={responding ? "button" : "submit"}
+          className={`v2-composer__send${responding ? " v2-composer__send--stop" : ""}`}
+          disabled={disabled || (!responding && value.trim().length === 0)}
+          aria-label={responding ? "Stop response" : "Send"}
+          title={responding ? "Stop response" : "Send"}
+          onClick={responding ? onStop : undefined}
         >
-          <Icon icon={ArrowRight} size={12} strokeWidth={2} />
+          <Icon icon={responding ? Square : ArrowRight} size={12} strokeWidth={2.5} />
         </button>
       </div>
     </form>

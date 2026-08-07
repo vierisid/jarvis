@@ -7,6 +7,8 @@ export type RelayOptions = {
   onSentence?: (sentence: string) => void;
   /** Called when all text is done streaming. */
   onTextDone?: () => void;
+  /** Stops relaying immediately when the owning client cancels/supersedes the turn. */
+  signal?: AbortSignal;
 };
 
 // Sentence boundary: period, exclamation, question mark, colon followed by whitespace or end
@@ -35,6 +37,7 @@ export class StreamRelay {
 
     try {
       for await (const event of stream) {
+        if (options?.signal?.aborted) break;
         if (event.type === 'text') {
           fullText += event.text;
 
@@ -105,7 +108,7 @@ export class StreamRelay {
             options.onSentence(sentenceBuffer.trim());
             sentenceBuffer = '';
           }
-          options?.onTextDone?.();
+          if (!options?.signal?.aborted) options?.onTextDone?.();
 
           console.log('[StreamRelay] Stream complete for request:', requestId);
 
@@ -121,7 +124,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(doneMessage);
+          if (!options?.signal?.aborted) this.wsServer.broadcast(doneMessage);
         }
       }
 

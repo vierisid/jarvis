@@ -7,7 +7,21 @@ import {
   selectActiveWakeEngine,
   isWithinSpeakingTailCooldown,
   planContainsWakeFlip,
+  isSpeechStopCommand,
 } from "./useVoice.ts";
+
+describe("isSpeechStopCommand", () => {
+  test("recognizes direct stop/quiet commands", () => {
+    expect(isSpeechStopCommand("Jarvis stop")).toBe(true);
+    expect(isSpeechStopCommand("Hey Jarvis, stop!")).toBe(true);
+    expect(isSpeechStopCommand("Jarvis be quiet")).toBe(true);
+  });
+
+  test("does not turn ordinary wake phrases into stop-only commands", () => {
+    expect(isSpeechStopCommand("Jarvis")).toBe(false);
+    expect(isSpeechStopCommand("Jarvis what time is it")).toBe(false);
+  });
+});
 
 describe("matchesSpeechWakePhrase (strict; used during TTS playback)", () => {
   test("accepts direct wake phrases", () => {

@@ -362,10 +362,22 @@ function AppShellLive() {
     (text: string) => {
       // Per the design rule: voice and text share one pipeline.
       // A suggestion click sends the same payload as typing it.
+      if (voice.voiceState === "speaking") voice.cancelTTS();
       live.send(text);
     },
-    [live],
+    [live, voice],
   );
+
+  const stopCurrentResponse = useCallback(() => {
+    live.stopResponse();
+    voice.cancelTTS();
+    voice.forceIdle();
+  }, [live, voice]);
+
+  const handleChatSubmit = useCallback((text: string) => {
+    if (voice.voiceState === "speaking") voice.cancelTTS();
+    live.send(text, { currentRoom: getCurrentRoom() });
+  }, [getCurrentRoom, live, voice]);
 
   // ── Palette wiring (Phase 5A) ──
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -514,9 +526,9 @@ function AppShellLive() {
             ? "Ask Jarvis, or press / to summon a tool…"
             : "Waiting for daemon…"
         }
-        onSubmit={(text) =>
-          live.send(text, { currentRoom: getCurrentRoom() })
-        }
+        composerResponding={live.isResponding || live.thinking || voice.voiceState === "speaking"}
+        onStopResponse={stopCurrentResponse}
+        onSubmit={handleChatSubmit}
         onApprove={handleApprove}
         onCancel={handleCancel}
         onFocusCard={(id) => {
@@ -765,6 +777,8 @@ interface ShellLayoutProps {
   threadRef?: React.MutableRefObject<ThreadHandle | null>;
   composerDisabled?: boolean;
   composerPlaceholder?: string;
+  composerResponding?: boolean;
+  onStopResponse?: () => void;
   onSubmit: (text: string) => void;
   onApprove: (id: string) => void;
   onCancel: (id: string) => void;
@@ -817,6 +831,8 @@ function ShellLayout({
   threadRef,
   composerDisabled,
   composerPlaceholder,
+  composerResponding,
+  onStopResponse,
   onSubmit,
   onApprove,
   onCancel,
@@ -1011,6 +1027,8 @@ function ShellLayout({
                 onSubmit={onSubmit}
                 onSlash={onOpenPalette}
                 disabled={composerDisabled}
+                responding={composerResponding}
+                onStop={onStopResponse}
                 placeholder={composerPlaceholder}
               />
             </div>

@@ -97,6 +97,15 @@
   background: #A62F22;
 }
 
+.v2-composer__send--stop {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.v2-composer__send--stop:hover:not(:disabled) {
+  background: var(--ink-2);
+}
+
 .v2-composer__send:active:not(:disabled) {
   transform: scale(0.92);
 }

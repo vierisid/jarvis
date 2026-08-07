@@ -278,6 +278,8 @@ export function useLiveThread() {
     items,
     isConnected: ws.isConnected,
     send: ws.sendMessage,
+    stopResponse: ws.cancelResponse,
+    isResponding: ws.isResponding,
     notices: ws.notices,
     dismissNotice: ws.dismissNotice,
     approve,
