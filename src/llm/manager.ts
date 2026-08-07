@@ -13,6 +13,7 @@ import {
   type TierMap,
   type TierResolution,
   TIERS,
+  TIER_FALLBACK,
   resolveTier,
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
@@ -198,10 +199,15 @@ export class LLMManager {
    * when the selected model is unavailable or the provider has no quota.
    */
   private shouldFailOver(code: LLMErrorCode | undefined, message: string): boolean {
-    if (code === 'rate_limit' || code === 'not_found') return true;
-    if (code !== 'bad_request') return false;
+    if (code === 'rate_limit') return true;
+    if (code !== 'bad_request' && code !== 'not_found') return false;
+
+    // A bare 404 can mean a bad endpoint or missing non-model resource. Only
+    // cross the provider boundary when the upstream error identifies model
+    // availability as the problem.
     return /\bmodel(?:[_ -](?:decommissioned|not[_ -]found|unsupported|unavailable|retired))\b/i.test(message)
-      || /\b(?:decommissioned|retired)\b.*\bmodel\b/i.test(message);
+      || /\bmodel\b.{0,160}\b(?:decommissioned|not found|does not exist|unsupported|unavailable|retired)\b/i.test(message)
+      || /\b(?:decommissioned|retired)\b.{0,160}\bmodel\b/i.test(message);
   }
 
   /** Honor provider Retry-After; oversized waits should fail over immediately. */
@@ -259,7 +265,10 @@ export class LLMManager {
     add({ tier: first.resolution.tier, assignment: { provider: first.provider.name } });
 
     const mapped: TierResolution[] = [];
-    for (const candidateTier of TIERS) {
+    // Respect the same explicit cost/routing boundary as normal tier
+    // resolution. In particular, task/background tiers never spill into the
+    // conversation tier merely because it happens to be configured.
+    for (const candidateTier of [tier, ...TIER_FALLBACK[tier]]) {
       const assignment = this.tierMap[candidateTier];
       if (assignment) mapped.push({ tier: candidateTier, assignment });
     }
@@ -451,7 +460,7 @@ export class LLMManager {
         );
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
-        if (failFastOnRateLimit && lastCode === 'rate_limit' && retryAfterMs !== undefined) break;
+        if (failFastOnRateLimit && lastCode === 'rate_limit') break;
         if (!await this.waitForRetry(retryAfterMs)) break;
       }
     }
@@ -506,7 +515,7 @@ export class LLMManager {
         }
         if (!hasError) return;
         if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-        if (failFastOnRateLimit && lastErrorCode === 'rate_limit' && eventRetryAfterMs !== undefined) break;
+        if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
         if (!await this.waitForRetry(eventRetryAfterMs)) break;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -528,7 +537,7 @@ export class LLMManager {
           return;
         }
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-        if (failFastOnRateLimit && lastErrorCode === 'rate_limit' && retryAfterMs !== undefined) break;
+        if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
         if (!await this.waitForRetry(retryAfterMs)) break;
       }
     }
