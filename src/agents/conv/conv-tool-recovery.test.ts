@@ -6,7 +6,27 @@ describe('conversation text tool recovery', () => {
     expect(couldStartWithSerializedConvTool('F')).toBe(true);
     expect(couldStartWithSerializedConvTool('FALLBACK_OK/dele')).toBe(true);
     expect(couldStartWithSerializedConvTool('/delegate')).toBe(true);
+    expect(couldStartWithSerializedConvTool('(dele')).toBe(true);
     expect(couldStartWithSerializedConvTool('Hi again')).toBe(false);
+  });
+
+  it('recovers the parenthesized tool syntax without exposing it to TTS', () => {
+    const recovered = recoverSerializedConvTools(
+      '(delegate {"intent":"Check the last email in my inbox","template":"research","tier":"medium"}) Let me check your inbox now.',
+      [],
+      'test',
+    );
+
+    expect(recovered.text).toBe('Let me check your inbox now.');
+    expect(recovered.toolCalls).toEqual([{
+      id: 'test_0',
+      name: 'delegate',
+      arguments: {
+        intent: 'Check the last email in my inbox',
+        template: 'research',
+        tier: 'medium',
+      },
+    }]);
   });
 
   it('recovers a leaked delegate call and keeps only visible prose', () => {

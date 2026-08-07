@@ -151,6 +151,27 @@ describe('ConvOrchestrator', () => {
     expect(result.tasksRun).toHaveLength(1);
   });
 
+  it('hides and executes a parenthesized delegate call', async () => {
+    const provider = new MockProvider([
+      textResponse('(delegate {"intent":"Check the last email in my inbox","template":"research","tier":"medium"}) Let me check your inbox now.'),
+      textResponse('Your latest email is from Alice.'),
+      textResponse('Your latest email is from Alice.'),
+    ]);
+    const llm = makeManager(provider);
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const result = await conv.processTurn('Check my last email', {});
+    expect(result.text).toBe('Let me check your inbox now.\nYour latest email is from Alice.');
+    expect(result.text).not.toContain('(delegate');
+    expect(result.text).not.toContain('"template"');
+    expect(result.tasksRun).toHaveLength(1);
+  });
+
   it('surfaces a fallback acknowledgment before a silent delegated task starts', async () => {
     const provider = new MockProvider([
       toolCallResponse('delegate', {

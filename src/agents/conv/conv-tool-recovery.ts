@@ -3,6 +3,7 @@ import { CONV_TOOL_NAMES } from './conv-tools.ts';
 
 const SERIALIZED_TOOL_NAMES = new Set<string>(Object.values(CONV_TOOL_NAMES));
 const SERIALIZED_TOOL_PREFIXES = [...SERIALIZED_TOOL_NAMES].map((name) => `/${name}`);
+const PAREN_TOOL_PREFIXES = [...SERIALIZED_TOOL_NAMES].map((name) => `(${name}`);
 const FALLBACK_MARKER = 'FALLBACK_OK';
 
 /**
@@ -19,9 +20,10 @@ export function couldStartWithSerializedConvTool(text: string): boolean {
     return true;
   }
 
-  if (!candidate.startsWith('/')) return false;
+  if (!candidate.startsWith('/') && !candidate.startsWith('(')) return false;
   const lower = candidate.toLowerCase();
-  return SERIALIZED_TOOL_PREFIXES.some((prefix) => (
+  const prefixes = candidate.startsWith('(') ? PAREN_TOOL_PREFIXES : SERIALIZED_TOOL_PREFIXES;
+  return prefixes.some((prefix) => (
     prefix.startsWith(lower) || lower.startsWith(prefix)
   ));
 }
@@ -65,7 +67,7 @@ export function recoverSerializedConvTools(
   const withoutMarker = text.replace(/\bFALLBACK_OK\b\s*/gi, '');
   const recovered: LLMToolCall[] = [];
   const existingSignatures = new Set(existingCalls.map(callSignature));
-  const pattern = /\/(delegate|check_task|cancel_task|resume_task)\s*(?=\{)/gi;
+  const pattern = /([/(])(delegate|check_task|cancel_task|resume_task)\s*(?=\{)/gi;
   let visible = '';
   let cursor = 0;
 
@@ -83,10 +85,16 @@ export function recoverSerializedConvTools(
     }
     if (!args || typeof args !== 'object' || Array.isArray(args)) continue;
 
-    const name = match[1]!.toLowerCase();
+    const name = match[2]!.toLowerCase();
     if (!SERIALIZED_TOOL_NAMES.has(name)) continue;
     visible += withoutMarker.slice(cursor, matchIndex);
     cursor = jsonEnd;
+    // Groq may print `(delegate {...})` rather than `/delegate{...}`.
+    // Consume the protocol's closing parenthesis along with the call.
+    if (match[1] === '(') {
+      while (/\s/.test(withoutMarker[cursor] ?? '')) cursor++;
+      if (withoutMarker[cursor] === ')') cursor++;
+    }
 
     const call: LLMToolCall = {
       id: `${idPrefix}_${recovered.length}`,
