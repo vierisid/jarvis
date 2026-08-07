@@ -73,13 +73,16 @@ export class LLMProviderError extends Error {
 /** Preserve provider metadata when a non-streaming tier call is exposed as a stream. */
 export function toLLMStreamError(error: unknown): Extract<LLMStreamEvent, { type: 'error' }> {
   const message = error instanceof Error ? error.message : String(error);
+  const structured = error && typeof error === 'object'
+    ? error as { code?: LLMErrorCode; retryAfterMs?: unknown }
+    : undefined;
   return {
     type: 'error',
     error: message,
-    code: error instanceof LLMProviderError && error.code
-      ? error.code
-      : classifyErrorString(message),
-    retryAfterMs: error instanceof LLMProviderError ? error.retryAfterMs : undefined,
+    code: structured?.code ?? classifyErrorString(message),
+    retryAfterMs: typeof structured?.retryAfterMs === 'number'
+      ? structured.retryAfterMs
+      : undefined,
   };
 }
 

@@ -12,7 +12,6 @@ import {
   guardImageSize,
   classifyHttpStatus,
   classifyErrorString,
-  LLMProviderError,
   parseRetryAfterMs,
   toLLMStreamError,
   type LLMMessage,
@@ -1248,10 +1247,9 @@ describe('parseRetryAfterMs', () => {
 
 describe('toLLMStreamError', () => {
   test('preserves the final provider code and retry timing over earlier error text', () => {
-    const error = new LLMProviderError(
+    const error = Object.assign(new Error(
       'Anthropic API error (401): invalid x-api-key\n\nGroq API error (429): rate limited',
-      { code: 'rate_limit', retryAfterMs: 90_000 },
-    );
+    ), { code: 'rate_limit' as const, retryAfterMs: 90_000 });
 
     expect(toLLMStreamError(error)).toEqual({
       type: 'error',
