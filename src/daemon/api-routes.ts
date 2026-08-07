@@ -525,6 +525,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             context: body.context,
             priority: body.priority,
             assigned_to: body.assigned_to,
+            // P0.2 — a person created this in the dashboard, so it is a
+            // direct instruction rather than an inference. Without an
+            // explicit confidence the executor reads the row as unknown and
+            // will only ever announce it. The other gates still apply: an
+            // `assigned_to` naming a person keeps it announce-only.
+            confidence: 1.0,
           });
           ctx.wsService?.broadcastTaskUpdate(commitment, 'created');
           return json(commitment, 201);
