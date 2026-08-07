@@ -98,7 +98,9 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
 
     browser = new BrowserController(TEST_PORT);
     await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
-  }, 60_000);
+    // 90s, not 60s: the poll alone may run ~46s and navigate() carries an
+    // internal 30s load wait — the hook must exceed their sum.
+  }, 90_000);
 
   afterAll(async () => {
     try { await browser?.disconnect(); } catch { /* already gone */ }
