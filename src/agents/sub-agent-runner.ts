@@ -12,7 +12,8 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
-import type { ActionCategory } from '../roles/authority.ts';
+import type { ActionCategory, Impact } from '../roles/authority.ts';
+import { impactFromCategory } from '../roles/authority.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
@@ -22,6 +23,24 @@ const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents shou
 const MAX_TOOL_RESULT_CHARS = 6000;
 
 /**
+ * Ordering over `Impact` so a run can declare a ceiling ("nothing above
+ * write") without enumerating every category. Kept here rather than in
+ * roles/authority.ts because it is a policy ordering, not a fact about the
+ * categories.
+ */
+const IMPACT_RANK: Record<Impact, number> = {
+  read: 0,
+  write: 1,
+  external: 2,
+  destructive: 3,
+};
+
+/** True when `impact` is above the ceiling and must therefore be refused. */
+export function exceedsImpactCeiling(impact: Impact, ceiling: Impact): boolean {
+  return IMPACT_RANK[impact] > IMPACT_RANK[ceiling];
+}
+
+/**
  * Why the loop ended. `completed` is the happy path (LLM stopped requesting
  * tools). `max_iterations` means we exhausted the iteration cap with the
  * model still asking for tools -- callers should treat the answer as
@@ -29,8 +48,19 @@ const MAX_TOOL_RESULT_CHARS = 6000;
  * this lets workflow callers (jarvis-agent.delegate) map directly to the
  * piece's `{completed | max_iterations | error}` status field instead of
  * inferring from `success` + `response`.
+ *
+ * P0.4 adds three bounded-resource endings, all of them partial answers:
+ *   `cancelled`      -- the caller aborted (AgentTaskManager.cancel, shutdown)
+ *   `timeout`        -- the per-task wall-clock budget elapsed
+ *   `token_budget`   -- the agent's max_token_budget was reached
  */
-export type SubAgentTerminationReason = 'completed' | 'max_iterations' | 'error';
+export type SubAgentTerminationReason =
+  | 'completed'
+  | 'max_iterations'
+  | 'error'
+  | 'cancelled'
+  | 'timeout'
+  | 'token_budget';
 
 export type SubAgentResult = {
   success: boolean;
@@ -47,6 +77,18 @@ export type SubAgentResult = {
    * which only sees the simple user/assistant turns. Returned even on error.
    */
   messages: LLMMessage[];
+};
+
+/**
+ * The authority components a caller must forward for a sub-agent run to be
+ * gated + audited. Bundled as one type so a new caller can't quietly forward
+ * three of the four -- the failure mode P0.1 exists to fix.
+ */
+export type SubAgentAuthorityContext = {
+  authorityEngine?: AuthorityEngine;
+  auditTrail?: AuditTrail;
+  emergencyController?: EmergencyController;
+  temporaryGrants: Map<string, ActionCategory[]>;
 };
 
 export type ProgressCallback = (event: {
@@ -69,6 +111,35 @@ export type RunSubAgentOptions = {
   auditTrail?: AuditTrail;
   emergencyController?: EmergencyController;
   temporaryGrants?: Map<string, ActionCategory[]>;
+  /**
+   * P0.1 — hard ceiling on the impact class this run may execute, checked
+   * BEFORE (and independently of) the authority engine. A run with
+   * `impactCeiling: 'write'` can never send email, browse, delete, pay or
+   * shell out, no matter what the numeric authority level or the engine's
+   * overrides say.
+   *
+   * This exists because the numeric level and the engine's per-action
+   * overrides are configured for what the USER may do through an agent. A
+   * non-user-initiated agent needs a second, narrower bound that no config
+   * knob can widen. Omitted = no ceiling (engine decides alone), which is
+   * the pre-existing behaviour for user-initiated runs.
+   */
+  impactCeiling?: Impact;
+  /**
+   * P0.4 — cooperative cancellation. Checked before each LLM call and
+   * before each tool execution, so a cancelled run stops at the next
+   * boundary rather than mid-tool. In-flight LLM calls are not aborted;
+   * the loop exits once they return.
+   */
+  signal?: AbortSignal;
+  /**
+   * P0.4 — total (input + output) token ceiling for this run. When the
+   * running total reaches it, the loop stops and returns whatever text the
+   * agent has produced with `terminationReason: 'token_budget'`. Defaults
+   * to the agent's own `authority.max_token_budget`, which until now was
+   * stored, halved on every spawn, and never read by anything.
+   */
+  tokenBudget?: number;
 };
 
 /**
@@ -120,6 +191,8 @@ function getLLMTools(registry: ToolRegistry): LLMTool[] | undefined {
 async function executeTool(
   registry: ToolRegistry,
   toolCall: LLMToolCall,
+  agent: AgentInstance,
+  impactCeiling: Impact | undefined,
   authorityCtx?: {
     agent: AgentInstance;
     engine: AuthorityEngine;
@@ -128,6 +201,31 @@ async function executeTool(
     temporaryGrants?: Map<string, ActionCategory[]>;
   }
 ): Promise<string> {
+  // Impact ceiling (P0.1). Runs first and independently of the authority
+  // engine so the bound holds even where no engine is wired (embedded use,
+  // tests) — "no engine" must not mean "no limit" for a capped run.
+  if (impactCeiling) {
+    const tool = registry.get(toolCall.name);
+    const actionCategory = getActionForTool(toolCall.name, tool?.category ?? 'unknown');
+    const impact = impactFromCategory(actionCategory);
+    if (exceedsImpactCeiling(impact, impactCeiling)) {
+      authorityCtx?.auditTrail?.log({
+        agent_id: agent.id,
+        agent_name: agent.agent.role.name,
+        tool_name: toolCall.name,
+        action_category: actionCategory,
+        authority_decision: 'denied',
+        executed: false,
+      });
+      return (
+        `[AUTHORITY DENIED] ${toolCall.name}: this agent run is capped at "${impactCeiling}" impact ` +
+        `and ${actionCategory} is "${impact}". This task was not initiated by the user, so it cannot ` +
+        `take actions that reach outside the machine or are hard to undo. Report what you found and ` +
+        `what you would have done instead.`
+      );
+    }
+  }
+
   // Authority gate (if engine provided)
   if (authorityCtx) {
     const { agent, engine, auditTrail, emergencyController, temporaryGrants } = authorityCtx;
@@ -148,6 +246,9 @@ async function executeTool(
       toolCategory: tool?.category ?? 'unknown',
       actionCategory,
       temporaryGrants: temporaryGrants ?? new Map(),
+      // P0.5 — lets a research-analyst actually browse without raising its
+      // authority level (which would also unlock execute_command).
+      scopedGrants: agent.agent.authority.scoped_grants,
     });
 
     auditTrail?.log({
@@ -203,6 +304,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     auditTrail,
     emergencyController,
     temporaryGrants,
+    impactCeiling,
+    signal,
   } = opts;
 
   // Build authority context if engine provided
@@ -213,6 +316,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     emergencyController,
     temporaryGrants,
   } : undefined;
+
+  // P0.4 — `max_token_budget` has been carried on every agent (and halved on
+  // every spawn) since the hierarchy was written, and nothing has ever read
+  // it. A budget of 0 or less is treated as "unbounded" so an explicit opt-out
+  // is still possible; the shipped default is 100_000, halved per generation.
+  const configuredBudget = opts.tokenBudget ?? agent.agent.authority.max_token_budget;
+  const tokenBudget = configuredBudget > 0 ? configuredBudget : Infinity;
 
   const agentName = agent.agent.role.name;
   const agentId = agent.id;
@@ -239,10 +349,30 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   const tools = getLLMTools(toolRegistry);
   let finalText = '';
   let reachedFinal = false;
+  // Set when a bounded resource ran out. Wins over the iteration-count
+  // reasons because it says something more specific about why we stopped.
+  let stoppedBy: 'cancelled' | 'timeout' | 'token_budget' | null = null;
+
+  /** Reason the abort signal fired, mapped to a termination reason. */
+  const abortReason = (): 'cancelled' | 'timeout' =>
+    (signal?.reason as { name?: string } | undefined)?.name === 'TimeoutError' ? 'timeout' : 'cancelled';
 
   try {
     // Tool execution loop
     for (let iteration = 0; iteration < maxIterations; iteration++) {
+      if (signal?.aborted) {
+        stoppedBy = abortReason();
+        break;
+      }
+      if (totalUsage.input + totalUsage.output >= tokenBudget) {
+        console.warn(
+          `[SubAgent:${agent.agent.role.name}] token budget exhausted ` +
+          `(${totalUsage.input + totalUsage.output}/${tokenBudget}) — stopping`,
+        );
+        stoppedBy = 'token_budget';
+        break;
+      }
+
       const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
 
       totalUsage.input += llmResponse.usage.input_tokens;
@@ -265,6 +395,20 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         for (const tc of llmResponse.tool_calls) {
           toolsUsed.push(tc.name);
 
+          // Cancellation lands between tool calls, never mid-tool: a
+          // half-executed side effect is worse than a slightly late stop.
+          // The remaining calls in this batch get a result message anyway so
+          // the message log stays well-formed for the trace extractor.
+          if (signal?.aborted) {
+            stoppedBy = abortReason();
+            messages.push({
+              role: 'tool',
+              content: `[CANCELLED] ${tc.name} was not executed — the task was ${stoppedBy === 'timeout' ? 'timed out' : 'cancelled'}.`,
+              tool_call_id: tc.id,
+            });
+            continue;
+          }
+
           // Notify about tool call
           if (onProgress) {
             onProgress({
@@ -275,7 +419,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
             });
           }
 
-          const result = await executeTool(toolRegistry, tc, authorityCtx);
+          const result = await executeTool(toolRegistry, tc, agent, impactCeiling, authorityCtx);
           messages.push({
             role: 'tool',
             content: result,
@@ -285,6 +429,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
           console.log(`[SubAgent:${agentName}] Tool ${tc.name} -> ${result.slice(0, 100)}...`);
         }
 
+        if (stoppedBy) break;
         continue;
       }
 
@@ -300,15 +445,30 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       break;
     }
 
+    // A run stopped by a bounded resource has no final answer. Say so in the
+    // response text rather than returning an empty string that reads like a
+    // silent success to every caller downstream.
+    if (stoppedBy && !reachedFinal) {
+      finalText = {
+        cancelled: 'Task cancelled before the agent finished. Partial work only.',
+        timeout: 'Task stopped at its wall-clock timeout before the agent finished. Partial work only.',
+        token_budget: 'Task stopped at its token budget before the agent finished. Partial work only.',
+      }[stoppedBy];
+    }
+
     // Add final response to agent's history
     agent.addMessage('assistant', finalText);
 
     return {
-      success: true,
+      // `cancelled` / `timeout` / `token_budget` are not errors, but they are
+      // not successes either -- the goal wasn't reached. Callers that branch
+      // on `success` (the sub-pebble rail, the workflow delegator) must not
+      // render a truncated run as a completed one.
+      success: !stoppedBy,
       response: finalText,
       toolsUsed: [...new Set(toolsUsed)],
       tokensUsed: totalUsage,
-      terminationReason: reachedFinal ? 'completed' : 'max_iterations',
+      terminationReason: stoppedBy ?? (reachedFinal ? 'completed' : 'max_iterations'),
       messages,
     };
   } catch (err) {

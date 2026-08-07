@@ -178,6 +178,22 @@ export class M7AgentDelegator implements PieceAgentDelegator {
           error: result.response,
         };
       }
+      // P0.4 added three bounded-resource endings. The piece contract only
+      // knows completed / max_iterations / error / canceled, so map them:
+      // cancellation is `canceled`; a run cut short by its token budget or
+      // wall clock is an `error` with the reason named, because the step's
+      // goal was NOT met and a downstream branch must be able to see that.
+      if (result.terminationReason === "cancelled") {
+        return { finalMessage: result.response, toolCalls, status: "canceled" };
+      }
+      if (result.terminationReason === "timeout" || result.terminationReason === "token_budget") {
+        return {
+          finalMessage: result.response,
+          toolCalls,
+          status: "error",
+          error: `sub-agent stopped early: ${result.terminationReason}`,
+        };
+      }
       return {
         finalMessage: result.response,
         toolCalls,

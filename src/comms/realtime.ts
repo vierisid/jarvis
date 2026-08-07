@@ -110,6 +110,16 @@ export function buildSessionUpdate(
       input: {
         // OpenAI requires rate >= MIN_REALTIME_INPUT_RATE (24kHz).
         format: { type: 'audio/pcm', rate: inputSampleRate },
+        // P0.5 — without this key OpenAI transcribes only ITS OWN output.
+        // The model consumes user audio directly, so input transcription is a
+        // separate, opt-in, asynchronous process. Omitting it meant
+        // `conversation.item.input_audio_transcription.completed` never fired
+        // and the user's own words never reached `onTranscript` — the handler
+        // for that event has been in this file the whole time with nothing to
+        // deliver. An empty model string leaves it off (deliberate opt-out).
+        ...(resolved.inputTranscriptionModel
+          ? { transcription: { model: resolved.inputTranscriptionModel } }
+          : {}),
         // Plain semantic_vad — the low-latency, natural, preamble-friendly
         // default. (server_vad and eagerness tuning both made it worse.) The
         // first-turn "doesn't start" was dropped opening audio, fixed by the

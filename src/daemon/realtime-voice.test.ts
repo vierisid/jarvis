@@ -7,7 +7,8 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { setUsageDatabase } from '../llm/usage.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
-  apiKey: 'k', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
+  apiKey: 'k', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10,
+  inputTranscriptionModel: 'whisper-1', blockedCategories: [],
 };
 
 /** Fake RealtimeSession capturing wired callbacks + outgoing results. */

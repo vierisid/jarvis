@@ -62,6 +62,18 @@ export type RealtimeVoiceConfig = {
   reasoning_effort?: RealtimeReasoningEffort;
   /** Hard cap on a single realtime session length (cost guard). Default 10. */
   max_session_minutes?: number;
+  /**
+   * P0.5 — model used for INPUT (user speech) transcription on the realtime
+   * channel. Until this shipped, `buildSessionUpdate` never set
+   * `session.audio.input.transcription`, so OpenAI transcribed only its own
+   * output: the user's own words never reached the transcript, the vault, or
+   * anything else reading `onTranscript`.
+   *
+   * Default 'whisper-1' — the longest-lived, most broadly accepted value for
+   * this field. 'gpt-4o-transcribe' is more accurate and costs more.
+   * Set to the empty string to turn input transcription off entirely.
+   */
+  input_transcription_model?: string;
   /** Optional monthly USD spend ceiling; block new sessions past it. */
   monthly_budget_usd?: number;
   /**

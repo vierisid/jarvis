@@ -217,8 +217,12 @@ export class AgentService implements Service, IAgentService {
         toolRegistry.register(delegateTool);
         console.log('[AgentService] Registered delegate_task tool');
 
-        // Register manage_agents tool for persistent/async agents
-        this.taskManager = new AgentTaskManager();
+        // Register manage_agents tool for persistent/async agents.
+        // P0.1 — the orchestrator is the authority source. It is passed (not
+        // its components) because the daemon calls
+        // orchestrator.setAuthorityEngine/setAuditTrail/setEmergencyController
+        // later in boot; the manager re-reads them on every launch.
+        this.taskManager = new AgentTaskManager({ authoritySource: this.orchestrator });
         const agentToolDeps: AgentToolDeps = {
           orchestrator: this.orchestrator,
           llmManager: this.llmManager,

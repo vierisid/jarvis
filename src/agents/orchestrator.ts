@@ -4,7 +4,7 @@ import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, Con
 import { guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
-import { AgentInstance, canSpawnChildren } from './agent.ts';
+import { AgentInstance, canSpawnChildren, scopedGrantsForTools } from './agent.ts';
 import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
@@ -15,6 +15,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
+import type { SubAgentAuthorityContext } from './sub-agent-runner.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -153,6 +154,29 @@ export class AgentOrchestrator {
     this.emergencyController = controller;
   }
 
+  /**
+   * Live view of the authority components wired into this orchestrator, for
+   * callers that run sub-agents outside `processMessage` (P0.1:
+   * AgentTaskManager -> runSubAgent).
+   *
+   * Read at USE time, not at wire time: the daemon constructs the task
+   * manager during agent-service start-up but only calls
+   * setAuthorityEngine/setAuditTrail/setEmergencyController later in boot.
+   * Snapshotting at construction would have silently produced an ungated
+   * task manager -- exactly the bug P0.1 is fixing.
+   *
+   * `temporaryGrants` is returned by reference on purpose so grants issued
+   * after a task launches are visible to the running sub-agent.
+   */
+  getAuthorityContext(): SubAgentAuthorityContext {
+    return {
+      ...(this.authorityEngine ? { authorityEngine: this.authorityEngine } : {}),
+      ...(this.auditTrail ? { auditTrail: this.auditTrail } : {}),
+      ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),
+      temporaryGrants: this.temporaryGrants,
+    };
+  }
+
   setApprovalCallback(cb: (request: ApprovalRequest) => void): void {
     this.onApprovalNeeded = cb;
   }
@@ -245,17 +269,22 @@ export class AgentOrchestrator {
     }
 
     // Create child agent with reduced authority
+    const childTools = role.tools.filter((tool) =>
+      parent.agent.authority.allowed_tools.includes(tool)
+    );
     const childAuthority = {
       max_authority_level: Math.min(
         role.authority_level,
         parent.agent.authority.max_authority_level - 1
       ),
-      allowed_tools: role.tools.filter((tool) =>
-        parent.agent.authority.allowed_tools.includes(tool)
-      ),
+      allowed_tools: childTools,
       denied_tools: parent.agent.authority.denied_tools,
       max_token_budget: Math.floor(parent.agent.authority.max_token_budget / 2),
       can_spawn_children: canSpawnChildren(role),
+      // P0.5 — derived from the tools the child ACTUALLY holds after the
+      // parent's filter, so a parent that withheld `browser` also withholds
+      // the browse grant. Never widened by the parent's own grants.
+      scoped_grants: scopedGrantsForTools(childTools),
     };
 
     const agent = new AgentInstance(role, {
@@ -758,6 +787,7 @@ export class AgentOrchestrator {
         toolCategory: tool?.category ?? 'unknown',
         actionCategory,
         temporaryGrants: this.temporaryGrants,
+        scopedGrants: primary.agent.authority.scoped_grants,
       });
 
       // Determine decision type for audit
@@ -954,6 +984,7 @@ export class AgentOrchestrator {
         toolCategory: tool?.category ?? 'unknown',
         actionCategory,
         temporaryGrants: this.temporaryGrants,
+        scopedGrants: primary.agent.authority.scoped_grants,
       });
 
       if (!decision.allowed) {

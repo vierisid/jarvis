@@ -1,4 +1,5 @@
 import type { RoleDefinition } from '../roles/types.ts';
+import type { ActionCategory } from '../roles/authority.ts';
 import type { LLMMessage } from '../llm/provider.ts';
 import { compactHistory, measureMessage } from '../llm/history.ts';
 
@@ -27,6 +28,22 @@ export type AuthorityBounds = {
   denied_tools: string[];
   max_token_budget: number;
   can_spawn_children: boolean;
+  /**
+   * P0.5 — narrow, per-action exemptions from the NUMERIC level check only.
+   *
+   * A specialist whose whole job needs one high-level action (research-analyst
+   * needs `access_browser`, which requires level 5, while the role sits at 4
+   * and the spawn rule caps it lower still) gets that one action here instead
+   * of having its authority_level raised. Raising the level would also hand it
+   * `execute_command` and `control_app`, which share level 5 and which a
+   * research agent has no business holding.
+   *
+   * Deliberately NOT the same thing as a temporary grant. Temporary grants win
+   * over everything, including an explicit user deny. A scoped grant is only
+   * consulted at step 4 of the authority decision, so a user override, a
+   * context rule, or a governed-category approval requirement all still bind.
+   */
+  scoped_grants: ActionCategory[];
 };
 
 export type Agent = {
@@ -67,7 +84,33 @@ function getDefaultAuthority(role: RoleDefinition): AuthorityBounds {
     denied_tools: [],
     max_token_budget: 100000,
     can_spawn_children: canSpawnChildren(role),
+    scoped_grants: scopedGrantsForTools(role.tools),
   };
+}
+
+/**
+ * P0.5 — the exemptions an agent earns from the tools it actually holds.
+ *
+ * Today there is exactly one: an agent holding the `browser` tool gets
+ * `access_browser`. Without it, `research-analyst` (authority_level 4) is
+ * handed browser tools it is then forbidden to call, because
+ * `access_browser` requires level 5. That is not a theoretical mismatch —
+ * with the shipped `active_role: personal-assistant` (level 5) the spawn rule
+ * caps a child at `min(4, 5 - 1) = 4`, so the research agent the voice
+ * fast-path spawns cannot browse at all. Note that raising the specialist's
+ * `authority_level` to 5 would NOT fix this: the spawn cap still lands it at
+ * 4. The grant is both the narrower fix and the only one that works.
+ *
+ * Takes the effective tool list (not the role) so a child spawned under a
+ * parent that withheld `browser` gets no grant either.
+ *
+ * Keep this list short and derived from a declared tool. It is not a place to
+ * hand out capability by role name.
+ */
+export function scopedGrantsForTools(tools: string[]): ActionCategory[] {
+  const grants: ActionCategory[] = [];
+  if (tools.includes('browser')) grants.push('access_browser');
+  return grants;
 }
 
 /**
@@ -85,6 +128,7 @@ function mergeAuthority(
     denied_tools: custom.denied_tools ?? defaultAuth.denied_tools,
     max_token_budget: custom.max_token_budget ?? defaultAuth.max_token_budget,
     can_spawn_children: custom.can_spawn_children ?? defaultAuth.can_spawn_children,
+    scoped_grants: custom.scoped_grants ?? defaultAuth.scoped_grants,
   };
 }
 

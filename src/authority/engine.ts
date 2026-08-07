@@ -56,6 +56,14 @@ export type AuthorityCheckParams = {
   toolCategory: string;
   actionCategory: ActionCategory;
   temporaryGrants: Map<string, ActionCategory[]>;
+  /**
+   * P0.5 — actions this agent may perform despite sitting below the required
+   * numeric level, because its role declares the matching tool. Consulted at
+   * step 4 ONLY: overrides, context rules and the governed-category approval
+   * gate all still bind. Contrast `temporaryGrants`, which short-circuits
+   * every later check including an explicit user deny.
+   */
+  scopedGrants?: ActionCategory[];
 };
 
 export class AuthorityEngine {
@@ -147,12 +155,21 @@ export class AuthorityEngine {
     const effectiveLevel = Math.max(agentAuthorityLevel, this.config.default_level);
     const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
     if (effectiveLevel < requiredLevel) {
-      return {
-        allowed: false,
-        requiresApproval: false,
-        reason: `Authority level ${effectiveLevel} is below required ${requiredLevel} for ${actionCategory}`,
-        actionCategory,
-      };
+      // P0.5 — a scoped grant satisfies the NUMERIC requirement for one named
+      // action and nothing else. It is checked here, at step 4, on purpose:
+      // an explicit user deny (step 2) and a context rule (step 3) have
+      // already had their say and win, and the governed-category approval
+      // gate below still applies. This is the narrow alternative to raising a
+      // specialist's authority_level, which would also unlock every other
+      // action at that level.
+      if (!params.scopedGrants?.includes(actionCategory)) {
+        return {
+          allowed: false,
+          requiresApproval: false,
+          reason: `Authority level ${effectiveLevel} is below required ${requiredLevel} for ${actionCategory}`,
+          actionCategory,
+        };
+      }
     }
 
     // 5. Governed category check — if level is sufficient but action is governed, require approval

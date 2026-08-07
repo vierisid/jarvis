@@ -4,14 +4,81 @@
  * Manages sub-agent tasks as background Promises. When a task is launched,
  * runSubAgent() fires without blocking — the caller gets a task ID and can
  * check status / collect results later.
+ *
+ * ## Safety contract (Phase 0)
+ *
+ * Every task launched here is authority-gated and audited. Before P0.1 this
+ * class called `runSubAgent` with no authority engine, no audit trail and no
+ * emergency controller, and `runSubAgent` reads "no engine" as "no gate" —
+ * so background agents were the one sub-agent path in the codebase that ran
+ * completely ungoverned, while the workflow delegator forwarded authority
+ * correctly. The components are pulled from the orchestrator at LAUNCH time
+ * (see `AuthoritySource`), not captured at construction, because the daemon
+ * wires them into the orchestrator after this class is built.
+ *
+ * ## Initiator, and what a non-user-initiated agent may do (P0.1)
+ *
+ * `launch()` requires an explicit `initiator`. The roadmap notes that the
+ * concept of a non-user-initiated agent had no representation anywhere; this
+ * is it, deliberately kept to one bit rather than a new permission model.
+ *
+ *   `user`   — a person asked for this, directly or one step removed: they
+ *              typed it, spoke it, or the primary agent called `manage_agents`
+ *              while answering them. Gated by the authority engine exactly as
+ *              before, with no extra ceiling.
+ *   `system` — nothing a person said started this: an ambient trigger, a
+ *              timer, a passive classifier, an overheard sentence. Gated by
+ *              the engine AND capped at `write` impact, so it can read and
+ *              mutate local state but can never send email, browse, run a
+ *              command, install, pay, delete or terminate — regardless of the
+ *              numeric authority level or any per-action override.
+ *
+ * `system` is the DEFAULT when `initiator` is omitted. That is intentional:
+ * a future caller that forgets the field gets the restrictive answer rather
+ * than the permissive one.
  */
 
-import { runSubAgent, type SubAgentResult, type ProgressCallback } from './sub-agent-runner.ts';
+import {
+  runSubAgent,
+  type SubAgentResult,
+  type ProgressCallback,
+  type SubAgentAuthorityContext,
+} from './sub-agent-runner.ts';
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
+import type { Impact } from '../roles/authority.ts';
 
-export type AsyncTaskStatus = 'running' | 'completed' | 'failed';
+export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** See the class doc for what each value permits. */
+export type TaskInitiator = 'user' | 'system';
+
+/**
+ * Impact ceiling applied to a non-user-initiated run. `write` covers
+ * read_data, write_data, send_message, spawn_agent and control_app; it
+ * excludes access_browser and send_email (external) and everything
+ * destructive.
+ */
+export const SYSTEM_INITIATED_IMPACT_CEILING: Impact = 'write';
+
+/**
+ * Anything that can hand over the live authority wiring. The orchestrator
+ * implements this; tests can pass a literal.
+ */
+export type AuthoritySource = {
+  getAuthorityContext(): SubAgentAuthorityContext;
+};
+
+/** Default cap on tasks running at once across the whole daemon. */
+export const DEFAULT_MAX_CONCURRENT_TASKS = 3;
+
+/**
+ * Default per-task wall clock. Long enough for a real research run over many
+ * tool calls, short enough that a wedged agent doesn't hold a concurrency
+ * slot for the rest of the daemon's life.
+ */
+export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000;
 
 export type AsyncTask = {
   id: string;
@@ -20,6 +87,8 @@ export type AsyncTask = {
   specialistId: string;
   task: string;
   status: AsyncTaskStatus;
+  /** Who caused this task to exist. See the class doc. */
+  initiator: TaskInitiator;
   startedAt: number;
   completedAt: number | null;
   result: SubAgentResult | null;
@@ -40,6 +109,36 @@ export type LaunchOptions = {
   toolRegistry: ToolRegistry;
   onProgress?: ProgressCallback;
   onComplete?: (task: AsyncTask) => void;
+  /**
+   * Who caused this task. Omitting it means `system` — the restrictive
+   * answer. Pass `user` only where a person's request is genuinely upstream.
+   */
+  initiator?: TaskInitiator;
+  /** Override the per-task wall clock for this launch. */
+  timeoutMs?: number;
+};
+
+/** Thrown by `launch()` when the global concurrency cap is already reached. */
+export class TaskCapacityError extends Error {
+  constructor(public readonly running: number, public readonly max: number) {
+    super(
+      `Too many agent tasks already running (${running}/${max}). ` +
+      `Wait for one to finish, or cancel one, before starting another.`,
+    );
+    this.name = 'TaskCapacityError';
+  }
+}
+
+export type AgentTaskManagerOptions = {
+  /**
+   * Where to read the authority engine / audit trail / emergency controller
+   * from at launch time. Omitting it leaves tasks ungated, which is only
+   * appropriate in tests and embedded use — production wires the
+   * orchestrator.
+   */
+  authoritySource?: AuthoritySource;
+  maxConcurrent?: number;
+  taskTimeoutMs?: number;
 };
 
 export type TaskLifecycleEvent = 'launch' | 'complete' | 'fail';
@@ -48,6 +147,23 @@ export type TaskLifecycleListener = (event: TaskLifecycleEvent, task: AsyncTask)
 export class AgentTaskManager {
   private tasks = new Map<string, AsyncTask>();
   private listeners = new Set<TaskLifecycleListener>();
+  private readonly authoritySource: AuthoritySource | undefined;
+  private readonly maxConcurrent: number;
+  private readonly taskTimeoutMs: number;
+  /** Abort controllers for in-flight runs, keyed by task id. */
+  private aborts = new Map<string, AbortController>();
+
+  constructor(opts: AgentTaskManagerOptions = {}) {
+    this.authoritySource = opts.authoritySource;
+    this.maxConcurrent = opts.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_TASKS;
+    this.taskTimeoutMs = opts.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+    if (!this.authoritySource) {
+      console.warn(
+        '[TaskManager] constructed without an authority source — background ' +
+        'sub-agent tool calls will NOT be gated or audited. This is only safe in tests.',
+      );
+    }
+  }
 
   /**
    * Subscribe to lifecycle events (launch / complete / fail) for every task
@@ -70,11 +186,34 @@ export class AgentTaskManager {
     }
   }
 
+  /** Number of tasks currently running. */
+  runningCount(): number {
+    let n = 0;
+    for (const t of this.tasks.values()) if (t.status === 'running') n++;
+    return n;
+  }
+
+  /** The configured global cap, for callers that want to report it. */
+  getMaxConcurrent(): number {
+    return this.maxConcurrent;
+  }
+
   /**
    * Launch a sub-agent task in the background. Returns task ID immediately.
+   *
+   * Throws `TaskCapacityError` when the global concurrency cap is already
+   * reached. Callers surface that to the user rather than queueing: a
+   * background agent the user asked for and never got is better than a
+   * silent queue that fires an hour later.
    */
   launch(opts: LaunchOptions): string {
     const { agent, task, context, llmManager, toolRegistry, onProgress, onComplete } = opts;
+    const initiator: TaskInitiator = opts.initiator ?? 'system';
+
+    const running = this.runningCount();
+    if (running >= this.maxConcurrent) {
+      throw new TaskCapacityError(running, this.maxConcurrent);
+    }
 
     const taskId = crypto.randomUUID();
     const asyncTask: AsyncTask = {
@@ -84,6 +223,7 @@ export class AgentTaskManager {
       specialistId: agent.agent.role.id,
       task,
       status: 'running',
+      initiator,
       startedAt: Date.now(),
       completedAt: null,
       result: null,
@@ -93,6 +233,23 @@ export class AgentTaskManager {
     this.tasks.set(taskId, asyncTask);
     this.emit('launch', asyncTask);
 
+    // Wall-clock bound + cancel path share one controller: runSubAgent maps
+    // a TimeoutError reason to `timeout` and anything else to `cancelled`.
+    const controller = new AbortController();
+    this.aborts.set(taskId, controller);
+    const timeoutMs = opts.timeoutMs ?? this.taskTimeoutMs;
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+          if (controller.signal.aborted) return;
+          console.warn(`[TaskManager] Task ${taskId} hit its ${Math.round(timeoutMs / 1000)}s timeout — aborting`);
+          controller.abort(new DOMException('Task wall-clock timeout', 'TimeoutError'));
+        }, timeoutMs)
+      : null;
+
+    // Authority is read HERE, not in the constructor: the daemon wires the
+    // engine into the orchestrator after this manager is built.
+    const authority = this.authoritySource?.getAuthorityContext();
+
     // Fire runSubAgent without awaiting — runs in background
     runSubAgent({
       agent,
@@ -101,12 +258,28 @@ export class AgentTaskManager {
       llmManager,
       toolRegistry,
       onProgress,
+      signal: controller.signal,
+      ...(initiator === 'system' ? { impactCeiling: SYSTEM_INITIATED_IMPACT_CEILING } : {}),
+      ...(authority?.authorityEngine ? { authorityEngine: authority.authorityEngine } : {}),
+      ...(authority?.auditTrail ? { auditTrail: authority.auditTrail } : {}),
+      ...(authority?.emergencyController ? { emergencyController: authority.emergencyController } : {}),
+      // A non-user-initiated agent inherits NO temporary grants. Grants are
+      // escalations a parent handed out during a user's turn; letting an
+      // ambient agent ride on one would defeat the ceiling above.
+      ...(authority && initiator === 'user' ? { temporaryGrants: authority.temporaryGrants } : {}),
     }).then((result) => {
-      asyncTask.status = 'completed';
+      // Map the runner's termination reason onto the task status the UI and
+      // API consume. A run stopped by its budget or wall clock did not do
+      // what it was asked, so it reports `failed` -- rendering it as
+      // completed would put a green dot on an unfinished job.
+      asyncTask.status =
+        result.terminationReason === 'cancelled' ? 'cancelled'
+        : result.terminationReason === 'timeout' || result.terminationReason === 'token_budget' ? 'failed'
+        : 'completed';
       asyncTask.completedAt = Date.now();
       asyncTask.result = result;
-      console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
-      this.emit('complete', asyncTask);
+      console.log(`[TaskManager] Task ${taskId} ${asyncTask.status} (${asyncTask.agentName}, ${result.terminationReason})`);
+      this.emit(asyncTask.status === 'failed' ? 'fail' : 'complete', asyncTask);
       onComplete?.(asyncTask);
     }).catch((err) => {
       asyncTask.status = 'failed';
@@ -122,9 +295,43 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit('fail', asyncTask);
       onComplete?.(asyncTask);
+    }).finally(() => {
+      if (timer) clearTimeout(timer);
+      this.aborts.delete(taskId);
     });
 
     return taskId;
+  }
+
+  /**
+   * Request cancellation of a running task. Returns false if the task is
+   * unknown or already settled.
+   *
+   * Cooperative: the run stops at the next LLM-call or tool-call boundary,
+   * so an in-flight tool finishes rather than being torn down half-done.
+   * The task's `onComplete` still fires, with
+   * `terminationReason: 'cancelled'`.
+   */
+  cancel(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== 'running') return false;
+    const controller = this.aborts.get(taskId);
+    if (!controller) return false;
+    console.log(`[TaskManager] Cancelling task ${taskId} (${task.agentName})`);
+    controller.abort(new DOMException('Task cancelled', 'AbortError'));
+    return true;
+  }
+
+  /**
+   * Cancel every running task. Used on shutdown and by the emergency stop.
+   * Returns the number of tasks signalled.
+   */
+  cancelAll(): number {
+    let n = 0;
+    for (const [id, task] of this.tasks) {
+      if (task.status === 'running' && this.cancel(id)) n++;
+    }
+    return n;
   }
 
   /**

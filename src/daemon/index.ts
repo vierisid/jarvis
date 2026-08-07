@@ -2517,7 +2517,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
         try {
           const spawned = spawnPersistentAgent(deps, specialistId);
-          await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context: '' });
+          // The user said "in the background, ..." out loud — user-initiated.
+          // When Phase 1 routes ambient meeting speech here, that path must
+          // pass `system` instead so the impact ceiling applies.
+          await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context: '', initiator: 'user' });
           await speakConfirmation(sidecarId, `Got it. Running in the background.`, ctrl);
           console.log(`[ambient-ui] background-intent: spawned ${specialistId} for "${task.slice(0, 60)}"`);
         } catch (err) {

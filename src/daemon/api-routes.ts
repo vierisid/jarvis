@@ -775,6 +775,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               agentId: spawned.agent.id,
               task: body.task.trim(),
               context: body.context?.trim(),
+              // A person clicked "spawn agent" in the dashboard.
+              initiator: 'user',
             });
           }
 

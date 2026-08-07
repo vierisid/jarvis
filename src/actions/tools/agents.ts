@@ -12,7 +12,7 @@ import type { AgentOrchestrator } from '../../agents/orchestrator.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition } from './registry.ts';
-import type { AgentTaskManager, AsyncTask } from '../../agents/task-manager.ts';
+import { TaskCapacityError, type AgentTaskManager, type AsyncTask, type TaskInitiator } from '../../agents/task-manager.ts';
 import { createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 
 export type AgentToolDeps = {
@@ -84,9 +84,21 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) 
 
 export async function assignPersistentAgentTask(
   deps: AgentToolDeps,
-  params: { agentId: string; task: string; context?: string }
+  params: {
+    agentId: string;
+    task: string;
+    context?: string;
+    /**
+     * P0.1 — who caused this task. `user` for anything a person asked for
+     * (dashboard, chat, a spoken "in the background, ..."), `system` for
+     * ambient / passive triggers. Defaults to `system`, the restrictive
+     * answer, so a future caller that forgets it doesn't accidentally get
+     * user-level reach. See AgentTaskManager's class doc.
+     */
+    initiator?: TaskInitiator;
+  }
 ) {
-  const { agentId, task, context = '' } = params;
+  const { agentId, task, context = '', initiator = 'system' } = params;
   if (!agentId) throw new HttpError(400, '"agentId" is required');
   if (!task) throw new HttpError(400, '"task" is required');
 
@@ -109,15 +121,24 @@ export async function assignPersistentAgentTask(
     data: `[Assigning task to ${agent.agent.role.name}...]`,
   });
 
-  const taskId = deps.taskManager.launch({
-    agent,
-    task,
-    context,
-    llmManager: deps.llmManager,
-    toolRegistry: scopedRegistry,
-    onProgress: deps.onProgress,
-    onComplete: deps.onTaskComplete,
-  });
+  let taskId: string;
+  try {
+    taskId = deps.taskManager.launch({
+      agent,
+      task,
+      context,
+      llmManager: deps.llmManager,
+      toolRegistry: scopedRegistry,
+      onProgress: deps.onProgress,
+      onComplete: deps.onTaskComplete,
+      initiator,
+    });
+  } catch (err) {
+    // P0.4 — the global concurrency cap. 429 rather than 500: this is a
+    // "try again shortly", not a bug.
+    if (err instanceof TaskCapacityError) throw new HttpError(429, err.message);
+    throw err;
+  }
 
   console.log(`[ManageAgents] Assigned task ${taskId} to ${agent.agent.role.name}`);
 
@@ -293,6 +314,9 @@ async function handleAssign(deps: AgentToolDeps, params: Record<string, unknown>
       agentId: params.agent_id as string,
       task: params.task as string,
       context: params.context as string | undefined,
+      // The primary agent only calls manage_agents while answering a person,
+      // so this path is user-initiated.
+      initiator: 'user',
     }));
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;

@@ -23,6 +23,13 @@ export type ResolvedRealtimeVoice = {
   voice?: string;
   reasoningEffort: RealtimeReasoningEffort;
   maxSessionMinutes: number;
+  /**
+   * P0.5 — model for transcribing the USER's speech on the realtime channel.
+   * Empty string means input transcription stays off (the pre-P0.5
+   * behaviour), so an owner who doesn't want their speech transcribed by a
+   * second model can turn it back off.
+   */
+  inputTranscriptionModel: string;
   monthlyBudgetUsd?: number;
   blockedCategories: string[];
 };
@@ -34,6 +41,12 @@ export type RealtimeVoiceResolution =
 const DEFAULT_MODEL = 'gpt-realtime-2';
 const DEFAULT_EFFORT: RealtimeReasoningEffort = 'low';
 const DEFAULT_MAX_SESSION_MINUTES = 10;
+/**
+ * P0.5 — default input transcription model. `whisper-1` is the longest-lived
+ * and most broadly accepted value for `session.audio.input.transcription`;
+ * `gpt-4o-transcribe` is more accurate and costs more.
+ */
+const DEFAULT_INPUT_TRANSCRIPTION_MODEL = 'whisper-1';
 const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 /**
@@ -106,6 +119,12 @@ export function resolveRealtimeVoice(
       voice: rt.voice,
       reasoningEffort,
       maxSessionMinutes,
+      // An explicit empty string is a deliberate opt-out and is honored;
+      // anything else falls back to the default.
+      inputTranscriptionModel:
+        typeof rt.input_transcription_model === 'string'
+          ? rt.input_transcription_model.trim()
+          : DEFAULT_INPUT_TRANSCRIPTION_MODEL,
       monthlyBudgetUsd:
         typeof rt.monthly_budget_usd === 'number' && rt.monthly_budget_usd > 0
           ? rt.monthly_budget_usd

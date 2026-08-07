@@ -16,6 +16,7 @@ const RESOLVED: ResolvedRealtimeVoice = {
   voice: 'marin',
   reasoningEffort: 'medium',
   maxSessionMinutes: 10,
+  inputTranscriptionModel: 'whisper-1',
   blockedCategories: [],
 };
 
@@ -53,6 +54,21 @@ describe('buildSessionUpdate', () => {
     expect(msg.session.audio.output.voice).toBeUndefined();
     expect(msg.session.tools).toBeUndefined();
     expect(msg.session.tool_choice).toBeUndefined();
+  });
+
+  // P0.5 — this key was missing entirely, so the user's own speech was never
+  // transcribed on the realtime channel and the
+  // `conversation.item.input_audio_transcription.completed` handler in
+  // realtime.ts never fired.
+  test('enables input transcription so user speech is transcribed', () => {
+    const msg = buildSessionUpdate(RESOLVED, [], 'hi', 24000, 24000) as any;
+    expect(msg.session.audio.input.transcription).toEqual({ model: 'whisper-1' });
+  });
+
+  test('leaves input transcription off when the model is empty (opt-out)', () => {
+    const off = { ...RESOLVED, inputTranscriptionModel: '' };
+    const msg = buildSessionUpdate(off, [], 'hi', 24000, 24000) as any;
+    expect(msg.session.audio.input.transcription).toBeUndefined();
   });
 });
 
