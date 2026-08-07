@@ -6,6 +6,7 @@ import {
   KEY_BASED_KINDS,
   LLM_PROVIDER_KIND_LABELS,
   LLM_PROVIDER_KINDS,
+  OPTIONAL_KEY_KINDS,
   URL_BASED_KINDS,
   type LLMConfigProviderView,
   type LLMProviderKind,
@@ -315,7 +316,8 @@ function ProviderRow({
 }) {
   const usesUrl = URL_BASED_KINDS.has(entry.kind);
   const usesKey = KEY_BASED_KINDS.has(entry.kind);
-  const configured = (!usesUrl || !!entry.base_url?.trim()) && (!usesKey || entry.has_api_key);
+  const needsKey = usesKey && !OPTIONAL_KEY_KINDS.has(entry.kind);
+  const configured = (!usesUrl || !!entry.base_url?.trim()) && (!needsKey || entry.has_api_key);
 
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(entry.base_url ?? "");
@@ -354,7 +356,7 @@ function ProviderRow({
         <div className="v2-set__row-body">
           {usesKey && (
             <div className="v2-set__field">
-              <label className="v2-set__field-label">API key</label>
+              <label className="v2-set__field-label">API key{needsKey ? "" : " (optional)"}</label>
               <input
                 type="password"
                 className="v2-set__input"
@@ -457,6 +459,7 @@ function NewProviderRow({
 
   const usesUrl = URL_BASED_KINDS.has(kind);
   const usesKey = KEY_BASED_KINDS.has(kind);
+  const needsKey = usesKey && !OPTIONAL_KEY_KINDS.has(kind);
   // Suggest name = kind unless user typed something
   const effectiveName = name.trim() || kind;
   const duplicate = existing.includes(effectiveName);
@@ -503,7 +506,7 @@ function NewProviderRow({
 
         {usesKey && (
           <div className="v2-set__field">
-            <label className="v2-set__field-label">API key</label>
+            <label className="v2-set__field-label">API key{needsKey ? "" : " (optional)"}</label>
             <input
               type="password"
               className="v2-set__input"
@@ -532,7 +535,7 @@ function NewProviderRow({
           <button
             type="button"
             className="v2-set__btn v2-set__btn--primary"
-            disabled={saving || duplicate || (usesKey && !apiKey) || (usesUrl && !baseUrl)}
+            disabled={saving || duplicate || (needsKey && !apiKey) || (usesUrl && !baseUrl)}
             onClick={async () => {
               setSaving(true);
               const input: { kind: LLMProviderKind; api_key?: string; base_url?: string } = { kind };

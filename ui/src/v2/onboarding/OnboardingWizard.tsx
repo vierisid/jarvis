@@ -40,7 +40,7 @@ const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html:
 /* — providers (backend kind ids); model lists per the design — */
 type Provider = {
   id: string; name: string; abbr: string; kind: string; reco?: boolean; soon?: boolean;
-  noConfig?: boolean; needsKey?: boolean; needsBaseUrl?: boolean; freeModel?: boolean;
+  noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; freeModel?: boolean;
   urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const PROVIDERS: Provider[] = [
@@ -54,7 +54,7 @@ const PROVIDERS: Provider[] = [
   { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: ["meta/llama-3.3-70b-instruct"], hint: "Live model catalog loads from your NVIDIA account." },
   { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
   { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
-  { id: "omniroute", name: "OmniRoute", abbr: "Om", kind: "gateway", needsKey: true, needsBaseUrl: true, urlLabel: "OmniRoute API URL", urlPh: "http://localhost:20128/v1", models: ["auto"], hint: "Loads every route and combo from your OmniRoute instance. Tool calls and streaming are supported through its OpenAI-compatible API." },
+  { id: "omniroute", name: "OmniRoute", abbr: "Om", kind: "gateway", needsKey: true, keyOptional: true, needsBaseUrl: true, urlLabel: "OmniRoute API URL", urlPh: "http://localhost:20128/v1", models: ["auto"], hint: "Loads every route and combo from your OmniRoute instance. Tool calls and streaming are supported through its OpenAI-compatible API." },
 ];
 
 const EDGE_VOICES = [
@@ -173,10 +173,13 @@ export function OnboardingWizard({
   // Reset the ElevenLabs test whenever the key changes or the provider flips.
   useEffect(() => { setTtsTest({ status: "idle" }); }, [elevenKey, tts]);
 
+  // Restore the URL last typed for each provider instead of clobbering it
+  // with the default every time the user toggles between providers.
+  const urlByProvider = useRef<Record<string, string>>({});
   useEffect(() => {
     const p = PROVIDERS.find((x) => x.id === provId)!;
     setModel(p.models?.[0] ?? "");
-    if (provId === "omniroute") setBaseUrl("http://localhost:20128/v1");
+    setBaseUrl(urlByProvider.current[provId] ?? (provId === "omniroute" ? "http://localhost:20128/v1" : ""));
     setTest({ status: "idle" });
   }, [provId]);
 
@@ -231,14 +234,17 @@ export function OnboardingWizard({
   const [omniRouteModels, setOmniRouteModels] = useState<string[] | null>(null);
   const [omniRouteLoading, setOmniRouteLoading] = useState(false);
   useEffect(() => {
-    if (provId !== "omniroute" || !baseUrl.trim() || !apiKey) return;
+    if (provId !== "omniroute") return;
+    // No URL to probe: also drop a catalog fetched with earlier inputs so a
+    // stale list doesn't linger on screen.
+    if (!baseUrl.trim()) { setOmniRouteModels(null); return; }
     let cancelled = false;
     setOmniRouteLoading(true);
     const timer = window.setTimeout(() => {
       fetch("/api/config/llm/omniroute/models", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base_url: baseUrl.trim(), api_key: apiKey }),
+        body: JSON.stringify({ base_url: baseUrl.trim(), ...(apiKey ? { api_key: apiKey } : {}) }),
       })
         .then((r) => r.json())
         .then((d: { ok: boolean; models?: string[] }) => {
@@ -272,7 +278,10 @@ export function OnboardingWizard({
     setTest({ status: "testing" });
     try {
       const body: Record<string, unknown> = { provider: provId, model };
-      if (prov.needsKey) { if (!apiKey) { setTest({ status: "err", msg: "Enter an API key first." }); return; } body.api_key = apiKey; }
+      if (prov.needsKey) {
+        if (!apiKey && !prov.keyOptional) { setTest({ status: "err", msg: "Enter an API key first." }); return; }
+        if (apiKey) body.api_key = apiKey;
+      }
       if (prov.needsBaseUrl) { if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a base URL first." }); return; } body.base_url = baseUrl.trim(); }
       if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -748,8 +757,8 @@ export function OnboardingWizard({
         : (prov.models ?? []);
     return (
       <>
-        {prov.needsBaseUrl && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
-        {prov.needsKey && <div className="obw-field"><label>API key</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
+        {prov.needsBaseUrl && <div className="obw-field"><label>{prov.urlLabel}</label><input className="obw-inp" placeholder={prov.urlPh} value={baseUrl} onChange={(e) => { urlByProvider.current[provId] = e.target.value; setBaseUrl(e.target.value); }} /></div>}
+        {prov.needsKey && <div className="obw-field"><label>API key{prov.keyOptional ? " (optional)" : ""}</label><input className="obw-inp" type="password" placeholder="paste your key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
         {prov.freeModel
           ? <div className="obw-field"><label>Model</label><input className="obw-inp" placeholder="model id" value={model} onChange={(e) => setModel(e.target.value)} /></div>
           : <div className="obw-field"><label>Model</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}

@@ -59,6 +59,14 @@ export const KEY_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "omniroute",
 ]);
 
+/**
+ * Kinds that show a key field but don't require it - local gateway installs
+ * can run without auth (the daemon instantiates them keyless too).
+ */
+export const OPTIONAL_KEY_KINDS: ReadonlySet<LLMProviderKind> = new Set([
+  "omniroute",
+]);
+
 /** Provider kinds that need a base_url. */
 export const URL_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "ollama",
@@ -446,8 +454,8 @@ export function useSettingsData() {
     if (llm) {
       for (const entry of Object.values(llm.providers ?? {})) {
         const usesUrl = URL_BASED_KINDS.has(entry.kind);
-        const usesKey = KEY_BASED_KINDS.has(entry.kind);
-        if ((!usesUrl || !!entry.base_url?.trim()) && (!usesKey || entry.has_api_key)) {
+        const needsKey = KEY_BASED_KINDS.has(entry.kind) && !OPTIONAL_KEY_KINDS.has(entry.kind);
+        if ((!usesUrl || !!entry.base_url?.trim()) && (!needsKey || entry.has_api_key)) {
           providersWithKey++;
         }
       }
