@@ -7,6 +7,7 @@ import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
+import { configureLLMTiers } from './config-binding.ts';
 import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
@@ -210,6 +211,157 @@ describe('LLMManager', () => {
     expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream ok')).toBe(true);
     expect(events.some((event) => event.type === 'done')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  test('tier chat falls back from a broken conversation provider to llm.default', async () => {
+    const manager = new LLMManager();
+    let anthropicCalls = 0;
+    let groqCalls = 0;
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() {
+        anthropicCalls++;
+        throw new Error('Anthropic API error (401): invalid x-api-key');
+      },
+      async *stream() { /* not used */ },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat(_messages: LLMMessage[], options?: { model?: string }) {
+        groqCalls++;
+        expect(options?.model).toBe('llama');
+        return {
+          content: 'groq recovered', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { conversation: 'anthropic:claude', medium: 'anthropic:claude' },
+    });
+
+    const response = await manager.chatTier('conversation', 'test', sampleMessages);
+    expect(response.content).toBe('groq recovered');
+    expect(anthropicCalls).toBe(1);
+    expect(groqCalls).toBe(1);
+  });
+
+  test('tier stream falls back before output and never exposes the primary error', async () => {
+    const manager = new LLMManager();
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'error' as const, error: 'invalid x-api-key', code: 'auth' as const };
+      },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'fallback stream' };
+        yield { type: 'done' as const, response: {
+          content: 'fallback stream', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { conversation: 'anthropic:claude' },
+    });
+
+    const events = [];
+    for await (const event of manager.streamTier('conversation', 'test', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  test('tier fallback does not resend malformed requests', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('400 invalid_request: invalid tool schema'); },
+      async *stream() { /* not used */ },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() {
+        fallbackCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    configureLLMTiers(manager, {
+      default: 'fallback:model-b',
+      tiers: { medium: 'primary:model-a' },
+    });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow('invalid tool schema');
+    expect(fallbackCalls).toBe(0);
+  });
+
+  test('tier fallback never sends content to a merely registered provider', async () => {
+    const manager = new LLMManager();
+    let unmappedCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('401 invalid x-api-key'); },
+      async *stream() { /* not used */ },
+    };
+    const unmapped = {
+      name: 'unmapped', listModels: async () => ['model-b'],
+      async chat() {
+        unmappedCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(unmapped);
+    manager.setTierMap({ medium: { provider: 'primary', model: 'model-a' } });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow('invalid x-api-key');
+    expect(unmappedCalls).toBe(0);
+  });
+
+  test('tier stream never crosses providers after output has started', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'partial' };
+        yield { type: 'error' as const, error: '429 quota exhausted', code: 'rate_limit' as const };
+      },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() { throw new Error('not used'); },
+      async *stream() { fallbackCalls++; },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    configureLLMTiers(manager, {
+      default: 'fallback:model-b',
+      tiers: { medium: 'primary:model-a' },
+    });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'partial')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(fallbackCalls).toBe(0);
   });
 });
 

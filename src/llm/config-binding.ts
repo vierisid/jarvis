@@ -16,7 +16,7 @@
 import type { LLMConfig, LLMProviderEntry, LLMProviderKind } from '../config/types.ts';
 import type { LLMManager } from './manager.ts';
 import type { LLMProvider } from './provider.ts';
-import { type Tier, type TierMap, parseModelRef } from './tiers.ts';
+import { type Tier, type TierAssignment, type TierMap, parseModelRef } from './tiers.ts';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
 import { GroqProvider } from './groq.ts';
@@ -172,11 +172,13 @@ export function atomicReloadProviders(
  */
 export function configureLLMTiers(manager: LLMManager, llm: LLMConfig): void {
   const tierMap: TierMap = {};
+  let defaultAssignment: TierAssignment | null = null;
 
   // 1. Single-LLM mode populates task tiers from `default`.
   if (llm.default) {
     const ref = parseModelRef(llm.default);
     if (ref && manager.getProvider(ref.provider)) {
+      defaultAssignment = ref;
       tierMap.low = ref;
       tierMap.medium = ref;
       tierMap.high = ref;
@@ -202,5 +204,6 @@ export function configureLLMTiers(manager: LLMManager, llm: LLMConfig): void {
     }
   }
 
+  manager.setDefaultAssignment(defaultAssignment);
   manager.setTierMap(tierMap);
 }
