@@ -42,13 +42,11 @@ static int setup_notif_status(void) {
             dispatch_semaphore_signal(sem);
         }];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
-    // cgo compiles without ARC, so dispatch objects are not auto-released.
-    // Releasing here is safe even on the timeout path (where the completion
-    // has NOT run yet) because the block captured sem and therefore holds its
-    // own reference until it finishes: with OS_OBJECT_USE_OBJC=1 — the
-    // default for this SDK — dispatch objects are ObjC objects and Block_copy
-    // retains them.
-    dispatch_release(sem);
+    // No dispatch_release: cgo compiles this with ARC, under which dispatch
+    // objects are ObjC objects managed automatically — calling it is a hard
+    // compile error ("ARC forbids explicit message send of 'release'").
+    // The completion block retains sem for as long as it needs it, so the
+    // timeout path is safe too.
     return result;
 }
 
