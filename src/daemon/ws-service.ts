@@ -1007,6 +1007,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         taskCommitment = createCommitment(taskLabel, {
           assigned_to: 'jarvis',
           created_from: 'user',
+          // P0.2 — the user typed this in chat; it is a direct instruction,
+          // not an inference. Without it the row reads as unknown-confidence
+          // and the executor would never act on it.
+          confidence: 1.0,
         });
         updateCommitmentStatus(taskCommitment.id, 'active');
         taskCommitment.status = 'active';

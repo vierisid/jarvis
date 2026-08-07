@@ -3,6 +3,21 @@ import { getDb, generateId } from './schema.ts';
 export type CommitmentPriority = 'low' | 'normal' | 'high' | 'critical';
 export type CommitmentStatus = 'pending' | 'active' | 'completed' | 'failed' | 'escalated';
 
+/**
+ * P0.2 — what a row MEANS, which decides whether the CommitmentExecutor may
+ * act on it.
+ *
+ *   'task'     — something JARVIS is meant to DO. Eligible for auto-execution
+ *                if it also clears the other gates.
+ *   'reminder' — something a HUMAN is meant to do, or a bare "remind me at
+ *                9". Announced when due; never executed.
+ *
+ * Defaults to 'task' so rows written before this column existed keep their
+ * current behaviour. New inferred paths (LLM extraction, and later ambient
+ * meeting capture) should write 'reminder'.
+ */
+export type CommitmentKind = 'task' | 'reminder';
+
 export type RetryPolicy = {
   max_retries: number;
   interval_ms: number;
@@ -23,6 +38,14 @@ export type Commitment = {
   completed_at: number | null;
   result: string | null;
   sort_order: number;
+  kind: CommitmentKind;
+  /**
+   * 0..1 confidence that this is a real commitment, correctly parsed. NULL
+   * means unknown — treated as below any floor by the executor. Explicit
+   * user-created rows write 1.0; inferred rows write what the extractor
+   * reported.
+   */
+  confidence: number | null;
 };
 
 type CommitmentRow = {
@@ -39,6 +62,8 @@ type CommitmentRow = {
   completed_at: number | null;
   result: string | null;
   sort_order: number;
+  kind: CommitmentKind | null;
+  confidence: number | null;
 };
 
 /**
@@ -48,6 +73,10 @@ function parseCommitment(row: CommitmentRow): Commitment {
   return {
     ...row,
     retry_policy: row.retry_policy ? JSON.parse(row.retry_policy) : null,
+    // Rows written before the P0.2 migration have kind NULL rather than the
+    // column default. Normalize on read so callers never see NULL.
+    kind: row.kind ?? 'task',
+    confidence: row.confidence ?? null,
   };
 }
 
@@ -63,15 +92,23 @@ export function createCommitment(
     retry_policy?: RetryPolicy;
     created_from?: string;
     assigned_to?: string;
+    /** P0.2. Defaults to 'task'. Inferred paths should pass 'reminder'. */
+    kind?: CommitmentKind;
+    /**
+     * P0.2. 0..1. Omit when genuinely unknown — the executor treats the
+     * resulting NULL as below any floor and announces instead of executing.
+     */
+    confidence?: number;
   }
 ): Commitment {
   const db = getDb();
   const id = generateId();
   const now = Date.now();
   const priority = opts?.priority ?? 'normal';
+  const kind: CommitmentKind = opts?.kind ?? 'task';
 
   const stmt = db.prepare(
-    'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result, kind, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   stmt.run(
@@ -86,7 +123,9 @@ export function createCommitment(
     opts?.assigned_to ?? null,
     now,
     null,
-    null
+    null,
+    kind,
+    opts?.confidence ?? null
   );
 
   return {
@@ -103,6 +142,8 @@ export function createCommitment(
     completed_at: null,
     result: null,
     sort_order: 0,
+    kind,
+    confidence: opts?.confidence ?? null,
   };
 }
 

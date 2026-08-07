@@ -153,12 +153,23 @@ function createTables(db: Database): void {
       created_at INTEGER NOT NULL,
       completed_at INTEGER,
       result TEXT,
-      sort_order INTEGER DEFAULT 0
+      sort_order INTEGER DEFAULT 0,
+      -- P0.2. kind separates "remind me" from "do it": only 'task' rows are
+      -- ever eligible for auto-execution. 'task' is the default so existing
+      -- rows keep their current meaning.
+      kind TEXT DEFAULT 'task',
+      -- P0.2. How sure we are this is a real, correctly-parsed commitment.
+      -- NULL means unknown, which is treated as below any floor: an
+      -- unattributed row is announced, never executed.
+      confidence REAL
     )
   `);
 
   // Migration: add sort_order to existing databases
   try { db.run('ALTER TABLE commitments ADD COLUMN sort_order INTEGER DEFAULT 0'); } catch {}
+  // Migration: P0.2 execution gates. Same expand-only ALTER pattern.
+  try { db.run("ALTER TABLE commitments ADD COLUMN kind TEXT DEFAULT 'task'"); } catch {}
+  try { db.run('ALTER TABLE commitments ADD COLUMN confidence REAL'); } catch {}
 
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status)

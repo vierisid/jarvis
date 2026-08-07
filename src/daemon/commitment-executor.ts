@@ -8,9 +8,33 @@
  *   passive:    announce only, never auto-execute
  *   moderate:   30s cancel window (default)
  *   aggressive: 5s cancel window
+ *
+ * ## Execution gates (P0.2)
+ *
+ * The shipped default is `aggressive`: a due row becomes an autonomous,
+ * tool-holding agent run five seconds after a notification. The only thing
+ * standing between an over-eager extraction and that run was the user
+ * noticing the toast in time. Three gates now decide `announce` vs
+ * `announce-then-execute`, evaluated by `executionEligibility`:
+ *
+ *   1. `kind !== 'task'` — a reminder is for a HUMAN to act on. Announce.
+ *   2. `assigned_to` names a human — the row records what SOMEONE ELSE owes.
+ *      Executing it would be JARVIS doing another person's task. Announce.
+ *   3. `confidence` below the floor, INCLUDING NULL — we are not sure enough
+ *      that this is a real, correctly-parsed commitment. Announce.
+ *
+ * A gated row is still announced, still fires its workflow events, and can
+ * still be run by the user asking for it. Nothing is silently dropped.
+ *
+ * NULL confidence counting as "below the floor" is deliberate and is the
+ * gate with the widest blast radius: today the LLM extractor writes dated
+ * commitments with no confidence at all, and those are exactly the rows that
+ * should not fire a tool-holding agent unattended. Callers that KNOW a row is
+ * a real user request (the chat task-board path, the `commitments` tool) pass
+ * `confidence: 1.0` explicitly.
  */
 
-import { getDueCommitments, getUpcoming, updateCommitmentStatus } from '../vault/commitments.ts';
+import { getCommitment, getDueCommitments, getUpcoming, updateCommitmentStatus } from '../vault/commitments.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
@@ -35,6 +59,73 @@ const CANCEL_WINDOW: Record<Aggressiveness, number> = {
   aggressive: 5_000,
 };
 
+/**
+ * Minimum confidence for a row to be eligible for auto-execution.
+ *
+ * 0.8 sits above "the model inferred this from passing conversation" and
+ * below "the user said it in so many words" (which writes 1.0). It is the
+ * same order as VOICE_APPROVAL_CONFIDENCE_FLOOR (0.85), the other place in
+ * the codebase where a machine guess is allowed to cause an action.
+ */
+export const DEFAULT_CONFIDENCE_FLOOR = 0.8;
+
+/**
+ * `assigned_to` values that mean "JARVIS itself". Anything else that is set
+ * is treated as a human (or another party) owning the row, and blocks
+ * execution. Agent ids also land here -- `delegation.ts` writes the child
+ * agent's id, and that child, not the executor, is responsible for the work.
+ */
+const SELF_ASSIGNEES = new Set(['jarvis', 'self', 'me', 'assistant']);
+
+export type ExecutionEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: 'kind' | 'assigned_to_other' | 'low_confidence'; detail: string };
+
+/**
+ * Pure decision: may this commitment be auto-executed?
+ *
+ * Exported for unit testing; this is the regression boundary for
+ * "an overheard sentence became an autonomous agent run".
+ */
+export function executionEligibility(
+  commitment: Pick<Commitment, 'kind' | 'assigned_to' | 'confidence'>,
+  confidenceFloor: number = DEFAULT_CONFIDENCE_FLOOR,
+): ExecutionEligibility {
+  if (commitment.kind !== 'task') {
+    return {
+      eligible: false,
+      reason: 'kind',
+      detail: `kind="${commitment.kind}" is for a person to act on, not for JARVIS to execute`,
+    };
+  }
+
+  const assignee = commitment.assigned_to?.trim();
+  if (assignee && !SELF_ASSIGNEES.has(assignee.toLowerCase())) {
+    return {
+      eligible: false,
+      reason: 'assigned_to_other',
+      detail: `assigned to "${assignee}", not to JARVIS`,
+    };
+  }
+
+  if (commitment.confidence === null || commitment.confidence === undefined) {
+    return {
+      eligible: false,
+      reason: 'low_confidence',
+      detail: `no confidence recorded (floor ${confidenceFloor})`,
+    };
+  }
+  if (commitment.confidence < confidenceFloor) {
+    return {
+      eligible: false,
+      reason: 'low_confidence',
+      detail: `confidence ${commitment.confidence} is below the floor ${confidenceFloor}`,
+    };
+  }
+
+  return { eligible: true };
+}
+
 export class CommitmentExecutor {
   private agentService: IAgentService | null = null;
   private broadcast: BroadcastFn | null = null;
@@ -52,10 +143,15 @@ export class CommitmentExecutor {
    */
   private executeTimers: Map<string, Timer> = new Map();
   private aggressiveness: Aggressiveness;
+  private confidenceFloor: number;
   private running = false;
 
-  constructor(aggressiveness: Aggressiveness = 'moderate') {
+  constructor(aggressiveness: Aggressiveness = 'moderate', confidenceFloor?: number) {
     this.aggressiveness = aggressiveness;
+    this.confidenceFloor =
+      typeof confidenceFloor === 'number' && confidenceFloor >= 0 && confidenceFloor <= 1
+        ? confidenceFloor
+        : DEFAULT_CONFIDENCE_FLOOR;
   }
 
   setAgentService(agent: IAgentService): void {
@@ -208,7 +304,11 @@ export class CommitmentExecutor {
 
   private announceExecution(commitment: Commitment): void {
     const now = Date.now();
-    const cancelWindow = CANCEL_WINDOW[this.aggressiveness];
+    // P0.2 — a row that fails any gate is announce-only, exactly like passive
+    // mode, regardless of the configured aggressiveness.
+    const gate = executionEligibility(commitment, this.confidenceFloor);
+    const announceOnly = this.aggressiveness === 'passive' || !gate.eligible;
+    const cancelWindow = announceOnly ? Infinity : CANCEL_WINDOW[this.aggressiveness];
 
     const state: ExecutionState = {
       commitmentId: commitment.id,
@@ -221,7 +321,9 @@ export class CommitmentExecutor {
 
     this.pending.set(commitment.id, state);
 
-    if (this.aggressiveness === 'passive') {
+    if (!gate.eligible) {
+      console.log(`[Executor] Announced (no auto-execute: ${gate.reason} — ${gate.detail}): ${commitment.what}`);
+    } else if (this.aggressiveness === 'passive') {
       console.log(`[Executor] Announced (passive, no auto-execute): ${commitment.what}`);
     } else {
       const windowSec = Math.round(cancelWindow / 1000);
@@ -238,6 +340,10 @@ export class CommitmentExecutor {
         what: commitment.what,
         executeAt: state.cancelDeadline === Infinity ? null : state.cancelDeadline,
         cancelWindowMs: cancelWindow === Infinity ? null : cancelWindow,
+        // Why this row will NOT auto-execute, so the dashboard can render
+        // "waiting on you" instead of a countdown that never counts.
+        autoExecute: !announceOnly,
+        ...(gate.eligible ? {} : { blockedReason: gate.reason, blockedDetail: gate.detail }),
       },
       timestamp: now,
     });
@@ -246,7 +352,7 @@ export class CommitmentExecutor {
     this.broadcast?.({
       type: 'chat',
       payload: {
-        text: this.aggressiveness === 'passive'
+        text: announceOnly
           ? `Task due: "${commitment.what}". Waiting for your instruction to proceed.`
           : `Executing "${commitment.what}" in ${Math.round(cancelWindow / 1000)}s. Send cancel to abort.`,
         source: 'proactive',
@@ -256,7 +362,8 @@ export class CommitmentExecutor {
     });
 
     // Schedule the execution fire precisely at the cancel deadline. Passive
-    // mode never auto-fires (cancelDeadline is Infinity); we skip scheduling.
+    // mode and gated rows never auto-fire (cancelDeadline is Infinity); we
+    // skip scheduling.
     if (state.cancelDeadline !== Infinity) {
       const delay = Math.max(0, state.cancelDeadline - now);
       const timer = setTimeout(() => {
@@ -281,6 +388,21 @@ export class CommitmentExecutor {
       return;
     }
     if (!this.agentService) return;
+
+    // P0.2 defence in depth. announceExecution already refused to schedule a
+    // gated row, but the row can be edited during the cancel window (the
+    // dashboard can reassign it) and this method is reachable directly. The
+    // gate is cheap; re-check against current state rather than trusting the
+    // decision made N seconds ago.
+    const current = getCommitment(commitmentId);
+    if (current) {
+      const gate = executionEligibility(current, this.confidenceFloor);
+      if (!gate.eligible) {
+        console.log(`[Executor] Refusing to execute "${state.what}" (${gate.reason}: ${gate.detail})`);
+        this.pending.delete(commitmentId);
+        return;
+      }
+    }
 
     state.executed = true;
     this.pending.delete(commitmentId);

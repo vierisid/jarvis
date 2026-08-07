@@ -2,6 +2,13 @@ export type HeartbeatConfig = {
   interval_minutes: number;
   active_hours: { start: number; end: number };
   aggressiveness: 'passive' | 'moderate' | 'aggressive';
+  /**
+   * P0.2 — minimum recorded confidence for the CommitmentExecutor to
+   * auto-execute a due commitment. Rows below it (including rows with no
+   * confidence recorded at all, which is every row written before this
+   * shipped) are announced and left for the user. Default 0.8.
+   */
+  commitment_confidence_floor?: number;
 };
 
 /**

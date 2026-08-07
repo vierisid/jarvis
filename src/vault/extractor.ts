@@ -9,7 +9,22 @@ export type ExtractionResult = {
   entities: Array<{ name: string; type: string; properties?: Record<string, unknown> }>;
   facts: Array<{ subject: string; predicate: string; object: string; confidence: number }>;
   relationships: Array<{ from: string; to: string; type: string }>;
-  commitments: Array<{ what: string; when_due?: string; priority?: string }>;
+  commitments: Array<{
+    what: string;
+    when_due?: string;
+    priority?: string;
+    /**
+     * P0.2 — 0..1 confidence that this really is a commitment someone made,
+     * not a hedge or an aside. Omitted by the model = unknown, which the
+     * CommitmentExecutor treats as below any floor.
+     */
+    confidence?: number;
+    /**
+     * P0.2 — 'task' only when JARVIS is the one who has to do it. Anything a
+     * person owes is a 'reminder' and is never auto-executed.
+     */
+    kind?: 'task' | 'reminder';
+  }>;
 };
 
 /**
@@ -53,7 +68,9 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
     {
       "what": "Description of commitment",
       "when_due": "ISO date string (optional)",
-      "priority": "low|normal|high|critical (optional)"
+      "priority": "low|normal|high|critical (optional)",
+      "kind": "task|reminder",
+      "confidence": 0.0-1.0
     }
   ]
 }
@@ -64,6 +81,13 @@ GUIDELINES:
 - For facts: extract attributes about entities (e.g., "birthday_is", "works_at", "location_is")
 - For relationships: extract connections between entities (e.g., "sister_of", "manages", "part_of")
 - For commitments: extract any promises, tasks, or reminders mentioned
+- For commitment "kind": use "task" ONLY when the assistant itself is the one
+  who must do the work. Anything a person owes ("Sarah will send the deck") is
+  a "reminder". When in doubt, use "reminder".
+- For commitment "confidence": how sure you are this is a real commitment and
+  you parsed it correctly. Hedged or conditional language ("we should
+  probably", "maybe next week", "if that works") must score below 0.8. Reserve
+  0.9+ for an explicit, unambiguous commitment with a clear owner.
 - Use snake_case for predicates and relationship types
 - Set confidence lower (0.5-0.8) for implied or uncertain information
 - If no information to extract, return empty arrays
@@ -280,7 +304,7 @@ export async function extractAndStore(
 
     // Store commitments
     for (const commitmentData of extraction.commitments) {
-      const { what, when_due, priority } = commitmentData;
+      const { what, when_due, priority, confidence, kind } = commitmentData;
 
       const whenDueTimestamp = parseDate(when_due);
 
@@ -289,6 +313,18 @@ export async function extractAndStore(
         priority: (priority as any) ?? 'normal',
         context: `Extracted from conversation`,
         created_from: 'llm_extraction',
+        // P0.2 — this is the inference path, so it records what the model
+        // actually claimed rather than assuming. A missing or out-of-range
+        // confidence stays undefined (NULL in the row), which the executor
+        // reads as "unknown" and refuses to auto-execute. An extraction from
+        // passing conversation should not become an autonomous agent run
+        // five seconds after a toast.
+        ...(typeof confidence === 'number' && confidence >= 0 && confidence <= 1
+          ? { confidence }
+          : {}),
+        // Default to 'reminder', not 'task': an extracted line is far more
+        // often "Sarah owes the deck Friday" than "JARVIS, go do this".
+        kind: kind === 'task' ? 'task' : 'reminder',
       });
     }
 

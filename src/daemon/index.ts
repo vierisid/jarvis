@@ -541,7 +541,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 5c. Create commitment executor (notify-then-execute)
     const aggressiveness = heartbeatConfig?.aggressiveness ?? 'moderate';
-    const executor = new CommitmentExecutor(aggressiveness as any);
+    // P0.2 — the confidence floor below which a due commitment is announced
+    // but never auto-executed. Matters most at the shipped `aggressive`
+    // default, where the cancel window is 5 seconds.
+    const confidenceFloor =
+      typeof heartbeatConfig?.commitment_confidence_floor === 'number'
+        ? heartbeatConfig.commitment_confidence_floor
+        : undefined;
+    const executor = new CommitmentExecutor(aggressiveness as any, confidenceFloor);
 
     // 6. Wire reactor callback for WebSocket notifications
     reactor.setReactionCallback((text, priority) => {

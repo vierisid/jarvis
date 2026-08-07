@@ -82,6 +82,23 @@ authority:
   # 5: Full control
   default_level: 3
 
+# Heartbeat + commitment execution.
+#   aggressiveness controls how long you get to cancel a due commitment before
+#   JARVIS executes it through a tool-holding agent:
+#     passive    announce only, never auto-execute
+#     moderate   30s cancel window
+#     aggressive 5s cancel window
+#   commitment_confidence_floor is the minimum recorded confidence for a due
+#   commitment to auto-execute at all. Rows below it -- including every row
+#   with no confidence recorded, which is anything the LLM extractor wrote
+#   without one -- are announced and left for you. Reminders and rows assigned
+#   to another person are never auto-executed regardless of this setting.
+# heartbeat:
+#   interval_minutes: 15
+#   active_hours: { start: 8, end: 23 }
+#   aggressiveness: "aggressive"
+#   commitment_confidence_floor: 0.8
+
 # System cron triggers. Each fires `cron.<name>` on the shared event bus.
 # Phase 2 will hook the goal system + commitment executor onto these so the
 # 15-minute heartbeat poll can be removed. Defaults shown below.

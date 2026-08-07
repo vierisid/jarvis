@@ -147,6 +147,13 @@ export const commitmentsTool: ToolDefinition = {
           context: params.context as string | undefined,
           assigned_to: params.assigned_to as string | undefined,
           created_from: 'jarvis',
+          // P0.2 — the primary agent calls this tool while answering the
+          // user, so the row is a direct instruction, not an inference.
+          // Without an explicit confidence the executor would treat it as
+          // unknown and never auto-execute it. Note the executor's other
+          // gates still apply: an `assigned_to` naming a person keeps this
+          // announce-only regardless.
+          confidence: 1.0,
         });
 
         const due = item.when_due ? ` — due: ${new Date(item.when_due).toLocaleString()}` : '';
