@@ -117,6 +117,7 @@ export interface LLMConfigProviderView {
  */
 export interface LLMConfig {
   providers: Record<string, LLMConfigProviderView>;
+  default_provider: string | null;
   default: string | null;
   mode: "single" | "multi-tier";
   tiers: {
@@ -531,6 +532,26 @@ export function useSettingsData() {
         return {
           ok: true,
           message: r.message || (ref ? `Default model set to ${ref}.` : "Default model cleared."),
+        };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
+  /** Select the provider used as the real runtime primary. */
+  const setDefaultProvider = useCallback(
+    async (name: string): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/llm",
+          { default_provider: name },
+        );
+        await refresh();
+        return {
+          ok: true,
+          message: r.message || `Default provider set to ${name}.`,
         };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
@@ -960,6 +981,7 @@ export function useSettingsData() {
     // New-shape LLM actions
     upsertProvider,
     removeProvider,
+    setDefaultProvider,
     setDefaultModel,
     setTierModel,
     clearAllTiers,

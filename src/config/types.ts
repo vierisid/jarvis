@@ -330,6 +330,14 @@ export type LLMConfig = {
   providers?: Record<string, LLMProviderEntry>;
 
   /**
+   * Provider selected as the real runtime primary. Unlike `default`, this
+   * does not require a model id: gateways such as OmniRoute can apply their
+   * own default/auto routing. An explicit `default` model is used only when
+   * it belongs to this provider.
+   */
+  default_provider?: string;
+
+  /**
    * Single-LLM mode model reference. When set and `tiers` is absent, all
    * task tiers (low/medium/high) resolve to this model and the classic
    * orchestrator runs. Ignored when `tiers` is configured.

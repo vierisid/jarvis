@@ -3,6 +3,7 @@
  *
  * Canonical config shape (after the provider/model split):
  *   llm.providers           Record<name, { kind?, api_key?, base_url? }>
+ *   llm.default_provider    "name" (real runtime primary; model optional)
  *   llm.default             "name:model" (single-LLM mode)
  *   llm.tiers.{conversation,high,medium,low}  "name:model" (router-first)
  *
@@ -30,6 +31,7 @@ import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
 
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
+const SETTING_DEFAULT_PROVIDER = 'llm.default_provider';
 const SETTING_DEFAULT = 'llm.default';
 const SETTING_MODE = 'llm.mode';
 const SETTING_TIER_CONVERSATION = 'llm.tiers.conversation';
@@ -58,6 +60,7 @@ export type LLMMode = 'single' | 'multi-tier';
 
 export type LLMSettingsResponse = {
   providers: Record<string, LLMSettingsProviderView>;
+  default_provider: string | null;
   default: string | null;
   /**
    * The user's persisted architecture choice. Stored explicitly rather than
@@ -86,6 +89,7 @@ export type LLMSettingsRequest = {
     api_key?: string;
     base_url?: string;
   } | null>;            // null deletes the provider
+  default_provider?: string | null; // null clears
   default?: string | null;     // null clears
   mode?: LLMMode;              // persisted architecture choice
   tiers?: {
@@ -145,6 +149,9 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
 
   return {
     providers,
+    default_provider: config.llm.default_provider
+      ?? providerFromModelRef(config.llm.default)
+      ?? null,
     default: config.llm.default ?? null,
     mode,
     tiers,
@@ -206,6 +213,8 @@ export function saveLLMSettings(
     for (const [name, update] of updates) {
       if (update === null) {
         delete config.llm.providers[name];
+        if (config.llm.default_provider === name) config.llm.default_provider = undefined;
+        if (providerFromModelRef(config.llm.default) === name) config.llm.default = undefined;
         try { deleteSecret(keychainKey(name)); } catch { /* ignore */ }
         continue;
       }
@@ -229,6 +238,23 @@ export function saveLLMSettings(
     }
   }
 
+  // A provider default is independent of a model id. Gateways can therefore
+  // apply their own default/auto route without inheriting an invalid model id
+  // from whichever provider used to be selected.
+  if (body.default_provider !== undefined) {
+    if (body.default_provider === null || body.default_provider === '') {
+      config.llm.default_provider = undefined;
+    } else if (typeof body.default_provider === 'string') {
+      if (!config.llm.providers[body.default_provider]) {
+        throw new Error(`Default provider '${body.default_provider}' is not configured`);
+      }
+      config.llm.default_provider = body.default_provider;
+      if (providerFromModelRef(config.llm.default) !== body.default_provider) {
+        config.llm.default = undefined;
+      }
+    }
+  }
+
   // Persist the architecture choice. Kept in its own setting (not derived) so
   // the selection survives reloads and the user can flip either direction even
   // before any tier model is picked. Does NOT drive runtime routing - that
@@ -239,7 +265,15 @@ export function saveLLMSettings(
 
   // Apply default + tier model refs.
   if (body.default !== undefined) {
-    config.llm.default = body.default ?? undefined;
+    const nextDefault = body.default ?? undefined;
+    const modelProvider = providerFromModelRef(nextDefault);
+    if (modelProvider) {
+      if (!config.llm.providers[modelProvider]) {
+        throw new Error(`Default model references unconfigured provider '${modelProvider}'`);
+      }
+      config.llm.default_provider = modelProvider;
+    }
+    config.llm.default = nextDefault;
   }
   if (body.tiers) {
     for (const tier of ['conversation', 'high', 'medium', 'low'] as const) {
@@ -263,6 +297,7 @@ export function saveLLMSettings(
   // injected from the keychain (see mergeLLMSettingsIntoConfig), and the
   // settings table is plaintext.
   setSetting(SETTING_PROVIDERS, JSON.stringify(stripSecretsFromProviders(config.llm.providers)));
+  setSetting(SETTING_DEFAULT_PROVIDER, config.llm.default_provider ?? '');
   setSetting(SETTING_DEFAULT, config.llm.default ?? '');
   setSetting(SETTING_TIER_CONVERSATION, config.llm.tiers.conversation ?? '');
   setSetting(SETTING_TIER_HIGH, config.llm.tiers.high ?? '');
@@ -316,6 +351,7 @@ export function mergeLLMSettingsIntoConfig(
   // Replace, don't merge: the DB is authoritative for every LLM setting.
   config.llm.providers = {};
   config.llm.tiers = {};
+  config.llm.default_provider = undefined;
   config.llm.default = undefined;
 
   // 1. New shape: load providers JSON + default + tier strings.
@@ -330,6 +366,9 @@ export function mergeLLMSettingsIntoConfig(
       console.warn('[LLM] Failed to parse stored providers JSON:', err);
     }
   }
+
+  const dbDefaultProvider = getSetting(SETTING_DEFAULT_PROVIDER);
+  if (dbDefaultProvider) config.llm.default_provider = dbDefaultProvider;
 
   const dbDefault = getSetting(SETTING_DEFAULT);
   if (dbDefault) config.llm.default = dbDefault;
@@ -474,9 +513,18 @@ function migrateLegacyDBSettings(config: JarvisConfig): void {
     const legacyPrimary = getSetting('llm.primary');
     if (legacyPrimary) {
       const model = legacyModels[legacyPrimary as LLMProviderKind];
-      if (model) config.llm.default = `${legacyPrimary}:${model}`;
+      if (model) {
+        config.llm.default = `${legacyPrimary}:${model}`;
+        config.llm.default_provider = legacyPrimary;
+      }
     }
   }
+}
+
+function providerFromModelRef(ref: string | null | undefined): string | null {
+  if (!ref) return null;
+  const separator = ref.indexOf(':');
+  return separator > 0 ? ref.slice(0, separator) : null;
 }
 
 // ── hotReloadLLMProviders ────────────────────────────────────────────────

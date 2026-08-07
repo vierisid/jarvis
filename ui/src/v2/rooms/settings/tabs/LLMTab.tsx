@@ -322,6 +322,7 @@ function ProviderRow({
   const usesKey = KEY_BASED_KINDS.has(entry.kind);
   const needsKey = usesKey && !OPTIONAL_KEY_KINDS.has(entry.kind);
   const configured = (!usesUrl || !!entry.base_url?.trim()) && (!needsKey || entry.has_api_key);
+  const isDefault = data.llm?.default_provider === name;
 
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(entry.base_url ?? "");
@@ -338,6 +339,7 @@ function ProviderRow({
   const endpointChanged = (usesUrl || optionalUrl)
     && entry.has_api_key
     && effectiveBaseUrl !== normalizeBaseUrl(entry.base_url ?? "");
+  const [settingDefault, setSettingDefault] = useState(false);
 
   useEffect(() => {
     setBaseUrl(entry.base_url ?? "");
@@ -360,6 +362,11 @@ function ProviderRow({
           <span className="v2-set__chip" style={{ marginLeft: 6 }}>
             kind: {LLM_PROVIDER_KIND_LABELS[entry.kind]}
           </span>
+          {isDefault && (
+            <span className="v2-set__chip v2-set__chip--ok" style={{ marginLeft: 6 }}>
+              default
+            </span>
+          )}
         </span>
         <span className="v2-set__row-state">
           {configured ? (
@@ -373,6 +380,34 @@ function ProviderRow({
 
       {expanded && (
         <div className="v2-set__row-body">
+          <div className="v2-set__field">
+            <label className="v2-set__toggle-row">
+              <button
+                type="button"
+                className="v2-set__toggle"
+                data-checked={isDefault}
+                aria-checked={isDefault}
+                role="switch"
+                disabled={isDefault || settingDefault || !configured}
+                onClick={async () => {
+                  if (isDefault || settingDefault) return;
+                  setSettingDefault(true);
+                  const r = await data.setDefaultProvider(name);
+                  onToast(r.message, r.ok ? "ok" : "warn");
+                  setSettingDefault(false);
+                }}
+              />
+              <span>
+                <strong>Default provider</strong>
+                <span className="v2-set__hint" style={{ display: "block", marginTop: 2 }}>
+                  {isDefault
+                    ? "Jarvis uses this as its runtime primary and fallback provider."
+                    : "Make this Jarvis’s runtime primary. Tier-specific routes still take priority."}
+                </span>
+              </span>
+            </label>
+          </div>
+
           {usesKey && (
             <div className="v2-set__field">
               <label className="v2-set__field-label">
