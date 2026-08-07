@@ -980,6 +980,31 @@ describe('Groq request shaping', () => {
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
 
+  test('GroqProvider rotates chat to the next model when daily model quota is exhausted', async () => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === 'llama-3.3-70b-versatile') {
+        return new Response(JSON.stringify({
+          error: { message: 'Tokens per day (TPD): Limit 100000, Used 98608, Requested 3019.' },
+        }), { status: 429, headers: { 'Retry-After': '1200' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'cmpl_rotated', object: 'chat.completion', created: Date.now(), model: body.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'rotated ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const response = await provider.chat([{ role: 'user', content: 'hello' }]);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const models = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model);
+
+    expect(response.content).toBe('rotated ok');
+    expect(response.model).toBe('llama-3.1-8b-instant');
+    expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+  });
+
   test('GroqProvider compaction never orphans a tool message from its assistant tool_call', async () => {
     let captured: any = null;
     globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
@@ -1077,6 +1102,42 @@ describe('Groq request shaping', () => {
     expect(events.join('')).toBe('retry-stream ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+
+  test('GroqProvider rotates streaming to the next model on a model rate limit', async () => {
+    const enc = new TextEncoder();
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === 'llama-3.3-70b-versatile') {
+        return new Response(JSON.stringify({ error: { message: 'TPD quota exhausted' } }), {
+          status: 429,
+          headers: { 'Retry-After': '1200' },
+        });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({
+            id: 'rotated', object: 'chat.completion.chunk', created: 0, model: body.model,
+            choices: [{ index: 0, delta: { content: 'stream rotated ok' }, finish_reason: null }],
+          })}\n\n`));
+          controller.enqueue(enc.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const events = [];
+    for await (const event of provider.stream([{ role: 'user', content: 'hello' }])) events.push(event);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const models = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model);
+    const done = events.find((event) => event.type === 'done');
+
+    expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+    expect(events.some((event) => event.type === 'text' && event.text === 'stream rotated ok')).toBe(true);
+    expect(done?.type === 'done' ? done.response.model : null).toBe('llama-3.1-8b-instant');
+    expect(events.some((event) => event.type === 'error')).toBe(false);
   });
 });
 

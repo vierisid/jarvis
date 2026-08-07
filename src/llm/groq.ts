@@ -133,6 +133,14 @@ export function relaxOptionalFieldsToNullable(schema: unknown): unknown {
   return out;
 }
 
+/** Production chat models with independent Groq quota buckets. */
+export const GROQ_CHAT_MODEL_ROTATION = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+] as const;
+
 export class GroqProvider implements LLMProvider {
   name = 'groq';
   private apiKey: string;
@@ -153,58 +161,28 @@ export class GroqProvider implements LLMProvider {
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    let response = await this.sendRequest(
-      this.buildRequestBody(messages, options, false, GroqProvider.SAFE_PROMPT_CHAR_BUDGET)
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (!this.shouldRetryWithTighterPrompt(response.status, errorText)) {
-        throw this.responseError(response, errorText);
-      }
-      response = await this.sendRequest(
-        this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
-      );
-      if (!response.ok) {
-        const retryError = await response.text();
-        throw this.responseError(response, retryError, 'Groq API error after compact retry');
-      }
-    }
+    const { response } = await this.sendWithModelRotation(messages, options, false);
 
     const data = await response.json() as GroqResponse;
     return this.convertResponse(data);
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const body = this.buildRequestBody(
-      messages,
-      options,
-      true,
-      GroqProvider.SAFE_PROMPT_CHAR_BUDGET,
-    );
-    const responseModel = typeof body.model === 'string' ? body.model : this.defaultModel;
-
-    let response = await this.sendRequest(body);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (!this.shouldRetryWithTighterPrompt(response.status, errorText)) {
-        yield this.responseErrorEvent(response, errorText);
+    let response: Response;
+    let responseModel: string;
+    try {
+      ({ response, model: responseModel } = await this.sendWithModelRotation(messages, options, true));
+    } catch (err) {
+      if (err instanceof LLMProviderError) {
+        yield {
+          type: 'error',
+          error: err.message,
+          code: err.code,
+          retryAfterMs: err.retryAfterMs,
+        };
         return;
       }
-      response = await this.sendRequest(
-        this.buildRequestBody(
-          messages,
-          options,
-          true,
-          GroqProvider.RETRY_PROMPT_CHAR_BUDGET,
-        )
-      );
-      if (!response.ok) {
-        const retryError = await response.text();
-        yield this.responseErrorEvent(response, retryError, 'Groq API error after compact retry');
-        return;
-      }
+      throw err;
     }
 
     if (!response.body) {
@@ -369,6 +347,69 @@ export class GroqProvider implements LLMProvider {
       },
       body: JSON.stringify(body),
     });
+  }
+
+  private modelRotation(requestedModel: string): string[] {
+    const known = [...GROQ_CHAT_MODEL_ROTATION];
+    const index = known.indexOf(requestedModel as typeof GROQ_CHAT_MODEL_ROTATION[number]);
+    const rest = index >= 0
+      ? [...known.slice(index + 1), ...known.slice(0, index)]
+      : known;
+    return [requestedModel, ...rest.filter((model) => model !== requestedModel)];
+  }
+
+  /**
+   * Retry a token-window failure with a compact prompt, then rotate to the
+   * next chat model when that model's quota bucket is still exhausted.
+   */
+  private async sendWithModelRotation(
+    messages: LLMMessage[],
+    options: LLMOptions,
+    stream: boolean,
+  ): Promise<{ response: Response; model: string }> {
+    const requestedModel = options.model ?? this.defaultModel;
+    let lastRateLimit: { response: Response; errorText: string; model: string } | null = null;
+    const models = this.modelRotation(requestedModel);
+
+    for (let index = 0; index < models.length; index++) {
+      const model = models[index]!;
+      const modelOptions = { ...options, model };
+      let response = await this.sendRequest(
+        this.buildRequestBody(messages, modelOptions, stream, GroqProvider.SAFE_PROMPT_CHAR_BUDGET),
+      );
+      let errorText = response.ok ? '' : await response.text();
+      let compactRetried = false;
+
+      if (!response.ok && this.shouldRetryWithTighterPrompt(response.status, errorText)) {
+        compactRetried = true;
+        response = await this.sendRequest(
+          this.buildRequestBody(messages, modelOptions, stream, GroqProvider.RETRY_PROMPT_CHAR_BUDGET),
+        );
+        errorText = response.ok ? '' : await response.text();
+      }
+
+      if (response.ok) return { response, model };
+      if (response.status !== 429) {
+        throw this.responseError(
+          response,
+          errorText,
+          compactRetried ? 'Groq API error after compact retry' : 'Groq API error',
+        );
+      }
+
+      lastRateLimit = { response, errorText, model };
+      const nextModel = models[index + 1];
+      if (nextModel) {
+        console.warn(`[Groq] Model '${model}' rate-limited; rotating to '${nextModel}'.`);
+      }
+    }
+
+    const exhausted = lastRateLimit!;
+    throw this.responseError(
+      exhausted.response,
+      exhausted.errorText,
+      `Groq chat models exhausted (last model '${exhausted.model}')`,
+    );
   }
 
   private convertMessages(messages: LLMMessage[]): GroqMessage[] {
@@ -569,19 +610,6 @@ export class GroqProvider implements LLMProvider {
       code: classifyHttpStatus(response.status),
       retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after'), errorText),
     });
-  }
-
-  private responseErrorEvent(
-    response: Response,
-    errorText: string,
-    prefix = 'Groq API error',
-  ): Extract<LLMStreamEvent, { type: 'error' }> {
-    return {
-      type: 'error',
-      error: `${prefix} (${response.status}): ${errorText}`,
-      code: classifyHttpStatus(response.status),
-      retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after'), errorText),
-    };
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {
