@@ -76,6 +76,30 @@ jobs:
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           go build -o /tmp/jarvis-sidecar.exe .
 
+  # The windows-tagged tests (pebble draw-bounds crop invariant) are pure Go
+  # but can only RUN on a Windows runner — the mingw cross-build above only
+  # proves the package compiles. `go test` also compiles every _test.go under
+  # GOOS=windows, which the cross-build (build-only) never checks. Scoped to
+  # the draw-bounds test to keep runtime bounded; the full logic suite is
+  # covered on linux.
+  sidecar-test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+      - name: Run windows-tagged pebble tests (amd64, cgo)
+        working-directory: sidecar
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
+          go test -run '^TestMainPebbleDrawStaysInsideCrop$' -v .
+
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
   # first compile happens on a release runner. Build + vet only — the UI
