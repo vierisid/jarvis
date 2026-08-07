@@ -168,7 +168,7 @@ export class ConvOrchestrator {
         } else if (event.type === 'done') {
           response = event.response;
         } else if (event.type === 'error') {
-          throw new Error(event.error);
+          throw Object.assign(new Error(event.error), { code: event.code });
         }
       }
 
