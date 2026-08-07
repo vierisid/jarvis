@@ -137,8 +137,23 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set -euo pipefail
+          # vet first, on the host arch: unlike `go build` it also type-checks
+          # the darwin _test.go files and runs the analyzers.
           go vet ./...
-          go build ./...
+          # Both architectures, at the SAME deployment target the release uses.
+          # That target is what makes APIs newer SDKs mark obsoleted fail here
+          # rather than during a release (e.g. CGWindowListCreateImage, gone in
+          # the macOS 15 SDK) — a host-arch build at the default target misses
+          # both that and any amd64-only compile error.
+          for arch in arm64 amd64; do
+            case "$arch" in
+              arm64) target=arm64-apple-macos11 ;;
+              amd64) target=x86_64-apple-macos11 ;;
+            esac
+            echo "== darwin/$arch =="
+            CC="clang -target $target" CXX="clang++ -target $target" \
+              GOOS=darwin GOARCH="$arch" go build ./...
+          done
 
   # The desktop-automation fallback scripts can't be exercised from the linux
   # job: bun test's pwsh check covers desktop.ps1, but AppleScript terminology

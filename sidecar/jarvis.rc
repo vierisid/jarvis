@@ -5,3 +5,33 @@
 // loads these by ID. ID 3 is the vermilion connection-error variant.
 2 ICON "jarvis.ico"
 3 ICON "jarvis-error.ico"
+
+// Version resource. Windows Explorer's Properties -> Details reads this, and a
+// blank panel is weak provenance signal exactly while SmartScreen reputation is
+// being earned from zero. __VERSION__ / __VERSION_COMMA__ are substituted by the
+// Makefile from sidecar/VERSION, so the resource cannot drift from the binary.
+1 VERSIONINFO
+FILEVERSION    __VERSION_COMMA__
+PRODUCTVERSION __VERSION_COMMA__
+FILEOS   0x4L      // VOS__WINDOWS32
+FILETYPE 0x1L      // VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"   // U.S. English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Usejarvis Inc."
+            VALUE "FileDescription",  "JARVIS Sidecar"
+            VALUE "FileVersion",      "__VERSION__"
+            VALUE "InternalName",     "jarvis"
+            VALUE "LegalCopyright",   "Copyright (C) Usejarvis Inc."
+            VALUE "OriginalFilename", "jarvis.exe"
+            VALUE "ProductName",      "JARVIS"
+            VALUE "ProductVersion",   "__VERSION__"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

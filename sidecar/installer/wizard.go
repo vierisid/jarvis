@@ -72,7 +72,7 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 		return st
 	}
 
-	webviewui.RunWindow("Install Jarvis", 480, 560, webview.HintNone, func(w webview.WebView) {
+	opened := webviewui.RunWindow("Install Jarvis", 480, 560, webview.HintNone, func(w webview.WebView) {
 
 		// startPlan resolves versions on a goroutine. Bindings run ON the UI
 		// thread, so doing the (up to 60s) registry fetch inline would block
@@ -224,6 +224,14 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 
 		w.SetHtml(wizardHTML)
 	})
+
+	// No window at all (a broken WebView2, a headless session): silently exiting
+	// would look like the installer doing nothing when double-clicked, so fall
+	// back to the console flow, which at least reports what happened.
+	if !opened {
+		logf("no window could be opened — falling back to a console install")
+		return runInstall(registryURL, false, noLaunch, autostartDefault)
+	}
 
 	// The window can be closed with its native close button at any time,
 	// including mid-install (the JS only disables our own Cancel button).

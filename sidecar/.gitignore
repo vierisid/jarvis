@@ -24,3 +24,7 @@ helpers/ocr-helper
 jarvis-setup
 jarvis-setup.exe
 installer/rsrc_windows_amd64.syso
+
+# Generated resource scripts (version substituted from VERSION)
+.jarvis.rc.gen
+installer/.installer.rc.gen

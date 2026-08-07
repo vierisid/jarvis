@@ -84,12 +84,22 @@ all: test build
 # builds. The manifest declares OS compatibility so the Program Compatibility
 # Assistant doesn't flag the app as a (failed) installer. Requires mingw windres.
 manifest:
-	x86_64-w64-mingw32-windres --input jarvis.rc --output rsrc_windows_amd64.syso --output-format=coff
+	@# The version is substituted from VERSION so the resource cannot drift from
+	@# the binary. A prerelease suffix (0.9.1-rc.1) is stripped for the numeric
+	@# FILEVERSION, which must be four integers.
+	@v="$(VERSION)"; vc="$$(echo "$$v" | sed 's/-.*//' | tr '.' ',')"; \
+	sed -e "s/__VERSION_COMMA__/$$vc,0/g" -e "s/__VERSION__/$$v/g" jarvis.rc > .jarvis.rc.gen
+	x86_64-w64-mingw32-windres --input .jarvis.rc.gen --output rsrc_windows_amd64.syso --output-format=coff
+	@rm -f .jarvis.rc.gen
 
 # Same, for the installer binary (icon + asInvoker manifest). CI runs this in
 # the windows-cross job before building the installer.
 manifest-installer:
-	cd installer && x86_64-w64-mingw32-windres --input installer.rc --output rsrc_windows_amd64.syso --output-format=coff
+	@v="$(INSTALLER_VERSION)"; vc="$$(echo "$$v" | sed 's/-.*//' | tr '.' ',')"; \
+	sed -e "s/__VERSION_COMMA__/$$vc,0/g" -e "s/__VERSION__/$$v/g" \
+	  installer/installer.rc > installer/.installer.rc.gen
+	cd installer && x86_64-w64-mingw32-windres --input .installer.rc.gen --output rsrc_windows_amd64.syso --output-format=coff
+	@rm -f installer/.installer.rc.gen
 
 # Build the installer for the host platform: ./jarvis-setup(.exe), stamped
 # with installer/VERSION (its own, independent of the sidecar's).

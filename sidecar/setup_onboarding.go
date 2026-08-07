@@ -72,7 +72,7 @@ func runOnboarding(cfg *SidecarConfig) {
 		}
 	}()
 
-	webviewui.RunWindow("Welcome to JARVIS", 520, 620, webview.HintNone, func(w webview.WebView) {
+	if !webviewui.RunWindow("Welcome to JARVIS", 520, 620, webview.HintNone, func(w webview.WebView) {
 
 		_ = w.Bind("getPermissions", func() setupPermState {
 			permMu.Lock()
@@ -122,7 +122,12 @@ func runOnboarding(cfg *SidecarConfig) {
 		})
 
 		w.SetHtml(onboardingWindowHTML)
-	})
+	}) {
+		// Onboarding is a convenience, not a gate: if no window can be shown the
+		// sidecar must still start. Permissions are then requested lazily on
+		// first use, as they were before --setup existed.
+		log.Println("[setup] no window available — skipping onboarding and starting normally")
+	}
 }
 
 // saveConfigMutation applies fn to cfg and persists it. The wizard runs before
