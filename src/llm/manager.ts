@@ -18,6 +18,30 @@ import {
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
 
+/**
+ * Subsystems that are allowed to send user content across provider boundaries
+ * when their assigned provider fails. Keep this list explicit: background and
+ * newly-added subsystems must not inherit cross-provider routing by accident.
+ */
+const CROSS_PROVIDER_FALLBACK_SUBSYSTEMS = new Set([
+  'chat_orchestrator',
+  'chat_orchestrator_stream',
+  'chat_orchestrator_subagent',
+  'conv_orchestrator',
+  'sub_agent',
+  'task_code',
+  'task_general',
+  'task_plan',
+  'task_research',
+  'task_write',
+  'onboarding_interviewer',
+  'nl_goal_builder',
+  'nl_goal_chat',
+  'manual_test',
+  'manual_test_stream',
+  'manual_cache_test',
+]);
+
 export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
   private primaryProvider = '';
@@ -285,7 +309,10 @@ export class LLMManager {
    * provider is not enough: it must be mapped to the requested tier/fall-up
    * path or selected as llm.default. This prevents accidental data/cost spill.
    */
-  private tierCandidates(tier: Tier): Array<{ resolution: TierResolution; provider: LLMProvider }> {
+  private tierCandidates(
+    tier: Tier,
+    allowCrossProvider: boolean,
+  ): Array<{ resolution: TierResolution; provider: LLMProvider }> {
     const first = this.resolveTierOrThrow(tier);
     const candidates = [first];
     const seen = new Set([`${first.provider.name}\u0000${first.resolution.assignment.model ?? ''}`]);
@@ -305,6 +332,7 @@ export class LLMManager {
     for (const candidateTier of [tier, ...TIER_FALLBACK[tier]]) {
       const assignment = this.tierMap[candidateTier];
       if (!assignment) continue;
+      if (!allowCrossProvider && assignment.provider !== first.provider.name) continue;
       add({ tier: candidateTier, assignment });
       add({ tier: candidateTier, assignment: { provider: assignment.provider } });
     }
@@ -312,7 +340,7 @@ export class LLMManager {
     // llm.default is an explicit user-selected safety net. It is especially
     // important for conversation, whose normal tier fall-up is intentionally
     // empty because configuring it toggles router-first mode.
-    if (this.defaultAssignment) {
+    if (allowCrossProvider && this.defaultAssignment) {
       add({ tier, assignment: this.defaultAssignment });
       add({ tier, assignment: { provider: this.defaultAssignment.provider } });
     }
@@ -331,7 +359,10 @@ export class LLMManager {
   ): Promise<LLMResponse> {
     const failures: Array<{ message: string; code: LLMErrorCode; retryAfterMs?: number }> = [];
     const exhaustedProviders = new Set<string>();
-    const candidates = this.tierCandidates(tier);
+    const candidates = this.tierCandidates(
+      tier,
+      CROSS_PROVIDER_FALLBACK_SUBSYSTEMS.has(subsystem),
+    );
 
     for (let index = 0; index < candidates.length; index++) {
       const { resolution, provider } = candidates[index]!;
@@ -391,7 +422,10 @@ export class LLMManager {
   ): AsyncIterable<LLMStreamEvent> {
     const failures: Array<Extract<LLMStreamEvent, { type: 'error' }>> = [];
     const exhaustedProviders = new Set<string>();
-    const candidates = this.tierCandidates(tier);
+    const candidates = this.tierCandidates(
+      tier,
+      CROSS_PROVIDER_FALLBACK_SUBSYSTEMS.has(subsystem),
+    );
 
     for (let index = 0; index < candidates.length; index++) {
       const { resolution, provider } = candidates[index]!;

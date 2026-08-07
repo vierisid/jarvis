@@ -251,7 +251,7 @@ describe('LLMManager', () => {
       tiers: { conversation: 'anthropic:claude', medium: 'anthropic:claude' },
     });
 
-    const response = await manager.chatTier('conversation', 'test', sampleMessages);
+    const response = await manager.chatTier('conversation', 'conv_orchestrator', sampleMessages);
     expect(response.content).toBe('groq recovered');
     expect(anthropicCalls).toBe(1);
     expect(groqCalls).toBe(1);
@@ -285,7 +285,7 @@ describe('LLMManager', () => {
     });
 
     const events = [];
-    for await (const event of manager.streamTier('conversation', 'test', sampleMessages)) events.push(event);
+    for await (const event of manager.streamTier('conversation', 'conv_orchestrator', sampleMessages)) events.push(event);
     expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
   });
@@ -313,7 +313,7 @@ describe('LLMManager', () => {
       tiers: { medium: 'primary:model-a' },
     });
 
-    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow('invalid tool schema');
+    await expect(manager.chatTier('medium', 'chat_orchestrator', sampleMessages)).rejects.toThrow('invalid tool schema');
     expect(fallbackCalls).toBe(0);
   });
 
@@ -365,10 +365,38 @@ describe('LLMManager', () => {
     });
 
     const events = [];
-    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    for await (const event of manager.streamTier('medium', 'chat_orchestrator_stream', sampleMessages)) events.push(event);
     expect(events.some((event) => event.type === 'text' && event.text === 'partial')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(true);
     expect(fallbackCalls).toBe(0);
+  });
+
+  test('background tier failures never cross provider boundaries', async () => {
+    const manager = new LLMManager();
+    let groqCalls = 0;
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() { throw new Error('Anthropic API error (401): invalid x-api-key'); },
+      async *stream() { /* not used */ },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() {
+        groqCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { medium: 'anthropic:claude' },
+    });
+
+    await expect(manager.chatTier('medium', 'background_agent', sampleMessages))
+      .rejects.toThrow('invalid x-api-key');
+    expect(groqCalls).toBe(0);
   });
 
   test('last tier candidate honors retryAfterMs before retrying chat', async () => {

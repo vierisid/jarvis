@@ -141,7 +141,12 @@ export class BackgroundAgentService implements Service, IAgentService {
       this.busy = true;
       try {
         const systemPrompt = this.buildSystemPromptParts(channel);
-        return await this.orchestrator.processMessage(systemPrompt, text);
+        return await this.orchestrator.processMessage(
+          systemPrompt,
+          text,
+          'medium',
+          'background_agent',
+        );
       } catch (err) {
         console.error('[BackgroundAgent] Message error:', err);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
