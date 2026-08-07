@@ -472,9 +472,20 @@ export class WebSocketServer {
 
           const file = Bun.file(filePath);
           if (await file.exists()) {
-            if (!self.insecureOpenAccess && filePath.endsWith('.html')) {
-              const html = await file.text();
-              return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
+            if (filePath.endsWith('.html')) {
+              // The HTML points at content-hashed JS/CSS bundles. Never let a
+              // browser or reverse proxy retain an old shell after an update,
+              // otherwise newly deployed controls (such as Stop) remain
+              // invisible even though the new bundle exists on the server.
+              const headers = {
+                'Content-Type': 'text/html',
+                'Cache-Control': 'no-store',
+              };
+              if (!self.insecureOpenAccess) {
+                const html = await file.text();
+                return new Response(injectTokenStrip(html), { headers });
+              }
+              return new Response(file, { headers });
             }
             return new Response(file);
           }
