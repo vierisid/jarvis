@@ -60,3 +60,31 @@ describe('StreamRelay cancellation', () => {
     expect(messages.map((message) => message.type)).toEqual(['stream', 'status']);
   });
 });
+
+describe('StreamRelay progress narration', () => {
+  test('starts UI/TTS immediately for a complete acknowledgment sentence', async () => {
+    const messages: WSMessage[] = [];
+    const sentences: string[] = [];
+    let starts = 0;
+    const server = {
+      broadcast(message: WSMessage) { messages.push(message); },
+    } as unknown as WebSocketServer;
+    const relay = new StreamRelay(server);
+
+    async function* stream(): AsyncGenerator<LLMStreamEvent> {
+      yield { type: 'text', text: 'I’m checking that now.' };
+      // A slow tool would run here. The sentence callback must already have
+      // fired instead of waiting for a later chunk or the done event.
+      expect(starts).toBe(1);
+      expect(sentences).toEqual(['I’m checking that now.']);
+      yield doneEvent('I’m checking that now.');
+    }
+
+    await relay.relayStream(stream(), 'req-progress', {
+      onTextStart: () => { starts++; },
+      onSentence: (sentence) => sentences.push(sentence),
+    });
+    expect(starts).toBe(1);
+    expect(sentences).toEqual(['I’m checking that now.']);
+  });
+});

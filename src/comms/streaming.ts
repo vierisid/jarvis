@@ -9,10 +9,14 @@ export type RelayOptions = {
   onTextDone?: () => void;
   /** Stops relaying immediately when the owning client cancels/supersedes the turn. */
   signal?: AbortSignal;
+  /** Called once, immediately before the first visible text chunk is relayed. */
+  onTextStart?: () => void;
 };
 
-// Sentence boundary: period, exclamation, question mark, colon followed by whitespace or end
-const SENTENCE_END_RE = /[.!?:]\s/;
+// A completed sentence can end at a chunk boundary. Colons still require
+// following whitespace so a token chunk such as "Here are:" is not spoken
+// prematurely while the model is still producing the list.
+const SENTENCE_END_RE = /[.!?](?:\s|$)|:\s/;
 
 export class StreamRelay {
   private wsServer: WebSocketServer;
@@ -34,11 +38,16 @@ export class StreamRelay {
     let fullText = '';
     let sentenceBuffer = '';
     let streamError: string | null = null;
+    let textStarted = false;
 
     try {
       for await (const event of stream) {
         if (options?.signal?.aborted) break;
         if (event.type === 'text') {
+          if (!textStarted) {
+            textStarted = true;
+            options?.onTextStart?.();
+          }
           fullText += event.text;
 
           // Sentence-level TTS callback

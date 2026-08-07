@@ -366,7 +366,8 @@ export class AgentService implements Service, IAgentService {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
             // the later verbalization on the client side.
-            const chunk = (fullText && !fullText.endsWith('\n') ? '\n\n' : '') + event.text;
+            const separator = event.newSegment && fullText && !fullText.endsWith('\n') ? '\n\n' : '';
+            const chunk = separator + event.text;
             fullText += chunk;
             yield { type: 'text', text: chunk };
           }

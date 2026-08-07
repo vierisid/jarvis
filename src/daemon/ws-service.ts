@@ -1217,6 +1217,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // We ignore onTextDone and use the relayStream return to mark stream completion.
       const fullText = await this.streamRelay.relayStream(stream, requestId, {
         signal: activeChat?.controller.signal,
+        // Voice enters "thinking" after STT-final. Flip it off as soon as
+        // acknowledgment/final prose becomes visible instead of leaving the
+        // orb stuck there until the whole tool loop completes.
+        onTextStart: () => this.broadcastThinkingEnd(requestId),
         ...(ttsActive ? {
           onSentence: (sentence: string) => {
             if (activeChat?.controller.signal.aborted) return;

@@ -29,9 +29,13 @@ class MockProvider implements LLMProvider {
     }
     return next;
   }
-  // eslint-disable-next-line require-yield
-  async *stream(): AsyncIterable<LLMStreamEvent> {
-    throw new Error('stream not used in these tests');
+  async *stream(messages: LLMMessage[], opts?: LLMOptions): AsyncIterable<LLMStreamEvent> {
+    const response = await this.chat(messages, opts);
+    if (response.content) yield { type: 'text', text: response.content };
+    for (const toolCall of response.tool_calls) {
+      yield { type: 'tool_call', tool_call: toolCall };
+    }
+    yield { type: 'done', response };
   }
   async listModels(): Promise<string[]> { return ['mock']; }
 }
@@ -115,12 +119,41 @@ describe('ConvOrchestrator', () => {
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     const result = await conv.processTurn('What is the capital of Italy?', {});
-    expect(result.text).toBe('Rome is the capital of Italy.');
+    expect(result.text).toBe(
+      'I’m looking into that now and I’ll report back.\nRome is the capital of Italy.',
+    );
     expect(result.tasksRun).toHaveLength(1);
 
     // The task should be completed in the registry
     const taskId = result.tasksRun[0]!;
     expect(registry.get(taskId)?.status).toBe('completed');
+  });
+
+  it('surfaces a fallback acknowledgment before a silent delegated task starts', async () => {
+    const provider = new MockProvider([
+      toolCallResponse('delegate', {
+        tier: 'medium',
+        template: 'code',
+        intent: 'Inspect the failing route',
+      }),
+    ]);
+    const llm = makeManager(provider);
+    let runnerStarted = false;
+    const runner = async () => {
+      runnerStarted = true;
+      return { kind: 'completed' as const, text: 'done', conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const stream = conv.streamTurn('Fix the route', {});
+    const first = await stream.next();
+    expect(first.value).toMatchObject({
+      type: 'text',
+      text: 'I’m checking the relevant code now.',
+    });
+    expect(runnerStarted).toBe(false);
+    await stream.return(undefined);
   });
 
   it('handles check_task on an unknown task gracefully', async () => {

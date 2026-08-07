@@ -15,6 +15,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
+import { progressAcknowledgement } from './progress.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -559,6 +560,7 @@ export class AgentOrchestrator {
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
     let finalText = '';
     let responseModel = 'unknown';
+    let acknowledgedWork = false;
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -625,6 +627,11 @@ export class AgentOrchestrator {
       }
 
       // Tool calls present — execute them
+      if (!accumulatedText.trim() && !acknowledgedWork) {
+        accumulatedText = progressAcknowledgement(toolCalls);
+        yield { type: 'text', text: accumulatedText };
+      }
+      if (accumulatedText.trim()) acknowledgedWork = true;
       finalText += accumulatedText;
 
       // Add assistant message with tool calls to local messages
