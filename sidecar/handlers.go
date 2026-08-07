@@ -19,7 +19,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, onReloaded func(), brainURL string, panelToken func(context.Context) (string, error)) map[string]RPCHandler {
+func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []SidecarCapability, panels PanelService, pebble PebbleService, subPebble SubPebbleService, playback *AudioPlaybackService, regions RegionSelectionService, micGate *MicGate, onReloaded func(), brainURL string, panelToken func(context.Context) (string, error)) map[string]RPCHandler {
 	caps := make(map[string]bool)
 	for _, c := range availableCaps {
 		caps[c] = true
@@ -88,7 +88,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["pebble.close"] = makePebbleCloseHandler(pebble)
 		registry["pebble.set_state"] = makePebbleSetStateHandler(pebble)
 		registry["pebble.set_eye"] = makePebbleSetEyeHandler(pebble)
-		registry["pebble.set_blinded"] = makePebbleSetBlindedHandler(pebble)
+		registry["pebble.set_blinded"] = makePebbleSetBlindedHandler(pebble, micGate)
 		registry["pebble.set_answer_overflow"] = makePebbleSetAnswerOverflowHandler(pebble)
 		registry["pebble.point_at"] = makePebblePointAtHandler(pebble)
 		if playback != nil {

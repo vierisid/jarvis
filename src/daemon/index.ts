@@ -1406,6 +1406,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // awareness.enabled in config (persists), starts/stops the awareness
       // service in place (no daemon restart), and pushes the visual state
       // to every connected pebble. Speaks a confirmation through TTS.
+      //
+      // P0.3 — "blinded" now covers the microphone too. The sidecar's
+      // set_blinded handler mutes the always-on wake listener, and the
+      // wake-segment handler below drops anything that still arrives. Push
+      // to EVERY connected sidecar, not just the one that emitted the
+      // long-press: awareness.enabled is a single global setting, so leaving
+      // other sidecars listening would make the toggle a lie on a
+      // multi-machine setup.
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
@@ -1416,14 +1424,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           saveUserSection('awareness', jarvisConfig.awareness);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
-          // Push visual: blinded = !enabled.
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !nextEnabled })
-            .catch(() => { /* sidecar may have detached */ });
+          // Push visual + mic mute: blinded = !enabled.
+          await Promise.all(
+            sidecarManager.getConnectedSidecars().map((s) =>
+              sidecarManager.dispatchRPC(s.id, 'pebble.set_blinded', { blinded: !nextEnabled })
+                .catch(() => { /* sidecar may have detached or lack the pebble cap */ }),
+            ),
+          );
           const ack = nextEnabled
-            ? "Awareness back on. I can see your screen again."
-            : "Awareness off. I can't see anything until you toggle it back.";
+            ? "Awareness back on. I can see your screen and hear you again."
+            : "Awareness off. I can't see your screen or hear you until you toggle it back. Control-space still works.";
           await speakConfirmation(sidecarId, ack, { cancelled: false });
-          console.log(`[ambient-ui] blind toggle → awareness.enabled=${nextEnabled}`);
+          console.log(`[ambient-ui] blind toggle → awareness.enabled=${nextEnabled} (screen + mic)`);
         } catch (err) {
           console.warn('[ambient-ui] blind_toggle failed:', err);
         }
@@ -3323,6 +3335,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'audio.wake_segment') return;
+        // P0.3 — hard privacy gate. The sidecar's mic gate should already have
+        // closed the device while blinded, but a sidecar built before that
+        // change (or one that missed the set_blinded push across a reconnect
+        // race) can still ship a segment. Drop it BEFORE the STT call so
+        // blinded audio never leaves the machine.
+        if (!(jarvisConfig.awareness?.enabled ?? true)) {
+          console.log('[ambient-ui] wake segment dropped — awareness disabled (blinded)');
+          return;
+        }
         // Suppress while an active summon is in flight — the user already
         // got JARVIS's attention via Ctrl+Space (or a prior wake).
         if (pendingSummons.has(sidecarId)) return;

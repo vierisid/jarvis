@@ -71,6 +71,10 @@ type SidecarClient struct {
 	subPebble SubPebbleService       // per-sub-agent rail overlays (CapSubPebble)
 	playback  *AudioPlaybackService  // pebble TTS playback (alongside CapPebble)
 	regions   RegionSelectionService // T19 drag-select capture (alongside CapPebble)
+	// micGate (P0.3) carries the blind toggle's mic state across reconnects
+	// and lets the connection-scoped wake listener be muted by the
+	// client-scoped pebble.set_blinded handler.
+	micGate *MicGate
 
 	// Realtime voice (gpt-realtime). streamPlayer is the live PCM playback
 	// device, read by the readLoop's pebble.play_pcm fast-path; realtime is the
@@ -111,7 +115,8 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		// makes sense when the ambient UI is active.
 		client.regions = NewRegionSelectionService()
 	}
-	client.handlers = NewHandlerRegistry(config, &client.mu, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig, client.claims.Brain, client.tokenProvider.Token)
+	client.micGate = NewMicGate()
+	client.handlers = NewHandlerRegistry(config, &client.mu, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.micGate, client.reloadConfig, client.claims.Brain, client.tokenProvider.Token)
 	return client, nil
 }
 
@@ -425,7 +430,7 @@ func (c *SidecarClient) reloadConfig() {
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, &c.mu, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.tokenProvider.Token)
+	c.handlers = NewHandlerRegistry(c.config, &c.mu, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.micGate, c.reloadConfig, c.claims.Brain, c.tokenProvider.Token)
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
@@ -528,10 +533,21 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// regex-matches "jarvis". Pauses around Ctrl+Space session
 		// captures so it doesn't fight for the mic device.
 		wakeListener := NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
+		// P0.3 — the mic gate outranks Start(): if the user blinded JARVIS
+		// before this connection came up, the listener must come up with the
+		// device closed rather than opening it and waiting for the daemon's
+		// set_blinded push. Apply the remembered state BEFORE Start.
+		if c.micGate != nil {
+			wakeListener.SetMuted(ctx, c.micGate.Blinded())
+		}
 		if err := wakeListener.Start(ctx); err != nil {
 			log.Printf("[wake] failed to start: %v", err)
 			wakeListener = nil
 		} else {
+			if c.micGate != nil {
+				c.micGate.Attach(ctx, wakeListener)
+				defer c.micGate.Detach()
+			}
 			// Tear the listener down when this connection ends. audioSvc and
 			// wakeListener are constructed fresh per connectAndServe, so without
 			// this every reconnect leaked a coordinate() goroutine and a held mic

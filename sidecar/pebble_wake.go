@@ -21,6 +21,11 @@ package main
 // Resume() restarts the continuous capture once the session ends. The
 // daemon also gates wake_segment processing during TTS playback so JARVIS
 // saying his own name doesn't re-trigger the loop.
+//
+// Privacy gate (P0.3): SetMuted() is a separate, longer-lived gate driven by
+// MicGate / the pebble blind toggle. While muted the device stays closed
+// across Pause/Resume cycles, so blinding JARVIS stops the passive mic stream
+// instead of only stopping screen awareness.
 
 import (
 	"context"
@@ -75,9 +80,22 @@ type WakeListenerService struct {
 	// COUNTER, not a bool, because the sources are independent and can overlap:
 	// a bool let whichever source released first re-enable the mic while the
 	// other still needed it suppressed. Suppressed iff depth > 0.
+	//
+	// muted is the privacy gate (P0.3), owned by MicGate and driven by the
+	// pebble blind toggle. It is deliberately NOT the same flag as paused:
+	// paused is a short-lived device handover for a session capture and is
+	// always followed by a Resume, whereas muted must SURVIVE that Resume.
+	// The device is open iff running && !paused && !muted.
 	running       atomic.Bool
 	paused        atomic.Bool
+	muted         atomic.Bool
 	suppressDepth atomic.Int32
+
+	// devMu serializes device open/close transitions across Pause / Resume /
+	// SetMuted, which are driven by independent goroutines (session capture,
+	// RPC handler). The atomics above are still the read path for the hot
+	// audio callback; devMu only guards the transitions.
+	devMu sync.Mutex
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -115,6 +133,15 @@ func (w *WakeListenerService) Start(ctx context.Context) error {
 	w.doneCh = make(chan struct{})
 	w.resetSegment()
 
+	// Muted (blinded) at start-up: come up "running" but with the mic device
+	// never opened. SetMuted(false) opens it later. Starting the coordinator
+	// anyway keeps Stop()'s doneCh handshake identical in both paths.
+	if w.muted.Load() {
+		log.Printf("[wake] started MUTED (blinded) — mic device not opened")
+		go w.coordinate(ctx)
+		return nil
+	}
+
 	// Hook the chunk listener BEFORE Start so we don't miss any audio.
 	w.audioSvc.SetChunkListener(w.onChunk)
 	if err := w.audioSvc.Start(fmt.Sprintf("wake-%d", time.Now().UnixMilli())); err != nil {
@@ -136,28 +163,88 @@ func (w *WakeListenerService) Pause() {
 	if !w.running.Load() {
 		return
 	}
+	w.devMu.Lock()
+	defer w.devMu.Unlock()
 	if !w.paused.CompareAndSwap(false, true) {
 		return
 	}
-	w.audioSvc.SetChunkListener(nil)
-	_, _, _ = w.audioSvc.Stop()
+	if w.muted.Load() {
+		// Blinded: the device was already released by SetMuted. Nothing to
+		// close, and nothing to log — the mic is off either way.
+		return
+	}
+	w.closeDeviceLocked()
 	log.Printf("[wake] paused (mic released)")
 }
 
 // Resume restarts capture after a Pause(). No-op if not paused or not
-// running.
+// running. Does NOT reopen the mic while muted (blinded) — the privacy gate
+// outranks the session-capture handover, and a session capture's deferred
+// Resume must not undo it.
 func (w *WakeListenerService) Resume(ctx context.Context) {
 	if !w.running.Load() {
 		return
 	}
+	w.devMu.Lock()
+	defer w.devMu.Unlock()
 	if !w.paused.CompareAndSwap(true, false) {
 		return
 	}
+	if w.muted.Load() {
+		log.Printf("[wake] resume skipped — listener is muted (blinded)")
+		return
+	}
+	w.openDeviceLocked(ctx)
+}
+
+// SetMuted is the privacy gate: mute releases the mic device and keeps it
+// released until unmuted, regardless of how many Pause/Resume cycles happen
+// in between. Driven by MicGate from the pebble blind toggle.
+//
+// Safe to call before Start() — the flag is remembered and Start() honours it.
+func (w *WakeListenerService) SetMuted(ctx context.Context, muted bool) {
+	w.devMu.Lock()
+	defer w.devMu.Unlock()
+	if !w.muted.CompareAndSwap(!muted, muted) {
+		return // already in the requested state
+	}
+	if !w.running.Load() || w.paused.Load() {
+		// We don't hold the device right now. The flag alone is enough:
+		// Start() and Resume() both consult it before opening.
+		log.Printf("[wake] muted=%v recorded (device not currently held)", muted)
+		return
+	}
+	if muted {
+		w.closeDeviceLocked()
+		w.resetSegment()
+		log.Printf("[wake] MUTED — mic released, no segments will be captured")
+		return
+	}
+	w.openDeviceLocked(ctx)
+	log.Printf("[wake] unmuted — mic capture restored")
+}
+
+// Muted reports whether the privacy gate is currently holding the mic closed.
+func (w *WakeListenerService) Muted() bool {
+	return w.muted.Load()
+}
+
+// closeDeviceLocked drops the chunk listener and stops the capture device.
+// Caller holds devMu.
+func (w *WakeListenerService) closeDeviceLocked() {
+	w.audioSvc.SetChunkListener(nil)
+	_, _, _ = w.audioSvc.Stop()
+}
+
+// openDeviceLocked (re)opens the capture device. Caller holds devMu and has
+// already checked that the device should be open.
+//
+// The OS may not have released the capture device yet (the session capture we
+// paused for is still tearing down), so a single Start can fail transiently.
+// Retry briefly before giving up.
+func (w *WakeListenerService) openDeviceLocked(ctx context.Context) {
 	w.resetSegment()
 	w.audioSvc.SetChunkListener(w.onChunk)
-	// The OS may not have released the capture device yet (the session capture
-	// we paused for is still tearing down), so a single Start can fail
-	// transiently. Retry briefly before giving up.
 	var err error
 	for attempt := 0; attempt < 5; attempt++ {
 		if ctx.Err() != nil {
@@ -165,7 +252,7 @@ func (w *WakeListenerService) Resume(ctx context.Context) {
 			return
 		}
 		if err = w.audioSvc.Start(fmt.Sprintf("wake-%d", time.Now().UnixMilli())); err == nil {
-			log.Printf("[wake] resumed")
+			log.Printf("[wake] capture device open")
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -177,7 +264,7 @@ func (w *WakeListenerService) Resume(ctx context.Context) {
 	// explicit Pause/Resume — can recover. Surface loudly.
 	w.audioSvc.SetChunkListener(nil)
 	w.paused.Store(true)
-	log.Printf("[wake] resume failed after retries; listener paused (deaf) until next resume: %v", err)
+	log.Printf("[wake] capture device open failed after retries; listener paused (deaf) until next resume: %v", err)
 }
 
 // Stop fully tears down the wake listener.
@@ -225,7 +312,10 @@ func (w *WakeListenerService) Suppress(yes bool) {
 // 30 ms buffer is ~480 multiplies. Keep work here minimal so we don't
 // stall the audio thread.
 func (w *WakeListenerService) onChunk(buf []byte) {
-	if w.paused.Load() || w.suppressDepth.Load() > 0 {
+	// muted is checked here as well as at the device layer: closing the device
+	// is the real guarantee, this is the belt-and-braces one that covers the
+	// in-flight callback racing with closeDeviceLocked.
+	if w.paused.Load() || w.muted.Load() || w.suppressDepth.Load() > 0 {
 		return
 	}
 	rms := pcmRMSint16(buf)
@@ -271,7 +361,7 @@ func (w *WakeListenerService) coordinate(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if w.paused.Load() {
+			if w.paused.Load() || w.muted.Load() {
 				continue
 			}
 			w.maybeEmitSegment(ctx)

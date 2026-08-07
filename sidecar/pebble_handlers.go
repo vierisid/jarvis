@@ -155,13 +155,24 @@ func makePebbleSetAnswerOverflowHandler(svc PebbleService) RPCHandler {
 // pebble.set_blinded (W6-T2) — mark awareness as hard-paused. The pebble
 // shows a struck-through eye glyph. Daemon also persists awareness.enabled
 // to the config so the state survives restart. Params: { "blinded": bool }
-func makePebbleSetBlindedHandler(svc PebbleService) RPCHandler {
+//
+// P0.3: blinded now ALSO closes the always-on wake listener's microphone via
+// the MicGate. Before this, blinding stopped screen capture only and every
+// spoken phrase kept flowing to STT. The reply reports `mic_muted` so the
+// daemon can tell whether the mic gate was actually reachable on this sidecar
+// (it is nil only when the binary was built without the gate wired).
+func makePebbleSetBlindedHandler(svc PebbleService, micGate *MicGate) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		blinded, _ := params["blinded"].(bool)
 		if err := svc.SetBlinded(blinded); err != nil {
 			return nil, err
 		}
-		return &RPCResult{Result: map[string]any{"blinded": blinded}}, nil
+		micMuted := false
+		if micGate != nil {
+			micGate.SetBlinded(blinded)
+			micMuted = micGate.Blinded()
+		}
+		return &RPCResult{Result: map[string]any{"blinded": blinded, "mic_muted": micMuted}}, nil
 	}
 }
 
