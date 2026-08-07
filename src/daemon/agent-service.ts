@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Service, ServiceStatus } from './services.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { LLMStreamEvent, LLMMessage } from '../llm/provider.ts';
+import { toLLMStreamError } from '../llm/provider.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { PersonalityModel } from '../personality/model.ts';
 
@@ -386,7 +387,7 @@ export class AgentService implements Service, IAgentService {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('[AgentService] Conv stream error:', errorMsg);
-        yield { type: 'error', error: errorMsg };
+        yield toLLMStreamError(err);
       }
     })();
 

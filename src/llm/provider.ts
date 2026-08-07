@@ -70,6 +70,19 @@ export class LLMProviderError extends Error {
   }
 }
 
+/** Preserve provider metadata when a non-streaming tier call is exposed as a stream. */
+export function toLLMStreamError(error: unknown): Extract<LLMStreamEvent, { type: 'error' }> {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    type: 'error',
+    error: message,
+    code: error instanceof LLMProviderError && error.code
+      ? error.code
+      : classifyErrorString(message),
+    retryAfterMs: error instanceof LLMProviderError ? error.retryAfterMs : undefined,
+  };
+}
+
 /**
  * Parse standard Retry-After values and the decimal-second wording used in
  * Groq quota bodies. The result is rounded up so we never retry just before

@@ -12,7 +12,9 @@ import {
   guardImageSize,
   classifyHttpStatus,
   classifyErrorString,
+  LLMProviderError,
   parseRetryAfterMs,
+  toLLMStreamError,
   type LLMMessage,
   type ContentBlock,
 } from './provider.ts';
@@ -1241,5 +1243,21 @@ describe('parseRetryAfterMs', () => {
 
   test('returns undefined when the provider gives no retry timing', () => {
     expect(parseRetryAfterMs(undefined, 'rate limited')).toBeUndefined();
+  });
+});
+
+describe('toLLMStreamError', () => {
+  test('preserves the final provider code and retry timing over earlier error text', () => {
+    const error = new LLMProviderError(
+      'Anthropic API error (401): invalid x-api-key\n\nGroq API error (429): rate limited',
+      { code: 'rate_limit', retryAfterMs: 90_000 },
+    );
+
+    expect(toLLMStreamError(error)).toEqual({
+      type: 'error',
+      error: error.message,
+      code: 'rate_limit',
+      retryAfterMs: 90_000,
+    });
   });
 });
