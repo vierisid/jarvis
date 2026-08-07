@@ -7,7 +7,7 @@ package main
 // prompts fire implicitly on first use (malgo capture, screencapture, ...).
 // Grants attach to this bundle's identifier + signing identity, which is why
 // the installer never requests them — only the installed, signed Jarvis.app
-// may (see the internal code-signing runbook).
+// may (see code-signing/macos-setup.md in the usejarvis-docs repo).
 //
 // Status legend used across the C bridges:
 //   0 = undetermined (never asked)   1 = granted

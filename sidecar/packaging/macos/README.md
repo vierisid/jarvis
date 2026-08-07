@@ -47,7 +47,8 @@ make app-macos BIN=dist/darwin-arm64/jarvis APP_DIR=npm/darwin-arm64/bin/Jarvis.
 An unsigned bundle can be tested locally, but notifications + TCC prompts are
 reliable only when signed (and Gatekeeper needs notarization for other machines).
 Release builds are signed and notarized in CI (`sidecar-release.yml`); the
-credential setup lives in the internal code-signing runbook. To reproduce it
+credential setup lives in code-signing/macos-setup.md in the usejarvis-docs
+repo. To reproduce it
 manually, sign inside-out (nested Mach-Os first, never `--deep`) with the
 hardened runtime:
 

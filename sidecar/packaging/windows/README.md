@@ -45,5 +45,5 @@ openssl x509 -in sidecar/packaging/windows/codesign-chain.pem -pubkey -noout \
   | diff - /tmp/kms.pub && echo "leaf matches the HSM key"
 ```
 
-Full onboarding, including the CSR and the GCP setup, is in the internal
-code-signing runbook.
+Full onboarding, including the CSR and the GCP setup, is in
+code-signing/windows-setup.md in the usejarvis-docs repo.

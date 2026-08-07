@@ -109,7 +109,7 @@ for v in GCP_KMS_KEYRING GCP_KMS_KEY_ALIAS GCP_ACCESS_TOKEN; do
 		if [ "$v" = "GCP_ACCESS_TOKEN" ] && [ -n "$gcloud_err" ]; then
 			fail "GCP_ACCESS_TOKEN is required and \`gcloud auth print-access-token\` failed: ${gcloud_err}"
 		fi
-		fail "$v is required (see the internal code-signing runbook)"
+		fail "$v is required (see code-signing/ci-pipeline.md in usejarvis-docs)"
 	fi
 done
 
@@ -128,7 +128,7 @@ done
 # issued this is the expected state, and it must read as "the cert isn't there
 # yet", not as a broken pipeline.
 [ -f "$CODESIGN_CERT_FILE" ] ||
-	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See the internal code-signing runbook."
+	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
 grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
 	fail "${CODESIGN_CERT_FILE} contains no PEM certificate — is it still the placeholder?"
 

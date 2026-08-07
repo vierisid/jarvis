@@ -7,7 +7,7 @@
 // downloads the platform package tarball, verifies its sha512 AND its code
 // signature, and only then installs.
 //
-// Boundaries (see the internal code-signing runbook and the sidecar docs):
+// Boundaries (see code-signing/ in the usejarvis-docs repo):
 //   - Enrollment is strictly the sidecar's concern: this program has no
 //     --token flag and never reads or writes ~/.jarvis.
 //   - It never requests OS permissions (macOS TCC grants bind to the
