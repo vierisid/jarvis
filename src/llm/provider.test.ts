@@ -8,7 +8,14 @@ import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
 import { configureLLMTiers } from './config-binding.ts';
-import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
+import {
+  guardImageSize,
+  classifyHttpStatus,
+  classifyErrorString,
+  parseRetryAfterMs,
+  type LLMMessage,
+  type ContentBlock,
+} from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
 describe('LLM Provider Types', () => {
@@ -362,6 +369,68 @@ describe('LLMManager', () => {
     expect(events.some((event) => event.type === 'text' && event.text === 'partial')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(true);
     expect(fallbackCalls).toBe(0);
+  });
+
+  test('last tier candidate honors retryAfterMs before retrying chat', async () => {
+    const manager = new LLMManager();
+    let calls = 0;
+    const provider = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() {
+        calls++;
+        if (calls === 1) {
+          throw Object.assign(new Error('Groq API error (429): rate limited'), {
+            code: 'rate_limit' as const,
+            retryAfterMs: 1,
+          });
+        }
+        return {
+          content: 'recovered', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(provider);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'llama' } });
+
+    const response = await manager.chatTier('medium', 'test', sampleMessages);
+    expect(response.content).toBe('recovered');
+    expect(calls).toBe(2);
+  });
+
+  test('last tier candidate honors stream retryAfterMs instead of retrying immediately', async () => {
+    const manager = new LLMManager();
+    let calls = 0;
+    const provider = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'error' as const,
+            error: 'Groq API error (429): rate limited',
+            code: 'rate_limit' as const,
+            retryAfterMs: 1,
+          };
+          return;
+        }
+        yield { type: 'text' as const, text: 'recovered stream' };
+        yield { type: 'done' as const, response: {
+          content: 'recovered stream', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(provider);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'llama' } });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'recovered stream')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(calls).toBe(2);
   });
 });
 
@@ -848,6 +917,40 @@ describe('Groq request shaping', () => {
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
 
+  test('GroqProvider retries TPM quota failures once with a tighter payload', async () => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const callCount = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.length;
+      if (callCount === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            message: 'Rate limit reached on tokens per minute (TPM). Used 9524, Requested 9754. Please try again in 36.39s.',
+          },
+        }), { status: 429, headers: { 'Retry-After': '37' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'cmpl_quota_retry', object: 'chat.completion', created: Date.now(), model: 'llama-test',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'compact quota retry ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'S'.repeat(14_000) },
+      { role: 'user', content: 'U'.repeat(10_000) },
+      { role: 'assistant', content: 'A'.repeat(10_000) },
+      { role: 'user', content: 'Can you still answer?' },
+    ];
+
+    const response = await provider.chat(messages);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(response.content).toBe('compact quota retry ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+
   test('GroqProvider compaction never orphans a tool message from its assistant tool_call', async () => {
     let captured: any = null;
     globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
@@ -1099,5 +1202,16 @@ describe('classifyErrorString', () => {
     expect(classifyErrorString('something unexpected happened')).toBe('unknown');
     expect(classifyErrorString(undefined)).toBe('unknown');
     expect(classifyErrorString('')).toBe('unknown');
+  });
+});
+
+describe('parseRetryAfterMs', () => {
+  test('parses standard seconds and Groq decimal-second quota messages', () => {
+    expect(parseRetryAfterMs('37')).toBe(37_000);
+    expect(parseRetryAfterMs(undefined, 'Please try again in 36.39s.')).toBe(36_390);
+  });
+
+  test('returns undefined when the provider gives no retry timing', () => {
+    expect(parseRetryAfterMs(undefined, 'rate limited')).toBeUndefined();
   });
 });

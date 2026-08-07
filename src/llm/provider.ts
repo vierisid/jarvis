@@ -55,7 +55,40 @@ export type LLMStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; tool_call: LLMToolCall }
   | { type: 'done'; response: LLMResponse }
-  | { type: 'error'; error: string; code?: LLMErrorCode };
+  | { type: 'error'; error: string; code?: LLMErrorCode; retryAfterMs?: number };
+
+/** Provider failure metadata that must survive manager aggregation/retry. */
+export class LLMProviderError extends Error {
+  code?: LLMErrorCode;
+  retryAfterMs?: number;
+
+  constructor(message: string, opts?: { code?: LLMErrorCode; retryAfterMs?: number }) {
+    super(message);
+    this.name = 'LLMProviderError';
+    this.code = opts?.code;
+    this.retryAfterMs = opts?.retryAfterMs;
+  }
+}
+
+/**
+ * Parse standard Retry-After values and the decimal-second wording used in
+ * Groq quota bodies. The result is rounded up so we never retry just before
+ * the provider window actually opens.
+ */
+export function parseRetryAfterMs(header: string | null | undefined, body = ''): number | undefined {
+  const raw = header?.trim();
+  if (raw) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+    const dateMs = Date.parse(raw);
+    if (Number.isFinite(dateMs)) return Math.max(dateMs - Date.now(), 0);
+  }
+
+  const match = /(?:please\s+)?try again in\s+([\d.]+)\s*(?:s|sec|secs|second|seconds)\b/i.exec(body);
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : undefined;
+}
 
 /**
  * Map an HTTP status code returned by a provider to a canonical error code.

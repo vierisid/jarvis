@@ -6,7 +6,7 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { classifyErrorString } from './provider.ts';
+import { classifyErrorString, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 import {
   type Tier,
   type TierAssignment,
@@ -26,6 +26,7 @@ export class LLMManager {
   /** Explicit llm.default assignment; also authorizes cross-provider fallback. */
   private defaultAssignment: TierAssignment | null = null;
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
+  private static readonly MAX_RETRY_SLEEP_MS = 60_000;
   private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
@@ -144,6 +145,41 @@ export class LLMManager {
     return `Provider '${providerName}' failed after ${n} ${word}:\n${errors.map((error) => `  ${error}`).join('\n')}`;
   }
 
+  private errorCode(error: unknown): LLMErrorCode {
+    const structured = error && typeof error === 'object'
+      ? (error as { code?: LLMErrorCode }).code
+      : undefined;
+    if (structured) return structured;
+    return classifyErrorString(error instanceof Error ? error.message : String(error));
+  }
+
+  private retryAfterMs(error: unknown): number | undefined {
+    const structured = error && typeof error === 'object'
+      ? (error as { retryAfterMs?: unknown }).retryAfterMs
+      : undefined;
+    if (typeof structured === 'number' && Number.isFinite(structured) && structured >= 0) {
+      return structured;
+    }
+    return parseRetryAfterMs(undefined, error instanceof Error ? error.message : String(error));
+  }
+
+  /**
+   * Wait only when this provider is the last authorized candidate. Long waits
+   * are surfaced to the caller instead of freezing an interactive request.
+   */
+  private async waitForRetry(provider: string, retryAfterMs: number | undefined): Promise<boolean> {
+    if (retryAfterMs === undefined) return true;
+    if (retryAfterMs > LLMManager.MAX_RETRY_SLEEP_MS) return false;
+    if (retryAfterMs > 0) {
+      const delay = retryAfterMs >= 1000
+        ? `${Math.ceil(retryAfterMs / 1000)}s`
+        : `${Math.ceil(retryAfterMs)}ms`;
+      console.log(`[LLM] ${provider} rate-limited — retrying in ${delay}`);
+      await Bun.sleep(retryAfterMs);
+    }
+    return true;
+  }
+
   /**
    * Atomically replace all providers. Safe for in-flight requests because
    * JS is single-threaded and the map assignment is atomic.
@@ -185,6 +221,8 @@ export class LLMManager {
    */
   private shouldRetry(error: unknown): boolean {
     if (!(error instanceof Error)) return false;
+
+    if (this.shouldRetryCode(this.errorCode(error))) return true;
 
     const msg = error.message.toLowerCase();
     // Retry on network/timeout errors, not on auth/validation errors
@@ -291,7 +329,7 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): Promise<LLMResponse> {
-    const failures: string[] = [];
+    const failures: Array<{ message: string; code: LLMErrorCode; retryAfterMs?: number }> = [];
     const exhaustedProviders = new Set<string>();
     const candidates = this.tierCandidates(tier);
 
@@ -322,8 +360,9 @@ export class LLMManager {
         return response;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const code = classifyErrorString(message);
-        failures.push(message);
+        const code = this.errorCode(err);
+        const retryAfterMs = this.retryAfterMs(err);
+        failures.push({ message, code, retryAfterMs });
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
           model: model || '', input_tokens: 0, output_tokens: 0,
@@ -334,7 +373,11 @@ export class LLMManager {
       }
     }
 
-    throw new Error(failures.join('\n\n'));
+    const last = failures.at(-1);
+    throw new LLMProviderError(failures.map((failure) => failure.message).join('\n\n'), {
+      code: last?.code,
+      retryAfterMs: last?.retryAfterMs,
+    });
   }
 
   /**
@@ -403,10 +446,12 @@ export class LLMManager {
     }
 
     const error = failures.map((failure) => failure.error).join('\n\n');
+    const lastFailure = failures.at(-1);
     yield {
       type: 'error',
       error,
-      code: failures.at(-1)?.code ?? classifyErrorString(error),
+      code: lastFailure?.code ?? classifyErrorString(error),
+      retryAfterMs: lastFailure?.retryAfterMs,
     };
   }
 
@@ -422,6 +467,8 @@ export class LLMManager {
     failFastForAlternative = false,
   ): Promise<LLMResponse> {
     const errors: string[] = [];
+    let lastErrorCode: LLMErrorCode | undefined;
+    let lastRetryAfterMs: number | undefined;
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       try {
         const result = await this.withTimeout(provider.chat(messages, options), provider.name);
@@ -432,15 +479,24 @@ export class LLMManager {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
+        lastErrorCode = this.errorCode(err);
+        lastRetryAfterMs = this.retryAfterMs(err);
         const shouldRetry = this.shouldRetry(err);
         console.error(
           `[LLM] Provider ${provider.name} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
         );
-        if (failFastForAlternative && this.shouldFailOver(classifyErrorString(errorMsg), errorMsg)) break;
+        if (failFastForAlternative && this.shouldFailOver(lastErrorCode, errorMsg)) break;
         if (!shouldRetry) break;
+        if (
+          attempt < LLMManager.MAX_RETRIES_PER_PROVIDER
+          && !(await this.waitForRetry(provider.name, lastRetryAfterMs))
+        ) break;
       }
     }
-    throw new Error(this.formatFailure(provider.name, errors));
+    throw new LLMProviderError(this.formatFailure(provider.name, errors), {
+      code: lastErrorCode,
+      retryAfterMs: lastRetryAfterMs,
+    });
   }
 
   private async *streamWithRetry(
@@ -451,6 +507,7 @@ export class LLMManager {
   ): AsyncIterable<LLMStreamEvent> {
     const errors: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
+    let lastRetryAfterMs: number | undefined;
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       let emittedContent = false;
       let retryableEvent = true;
@@ -461,6 +518,8 @@ export class LLMManager {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
+            lastRetryAfterMs = event.retryAfterMs
+              ?? parseRetryAfterMs(undefined, event.error);
             retryableEvent = this.shouldRetryCode(lastErrorCode);
             console.error(
               `[LLM] Provider ${provider.name} stream error (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER}): ${event.error}`
@@ -482,10 +541,15 @@ export class LLMManager {
         }
         if (!hasError) return;
         if (!retryableEvent || failFastForAlternative) break;
+        if (
+          attempt < LLMManager.MAX_RETRIES_PER_PROVIDER
+          && !(await this.waitForRetry(provider.name, lastRetryAfterMs))
+        ) break;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
-        lastErrorCode = classifyErrorString(errorMsg);
+        lastErrorCode = this.errorCode(err);
+        lastRetryAfterMs = this.retryAfterMs(err);
         const shouldRetry = this.shouldRetry(err);
         console.error(
           `[LLM] Provider ${provider.name} stream failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
@@ -500,12 +564,17 @@ export class LLMManager {
         }
         if (failFastForAlternative && this.shouldFailOver(lastErrorCode, errorMsg)) break;
         if (!shouldRetry) break;
+        if (
+          attempt < LLMManager.MAX_RETRIES_PER_PROVIDER
+          && !(await this.waitForRetry(provider.name, lastRetryAfterMs))
+        ) break;
       }
     }
     yield {
       type: 'error',
       error: this.formatFailure(provider.name, errors),
       code: lastErrorCode ?? classifyErrorString(errors.join('\n')),
+      retryAfterMs: lastRetryAfterMs,
     };
   }
 

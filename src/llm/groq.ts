@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus } from './provider.ts';
+import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -159,15 +159,15 @@ export class GroqProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      if (!this.isRequestTooLargeError(response.status, errorText)) {
-        throw new Error(`Groq API error (${response.status}): ${errorText}`);
+      if (!this.shouldRetryWithTighterPrompt(response.status, errorText)) {
+        throw this.responseError(response, errorText);
       }
       response = await this.sendRequest(
         this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET)
       );
       if (!response.ok) {
         const retryError = await response.text();
-        throw new Error(`Groq API error after retry (${response.status}): ${retryError}`);
+        throw this.responseError(response, retryError, 'Groq API error after compact retry');
       }
     }
 
@@ -188,12 +188,8 @@ export class GroqProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      if (!this.isRequestTooLargeError(response.status, errorText)) {
-        yield {
-          type: 'error',
-          error: `Groq API error (${response.status}): ${errorText}`,
-          code: classifyHttpStatus(response.status),
-        };
+      if (!this.shouldRetryWithTighterPrompt(response.status, errorText)) {
+        yield this.responseErrorEvent(response, errorText);
         return;
       }
       response = await this.sendRequest(
@@ -206,11 +202,7 @@ export class GroqProvider implements LLMProvider {
       );
       if (!response.ok) {
         const retryError = await response.text();
-        yield {
-          type: 'error',
-          error: `Groq API error after retry (${response.status}): ${retryError}`,
-          code: classifyHttpStatus(response.status),
-        };
+        yield this.responseErrorEvent(response, retryError, 'Groq API error after compact retry');
         return;
       }
     }
@@ -556,6 +548,40 @@ export class GroqProvider implements LLMProvider {
     if (status === 413) return true;
     if (status !== 400) return false;
     return /\b(message is too large|request too large|payload too large|too many tokens|maximum context length|context window)\b/i.test(errorText);
+  }
+
+  /** A token-window 429 can often recover immediately with the compact body. */
+  private isTokenRateLimitError(status: number, errorText: string): boolean {
+    return status === 429 && /\b(?:tokens per minute|tpm)\b/i.test(errorText);
+  }
+
+  private shouldRetryWithTighterPrompt(status: number, errorText: string): boolean {
+    return this.isRequestTooLargeError(status, errorText)
+      || this.isTokenRateLimitError(status, errorText);
+  }
+
+  private responseError(
+    response: Response,
+    errorText: string,
+    prefix = 'Groq API error',
+  ): LLMProviderError {
+    return new LLMProviderError(`${prefix} (${response.status}): ${errorText}`, {
+      code: classifyHttpStatus(response.status),
+      retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after'), errorText),
+    });
+  }
+
+  private responseErrorEvent(
+    response: Response,
+    errorText: string,
+    prefix = 'Groq API error',
+  ): Extract<LLMStreamEvent, { type: 'error' }> {
+    return {
+      type: 'error',
+      error: `${prefix} (${response.status}): ${errorText}`,
+      code: classifyHttpStatus(response.status),
+      retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after'), errorText),
+    };
   }
 
   private convertTools(tools: LLMTool[]): GroqToolDef[] {
