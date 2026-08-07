@@ -25,18 +25,33 @@ import flockSource from './flock.c' with { type: 'file' };
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const LOG_DIR = join(JARVIS_DIR, 'logs');
-const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
 const LOG_PATH = join(LOG_DIR, 'jarvis.log');
 
 /**
- * Resolve the lock-file path for a given data dir. The daemon itself always
- * runs against `~/.jarvis` (no override path today), but the encryption
- * rotation script accepts `--data-dir` and needs to probe the lock for that
- * specific dir, not the default. Keep this in lock-step with `LOCK_PATH`
- * above: any change to the default lock-file name has to be reflected here.
+ * The daemon's own root: `JARVIS_HOME` when set (hosted wrappers export it for
+ * every jarvis invocation on an instance), `~/.jarvis` otherwise. The lock
+ * lives HERE — in the same root the daemon serves — so tools that probe "is a
+ * daemon running against this data dir" (restore, the rotation script) and the
+ * daemon itself can never disagree about which file to flock. Computed per
+ * call, not at module load, because config loading honors the same env var.
+ */
+function daemonRootDir(): string {
+  return process.env.JARVIS_HOME || JARVIS_DIR;
+}
+
+function defaultLockPath(): string {
+  return join(daemonRootDir(), 'jarvis.pid');
+}
+
+/**
+ * Resolve the lock-file path for a given data dir. With no argument this is
+ * the daemon's own lock path (JARVIS_HOME-aware, see `daemonRootDir`); the
+ * encryption rotation script passes an explicit `--data-dir` to probe the lock
+ * for that specific dir. Keep the file name in lock-step with
+ * `defaultLockPath` above.
  */
 export function lockPathFor(dataDir?: string): string {
-  if (!dataDir) return LOCK_PATH;
+  if (!dataDir) return defaultLockPath();
   return join(dataDir, 'jarvis.pid');
 }
 
@@ -98,10 +113,10 @@ export function acquireLock(pid: number): boolean {
     // we create the data dir or open an fd (nothing to leak / clean up).
     const flock = getFlock();
 
-    mkdirSync(JARVIS_DIR, { recursive: true });
+    mkdirSync(daemonRootDir(), { recursive: true });
 
     // Open (or create) the lock file — don't truncate before locking
-    const fd = openSync(LOCK_PATH, constants.O_WRONLY | constants.O_CREAT, 0o644);
+    const fd = openSync(defaultLockPath(), constants.O_WRONLY | constants.O_CREAT, 0o644);
 
     // Try non-blocking exclusive lock
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
@@ -129,9 +144,9 @@ export function acquireLock(pid: number): boolean {
  *
  * Accepts an optional explicit `lockPath` to probe a non-default location
  * (used by the encryption rotation script when given `--data-dir`). The
- * default probes `~/.jarvis/jarvis.pid`.
+ * default probes the daemon's own lock path (JARVIS_HOME-aware).
  */
-export function isLocked(lockPath: string = LOCK_PATH): number | null {
+export function isLocked(lockPath: string = defaultLockPath()): number | null {
   if (!existsSync(lockPath)) return null;
 
   let fd: number;
@@ -159,7 +174,7 @@ export function isLocked(lockPath: string = LOCK_PATH): number | null {
     if (pid === 1 && isInsideContainer()) {
       // Only auto-release when probing the default daemon path. A custom
       // lockPath probe shouldn't be allowed to nuke an arbitrary file.
-      if (lockPath === LOCK_PATH) releaseLock();
+      if (lockPath === defaultLockPath()) releaseLock();
       return null;
     }
 
@@ -173,7 +188,7 @@ export function isLocked(lockPath: string = LOCK_PATH): number | null {
 /**
  * Acquire an exclusive lock at an arbitrary `lockPath`. Returns a handle that
  * releases the lock + unlinks the file. Distinct from `acquireLock`, which
- * always targets the default `~/.jarvis/jarvis.pid` and is only used by the
+ * always targets the daemon's own lock path and is only used by the
  * daemon itself. This helper exists for tests and tools (e.g. the rotation
  * script's test fixture) that need to simulate "a daemon is running against
  * this data dir" without colliding with a real daemon on the dev machine.
@@ -219,7 +234,8 @@ export function releaseLock(): void {
     lockFd = null;
   }
   try {
-    if (existsSync(LOCK_PATH)) unlinkSync(LOCK_PATH);
+    const lockPath = defaultLockPath();
+    if (existsSync(lockPath)) unlinkSync(lockPath);
   } catch { /* ignore */ }
 }
 
@@ -231,7 +247,7 @@ export function releaseLock(): void {
  *   PID\nPORT      (current — PID on line 1, bound port on line 2)
  */
 export function readPid(): number | null {
-  return readPidAt(LOCK_PATH);
+  return readPidAt(defaultLockPath());
 }
 
 function readPidAt(lockPath: string): number | null {
@@ -252,9 +268,10 @@ function readPidAt(lockPath: string): number | null {
  * Returns null for legacy lock files that contain only a PID.
  */
 export function readLockedPort(): number | null {
-  if (!existsSync(LOCK_PATH)) return null;
+  const lockPath = defaultLockPath();
+  if (!existsSync(lockPath)) return null;
   try {
-    const content = readFileSync(LOCK_PATH, 'utf-8');
+    const content = readFileSync(lockPath, 'utf-8');
     const lines = content.split(/\r?\n/);
     const raw = lines[1]?.trim();
     if (!raw) return null;
@@ -290,7 +307,7 @@ export function writeLockedPort(port: number): void {
  * Get the lock file path (for display purposes).
  */
 export function getPidPath(): string {
-  return LOCK_PATH;
+  return defaultLockPath();
 }
 
 /**

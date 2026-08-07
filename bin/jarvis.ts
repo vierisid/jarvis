@@ -51,6 +51,8 @@ ${c.bold('Commands:')}
   ${c.cyan('enroll')}    Enroll a sidecar device: mint + store its JWT (no daemon needed)
   ${c.cyan('sidecars')}  List enrolled devices (sidecars list [--json])
   ${c.cyan('revoke')}    Revoke an enrolled device by sid
+  ${c.cyan('export')}    Export user data as a tar archive (export [--out <path>|-] [--full])
+  ${c.cyan('restore')}   Restore user data from an export archive (restore <archive|->)
   ${c.cyan('version')}   Print version number
   ${c.cyan('help')}      Show this help message
 
@@ -453,6 +455,14 @@ switch (command) {
   case 'revoke': {
     const { cmdRevoke } = await import('../src/cli/devices.ts');
     process.exit(await cmdRevoke(commandArgs));
+  }
+  case 'export': {
+    const { cmdExport } = await import('../src/cli/backup.ts');
+    process.exit(await cmdExport(commandArgs));
+  }
+  case 'restore': {
+    const { cmdRestore } = await import('../src/cli/backup.ts');
+    process.exit(await cmdRestore(commandArgs));
   }
   case 'uninstall':
     await cmdUninstall();
