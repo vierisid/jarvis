@@ -117,6 +117,18 @@ export function anthropicMessagesUrl(baseUrl?: string): string {
   return `${normalized}/v1/messages`;
 }
 
+/** The public Anthropic origin still uses x-api-key even when typed explicitly. */
+export function isAnthropicCustomBaseUrl(baseUrl?: string): boolean {
+  if (!baseUrl?.trim()) return false;
+  try {
+    return new URL(baseUrl.trim()).origin !== 'https://api.anthropic.com';
+  } catch {
+    // Let fetch surface the malformed URL; never treat it as Anthropic's
+    // trusted origin for credential/header selection.
+    return true;
+  }
+}
+
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic';
   private apiKey: string;
@@ -134,7 +146,7 @@ export class AnthropicProvider implements LLMProvider {
     this.defaultModel = defaultModel;
     this.promptCache = opts?.promptCache !== false;
     this.apiUrl = anthropicMessagesUrl(opts?.baseUrl);
-    this.bearerAuth = Boolean(opts?.baseUrl?.trim());
+    this.bearerAuth = isAnthropicCustomBaseUrl(opts?.baseUrl);
   }
 
   /**
@@ -374,14 +386,14 @@ export class AnthropicProvider implements LLMProvider {
       const response = await fetch(this.apiUrl.replace(/\/messages$/, '/models'), {
         headers: { authorization: `Bearer ${this.apiKey}` },
       });
-      if (!response.ok) return knownModels;
+      if (!response.ok) return [];
       const payload = await response.json() as { data?: Array<{ id?: unknown }> };
       const models = payload.data
         ?.map((entry) => entry.id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
-      return models?.length ? [...new Set(models)].sort() : knownModels;
+      return models?.length ? [...new Set(models)].sort() : [];
     } catch {
-      return knownModels;
+      return [];
     }
   }
 

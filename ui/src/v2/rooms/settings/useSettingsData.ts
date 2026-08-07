@@ -626,7 +626,9 @@ export function useSettingsData() {
         const body: Record<string, unknown> = { name };
         if (overrides?.kind) body.kind = overrides.kind;
         if (overrides?.model) body.model = overrides.model;
-        if (overrides?.baseUrl) body.base_url = overrides.baseUrl;
+        if (overrides && Object.hasOwn(overrides, "baseUrl")) {
+          body.base_url = overrides.baseUrl ?? "";
+        }
         if (overrides?.apiKey) body.api_key = overrides.apiKey;
         const r = await postJson<{ ok: boolean; model?: string; models?: string[]; error?: string }>(
           "/api/config/llm/test",

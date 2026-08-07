@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
+import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
    Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
@@ -104,7 +105,7 @@ const TOUR = [
   { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
 ];
 
-type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; models?: string[] };
+type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; models?: string[]; validatedModel?: string };
 
 export function OnboardingWizard({
   status,
@@ -281,7 +282,12 @@ export function OnboardingWizard({
   const runTest = useCallback(async () => {
     setTest({ status: "testing" });
     try {
-      const body: Record<string, unknown> = { provider: provId, model };
+      const body: Record<string, unknown> = { provider: provId };
+      // A custom Anthropic gateway may not recognize public Anthropic model
+      // ids. Let the daemon discover a model, validate it, and return the
+      // exact id that succeeded.
+      const testModel = modelForOnboardingTest(provId, customEndpoint, model);
+      if (testModel) body.model = testModel;
       if (prov.needsKey) {
         if (!apiKey && !prov.keyOptional) { setTest({ status: "err", msg: "Enter an API key first." }); return; }
         if (apiKey) body.api_key = apiKey;
@@ -294,7 +300,10 @@ export function OnboardingWizard({
       if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = (await r.json()) as { ok: boolean; model?: string; models?: string[]; error?: string };
-      if (data.ok) setTest({ status: "ok", msg: data.model ?? model, models: data.models });
+      if (data.ok) {
+        const validatedModel = data.model ?? model;
+        setTest({ status: "ok", msg: validatedModel, validatedModel, models: data.models });
+      }
       else setTest({ status: "err", msg: data.error ?? "Test failed." });
     } catch (e) {
       setTest({ status: "err", msg: e instanceof Error ? e.message : "Test failed." });
@@ -311,7 +320,11 @@ export function OnboardingWizard({
       if (prov.needsKey && apiKey) entry.api_key = apiKey;
       if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
       if (prov.optionalBaseUrl && customEndpoint && baseUrl.trim()) entry.base_url = baseUrl.trim();
-      const llm: Record<string, unknown> = { providers: { [provId]: entry }, default: `${provId}:${model || "default"}` };
+      const validatedModel = test.status === "ok" ? test.validatedModel : undefined;
+      const llm: Record<string, unknown> = {
+        providers: { [provId]: entry },
+        default: onboardingDefaultModelRef(provId, model, validatedModel),
+      };
 
       const ttsBlock: Record<string, unknown> = { enabled: tts !== "off", provider: tts === "off" ? "edge" : tts };
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
@@ -330,7 +343,7 @@ export function OnboardingWizard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [prov, provId, apiKey, baseUrl, customEndpoint, model, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);

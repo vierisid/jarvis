@@ -328,6 +328,8 @@ function ProviderRow({
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string; models?: string[] } | null>(null);
+  const endpointChanged = customEndpoint
+    && baseUrl.trim() !== (entry.base_url?.trim() ?? "");
 
   useEffect(() => {
     setBaseUrl(entry.base_url ?? "");
@@ -414,14 +416,18 @@ function ProviderRow({
             <button
               type="button"
               className="v2-set__btn"
-              disabled={testing || (customEndpoint && !baseUrl.trim())}
+              disabled={testing
+                || (customEndpoint && !baseUrl.trim())
+                || (endpointChanged && !apiKey)}
               onClick={async () => {
                 setTesting(true);
                 setTestResult(null);
                 const r = await data.testProvider(name, {
                   kind: entry.kind,
                   apiKey: apiKey || undefined,
-                  baseUrl: baseUrl || undefined,
+                  baseUrl: optionalUrl
+                    ? (customEndpoint ? baseUrl : "")
+                    : (baseUrl || undefined),
                 });
                 setTestResult({ ok: r.ok, text: r.message, models: r.models });
                 setTesting(false);
@@ -432,7 +438,10 @@ function ProviderRow({
             <button
               type="button"
               className="v2-set__btn v2-set__btn--primary"
-              disabled={saving || (customEndpoint && !baseUrl.trim()) || (!apiKey && baseUrl === (entry.base_url ?? ""))}
+              disabled={saving
+                || (customEndpoint && !baseUrl.trim())
+                || (endpointChanged && !apiKey)
+                || (!apiKey && baseUrl === (entry.base_url ?? ""))}
               onClick={async () => {
                 setSaving(true);
                 const input: { kind?: LLMProviderKind; api_key?: string; base_url?: string } = {};
@@ -459,6 +468,12 @@ function ProviderRow({
               <Icon icon={Trash2} size={14} /> Remove
             </button>
           </div>
+
+          {endpointChanged && !apiKey && (
+            <div className="v2-set__hint v2-set__hint--warn">
+              Enter the auth token again before testing or saving a new endpoint URL.
+            </div>
+          )}
 
           {testResult && <ProviderTestResult result={testResult} />}
         </div>

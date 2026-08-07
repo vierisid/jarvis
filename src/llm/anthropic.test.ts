@@ -98,6 +98,21 @@ describe('AnthropicProvider custom endpoint', () => {
     expect(requestHeaders.get('authorization')).toBeNull();
   });
 
+  it('keeps x-api-key authentication when the official URL is entered explicitly', async () => {
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify(anthropicResponse()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await new AnthropicProvider('sk-ant-test', undefined, {
+      baseUrl: 'https://api.anthropic.com',
+    }).chat([{ role: 'user', content: 'hi' }]);
+
+    expect(requestHeaders.get('x-api-key')).toBe('sk-ant-test');
+    expect(requestHeaders.get('authorization')).toBeNull();
+  });
+
   it('discovers models from a custom endpoint', async () => {
     let requestUrl = '';
     let requestHeaders = new Headers();

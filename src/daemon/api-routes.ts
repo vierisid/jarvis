@@ -1484,7 +1484,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/llm/test': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { provider: string; api_key?: string; model?: string; base_url?: string };
+          const body = await req.json() as {
+            name?: string;
+            provider?: string;
+            kind?: import('../config/types.ts').LLMProviderKind;
+            api_key?: string;
+            model?: string;
+            base_url?: string;
+          };
           const { testLLMProvider } = await import('./llm-settings.ts');
           const result = await testLLMProvider(body, ctx.config);
           return json(result);
