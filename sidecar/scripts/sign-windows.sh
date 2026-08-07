@@ -219,13 +219,38 @@ verify_signature() {
 	*) fail "$f carries no trusted timestamp — it would stop validating when the certificate expires" ;;
 	esac
 
-	# Publisher: the same identity the installer pins at runtime. Take the
-	# FIRST CN on the Subject line, matching installer/certsubject.go — a
-	# greedy match would anchor on the LAST /CN=, letting a DN that embeds
-	# "/CN=<expected>" in a later RDN spoof the check.
+	# Publisher: the same identity the installer pins at runtime.
+	#
+	# Two rules, both load-bearing:
+	#   * FIRST Subject line only. Everything after it belongs to the
+	#     timestamp authority's chain — matching those would assert the TSA's
+	#     identity instead of ours.
+	#   * FIRST CN component only, matching installer/certsubject.go. Taking
+	#     the last would let a DN that embeds "CN=<expected>" in a later RDN
+	#     spoof the check.
+	#
+	# The separator is version-dependent and both are in the wild:
+	#   osslsigncode 2.9  -> /C=US/O=Org/CN=Name        (OpenSSL oneline)
+	#   osslsigncode 2.13 -> C=US,O=Org,CN=Name         (RFC 2253)
+	# Assuming either one silently yields an empty CN on the other, which
+	# fails every release with "signed by '<unknown>'".
+	#
 	# awk exits after the first Subject line; no `head` in the pipeline, whose
 	# early exit would return 141 under `set -o pipefail` and abort a release.
-	cn="$(printf '%s\n' "$out" | awk -F'/CN=' '/Subject:/ {split($2, a, "/"); sub(/[ \t]+$/, "", a[1]); print a[1]; exit}')"
+	cn="$(printf '%s\n' "$out" | awk '
+		/Subject:/ {
+			sub(/^[ \t]*Subject:[ \t]*/, "")
+			n = split($0, part, (substr($0, 1, 1) == "/") ? "/" : ",")
+			for (i = 1; i <= n; i++) {
+				if (part[i] ~ /^[ \t]*CN=/) {
+					sub(/^[ \t]*CN=/, "", part[i])
+					sub(/[ \t]+$/, "", part[i])
+					print part[i]
+					exit
+				}
+			}
+			exit
+		}')"
 	if [ -n "${SIGNING_PUBLISHER_CN:-}" ]; then
 		[ "$cn" = "$SIGNING_PUBLISHER_CN" ] ||
 			fail "$f is signed by '${cn:-<unknown>}', expected '${SIGNING_PUBLISHER_CN}'"

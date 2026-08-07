@@ -36,6 +36,30 @@ printf '%s\0' "$@" >> "${STUB_JAVA_LOG}"
 exit "${STUB_JAVA_EXIT:-0}"
 STUB
 chmod +x "$WORK/bin/java"
+
+# A permissive default osslsigncode stub, installed BEFORE any test runs.
+# Without it the suite is not hermetic: on a machine that has the real
+# osslsigncode (any developer who followed the runbook) it would run against
+# the fake .exe fixtures and fail for environmental reasons. Individual tests
+# overwrite this via make_osslsigncode.
+cat >"$WORK/bin/osslsigncode" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\0' "$@" >> "${VERIFY_LOG:-/dev/null}"
+cat <<'OUT'
+Message digest algorithm  : SHA256
+Current message digest    : AAAA
+Calculated message digest : AAAA
+	Signer #0:
+		Subject: /C=US/O=Jarvis Technologies Inc/CN=Jarvis Technologies Inc
+	Timestamp time: Aug  7 10:00:00 2026 GMT
+Number of verified signatures: 1
+Signing certificate chain verified using:
+Succeeded
+OUT
+exit 0
+STUB
+chmod +x "$WORK/bin/osslsigncode"
+
 export PATH="$WORK/bin:$PATH"
 
 touch "$WORK/fake-jsign.jar"
@@ -310,7 +334,17 @@ fi
 # format rather than a guess. Note osslsigncode exits 1 for an untrusted
 # chain even when the signature is perfect — hence verify_signature asserts
 # on output, not exit status.
-make_osslsigncode() { # make_osslsigncode <digest-state> <cn> <timestamp> <chain> <exit>
+# make_osslsigncode <digest> <cn> <timestamp> <chain> <exit> [subject-format]
+# subject-format: "slash" (osslsigncode 2.9, OpenSSL oneline) or "rfc2253"
+# (2.13). Both are in the wild; assuming one silently breaks the publisher
+# assertion on the other, which is a release-stopping bug.
+make_osslsigncode() {
+	local subject
+	if [ "${6:-slash}" = "rfc2253" ]; then
+		subject="C=US,ST=Delaware,L=Claymont,O=Jarvis Technologies Inc,CN=${2}"
+	else
+		subject="/C=US/O=Jarvis Technologies Inc/CN=${2}"
+	fi
 	cat >"$WORK/bin/osslsigncode" <<STUB
 #!/usr/bin/env bash
 printf '%s\0' "\$@" >> "\${VERIFY_LOG:-/dev/null}"
@@ -324,7 +358,7 @@ Current message digest    : C40CC1ABF65CC1E86B6090E9E6DBC3FB6FA36D2CB82B8ECB987F
 Calculated message digest : ${1}
 Signer's certificate:
 	Signer #0:
-		Subject: /C=US/O=Jarvis Technologies Inc/CN=${2}
+		Subject: ${subject}
 		Issuer : /C=GB/O=Sectigo Limited/CN=Sectigo Public Code Signing CA R36
 ${3}
 Number of verified signatures: 1
@@ -357,6 +391,27 @@ if [ $? -ne 0 ] && [[ "$out" == *"does not verify cryptographically"* ]]; then
 	ok "refuses a signature that does not verify cryptographically"
 else
 	no "refuses a cryptographically broken signature" "$out"
+fi
+
+# osslsigncode 2.13 prints RFC 2253 subjects; 2.9 printed OpenSSL oneline.
+# Both must yield the same CN, or the publisher assertion fails on whichever
+# version the runner happens to ship.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0 rfc2253
+out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -eq 0 ] && [[ "$out" == *"signed by 'Jarvis Technologies Inc'"* ]]; then
+	ok "reads the publisher CN from an RFC 2253 subject (osslsigncode 2.13+)"
+else
+	no "reads an RFC 2253 subject" "$out"
+fi
+
+# …and the anti-spoofing rule must hold in that format too.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0 rfc2253
+sed -i 's/^\t\tSubject: C=US.*/\t\tSubject: C=US,CN=Attacker Ltd,OU=x,CN=Jarvis Technologies Inc/' "$WORK/bin/osslsigncode"
+out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"Attacker Ltd"* ]]; then
+	ok "rejects a CN-spoofing DN in RFC 2253 form too"
+else
+	no "rejects CN spoofing in RFC 2253 form" "$out"
 fi
 
 # a digest mismatch means the signature does not cover these bytes
