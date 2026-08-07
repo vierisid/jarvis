@@ -23,6 +23,7 @@ import type { LLMManager } from '../../llm/manager.ts';
 import type { LLMMessage, LLMToolCall } from '../../llm/provider.ts';
 import { progressAcknowledgement } from '../progress.ts';
 import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
+import { couldStartWithSerializedConvTool, recoverSerializedConvTools } from './conv-tool-recovery.ts';
 import { TaskDispatcher } from './task-dispatcher.ts';
 import { TaskRegistry } from './task-registry.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope } from './task-envelope.ts';
@@ -146,6 +147,7 @@ export class ConvOrchestrator {
       const responseToolCalls: LLMToolCall[] = [];
       let response: import('../../llm/provider.ts').LLMResponse | null = null;
       let firstTextChunk = true;
+      let deferPotentialToolText = true;
 
       // Stream the conversation layer itself instead of waiting for a full
       // chat response. Natural acknowledgments now reach the user as soon as
@@ -156,9 +158,17 @@ export class ConvOrchestrator {
       })) {
         if (event.type === 'text') {
           responseText += event.text;
+          // Do not expose a text-serialized tool call to either the chat UI
+          // or TTS. Ordinary prose still streams as soon as the prefix can no
+          // longer be mistaken for an internal conversation tool.
+          if (deferPotentialToolText && couldStartWithSerializedConvTool(responseText)) {
+            continue;
+          }
+          const visibleChunk = deferPotentialToolText ? responseText : event.text;
+          deferPotentialToolText = false;
           yield {
             type: 'text',
-            text: event.text,
+            text: visibleChunk,
             newSegment: firstTextChunk && hasVisibleText,
           };
           firstTextChunk = false;
@@ -184,6 +194,24 @@ export class ConvOrchestrator {
         content: responseText || response.content || '',
         tool_calls: responseToolCalls.length > 0 ? responseToolCalls : response.tool_calls,
       };
+      const recovered = recoverSerializedConvTools(
+        response.content,
+        response.tool_calls ?? [],
+        `recovered_conv_${iteration}`,
+      );
+      response = { ...response, content: recovered.text, tool_calls: recovered.toolCalls };
+
+      // A possible serialized-tool prefix was buffered for safety. Emit only
+      // the recovered human-facing portion once parsing is complete.
+      if (deferPotentialToolText && response.content) {
+        yield {
+          type: 'text',
+          text: response.content,
+          newSegment: firstTextChunk && hasVisibleText,
+        };
+        firstTextChunk = false;
+        hasVisibleText = true;
+      }
 
       // Conv LLM emitted text only (no tool calls) -> final user-facing reply.
       if (!response.tool_calls || response.tool_calls.length === 0) {

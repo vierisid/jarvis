@@ -129,6 +129,28 @@ describe('ConvOrchestrator', () => {
     expect(registry.get(taskId)?.status).toBe('completed');
   });
 
+  it('hides and executes a delegate call serialized as fallback text', async () => {
+    const provider = new MockProvider([
+      textResponse('FALLBACK_OK/delegate{"intent":"Provide friendly greeting.","template":"general","tier":"medium"} I’ll handle that.'),
+      textResponse('Hi again!'),
+      textResponse('Hi again, how is your day going?'),
+    ]);
+    const llm = makeManager(provider);
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; template: string; intent: string; originalMessage: string; signal: AbortSignal; history?: unknown[] }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const result = await conv.processTurn('Hello', {});
+    expect(result.text).toBe('I’ll handle that.\nHi again, how is your day going?');
+    expect(result.text).not.toContain('FALLBACK_OK');
+    expect(result.text).not.toContain('/delegate');
+    expect(result.text).not.toContain('"template"');
+    expect(result.tasksRun).toHaveLength(1);
+  });
+
   it('surfaces a fallback acknowledgment before a silent delegated task starts', async () => {
     const provider = new MockProvider([
       toolCallResponse('delegate', {
