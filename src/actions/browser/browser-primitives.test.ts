@@ -80,21 +80,25 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
       'about:blank',
     ], { stdout: 'ignore', stderr: 'ignore' });
 
-    // Wait for CDP to come up
-    const deadline = Date.now() + 15_000;
+    // Wait for CDP to come up. Generous deadline: on loaded CI runners a
+    // headless Chromium can take well over 15s to start (see the flaky
+    // hook-timeout failures on ubuntu-latest).
+    const deadline = Date.now() + 45_000;
+    let up = false;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/version`, {
           signal: AbortSignal.timeout(1000),
         });
-        if (res.ok) break;
+        if (res.ok) { up = true; break; }
       } catch { /* not up yet */ }
       await Bun.sleep(250);
     }
+    if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_PORT}`);
 
     browser = new BrowserController(TEST_PORT);
     await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
-  }, 30_000);
+  }, 60_000);
 
   afterAll(async () => {
     try { await browser?.disconnect(); } catch { /* already gone */ }

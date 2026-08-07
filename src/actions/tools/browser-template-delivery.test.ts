@@ -77,7 +77,10 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
       'about:blank',
     ], { stdout: 'ignore', stderr: 'ignore' });
 
-    const deadline = Date.now() + 15_000;
+    // Generous deadline: on loaded CI runners a headless Chromium can take
+    // well over 15s to start (see the flaky hook-timeout failures on
+    // ubuntu-latest).
+    const deadline = Date.now() + 45_000;
     let up = false;
     while (Date.now() < deadline) {
       try {
@@ -92,7 +95,7 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
 
     ctrl = new BrowserController(TEST_CDP_PORT);
     tools = toolMap(ctrl);
-  }, 30_000);
+  }, 60_000);
 
   afterAll(async () => {
     proc?.kill();
