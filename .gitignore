@@ -62,3 +62,22 @@ eng.traineddata
 # Ignore agent files
 CLAUDE.md
 AGENTS.md
+
+# Signing material — never commit a private key.
+# The public certificate CHAIN is committed on purpose (see
+# sidecar/packaging/windows/README.md); these are the formats that carry a
+# private key, plus the Apple/Google credential files. If you need one of
+# these in CI, it belongs in a GitHub secret.
+*.p12
+*.pfx
+*.p8
+*.jks
+*.keystore
+*.attestation
+id_rsa
+id_ecdsa
+# Private-key PEMs. Certificate chains are committed under packaging/, so this
+# targets the conventional key filenames rather than every .pem.
+*.key.pem
+*-key.pem
+privkey.pem
