@@ -3603,6 +3603,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Persist emergency state changes to the DB settings store
     emergencyController.setStateChangeCallback(async (state) => {
       wsService.broadcastEmergencyState(state);
+      // P0.4 — the kill switch says "terminate all agents, cancel all
+      // pending". Background sub-agent runs had no cancel path to call, so a
+      // kill only stopped their NEXT tool call and left them burning tokens
+      // in the LLM loop. Now they are actually stopped.
+      if (state === 'killed') {
+        const tm = agentService.getTaskManager();
+        const n = tm?.cancelAll() ?? 0;
+        if (n > 0) console.log(`[Daemon] Emergency kill cancelled ${n} running background task(s)`);
+      }
       try {
         const { saveUserSection } = await import('./user-settings.ts');
         if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;

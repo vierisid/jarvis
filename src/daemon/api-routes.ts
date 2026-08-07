@@ -51,6 +51,7 @@ import {
 } from '../vault/content-pipeline.ts';
 import {
   assignPersistentAgentTask,
+  cancelPersistentAgentTask,
   HttpError,
   listPersistentAgents,
   spawnPersistentAgent,
@@ -886,6 +887,24 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // also flattens the fields the sub-pebble's "open full" panel
     // (taskResult room) renders directly.
     '/api/agents/tasks/:id': {
+      // P0.4 — cancel a running background task. Cooperative: the run stops
+      // at its next tool-call boundary, so a tool already in flight finishes.
+      // The task record survives (status 'cancelled') so the rail and the
+      // agents room can show what happened.
+      DELETE: (req: Request & { params: { id: string } }) => {
+        const tm = ctx.agentService.getTaskManager();
+        if (!tm) return error('Persistent agents are not available.', 503);
+        try {
+          return json(cancelPersistentAgentTask({
+            orchestrator: ctx.agentService.getOrchestrator(),
+            llmManager: ctx.agentService.getLLMManager(),
+            specialists: ctx.agentService.getSpecialists(),
+            taskManager: tm,
+          }, req.params.id));
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
       GET: (req: Request & { params: { id: string } }) => {
         const tm = ctx.agentService.getTaskManager();
         if (!tm) return error('Persistent agents are not available.', 503);

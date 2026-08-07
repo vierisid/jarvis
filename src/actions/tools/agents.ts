@@ -197,6 +197,31 @@ export function listPersistentAgents(deps: AgentToolDeps) {
   };
 }
 
+/**
+ * P0.4 — stop a running task without tearing down its agent.
+ *
+ * Cooperative: the run stops at the next tool-call boundary, so a tool
+ * already in flight completes rather than being killed half-done.
+ */
+export function cancelPersistentAgentTask(deps: AgentToolDeps, taskId: string) {
+  if (!taskId) throw new HttpError(400, '"taskId" is required');
+  const task = deps.taskManager.getTask(taskId);
+  if (!task) throw new HttpError(404, `Task "${taskId}" not found`);
+  if (task.status !== 'running') {
+    throw new HttpError(409, `Task "${taskId}" is already ${task.status}.`);
+  }
+
+  const cancelled = deps.taskManager.cancel(taskId);
+  return {
+    task_id: taskId,
+    agent_name: task.agentName,
+    cancelled,
+    message: cancelled
+      ? `Cancelling ${task.agentName}. It stops after its current step.`
+      : `Could not cancel ${task.agentName}; it may have just finished.`,
+  };
+}
+
 export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
   if (!agentId) throw new HttpError(400, '"agentId" is required');
 
@@ -237,6 +262,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       '  status    — Check agent or task status',
       '  collect   — Get full result of a completed task',
       '  list      — Show all active agents and tasks',
+      '  cancel    — Stop a running task (the agent stays alive)',
       '  terminate — Shut down an agent',
       '',
       'Available specialists: ' + Array.from(deps.specialists.keys()).join(', '),
@@ -247,7 +273,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
     parameters: {
       action: {
         type: 'string',
-        description: 'The action: spawn, assign, status, collect, list, terminate',
+        description: 'The action: spawn, assign, status, collect, list, cancel, terminate',
         required: true,
       },
       specialist: {
@@ -262,7 +288,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       },
       task_id: {
         type: 'string',
-        description: 'Task ID (for status, collect)',
+        description: 'Task ID (for status, collect, cancel)',
         required: false,
       },
       task: {
@@ -290,10 +316,12 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
           return handleCollect(deps, params);
         case 'list':
           return handleList(deps);
+        case 'cancel':
+          return handleCancel(deps, params);
         case 'terminate':
           return handleTerminate(deps, params);
         default:
-          return `Error: Unknown action "${action}". Use: spawn, assign, status, collect, list, terminate`;
+          return `Error: Unknown action "${action}". Use: spawn, assign, status, collect, list, cancel, terminate`;
       }
     },
   };
@@ -406,6 +434,14 @@ function handleCollect(deps: AgentToolDeps, params: Record<string, unknown>): st
 
 function handleList(deps: AgentToolDeps): string {
   return JSON.stringify(listPersistentAgents(deps));
+}
+
+function handleCancel(deps: AgentToolDeps, params: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(cancelPersistentAgentTask(deps, params.task_id as string));
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 function handleTerminate(deps: AgentToolDeps, params: Record<string, unknown>): string {
